@@ -1,0 +1,61 @@
+{
+  "name": "vscode-graph-agent",
+  "displayName": "VS Code Graph Agent",
+  "description": "A minimal workspace-aware VS Code chat participant with a FastAPI backend.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onChatParticipant:vscode-graph-agent.workspace"
+  ],
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "vscode-graph-agent.workspace",
+        "name": "workspace",
+        "fullName": "Workspace Agent",
+        "description": "Basic chat for the current workspace with progress updates.",
+        "isSticky": true
+      }
+    ],
+    "configuration": {
+      "title": "VS Code Graph Agent",
+      "properties": {
+        "vscodeGraphAgent.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Python executable used to start the FastAPI backend."
+        },
+        "vscodeGraphAgent.port": {
+          "type": "number",
+          "default": 8765,
+          "description": "Local port for the backend service."
+        },
+        "vscodeGraphAgent.model": {
+          "type": "string",
+          "default": "bytedance-seed/dola-seed-2.0-pro:free",
+          "description": "Model name used by the backend agent."
+        },
+        "vscodeGraphAgent.baseUrl": {
+          "type": "string",
+          "default": "https://api.kilo.ai/api/gateway",
+          "description": "OpenAI-compatible base URL for the backend model."
+        },
+        "vscodeGraphAgent.apiKeyEnv": {
+          "type": "string",
+          "default": "KILO_API_KEY",
+          "description": "Environment variable name that stores the model API key."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "start": "node ./src/extension.js"
+  }
+}
