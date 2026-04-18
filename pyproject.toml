@@ -1,0 +1,23 @@
+[project]
+name = "boxteam-backend"
+version = "0.1.0"
+description = "BoxTeam Local Workspace Deep Agent Backend"
+authors = [
+  { name="BoxTeam", email="dev@boxteam.dev" }
+]
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.109.0",
+  "uvicorn>=0.27.0",
+  "pydantic>=2.6.0",
+  "python-multipart>=0.0.6",
+  "python-dotenv>=1.0.0"
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
