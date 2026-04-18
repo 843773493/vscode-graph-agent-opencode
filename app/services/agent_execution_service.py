@@ -131,6 +131,8 @@ class AgentExecutionService:
     def get_available_tools(cls) -> List[Dict[str, Any]]:
         """
         获取DeepAgent支持的所有可用工具列表
+        
+        本地运行原则：失败时快速崩溃，不静默降级，不隐藏问题
         """
         # 从agent实例动态获取真实工具列表
         session_id = "tools_inspection_session"
@@ -140,10 +142,18 @@ class AgentExecutionService:
         tool_map = {}
         graph_view = agent.get_graph()
         nodes = getattr(graph_view, "nodes", {}) or {}
+        
         for _, node in nodes.items():
             candidate = getattr(node, "data", node)
             if hasattr(candidate, "tools_by_name"):
                 tool_map.update(candidate.tools_by_name)
+        
+        if not tool_map:
+            raise RuntimeError(
+                "无法从Agent实例中提取工具列表！\n"
+                "Agent图中未找到包含tools_by_name属性的节点。\n"
+                "这是严重错误，需要立即修复，不能静默降级。"
+            )
         
         tools = []
         for tool_name, tool in tool_map.items():
@@ -155,73 +165,5 @@ class AgentExecutionService:
                 "category": "general"
             }
             tools.append(tool_def)
-        
-        # 兼容模式：如果动态获取失败则返回默认列表
-        if not tools:
-            tools = [
-                {
-                    "id": "write_todos",
-                    "name": "write_todos",
-                    "description": "管理待办事项列表",
-                    "parameters": {"type": "object", "properties": {}},
-                    "category": "system"
-                },
-                {
-                    "id": "ls",
-                    "name": "ls",
-                    "description": "列出目录内容",
-                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
-                    "category": "filesystem"
-                },
-                {
-                    "id": "read_file",
-                    "name": "read_file",
-                    "description": "读取文件内容",
-                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
-                    "category": "filesystem"
-                },
-                {
-                    "id": "write_file",
-                    "name": "write_file",
-                    "description": "写入文件内容",
-                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}},
-                    "category": "filesystem"
-                },
-                {
-                    "id": "edit_file",
-                    "name": "edit_file",
-                    "description": "编辑文件内容",
-                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}},
-                    "category": "filesystem"
-                },
-                {
-                    "id": "glob",
-                    "name": "glob",
-                    "description": "搜索文件匹配模式",
-                    "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}},
-                    "category": "filesystem"
-                },
-                {
-                    "id": "grep",
-                    "name": "grep",
-                    "description": "搜索文件内容",
-                    "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}},
-                    "category": "filesystem"
-                },
-                {
-                    "id": "execute",
-                    "name": "execute",
-                    "description": "执行Shell命令",
-                    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
-                    "category": "system"
-                },
-                {
-                    "id": "task",
-                    "name": "task",
-                    "description": "调用子代理",
-                    "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "prompt": {"type": "string"}}},
-                    "category": "agent"
-                }
-            ]
         
         return tools
