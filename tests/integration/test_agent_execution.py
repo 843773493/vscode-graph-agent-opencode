@@ -7,11 +7,11 @@ import os
 import sys
 sys.path.insert(0, os.path.abspath('.'))
 
-# Setup test environment BEFORE importing app modules
+# 在导入应用模块之前设置测试环境
 from scripts.setup_test_env import setup_test_environment
 setup_test_environment()
 
-# Now import app modules
+# 现在导入应用模块
 import dotenv
 dotenv.load_dotenv()
 
@@ -59,16 +59,16 @@ async def test_session_isolation():
     print("\n=== Test 3: Session Isolation ===")
     
     try:
-        # Send first message to session A
+        # 向会话A发送第一条消息
         resp_a1 = await AgentExecutionService.run_step("session_a", "记住这个数字：42")
         
-        # Send first message to session B
+        # 向会话B发送第一条消息
         resp_b1 = await AgentExecutionService.run_step("session_b", "记住这个数字：88")
         
-        # Query session A
+        # 查询会话A
         resp_a2 = await AgentExecutionService.run_step("session_a", "我刚才告诉你的数字是什么？")
         
-        # Query session B
+        # 查询会话B
         resp_b2 = await AgentExecutionService.run_step("session_b", "我刚才告诉你的数字是什么？")
         
         print("✅ Sessions are properly isolated")

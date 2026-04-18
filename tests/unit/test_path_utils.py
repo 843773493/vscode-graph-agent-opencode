@@ -1,0 +1,131 @@
+import os
+import tempfile
+from pathlib import Path
+import pytest
+from app.core.path_utils import safe_join, validate_workspace_path, get_session_path, ensure_session_dir
+from app.core.exceptions import ForbiddenError
+
+
+class TestPathUtils:
+    """测试路径工具类安全功能"""
+
+    def setup_method(self):
+        """每个测试前创建临时目录作为测试根目录"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.base_path = Path(self.temp_dir).resolve()
+
+    def test_safe_join_normal_paths(self):
+        """测试正常路径拼接"""
+        result = safe_join(self.base_path, "test", "file.txt")
+        assert result == self.base_path / "test" / "file.txt"
+        assert result.exists() is False  # 只返回路径，不创建
+
+    def test_safe_join_directory_traversal_attack(self):
+        """测试目录遍历防护 - 阻止 ../ 攻击"""
+        with pytest.raises(ForbiddenError, match="Path traversal detected"):
+            safe_join(self.base_path, "../etc/passwd")
+
+        with pytest.raises(ForbiddenError, match="Path traversal detected"):
+            safe_join(self.base_path, "test/../../etc/passwd")
+
+        with pytest.raises(ForbiddenError, match="Path traversal detected"):
+            safe_join(self.base_path, "..\\windows\\system32")
+
+    def test_safe_join_absolute_path_attack(self):
+        """测试绝对路径攻击防护"""
+        with pytest.raises(ForbiddenError, match="Path traversal detected"):
+            safe_join(self.base_path, "/etc/passwd")
+
+        with pytest.raises(ForbiddenError, match="Path traversal detected"):
+            safe_join(self.base_path, "C:\\windows\\system32")
+
+    def test_safe_join_symlink_attack(self):
+        """测试符号链接攻击防护"""
+        # 创建指向系统目录的符号链接
+        symlink_path = self.base_path / "link"
+        try:
+            symlink_path.symlink_to("/etc")
+        except (OSError, AttributeError):
+            pytest.skip("Symlinks not supported on this platform")
+
+        try:
+            with pytest.raises(ForbiddenError, match="Path traversal detected"):
+                safe_join(self.base_path, "link/passwd")
+        except OSError:
+            # Windows上resolve()对不存在的符号链接会抛出错误，这也是预期行为
+            pytest.skip("Windows path resolution behavior differs")
+
+    def test_safe_join_exact_base_path(self):
+        """测试允许访问基础目录本身"""
+        result = safe_join(self.base_path)
+        assert result == self.base_path
+
+    def test_validate_workspace_path(self):
+        """测试工作区路径验证"""
+        # 先设置临时工作区环境变量
+        original_env = os.environ.get("WORKSPACE_ROOT")
+        os.environ["WORKSPACE_ROOT"] = str(self.base_path)
+
+        try:
+            # 重新导入以刷新环境变量
+            from importlib import reload
+            import app.core.path_utils
+            reload(app.core.path_utils)
+            from app.core.path_utils import validate_workspace_path
+
+            # 正常路径
+            result = validate_workspace_path("test/file.txt")
+            assert result == self.base_path / "test" / "file.txt"
+
+            # 遍历攻击
+            with pytest.raises(ForbiddenError):
+                validate_workspace_path("../outside.txt")
+
+        finally:
+            if original_env:
+                os.environ["WORKSPACE_ROOT"] = original_env
+            else:
+                del os.environ["WORKSPACE_ROOT"]
+
+    def test_get_session_path_isolation(self):
+        """测试会话路径隔离"""
+        session_id = "test-session-123"
+        path = get_session_path(session_id)
+        assert session_id in str(path)
+        assert path.parent.name == "sessions"
+
+    def test_ensure_session_dir_creates_directory(self):
+        """测试确保会话目录存在"""
+        session_id = "test-session-456"
+        path = ensure_session_dir(session_id)
+        assert path.exists()
+        assert path.is_dir()
+
+        # 重复调用不会报错
+        path2 = ensure_session_dir(session_id)
+        assert path2 == path
+
+    def test_safe_join_case_sensitivity(self):
+        """测试大小写敏感路径处理"""
+        # 创建混合大小写目录
+        mixed_dir = self.base_path / "TestDir"
+        mixed_dir.mkdir()
+
+        result = safe_join(self.base_path, "testdir")
+        # 在Windows上不区分大小写，在Linux上区分
+        if os.name == 'nt':
+            assert result.resolve() == mixed_dir.resolve()
+        else:
+            assert result != mixed_dir
+
+    def test_safe_join_empty_components(self):
+        """测试空路径组件处理"""
+        result = safe_join(self.base_path, "", "test", "", "file.txt")
+        assert result == self.base_path / "test" / "file.txt"
+
+    def test_safe_join_special_characters(self):
+        """测试特殊字符路径处理"""
+        # Windows不允许路径中包含某些特殊字符，使用安全的特殊字符测试
+        special_path = "test with spaces and_safe-special.chars"
+        result = safe_join(self.base_path, special_path)
+        assert result.name == special_path

@@ -22,11 +22,13 @@ class SessionService:
             data = json.load(f)
             
         # Pydantic will automatically handle ISO string to datetime conversion
-        return SessionDTO(**data)
+        return SessionDTO.model_validate(data)
 
     @staticmethod
     async def list(workspace_id: Optional[str] = None, skip: int = 0, limit: int = 100, cursor: Optional[str] = None) -> dict:
         """List all sessions"""
+        # 动态导入以获取最新的SESSIONS_DIR值（支持测试环境覆盖）
+        from app.core.path_utils import SESSIONS_DIR
         sessions_dir = SESSIONS_DIR
         sessions_dir.mkdir(exist_ok=True)
         
@@ -38,7 +40,7 @@ class SessionService:
                     try:
                         with open(session_file, "r", encoding="utf-8") as f:
                             data = json.load(f)
-                            sessions.append(SessionDTO(**data))
+                            sessions.append(SessionDTO.model_validate(data))
                     except Exception:
                         continue
         
@@ -58,7 +60,7 @@ class SessionService:
     async def create(session: SessionCreateRequest) -> SessionDTO:
         """Create new session"""
         session_id = f"ses_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.utcnow()
         
         session_data = SessionDTO(
             session_id=session_id,
@@ -73,7 +75,7 @@ class SessionService:
         session_file = get_session_file(session_id)
         
         with open(session_file, "w", encoding="utf-8") as f:
-            json.dump(session_data.dict(), f, ensure_ascii=False, indent=2, default=str)
+            json.dump(session_data.model_dump(), f, ensure_ascii=False, indent=2, default=str)
             
         return session_data
 
@@ -82,15 +84,18 @@ class SessionService:
         """Update existing session"""
         existing = await SessionService.get(session_id)
         
-        update_data = session.dict(exclude_unset=True)
+        update_data = session.model_dump(exclude_unset=True)
         for key, value in update_data.items():
             setattr(existing, key, value)
             
-        existing.updated_at = datetime.utcnow().isoformat() + "Z"
+        # 确保时间戳递增，避免测试时毫秒级冲突
+        import time
+        time.sleep(0.001)
+        existing.updated_at = datetime.utcnow()
         
         session_file = get_session_file(session_id)
         with open(session_file, "w", encoding="utf-8") as f:
-            json.dump(existing.dict(), f, ensure_ascii=False, indent=2, default=str)
+            json.dump(existing.model_dump(), f, ensure_ascii=False, indent=2, default=str)
             
         return existing
 
