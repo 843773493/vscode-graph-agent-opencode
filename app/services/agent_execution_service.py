@@ -17,9 +17,9 @@ class AgentExecutionService:
     
     def __init__(self):
         self.model = ChatOpenAI(
-            model="bytedance-seed/dola-seed-2.0-pro:free",
+            model=os.getenv("KILO_MODEL", "bytedance-seed/dola-seed-2.0-pro:free"),
             api_key=os.getenv("KILO_API_KEY"),
-            base_url="https://api.kilo.ai/api/gateway",
+            base_url=os.getenv("KILO_API_BASE", "https://api.kilo.ai/api/gateway"),
             use_responses_api=False,
             max_retries=3,
         )
@@ -43,12 +43,23 @@ class AgentExecutionService:
         
         checkpointer = MemorySaver()
         
+        # 启用DeepAgent内置文件系统中间件和工具
+        from deepagents.middleware.filesystem import FilesystemMiddleware
+        
         agent = create_deep_agent(
             model=self.model,
             backend=backend,
             system_prompt="You are a helpful assistant.",
-            middleware=[],
+            middleware=[
+                FilesystemMiddleware(
+                    root_dir=str(session_dir),
+                    allow_write=True,
+                    allow_read=True,
+                    allow_list=True
+                )
+            ],
             checkpointer=checkpointer,
+            enable_builtin_tools=True
         )
         
         self._agent_cache[session_id] = agent
@@ -127,3 +138,11 @@ class AgentExecutionService:
         """
         instance = cls.get_instance()
         return instance._get_or_create_agent(session_id)
+    
+    @classmethod
+    def get_available_tools(cls) -> List[Dict[str, Any]]:
+        """
+        获取DeepAgent支持的所有可用工具列表
+        """
+        from deepagents.tools import get_all_tools
+        return get_all_tools()

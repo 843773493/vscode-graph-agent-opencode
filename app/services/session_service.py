@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from app.schemas.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest
-from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, SESSIONS_DIR
+from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir
 from app.core.exceptions import NotFoundError
 
 
@@ -27,9 +27,7 @@ class SessionService:
     @staticmethod
     async def list(workspace_id: Optional[str] = None, skip: int = 0, limit: int = 100, cursor: Optional[str] = None) -> dict:
         """List all sessions"""
-        # 动态导入以获取最新的SESSIONS_DIR值（支持测试环境覆盖）
-        from app.core.path_utils import SESSIONS_DIR
-        sessions_dir = SESSIONS_DIR
+        sessions_dir = get_sessions_dir()
         sessions_dir.mkdir(exist_ok=True)
         
         sessions = []

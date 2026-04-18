@@ -7,6 +7,14 @@ from app.schemas.common import MessageRole, JobStatus
 
 
 class MessageService:
+    _instance: Optional["MessageService"] = None
+    
+    @classmethod
+    def get_instance(cls) -> "MessageService":
+        if cls._instance is None:
+            cls._instance = MessageService()
+        return cls._instance
+    
     async def list(self, session_id: str) -> list[MessageDTO]:
         now = datetime.now()
         return [
@@ -66,5 +74,23 @@ class MessageService:
         return MessageRunAccepted(
             message_id=message.message_id,
             job_id=f"job_{datetime.now().timestamp()}",
+            status=JobStatus.accepted
+        )
+    
+    async def create_and_run(self, session_id: str, run_request: MessageRunRequest) -> MessageRunAccepted:
+        """
+        创建消息并启动异步Job执行
+        供路由层调用的实例方法
+        """
+        message = await self.create(session_id, run_request.message)
+        
+        # 使用JobService启动后台异步任务
+        from app.services.job_service import JobService
+        job_service = JobService.get_instance()
+        job_id = await job_service.start_job(session_id, message.content)
+        
+        return MessageRunAccepted(
+            message_id=message.message_id,
+            job_id=job_id,
             status=JobStatus.accepted
         )

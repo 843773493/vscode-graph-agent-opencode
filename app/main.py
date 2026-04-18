@@ -1,8 +1,4 @@
 from __future__ import annotations
-import dotenv
-
-dotenv.load_dotenv()
-
 from fastapi import FastAPI
 
 from app.api.agents import router as agents_router
@@ -36,17 +32,13 @@ app.include_router(config_router, prefix="/api/v1")
 
 @app.on_event("startup")
 async def startup_event():
-    # All directory creation is now handled in path_utils.py
-    # Import to trigger directory initialization
+    # 初始化工作区目录
     from app.core import path_utils
-    # Ensure all directories exist
-    path_utils.BOXTEAM_ROOT.mkdir(exist_ok=True, parents=True)
-    path_utils.SESSIONS_DIR.mkdir(exist_ok=True, parents=True)
-    path_utils.LOGS_DIR.mkdir(exist_ok=True, parents=True)
-    path_utils.ARTIFACTS_DIR.mkdir(exist_ok=True, parents=True)
-    path_utils.CACHE_DIR.mkdir(exist_ok=True, parents=True)
+    path_utils.initialize_directories()
 
 
 if __name__ == "__main__":
+    import dotenv
+    dotenv.load_dotenv()
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)

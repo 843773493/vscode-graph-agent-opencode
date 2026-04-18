@@ -4,23 +4,27 @@ import os
 import time
 import asyncio
 from datetime import datetime
+from app.core.path_utils import get_workspace_root, get_artifacts_dir, get_logs_dir, get_cache_dir
 
 
 class RuntimeService:
-    start_time = time.time()
+    _start_time = None
 
     async def status(self) -> dict:
+        if self._start_time is None:
+            self._start_time = time.time()
+        
         return {
             "pid": os.getpid(),
-            "uptime_seconds": int(time.time() - self.start_time),
+            "uptime_seconds": int(time.time() - self._start_time),
             "workspace_id": "ws_local",
             "active_jobs": 0,
             "loaded_agents": ["planner", "executor", "reviewer", "summarizer"],
             "storage": {
-                "root": "./workspace",
-                "artifact_dir": "./workspace/artifacts",
-                "log_dir": "./workspace/logs",
-                "cache_dir": "./workspace/cache"
+                "root": str(get_workspace_root()),
+                "artifact_dir": str(get_artifacts_dir()),
+                "log_dir": str(get_logs_dir()),
+                "cache_dir": str(get_cache_dir())
             }
         }
 

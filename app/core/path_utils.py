@@ -6,25 +6,35 @@ from app.core.exceptions import ForbiddenError
 
 
 # 工作区根目录配置 - 如果设置了环境变量则使用，否则默认为 ./workspace
-if "WORKSPACE_ROOT" in os.environ:
-    WORKSPACE_ROOT = Path(os.environ["WORKSPACE_ROOT"]).resolve()
-else:
-    WORKSPACE_ROOT = Path(os.getcwd()) / "workspace"
+def get_workspace_root() -> Path:
+    """获取工作区根目录，延迟初始化避免导入时提前创建目录"""
+    if "WORKSPACE_ROOT" in os.environ:
+        return Path(os.environ["WORKSPACE_ROOT"]).resolve()
+    else:
+        return Path(os.getcwd()) / "workspace"
 
-BOXTEAM_ROOT = WORKSPACE_ROOT / ".boxteam"
-BOXTEAM_ROOT.mkdir(exist_ok=True, parents=True)
+def get_boxteam_root() -> Path:
+    return get_workspace_root() / ".boxteam"
 
-# BoxTeam 内部目录
-SESSIONS_DIR = BOXTEAM_ROOT / "sessions"
-LOGS_DIR = BOXTEAM_ROOT / "logs"
-ARTIFACTS_DIR = BOXTEAM_ROOT / "artifacts"
-CACHE_DIR = BOXTEAM_ROOT / "cache"
+def get_sessions_dir() -> Path:
+    return get_boxteam_root() / "sessions"
 
-# 创建所有必需的目录
-SESSIONS_DIR.mkdir(exist_ok=True, parents=True)
-LOGS_DIR.mkdir(exist_ok=True, parents=True)
-ARTIFACTS_DIR.mkdir(exist_ok=True, parents=True)
-CACHE_DIR.mkdir(exist_ok=True, parents=True)
+def get_logs_dir() -> Path:
+    return get_boxteam_root() / "logs"
+
+def get_artifacts_dir() -> Path:
+    return get_boxteam_root() / "artifacts"
+
+def get_cache_dir() -> Path:
+    return get_boxteam_root() / "cache"
+
+def initialize_directories() -> None:
+    """初始化所有必需的目录，应该在应用启动时显式调用"""
+    get_boxteam_root().mkdir(exist_ok=True, parents=True)
+    get_sessions_dir().mkdir(exist_ok=True, parents=True)
+    get_logs_dir().mkdir(exist_ok=True, parents=True)
+    get_artifacts_dir().mkdir(exist_ok=True, parents=True)
+    get_cache_dir().mkdir(exist_ok=True, parents=True)
 
 
 def safe_join(base_path: Path, *paths: str) -> Path:
@@ -53,7 +63,7 @@ def safe_join(base_path: Path, *paths: str) -> Path:
 
 def get_session_path(session_id: str) -> Path:
     """Get the directory path for a specific session"""
-    return safe_join(SESSIONS_DIR, session_id)
+    return safe_join(get_sessions_dir(), session_id)
 
 
 def get_session_file(session_id: str) -> Path:
@@ -70,4 +80,4 @@ def ensure_session_dir(session_id: str) -> Path:
 
 def validate_workspace_path(path: str) -> Path:
     """Validate a path is within the workspace root"""
-    return safe_join(WORKSPACE_ROOT, path)
+    return safe_join(get_workspace_root(), path)
