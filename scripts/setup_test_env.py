@@ -27,21 +27,21 @@ def setup_test_environment():
     # Copy entire workspace from assets
     if source_workspace.exists():
         shutil.copytree(source_workspace, target_workspace)
-        print(f"✓ Copied test workspace from {source_workspace} to {target_workspace}")
+        print(f"Copied test workspace from {source_workspace} to {target_workspace}")
     else:
         print(f"⚠ Source workspace not found at {source_workspace}, creating empty workspace")
         target_workspace.mkdir(exist_ok=True, parents=True)
     
     # Set environment variable
     os.environ["WORKSPACE_ROOT"] = str(target_workspace)
-    print(f"✓ Set WORKSPACE_ROOT={target_workspace}")
+    print(f"Set WORKSPACE_ROOT={target_workspace}")
     
     # Verify directories exist
     boxteam_dir = target_workspace / ".boxteam"
     for subdir in ["sessions", "logs", "artifacts", "cache"]:
         (boxteam_dir / subdir).mkdir(exist_ok=True, parents=True)
     
-    print("\n✅ Test environment setup complete!")
+    print("\nTest environment setup complete!")
     print(f"   Workspace root: {target_workspace}")
     print(f"   All tests will run in isolated playground environment")
 

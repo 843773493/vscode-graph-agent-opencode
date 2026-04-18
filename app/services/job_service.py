@@ -4,6 +4,7 @@ from typing import Optional
 
 from app.schemas.job import JobDTO, StepDTO, JobControlRequest, JobControlResponse
 from app.schemas.common import JobStatus, RunMode, StepStatus, ControlAction
+from app.services.agent_execution_service import AgentExecutionService
 
 
 class JobService:
@@ -118,3 +119,17 @@ class JobService:
             status=JobStatus.paused if control_request.action == ControlAction.pause else JobStatus.running,
             control_state=f"Action {control_request.action.value} applied successfully"
         )
+    
+    async def run_agent(self, session_id: str, message: str) -> str:
+        """
+        启动Agent执行单步调用
+        
+        Args:
+            session_id: 会话ID
+            message: 用户输入消息
+            
+        Returns:
+            Agent响应内容
+        """
+        agent_service = AgentExecutionService.get_instance()
+        return await agent_service.run_step(session_id, message)

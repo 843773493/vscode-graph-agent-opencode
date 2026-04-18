@@ -5,7 +5,7 @@ from typing import Optional
 from app.core.exceptions import ForbiddenError
 
 
-# Workspace root configuration - use environment variable if set, default to ./workspace
+# 工作区根目录配置 - 如果设置了环境变量则使用，否则默认为 ./workspace
 if "WORKSPACE_ROOT" in os.environ:
     WORKSPACE_ROOT = Path(os.environ["WORKSPACE_ROOT"]).resolve()
 else:
@@ -14,13 +14,13 @@ else:
 BOXTEAM_ROOT = WORKSPACE_ROOT / ".boxteam"
 BOXTEAM_ROOT.mkdir(exist_ok=True, parents=True)
 
-# BoxTeam internal directories
+# BoxTeam 内部目录
 SESSIONS_DIR = BOXTEAM_ROOT / "sessions"
 LOGS_DIR = BOXTEAM_ROOT / "logs"
 ARTIFACTS_DIR = BOXTEAM_ROOT / "artifacts"
 CACHE_DIR = BOXTEAM_ROOT / "cache"
 
-# Create all required directories
+# 创建所有必需的目录
 SESSIONS_DIR.mkdir(exist_ok=True, parents=True)
 LOGS_DIR.mkdir(exist_ok=True, parents=True)
 ARTIFACTS_DIR.mkdir(exist_ok=True, parents=True)
@@ -44,7 +44,7 @@ def safe_join(base_path: Path, *paths: str) -> Path:
     base = base_path.resolve()
     joined = base.joinpath(*paths).resolve()
     
-    # Ensure the resulting path is still within the base directory
+    # 确保生成的路径仍然在基础目录范围内
     if not str(joined).startswith(str(base) + os.sep) and joined != base:
         raise ForbiddenError("Path traversal detected")
     
