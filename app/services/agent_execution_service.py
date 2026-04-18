@@ -132,69 +132,96 @@ class AgentExecutionService:
         """
         获取DeepAgent支持的所有可用工具列表
         """
-        # DeepAgent 内置标准工具列表 - 与官方版本完全一致
-        return [
-            {
-                "id": "write_todos",
-                "name": "write_todos",
-                "description": "管理待办事项列表",
-                "parameters": {"type": "object", "properties": {}},
-                "category": "system"
-            },
-            {
-                "id": "ls",
-                "name": "ls",
-                "description": "列出目录内容",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
-                "category": "filesystem"
-            },
-            {
-                "id": "read_file",
-                "name": "read_file",
-                "description": "读取文件内容",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
-                "category": "filesystem"
-            },
-            {
-                "id": "write_file",
-                "name": "write_file",
-                "description": "写入文件内容",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}},
-                "category": "filesystem"
-            },
-            {
-                "id": "edit_file",
-                "name": "edit_file",
-                "description": "编辑文件内容",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}},
-                "category": "filesystem"
-            },
-            {
-                "id": "glob",
-                "name": "glob",
-                "description": "搜索文件匹配模式",
-                "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}},
-                "category": "filesystem"
-            },
-            {
-                "id": "grep",
-                "name": "grep",
-                "description": "搜索文件内容",
-                "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}},
-                "category": "filesystem"
-            },
-            {
-                "id": "execute",
-                "name": "execute",
-                "description": "执行Shell命令",
-                "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
-                "category": "system"
-            },
-            {
-                "id": "task",
-                "name": "task",
-                "description": "调用子代理",
-                "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "prompt": {"type": "string"}}},
-                "category": "agent"
+        # 从agent实例动态获取真实工具列表
+        session_id = "tools_inspection_session"
+        agent = cls.get_instance()._get_or_create_agent(session_id)
+        
+        # 使用正确的inspect_agent_tools实现
+        tool_map = {}
+        graph_view = agent.get_graph()
+        nodes = getattr(graph_view, "nodes", {}) or {}
+        for _, node in nodes.items():
+            candidate = getattr(node, "data", node)
+            if hasattr(candidate, "tools_by_name"):
+                tool_map.update(candidate.tools_by_name)
+        
+        tools = []
+        for tool_name, tool in tool_map.items():
+            tool_def = {
+                "id": tool_name,
+                "name": tool_name,
+                "description": getattr(tool, "description", ""),
+                "parameters": tool.args_schema.schema() if hasattr(tool, 'args_schema') else {"type": "object", "properties": {}},
+                "category": "general"
             }
-        ]
+            tools.append(tool_def)
+        
+        # 兼容模式：如果动态获取失败则返回默认列表
+        if not tools:
+            tools = [
+                {
+                    "id": "write_todos",
+                    "name": "write_todos",
+                    "description": "管理待办事项列表",
+                    "parameters": {"type": "object", "properties": {}},
+                    "category": "system"
+                },
+                {
+                    "id": "ls",
+                    "name": "ls",
+                    "description": "列出目录内容",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+                    "category": "filesystem"
+                },
+                {
+                    "id": "read_file",
+                    "name": "read_file",
+                    "description": "读取文件内容",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+                    "category": "filesystem"
+                },
+                {
+                    "id": "write_file",
+                    "name": "write_file",
+                    "description": "写入文件内容",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}},
+                    "category": "filesystem"
+                },
+                {
+                    "id": "edit_file",
+                    "name": "edit_file",
+                    "description": "编辑文件内容",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}},
+                    "category": "filesystem"
+                },
+                {
+                    "id": "glob",
+                    "name": "glob",
+                    "description": "搜索文件匹配模式",
+                    "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}},
+                    "category": "filesystem"
+                },
+                {
+                    "id": "grep",
+                    "name": "grep",
+                    "description": "搜索文件内容",
+                    "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}},
+                    "category": "filesystem"
+                },
+                {
+                    "id": "execute",
+                    "name": "execute",
+                    "description": "执行Shell命令",
+                    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+                    "category": "system"
+                },
+                {
+                    "id": "task",
+                    "name": "task",
+                    "description": "调用子代理",
+                    "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "prompt": {"type": "string"}}},
+                    "category": "agent"
+                }
+            ]
+        
+        return tools
