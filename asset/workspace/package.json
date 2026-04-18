@@ -1,0 +1,8 @@
+{
+  "name": "boxteam-agent-demo-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc -p . --noEmit"
+  }
+}
