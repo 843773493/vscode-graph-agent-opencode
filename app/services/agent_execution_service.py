@@ -43,23 +43,11 @@ class AgentExecutionService:
         
         checkpointer = MemorySaver()
         
-        # 启用DeepAgent内置文件系统中间件和工具
-        from deepagents.middleware.filesystem import FilesystemMiddleware
-        
         agent = create_deep_agent(
             model=self.model,
             backend=backend,
             system_prompt="You are a helpful assistant.",
-            middleware=[
-                FilesystemMiddleware(
-                    root_dir=str(session_dir),
-                    allow_write=True,
-                    allow_read=True,
-                    allow_list=True
-                )
-            ],
-            checkpointer=checkpointer,
-            enable_builtin_tools=True
+            checkpointer=checkpointer
         )
         
         self._agent_cache[session_id] = agent
