@@ -5,10 +5,14 @@
 """
 import os
 import sys
+from pathlib import Path
+
+# 定位项目根目录，无论测试文件在哪个子目录运行都能正确找到.env
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # 加载环境变量
 import dotenv
-dotenv.load_dotenv()
+dotenv.load_dotenv(PROJECT_ROOT / ".env")
 
 # 验证KILO_API_KEY是否存在
 api_key = os.getenv("KILO_API_KEY")

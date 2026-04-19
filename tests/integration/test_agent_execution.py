@@ -5,6 +5,10 @@ Runs in isolated playground environment.
 """
 import os
 import sys
+from pathlib import Path
+
+# 定位项目根目录，无论测试文件在哪个子目录运行都能正确找到.env
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # 在导入应用模块之前设置测试环境
 from scripts.setup_test_env import setup_test_environment
@@ -12,7 +16,7 @@ setup_test_environment()
 
 # 现在导入应用模块
 import dotenv
-dotenv.load_dotenv()
+dotenv.load_dotenv(PROJECT_ROOT / ".env")
 
 from app.services.agent_execution_service import AgentExecutionService
 import asyncio
