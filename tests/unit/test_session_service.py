@@ -14,19 +14,24 @@ class TestSessionService:
 
     def setup_method(self):
         """每个测试前设置临时会话目录"""
-        # 保存原始会话目录
-        import app.core.path_utils
-        self.original_sessions_dir = app.core.path_utils.SESSIONS_DIR
-        
         # 创建临时目录作为会话根目录
         self.temp_dir = tempfile.mkdtemp()
-        app.core.path_utils.SESSIONS_DIR = Path(self.temp_dir) / "sessions"
-        app.core.path_utils.SESSIONS_DIR.mkdir(exist_ok=True, parents=True)
+        # 使用monkeypatch覆盖WORKSPACE_ROOT环境变量
+        import os
+        self.original_workspace = os.environ.get("WORKSPACE_ROOT")
+        os.environ["WORKSPACE_ROOT"] = self.temp_dir
+        
+        # 确保目录存在
+        from app.core.path_utils import get_sessions_dir
+        get_sessions_dir().mkdir(exist_ok=True, parents=True)
 
     def teardown_method(self):
         """测试后恢复原始目录"""
-        import app.core.path_utils
-        app.core.path_utils.SESSIONS_DIR = self.original_sessions_dir
+        import os
+        if self.original_workspace is not None:
+            os.environ["WORKSPACE_ROOT"] = self.original_workspace
+        else:
+            os.environ.pop("WORKSPACE_ROOT", None)
         
         # 清理临时目录
         import shutil

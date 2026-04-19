@@ -5,7 +5,6 @@ Runs in isolated playground environment.
 """
 import os
 import sys
-sys.path.insert(0, os.path.abspath('.'))
 
 # 在导入应用模块之前设置测试环境
 from scripts.setup_test_env import setup_test_environment

@@ -5,7 +5,6 @@
 """
 import os
 import sys
-sys.path.insert(0, os.path.abspath('.'))
 
 # 加载环境变量
 import dotenv
