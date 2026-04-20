@@ -1,0 +1,28 @@
+{
+  "$schema": "../config.json",
+  "llm":{
+    "providers":[
+      {
+        "endpoint": "https://opencode.ai/zen/v1",
+        "model": "minimax-m2.5-free",
+        "api_key": "${OPENCODE_ZEN_API_KEY}",
+        "interface": "chat.completion"
+      },
+      {
+        "endpoint": "https://openrouter.ai/api/v1",
+        "model": "openrouter/free",
+        "api_key": "${OPENROUTER_API_KEY}",
+        "interface": "responses"
+      },
+      {
+        "endpoint": "https://openrouter.ai/api/v1",
+        "model": "openai/gpt-oss-120b:free",
+        "api_key": "${OPENROUTER_API_KEY}",
+        "interface": "responses"
+      }
+    ]
+  },
+  "logger": {
+  }
+}
+

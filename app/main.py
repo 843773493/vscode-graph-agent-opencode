@@ -1,6 +1,10 @@
 from __future__ import annotations
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
+from app.core.trace_middleware import TraceMiddleware
 from app.api.agents import router as agents_router
 from app.api.artifacts import router as artifacts_router
 from app.api.config import router as config_router
@@ -10,6 +14,33 @@ from app.api.runtime import router as runtime_router
 from app.api.sessions import router as sessions_router
 from app.api.tools import router as tools_router
 from app.api.workspace import router as workspace_router
+from app.core.env import load_project_env
+
+load_project_env(__file__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    from app.core import path_utils
+
+    path_utils.initialize_directories()
+
+    from app.services.config_service import ConfigService
+
+    config_service = ConfigService.get_instance()
+    workspace_root = os.environ.get("WORKSPACE_ROOT", "")
+
+    if workspace_root:
+        config_service._apply_workspace_override(workspace_root)
+
+    try:
+        config_service.validate_boxteam_config()
+    except Exception as e:
+        import logging
+
+        logging.warning(f"boxteam.json 配置验证失败: {e}")
+
+    yield
 
 app = FastAPI(
     title="BoxTeam Local Workspace API",
@@ -17,7 +48,11 @@ app = FastAPI(
     openapi_url="/api/v1/openapi.json",
     docs_url="/api/v1/docs",
     redoc_url="/api/v1/redoc",
+    lifespan=lifespan,
 )
+
+# Add trace middleware
+app.add_middleware(TraceMiddleware)
 
 app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(runtime_router, prefix="/api/v1")
@@ -30,15 +65,6 @@ app.include_router(artifacts_router, prefix="/api/v1")
 app.include_router(config_router, prefix="/api/v1")
 
 
-@app.on_event("startup")
-async def startup_event():
-    # 初始化工作区目录
-    from app.core import path_utils
-    path_utils.initialize_directories()
-
-
 if __name__ == "__main__":
-    import dotenv
-    dotenv.load_dotenv()
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)

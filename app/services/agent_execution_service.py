@@ -21,24 +21,25 @@ from app.core.event_bus import EventBus, EventType
 
 class LLMLoggingMiddleware(AgentMiddleware):
     """唯一职责：存储每个LLM调用的完整原始请求/响应"""
+
+    def __init__(self):
+        self._prepared_session_dirs: set[str] = set()
     
     def _get_session_id(self, runtime) -> str:
-        """安全逐层访问session_id，永远不会抛出异常"""
-        # 安全逐层访问，每一层都做存在性检查
-        config = getattr(runtime, 'config', None)
-        if not config:
-            return f"session_{int(time.time() * 1000)}"
-        
-        configurable = config.get("configurable", None)
-        if not configurable:
-            return f"session_{int(time.time() * 1000)}"
-        
-        return configurable.get('thread_id', f"session_{int(time.time() * 1000)}")
+        """直接读取 LangChain 的 thread_id。"""
+        execution_info = runtime.execution_info
+        return execution_info.thread_id
+
+    def _ensure_session_dir(self, session_id: str) -> Path:
+        logs_dir = get_logs_dir() / "llm_requests" / session_id
+        if session_id not in self._prepared_session_dirs:
+            logs_dir.mkdir(exist_ok=True, parents=True)
+            self._prepared_session_dirs.add(session_id)
+        return logs_dir
     
     def _save_log(self, session_id: str, request: ModelRequest, response: ModelResponse) -> None:
         try:
-            logs_dir = get_logs_dir() / "llm_requests" / session_id
-            logs_dir.mkdir(exist_ok=True, parents=True)
+            logs_dir = self._ensure_session_dir(session_id)
             
             timestamp = int(time.time() * 1000)
             log_file = logs_dir / f"{timestamp}.json"
@@ -68,12 +69,6 @@ class LLMLoggingMiddleware(AgentMiddleware):
                 
         except Exception:
             pass
-
-    def _get_session_id(self, runtime) -> str:
-        """正确获取真实session_id，不返回unknown"""
-        config = getattr(runtime, 'config', {})
-        configurable = config.get("configurable", {})
-        return configurable["thread_id"]
 
     def wrap_model_call(
         self,
@@ -134,29 +129,16 @@ class ExecutionTraceMiddleware(AgentMiddleware):
         self._session_start_times = {}
     
     def _get_session_id(self, runtime) -> str:
-        """安全逐层访问session_id，永远不会抛出异常"""
-        # 安全逐层访问，每一层都做存在性检查
-        config = getattr(runtime, 'config', None)
-        if not config:
-            return f"session_{int(time.time() * 1000)}"
-        
-        configurable = config.get("configurable", None)
-        if not configurable:
-            return f"session_{int(time.time() * 1000)}"
-        
-        return configurable.get('thread_id', f"session_{int(time.time() * 1000)}")
+        """直接读取 LangChain 的 thread_id。"""
+        execution_info = runtime.execution_info
+        return execution_info.thread_id
     
     def _save_trace_event(self, session_id: str, event_type: str, data: dict) -> None:
         try:
             logs_dir = get_logs_dir() / "traces"
             logs_dir.mkdir(exist_ok=True, parents=True)
             
-            # 同一个会话使用同一个日志文件
-            if session_id not in self._session_start_times:
-                self._session_start_times[session_id] = int(time.time() * 1000)
-            
-            start_ts = self._session_start_times[session_id]
-            log_file = logs_dir / f"trace_{session_id}_{start_ts}.jsonl"
+            log_file = logs_dir / f"trace_{session_id}.jsonl"
             
             timestamp = int(time.time() * 1000)
             log_data = {
@@ -264,12 +246,12 @@ class AgentExecutionService:
             model=self.model,
             backend=backend,
             system_prompt="You are a helpful assistant.",
-            checkpointer=checkpointer
-            # 日志中间件暂时注释，完整实现将在单独分支开发
-            # middleware=[
-            #     LLMLoggingMiddleware(),
-            #     ExecutionTraceMiddleware(),
-            # ]
+            checkpointer=checkpointer,
+
+            middleware=[
+                LLMLoggingMiddleware(),
+                ExecutionTraceMiddleware(),
+            ]
         )
         
         self._agent_cache[session_id] = agent
@@ -301,7 +283,7 @@ class AgentExecutionService:
         
         config = {
             "configurable": {
-                "thread_id": session_id
+                "thread_id": session_id,
             }
         }
         

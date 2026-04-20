@@ -5,13 +5,13 @@ from typing import Optional
 from app.core.exceptions import ForbiddenError
 
 
-# 工作区根目录配置 - 如果设置了环境变量则使用，否则默认为 ./workspace
 def get_workspace_root() -> Path:
-    """获取工作区根目录，延迟初始化避免导入时提前创建目录"""
-    if "WORKSPACE_ROOT" in os.environ:
-        return Path(os.environ["WORKSPACE_ROOT"]).resolve()
-    else:
-        return Path(os.getcwd()) / "workspace"
+    """获取工作区根目录，必须由外部进程显式传入 WORKSPACE_ROOT。"""
+    workspace_root = os.environ.get("WORKSPACE_ROOT")
+    if not workspace_root:
+        raise RuntimeError("未设置 WORKSPACE_ROOT，请在启动进程时显式传入工作区根目录")
+
+    return Path(workspace_root).resolve()
 
 def get_boxteam_root() -> Path:
     return get_workspace_root() / ".boxteam"

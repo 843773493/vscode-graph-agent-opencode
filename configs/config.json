@@ -1,0 +1,71 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://example.com/llm-config.schema.json",
+    "title": "LLM Config Schema",
+    "type": "object",
+    "additionalProperties": true,
+    "required": [
+        "llm",
+        "logger"
+    ],
+    "properties": {
+        "llm": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "providers"
+            ],
+            "properties": {
+                "providers": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/$defs/provider"
+                    }
+                }
+            }
+        },
+        "logger": {
+            "type": "object"
+        }
+    },
+    "$defs": {
+        "provider": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "endpoint",
+                "model",
+                "api_key",
+                "interface"
+            ],
+            "properties": {
+                "endpoint": {
+                    "type": "string",
+                    "format": "uri",
+                    "minLength": 1
+                },
+                "model": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "api_key": {
+                    "description": "Can be a literal API key string, or an environment variable reference like ${OPENAI_API_KEY}.",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "interface": {
+                    "type": "string",
+                    "enum": [
+                        "chat.completion",
+                        "responses"
+                    ]
+                },
+                "auth_header": {
+                    "type": "string",
+                    "minLength": 1
+                }
+            }
+        }
+    }
+}

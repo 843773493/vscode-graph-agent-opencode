@@ -35,6 +35,7 @@ def setup_test_environment():
     # Set environment variable
     os.environ["WORKSPACE_ROOT"] = str(target_workspace)
     print(f"Set WORKSPACE_ROOT={target_workspace}")
+    print(f"测试工作区路径: {target_workspace}")
     
     # Verify directories exist
     boxteam_dir = target_workspace / ".boxteam"
@@ -44,6 +45,7 @@ def setup_test_environment():
     print("\nTest environment setup complete!")
     print(f"   Workspace root: {target_workspace}")
     print(f"   All tests will run in isolated playground environment")
+    return target_workspace
 
 if __name__ == "__main__":
     setup_test_environment()

@@ -19,6 +19,7 @@ class RunMode(str, Enum):
 
 
 class JobStatus(str, Enum):
+    accepted = "accepted"
     queued = "queued"
     running = "running"
     streaming = "streaming"
@@ -26,6 +27,7 @@ class JobStatus(str, Enum):
     paused = "paused"
     interrupt_pending = "interrupt_pending"
     cancelling = "cancelling"
+    completed = "completed"
     succeeded = "succeeded"
     failed = "failed"
     cancelled = "cancelled"

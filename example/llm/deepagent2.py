@@ -180,6 +180,7 @@ model = ChatOpenAI(
     use_responses_api=False,
     max_retries=3,
 )
+
 fallback_model_1 = ChatOpenAI(
     model="bytedance-seed/dola-seed-2.0-pro:free",
     api_key=os.getenv("KILO_API_KEY"),
@@ -206,10 +207,29 @@ agent = create_deep_agent(
     checkpointer=checkpointer,   # 关键
 )
 
+def inspect_agent_tools(agent):
+    tool_map = {}
+
+    graph_view = agent.get_graph()
+    nodes = getattr(graph_view, "nodes", {}) or {}
+
+    for _, node in nodes.items():
+        candidate = getattr(node, "data", node)
+        if hasattr(candidate, "tools_by_name"):
+            tool_map.update(candidate.tools_by_name)
+
+    return tool_map
+
+tools = inspect_agent_tools(agent)
+print(list(tools.keys()))
+
 config = {
     "configurable": {
         "thread_id": "user_001"  # 同一个用户/会话固定一个 thread_id
-    }
+    },
+    "metadata": {
+        "thread_id": "user_001",   # 给 LangSmith 分组用
+    },
 }
 
 # 第一轮

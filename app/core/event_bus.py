@@ -9,6 +9,11 @@ from app.schemas.job import EventDTO
 
 
 class EventType:
+    JOB_CREATED = "job_created"
+    JOB_STARTED = "job_started"
+    JOB_COMPLETED = "job_completed"
+    JOB_FAILED = "job_failed"
+    JOB_CANCELLED = "job_cancelled"
     AGENT_START = "agent_start"
     AGENT_STEP = "agent_step"
     AGENT_END = "agent_end"

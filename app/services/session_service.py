@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 from app.schemas.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest
@@ -58,7 +58,7 @@ class SessionService:
     async def create(session: SessionCreateRequest) -> SessionDTO:
         """Create new session"""
         session_id = f"ses_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         session_data = SessionDTO(
             session_id=session_id,
@@ -89,7 +89,7 @@ class SessionService:
         # 确保时间戳递增，避免测试时毫秒级冲突
         import time
         time.sleep(0.001)
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = datetime.now(timezone.utc)
         
         session_file = get_session_file(session_id)
         with open(session_file, "w", encoding="utf-8") as f:

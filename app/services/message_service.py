@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.schemas.message import MessageDTO, MessageCreate, MessageRunRequest, MessageRunAccepted
-from app.schemas.common import MessageRole, JobStatus
+from app.schemas.common import MessageRole, JobStatus, CursorPage
 
 
 class MessageService:
@@ -15,9 +15,9 @@ class MessageService:
             cls._instance = MessageService()
         return cls._instance
     
-    async def list(self, session_id: str) -> list[MessageDTO]:
+    async def list(self, session_id: str, limit: int = 50, cursor: str | None = None) -> CursorPage[MessageDTO]:
         now = datetime.now()
-        return [
+        items = [
             MessageDTO(
                 message_id="msg_001",
                 session_id=session_id,
@@ -46,6 +46,8 @@ class MessageService:
                 created_at=now
             )
         ]
+
+        return CursorPage(items=items[:limit], next_cursor=None, has_more=False)
 
     async def get(self, message_id: str) -> MessageDTO:
         return MessageDTO(
