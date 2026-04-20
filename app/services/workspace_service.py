@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from app.schemas.workspace import WorkspaceDTO, WorkspaceContextDTO
-from app.core.path_utils import WORKSPACE_ROOT
+from app.core.path_utils import get_workspace_root
 
 
 class WorkspaceService:
     def __init__(self):
         self.workspace_id = "ws_local"
-        self.root_path = str(WORKSPACE_ROOT.resolve())
+        self.root_path = str(get_workspace_root())
         self.name = os.path.basename(os.getcwd())
 
     async def get(self) -> WorkspaceDTO:
@@ -26,7 +26,7 @@ class WorkspaceService:
             },
             runtime={
                 "pid": os.getpid(),
-                "started_at": datetime.utcnow().isoformat() + "Z"
+                "started_at": datetime.now(timezone.utc).isoformat() + "Z"
             }
         )
 
@@ -37,7 +37,7 @@ class WorkspaceService:
             project_type="python",
             languages=["python", "javascript", "typescript"],
             git={},
-            index_status={"status": "ready", "indexed_at": datetime.utcnow().isoformat() + "Z"},
+            index_status={"status": "ready", "indexed_at": datetime.now(timezone.utc).isoformat() + "Z"},
             config={}
         )
 
@@ -45,7 +45,7 @@ class WorkspaceService:
         return {
             "status": "ready",
             "indexed_files": 0,
-            "last_updated": datetime.utcnow().isoformat() + "Z"
+            "last_updated": datetime.now(timezone.utc).isoformat() + "Z"
         }
 
     async def rebuild_index(self) -> dict:

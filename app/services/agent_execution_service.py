@@ -1,15 +1,232 @@
 from __future__ import annotations
 import os
+import json
+import textwrap
+import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.tools.tool_node import ToolCallRequest
+from langchain.messages import ToolMessage
+from langgraph.types import Command
 
-from app.core.path_utils import get_session_path, ensure_session_dir
+from app.core.path_utils import get_workspace_root, get_logs_dir
 from app.core.event_bus import EventBus, EventType
+
+
+class LLMLoggingMiddleware(AgentMiddleware):
+    """唯一职责：存储每个LLM调用的完整原始请求/响应"""
+    
+    def _get_session_id(self, runtime) -> str:
+        """安全逐层访问session_id，永远不会抛出异常"""
+        # 安全逐层访问，每一层都做存在性检查
+        config = getattr(runtime, 'config', None)
+        if not config:
+            return f"session_{int(time.time() * 1000)}"
+        
+        configurable = config.get("configurable", None)
+        if not configurable:
+            return f"session_{int(time.time() * 1000)}"
+        
+        return configurable.get('thread_id', f"session_{int(time.time() * 1000)}")
+    
+    def _save_log(self, session_id: str, request: ModelRequest, response: ModelResponse) -> None:
+        try:
+            logs_dir = get_logs_dir() / "llm_requests" / session_id
+            logs_dir.mkdir(exist_ok=True, parents=True)
+            
+            timestamp = int(time.time() * 1000)
+            log_file = logs_dir / f"{timestamp}.json"
+            
+            def serialize_object(obj):
+                if hasattr(obj, '__dict__'):
+                    result = {}
+                    for key, value in obj.__dict__.items():
+                        if not key.startswith('_'):
+                            try:
+                                json.dumps(value, default=str)
+                                result[key] = value
+                            except:
+                                result[key] = str(value)
+                    return result
+                return str(obj)
+            
+            log_data = {
+                "timestamp": timestamp,
+                "session_id": session_id,
+                "request": serialize_object(request),
+                "response": serialize_object(response)
+            }
+            
+            with open(log_file, "w", encoding="utf-8") as f:
+                json.dump(log_data, f, ensure_ascii=False, indent=2, default=str)
+                
+        except Exception:
+            pass
+
+    def _get_session_id(self, runtime) -> str:
+        """正确获取真实session_id，不返回unknown"""
+        config = getattr(runtime, 'config', {})
+        configurable = config.get("configurable", {})
+        return configurable["thread_id"]
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        session_id = self._get_session_id(request.runtime)
+        model_name = getattr(request.model, "model_name", str(request.model))
+        
+        response = handler(request)
+        
+        self._save_log(session_id, request, response)
+        
+        try:
+            bus = EventBus.get_instance()
+            import asyncio
+            asyncio.create_task(bus.publish(
+                job_id=session_id,
+                event_type=EventType.LLM_REQUEST,
+                payload={"model": model_name, "timestamp": int(time.time() * 1000)},
+                agent_id="deep_agent"
+            ))
+        except Exception:
+            pass
+
+        return response
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        session_id = self._get_session_id(request.runtime)
+        model_name = getattr(request.model, "model_name", str(request.model))
+        
+        response = await handler(request)
+        
+        self._save_log(session_id, request, response)
+        
+        try:
+            bus = EventBus.get_instance()
+            await bus.publish(
+                job_id=session_id,
+                event_type=EventType.LLM_REQUEST,
+                payload={"model": model_name, "timestamp": int(time.time() * 1000)},
+                agent_id="deep_agent"
+            )
+        except Exception:
+            pass
+
+        return response
+
+
+class ExecutionTraceMiddleware(AgentMiddleware):
+    """唯一职责：存储完整的执行轨迹事件"""
+    
+    def __init__(self):
+        self._session_start_times = {}
+    
+    def _get_session_id(self, runtime) -> str:
+        """安全逐层访问session_id，永远不会抛出异常"""
+        # 安全逐层访问，每一层都做存在性检查
+        config = getattr(runtime, 'config', None)
+        if not config:
+            return f"session_{int(time.time() * 1000)}"
+        
+        configurable = config.get("configurable", None)
+        if not configurable:
+            return f"session_{int(time.time() * 1000)}"
+        
+        return configurable.get('thread_id', f"session_{int(time.time() * 1000)}")
+    
+    def _save_trace_event(self, session_id: str, event_type: str, data: dict) -> None:
+        try:
+            logs_dir = get_logs_dir() / "traces"
+            logs_dir.mkdir(exist_ok=True, parents=True)
+            
+            # 同一个会话使用同一个日志文件
+            if session_id not in self._session_start_times:
+                self._session_start_times[session_id] = int(time.time() * 1000)
+            
+            start_ts = self._session_start_times[session_id]
+            log_file = logs_dir / f"trace_{session_id}_{start_ts}.jsonl"
+            
+            timestamp = int(time.time() * 1000)
+            log_data = {
+                "timestamp": timestamp,
+                "event_type": event_type,
+                "data": data
+            }
+            
+            # 追加写入JSONL格式，每个事件一行
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(log_data, ensure_ascii=False, default=str) + "\n")
+                
+        except Exception:
+            pass
+
+    def before_agent(self, state: dict[str, Any], runtime):
+        session_id = self._get_session_id(runtime)
+        self._save_trace_event(session_id, "agent_start", {"message_count": len(state.get("messages", []))})
+        return None
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command],
+    ) -> ToolMessage | Command:
+        session_id = self._get_session_id(request.runtime)
+        tool_call = request.tool_call
+        tool_name = tool_call.get("name", "unknown_tool")
+        
+        self._save_trace_event(session_id, "tool_call_start", {
+            "tool_name": tool_name,
+            "args": tool_call.get("args", {})
+        })
+        
+        result = handler(request)
+        
+        self._save_trace_event(session_id, "tool_call_end", {
+            "tool_name": tool_name,
+            "result": str(result)
+        })
+        
+        return result
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command],
+    ) -> ToolMessage | Command:
+        session_id = self._get_session_id(request.runtime)
+        tool_call = request.tool_call
+        tool_name = tool_call.get("name", "unknown_tool")
+        
+        self._save_trace_event(session_id, "tool_call_start", {
+            "tool_name": tool_name,
+            "args": tool_call.get("args", {})
+        })
+        
+        result = await handler(request)
+        
+        self._save_trace_event(session_id, "tool_call_end", {
+            "tool_name": tool_name,
+            "result": str(result)
+        })
+        
+        return result
+
+    def after_agent(self, state: dict[str, Any], runtime):
+        session_id = self._get_session_id(runtime)
+        self._save_trace_event(session_id, "agent_end", {"final_message_count": len(state.get("messages", []))})
+        return None
 
 
 class AgentExecutionService:
@@ -35,9 +252,9 @@ class AgentExecutionService:
         if session_id in self._agent_cache:
             return self._agent_cache[session_id]
         
-        session_dir = ensure_session_dir(session_id)
+        workspace_root = get_workspace_root()
         backend = FilesystemBackend(
-            root_dir=str(session_dir),
+            root_dir=str(workspace_root),
             virtual_mode=True,
         )
         
@@ -48,6 +265,11 @@ class AgentExecutionService:
             backend=backend,
             system_prompt="You are a helpful assistant.",
             checkpointer=checkpointer
+            # 日志中间件暂时注释，完整实现将在单独分支开发
+            # middleware=[
+            #     LLMLoggingMiddleware(),
+            #     ExecutionTraceMiddleware(),
+            # ]
         )
         
         self._agent_cache[session_id] = agent
