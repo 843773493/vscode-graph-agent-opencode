@@ -1,9 +1,13 @@
 from __future__ import annotations
+import json
+import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from app.schemas.message import MessageDTO, MessageCreate, MessageRunRequest, MessageRunAccepted
 from app.schemas.common import MessageRole, JobStatus, CursorPage
+from app.core.path_utils import get_session_path
 
 
 class MessageService:
@@ -14,68 +18,77 @@ class MessageService:
         if cls._instance is None:
             cls._instance = MessageService()
         return cls._instance
+
+    def _message_file(self, session_id: str) -> Path:
+        return get_session_path(session_id) / "messages.jsonl"
+
+    def _read_messages(self, session_id: str) -> list[MessageDTO]:
+        message_file = self._message_file(session_id)
+        if not message_file.exists():
+            return []
+
+        messages: list[MessageDTO] = []
+        with open(message_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                data = json.loads(line)
+                messages.append(MessageDTO.model_validate(data))
+
+        messages.sort(key=lambda item: item.created_at)
+        return messages
+
+    def _append_message(self, message: MessageDTO) -> MessageDTO:
+        message_file = self._message_file(message.session_id)
+        message_file.parent.mkdir(exist_ok=True, parents=True)
+
+        with open(message_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(message.model_dump(mode="json"), ensure_ascii=False) + "\n")
+
+        return message
+
+    async def append_assistant_message(self, session_id: str, content: str, metadata: dict | None = None) -> MessageDTO:
+        message = MessageDTO(
+            message_id=f"msg_{uuid.uuid4().hex[:12]}",
+            session_id=session_id,
+            role=MessageRole.assistant,
+            content=content,
+            attachments=[],
+            metadata=metadata or {},
+            created_at=datetime.now(),
+        )
+        return self._append_message(message)
     
     async def list(self, session_id: str, limit: int = 50, cursor: str | None = None) -> CursorPage[MessageDTO]:
-        now = datetime.now()
-        items = [
-            MessageDTO(
-                message_id="msg_001",
-                session_id=session_id,
-                role=MessageRole.user,
-                content="请帮我实现用户认证模块",
-                attachments=[],
-                metadata={"source": "user_input"},
-                created_at=now
-            ),
-            MessageDTO(
-                message_id="msg_002",
-                session_id=session_id,
-                role=MessageRole.assistant,
-                content="好的，我将为您实现用户认证模块。首先我会创建用户模型、认证路由和JWT中间件。",
-                attachments=[],
-                metadata={"agent": "planner"},
-                created_at=now
-            ),
-            MessageDTO(
-                message_id="msg_003",
-                session_id=session_id,
-                role=MessageRole.assistant,
-                content="已完成用户模型创建，正在创建认证路由...",
-                attachments=[],
-                metadata={"agent": "executor"},
-                created_at=now
-            )
-        ]
+        items = self._read_messages(session_id)
+        return CursorPage(items=items[:limit], next_cursor=None, has_more=len(items) > limit)
 
-        return CursorPage(items=items[:limit], next_cursor=None, has_more=False)
+    async def get(self, session_id: str, message_id: str) -> MessageDTO:
+        for message in self._read_messages(session_id):
+            if message.message_id == message_id:
+                return message
 
-    async def get(self, message_id: str) -> MessageDTO:
-        return MessageDTO(
-            message_id=message_id,
-            session_id="ses_123",
-            role=MessageRole.user,
-            content="请帮我实现用户认证模块",
-            attachments=[],
-            metadata={"source": "user_input"},
-            created_at=datetime.now()
-        )
+        raise ValueError(f"Message {message_id} not found in session {session_id}")
 
     async def create(self, session_id: str, message_create: MessageCreate) -> MessageDTO:
-        return MessageDTO(
-            message_id=f"msg_{datetime.now().timestamp()}",
+        message = MessageDTO(
+            message_id=f"msg_{uuid.uuid4().hex[:12]}",
             session_id=session_id,
             role=message_create.role,
             content=message_create.content,
             attachments=message_create.attachments,
             metadata=message_create.metadata,
-            created_at=datetime.now()
+            created_at=datetime.now(),
         )
+        return self._append_message(message)
 
     async def run(self, session_id: str, run_request: MessageRunRequest) -> MessageRunAccepted:
         message = await self.create(session_id, run_request.message)
         return MessageRunAccepted(
             message_id=message.message_id,
-            job_id=f"job_{datetime.now().timestamp()}",
+            job_id=f"job_{uuid.uuid4().hex[:12]}",
             status=JobStatus.accepted
         )
     

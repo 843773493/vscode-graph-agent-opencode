@@ -3,9 +3,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 from app.schemas.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest
-from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir
+from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir, get_logs_dir
 from app.core.exceptions import NotFoundError
 
 
@@ -115,3 +115,29 @@ class SessionService:
         # Verify session exists
         await SessionService.get(session_id)
         return {"session_id": session_id, "action": action, "status": "executed"}
+
+    @staticmethod
+    async def list_trace_events(session_id: str) -> list[dict[str, Any]]:
+        """Read the stored execution trace for a session."""
+        trace_file = get_logs_dir() / "traces" / f"trace_{session_id}.jsonl"
+
+        if not trace_file.exists():
+            return []
+
+        events: list[dict[str, Any]] = []
+        with open(trace_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if isinstance(event, dict):
+                    events.append(event)
+
+        events.sort(key=lambda item: item.get("timestamp", 0))
+        return events

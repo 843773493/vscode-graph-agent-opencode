@@ -4,6 +4,7 @@
   "description": "A minimal workspace-aware VS Code chat participant with a FastAPI backend.",
   "version": "0.0.1",
   "publisher": "local",
+  "type": "module",
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -12,9 +13,35 @@
   ],
   "main": "./src/extension.js",
   "activationEvents": [
-    "onChatParticipant:vscode-graph-agent.workspace"
+    "onStartupFinished",
+    "onView:vscode-graph-agent.sidebar",
+    "onCommand:vscode-graph-agent.openSidebar"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "vscode-graph-agent.openSidebar",
+        "title": "Graph Agent: Open Sidebar"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vscode-graph-agent",
+          "title": "Graph Agent",
+          "icon": "media/graph-agent.svg"
+        }
+      ]
+    },
+    "views": {
+      "vscode-graph-agent": [
+        {
+          "type": "webview",
+          "id": "vscode-graph-agent.sidebar",
+          "name": "Workspace Chat"
+        }
+      ]
+    },
     "chatParticipants": [
       {
         "id": "vscode-graph-agent.workspace",
@@ -34,7 +61,7 @@
         },
         "vscodeGraphAgent.port": {
           "type": "number",
-          "default": 8765,
+          "default": 8000,
           "description": "Local port for the backend service."
         },
         "vscodeGraphAgent.model": {

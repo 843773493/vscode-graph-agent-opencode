@@ -41,7 +41,7 @@ coverage/
 .svelte-kit/
 
 # VS Code
-.vscode/
+reference_repo/
 
 # OS / editor junk
 .DS_Store

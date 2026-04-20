@@ -41,6 +41,16 @@ async def get_session(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.get("/{session_id}/traces", response_model=APIResponse[list[dict]], summary="获取会话执行轨迹")
+async def list_session_traces(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+):
+    result = await SessionService.list_trace_events(session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.patch("/{session_id}", response_model=APIResponse[SessionDTO], summary="更新会话")
 async def update_session(
     session_id: str,

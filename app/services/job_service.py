@@ -170,6 +170,16 @@ class JobService:
             
             agent_service = AgentExecutionService.get_instance()
             result = await agent_service.run_step(session_id, message)
+
+            from app.services.message_service import MessageService
+            await MessageService().append_assistant_message(
+                session_id,
+                result,
+                metadata={
+                    "source": "agent_execution",
+                    "job_id": job_id,
+                },
+            )
             
             job.result = result
             job.status = JobStatus.completed
