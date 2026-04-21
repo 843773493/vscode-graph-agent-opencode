@@ -57,6 +57,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     assert "emit_system_time_messages" in tool_names
     assert "monitor_session_agent_end" in tool_names
     assert "collect_background_messages" in tool_names
+    assert "send_message_to_session" in tool_names
 
 
 @pytest.mark.asyncio
@@ -167,3 +168,48 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
     assert emitted_messages[0]["kind"].value == "interrupt"
     assert emitted_messages[0]["content"] == "橙子"
     assert emitted_messages[0]["payload"]["final_text"] == "橙子"
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_session_tool_creates_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(AgentExecutionService, "_instance", None)
+    monkeypatch.setattr(BackgroundMessageBus, "_instance", None)
+    monkeypatch.setattr(
+        "app.services.agent_execution_service.ConfigService.get_instance",
+        lambda: _DummyConfigService(),
+    )
+
+    captured = {}
+
+    class _FakeResult:
+        def model_dump(self, mode="json"):
+            return {
+                "message_id": "msg_test",
+                "job_id": "job_test",
+                "status": "accepted",
+            }
+
+    class _FakeMessageService:
+        async def create_and_run(self, session_id, run_request):
+            captured["session_id"] = session_id
+            captured["content"] = run_request.message.content
+            captured["role"] = run_request.message.role
+            captured["agent_id"] = run_request.run.agent_id
+            return _FakeResult()
+
+    monkeypatch.setattr(
+        "app.services.agent_execution_service.MessageService.get_instance",
+        lambda: _FakeMessageService(),
+    )
+
+    service = AgentExecutionService.get_instance()
+    tool = service._create_send_message_to_session_tool()
+
+    result = await tool.ainvoke({"target_session_id": "ses_target", "content": "请再次只重复前面的话"})
+
+    assert captured["session_id"] == "ses_target"
+    assert captured["content"] == "请再次只重复前面的话"
+    assert captured["role"] == "user"
+    assert captured["agent_id"] == "deep_agent"
+    assert result["job_id"] == "job_test"

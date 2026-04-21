@@ -105,3 +105,36 @@ async def test_job_control_cancel_requests_task_cancel(monkeypatch):
     assert job.status == JobStatus.cancelling
     assert result.status == JobStatus.cancelling
     assert task.cancel_called is True
+
+
+@pytest.mark.asyncio
+async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch):
+    service = JobService.get_instance()
+    monkeypatch.setattr(JobService, "_jobs", {})
+    service._session_current_job = {}
+    service._session_waiting_jobs = {}
+
+    started_jobs: list[str] = []
+
+    def fake_start_job_task(job):
+        started_jobs.append(job.job_id)
+        job.task = DummyTask(done=False)
+
+    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
+
+    session_id = "session_queue_test"
+    first_job_id = await service.start_job(session_id, "first")
+    second_job_id = await service.start_job(session_id, "second")
+
+    assert started_jobs == [first_job_id]
+    assert service._session_current_job[session_id] == first_job_id
+    assert list(service._session_waiting_jobs[session_id]) == [second_job_id]
+    assert service._jobs[second_job_id].status == JobStatus.queued
+
+    first_job = service._jobs[first_job_id]
+    first_job.status = JobStatus.completed
+
+    await service._schedule_next_job_if_needed(first_job)
+
+    assert started_jobs == [first_job_id, second_job_id]
+    assert service._session_current_job[session_id] == second_job_id

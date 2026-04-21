@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import uuid
+from collections import deque
 from datetime import datetime
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
@@ -33,6 +34,9 @@ class JobService:
     
     def __init__(self):
         self._bus = JobEventBus.get_instance()
+        self._session_current_job: dict[str, str] = {}
+        self._session_waiting_jobs: dict[str, deque[str]] = {}
+        self._dispatch_lock = asyncio.Lock()
     
     @classmethod
     def get_instance(cls) -> "JobService":
@@ -147,17 +151,88 @@ class JobService:
         
         self._jobs[job_id] = job
         
-        # 启动后台异步任务
-        job.task = asyncio.create_task(self._run_job_background(job_id, session_id, message))
-        
         await self._bus.publish(
             job_id=job_id,
             event_type=EventType.JOB_CREATED,
             payload={"session_id": session_id, "message": message},
             agent_id="job_service"
         )
+
+        queued, blocked_by = await self._enqueue_or_dispatch(job)
+        if queued:
+            await self._bus.publish(
+                job_id=job_id,
+                event_type=EventType.STATUS_CHANGE,
+                payload={
+                    "status": JobStatus.queued.value,
+                    "reason": "waiting_previous_job",
+                    "blocked_by_job_id": blocked_by,
+                },
+                agent_id="job_service",
+            )
         
         return job_id
+
+    def _is_terminal_status(self, status: JobStatus) -> bool:
+        return status in {
+            JobStatus.completed,
+            JobStatus.succeeded,
+            JobStatus.failed,
+            JobStatus.cancelled,
+            JobStatus.timed_out,
+        }
+
+    def _start_job_task(self, job: JobState) -> None:
+        job.task = asyncio.create_task(self._run_job_background(job.job_id, job.session_id, job.message))
+
+    async def _enqueue_or_dispatch(self, job: JobState) -> tuple[bool, str | None]:
+        async with self._dispatch_lock:
+            current_job_id = self._session_current_job.get(job.session_id)
+            if current_job_id:
+                current_job = self._jobs.get(current_job_id)
+                if current_job and not self._is_terminal_status(current_job.status):
+                    if job.session_id not in self._session_waiting_jobs:
+                        self._session_waiting_jobs[job.session_id] = deque()
+                    self._session_waiting_jobs[job.session_id].append(job.job_id)
+                    job.status = JobStatus.queued
+                    job.updated_at = datetime.now()
+                    return True, current_job_id
+
+            self._session_current_job[job.session_id] = job.job_id
+            self._start_job_task(job)
+            return False, None
+
+    async def _schedule_next_job_if_needed(self, finished_job: JobState) -> None:
+        if not self._is_terminal_status(finished_job.status):
+            return
+
+        next_job: JobState | None = None
+
+        async with self._dispatch_lock:
+            current_job_id = self._session_current_job.get(finished_job.session_id)
+            if current_job_id != finished_job.job_id:
+                return
+
+            waiting = self._session_waiting_jobs.get(finished_job.session_id, deque())
+            while waiting:
+                next_job_id = waiting.popleft()
+                candidate = self._jobs.get(next_job_id)
+                if candidate and candidate.status == JobStatus.queued:
+                    next_job = candidate
+                    break
+
+            if waiting:
+                self._session_waiting_jobs[finished_job.session_id] = waiting
+            else:
+                self._session_waiting_jobs.pop(finished_job.session_id, None)
+
+            if next_job is None:
+                self._session_current_job.pop(finished_job.session_id, None)
+                return
+
+            self._session_current_job[finished_job.session_id] = next_job.job_id
+
+        self._start_job_task(next_job)
     
     async def _run_job_background(self, job_id: str, session_id: str, message: str):
         """后台执行Job的实际逻辑"""
@@ -232,6 +307,8 @@ class JobService:
                 payload={"error": str(e)},
                 agent_id="job_service"
             )
+        finally:
+            await self._schedule_next_job_if_needed(job)
 
     def get_active_job_for_session(self, session_id: str) -> JobState | None:
         active_statuses = {

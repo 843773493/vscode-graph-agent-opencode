@@ -219,9 +219,13 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
         json={
             "message": {
                 "content": (
-                    f"你要监控 session {session2_id} 的 AGENT_END 事件。"
-                    "监控到之后，务必先调用 collect_background_messages 工具读取打断消息，"
-                    "然后只重复其中的 final_text，不要加任何多余的话。"
+                    "严格按顺序执行，禁止跳步："
+                    f"1) 调用 monitor_session_agent_end 监控 session {session2_id}；"
+                    "2) 紧接着调用 collect_background_messages，等待并读取 interrupt 消息；"
+                    "3) 从 interrupt 消息里提取 final_text，并在你的回复中原样重复该 final_text；"
+                    f"4) 调用 send_message_to_session，向 session {session2_id} 发送：再次只重复前面的话；"
+                    "5) 完成后结束。"
+                    "如果任一步未完成，不允许结束。"
                 ),
             },
             "run": {
@@ -269,6 +273,13 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
     assert session2_result["status"] in {"completed", "succeeded"}
     assert not session2_result.get("error_message")
 
+    session2_messages_after_first = await _wait_for_session_assistant_messages(
+        client,
+        session2_id,
+        min_count=1,
+    )
+    session2_first_final_text = session2_messages_after_first[-1]["content"].strip()
+
     try:
         session1_result = await _wait_for_job_completion(
             client,
@@ -295,10 +306,19 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
     session2_assistant_messages = [message for message in session2_messages if message["role"] == "assistant"]
     assert session2_assistant_messages, "session 2 没有生成助手回复"
 
-    session1_final_text = session1_assistant_messages[-1]["content"].strip()
-    session2_final_text = session2_assistant_messages[-1]["content"].strip()
+    assert any(
+        session2_first_final_text in message["content"]
+        for message in session1_assistant_messages
+    ), "session 1 未在回复中重复 session 2 的第一次 final_text"
 
-    assert session1_final_text == session2_final_text
+    session2_messages_after_second = await _wait_for_session_assistant_messages(
+        client,
+        session2_id,
+        min_count=2,
+    )
+    session2_second_final_text = session2_messages_after_second[-1]["content"].strip()
+
+    assert session2_second_final_text == session2_first_final_text
 
     session1_trace_events = [
         json.loads(line)
@@ -320,6 +340,16 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
         and event.get("data", {}).get("tool_name") == "collect_background_messages"
         for event in session1_trace_events
     ), f"未在 trace 中观察到 collect_background_messages 工具结束事件: {session1_trace_file}"
+    assert any(
+        event.get("event_type") == "tool_call_start"
+        and event.get("data", {}).get("tool_name") == "send_message_to_session"
+        for event in session1_trace_events
+    ), f"未在 trace 中观察到 send_message_to_session 工具调用: {session1_trace_file}"
+    assert any(
+        event.get("event_type") == "tool_call_end"
+        and event.get("data", {}).get("tool_name") == "send_message_to_session"
+        for event in session1_trace_events
+    ), f"未在 trace 中观察到 send_message_to_session 工具结束事件: {session1_trace_file}"
 
     print("✅ DeepAgent 跨 session final_text 监控测试通过")
 
@@ -496,6 +526,32 @@ def _collect_monitor_timeout_debug(session_id: str, job_id: str, trace_file: Pat
         debug_lines.append("trace_tail=<missing>")
 
     return "\n".join(debug_lines)
+
+
+async def _wait_for_session_assistant_messages(
+    client: httpx.AsyncClient,
+    session_id: str,
+    *,
+    min_count: int,
+    timeout_seconds: int = 60,
+) -> list[dict]:
+    for attempt in range(timeout_seconds):
+        response = await client.get(f"/api/v1/sessions/{session_id}/messages")
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        assistant_messages = [message for message in items if message["role"] == "assistant"]
+        if len(assistant_messages) >= min_count:
+            return assistant_messages
+
+        print(
+            f"Session {session_id} assistant message wait (attempt {attempt + 1}): "
+            f"{len(assistant_messages)}/{min_count}"
+        )
+        await asyncio.sleep(1)
+
+    pytest.fail(
+        f"Session {session_id} did not reach {min_count} assistant messages within {timeout_seconds} seconds"
+    )
     
     
     

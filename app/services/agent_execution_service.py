@@ -25,7 +25,10 @@ from app.core.job_event_bus import EventType, JobEventBus
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.schemas.background_message import BackgroundMessageKind
+from app.schemas.common import RunMode
+from app.schemas.message import MessageCreate, MessageRunRequest, RunOptions
 from app.services.config_service import ConfigService
+from app.services.message_service import MessageService
 
 
 class LLMLoggingMiddleware(AgentMiddleware):
@@ -504,6 +507,34 @@ class AgentExecutionService:
             return batch.model_dump(mode="json")
 
         return collect_background_messages
+
+    def _create_send_message_to_session_tool(self, agent_id: str = "deep_agent"):
+        @tool("send_message_to_session")
+        async def send_message_to_session(
+            target_session_id: str,
+            content: str,
+        ) -> Dict[str, Any]:
+            """模拟用户向目标 session 发送消息，并立即启动目标 session 的新任务。"""
+            if not target_session_id:
+                raise ValueError("target_session_id 不能为空")
+            if not content.strip():
+                raise ValueError("content 不能为空")
+
+            run_request = MessageRunRequest(
+                message=MessageCreate(
+                    role="user",
+                    content=content,
+                ),
+                run=RunOptions(
+                    mode=RunMode.single_agent,
+                    agent_id=agent_id,
+                ),
+            )
+
+            result = await MessageService.get_instance().create_and_run(target_session_id, run_request)
+            return result.model_dump(mode="json")
+
+        return send_message_to_session
     
     @classmethod
     def get_instance(cls) -> AgentExecutionService:
@@ -536,10 +567,17 @@ class AgentExecutionService:
         system_time_emitter_tool = self._create_system_time_emitter_tool(session_id)
         monitor_session_agent_end_tool = self._create_monitor_session_agent_end_tool(session_id)
         background_message_collection_tool = self._create_background_message_collection_tool(session_id)
+        send_message_to_session_tool = self._create_send_message_to_session_tool()
         
         agent = create_deep_agent(
             model=self.model,
-            tools=[python_execution_tool, system_time_emitter_tool, monitor_session_agent_end_tool, background_message_collection_tool],
+            tools=[
+                python_execution_tool,
+                system_time_emitter_tool,
+                monitor_session_agent_end_tool,
+                background_message_collection_tool,
+                send_message_to_session_tool,
+            ],
             backend=backend,
             system_prompt="You are a helpful assistant.",
             checkpointer=checkpointer,

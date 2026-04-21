@@ -96,8 +96,8 @@ async def test_full_session_flow(client: httpx.AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_multiple_parallel_jobs(client: httpx.AsyncClient):
-    """测试多个Job并行运行"""
+async def test_multiple_same_session_jobs_are_queued(client: httpx.AsyncClient):
+    """测试同一 session 的多个 Job 串行排队执行"""
     
     # 创建会话
     create_session_response = await client.post(
@@ -106,7 +106,7 @@ async def test_multiple_parallel_jobs(client: httpx.AsyncClient):
     )
     session_id = create_session_response.json()["data"]["session_id"]
     
-    # 同时启动3个Job
+    # 连续启动3个Job（同一 session）
     job_ids = []
     for i in range(3):
         response = await client.post(
@@ -117,11 +117,11 @@ async def test_multiple_parallel_jobs(client: httpx.AsyncClient):
             }
         )
         job_ids.append(response.json()["data"]["job_id"])
-        print(f"Started parallel job {i}: {job_ids[i]}")
+        print(f"Started queued job {i}: {job_ids[i]}")
     
-    # 等待所有Job完成
+    # 等待所有Job完成（串行执行可能更慢）
     completed = 0
-    for attempt in range(40):
+    for attempt in range(90):
         for job_id in job_ids:
             response = await client.get(f"/api/v1/jobs/{job_id}")
             status = response.json()["data"]["status"]
@@ -134,9 +134,9 @@ async def test_multiple_parallel_jobs(client: httpx.AsyncClient):
         completed = 0
         await asyncio.sleep(1)
     else:
-        pytest.fail("Not all jobs completed in time")
+        pytest.fail("Not all queued jobs completed in time")
     
-    print(f"✅ All {len(job_ids)} parallel jobs completed successfully!")
+    print(f"✅ All {len(job_ids)} queued jobs completed successfully!")
 
 
 if __name__ == "__main__":
