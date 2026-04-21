@@ -86,7 +86,22 @@ class ConfigService:
 
     def get_llm_providers(self) -> list[dict]:
         config = self._load_boxteam_config()
-        return config.get("llm", {}).get("providers", [])
+        providers = config.get("llm", {}).get("providers", [])
+        
+        # 展开每个 provider 的 api_key 环境变量引用
+        result = []
+        for provider in providers:
+            expanded = provider.copy()
+            api_key = provider.get("api_key", "")
+            if api_key.startswith("${") and api_key.endswith("}"):
+                var_name = api_key[2:-1]
+                env_value = os.environ.get(var_name)
+                if env_value is None:
+                    raise ValueError(f'环境变量 {var_name} 未设置')
+                expanded["api_key"] = env_value
+            result.append(expanded)
+        
+        return result
 
     async def get(self) -> ConfigDTO:
         return ConfigDTO(

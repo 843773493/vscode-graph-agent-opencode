@@ -9,9 +9,9 @@
         "interface": "chat.completion"
       },
       {
-        "endpoint": "https://openrouter.ai/api/v1",
-        "model": "openrouter/free",
-        "api_key": "${OPENROUTER_API_KEY}",
+        "endpoint": "https://api.kilo.ai/api/gateway",
+        "model": "bytedance-seed/dola-seed-2.0-pro:free",
+        "api_key": "${KILO_API_KEY}",
         "interface": "responses"
       },
       {

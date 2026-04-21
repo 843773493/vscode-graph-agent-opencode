@@ -3,15 +3,15 @@ const boot = bootElement ? JSON.parse(bootElement.textContent || '{}') : {};
 const vscode = acquireVsCodeApi();
 
 const workspaceEl = document.getElementById('workspace');
-const conversationTitleEl = document.getElementById('conversationTitle');
-const conversationMetaEl = document.getElementById('conversationMeta');
+const workspaceStatusEl = document.getElementById('workspaceStatus');
 const sessionListEl = document.getElementById('sessionList');
 const turnListEl = document.getElementById('turnList');
 const inputEl = document.getElementById('input');
 const statusEl = document.getElementById('status');
-const sendButton = document.getElementById('send');
+const sendButton = document.getElementById('sendButton');
 const newSessionButton = document.getElementById('newSessionButton');
 const refreshButton = document.getElementById('refreshButton');
+const expandDetailsToggle = document.getElementById('expandDetailsToggle');
 
 const persistedState = vscode.getState?.() ?? {};
 
@@ -25,7 +25,12 @@ const uiState = {
   activeJob: boot.activeJob ?? persistedState.activeJob ?? null,
   pendingTurns: new Map(),
   status: persistedState.status ?? '准备就绪',
+  expandDetails: persistedState.expandDetails ?? true,
 };
+
+if (typeof boot.expandDetails === 'boolean') {
+  uiState.expandDetails = boot.expandDetails;
+}
 
 if (Array.isArray(persistedState.pendingTurns)) {
   for (const turn of persistedState.pendingTurns) {
@@ -45,12 +50,13 @@ function persistState() {
     traceEvents: uiState.traceEvents,
     activeJob: uiState.activeJob,
     status: uiState.status,
+    expandDetails: uiState.expandDetails,
     pendingTurns: Array.from(uiState.pendingTurns.values()),
   });
 }
 
 function escapeHtml(value) {
-  return String(value)
+  return String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
@@ -83,7 +89,7 @@ function renderMarkdown(source) {
       return;
     }
 
-    output.push(`<pre class="code-block"><code data-lang="${escapeHtml(codeLang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+    output.push(`<pre><code data-lang="${escapeHtml(codeLang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>`);
     codeLines = [];
     codeLang = '';
   };
@@ -94,7 +100,7 @@ function renderMarkdown(source) {
     }
 
     const tag = listType === 'ol' ? 'ol' : 'ul';
-    output.push(`<${tag} class="markdown-list">${listItems.map((item) => `<li>${applyInlineMarkdown(item)}</li>`).join('')}</${tag}>`);
+    output.push(`<${tag}>${listItems.map((item) => `<li>${applyInlineMarkdown(item)}</li>`).join('')}</${tag}>`);
     listItems = [];
     listType = null;
   };
@@ -108,7 +114,7 @@ function renderMarkdown(source) {
     paragraph = [];
   };
 
-  const flushAllText = () => {
+  const flushAll = () => {
     flushParagraph();
     flushList();
     flushCode();
@@ -122,7 +128,7 @@ function renderMarkdown(source) {
         flushCode();
         inCode = false;
       } else {
-        flushAllText();
+        flushAll();
         inCode = true;
         codeLang = trimmed.slice(3).trim();
       }
@@ -135,15 +141,15 @@ function renderMarkdown(source) {
     }
 
     if (!trimmed) {
-      flushAllText();
+      flushAll();
       continue;
     }
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
     if (headingMatch) {
-      flushAllText();
+      flushAll();
       const level = Math.min(headingMatch[1].length, 6);
-      output.push(`<h${level} class="markdown-heading">${applyInlineMarkdown(headingMatch[2])}</h${level}>`);
+      output.push(`<h${level}>${applyInlineMarkdown(headingMatch[2])}</h${level}>`);
       continue;
     }
 
@@ -161,8 +167,8 @@ function renderMarkdown(source) {
     }
 
     if (trimmed.startsWith('>')) {
-      flushAllText();
-      output.push(`<blockquote class="markdown-quote">${applyInlineMarkdown(trimmed.slice(1).trim())}</blockquote>`);
+      flushAll();
+      output.push(`<blockquote>${applyInlineMarkdown(trimmed.slice(1).trim())}</blockquote>`);
       continue;
     }
 
@@ -173,7 +179,7 @@ function renderMarkdown(source) {
     paragraph.push(trimmed);
   }
 
-  flushAllText();
+  flushAll();
   return output.join('');
 }
 
@@ -285,34 +291,6 @@ function splitMessagesIntoTurns(messages) {
   return turns;
 }
 
-function groupTraceEvents(traceEvents) {
-  const groups = [];
-  let currentGroup = null;
-
-  for (const rawEvent of traceEvents ?? []) {
-    const event = normalizeTraceEvent(rawEvent);
-
-    if (event.event_type === 'agent_start' || !currentGroup) {
-      currentGroup = {
-        startedAt: event.timestamp,
-        endedAt: null,
-        summary: event.event_type === 'agent_start' && event.data?.message ? formatSnippet(event.data.message, 96) : 'Agent 执行',
-        events: [],
-      };
-      groups.push(currentGroup);
-    }
-
-    currentGroup.events.push(event);
-
-    if (event.event_type === 'agent_end') {
-      currentGroup.endedAt = event.timestamp;
-      currentGroup = null;
-    }
-  }
-
-  return groups;
-}
-
 function getActiveSession() {
   const currentSessionId = uiState.currentSession?.session_id;
   return uiState.sessions.find((session) => session.session_id === currentSessionId) ?? uiState.currentSession ?? null;
@@ -342,46 +320,32 @@ function getTurnsForSession(sessionId) {
   return [...backendTurns, pendingTurn];
 }
 
-function renderSessionList() {
-  const sessions = [...uiState.sessions].sort((a, b) => new Date(b.updated_at ?? 0) - new Date(a.updated_at ?? 0));
-  const activeSessionId = uiState.currentSession?.session_id;
-
-  if (!sessions.length) {
-    sessionListEl.innerHTML = '<div class="empty-state">暂无会话，点击 New Session 创建第一条会话。</div>';
-    return;
-  }
-
-  sessionListEl.innerHTML = sessions
-    .map((session) => {
-      const turns = splitMessagesIntoTurns(uiState.messages.filter((message) => message.session_id === session.session_id));
-      const pendingTurn = uiState.pendingTurns.get(session.session_id);
-      const totalTurns = turns.length + (pendingTurn ? 1 : 0);
-      const latestTurn = [...turns, pendingTurn ?? null].filter(Boolean).at(-1);
-      const preview = latestTurn?.userMessage?.content || latestTurn?.assistantMessages?.at?.(-1)?.content || '暂无消息';
-      const isActive = session.session_id === activeSessionId;
-      const jobStatus = isActive && uiState.activeJob?.jobId ? uiState.activeJob.status : '';
-
-      return `
-        <details class="session-card" data-session-id="${escapeHtml(session.session_id)}" ${isActive ? 'open' : ''}>
-          <summary class="session-summary">
-            <div style="min-width:0; display:grid; gap:4px;">
-              <div class="session-title">${escapeHtml(session.title || '新会话')}</div>
-              <div class="session-meta">${escapeHtml(session.session_id)} · ${totalTurns} turn${totalTurns === 1 ? '' : 's'}</div>
-            </div>
-            <span class="badge ${jobStatus === 'running' ? 'running' : ''}">${escapeHtml(jobStatus || (isActive ? 'active' : 'idle'))}</span>
-          </summary>
-          <div class="session-body">
-            <div class="session-preview">${escapeHtml(formatSnippet(preview, 120))}</div>
-            <div class="session-meta">更新于 ${escapeHtml(formatTime(session.updated_at) || '未知')}</div>
-            <button class="session-action" type="button" data-select-session="${escapeHtml(session.session_id)}">切换到此会话</button>
-          </div>
-        </details>
-      `;
-    })
-    .join('');
+function sessionSortKey(session) {
+  return new Date(session?.updated_at ?? session?.created_at ?? 0).getTime();
 }
 
-function renderTraceSummary(eventType, payload) {
+function sessionStatusBadge(session, isActive) {
+  if (isActive) {
+    return '<span class="badge active">Active</span>';
+  }
+
+  const status = String(session?.status ?? '').toLowerCase();
+  if (status.includes('fail') || status.includes('error')) {
+    return '<span class="badge danger">Failed</span>';
+  }
+
+  if (status.includes('progress') || status.includes('run')) {
+    return '<span class="badge warning">Running</span>';
+  }
+
+  return '<span class="badge neutral">Ready</span>';
+}
+
+function renderSessionList() {
+  sessionListEl.innerHTML = '';
+}
+
+function renderTraceGroupTitle(eventType, payload) {
   const type = String(eventType ?? '').toLowerCase();
 
   if (type === 'agent_start') {
@@ -393,15 +357,15 @@ function renderTraceSummary(eventType, payload) {
   }
 
   if (type === 'tool_call_start') {
-    return `调用工具：${payload?.tool_name || 'unknown_tool'}\n\n\`\`\`json\n${JSON.stringify(payload?.args ?? {}, null, 2)}\n\`\`\``;
+    return `调用工具：${payload?.tool_name || 'unknown_tool'}`;
   }
 
   if (type === 'tool_call_end') {
-    return `工具完成：${payload?.tool_name || 'unknown_tool'}\n\n\`\`\`text\n${String(payload?.result ?? '')}\n\`\`\``;
+    return `工具完成：${payload?.tool_name || 'unknown_tool'}`;
   }
 
   if (type === 'file_write') {
-    return `文件写入：${payload?.path || payload?.file_path || 'unknown path'}\n\n\`\`\`text\n${String(payload?.summary ?? payload?.result ?? '')}\n\`\`\``;
+    return `文件写入：${payload?.path || payload?.file_path || 'unknown path'}`;
   }
 
   if (type === 'llm_request' || type === 'model_call') {
@@ -419,68 +383,154 @@ function renderTraceSummary(eventType, payload) {
   return `事件：${eventType}`;
 }
 
-function renderTraceEventCard(event) {
+function isErrorTraceEvent(event) {
+  const type = String(event?.event_type ?? '').toLowerCase();
+  return type === 'error' || type === 'job_failed' || type === 'job_cancelled';
+}
+
+function renderOutputEventCard(event) {
   const eventType = event.event_type ?? 'event';
   const payload = event.data ?? {};
-
   return `
-    <article class="event-card">
-      <div class="event-head">
-        <div class="event-title">${escapeHtml(String(eventType).replaceAll('_', ' '))}</div>
-        <span class="event-type">${escapeHtml(formatTime(event.timestamp) || 'now')}</span>
+    <article class="output-event-card">
+      <div class="editor-head">
+        <span>${escapeHtml(renderTraceGroupTitle(eventType, payload))}</span>
+        <span class="badge neutral">${escapeHtml(formatTime(event.timestamp) || 'now')}</span>
       </div>
-      <div class="event-content markdown-body">${renderMarkdown(renderTraceSummary(eventType, payload))}</div>
+      <div class="editor-body">
+        <pre>${escapeHtml(JSON.stringify(payload, null, 2))}</pre>
+      </div>
     </article>
   `;
 }
 
-function renderTraceGroup(group, index) {
-  const title = group?.summary || `Trace #${index + 1}`;
-  const startedAt = formatTime(group?.startedAt);
-  const events = group?.events ?? [];
+function renderOutputStream(label, events) {
+  if (!events.length) {
+    return '';
+  }
 
   return `
-    <details class="thinking-panel" open>
-      <summary class="thinking-summary">
-        <div style="display:flex; align-items:center; gap:10px; min-width:0;">
-          <span class="thinking-spinner" aria-hidden="true"></span>
-          <span class="thinking-title">${escapeHtml(title)}</span>
+    <section class="output-stream">
+      <h3 class="output-stream-title">${escapeHtml(label)}</h3>
+      <div class="output-stream-body">
+        ${events.map((event) => renderOutputEventCard(event)).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderTraceCard(event) {
+  const eventType = event.event_type ?? 'event';
+  const payload = event.data ?? {};
+  const detailsMarkdown = [];
+
+  if (eventType === 'tool_call_start' || eventType === 'tool_call_end') {
+    detailsMarkdown.push('```json');
+    detailsMarkdown.push(JSON.stringify(payload ?? {}, null, 2));
+    detailsMarkdown.push('```');
+  } else if (eventType === 'file_write') {
+    detailsMarkdown.push('```text');
+    detailsMarkdown.push(String(payload?.summary ?? payload?.result ?? ''));
+    detailsMarkdown.push('```');
+  } else if (eventType === 'error') {
+    detailsMarkdown.push('```text');
+    detailsMarkdown.push(String(payload?.error ?? ''));
+    detailsMarkdown.push('```');
+  } else if (payload && Object.keys(payload).length > 0) {
+    detailsMarkdown.push('```json');
+    detailsMarkdown.push(JSON.stringify(payload, null, 2));
+    detailsMarkdown.push('```');
+  }
+
+  return `
+    <article class="trace-item">
+      <div class="trace-title">
+        <span>${escapeHtml(renderTraceGroupTitle(eventType, payload))}</span>
+        <span class="badge neutral">${escapeHtml(formatTime(event.timestamp) || 'now')}</span>
+      </div>
+      <div class="trace-body">
+        ${detailsMarkdown.length ? `<pre>${escapeHtml(detailsMarkdown.join('\n'))}</pre>` : `<pre>${escapeHtml(renderTraceGroupTitle(eventType, payload))}</pre>`}
+      </div>
+    </article>
+  `;
+}
+
+function renderTracePanel(events) {
+  if (!events.length) {
+    return '';
+  }
+
+  const stdoutEvents = events.filter((event) => !isErrorTraceEvent(event));
+  const stderrEvents = events.filter((event) => isErrorTraceEvent(event));
+
+  return `
+    <details class="request-container output-container" ${uiState.expandDetails ? 'open' : ''}>
+      <summary class="title">
+        <div class="request-main">
+          <span class="request-chevron">${uiState.expandDetails ? '▼' : '▶'}</span>
+          <span class="request-title">Output</span>
         </div>
-        <span class="pill">${escapeHtml(startedAt || 'now')} · ${escapeHtml(String(events.length))} events</span>
+        <div class="request-stats">
+          <span class="badge neutral">${escapeHtml(String(events.length))} events</span>
+        </div>
       </summary>
-      <div class="thinking-body">
-        <div class="event-list">
-          ${events.map((event) => renderTraceEventCard(event)).join('')}
-        </div>
+      <div class="request-details">
+        ${renderOutputStream('stdout', stdoutEvents)}
+        ${renderOutputStream('stderr', stderrEvents)}
       </div>
     </details>
   `;
 }
 
-function renderThoughtPanel(turn, index) {
-  const traceGroups = groupTraceEvents(uiState.traceEvents);
-  const traceGroup = traceGroups[index] ?? null;
+function renderTurnSummary(turn) {
+  const userText = turn.userMessage?.content ? formatSnippet(turn.userMessage.content, 64) : '';
+  const assistantText = (turn.assistantMessages ?? []).map((message) => formatSnippet(message.content, 64)).filter(Boolean).at(-1) ?? '';
+  return userText || assistantText || '未命名 turn';
+}
 
-  if (traceGroup) {
-    return renderTraceGroup(traceGroup, index);
+function renderRequestSection(message) {
+  if (!message) {
+    return '';
   }
 
-  const events = turn.events ?? [];
-  const open = events.length > 0 || turn.pending;
+  return `
+    <section class="chat-message user">
+      <div class="chat-message-head">
+        <span>You</span>
+        <span>${escapeHtml(formatTime(message.created_at) || '')}</span>
+      </div>
+      <div class="chat-message-body reply">${renderMarkdown(message.content || '')}</div>
+    </section>
+  `;
+}
+
+function renderResponseSection(assistantMessages, isPending) {
+  if (!assistantMessages.length && !isPending) {
+    return '';
+  }
 
   return `
-    <details class="thinking-panel" ${open ? 'open' : ''}>
-      <summary class="thinking-summary">
-        <div style="display:flex; align-items:center; gap:10px; min-width:0;">
-          <span class="thinking-spinner" aria-hidden="true"></span>
-          <span class="thinking-title">思考过程</span>
-        </div>
-        <span class="pill">${escapeHtml(String(events.length))} events</span>
-      </summary>
-      <div class="thinking-body">
-        ${events.length ? `<div class="event-list">${events.map((event) => renderTraceEventCard(normalizeTraceEvent(event))).join('')}</div>` : '<div class="thinking-empty">暂无思考事件，等待模型输出中。</div>'}
+    <section>
+      <div class="turn-section-body">
+        ${assistantMessages.length ? assistantMessages.map((assistantMessage, assistantIndex) => `
+          <div class="chat-message assistant">
+            <div class="chat-message-head">
+              <span>${assistantIndex === 0 ? 'Assistant' : `Assistant #${assistantIndex + 1}`}</span>
+              <span>${escapeHtml(formatTime(assistantMessage.created_at) || '')}</span>
+            </div>
+            <div class="chat-message-body reply">${renderMarkdown(assistantMessage.content || '')}</div>
+          </div>
+        `).join('') : `
+          <div class="chat-message assistant">
+            <div class="chat-message-head">
+              <span>Assistant</span>
+              <span>running</span>
+            </div>
+            <div class="chat-message-body reply">正在思考并调用工具...</div>
+          </div>
+        `}
       </div>
-    </details>
+    </section>
   `;
 }
 
@@ -489,85 +539,43 @@ function renderTurn(turn, index, totalTurns) {
   const isPending = Boolean(turn.pending) || turn.status === 'running';
   const userMessage = turn.userMessage;
   const assistantMessages = turn.assistantMessages ?? [];
-  const latestAssistant = assistantMessages[assistantMessages.length - 1] ?? null;
-  const open = isPending || isLast;
-  const summaryText = userMessage?.content ? formatSnippet(userMessage.content, 72) : latestAssistant?.content ? formatSnippet(latestAssistant.content, 72) : '未命名 turn';
-  const statusClass = turn.status === 'error' ? 'error' : turn.status === 'completed' || turn.status === 'done' ? 'complete' : 'running';
+  const showTrace = (turn.events?.length ?? 0) > 0 && uiState.expandDetails;
 
   return `
-    <details class="turn-card" ${open ? 'open' : ''} data-turn-id="${escapeHtml(turn.turnId)}">
-      <summary class="turn-summary">
-        <div style="min-width:0; display:grid; gap:4px;">
-          <div class="turn-title">${escapeHtml(summaryText)}</div>
-          <div class="turn-meta">${escapeHtml(userMessage?.created_at ? formatTime(userMessage.created_at) : latestAssistant?.created_at ? formatTime(latestAssistant.created_at) : '进行中')}</div>
-        </div>
-        <span class="status-pill ${statusClass}">${escapeHtml(isPending ? 'running' : turn.status || 'done')}</span>
-      </summary>
-      <div class="turn-body">
-        ${userMessage ? `
-          <section class="bubble bubble-user">
-            <div class="bubble-header">
-              <span>User</span>
-              <span>${escapeHtml(formatTime(userMessage.created_at) || '')}</span>
-            </div>
-            <div class="bubble-content markdown-body">${renderMarkdown(userMessage.content || '')}</div>
-          </section>
-        ` : ''}
-
-        ${assistantMessages.length ? assistantMessages.map((assistantMessage, assistantIndex) => `
-          <section class="bubble bubble-assistant">
-            <div class="bubble-header">
-              <span>Assistant ${assistantIndex === 0 ? '' : `#${assistantIndex + 1}`}</span>
-              <span>${escapeHtml(formatTime(assistantMessage.created_at) || '')}</span>
-            </div>
-            <div class="bubble-content markdown-body">${renderMarkdown(assistantMessage.content || '')}</div>
-          </section>
-        `).join('') : isPending ? `
-          <section class="bubble bubble-assistant">
-            <div class="bubble-header">
-              <span>Assistant</span>
-              <span class="thinking-spinner" aria-hidden="true"></span>
-            </div>
-            <div class="bubble-content markdown-body">正在思考并调用工具...</div>
-          </section>
-        ` : ''}
-
-        ${renderThoughtPanel(turn, index)}
-      </div>
-    </details>
+    <div class="request-container" data-turn-id="${escapeHtml(turn.turnId)}">
+      ${renderRequestSection(userMessage)}
+      ${renderResponseSection(assistantMessages, isPending)}
+      ${showTrace ? renderTracePanel(turn.events.map((event) => normalizeTraceEvent(event))) : ''}
+    </div>
   `;
 }
 
-function renderConversation() {
+function renderTranscript() {
   const activeSession = getActiveSession();
   const sessionId = activeSession?.session_id;
   const turns = sessionId ? getTurnsForSession(sessionId) : [];
 
-  conversationTitleEl.textContent = activeSession?.title || 'Workspace Chat';
-  conversationMetaEl.textContent = activeSession
-    ? `${activeSession.session_id} · ${turns.length} turn${turns.length === 1 ? '' : 's'} · ${uiState.activeJob?.status || 'idle'}`
-    : '尚未创建会话';
+  workspaceEl.textContent = uiState.workspaceName || 'workspace';
+  workspaceEl.title = uiState.workspaceRoot || uiState.workspaceName || 'workspace';
+  workspaceStatusEl.textContent = activeSession?.title ? activeSession.title : 'No active session';
+  workspaceStatusEl.title = activeSession?.title || 'No active session';
 
   if (!turns.length) {
     turnListEl.innerHTML = `
       <div class="empty-state">
-        <div style="font-weight:700; color: var(--text); margin-bottom: 6px;">暂无对话</div>
-        <div>创建新的 session 后，输入内容即可发送。发送后会先显示本地用户消息，再展示思考过程和回复。</div>
+        <div style="font-weight:600; margin-bottom: 4px;">会话</div>
+        <div>输入内容开始聊天。</div>
       </div>
     `;
     return;
   }
 
   turnListEl.innerHTML = turns.map((turn, index) => renderTurn(turn, index, turns.length)).join('');
-  requestAnimationFrame(() => {
-    turnListEl.scrollTop = turnListEl.scrollHeight;
-  });
 }
 
 function render() {
-  workspaceEl.textContent = `${uiState.workspaceName || 'workspace'} · ${uiState.workspaceRoot || ''}`;
   renderSessionList();
-  renderConversation();
+  renderTranscript();
   setStatus(uiState.status || '准备就绪');
 }
 
@@ -624,7 +632,7 @@ function submitCurrentMessage() {
   inputEl.value = '';
   setStatus('已发送，正在等待模型响应...');
   persistState();
-  renderConversation();
+  renderTranscript();
 
   try {
     vscode.postMessage({ type: 'sendMessage', content });
@@ -724,11 +732,14 @@ function handleJobEvent(message) {
   }
 
   pendingTurn.jobId = jobId;
-  pendingTurn.events = [...(pendingTurn.events ?? []), {
-    event_type: message.eventType ?? 'event',
-    data: message.payload ?? {},
-    timestamp: message.payload?.timestamp ?? new Date().toISOString(),
-  }];
+  pendingTurn.events = [
+    ...(pendingTurn.events ?? []),
+    {
+      event_type: message.eventType ?? 'event',
+      data: message.payload ?? {},
+      timestamp: message.payload?.timestamp ?? new Date().toISOString(),
+    },
+  ];
 
   if (['job_completed', 'job_failed', 'job_cancelled'].includes(String(message.eventType ?? '').toLowerCase())) {
     pendingTurn.status = message.eventType === 'job_completed' ? 'done' : 'error';
@@ -741,13 +752,16 @@ function handleJobEvent(message) {
     };
   }
 
-  renderConversation();
+  renderTranscript();
   persistState();
 }
 
 function initializeWebview() {
   try {
     setStatus(uiState.status || '前端已加载');
+    if (expandDetailsToggle) {
+      expandDetailsToggle.checked = Boolean(uiState.expandDetails);
+    }
     postDebug(`webview 脚本已启动，readyState=${document.readyState}`);
     vscode.postMessage({ type: 'ready' });
     render();
@@ -756,25 +770,31 @@ function initializeWebview() {
   }
 }
 
-newSessionButton.addEventListener('click', (event) => {
+newSessionButton?.addEventListener('click', (event) => {
   event.preventDefault();
   postDebug('新建 session');
   vscode.postMessage({ type: 'createSession', title: '新会话' });
 });
 
-refreshButton.addEventListener('click', (event) => {
+refreshButton?.addEventListener('click', (event) => {
   event.preventDefault();
   postDebug('刷新');
   vscode.postMessage({ type: 'refresh' });
 });
 
-sendButton.addEventListener('click', (event) => {
+sendButton?.addEventListener('click', (event) => {
   event.preventDefault();
   postDebug('发送按钮点击');
   void submitCurrentMessage();
 });
 
-inputEl.addEventListener('keydown', (event) => {
+expandDetailsToggle?.addEventListener('change', (event) => {
+  uiState.expandDetails = Boolean(event.target.checked);
+  persistState();
+  renderTranscript();
+});
+
+inputEl?.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') {
     return;
   }
@@ -800,7 +820,7 @@ inputEl.addEventListener('keydown', (event) => {
   void submitCurrentMessage();
 });
 
-sessionListEl.addEventListener('click', (event) => {
+sessionListEl?.addEventListener('click', (event) => {
   const button = event.target?.closest?.('[data-select-session]');
   if (!button) {
     return;
@@ -829,7 +849,7 @@ window.addEventListener('message', (event) => {
 
   if (message.type === 'messageAccepted') {
     handleMessageAccepted(message);
-    renderConversation();
+    renderTranscript();
     return;
   }
 

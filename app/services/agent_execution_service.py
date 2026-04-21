@@ -11,12 +11,14 @@ from langgraph.checkpoint.memory import MemorySaver
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain.tools.tool_node import ToolCallRequest
 from langchain.messages import ToolMessage
 from langgraph.types import Command
 
 from app.core.path_utils import get_workspace_root, get_logs_dir
 from app.core.event_bus import EventBus, EventType
+from app.services.config_service import ConfigService
 
 
 class LLMLoggingMiddleware(AgentMiddleware):
@@ -215,13 +217,25 @@ class AgentExecutionService:
     _instance: Optional[AgentExecutionService] = None
     
     def __init__(self):
-        self.model = ChatOpenAI(
-            model=os.getenv("KILO_MODEL", "bytedance-seed/dola-seed-2.0-pro:free"),
-            api_key=os.getenv("KILO_API_KEY"),
-            base_url=os.getenv("KILO_API_BASE", "https://api.kilo.ai/api/gateway"),
-            use_responses_api=False,
-            max_retries=3,
-        )
+        config_service = ConfigService.get_instance()
+        providers = config_service.get_llm_providers()
+        
+        # 构建模型列表，支持fallback
+        models = []
+        for provider in providers:
+            model = ChatOpenAI(
+                model=provider["model"],
+                api_key=provider["api_key"],
+                base_url=provider["endpoint"],
+                use_responses_api=(provider.get("interface") == "responses"),
+                max_retries=3,
+            )
+            models.append(model)
+        
+        # 主模型和fallback模型
+        self.model = models[0] if models else None
+        self.midware_fallback_models = ModelFallbackMiddleware(*models[1:]) if len(models) > 1 else None
+        
         self._agent_cache = {}
     
     @classmethod
@@ -242,16 +256,21 @@ class AgentExecutionService:
         
         checkpointer = MemorySaver()
         
+        # 构建中间件列表，添加fallback中间件
+        middleware_list = [
+            LLMLoggingMiddleware(),
+            ExecutionTraceMiddleware(),
+        ]
+        
+        if self.midware_fallback_models:
+            middleware_list.append(self.midware_fallback_models)
+        
         agent = create_deep_agent(
             model=self.model,
             backend=backend,
             system_prompt="You are a helpful assistant.",
             checkpointer=checkpointer,
-
-            middleware=[
-                LLMLoggingMiddleware(),
-                ExecutionTraceMiddleware(),
-            ]
+            middleware=middleware_list
         )
         
         self._agent_cache[session_id] = agent

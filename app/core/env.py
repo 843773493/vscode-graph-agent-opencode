@@ -27,6 +27,8 @@ def load_project_env(
     project_root = get_project_root(start_path)
     env_file = project_root / ".env"
 
+    print(f"[Env] 加载 .env 文件: {env_file.resolve()}")
+
     if not env_file.exists():
         if required:
             raise FileNotFoundError(f"未找到项目环境文件: {env_file}")
