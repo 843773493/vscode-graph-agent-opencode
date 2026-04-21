@@ -13,6 +13,7 @@ from typing import AsyncGenerator
 import httpx
 import pytest
 
+from app.core.background_task_registry import BackgroundTaskRegistry
 from app.main import app
 
 
@@ -268,7 +269,17 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
     assert session2_result["status"] in {"completed", "succeeded"}
     assert not session2_result.get("error_message")
 
-    session1_result = await _wait_for_job_completion(client, session1_job_id)
+    try:
+        session1_result = await _wait_for_job_completion(
+            client,
+            session1_job_id,
+            trace_file=session1_trace_file,
+            session_id=session1_id,
+        )
+    except TimeoutError as exc:
+        debug_info = _collect_monitor_timeout_debug(session1_id, session1_job_id, session1_trace_file)
+        pytest.fail(f"{exc}\n{debug_info}")
+
     assert session1_result["status"] in {"completed", "succeeded"}
     assert not session1_result.get("error_message")
 
@@ -400,7 +411,13 @@ async def test_real_deepagent_interrupt_and_resume(client: httpx.AsyncClient, wo
     print("✅ DeepAgent 中断和恢复测试通过")
 
 
-async def _wait_for_job_completion(client: httpx.AsyncClient, job_id: str) -> dict:
+async def _wait_for_job_completion(
+    client: httpx.AsyncClient,
+    job_id: str,
+    *,
+    trace_file: Path | None = None,
+    session_id: str | None = None,
+) -> dict:
     for attempt in range(30):
         response = await client.get(f"/api/v1/jobs/{job_id}")
         assert response.status_code == 200
@@ -414,7 +431,10 @@ async def _wait_for_job_completion(client: httpx.AsyncClient, job_id: str) -> di
 
         await asyncio.sleep(1)
 
-    pytest.fail(f"Job timed out after 30 seconds: {job_id}")
+    message = f"Job timed out after 30 seconds: {job_id}"
+    if session_id is not None and trace_file is not None:
+        message = f"{message}\n{_collect_monitor_timeout_debug(session_id, job_id, trace_file)}"
+    raise TimeoutError(message)
 
 
 async def _wait_for_job_state(client: httpx.AsyncClient, job_id: str, expected_states: set[str]) -> dict:
@@ -450,6 +470,32 @@ async def _wait_for_trace_event(trace_file: Path, event_type: str, tool_name: st
         await asyncio.sleep(1)
 
     pytest.fail(f"Job trace timed out waiting for {event_type} / {tool_name}: {trace_file}")
+
+
+def _collect_monitor_timeout_debug(session_id: str, job_id: str, trace_file: Path) -> str:
+    debug_lines = [f"session_id={session_id}", f"job_id={job_id}", f"trace_file={trace_file}"]
+
+    handles = BackgroundTaskRegistry.get_instance().list_handles(session_id)
+    if not handles:
+        debug_lines.append("background_tasks=[]")
+    else:
+        debug_lines.append("background_tasks=")
+        for handle in handles:
+            debug_lines.append(
+                f"  - task_id={handle.task_id} name={handle.task_name} status={handle.status} "
+                f"created_at={handle.created_at.isoformat()} started_at={handle.started_at.isoformat() if handle.started_at else None} "
+                f"ended_at={handle.ended_at.isoformat() if handle.ended_at else None} metadata={handle.metadata}"
+            )
+
+    if trace_file.exists():
+        trace_lines = trace_file.read_text(encoding="utf-8").splitlines()
+        tail = trace_lines[-20:]
+        debug_lines.append("trace_tail=")
+        debug_lines.extend(f"  {line}" for line in tail)
+    else:
+        debug_lines.append("trace_tail=<missing>")
+
+    return "\n".join(debug_lines)
     
     
     

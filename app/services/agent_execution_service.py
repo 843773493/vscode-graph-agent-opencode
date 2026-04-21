@@ -414,8 +414,9 @@ class AgentExecutionService:
             if poll_interval_seconds <= 0:
                 raise ValueError("poll_interval_seconds 必须大于 0")
 
+            submitted_at = datetime.now()
+
             async def _monitor_background_task() -> dict[str, Any]:
-                started_at = datetime.now()
                 job_event_bus = JobEventBus.get_instance()
                 message_bus = BackgroundMessageBus.get_instance()
                 deadline = asyncio.get_running_loop().time() + timeout_seconds
@@ -426,7 +427,7 @@ class AgentExecutionService:
                     for event in events:
                         if event.type != EventType.AGENT_END:
                             continue
-                        if event.timestamp <= started_at:
+                        if event.timestamp <= submitted_at:
                             continue
 
                         final_text = event.payload.get("final_text")
@@ -469,6 +470,7 @@ class AgentExecutionService:
                     "target_session_id": target_session_id,
                     "timeout_seconds": timeout_seconds,
                     "poll_interval_seconds": poll_interval_seconds,
+                    "submitted_at": submitted_at.isoformat(),
                 },
             )
 
