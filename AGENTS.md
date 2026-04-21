@@ -101,7 +101,7 @@ API文档: 👉 http://127.0.0.1:8000/api/v1/docs
 2. 初次实现功能时减少 try except，以实现核心功能为主
 3. 不要在代码中给环境变量添加硬编码参数，
 4. 能调第三方库实现的工具就用第三方库，不要自己实现
-5. 如果根目录下存在.venv目录，则使用.venv\Scripts\python.exe的python解释器而不是全局python
+5. 如果根目录下存在.venv目录，则使用.venv\Scripts\python.exe的python解释器和pytest而不是全局python
 6. 每次编写代码文件都要静态分析通过再提交
 7. package.json中指令过长，则写入scrips的.mjs脚本中
 8. 仓库中js代码统一使用 ESM (ES Modules)，使用 `import`/`export` 语法，避免 CommonJS

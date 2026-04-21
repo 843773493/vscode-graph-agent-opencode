@@ -3,12 +3,12 @@ import asyncio
 from typing import AsyncGenerator
 
 from app.schemas.job import EventDTO
-from app.core.event_bus import EventBus
+from app.core.job_event_bus import JobEventBus
 
 
 class EventService:
     def __init__(self):
-        self.bus = EventBus.get_instance()
+        self.bus = JobEventBus.get_instance()
     
     async def list(self, job_id: str, after: str | None = None, limit: int = 100) -> list[EventDTO]:
         return await self.bus.list_events(job_id, after, limit)

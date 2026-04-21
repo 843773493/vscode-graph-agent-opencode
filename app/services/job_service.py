@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from app.schemas.job import JobDTO, StepDTO, JobControlRequest, JobControlResponse
 from app.schemas.common import JobStatus, RunMode, StepStatus, ControlAction
 from app.services.agent_execution_service import AgentExecutionService
-from app.core.event_bus import EventBus, EventType
+from app.core.job_event_bus import EventType, JobEventBus
 
 
 @dataclass
@@ -16,6 +16,7 @@ class JobState:
     job_id: str
     session_id: str
     status: JobStatus
+    message: str = ""
     progress: int = 0
     error_message: Optional[str] = None
     result: Optional[str] = None
@@ -31,7 +32,7 @@ class JobService:
     _jobs: Dict[str, JobState] = {}
     
     def __init__(self):
-        self._bus = EventBus.get_instance()
+        self._bus = JobEventBus.get_instance()
     
     @classmethod
     def get_instance(cls) -> "JobService":
@@ -92,10 +93,14 @@ class JobService:
         
         if control_request.action == ControlAction.pause:
             job.status = JobStatus.paused
+            if job.task and not job.task.done():
+                job.task.cancel()
         elif control_request.action == ControlAction.resume:
             job.status = JobStatus.running
+            if job.task is None or job.task.done():
+                job.task = asyncio.create_task(self._run_job_background(job_id, job.session_id, job.message))
         elif control_request.action == ControlAction.cancel:
-            job.status = JobStatus.cancelled
+            job.status = JobStatus.cancelling
             if job.task and not job.task.done():
                 job.task.cancel()
         
@@ -131,11 +136,12 @@ class JobService:
         Returns:
             job_id: 新创建的Job ID
         """
-        job_id = f"job_{uuid.uuid4().hex[:8]}"
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
         
         job = JobState(
             job_id=job_id,
             session_id=session_id,
+            message=message,
             status=JobStatus.queued
         )
         
@@ -195,15 +201,25 @@ class JobService:
             )
             
         except asyncio.CancelledError:
-            job.status = JobStatus.cancelled
-            job.ended_at = datetime.now()
+            if job.status == JobStatus.paused:
+                job.updated_at = datetime.now()
+                await self._bus.publish(
+                    job_id=job_id,
+                    event_type=EventType.STATUS_CHANGE,
+                    payload={"status": JobStatus.paused.value, "reason": "pause_requested"},
+                    agent_id="job_service"
+                )
+            else:
+                job.status = JobStatus.cancelled
+                job.ended_at = datetime.now()
+                await self._bus.publish(
+                    job_id=job_id,
+                    event_type=EventType.JOB_CANCELLED,
+                    payload={},
+                    agent_id="job_service"
+                )
+
             job.updated_at = datetime.now()
-            await self._bus.publish(
-                job_id=job_id,
-                event_type=EventType.JOB_CANCELLED,
-                payload={},
-                agent_id="job_service"
-            )
             
         except Exception as e:
             job.status = JobStatus.failed
@@ -216,3 +232,25 @@ class JobService:
                 payload={"error": str(e)},
                 agent_id="job_service"
             )
+
+    def get_active_job_for_session(self, session_id: str) -> JobState | None:
+        active_statuses = {
+            JobStatus.accepted,
+            JobStatus.queued,
+            JobStatus.running,
+            JobStatus.streaming,
+            JobStatus.waiting_input,
+            JobStatus.paused,
+            JobStatus.interrupt_pending,
+            JobStatus.cancelling,
+        }
+
+        candidates = [
+            job
+            for job in self._jobs.values()
+            if job.session_id == session_id and job.status in active_statuses
+        ]
+        if not candidates:
+            return None
+
+        return max(candidates, key=lambda item: item.updated_at)
