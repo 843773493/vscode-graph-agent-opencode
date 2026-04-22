@@ -165,38 +165,42 @@ export class BackendManager {
 
   async ensureStarted() {
     if (this.readyPromise) {
+      this.log(`复用现有后端实例`);
       return this.readyPromise;
     }
 
     this.workspaceRoot = getWorkspaceRoot();
     this.projectRoot = findProjectRoot(this.workspaceRoot);
     this.outputChannel.show(true);
+    this.log(`========== 启动后端进程 ==========`);
     this.log(`首选后端端口: ${this.port}`);
     this.log(`工作区根目录: ${this.workspaceRoot}`);
     this.log(`项目根目录: ${this.projectRoot}`);
 
     const candidatePorts = [...new Set([this.port, 8000])];
+    this.log(`将要探测的端口列表: ${candidatePorts.join(', ')}`);
+
     for (const candidatePort of candidatePorts) {
-      this.log(`探测已存在后端: http://127.0.0.1:${candidatePort}/api/v1/workspace`);
+      this.log(`--> 探测端口 ${candidatePort}: http://127.0.0.1:${candidatePort}/api/v1/workspace`);
       const existing = await probeBackend(candidatePort);
       if (existing) {
         this.port = candidatePort;
-        this.log(`检测到已存在的后端实例，使用端口 ${candidatePort}`);
+        this.log(`✓ 检测到已存在的后端实例，使用端口 ${candidatePort}`);
         this.readyPromise = Promise.resolve(existing);
         return this.readyPromise;
       }
-
-      this.log(`端口 ${candidatePort} 上未发现可用后端`);
+      this.log(`× 端口 ${candidatePort} 上未发现可用后端`);
     }
 
     this.port = await findAvailablePort(this.port);
-    this.log(`后端启动端口已选择为: ${this.port}`);
+    this.log(`>> 选择新端口: ${this.port}`);
     this.readyPromise = this.startAndWait();
     return this.readyPromise;
   }
 
   async startAndWait() {
     if (this.process) {
+      this.log(`>> 后端进程已存在，等待就绪...`);
       return this.waitForReady();
     }
 
@@ -209,14 +213,20 @@ export class BackendManager {
     this.stdoutTail = createTailBuffer();
     this.stderrTail = createTailBuffer();
 
-    this.log(`Python 候选已解析为: ${pythonPath}`);
-    if (!fs.existsSync(pythonPath)) {
-      this.log(`Python 路径不存在: ${pythonPath}`);
-    }
-
-    this.log(`启动后端: ${formatCommandLine(pythonPath, args, cwd, workspaceRoot, this.port)}`);
+    this.log(`========== 启动后端进程 ==========`);
+    this.log(`Python 路径: ${pythonPath}`);
+    this.log(`Python 存在: ${fs.existsSync(pythonPath) ? '✓ 是' : '✗ 否'}`);
+    this.log(`项目根目录(cwd): ${cwd}`);
+    this.log(`启动命令: ${pythonPath} ${args.join(' ')}`);
     this.log(`环境变量: WORKSPACE_ROOT=${workspaceRoot}`);
 
+    if (!fs.existsSync(pythonPath)) {
+      const error = new Error(`Python 路径不存在: ${pythonPath}`);
+      this.log(`✗ ${error.message}`);
+      throw error;
+    }
+
+    this.log(`>> 创建子进程...`);
     this.process = spawn(pythonPath, args, {
       cwd,
       env: {
@@ -228,17 +238,23 @@ export class BackendManager {
     });
 
     this.process.once('spawn', () => {
-      this.log(`子进程已创建，pid=${this.process?.pid ?? 'unknown'}`);
+      this.log(`✓ 子进程已创建，pid=${this.process?.pid ?? 'unknown'}`);
     });
 
     this.process.stdout?.on('data', (chunk) => {
       this.stdoutTail.push(chunk);
-      this.outputChannel.append(`[backend stdout] ${chunk.toString()}`);
+      const text = chunk.toString().trim();
+      if (text) {
+        this.log(`[backend stdout] ${text}`);
+      }
     });
 
     this.process.stderr?.on('data', (chunk) => {
       this.stderrTail.push(chunk);
-      this.outputChannel.append(`[backend stderr] ${chunk.toString()}`);
+      const text = chunk.toString().trim();
+      if (text) {
+        this.log(`[backend stderr] ${text}`);
+      }
     });
 
     const processFailure = new Promise((_, reject) => {
@@ -249,7 +265,7 @@ export class BackendManager {
           `stdout_tail:\n${this.stdoutTail.toString()}`,
           `stderr_tail:\n${this.stderrTail.toString()}`,
         ].join('\n\n');
-        this.log(diagnostic);
+        this.log(`✗ ${diagnostic}`);
         reject(error instanceof Error ? error : new Error(String(error)));
       });
 
@@ -260,40 +276,49 @@ export class BackendManager {
             `stdout_tail:\n${this.stdoutTail.toString()}`,
             `stderr_tail:\n${this.stderrTail.toString()}`,
           ].join('\n\n');
-          this.log(diagnostic);
+          this.log(`✗ ${diagnostic}`);
           reject(new Error(diagnostic));
         }
       });
     });
 
     this.process.on('exit', (code, signal) => {
-      this.log(`后端退出: code=${code}, signal=${signal ?? ''}`);
+      this.log(`后端进程退出: code=${code}, signal=${signal ?? ''}`);
       this.process = null;
       this.readyPromise = null;
     });
 
+    this.log(`>> 等待后端就绪（最多60次，间隔500ms）...`);
     return Promise.race([this.waitForReady(), processFailure]);
   }
 
   async waitForReady() {
-    for (let attempt = 0; attempt < 60; attempt += 1) {
+    this.log(`>> 开始后端就绪探测（最多60次，间隔500ms）`);
+    for (let attempt = 1; attempt <= 60; attempt += 1) {
       try {
+        this.log(`>> 探测尝试 ${attempt}/60: GET /api/v1/workspace`);
         const workspace = await getWorkspace(this.port);
-        this.log(`后端就绪探测成功: http://127.0.0.1:${this.port}/api/v1/workspace`);
+        this.log(`✓ 后端就绪! 探测成功: http://127.0.0.1:${this.port}/api/v1/workspace`);
+        this.log(`   workspace: ${JSON.stringify(workspace).slice(0, 150)}`);
         return { port: this.port, workspace };
       } catch (error) {
-        this.log(`后端就绪探测失败(${attempt + 1}/60): ${error instanceof Error ? error.message : String(error)}`);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        this.log(`× 探测失败(${attempt}/60): ${errorMsg}`);
+        if (attempt >= 5) {
+          // 每5次提示一次等待
+          this.log(`>> 继续等待... (已等待 ${(attempt * 0.5).toFixed(1)}秒)`);
+        }
         await wait(500);
       }
     }
 
     const diagnostic = [
-      '本地后端启动超时，未能完成 workspace 就绪探测',
+      '!!! 本地后端启动超时，未能完成 workspace 就绪探测',
       `port=${this.port}`,
       `stdout_tail:\n${this.stdoutTail.toString()}`,
       `stderr_tail:\n${this.stderrTail.toString()}`,
     ].join('\n\n');
-    this.log(diagnostic);
+    this.log(`✗ ${diagnostic}`);
     throw new Error(diagnostic);
   }
 

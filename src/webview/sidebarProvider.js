@@ -305,18 +305,28 @@ export class SidebarProvider {
   }
 
   async sendCurrentMessage(content) {
+    this.log(`========== 开始发送消息 ==========`);
+    this.log(`消息内容: ${String(content ?? '').slice(0, 100)}`);
+
     if (!this.state.currentSession) {
+      this.log('错误: 当前无活动session，创建新session');
       await this.createNewSession(DEFAULT_SESSION_TITLE);
     }
 
-    this.log(`开始处理发送消息，内容长度=${String(content ?? '').length}`);
+    this.log(`当前session: ${this.state.currentSession?.session_id}`);
+    this.log(`当前端口: ${this.state.apiPort}`);
+
     const ready = await this.ensureBackendReady();
     const port = ready.port;
+    this.log(`后端就绪确认成功，端口=${port}`);
 
     const defaultAgent = this.state.agents.find((agent) => agent.agent_id === DEFAULT_AGENT_ID) ?? this.state.agents[0];
     if (!defaultAgent) {
-      throw new Error('未找到可用 agent');
+      const error = new Error('未找到可用 agent');
+      this.log(`错误: ${error.message}`);
+      throw error;
     }
+    this.log(`使用agent: ${defaultAgent.agent_id}`);
 
     const payload = {
       message: {
@@ -339,47 +349,64 @@ export class SidebarProvider {
       },
     };
 
-    const accepted = await sendMessage(port, this.state.currentSession.session_id, payload);
-    this.log(`后端已接受消息，job_id=${accepted?.job_id ?? '(none)'}`);
+    this.log(`发送API请求到: POST /api/v1/sessions/${this.state.currentSession.session_id}/messages`);
+    this.log(`Payload: ${JSON.stringify(payload).slice(0, 200)}...`);
 
-    this.state.activeJob = accepted?.job_id
-      ? {
+    try {
+      const accepted = await sendMessage(port, this.state.currentSession.session_id, payload);
+      this.log(`✓ API响应成功: job_id=${accepted?.job_id ?? '(none)'}, message_id=${accepted?.message_id ?? '(none)'}, status=${accepted?.status}`);
+
+      this.state.activeJob = accepted?.job_id
+        ? {
+            jobId: accepted.job_id,
+            sessionId: this.state.currentSession.session_id,
+            status: 'running',
+            messageId: accepted.message_id ?? null,
+            content,
+          }
+        : null;
+
+      if (accepted?.job_id) {
+        this.postMessageToWebview({
+          type: HostToWebviewMessageType.messageAccepted,
           jobId: accepted.job_id,
           sessionId: this.state.currentSession.session_id,
-          status: 'running',
           messageId: accepted.message_id ?? null,
           content,
-        }
-      : null;
+        });
+        this.log(`✓ 已通知webview消息已接受，开始监听job事件: job_id=${accepted.job_id}`);
+        void this.observeJobEvents(port, accepted.job_id, this.state.currentSession.session_id);
+      } else {
+        this.log('⚠ 后端返回的job_id为空，非流式响应模式');
+      }
 
-    if (accepted?.job_id) {
-      this.postMessageToWebview({
-        type: HostToWebviewMessageType.messageAccepted,
-        jobId: accepted.job_id,
-        sessionId: this.state.currentSession.session_id,
-        messageId: accepted.message_id ?? null,
-        content,
-      });
-      void this.observeJobEvents(port, accepted.job_id, this.state.currentSession.session_id);
+      this.syncState('任务已提交，正在更新回复...');
+
+      if (!accepted?.job_id) {
+        void this.reloadMessages().then(() => {
+          this.syncState('消息已提交到后端');
+        });
+      }
+    } catch (error) {
+      this.log(`✗ API请求失败: ${error.message}`);
+      this.log(`错误堆栈: ${error.stack?.split('\n')[0] || 'no stack'}`);
+      throw error; // 抛出给外层，会被handleMessage捕获并显示
     }
 
-    this.syncState('任务已提交，正在更新回复...');
-
-    if (!accepted?.job_id) {
-      void this.reloadMessages().then(() => {
-        this.syncState('消息已提交到后端');
-      });
-    }
+    this.log(`========== 发送消息流程结束 ==========`);
   }
 
   async observeJobEvents(port, jobId, sessionId) {
+    this.log(`>> 开始监听job事件: job_id=${jobId}, session_id=${sessionId}, port=${port}`);
     const controller = new AbortController();
     this.jobStreams.set(jobId, controller);
 
     try {
+      this.log(`>> 连接SSE流: /api/v1/jobs/${jobId}/events/stream`);
       await streamJobEvents(port, jobId, {
         signal: controller.signal,
         onEvent: ({ eventType, payload }) => {
+          this.log(`>> 收到job事件: type=${eventType}, payload=${JSON.stringify(payload).slice(0, 100)}`);
           this.postMessageToWebview({
             type: HostToWebviewMessageType.jobEvent,
             jobId,
@@ -389,6 +416,7 @@ export class SidebarProvider {
           });
 
           if (['job_completed', 'job_failed', 'job_cancelled'].includes(eventType)) {
+            this.log(`>> Job结束: ${eventType}`);
             this.state.activeJob = {
               ...(this.state.activeJob ?? {}),
               jobId,
@@ -404,15 +432,21 @@ export class SidebarProvider {
           }
         },
         onError: (error) => {
-          this.postError(error);
+          const errorMsg = `SSE流错误: ${error.message}`;
+          this.log(`✗ ${errorMsg}`);
+          this.postError(new Error(errorMsg));
         },
       });
+      this.log(`>> SSE流正常结束`);
     } catch (error) {
       if (!controller.signal.aborted) {
-        this.postError(error);
+        const errorMsg = `监听job事件失败: ${error.message}`;
+        this.log(`✗ ${errorMsg}`);
+        this.postError(new Error(errorMsg));
       }
     } finally {
       this.jobStreams.delete(jobId);
+      this.log(`>> 清理job监听: job_id=${jobId}`);
     }
   }
 

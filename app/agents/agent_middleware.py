@@ -24,6 +24,38 @@ class LLMLoggingMiddleware(AgentMiddleware):
         execution_info = runtime.execution_info
         return execution_info.thread_id
 
+    def _get_job_id(self, runtime) -> str:
+        """
+        从runtime中提取job_id。
+        优先级：
+        1. runtime.configurable.job_id
+        2. runtime.execution_info.configurable.job_id
+        3. runtime.execution_info.job_id
+        4. 回退到 thread_id (session_id)
+        """
+        # 尝试 runtime.configurable
+        configurable = getattr(runtime, 'configurable', None)
+        if isinstance(configurable, dict):
+            job_id = configurable.get('job_id')
+            if job_id:
+                return job_id
+
+        # 尝试 runtime.execution_info.configurable
+        execution_info = getattr(runtime, 'execution_info', None)
+        if execution_info is not None:
+            configurable = getattr(execution_info, 'configurable', None)
+            if isinstance(configurable, dict):
+                job_id = configurable.get('job_id')
+                if job_id:
+                    return job_id
+            # 有些实现可能直接把 job_id 放在 execution_info 上
+            job_id = getattr(execution_info, 'job_id', None)
+            if job_id:
+                return job_id
+
+        # 回退到 thread_id (session_id)
+        return self._get_session_id(runtime)
+
     def _ensure_session_dir(self, session_id: str) -> Path:
         logs_dir = get_logs_dir() / "llm_requests" / session_id
         if session_id not in self._prepared_session_dirs:
@@ -70,6 +102,7 @@ class LLMLoggingMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         session_id = self._get_session_id(request.runtime)
+        job_id = self._get_job_id(request.runtime)
         model_name = getattr(request.model, "model_name", str(request.model))
 
         response = handler(request)
@@ -80,7 +113,7 @@ class LLMLoggingMiddleware(AgentMiddleware):
             bus = JobEventBus.get_instance()
             import asyncio
             asyncio.create_task(bus.publish(
-                job_id=session_id,
+                job_id=job_id,  # 使用正确的job_id
                 event_type=EventType.LLM_REQUEST,
                 payload={"model": model_name, "timestamp": int(time.time() * 1000)},
                 agent_id="deep_agent",
@@ -93,9 +126,10 @@ class LLMLoggingMiddleware(AgentMiddleware):
     async def awrap_model_call(
         self,
         request: ModelRequest,
-        handler: Callable[[ModelRequest], ModelResponse],
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         session_id = self._get_session_id(request.runtime)
+        job_id = self._get_job_id(request.runtime)
         model_name = getattr(request.model, "model_name", str(request.model))
 
         response = await handler(request)
@@ -105,7 +139,7 @@ class LLMLoggingMiddleware(AgentMiddleware):
         try:
             bus = JobEventBus.get_instance()
             await bus.publish(
-                job_id=session_id,
+                job_id=job_id,  # 使用正确的job_id
                 event_type=EventType.LLM_REQUEST,
                 payload={"model": model_name, "timestamp": int(time.time() * 1000)},
                 agent_id="deep_agent",

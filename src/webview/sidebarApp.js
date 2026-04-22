@@ -875,7 +875,12 @@ window.addEventListener('error', (event) => {
 });
 
 window.addEventListener('unhandledrejection', (event) => {
-  reportWebviewError(event.reason || 'webview 发生未处理的 Promise 拒绝');
+  const reason = event.reason || 'webview 发生未处理的 Promise 拒绝';
+  reportWebviewError(reason);
+  console.error('[UnhandledRejection]', reason);
+  if (event.reason instanceof Error) {
+    console.error(event.reason.stack);
+  }
 });
 
 if (document.readyState === 'loading') {

@@ -128,7 +128,10 @@ class JobService:
             Agent响应内容
         """
         agent_service = AgentExecutionService.get_instance()
-        return await agent_service.run_step(session_id, message, agent_id=agent_id)
+        # 同步接口也必须生成真实的job_id，永远不要传递None
+        import uuid
+        job_id = str(uuid.uuid4())
+        return await agent_service.run_step(session_id, message, agent_id=agent_id, job_id=job_id)
     
     async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
         """
@@ -252,7 +255,7 @@ class JobService:
             )
             
             agent_service = AgentExecutionService.get_instance()
-            result = await agent_service.run_step(session_id, message, agent_id=job.agent_id)
+            result = await agent_service.run_step(session_id, message, agent_id=job.agent_id, job_id=job_id)
 
             from app.services.message_service import MessageService
             await MessageService().append_assistant_message(

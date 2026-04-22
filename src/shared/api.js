@@ -5,7 +5,10 @@ function buildUrl(port, path) {
 }
 
 async function requestJson(port, path, options = {}) {
-  const response = await fetch(buildUrl(port, path), {
+  const url = buildUrl(port, path);
+  console.log(`[API Request] ${options.method || 'GET'} ${url}`); // 添加日志
+
+  const response = await fetch(url, {
     ...options,
     headers: {
       accept: 'application/json',
@@ -15,12 +18,18 @@ async function requestJson(port, path, options = {}) {
     },
   });
 
+  const responseText = await response.text(); // 提前读取响应体
+  console.log(`[API Response] ${response.status} ${response.statusText}`, responseText.slice(0, 200)); // 打印响应摘要
+
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`后端请求失败 ${response.status}: ${text}`);
+    throw new Error(`后端请求失败 ${response.status}: ${responseText}`);
   }
 
-  return response.json();
+  try {
+    return JSON.parse(responseText);
+  } catch (e) {
+    throw new Error(`响应解析失败: ${responseText.slice(0, 100)}`);
+  }
 }
 
 function parseSseBlock(block) {

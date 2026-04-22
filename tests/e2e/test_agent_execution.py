@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -47,9 +48,12 @@ async def test_single_step_execution():
     """Test minimal single step execution"""
     print("\n=== Test 2: Single Step Execution ===")
 
+    import uuid
+    job_id = str(uuid.uuid4())
     response = await AgentExecutionService.run_step(
         "test_session_001",
         "简单回复一句话：你好，我是测试助手",
+        job_id=job_id
     )
 
     assert isinstance(response, str)
@@ -65,16 +69,16 @@ async def test_session_isolation():
     print("\n=== Test 3: Session Isolation ===")
 
     # 向会话A发送第一条消息
-    resp_a1 = await AgentExecutionService.run_step("session_a", "记住这个数字：42")
+    resp_a1 = await AgentExecutionService.run_step("session_a", "记住这个数字：42", job_id=str(uuid.uuid4()))
 
     # 向会话B发送第一条消息
-    resp_b1 = await AgentExecutionService.run_step("session_b", "记住这个数字：88")
+    resp_b1 = await AgentExecutionService.run_step("session_b", "记住这个数字：88", job_id=str(uuid.uuid4()))
 
     # 查询会话A
-    resp_a2 = await AgentExecutionService.run_step("session_a", "我刚才告诉你的数字是什么？")
+    resp_a2 = await AgentExecutionService.run_step("session_a", "我刚才告诉你的数字是什么？", job_id=str(uuid.uuid4()))
 
     # 查询会话B
-    resp_b2 = await AgentExecutionService.run_step("session_b", "我刚才告诉你的数字是什么？")
+    resp_b2 = await AgentExecutionService.run_step("session_b", "我刚才告诉你的数字是什么？", job_id=str(uuid.uuid4()))
 
     assert all(
         isinstance(response, str) and response.strip()

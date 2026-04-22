@@ -33,13 +33,15 @@ class AgentExecutionService:
         return agent
     
     @classmethod
-    async def run_step(cls, session_id: str, message: str, agent_id: str | None = None) -> str:
+    async def run_step(cls, session_id: str, message: str, agent_id: str | None = None, job_id: str | None = None) -> str:
         """
         执行单步Agent调用
         
         Args:
             session_id: 会话ID
             message: 用户输入消息
+            agent_id: Agent ID
+            job_id: 任务ID（用于事件发布），如果为None则使用session_id（向后兼容）
             
         Returns:
             Agent响应内容
@@ -49,9 +51,17 @@ class AgentExecutionService:
         agent = instance._get_or_create_agent(session_id, resolved_agent_id)
         bus = JobEventBus.get_instance()
         
+        # 确定用于事件发布的job_id
+        if job_id is None:
+            raise ValueError(f"job_id is required for run_step. session_id={session_id}, agent_id={agent_id}. "
+                           f"Do not fallback to session_id. Always pass a valid job_id. "
+                           f"This is a deliberate design choice following local agent principles: "
+                           f"fail fast, never hide errors, never return fake defaults.")
+        effective_job_id = job_id
+        
         # 发布AGENT_START事件
         await bus.publish(
-            job_id=session_id,
+            job_id=effective_job_id,
             event_type=EventType.AGENT_START,
             payload={"message": message, "agent_id": resolved_agent_id},
             agent_id=resolved_agent_id
@@ -60,12 +70,13 @@ class AgentExecutionService:
         config = {
             "configurable": {
                 "thread_id": session_id,
+                "job_id": effective_job_id,  # 将job_id注入到LangChain配置中，供middleware使用
             }
         }
         
         # 发布AGENT_STEP事件
         await bus.publish(
-            job_id=session_id,
+            job_id=effective_job_id,
             event_type=EventType.AGENT_STEP,
             payload={"phase": "invoking_agent"},
             agent_id=resolved_agent_id
@@ -81,7 +92,7 @@ class AgentExecutionService:
             
             # 发布AGENT_END事件
             await bus.publish(
-                job_id=session_id,
+                job_id=effective_job_id,
                 event_type=EventType.AGENT_END,
                 payload={
                     "response_length": len(response_content),
@@ -96,7 +107,7 @@ class AgentExecutionService:
         except Exception as e:
             # 发布ERROR事件
             await bus.publish(
-                job_id=session_id,
+                job_id=effective_job_id,
                 event_type=EventType.ERROR,
                 payload={"error": str(e), "phase": "agent_execution"},
                 agent_id=resolved_agent_id
