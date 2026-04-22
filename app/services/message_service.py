@@ -98,11 +98,15 @@ class MessageService:
         供路由层调用的实例方法
         """
         message = await self.create(session_id, run_request.message)
+
+        from app.services.session_service import SessionService
+        session = await SessionService.get(session_id)
+        effective_agent_id = run_request.run.agent_id or session.current_agent_id
         
         # 使用JobService启动后台异步任务
         from app.services.job_service import JobService
         job_service = JobService.get_instance()
-        job_id = await job_service.start_job(session_id, message.content)
+        job_id = await job_service.start_job(session_id, message.content, effective_agent_id)
         
         return MessageRunAccepted(
             message_id=message.message_id,

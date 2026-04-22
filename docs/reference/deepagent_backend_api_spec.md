@@ -209,6 +209,12 @@ VSCode / Electron / Local Client
 - 插入新的高优先级用户指令
 - 跳过某一步或某个子 agent
 
+## 5.4 Session 级调度约束
+
+- 同一个 `session_id` 下，Job 必须串行排队执行。
+- 仅当上一个 Job 进入终态（`completed/succeeded/failed/cancelled/timed_out`）后，才可启动下一个 Job。
+- 不同 `session_id` 的 Job 可以异步并行执行。
+
 ---
 
 ## 6. 状态机
@@ -591,7 +597,7 @@ data: {"job_id":"job_001","status":"succeeded"}
 }
 ```
 
-### 示例 5：取消某个并行 Agent
+### 示例 5：取消某个子 Agent
 
 ```json
 {
@@ -1508,7 +1514,7 @@ async def update_config(
 - 工具调用前
 - 工具调用后
 - step 完成后
-- 并行 fan-out 前
+- 子 agent fan-out 前
 - summarizer 汇总前
 
 ---

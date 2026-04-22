@@ -20,7 +20,7 @@ class MessageCreate(BaseModel):
 
 class RunOptions(BaseModel):
     mode: RunMode = RunMode.single_agent
-    agent_id: str
+    agent_id: Optional[str] = None
     response_mode: str = "stream"
     async_run: bool = Field(default=True, alias="async")
     max_steps: int = 20

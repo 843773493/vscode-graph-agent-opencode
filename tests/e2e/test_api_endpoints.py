@@ -102,7 +102,7 @@ async def test_multiple_same_session_jobs_are_queued(client: httpx.AsyncClient):
     # 创建会话
     create_session_response = await client.post(
         "/api/v1/sessions",
-        json={"title": "Parallel Jobs Test"}
+        json={"title": "Same Session Queue Test"}
     )
     session_id = create_session_response.json()["data"]["session_id"]
     
@@ -137,6 +137,55 @@ async def test_multiple_same_session_jobs_are_queued(client: httpx.AsyncClient):
         pytest.fail("Not all queued jobs completed in time")
     
     print(f"✅ All {len(job_ids)} queued jobs completed successfully!")
+
+
+@pytest.mark.asyncio
+async def test_multiple_different_session_jobs_can_run_in_parallel(client: httpx.AsyncClient):
+    """测试不同 session 的 Job 允许异步并行执行"""
+
+    session_ids = []
+    for i in range(2):
+        create_session_response = await client.post(
+            "/api/v1/sessions",
+            json={"title": f"Cross Session Parallel Test {i}"},
+        )
+        assert create_session_response.status_code == 200
+        session_ids.append(create_session_response.json()["data"]["session_id"])
+
+    job_ids = []
+    for index, session_id in enumerate(session_ids):
+        response = await client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            json={
+                "message": {"content": f"Please respond quickly from session {index}"},
+                "run": {"mode": "single_agent", "agent_id": "deep_agent"},
+            },
+        )
+        assert response.status_code == 200
+        job_id = response.json()["data"]["job_id"]
+        job_ids.append(job_id)
+        print(f"Started cross-session job {index}: {job_id}")
+
+    running_seen = False
+    for attempt in range(40):
+        statuses = []
+        for job_id in job_ids:
+            response = await client.get(f"/api/v1/jobs/{job_id}")
+            assert response.status_code == 200
+            statuses.append(response.json()["data"]["status"])
+
+        if statuses.count("running") >= 2:
+            running_seen = True
+
+        if all(status in {"completed", "succeeded", "failed"} for status in statuses):
+            break
+
+        await asyncio.sleep(1)
+    else:
+        pytest.fail("Cross-session jobs did not complete in time")
+
+    assert running_seen, f"Cross-session parallel running state not observed: {statuses}"
+    print("✅ Cross-session jobs observed running in parallel")
 
 
 if __name__ == "__main__":

@@ -16,11 +16,31 @@ class _DummyConfigService:
     def get_llm_providers(self):
         return [
             {
+                "id": "primary",
                 "model": "dummy-model",
                 "api_key": "dummy-key",
                 "endpoint": "http://localhost:1234",
+                "interface": "chat.completion",
             }
         ]
+
+    def get_default_agent_runtime_config(self):
+        return {
+            "system_prompt": "dummy system prompt",
+            "providers": self.get_llm_providers(),
+            "temperature": 0.2,
+            "top_p": 1,
+            "max_output_tokens": 4000,
+        }
+
+    def get_default_agent_id(self):
+        return "default"
+
+    def resolve_agent_id(self, agent_id):
+        return agent_id or "default"
+
+    def get_agent_runtime_config(self, agent_id=None):
+        return self.get_default_agent_runtime_config()
 
 
 class _DummyAgent:
@@ -58,6 +78,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     assert "monitor_session_agent_end" in tool_names
     assert "collect_background_messages" in tool_names
     assert "send_message_to_session" in tool_names
+    assert captured["system_prompt"] == "dummy system prompt"
 
 
 @pytest.mark.asyncio

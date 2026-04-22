@@ -227,10 +227,12 @@ class AgentExecutionService:
     _instance: Optional[AgentExecutionService] = None
     
     def __init__(self):
-        config_service = ConfigService.get_instance()
-        providers = config_service.get_llm_providers()
-        
-        # 构建模型列表，支持fallback
+        self._agent_cache = {}
+
+    def _build_runtime_for_agent(self, agent_id: str) -> dict[str, Any]:
+        runtime_config = ConfigService.get_instance().get_agent_runtime_config(agent_id)
+        providers = runtime_config["providers"]
+
         models = []
         for provider in providers:
             model = ChatOpenAI(
@@ -238,14 +240,21 @@ class AgentExecutionService:
                 api_key=provider["api_key"],
                 base_url=provider["endpoint"],
                 use_responses_api=(provider.get("interface") == "responses"),
+                temperature=runtime_config["temperature"],
+                top_p=runtime_config["top_p"],
+                max_tokens=runtime_config["max_output_tokens"],
                 max_retries=3,
             )
             models.append(model)
-        
-        # 主模型和fallback模型
-        self.model = models[0] if models else None
-        self.midware_fallback_models = ModelFallbackMiddleware(*models[1:]) if len(models) > 1 else None
-        self._agent_cache = {}
+
+        if not models:
+            raise RuntimeError("未能构建任何模型实例")
+
+        return {
+            "model": models[0],
+            "fallback": ModelFallbackMiddleware(*models[1:]) if len(models) > 1 else None,
+            "system_prompt": runtime_config["system_prompt"],
+        }
 
     def _get_repo_root(self) -> Path:
         return Path(__file__).resolve().parents[2]
@@ -542,9 +551,13 @@ class AgentExecutionService:
             cls._instance = AgentExecutionService()
         return cls._instance
     
-    def _get_or_create_agent(self, session_id: str):
-        if session_id in self._agent_cache:
-            return self._agent_cache[session_id]
+    def _get_or_create_agent(self, session_id: str, agent_id: str | None = None):
+        resolved_agent_id = ConfigService.get_instance().resolve_agent_id(agent_id)
+        cache_key = f"{session_id}::{resolved_agent_id}"
+        if cache_key in self._agent_cache:
+            return self._agent_cache[cache_key]
+
+        runtime = self._build_runtime_for_agent(resolved_agent_id)
         
         workspace_root = get_workspace_root()
         backend = FilesystemBackend(
@@ -560,8 +573,8 @@ class AgentExecutionService:
             ExecutionTraceMiddleware(),
         ]
         
-        if self.midware_fallback_models:
-            middleware_list.append(self.midware_fallback_models)
+        if runtime["fallback"]:
+            middleware_list.append(runtime["fallback"])
 
         python_execution_tool = self._create_python_execution_tool(session_id)
         system_time_emitter_tool = self._create_system_time_emitter_tool(session_id)
@@ -570,7 +583,7 @@ class AgentExecutionService:
         send_message_to_session_tool = self._create_send_message_to_session_tool()
         
         agent = create_deep_agent(
-            model=self.model,
+            model=runtime["model"],
             tools=[
                 python_execution_tool,
                 system_time_emitter_tool,
@@ -579,16 +592,16 @@ class AgentExecutionService:
                 send_message_to_session_tool,
             ],
             backend=backend,
-            system_prompt="You are a helpful assistant.",
+            system_prompt=runtime["system_prompt"],
             checkpointer=checkpointer,
             middleware=middleware_list
         )
         
-        self._agent_cache[session_id] = agent
+        self._agent_cache[cache_key] = agent
         return agent
     
     @classmethod
-    async def run_step(cls, session_id: str, message: str) -> str:
+    async def run_step(cls, session_id: str, message: str, agent_id: str | None = None) -> str:
         """
         执行单步Agent调用
         
@@ -600,15 +613,16 @@ class AgentExecutionService:
             Agent响应内容
         """
         instance = cls.get_instance()
-        agent = instance._get_or_create_agent(session_id)
+        resolved_agent_id = ConfigService.get_instance().resolve_agent_id(agent_id)
+        agent = instance._get_or_create_agent(session_id, resolved_agent_id)
         bus = JobEventBus.get_instance()
         
         # 发布AGENT_START事件
         await bus.publish(
             job_id=session_id,
             event_type=EventType.AGENT_START,
-            payload={"message": message},
-            agent_id="deep_agent"
+            payload={"message": message, "agent_id": resolved_agent_id},
+            agent_id=resolved_agent_id
         )
         
         config = {
@@ -622,7 +636,7 @@ class AgentExecutionService:
             job_id=session_id,
             event_type=EventType.AGENT_STEP,
             payload={"phase": "invoking_agent"},
-            agent_id="deep_agent"
+            agent_id=resolved_agent_id
         )
         
         try:
@@ -640,8 +654,9 @@ class AgentExecutionService:
                 payload={
                     "response_length": len(response_content),
                     "final_text": response_content,
+                    "agent_id": resolved_agent_id,
                 },
-                agent_id="deep_agent"
+                agent_id=resolved_agent_id
             )
             
             return response_content
@@ -652,18 +667,18 @@ class AgentExecutionService:
                 job_id=session_id,
                 event_type=EventType.ERROR,
                 payload={"error": str(e), "phase": "agent_execution"},
-                agent_id="deep_agent"
+                agent_id=resolved_agent_id
             )
             raise
 
     @classmethod
     @classmethod
-    def get_for_session(cls, session_id: str):
+    def get_for_session(cls, session_id: str, agent_id: str | None = None):
         """
         获取指定会话的Agent实例
         """
         instance = cls.get_instance()
-        return instance._get_or_create_agent(session_id)
+        return instance._get_or_create_agent(session_id, agent_id)
     
     @classmethod
     def get_available_tools(cls) -> List[Dict[str, Any]]:

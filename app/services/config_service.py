@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 import os
-from typing import Optional
+from typing import Optional, Any
 
 import jsonschema
 from jsonschema import ValidationError
@@ -102,6 +102,113 @@ class ConfigService:
             result.append(expanded)
         
         return result
+
+    def get_default_agent_runtime_config(self) -> dict[str, Any]:
+        """解析 default_agent 运行时配置。"""
+        return self.get_agent_runtime_config(self.get_default_agent_id())
+
+    def get_default_agent_id(self) -> str:
+        config = self._load_boxteam_config()
+        default_agent_id = config.get("default_agent")
+        agents = config.get("agents", {})
+
+        if default_agent_id and default_agent_id in agents:
+            return default_agent_id
+
+        # 兼容旧链路：历史上默认使用 deep_agent
+        return "deep_agent"
+
+    def _normalize_agent_id(self, agent_id: str | None) -> str:
+        if not agent_id:
+            return self.get_default_agent_id()
+
+        # 兼容旧调用方：deep_agent 映射到 default_agent
+        if agent_id == "deep_agent":
+            return self.get_default_agent_id()
+
+        return agent_id
+
+    def resolve_agent_id(self, agent_id: str | None) -> str:
+        return self._normalize_agent_id(agent_id)
+
+    def validate_agent_id(self, agent_id: str | None) -> str:
+        """校验 agent_id 是否可用，返回规范化后的 agent_id。"""
+        resolved_agent_id = self._normalize_agent_id(agent_id)
+        config = self._load_boxteam_config()
+        agents = config.get("agents", {})
+
+        # 兼容旧配置：未定义 agents 时仅保留 deep_agent 链路
+        if not agents:
+            if resolved_agent_id != "deep_agent":
+                raise ValueError(f"agent {resolved_agent_id} 不存在")
+            return resolved_agent_id
+
+        if resolved_agent_id not in agents:
+            raise ValueError(f"agent {resolved_agent_id} 不存在")
+
+        return resolved_agent_id
+
+    def get_agent_runtime_config(self, agent_id: str | None = None) -> dict[str, Any]:
+        """按 agent_id 解析运行时配置。
+
+        兼容旧配置：当不存在 agents 配置时，回退到旧的 provider 全量顺序与默认参数。
+        """
+        config = self._load_boxteam_config()
+        providers = self.get_llm_providers()
+
+        if not providers:
+            raise ValueError("未配置任何 LLM provider")
+
+        default_runtime = {
+            "system_prompt": "You are a helpful assistant.",
+            "providers": providers,
+            "temperature": 0.2,
+            "top_p": 1,
+            "max_output_tokens": 4000,
+        }
+
+        agents = config.get("agents", {})
+
+        resolved_agent_id = self._normalize_agent_id(agent_id)
+        if not agents or resolved_agent_id not in agents:
+            if resolved_agent_id != "deep_agent":
+                raise ValueError(f"agent {resolved_agent_id} 不存在")
+            return default_runtime
+
+        target_agent = agents[resolved_agent_id]
+        instructions = target_agent.get("instructions", {})
+        model_cfg = target_agent.get("model", {})
+
+        provider_map: dict[str, dict[str, Any]] = {}
+        for index, provider in enumerate(providers):
+            provider_id = provider.get("id")
+            if not provider_id:
+                provider_id = f"provider_{index}"
+            provider_map[provider_id] = provider
+
+        primary_provider = model_cfg.get("primary_provider")
+        fallback_providers = model_cfg.get("fallback_providers", [])
+
+        if not primary_provider:
+            raise ValueError(f"agent {resolved_agent_id} 缺少 model.primary_provider 配置")
+
+        provider_ids = [primary_provider, *fallback_providers]
+        selected_providers = []
+        for provider_id in provider_ids:
+            provider = provider_map.get(provider_id)
+            if provider is None:
+                raise ValueError(
+                    f"agent {resolved_agent_id} 引用了不存在的 provider: {provider_id}"
+                )
+            selected_providers.append(provider)
+
+        return {
+            "system_prompt": instructions.get("system_prompt", default_runtime["system_prompt"]),
+            "providers": selected_providers,
+            "temperature": model_cfg.get("temperature", default_runtime["temperature"]),
+            "top_p": model_cfg.get("top_p", default_runtime["top_p"]),
+            "max_output_tokens": model_cfg.get("max_output_tokens", default_runtime["max_output_tokens"]),
+        }
 
     async def get(self) -> ConfigDTO:
         return ConfigDTO(

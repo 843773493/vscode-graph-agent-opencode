@@ -18,6 +18,7 @@ class JobState:
     session_id: str
     status: JobStatus
     message: str = ""
+    agent_id: str = "deep_agent"
     progress: int = 0
     error_message: Optional[str] = None
     result: Optional[str] = None
@@ -53,7 +54,7 @@ class JobService:
                     session_id=job.session_id,
                     mode=RunMode.single_agent,
                     status=job.status,
-                    entry_agent="deep_agent",
+                    entry_agent=job.agent_id,
                     progress=job.progress,
                     current_step=None,
                     error_message=job.error_message,
@@ -74,7 +75,7 @@ class JobService:
             session_id=job.session_id,
             mode=RunMode.single_agent,
             status=job.status,
-            entry_agent="deep_agent",
+            entry_agent=job.agent_id,
             progress=job.progress,
             current_step=None,
             error_message=job.error_message,
@@ -115,7 +116,7 @@ class JobService:
             control_state=f"Action {control_request.action.value} applied successfully"
         )
     
-    async def run_agent(self, session_id: str, message: str) -> str:
+    async def run_agent(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
         """
         启动Agent执行单步调用（同步阻塞模式，保持向后兼容）
         
@@ -127,9 +128,9 @@ class JobService:
             Agent响应内容
         """
         agent_service = AgentExecutionService.get_instance()
-        return await agent_service.run_step(session_id, message)
+        return await agent_service.run_step(session_id, message, agent_id=agent_id)
     
-    async def start_job(self, session_id: str, message: str) -> str:
+    async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
         """
         启动异步后台Job，不阻塞HTTP请求
         
@@ -146,6 +147,7 @@ class JobService:
             job_id=job_id,
             session_id=session_id,
             message=message,
+            agent_id=agent_id,
             status=JobStatus.queued
         )
         
@@ -154,7 +156,7 @@ class JobService:
         await self._bus.publish(
             job_id=job_id,
             event_type=EventType.JOB_CREATED,
-            payload={"session_id": session_id, "message": message},
+                payload={"session_id": session_id, "message": message, "agent_id": agent_id},
             agent_id="job_service"
         )
 
@@ -250,7 +252,7 @@ class JobService:
             )
             
             agent_service = AgentExecutionService.get_instance()
-            result = await agent_service.run_step(session_id, message)
+            result = await agent_service.run_step(session_id, message, agent_id=job.agent_id)
 
             from app.services.message_service import MessageService
             await MessageService().append_assistant_message(

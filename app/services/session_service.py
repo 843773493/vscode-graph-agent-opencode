@@ -7,6 +7,7 @@ from typing import Any, List, Optional
 from app.schemas.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest
 from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir, get_logs_dir
 from app.core.exceptions import NotFoundError
+from app.services.config_service import ConfigService
 
 
 class SessionService:
@@ -59,11 +60,14 @@ class SessionService:
         """Create new session"""
         session_id = f"ses_{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc)
+        config_service = ConfigService.get_instance()
+        resolved_agent_id = config_service.validate_agent_id(session.agent_id)
         
         session_data = SessionDTO(
             session_id=session_id,
             workspace_id="ws_local",
             title=session.title,
+            current_agent_id=resolved_agent_id,
             created_at=now,
             updated_at=now
         )
@@ -81,9 +85,15 @@ class SessionService:
     async def update(session_id: str, session: SessionUpdateRequest) -> SessionDTO:
         """Update existing session"""
         existing = await SessionService.get(session_id)
+
+        if session.agent_id is not None:
+            ConfigService.get_instance().validate_agent_id(session.agent_id)
         
         update_data = session.model_dump(exclude_unset=True)
         for key, value in update_data.items():
+            if key == "agent_id":
+                existing.current_agent_id = value
+                continue
             setattr(existing, key, value)
             
         # 确保时间戳递增，避免测试时毫秒级冲突

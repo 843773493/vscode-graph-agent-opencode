@@ -1,71 +1,582 @@
 {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id": "https://example.com/llm-config.schema.json",
-    "title": "LLM Config Schema",
-    "type": "object",
-    "additionalProperties": true,
-    "required": [
-        "llm",
-        "logger"
-    ],
-    "properties": {
-        "llm": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "providers"
-            ],
-            "properties": {
-                "providers": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "$ref": "#/$defs/provider"
-                    }
-                }
-            }
-        },
-        "logger": {
-            "type": "object"
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/llm-config.schema.json",
+  "title": "LLM Workspace Config Schema",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "llm",
+    "logger",
+    "default_agent",
+    "agents"
+  ],
+  "properties": {
+    "llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providers"
+      ],
+      "properties": {
+        "providers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/provider"
+          }
         }
+      }
     },
-    "$defs": {
-        "provider": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "endpoint",
-                "model",
-                "api_key",
-                "interface"
-            ],
-            "properties": {
-                "endpoint": {
-                    "type": "string",
-                    "format": "uri",
-                    "minLength": 1
-                },
-                "model": {
-                    "type": "string",
-                    "minLength": 1
-                },
-                "api_key": {
-                    "description": "Can be a literal API key string, or an environment variable reference like ${OPENAI_API_KEY}.",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "interface": {
-                    "type": "string",
-                    "enum": [
-                        "chat.completion",
-                        "responses"
-                    ]
-                },
-                "auth_header": {
-                    "type": "string",
-                    "minLength": 1
-                }
-            }
-        }
+    "logger": {
+      "type": "object"
+    },
+    "default_agent": {
+      "type": "string",
+      "description": "Default agent key in the agents object",
+      "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+    },
+    "agents": {
+      "type": "object",
+      "description": "Workspace agent registry, keyed by agent name",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/agentConfig"
+      },
+      "propertyNames": {
+        "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+      }
     }
+  },
+  "$defs": {
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "endpoint",
+        "model",
+        "api_key",
+        "interface"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable unique ID of the provider, referenced by agents.*.model",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$",
+          "minLength": 2,
+          "maxLength": 64
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "api_key": {
+          "description": "Can be a literal API key string, or an environment variable reference like ${OPENAI_API_KEY}.",
+          "type": "string",
+          "minLength": 1
+        },
+        "interface": {
+          "type": "string",
+          "enum": [
+            "chat.completion",
+            "responses"
+          ]
+        },
+        "auth_header": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+
+    "agentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "instructions",
+        "model"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Display name of the agent",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "language": {
+          "type": "string",
+          "description": "Default response language",
+          "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+          "default": "zh-CN"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "Default timezone, preferably IANA timezone name",
+          "minLength": 1,
+          "maxLength": 64,
+          "default": "Asia/Shanghai"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "uniqueItems": true,
+          "maxItems": 20
+        },
+        "persona": {
+          "$ref": "#/$defs/agentPersona"
+        },
+        "instructions": {
+          "$ref": "#/$defs/agentInstructions"
+        },
+        "model": {
+          "$ref": "#/$defs/agentModel"
+        },
+        "tools": {
+          "$ref": "#/$defs/agentTools"
+        },
+        "knowledge": {
+          "$ref": "#/$defs/agentKnowledge"
+        },
+        "memory": {
+          "$ref": "#/$defs/agentMemory"
+        },
+        "safety": {
+          "$ref": "#/$defs/agentSafety"
+        },
+        "execution": {
+          "$ref": "#/$defs/agentExecution"
+        },
+        "env": {
+          "$ref": "#/$defs/agentEnv"
+        }
+      }
+    },
+
+    "agentPersona": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "professional",
+            "friendly",
+            "concise",
+            "formal",
+            "technical"
+          ],
+          "default": "professional"
+        },
+        "identity": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "verbosity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "medium"
+        }
+      }
+    },
+
+    "agentInstructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system_prompt"
+      ],
+      "properties": {
+        "system_prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30000
+        },
+        "developer_prompt": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "fallback_prompt": {
+          "type": "string",
+          "maxLength": 5000
+        }
+      }
+    },
+
+    "agentModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary_provider"
+      ],
+      "properties": {
+        "primary_provider": {
+          "type": "string",
+          "description": "Primary provider ID from llm.providers[].id",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+        },
+        "fallback_providers": {
+          "type": "array",
+          "description": "Fallback provider IDs from llm.providers[].id, used in order",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 10
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0.2
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 1
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536,
+          "default": 4000
+        }
+      }
+    },
+
+    "agentTools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "tool_choice": {
+          "type": "string",
+          "enum": [
+            "none",
+            "auto",
+            "required"
+          ],
+          "default": "auto"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 300000,
+          "default": 10000
+        },
+        "allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        },
+        "confirmation_required": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        }
+      }
+    },
+
+    "agentKnowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agentKnowledgeSource"
+          },
+          "maxItems": 20
+        },
+        "retrieval": {
+          "$ref": "#/$defs/agentRetrieval"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "required": [
+              "sources"
+            ]
+          }
+        }
+      ]
+    },
+
+    "agentKnowledgeSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "web",
+            "file",
+            "directory",
+            "notion",
+            "s3",
+            "custom"
+          ]
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "auth_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Reference to secret or environment variable",
+          "pattern": "^[A-Z0-9_./:-]+$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      }
+    },
+
+    "agentRetrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "keyword",
+            "vector",
+            "hybrid"
+          ],
+          "default": "hybrid"
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 5
+        },
+        "score_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.65
+        },
+        "rerank": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+
+    "agentMemory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "session",
+            "user",
+            "workspace"
+          ],
+          "default": "workspace"
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "redis",
+            "postgres",
+            "vector-db",
+            "custom"
+          ]
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 315360000,
+          "default": 2592000
+        },
+        "max_items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "default": 200
+        },
+        "store_user_preferences": {
+          "type": "boolean",
+          "default": true
+        },
+        "store_sensitive_data": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "required": [
+              "backend"
+            ]
+          }
+        }
+      ]
+    },
+
+    "agentSafety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy_mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "standard",
+            "strict"
+          ],
+          "default": "standard"
+        },
+        "prompt_injection_protection": {
+          "type": "boolean",
+          "default": true
+        },
+        "pii_redaction": {
+          "type": "boolean",
+          "default": true
+        },
+        "refuse_secrets_exfiltration": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+
+    "agentExecution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stream": {
+          "type": "boolean",
+          "default": true
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 16
+        },
+        "max_history_messages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200,
+          "default": 30
+        },
+        "max_context_tokens": {
+          "type": "integer",
+          "minimum": 512,
+          "maximum": 200000,
+          "default": 32000
+        }
+      }
+    },
+
+    "agentEnv": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "development",
+            "staging",
+            "production"
+          ],
+          "default": "development"
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "feature_flags": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
 }

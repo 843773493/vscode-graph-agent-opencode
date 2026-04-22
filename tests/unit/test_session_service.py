@@ -46,6 +46,8 @@ class TestSessionService:
         assert session.session_id.startswith("ses_")
         assert len(session.session_id) == 16  # ses_ + 12 hex chars
         assert session.title == "Test Session"
+        assert isinstance(session.current_agent_id, str)
+        assert session.current_agent_id
         assert session.created_at is not None
         assert session.updated_at == session.created_at
         
@@ -58,6 +60,27 @@ class TestSessionService:
             data = json.load(f)
             assert data["session_id"] == session.session_id
             assert data["title"] == "Test Session"
+            assert data["current_agent_id"] == session.current_agent_id
+
+    @pytest.mark.asyncio
+    async def test_create_session_with_specified_agent(self):
+        """测试创建会话时可指定当前agent"""
+        request = SessionCreateRequest(title="Agent Session", agent_id="deep_agent")
+        session = await SessionService.create(request)
+
+        assert session.current_agent_id == "deep_agent"
+
+    @pytest.mark.asyncio
+    async def test_update_session_can_switch_agent(self):
+        """测试会话创建后可切换当前agent"""
+        created = await SessionService.create(SessionCreateRequest(title="Switch Agent Session"))
+
+        updated = await SessionService.update(
+            created.session_id,
+            SessionUpdateRequest(agent_id="deep_agent"),
+        )
+
+        assert updated.current_agent_id == "deep_agent"
 
     @pytest.mark.asyncio
     async def test_get_session(self):

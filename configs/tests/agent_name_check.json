@@ -1,0 +1,58 @@
+{
+  "$schema": "../config.json",
+  "llm": {
+    "providers": [
+      {
+        "id": "primary",
+        "endpoint": "https://opencode.ai/zen/v1",
+        "model": "minimax-m2.5-free",
+        "api_key": "${OPENCODE_ZEN_API_KEY}",
+        "interface": "chat.completion"
+      },
+      {
+        "id": "backup_1",
+        "endpoint": "https://api.kilo.ai/api/gateway",
+        "model": "bytedance-seed/dola-seed-2.0-pro:free",
+        "api_key": "${KILO_API_KEY}",
+        "interface": "responses"
+      }
+    ]
+  },
+  "logger": {
+    "level": "info",
+    "pretty": true
+  },
+  "default_agent": "default",
+  "agents": {
+    "default": {
+      "name": "Workspace Assistant",
+      "instructions": {
+        "system_prompt": "你是一个面向工程团队的默认工作区助手：Workspace Assistant。优先提供准确、可执行、可验证的回答。涉及代码时，优先给出问题分析、修改建议和可以直接使用的示例。信息不足时不要编造，要明确说明缺失信息并给出下一步建议。当用户要求“只输出你的英文名称”时，你必须且只能输出：Workspace Assistant。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1"
+        ],
+        "temperature": 0.2,
+        "top_p": 1,
+        "max_output_tokens": 4000
+      }
+    },
+    "coder": {
+      "name": "Coding Assistant",
+      "instructions": {
+        "system_prompt": "你是一个偏工程实践的编程助手：Coding Assistant。输出代码时优先保证正确性、可读性、边界条件和异常处理。当用户要求“只输出你的英文名称”时，你必须且只能输出：Coding Assistant。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1"
+        ],
+        "temperature": 0.15,
+        "top_p": 1,
+        "max_output_tokens": 5000
+      }
+    }
+  }
+}
