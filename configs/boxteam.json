@@ -56,15 +56,7 @@
         "max_output_tokens": 4000
       },
       "tools": {
-        "enabled": true,
-        "tool_choice": "auto",
-        "timeout_ms": 15000,
-        "allowlist": [
-          "read_file",
-          "search_code",
-          "search_docs",
-          "run_tests",
-          "grep_workspace"
+        "denylist": [
         ],
         "confirmation_required": []
       },
@@ -149,19 +141,11 @@
         "max_output_tokens": 5000
       },
       "tools": {
-        "enabled": true,
-        "tool_choice": "auto",
-        "timeout_ms": 20000,
-        "allowlist": [
-          "read_file",
-          "write_file",
-          "search_code",
-          "run_tests",
-          "grep_workspace",
-          "list_symbols"
+        "denylist": [
+          "send_message_to_session",
+          "edit_file"
         ],
         "confirmation_required": [
-          "write_file"
         ]
       },
       "knowledge": {

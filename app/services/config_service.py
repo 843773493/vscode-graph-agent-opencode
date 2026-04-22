@@ -210,6 +210,33 @@ class ConfigService:
             "max_output_tokens": model_cfg.get("max_output_tokens", default_runtime["max_output_tokens"]),
         }
 
+    def get_agent_tool_config(self, agent_id: str | None = None) -> dict[str, Any]:
+        """按 agent_id 解析工具配置。"""
+        config = self._load_boxteam_config()
+        agents = config.get("agents", {})
+        resolved_agent_id = self._normalize_agent_id(agent_id)
+
+        default_tool_config = {
+            "denylist": [],
+            "confirmation_required": [],
+        }
+
+        if not agents or resolved_agent_id not in agents:
+            if resolved_agent_id != "deep_agent":
+                raise ValueError(f"agent {resolved_agent_id} 不存在")
+            return default_tool_config
+
+        tools_config = agents[resolved_agent_id].get("tools", {})
+        if not isinstance(tools_config, dict):
+            raise ValueError(f"agent {resolved_agent_id} 的 tools 配置必须是对象")
+
+        return {
+            "denylist": list(tools_config.get("denylist", default_tool_config["denylist"])),
+            "confirmation_required": list(
+                tools_config.get("confirmation_required", default_tool_config["confirmation_required"])
+            ),
+        }
+
     async def get(self) -> ConfigDTO:
         return ConfigDTO(
             default_model="gpt-4.1",

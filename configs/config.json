@@ -266,7 +266,6 @@
         }
       }
     },
-
     "agentTools": {
       "type": "object",
       "additionalProperties": false,
@@ -292,6 +291,17 @@
         },
         "allowlist": {
           "type": "array",
+          "description": "Only these tools are allowed",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        },
+        "denylist": {
+          "type": "array",
+          "description": "These tools are forbidden; all others are allowed unless restricted elsewhere",
           "items": {
             "type": "string",
             "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
@@ -308,9 +318,15 @@
           "uniqueItems": true,
           "maxItems": 100
         }
-      }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": ["allowlist", "denylist"]
+          }
+        }
+      ]
     },
-
     "agentKnowledge": {
       "type": "object",
       "additionalProperties": false,

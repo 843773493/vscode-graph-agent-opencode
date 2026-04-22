@@ -9,6 +9,11 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
 from app.schemas.job import EventDTO
+from app.agents.agent_tools import (
+    create_system_time_emitter_tool,
+    create_monitor_session_agent_end_tool,
+    create_send_message_to_session_tool,
+)
 from app.services.agent_execution_service import AgentExecutionService
 
 
@@ -42,6 +47,12 @@ class _DummyConfigService:
     def get_agent_runtime_config(self, agent_id=None):
         return self.get_default_agent_runtime_config()
 
+    def get_agent_tool_config(self, agent_id=None):
+        return {
+            "denylist": [],
+            "confirmation_required": [],
+        }
+
 
 class _DummyAgent:
     def get_graph(self):
@@ -57,17 +68,17 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     monkeypatch.setattr(AgentExecutionService, "_instance", None)
     monkeypatch.setattr(BackgroundMessageBus, "_instance", None)
     monkeypatch.setattr(
-        "app.services.agent_execution_service.ConfigService.get_instance",
+        "app.agents.agent_factory.ConfigService.get_instance",
         lambda: _DummyConfigService(),
     )
 
     captured = {}
 
-    def fake_create_deep_agent(**kwargs):
+    def fake_create_agent(*args, **kwargs):
         captured.update(kwargs)
         return _DummyAgent()
 
-    monkeypatch.setattr("app.services.agent_execution_service.create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr("app.agents.agent_factory.create_agent", fake_create_agent)
 
     service = AgentExecutionService.get_instance()
     service._get_or_create_agent("session_test")
@@ -78,7 +89,51 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     assert "monitor_session_agent_end" in tool_names
     assert "collect_background_messages" in tool_names
     assert "send_message_to_session" in tool_names
-    assert captured["system_prompt"] == "dummy system prompt"
+    assert captured["system_prompt"].startswith("dummy system prompt")
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(AgentExecutionService, "_instance", None)
+    monkeypatch.setattr(BackgroundMessageBus, "_instance", None)
+
+    class _DenylistConfigService(_DummyConfigService):
+        def get_agent_tool_config(self, agent_id=None):
+            return {
+                "denylist": ["send_message_to_session", "edit_file"],
+                "confirmation_required": [],
+            }
+
+    monkeypatch.setattr(
+        "app.agents.agent_factory.ConfigService.get_instance",
+        lambda: _DenylistConfigService(),
+    )
+
+    captured = {}
+
+    def fake_create_agent(*args, **kwargs):
+        captured.update(kwargs)
+        return _DummyAgent()
+
+    monkeypatch.setattr("app.agents.agent_factory.create_agent", fake_create_agent)
+
+    service = AgentExecutionService.get_instance()
+    service._get_or_create_agent("session_denylist")
+
+    direct_tool_names = [tool.name for tool in captured["tools"]]
+    assert "send_message_to_session" not in direct_tool_names
+    assert "python_exec" in direct_tool_names
+
+    middleware_tool_names = []
+    for middleware in captured["middleware"]:
+        tools = getattr(middleware, "tools", None)
+        if not tools:
+            continue
+        middleware_tool_names.extend(getattr(tool, "name", "") for tool in tools)
+
+    assert "edit_file" not in middleware_tool_names
+    assert "send_message_to_session" not in middleware_tool_names
 
 
 @pytest.mark.asyncio
@@ -87,17 +142,16 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(monkeypatc
     monkeypatch.setattr(AgentExecutionService, "_instance", None)
     monkeypatch.setattr(BackgroundMessageBus, "_instance", None)
     monkeypatch.setattr(
-        "app.services.agent_execution_service.ConfigService.get_instance",
+        "app.agents.agent_factory.ConfigService.get_instance",
         lambda: _DummyConfigService(),
     )
 
     async def fake_sleep(_seconds):
         return None
 
-    monkeypatch.setattr("app.services.agent_execution_service.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("app.agents.agent_tools.asyncio.sleep", fake_sleep)
 
-    service = AgentExecutionService.get_instance()
-    tool = service._create_system_time_emitter_tool("session_test")
+    tool = create_system_time_emitter_tool("session_test")
 
     result = await tool.ainvoke({"interval_seconds": 0.01, "message_count": 3, "source_id": "clock-stream"})
 
@@ -121,7 +175,7 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
     monkeypatch.setattr(BackgroundMessageBus, "_instance", None)
     monkeypatch.setattr(JobEventBus, "_instance", None)
     monkeypatch.setattr(
-        "app.services.agent_execution_service.ConfigService.get_instance",
+        "app.agents.agent_factory.ConfigService.get_instance",
         lambda: _DummyConfigService(),
     )
     monkeypatch.setattr(BackgroundTaskRegistry, "_instance", None)
@@ -163,16 +217,15 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
             return [future_event]
 
     monkeypatch.setattr(
-        "app.services.agent_execution_service.BackgroundMessageBus.get_instance",
+        "app.agents.agent_tools.BackgroundMessageBus.get_instance",
         lambda: _FakeBackgroundMessageBus(),
     )
     monkeypatch.setattr(
-        "app.services.agent_execution_service.JobEventBus.get_instance",
+        "app.agents.agent_tools.JobEventBus.get_instance",
         lambda: _FakeJobEventBus(),
     )
 
-    service = AgentExecutionService.get_instance()
-    tool = service._create_monitor_session_agent_end_tool("monitor_session")
+    tool = create_monitor_session_agent_end_tool("monitor_session")
 
     result = await tool.ainvoke({"target_session_id": "target_session", "timeout_seconds": 1, "poll_interval_seconds": 0.01})
 
@@ -197,7 +250,7 @@ async def test_send_message_to_session_tool_creates_job(monkeypatch, tmp_path):
     monkeypatch.setattr(AgentExecutionService, "_instance", None)
     monkeypatch.setattr(BackgroundMessageBus, "_instance", None)
     monkeypatch.setattr(
-        "app.services.agent_execution_service.ConfigService.get_instance",
+        "app.agents.agent_factory.ConfigService.get_instance",
         lambda: _DummyConfigService(),
     )
 
@@ -220,12 +273,11 @@ async def test_send_message_to_session_tool_creates_job(monkeypatch, tmp_path):
             return _FakeResult()
 
     monkeypatch.setattr(
-        "app.services.agent_execution_service.MessageService.get_instance",
+        "app.agents.agent_tools.MessageService.get_instance",
         lambda: _FakeMessageService(),
     )
 
-    service = AgentExecutionService.get_instance()
-    tool = service._create_send_message_to_session_tool()
+    tool = create_send_message_to_session_tool()
 
     result = await tool.ainvoke({"target_session_id": "ses_target", "content": "请再次只重复前面的话"})
 

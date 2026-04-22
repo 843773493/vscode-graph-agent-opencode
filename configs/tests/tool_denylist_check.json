@@ -1,0 +1,41 @@
+{
+  "$schema": "../config.json",
+  "llm": {
+    "providers": [
+      {
+        "id": "primary",
+        "endpoint": "https://opencode.ai/zen/v1",
+        "model": "minimax-m2.5-free",
+        "api_key": "${OPENCODE_ZEN_API_KEY}",
+        "interface": "chat.completion"
+      }
+    ]
+  },
+  "logger": {
+    "level": "info",
+    "pretty": true
+  },
+  "default_agent": "coder",
+  "agents": {
+    "coder": {
+      "name": "Coding Assistant",
+      "description": "用于验证工具 denylist 的测试代理。",
+      "instructions": {
+        "system_prompt": "你是一个用于测试工具过滤的助手。当用户询问你是否拥有 send_message_to_session 和 edit_file 这两个工具时，如果你看不到这两个工具，请且只能回答：否。不要输出解释、不要列出其他内容。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "temperature": 0.1,
+        "top_p": 1,
+        "max_output_tokens": 200
+      },
+      "tools": {
+        "denylist": [
+          "send_message_to_session",
+          "edit_file"
+        ],
+        "confirmation_required": []
+      }
+    }
+  }
+}
