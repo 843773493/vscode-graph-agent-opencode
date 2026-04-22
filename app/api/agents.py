@@ -15,7 +15,7 @@ async def list_agents(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await AgentService().list()
+    result = await AgentService.get_instance().list()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -25,5 +25,5 @@ async def get_agent(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await AgentService().get(agent_id)
+    result = await AgentService.get_instance().get(agent_id)
     return APIResponse(data=result, request_id=request_id)

@@ -20,7 +20,7 @@ async def get_job(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await JobService().get(job_id)
+    result = await JobService.get_instance().get(job_id)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -30,7 +30,7 @@ async def list_job_steps(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await JobService().list_steps(job_id)
+    result = await JobService.get_instance().list_steps(job_id)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -42,7 +42,7 @@ async def list_job_events(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await EventService().list(job_id=job_id, after=after, limit=limit)
+    result = await EventService.get_instance().list(job_id=job_id, after=after, limit=limit)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -52,7 +52,7 @@ async def stream_job_events(
     _: str = Depends(verify_local_token),
 ):
     async def event_generator():
-        async for chunk in EventService().stream_sse(job_id):
+        async for chunk in EventService.get_instance().stream_sse(job_id):
             yield chunk
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -65,7 +65,7 @@ async def control_job(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await JobService().control(job_id, payload)
+    result = await JobService.get_instance().control(job_id, payload)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -75,5 +75,5 @@ async def list_job_artifacts(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await ArtifactService().list_by_job(job_id)
+    result = await ArtifactService.get_instance().list_by_job(job_id)
     return APIResponse(data=result, request_id=request_id)

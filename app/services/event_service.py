@@ -1,14 +1,22 @@
 from __future__ import annotations
 import asyncio
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from app.schemas.job import EventDTO
 from app.core.job_event_bus import JobEventBus
 
 
 class EventService:
+    _instance: Optional["EventService"] = None
+
     def __init__(self):
         self.bus = JobEventBus.get_instance()
+
+    @classmethod
+    def get_instance(cls) -> "EventService":
+        if cls._instance is None:
+            cls._instance = EventService()
+        return cls._instance
     
     async def list(self, job_id: str, after: str | None = None, limit: int = 100) -> list[EventDTO]:
         return await self.bus.list_events(job_id, after, limit)

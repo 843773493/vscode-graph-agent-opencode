@@ -83,10 +83,16 @@ class AgentExecutionService:
         )
         
         try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"About to invoke agent: session_id={session_id}, message={message[:50]}...")
+            
             result = await agent.ainvoke(
                 {"messages": [{"role": "user", "content": message}]},
                 config=config
             )
+            
+            logger.debug(f"Agent invoke completed, result messages count: {len(result.get('messages', []))}")
             
             response_content = result["messages"][-1].content
             

@@ -15,7 +15,7 @@ async def get_workspace(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await WorkspaceService().get()
+    result = await WorkspaceService.get_instance().get()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -24,7 +24,7 @@ async def get_workspace_context(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await WorkspaceService().get_context()
+    result = await WorkspaceService.get_instance().get_context()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -33,7 +33,7 @@ async def get_workspace_index(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await WorkspaceService().get_index_status()
+    result = await WorkspaceService.get_instance().get_index_status()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -42,5 +42,5 @@ async def rebuild_workspace_index(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await WorkspaceService().rebuild_index()
+    result = await WorkspaceService.get_instance().rebuild_index()
     return APIResponse(data=result, request_id=request_id)

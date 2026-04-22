@@ -8,8 +8,18 @@ from app.core.path_utils import get_artifacts_dir, safe_join
 
 
 class ArtifactService:
-    @staticmethod
-    async def get_response(artifact_id: str) -> Any:
+    _instance: Optional["ArtifactService"] = None
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def get_instance(cls) -> "ArtifactService":
+        if cls._instance is None:
+            cls._instance = ArtifactService()
+        return cls._instance
+
+    async def get_response(self, artifact_id: str) -> Any:
         artifacts_dir = get_artifacts_dir()
         return ArtifactDTO(
             artifact_id=artifact_id,
@@ -19,8 +29,7 @@ class ArtifactService:
             path=str(safe_join(artifacts_dir, "sample.md"))
         )
     
-    @staticmethod
-    async def list_by_job(job_id: str) -> list[ArtifactDTO]:
+    async def list_by_job(self, job_id: str) -> list[ArtifactDTO]:
         artifacts_dir = get_artifacts_dir()
         return [
             ArtifactDTO(

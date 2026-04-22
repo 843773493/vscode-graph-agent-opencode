@@ -8,4 +8,4 @@ export const DEFAULT_BACKEND_TOKEN = 'local-dev-token';
 
 export const API_PREFIX = '/api/v1';
 export const DEFAULT_SESSION_TITLE = '新会话';
-export const DEFAULT_AGENT_ID = 'planner';
+export const DEFAULT_AGENT_ID = 'default';

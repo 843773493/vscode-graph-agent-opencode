@@ -15,7 +15,7 @@ async def list_tools(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await ToolService().list()
+    result = await ToolService.get_instance().list()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -25,7 +25,7 @@ async def get_tool(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await ToolService().get(tool_id)
+    result = await ToolService.get_instance().get(tool_id)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -36,5 +36,5 @@ async def invoke_tool(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await ToolService().invoke(tool_id, payload)
+    result = await ToolService.get_instance().invoke(tool_id, payload)
     return APIResponse(data=result, request_id=request_id)

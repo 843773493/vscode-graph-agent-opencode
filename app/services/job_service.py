@@ -187,8 +187,20 @@ class JobService:
             JobStatus.timed_out,
         }
 
-    def _start_job_task(self, job: JobState) -> None:
-        job.task = asyncio.create_task(self._run_job_background(job.job_id, job.session_id, job.message))
+    async def _start_job_task(self, job: JobState) -> None:
+        loop = asyncio.get_running_loop()
+        
+        def _task_done_callback(task):
+            try:
+                # 强制捕获任务异常，永远不要静默失败
+                task.result()
+            except Exception as e:
+                import logging
+                logging.error(f"Job task failed: job_id={job.job_id}, error={str(e)}", exc_info=True)
+                self._job_failed(job.job_id, e)
+        
+        job.task = loop.create_task(self._run_job_background(job.job_id, job.session_id, job.message))
+        job.task.add_done_callback(_task_done_callback)
 
     async def _enqueue_or_dispatch(self, job: JobState) -> tuple[bool, str | None]:
         async with self._dispatch_lock:
@@ -204,7 +216,7 @@ class JobService:
                     return True, current_job_id
 
             self._session_current_job[job.session_id] = job.job_id
-            self._start_job_task(job)
+            await self._start_job_task(job)
             return False, None
 
     async def _schedule_next_job_if_needed(self, finished_job: JobState) -> None:
@@ -258,7 +270,7 @@ class JobService:
             result = await agent_service.run_step(session_id, message, agent_id=job.agent_id, job_id=job_id)
 
             from app.services.message_service import MessageService
-            await MessageService().append_assistant_message(
+            await MessageService.get_instance().append_assistant_message(
                 session_id,
                 result,
                 metadata={

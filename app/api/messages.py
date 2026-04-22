@@ -17,7 +17,7 @@ async def create_message_and_run(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await MessageService().create_and_run(session_id, payload)
+    result = await MessageService.get_instance().create_and_run(session_id, payload)
     return APIResponse(message="accepted", data=result, request_id=request_id)
 
 
@@ -29,7 +29,7 @@ async def list_messages(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await MessageService().list(session_id=session_id, limit=limit, cursor=cursor)
+    result = await MessageService.get_instance().list(session_id=session_id, limit=limit, cursor=cursor)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -40,5 +40,5 @@ async def get_message(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await MessageService().get(session_id=session_id, message_id=message_id)
+    result = await MessageService.get_instance().get(session_id=session_id, message_id=message_id)
     return APIResponse(data=result, request_id=request_id)

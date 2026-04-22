@@ -16,7 +16,7 @@ async def create_session(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await SessionService().create(payload)
+    result = await SessionService.get_instance().create(payload)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -27,7 +27,7 @@ async def list_sessions(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await SessionService().list(limit=limit, cursor=cursor)
+    result = await SessionService.get_instance().list(limit=limit, cursor=cursor)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -37,7 +37,7 @@ async def get_session(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await SessionService().get(session_id)
+    result = await SessionService.get_instance().get(session_id)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -58,7 +58,7 @@ async def update_session(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await SessionService().update(session_id, payload)
+    result = await SessionService.get_instance().update(session_id, payload)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -68,5 +68,5 @@ async def delete_session(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await SessionService().delete(session_id)
+    result = await SessionService.get_instance().delete(session_id)
     return APIResponse(data=result, request_id=request_id)

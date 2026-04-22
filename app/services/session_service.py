@@ -11,6 +11,16 @@ from app.services.config_service import ConfigService
 
 
 class SessionService:
+    _instance: Optional["SessionService"] = None
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def get_instance(cls) -> "SessionService":
+        if cls._instance is None:
+            cls._instance = SessionService()
+        return cls._instance
     @staticmethod
     async def get(session_id: str) -> SessionDTO:
         """Get session by ID"""

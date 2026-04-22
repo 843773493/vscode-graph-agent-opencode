@@ -11,13 +11,20 @@ from app.core.path_utils import get_session_path
 
 
 class MessageService:
+
     _instance: Optional["MessageService"] = None
-    
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = object.__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        pass
+
     @classmethod
     def get_instance(cls) -> "MessageService":
-        if cls._instance is None:
-            cls._instance = MessageService()
-        return cls._instance
+        return cls()
 
     def _message_file(self, session_id: str) -> Path:
         return get_session_path(session_id) / "messages.jsonl"
@@ -101,9 +108,18 @@ class MessageService:
 
         from app.services.session_service import SessionService
         session = await SessionService.get(session_id)
-        effective_agent_id = run_request.run.agent_id or session.current_agent_id
         
-        # 使用JobService启动后台异步任务
+        from app.services.config_service import ConfigService
+        config_service = ConfigService.get_instance()
+        
+        requested_agent_id = run_request.run.agent_id if run_request.run else None
+        effective_agent_id = config_service.resolve_agent_id(requested_agent_id)
+        
+        try:
+            config_service.validate_agent_id(effective_agent_id)
+        except ValueError:
+            effective_agent_id = config_service.get_default_agent_id()
+        
         from app.services.job_service import JobService
         job_service = JobService.get_instance()
         job_id = await job_service.start_job(session_id, message.content, effective_agent_id)

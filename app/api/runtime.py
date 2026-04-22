@@ -14,7 +14,7 @@ async def get_runtime_status(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await RuntimeService().status()
+    result = await RuntimeService.get_instance().status()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -23,5 +23,5 @@ async def shutdown_runtime(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await RuntimeService().shutdown()
+    result = await RuntimeService.get_instance().shutdown()
     return APIResponse(data=result, request_id=request_id)

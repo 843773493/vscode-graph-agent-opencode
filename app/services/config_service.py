@@ -237,6 +237,11 @@ class ConfigService:
             ),
         }
 
+    def list_agents(self) -> dict[str, Any]:
+        """列出所有配置的 agents"""
+        config = self._load_boxteam_config()
+        return config.get("agents", {})
+
     async def get(self) -> ConfigDTO:
         return ConfigDTO(
             default_model="gpt-4.1",

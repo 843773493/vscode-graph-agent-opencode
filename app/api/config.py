@@ -15,7 +15,7 @@ async def get_config(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await ConfigService().get()
+    result = await ConfigService.get_instance().get()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -25,5 +25,5 @@ async def update_config(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
 ):
-    result = await ConfigService().update(payload)
+    result = await ConfigService.get_instance().update(payload)
     return APIResponse(data=result, request_id=request_id)
