@@ -4,7 +4,14 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
 from app.schemas.common import APIResponse, CursorPage
-from app.schemas.session import SessionCreateRequest, SessionDTO, SessionUpdateRequest
+from app.schemas.session import (
+    SessionAutoContinueStartRequest,
+    SessionAutoContinueStatusDTO,
+    SessionCreateRequest,
+    SessionDTO,
+    SessionUpdateRequest,
+)
+from app.services.session_auto_continue_service import SessionAutoContinueService
 from app.services.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -69,4 +76,50 @@ async def delete_session(
     request_id: str | None = Depends(get_request_id),
 ):
     result = await SessionService.get_instance().delete(session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/auto-continue/start",
+    response_model=APIResponse[SessionAutoContinueStatusDTO],
+    summary="开启会话自动继续任务",
+)
+async def start_session_auto_continue(
+    session_id: str,
+    payload: SessionAutoContinueStartRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+):
+    result = await SessionAutoContinueService.get_instance().start(
+        session_id=session_id,
+        poll_interval_seconds=payload.poll_interval_seconds,
+    )
+    return APIResponse(message="accepted", data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/auto-continue/stop",
+    response_model=APIResponse[SessionAutoContinueStatusDTO],
+    summary="关闭会话自动继续任务",
+)
+async def stop_session_auto_continue(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+):
+    result = await SessionAutoContinueService.get_instance().stop(session_id=session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{session_id}/auto-continue",
+    response_model=APIResponse[SessionAutoContinueStatusDTO],
+    summary="获取会话自动继续任务状态",
+)
+async def get_session_auto_continue_status(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+):
+    result = await SessionAutoContinueService.get_instance().get_status(session_id=session_id)
     return APIResponse(data=result, request_id=request_id)

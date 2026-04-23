@@ -980,6 +980,14 @@ function initializeWebview() {
   if (historyPanel) historyPanel.classList.remove('open');
   if (chatPanel) chatPanel.classList.remove('with-history');
   if (historyButton) historyButton.classList.remove('active');
+  
+  // 调试信息：检关键按钮是否被正确获取
+  postDebug(`初始化检查 - agentSelectButton: ${agentSelectButton ? '存在' : '不存在'}`);
+  if (agentSelectButton) {
+    postDebug(`初始化检查 - agentSelectButton文本内容: '${agentSelectButton.textContent}'`);
+    postDebug(`初始化检查 - agentSelectButton标题: '${agentSelectButton.title}'`);
+  }
+  
     postDebug(`webview 脚本已启动，readyState=${document.readyState}`);
     vscode.postMessage({ type: 'ready' });
     render();
@@ -1027,31 +1035,38 @@ function updateAgentDisplay() {
 
 agentSelectButton?.addEventListener('click', async (event) => {
   event.preventDefault();
-  postDebug('Agent选择按钮点击');
+  postDebug('Agent选择按钮点击 - 开始处理');
   
   const activeSession = getActiveSession();
+  postDebug(`Agent选择按钮点击 - activeSession: ${activeSession ? '存在' : '不存在'}`);
   if (!activeSession) {
     setStatus('请先创建会话', true);
+    postDebug('Agent选择按钮点击 - 没有活动会话，返回');
     return;
   }
 
   // 检查是否已有打开的菜单，如有则关闭
   const existingMenu = document.querySelector('.agent-select-menu');
+  postDebug(`Agent选择按钮点击 - existingMenu: ${existingMenu ? '存在' : '不存在'}`);
   if (existingMenu) {
     existingMenu.remove();
+    postDebug('Agent选择按钮点击 - 移除了现有菜单，返回');
     return;
   }
 
   // 动态获取Agent列表 - 通过VS Code消息总线转发
+  postDebug('Agent选择按钮点击 - 开始获取Agent列表');
   let agents;
   try {
     // VS Code Webview沙箱中不能直接fetch，必须通过扩展后端转发
     const response = await new Promise((resolve, reject) => {
       const messageId = `agent_list_${Date.now()}`;
+      postDebug(`Agent选择按钮点击 - 发送API请求, messageId: ${messageId}`);
       
       const handler = (event) => {
         if (event.data.type === 'api_response' && event.data.request_id === messageId) {
           window.removeEventListener('message', handler);
+          postDebug(`Agent选择按钮点击 - 收到API响应: ${JSON.stringify(event.data)}`);
           if (event.data.ok) {
             resolve(event.data);
           } else {
@@ -1068,6 +1083,7 @@ agentSelectButton?.addEventListener('click', async (event) => {
         method: 'GET',
         path: '/api/v1/agents'
       });
+      postDebug('Agent选择按钮点击 - API请求已发送');
       
       // 5秒超时
       setTimeout(() => {
@@ -1075,8 +1091,9 @@ agentSelectButton?.addEventListener('click', async (event) => {
         reject(new Error('API请求超时'));
       }, 5000);
     });
-
+    
     agents = response.data;
+    postDebug(`Agent选择按钮点击 - 获取到Agent数据: ${JSON.stringify(agents)}`);
     
     if (!Array.isArray(agents)) {
       throw new Error('API返回格式错误: 期望数组类型');
@@ -1085,6 +1102,7 @@ agentSelectButton?.addEventListener('click', async (event) => {
     postDebug(`成功加载 ${agents.length} 个Agent`);
   } catch (error) {
     console.error('Agent列表加载失败:', error);
+    postDebug(`Agent选择按钮点击 - Agent列表加载失败: ${error.message}`);
     setStatus(`Agent列表加载失败: ${error.message}`, true);
     return;
   }

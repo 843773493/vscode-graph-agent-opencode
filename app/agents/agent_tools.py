@@ -186,15 +186,15 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
     @tool("monitor_session_agent_end")
     async def monitor_session_agent_end(
         target_session_id: str,
-        timeout_seconds: int = 3000,
+        timeout_seconds: int | None = None,
         poll_interval_seconds: float = 1.0,
         max_events: int | None = None,
     ) -> dict[str, Any]:
         """开启后台任务，持续监控特定session的AGENT_END事件，每当该事件发生时则将agent最后输出的文本以打断参数转发到后台消息队列"""
         if not target_session_id:
             raise ValueError("target_session_id 不能为空")
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds 必须大于 0")
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise ValueError("timeout_seconds 必须大于 0 或 None")
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds 必须大于 0")
         if max_events is not None and max_events <= 0:
@@ -209,7 +209,7 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
             from app.services.job_service import JobService
 
             job_service = JobService.get_instance()
-            deadline = asyncio.get_running_loop().time() + timeout_seconds
+            deadline = None if timeout_seconds is None else asyncio.get_running_loop().time() + timeout_seconds
             seen_event_ids: set[str] = set()
             emitted_events: list[dict[str, Any]] = []
             emitted_count = 0
@@ -274,19 +274,20 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
                                 "events": emitted_events,
                             }
 
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    if emitted_count == 0:
-                        raise TimeoutError(f"监控 session {target_session_id} 的 AGENT_END 超时")
-                    return {
-                        "target_session_id": target_session_id,
-                        "monitor_source_id": monitor_source_id,
-                        "emitted_count": emitted_count,
-                        "timed_out": True,
-                        "events": emitted_events,
-                    }
+                if deadline is not None:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        if emitted_count == 0:
+                            raise TimeoutError(f"监控 session {target_session_id} 的 AGENT_END 超时")
+                        return {
+                            "target_session_id": target_session_id,
+                            "monitor_source_id": monitor_source_id,
+                            "emitted_count": emitted_count,
+                            "timed_out": True,
+                            "events": emitted_events,
+                        }
 
-                await asyncio.sleep(min(poll_interval_seconds, remaining))
+                await asyncio.sleep(poll_interval_seconds)
 
         handle = BackgroundTaskRegistry.get_instance().spawn(
             session_id=session_id,

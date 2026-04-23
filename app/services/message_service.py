@@ -106,6 +106,14 @@ class MessageService:
         """
         message = await self.create(session_id, run_request.message)
 
+        # 无论前端HTTP调用还是后端内部调用，创建消息后统一广播事件到SSE流
+        from app.core.job_event_bus import JobEventBus, EventType
+        await JobEventBus.get_instance().publish(
+            session_id,
+            EventType.MESSAGE_CREATED,
+            message.dict()
+        )
+
         from app.services.session_service import SessionService
         session = await SessionService.get(session_id)
         

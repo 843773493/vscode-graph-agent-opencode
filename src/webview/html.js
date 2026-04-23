@@ -1111,16 +1111,22 @@ export function renderSidebarHtml(webview, boot) {
           </svg>
         </button>
       </div>
-      <div class="toolbar-group">
-        <!-- 右侧按钮组 -->
-        <button id="modelSelectButton" type="button" title="选择模型">
-          <span>GPT-4o</span>
-          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-            <path d="M8 10L4 6H12L8 10Z"/>
-          </svg>
-        </button>
-        <div class="toolbar-separator" aria-hidden="true"></div>
-        <button id="contextButton" type="button" title="上下文设置">
+       <div class="toolbar-group">
+         <!-- 右侧按钮组 -->
+         <button id="modelSelectButton" type="button" title="选择模型">
+           <span>GPT-4o</span>
+           <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+             <path d="M8 10L4 6H12L8 10Z"/>
+           </svg>
+         </button>
+         <button id="agentSelectButton" type="button" title="选择Agent">
+           <span>default</span>
+           <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+             <path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-2 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm0-6c-.55 0-1 .45-1 1s.45 1 1 1 1-.45 1-1-.45-1-1-1z"/>
+           </svg>
+         </button>
+         <div class="toolbar-separator" aria-hidden="true"></div>
+         <button id="contextButton" type="button" title="上下文设置">
           <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
             <path d="M8 1C5.79086 1 4 2.79086 4 5C4 6.8625 5.275 8.425 7 8.875V15H9V8.875C10.725 8.425 12 6.8625 12 5C12 2.79086 10.2091 1 8 1ZM8 2C9.65685 2 11 3.34315 11 5C11 6.65685 9.65685 8 8 8C6.34315 8 5 6.65685 5 5C5 3.34315 6.34315 2 8 2Z"/>
           </svg>

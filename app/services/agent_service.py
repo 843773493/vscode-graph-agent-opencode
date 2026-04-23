@@ -34,16 +34,11 @@ class AgentService:
                 for agent_id, info in agents_config.items()
             ]
         
-        return [
-            AgentDTO(
-                agent_id="default",
-                name="Workspace Assistant",
-                description="工作区默认助手",
-                model="primary",
-                tools=[],
-                capabilities=["workspace", "assistant"]
-            )
-        ]
+        raise RuntimeError(
+            "Agent配置加载失败，没有找到有效的agent定义。\n"
+            "请检查工作区配置文件 boxteam.json 是否存在并且包含正确的agents字段。\n"
+            "这是一个故意的崩溃，遵循本地Agent设计原则：失败时快速崩溃，永远不要静默降级，永远不要返回假的默认值。"
+        )
 
     async def get(self, agent_id: str) -> AgentDTO:
         agents = {a.agent_id: a for a in await self.list()}
