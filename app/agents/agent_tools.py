@@ -5,6 +5,7 @@ import os
 import tempfile
 import textwrap
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -185,62 +186,105 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
     @tool("monitor_session_agent_end")
     async def monitor_session_agent_end(
         target_session_id: str,
-        timeout_seconds: int = 300,
+        timeout_seconds: int = 3000,
         poll_interval_seconds: float = 1.0,
+        max_events: int | None = None,
     ) -> dict[str, Any]:
-        """启动后台任务监控另一个 session 的 AGENT_END 事件，并返回任务句柄。"""
+        """开启后台任务，持续监控特定session的AGENT_END事件，每当该事件发生时则将agent最后输出的文本以打断参数转发到后台消息队列"""
         if not target_session_id:
             raise ValueError("target_session_id 不能为空")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds 必须大于 0")
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds 必须大于 0")
+        if max_events is not None and max_events <= 0:
+            raise ValueError("max_events 必须为正整数或 None")
 
         submitted_at = datetime.now()
+        monitor_source_id = f"monitor:{target_session_id}:{uuid.uuid4().hex[:12]}"
 
         async def _monitor_background_task() -> dict[str, Any]:
             job_event_bus = JobEventBus.get_instance()
             message_bus = BackgroundMessageBus.get_instance()
+            from app.services.job_service import JobService
+
+            job_service = JobService.get_instance()
             deadline = asyncio.get_running_loop().time() + timeout_seconds
+            seen_event_ids: set[str] = set()
+            emitted_events: list[dict[str, Any]] = []
+            emitted_count = 0
 
             while True:
-                events = await job_event_bus.list_events(target_session_id, limit=1000)
+                target_jobs = await job_service.list(session_id=target_session_id)
+                target_jobs.sort(key=lambda item: item.created_at)
 
-                for event in events:
-                    if event.type != EventType.AGENT_END:
-                        continue
-                    if event.timestamp <= submitted_at:
-                        continue
+                for target_job in target_jobs:
+                    events = await job_event_bus.list_events(target_job.job_id, limit=1000)
+                    events.sort(key=lambda item: item.timestamp)
 
-                    final_text = event.payload.get("final_text")
-                    if not final_text:
-                        continue
+                    for event in events:
+                        if event.event_id in seen_event_ids:
+                            continue
+                        seen_event_ids.add(event.event_id)
 
-                    emitted_message = message_bus.emit(
-                        session_id,
-                        agent_id,
-                        final_text,
-                        kind=BackgroundMessageKind.interrupt,
-                        source_id=f"monitor:{target_session_id}",
-                        payload={
-                            "target_session_id": target_session_id,
-                            "target_event_id": event.event_id,
-                            "target_event_timestamp": event.timestamp.isoformat(),
-                            "final_text": final_text,
-                        },
-                    )
+                        if event.type != EventType.AGENT_END:
+                            continue
+                        if event.timestamp <= submitted_at:
+                            continue
 
-                    return {
-                        "target_session_id": target_session_id,
-                        "target_event_id": event.event_id,
-                        "target_event_timestamp": event.timestamp.isoformat(),
-                        "final_text": final_text,
-                        "emitted_background_message": emitted_message.model_dump(mode="json"),
-                    }
+                        final_text = event.payload.get("final_text")
+                        if not final_text:
+                            continue
+
+                        emitted_message = message_bus.emit(
+                            session_id,
+                            agent_id,
+                            final_text,
+                            kind=BackgroundMessageKind.interrupt,
+                            source_id=monitor_source_id,
+                            payload={
+                                "target_session_id": target_session_id,
+                                "target_job_id": target_job.job_id,
+                                "target_event_id": event.event_id,
+                                "target_event_timestamp": event.timestamp.isoformat(),
+                                "final_text": final_text,
+                                "monitor_source_id": monitor_source_id,
+                                "sequence": emitted_count + 1,
+                            },
+                        )
+
+                        emitted_count += 1
+                        emitted_events.append(
+                            {
+                                "target_session_id": target_session_id,
+                                "target_job_id": target_job.job_id,
+                                "target_event_id": event.event_id,
+                                "target_event_timestamp": event.timestamp.isoformat(),
+                                "final_text": final_text,
+                                "emitted_background_message": emitted_message.model_dump(mode="json"),
+                            }
+                        )
+
+                        if max_events is not None and emitted_count >= max_events:
+                            return {
+                                "target_session_id": target_session_id,
+                                "monitor_source_id": monitor_source_id,
+                                "emitted_count": emitted_count,
+                                "timed_out": False,
+                                "events": emitted_events,
+                            }
 
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
-                    raise TimeoutError(f"监控 session {target_session_id} 的 AGENT_END 超时")
+                    if emitted_count == 0:
+                        raise TimeoutError(f"监控 session {target_session_id} 的 AGENT_END 超时")
+                    return {
+                        "target_session_id": target_session_id,
+                        "monitor_source_id": monitor_source_id,
+                        "emitted_count": emitted_count,
+                        "timed_out": True,
+                        "events": emitted_events,
+                    }
 
                 await asyncio.sleep(min(poll_interval_seconds, remaining))
 
@@ -252,6 +296,8 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
                 "target_session_id": target_session_id,
                 "timeout_seconds": timeout_seconds,
                 "poll_interval_seconds": poll_interval_seconds,
+                "max_events": max_events,
+                "source_id": monitor_source_id,
                 "submitted_at": submitted_at.isoformat(),
             },
         )

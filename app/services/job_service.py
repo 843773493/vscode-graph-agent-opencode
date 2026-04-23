@@ -187,7 +187,7 @@ class JobService:
             JobStatus.timed_out,
         }
 
-    async def _start_job_task(self, job: JobState) -> None:
+    def _start_job_task(self, job: JobState) -> None:
         loop = asyncio.get_running_loop()
         
         def _task_done_callback(task):
@@ -216,7 +216,7 @@ class JobService:
                     return True, current_job_id
 
             self._session_current_job[job.session_id] = job.job_id
-            await self._start_job_task(job)
+            self._start_job_task(job)
             return False, None
 
     async def _schedule_next_job_if_needed(self, finished_job: JobState) -> None:

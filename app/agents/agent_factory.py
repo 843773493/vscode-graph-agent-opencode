@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.backends import LocalShellBackend
 from deepagents.middleware.subagents import SubAgentMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
@@ -161,7 +162,7 @@ def create_my_deep_agent(
         ]
 
     workspace_root = get_workspace_root()
-    backend = FilesystemBackend(
+    backend = LocalShellBackend(
         root_dir=str(workspace_root),
         virtual_mode=True,
     )
