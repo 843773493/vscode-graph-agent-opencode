@@ -15,15 +15,209 @@
   "activationEvents": [
     "onStartupFinished",
     "onView:vscode-graph-agent.sidebar",
-    "onCommand:vscode-graph-agent.openSidebar"
+    "onCommand:vscode-graph-agent.openSidebar",
+    "onCommand:graph-agent.pinSession",
+    "onCommand:graph-agent.toggleView",
+    "onCommand:graph-agent.selectModel",
+    "onCommand:graph-agent.contextSettings",
+    "onCommand:graph-agent.showHistory",
+    "onCommand:graph-agent.showHelp",
+    "onCommand:graph-agent.openSettings",
+    "onCommand:graph-agent.showStatus",
+    "onCommand:graph-agent.toggleAgent"
   ],
   "contributes": {
     "commands": [
       {
         "command": "vscode-graph-agent.openSidebar",
         "title": "Graph Agent: Open Sidebar"
+      },
+      {
+        "command": "graph-agent.showHistory",
+        "title": "历史记录",
+        "icon": "$(history)"
+      },
+      {
+        "command": "graph-agent.showStatus",
+        "title": "Graph Agent: Show Status",
+        "icon": "$(copilot)"
+      },
+      {
+        "command": "graph-agent.toggleAgent",
+        "title": "Graph Agent: Toggle Agent",
+        "icon": "$(circle-filled)"
+      },
+      {
+        "command": "graph-agent.context.explainCode",
+        "title": "🔍 解释代码"
+      },
+      {
+        "command": "graph-agent.context.fixIssues",
+        "title": "🔧 修复问题"
+      },
+      {
+        "command": "graph-agent.context.generateTests",
+        "title": "🧪 生成测试"
+      },
+      {
+        "command": "graph-agent.context.refactorCode",
+        "title": "♻️ 重构代码"
+      },
+      {
+        "command": "graph-agent.context.optimizePerformance",
+        "title": "⚡ 性能优化"
+      },
+      {
+        "command": "graph-agent.context.addComments",
+        "title": "📝 添加注释"
+      },
+      {
+        "command": "graph-agent.context.findBugs",
+        "title": "🐛 查找Bug"
+      },
+      {
+        "command": "graph-agent.context.documentCode",
+        "title": "📚 文档生成"
+      },
+      {
+        "command": "graph-agent.context.translateCode",
+        "title": "🌐 代码翻译"
+      },
+      {
+        "command": "graph-agent.context.reviewCode",
+        "title": "👀 代码审查"
+      },
+      {
+        "command": "graph-agent.context.customPrompt",
+        "title": "✏️ 自定义提示"
+      },
+      {
+        "command": "graph-agent.pinSession",
+        "title": "固定会话",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "graph-agent.toggleView",
+        "title": "视图切换",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "graph-agent.selectModel",
+        "title": "模型选择",
+        "icon": "$(server)"
+      },
+      {
+        "command": "graph-agent.contextSettings",
+        "title": "上下文设置",
+        "icon": "$(symbol-constant)"
+      },
+      {
+        "command": "graph-agent.showHelp",
+        "title": "帮助",
+        "icon": "$(question)"
+      },
+      {
+        "command": "graph-agent.openSettings",
+        "title": "设置",
+        "icon": "$(gear)"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "graph-agent.pinSession",
+          "group": "navigation@1",
+          "when": "activeEditor"
+        },
+        {
+          "command": "graph-agent.toggleView",
+          "group": "navigation@2",
+          "when": "activeEditor"
+        },
+        {
+          "command": "graph-agent.selectModel",
+          "group": "navigation@3",
+          "when": "activeEditor"
+        },
+        {
+          "command": "graph-agent.contextSettings",
+          "group": "navigation@4",
+          "when": "activeEditor"
+        },
+        {
+          "command": "graph-agent.showHistory",
+          "group": "navigation@5",
+          "when": "activeEditor"
+        },
+        {
+          "command": "graph-agent.showHelp",
+          "group": "navigation@6",
+          "when": "activeEditor"
+        },
+        {
+          "command": "graph-agent.openSettings",
+          "group": "navigation@7",
+          "when": "activeEditor"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "graph-agent.context.explainCode",
+          "group": "graph-agent@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.fixIssues",
+          "group": "graph-agent@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.generateTests",
+          "group": "graph-agent@3",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.refactorCode",
+          "group": "graph-agent@4",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.optimizePerformance",
+          "group": "graph-agent@5",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.addComments",
+          "group": "graph-agent@6",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.findBugs",
+          "group": "graph-agent@7",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.documentCode",
+          "group": "graph-agent@8",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.translateCode",
+          "group": "graph-agent@9",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.reviewCode",
+          "group": "graph-agent@10",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "graph-agent.context.customPrompt",
+          "group": "graph-agent@11",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
