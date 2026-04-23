@@ -34,6 +34,7 @@ class JobEventBus:
         self._subscribers: Dict[str, Set[asyncio.Queue[EventDTO]]] = {}
         self._max_history: int = 1000
         self._lock = asyncio.Lock()
+        self._listener_count: int = 0
 
     @classmethod
     def get_instance(cls) -> "JobEventBus":
@@ -64,7 +65,7 @@ class JobEventBus:
                 self._job_events[job_id] = deque(maxlen=self._max_history)
             self._job_events[job_id].append(event)
 
-            if job_id in self._subscribers:
+            if self._listener_count > 0 and job_id in self._subscribers:
                 for queue in list(self._subscribers[job_id]):
                     try:
                         queue.put_nowait(event)
@@ -79,16 +80,18 @@ class JobEventBus:
             if job_id not in self._subscribers:
                 self._subscribers[job_id] = set()
             self._subscribers[job_id].add(queue)
+            self._listener_count += 1
         return queue
 
     async def unsubscribe(self, job_id: str, queue: asyncio.Queue[EventDTO]) -> None:
         async with self._lock:
             if job_id in self._subscribers:
                 self._subscribers[job_id].discard(queue)
+                self._listener_count -= 1
                 if not self._subscribers[job_id]:
                     del self._subscribers[job_id]
 
-    async def list_events(self, job_id: str, after: str | None = None, limit: int = 100) -> list[EventDTO]:
+    async def list_events(self, job_id: str, after: str | None = None, limit: int = 20) -> list[EventDTO]:
         async with self._lock:
             events = list(self._job_events.get(job_id, []))
 
