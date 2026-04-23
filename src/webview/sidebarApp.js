@@ -12,6 +12,19 @@ const sendButton = document.getElementById('sendButton');
 const newSessionButton = document.getElementById('newSessionButton');
 const refreshButton = document.getElementById('refreshButton');
 const expandDetailsToggle = document.getElementById('expandDetailsToggle');
+const attachButton = document.getElementById('attachButton');
+const mentionButton = document.getElementById('mentionButton');
+const quickPromptButton = document.getElementById('quickPromptButton');
+const clearInputButton = document.getElementById('clearInputButton');
+const voiceInputButton = document.getElementById('voiceInputButton');
+const stopButton = document.getElementById('stopButton');
+const pinButton = document.getElementById('pinButton');
+const historyButton = document.getElementById('historyButton');
+const viewToggleButton = document.getElementById('viewToggleButton');
+const modelSelectButton = document.getElementById('modelSelectButton');
+const contextButton = document.getElementById('contextButton');
+const helpButton = document.getElementById('helpButton');
+const settingsButton = document.getElementById('settingsButton');
 
 const persistedState = vscode.getState?.() ?? {};
 
@@ -89,7 +102,52 @@ function renderMarkdown(source) {
       return;
     }
 
-    output.push(`<pre><code data-lang="${escapeHtml(codeLang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+    output.push(`
+<div class="code-block-container">
+  <div class="code-block-actions">
+    <button class="code-action-btn" title="复制代码" data-code-action="copy">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+    </button>
+    <button class="code-action-btn" title="插入光标处" data-code-action="insert-cursor">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="16 18 22 12 16 6"></polyline>
+        <line x1="2" y1="12" x2="22" y2="12"></line>
+      </svg>
+    </button>
+    <button class="code-action-btn" title="替换选中内容" data-code-action="replace-selection">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="9" y1="9" x2="15" y2="15"></line>
+        <line x1="15" y1="9" x2="9" y2="15"></line>
+      </svg>
+    </button>
+    <button class="code-action-btn" title="在终端执行" data-code-action="run-terminal">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="4 17 10 11 4 5"></polyline>
+        <line x1="12" y1="19" x2="20" y2="19"></line>
+      </svg>
+    </button>
+    <button class="code-action-btn" title="新建文件" data-code-action="new-file">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+        <line x1="12" y1="18" x2="12" y2="12"></line>
+        <line x1="9" y1="15" x2="15" y2="15"></line>
+      </svg>
+    </button>
+    <button class="code-action-btn" title="查看差异" data-code-action="view-diff">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+        <circle cx="12" cy="12" r="3"></circle>
+      </svg>
+    </button>
+  </div>
+  <pre><code data-lang="${escapeHtml(codeLang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>
+</div>`);
     codeLines = [];
     codeLang = '';
   };
@@ -220,6 +278,19 @@ function postDebug(detail) {
   }
 }
 
+// 统一的TODO按钮点击反馈
+function showTodoFeedback(buttonName) {
+  try {
+    vscode.postMessage({ 
+      type: 'showInformationMessage', 
+      message: `[Graph Agent] ❌ 此功能正在开发中，敬请期待: ${buttonName}` 
+    });
+  } catch {
+    // ignore
+  }
+  postDebug(`TODO按钮点击: ${buttonName}`);
+}
+
 function reportWebviewError(error) {
   const message = error instanceof Error ? error.message : String(error);
   setStatus(message, true);
@@ -342,7 +413,32 @@ function sessionStatusBadge(session, isActive) {
 }
 
 function renderSessionList() {
-  sessionListEl.innerHTML = '';
+  if (!sessionListEl) return;
+  
+  const activeSessionId = uiState.currentSession?.session_id;
+  const sortedSessions = [...uiState.sessions].sort((a, b) => sessionSortKey(b) - sessionSortKey(a));
+  
+  if (sortedSessions.length === 0) {
+    sessionListEl.innerHTML = '<div class="empty-state small">暂无历史会话</div>';
+    return;
+  }
+  
+  sessionListEl.innerHTML = sortedSessions.map(session => {
+    const isActive = session.session_id === activeSessionId;
+    const title = session.title || '未命名会话';
+    const time = formatTime(session.updated_at || session.created_at);
+    
+    return `
+      <div class="session-item ${isActive ? 'active' : ''}" data-select-session="${escapeHtml(session.session_id)}">
+        <div class="session-title">${escapeHtml(title)}</div>
+        <div class="session-meta">
+          ${sessionStatusBadge(session, isActive)}
+          <span class="session-time">${escapeHtml(time)}</span>
+          <span class="session-id" style="font-size: 11px; color: var(--vscode-descriptionForeground); opacity: 0.7; margin-left: 8px; font-family: var(--vscode-editor-font-family); user-select: text; cursor: text;">${escapeHtml(session.session_id)}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function renderTraceGroupTitle(eventType, payload) {
@@ -517,6 +613,87 @@ function renderResponseSection(assistantMessages, isPending) {
             <div class="chat-message-head">
               <span>${assistantIndex === 0 ? 'Assistant' : `Assistant #${assistantIndex + 1}`}</span>
               <span>${escapeHtml(formatTime(assistantMessage.created_at) || '')}</span>
+              
+              <!-- 消息操作按钮区 -->
+              <div class="message-actions">
+                <!-- 默认始终显示 4个按钮 -->
+                <button class="action-btn" title="复制完整回复" data-action="copy">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+                <button class="action-btn" title="重新生成" data-action="regenerate">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="1 4 1 10 7 10"></polyline>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                  </svg>
+                </button>
+                <button class="action-btn" title="点赞" data-action="thumbs-up">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
+                  </svg>
+                </button>
+                <button class="action-btn" title="点踩" data-action="thumbs-down">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10 15v1a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path>
+                  </svg>
+                </button>
+                
+                <!-- 悬停才显示 8个按钮 -->
+                <button class="action-btn hover-only" title="编辑并重试" data-action="edit-retry">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                  </svg>
+                </button>
+                <button class="action-btn hover-only" title="插入到编辑器" data-action="insert-editor">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="16 18 22 12 16 6"></polyline>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                  </svg>
+                </button>
+                <button class="action-btn hover-only" title="在终端运行" data-action="run-terminal">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="4 17 10 11 4 5"></polyline>
+                    <line x1="12" y1="19" x2="20" y2="19"></line>
+                  </svg>
+                </button>
+                <button class="action-btn hover-only" title="创建新文件" data-action="create-file">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                  </svg>
+                </button>
+                <button class="action-btn hover-only" title="解释代码" data-action="explain-code">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                  </svg>
+                </button>
+                <button class="action-btn hover-only" title="优化代码" data-action="optimize-code">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                  </svg>
+                </button>
+                <button class="action-btn hover-only" title="添加注释" data-action="add-comments">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                </button>
+                <button class="action-btn hover-only" title="分享" data-action="share">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="18" cy="5" r="3"></circle>
+                    <circle cx="6" cy="12" r="3"></circle>
+                    <circle cx="18" cy="19" r="3"></circle>
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                  </svg>
+                </button>
+              </div>
             </div>
             <div class="chat-message-body reply">${renderMarkdown(assistantMessage.content || '')}</div>
           </div>
@@ -762,6 +939,12 @@ function initializeWebview() {
     if (expandDetailsToggle) {
       expandDetailsToggle.checked = Boolean(uiState.expandDetails);
     }
+  // 初始化时隐藏历史会话面板 - 默认关闭
+  const historyPanel = document.getElementById('historyPanel');
+  const chatPanel = document.getElementById('chatPanel');
+  if (historyPanel) historyPanel.classList.remove('open');
+  if (chatPanel) chatPanel.classList.remove('with-history');
+  if (historyButton) historyButton.classList.remove('active');
     postDebug(`webview 脚本已启动，readyState=${document.readyState}`);
     vscode.postMessage({ type: 'ready' });
     render();
@@ -786,6 +969,134 @@ sendButton?.addEventListener('click', (event) => {
   event.preventDefault();
   postDebug('发送按钮点击');
   void submitCurrentMessage();
+});
+
+attachButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  showTodoFeedback('附件选择');
+});
+
+mentionButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  showTodoFeedback('@提及');
+});
+
+quickPromptButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  showTodoFeedback('快速提示');
+});
+
+voiceInputButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  showTodoFeedback('语音输入');
+});
+
+stopButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  showTodoFeedback('停止生成');
+});
+
+mentionButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('@提及按钮点击');
+  // TODO: 实现@提及选择器
+});
+
+quickPromptButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('快速提示按钮点击');
+  // TODO: 实现快速提示菜单
+});
+
+clearInputButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('清空输入按钮点击');
+  inputEl.value = '';
+  inputEl.focus();
+});
+
+voiceInputButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('语音输入按钮点击');
+  // TODO: 实现语音输入功能
+});
+
+stopButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('停止生成按钮点击');
+  // TODO: 实现停止生成功能
+});
+
+pinButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('固定会话按钮点击');
+  showTodoFeedback('固定会话');
+  // TODO: 实现固定会话功能
+});
+
+historyButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('历史会话按钮点击');
+  
+  const historyPanel = document.getElementById('historyPanel');
+  const chatPanel = document.getElementById('chatPanel');
+  
+  if (!historyPanel || !chatPanel) return;
+  
+  // 切换面板状态
+  const isOpen = historyPanel.classList.contains('open');
+  
+  if (isOpen) {
+    // 关闭面板
+    historyPanel.classList.remove('open');
+    chatPanel.classList.remove('with-history');
+    historyButton.classList.remove('active');
+  } else {
+    // 打开面板
+    historyPanel.classList.add('open');
+    chatPanel.classList.add('with-history');
+    historyButton.classList.add('active');
+    
+    // 显示面板时刷新会话列表
+    renderSessionList();
+    // 向后端请求最新会话列表
+    vscode.postMessage({ type: 'listSessions' });
+  }
+});
+
+viewToggleButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('视图切换按钮点击');
+  showTodoFeedback('视图切换');
+  // TODO: 实现视图切换功能
+});
+
+modelSelectButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('模型选择按钮点击');
+  showTodoFeedback('模型选择');
+  // TODO: 实现模型选择功能
+});
+
+contextButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('上下文按钮点击');
+  showTodoFeedback('上下文管理');
+  // TODO: 实现上下文管理功能
+});
+
+helpButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('帮助按钮点击');
+  showTodoFeedback('帮助');
+  // TODO: 实现帮助功能
+});
+
+settingsButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('设置按钮点击');
+  showTodoFeedback('设置');
+  // TODO: 实现设置功能
 });
 
 expandDetailsToggle?.addEventListener('change', (event) => {
@@ -820,7 +1131,39 @@ inputEl?.addEventListener('keydown', (event) => {
   void submitCurrentMessage();
 });
 
+// 输入框内容变化时更新按钮状态
+inputEl?.addEventListener('input', () => {
+  const hasContent = inputEl.value.trim().length > 0;
+  sendButton.disabled = !hasContent;
+  clearInputButton.classList.toggle('hidden', !hasContent);
+});
+
+// 按钮显示/隐藏逻辑占位
+function updateButtonStates() {
+  const isGenerating = uiState.activeJob?.status === 'running';
+  
+  // 生成中显示停止按钮，隐藏发送按钮
+  sendButton.classList.toggle('hidden', isGenerating);
+  stopButton.classList.toggle('hidden', !isGenerating);
+  
+  // 输入框有内容时显示清空按钮
+  const hasContent = inputEl?.value?.trim().length > 0;
+  clearInputButton.classList.toggle('hidden', !hasContent);
+}
+
+// 在状态更新时调用
+const originalRender = render;
+render = function() {
+  originalRender();
+  updateButtonStates();
+};
+
 sessionListEl?.addEventListener('click', (event) => {
+  // 如果点击的是session-id元素，不触发会话切换，允许文本选择
+  if (event.target?.classList?.contains('session-id')) {
+    return;
+  }
+  
   const button = event.target?.closest?.('[data-select-session]');
   if (!button) {
     return;
@@ -833,7 +1176,103 @@ sessionListEl?.addEventListener('click', (event) => {
 
   postDebug(`切换 session: ${sessionId}`);
   vscode.postMessage({ type: 'selectSession', sessionId });
+  
+  // ✅ 官方 Copilot Chat 行为: 点击历史会话不会自动关闭面板
+  // 保持面板打开状态，用户可以继续浏览历史
+  event.stopPropagation();
 });
+
+// 消息操作按钮点击事件
+turnListEl?.addEventListener('click', (event) => {
+  const button = event.target?.closest?.('.action-btn');
+  if (!button) {
+    return;
+  }
+
+  const action = button.getAttribute('data-action');
+  const messageElement = button.closest('.chat-message');
+  
+  postDebug(`消息操作按钮点击: ${action}`);
+
+  switch (action) {
+    case 'copy':
+      showTodoFeedback('复制完整回复');
+      break;
+    case 'regenerate':
+      showTodoFeedback('重新生成');
+      break;
+    case 'thumbs-up':
+      showTodoFeedback('点赞');
+      break;
+    case 'thumbs-down':
+      showTodoFeedback('点踩');
+      break;
+    case 'edit-retry':
+      showTodoFeedback('编辑并重试');
+      break;
+    case 'insert-editor':
+      showTodoFeedback('插入到编辑器');
+      break;
+    case 'run-terminal':
+      showTodoFeedback('在终端运行');
+      break;
+    case 'create-file':
+      showTodoFeedback('创建新文件');
+      break;
+    case 'explain-code':
+      showTodoFeedback('解释代码');
+      break;
+    case 'optimize-code':
+      showTodoFeedback('优化代码');
+      break;
+    case 'add-comments':
+      showTodoFeedback('添加注释');
+      break;
+    case 'share':
+      showTodoFeedback('分享');
+      break;
+  }
+});
+
+// 代码块操作按钮点击事件
+turnListEl?.addEventListener('click', (event) => {
+  const button = event.target?.closest?.('.code-action-btn');
+  if (!button) {
+    return;
+  }
+
+  const action = button.getAttribute('data-code-action');
+  const codeBlock = button.closest('.code-block-container');
+  const codeElement = codeBlock?.querySelector('code');
+  const codeContent = codeElement?.textContent || '';
+  
+  postDebug(`代码块操作按钮点击: ${action}`);
+
+  switch (action) {
+    case 'copy':
+      showTodoFeedback('复制代码块');
+      break;
+    case 'insert-cursor':
+      showTodoFeedback('插入光标处');
+      break;
+    case 'replace-selection':
+      showTodoFeedback('替换选中内容');
+      break;
+    case 'run-terminal':
+      showTodoFeedback('在终端执行');
+      break;
+    case 'new-file':
+      showTodoFeedback('新建文件');
+      break;
+    case 'view-diff':
+      showTodoFeedback('查看差异');
+      break;
+  }
+});
+
+// ✅ 官方 Copilot Chat 行为: 点击外部不关闭面板
+// 只有再次点击历史按钮才会关闭面板
+// 移除点击外部自动关闭逻辑
 
 window.addEventListener('message', (event) => {
   const message = event.data;
