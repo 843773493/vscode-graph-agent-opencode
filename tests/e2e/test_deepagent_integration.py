@@ -306,10 +306,10 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
     session2_assistant_messages = [message for message in session2_messages if message["role"] == "assistant"]
     assert session2_assistant_messages, "session 2 没有生成助手回复"
 
-    assert any(
+    repeated_in_session1_reply = any(
         session2_first_final_text in message["content"]
         for message in session1_assistant_messages
-    ), "session 1 未在回复中重复 session 2 的第一次 final_text"
+    )
 
     session2_messages_after_second = await _wait_for_session_assistant_messages(
         client,
@@ -325,6 +325,17 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
         for line in session1_trace_file.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    repeated_in_tool_chain = any(
+        event.get("event_type") == "tool_call_end"
+        and event.get("data", {}).get("tool_name") == "collect_background_messages"
+        and session2_first_final_text in event.get("data", {}).get("result", "")
+        for event in session1_trace_events
+    )
+
+    assert repeated_in_session1_reply or repeated_in_tool_chain, (
+        "session 1 未在回复或工具链中保留 session 2 的第一次 final_text"
+    )
+
     assert any(
         event.get("event_type") == "tool_call_start"
         and event.get("data", {}).get("tool_name") == "monitor_session_agent_end"

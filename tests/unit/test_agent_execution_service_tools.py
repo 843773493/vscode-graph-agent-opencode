@@ -203,7 +203,7 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
 
     future_event = EventDTO(
         event_id="evt_future_1",
-        job_id="target_session",
+        job_id="job_target_1",
         step_id=None,
         type=EventType.AGENT_END,
         agent_id="deep_agent",
@@ -213,8 +213,17 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
 
     class _FakeJobEventBus:
         async def list_events(self, job_id, after=None, limit=100):
-            assert job_id == "target_session"
+            assert job_id == "job_target_1"
             return [future_event]
+
+    class _FakeTargetJob:
+        job_id = "job_target_1"
+        created_at = datetime.now()
+
+    class _FakeJobService:
+        async def list(self, session_id=None):
+            assert session_id == "target_session"
+            return [_FakeTargetJob()]
 
     monkeypatch.setattr(
         "app.agents.agent_tools.BackgroundMessageBus.get_instance",
@@ -224,14 +233,27 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
         "app.agents.agent_tools.JobEventBus.get_instance",
         lambda: _FakeJobEventBus(),
     )
+    monkeypatch.setattr(
+        "app.services.job_service.JobService.get_instance",
+        lambda: _FakeJobService(),
+    )
 
     tool = create_monitor_session_agent_end_tool("monitor_session")
 
-    result = await tool.ainvoke({"target_session_id": "target_session", "timeout_seconds": 1, "poll_interval_seconds": 0.01})
+    result = await tool.ainvoke(
+        {
+            "target_session_id": "target_session",
+            "timeout_seconds": 1,
+            "poll_interval_seconds": 0.01,
+            "max_events": 1,
+        }
+    )
 
     assert result["status"] == "pending"
     assert result["task_name"] == "monitor_session_agent_end"
     assert result["metadata"]["target_session_id"] == "target_session"
+    assert result["metadata"]["max_events"] == 1
+    assert result["metadata"]["source_id"].startswith("monitor:target_session:")
 
     task = BackgroundTaskRegistry.get_instance().get_task("monitor_session", result["task_id"])
     assert task is not None

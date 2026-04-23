@@ -1,5 +1,6 @@
 import os
 import tempfile
+import uuid
 from pathlib import Path
 import pytest
 from app.core.path_utils import safe_join, validate_workspace_path, get_session_path, ensure_session_dir
@@ -96,14 +97,30 @@ class TestPathUtils:
 
     def test_ensure_session_dir_creates_directory(self):
         """测试确保会话目录存在"""
-        session_id = "test-session-456"
-        path = ensure_session_dir(session_id)
-        assert path.exists()
-        assert path.is_dir()
-
-        # 重复调用不会报错
-        path2 = ensure_session_dir(session_id)
-        assert path2 == path
+        # 先设置临时工作区环境变量
+        original_env = os.environ.get("WORKSPACE_ROOT")
+        os.environ["WORKSPACE_ROOT"] = str(self.base_path)
+        
+        try:
+            # 重新导入以刷新环境变量
+            from importlib import reload
+            import app.core.path_utils
+            reload(app.core.path_utils)
+            from app.core.path_utils import ensure_session_dir
+            
+            session_id = f"ses_{uuid.uuid4().hex[:12]}"
+            path = ensure_session_dir(session_id)
+            assert path.exists()
+            assert path.is_dir()
+    
+            # 重复调用不会报错
+            path2 = ensure_session_dir(session_id)
+            assert path2 == path
+        finally:
+            if original_env:
+                os.environ["WORKSPACE_ROOT"] = original_env
+            else:
+                del os.environ["WORKSPACE_ROOT"]
 
     def test_safe_join_case_sensitivity(self):
         """测试大小写敏感路径处理"""
