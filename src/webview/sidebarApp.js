@@ -21,10 +21,12 @@ const stopButton = document.getElementById('stopButton');
 const pinButton = document.getElementById('pinButton');
 const historyButton = document.getElementById('historyButton');
 const viewToggleButton = document.getElementById('viewToggleButton');
-const modelSelectButton = document.getElementById('modelSelectButton');
+
 const contextButton = document.getElementById('contextButton');
 const helpButton = document.getElementById('helpButton');
 const settingsButton = document.getElementById('settingsButton');
+const autoContinueButton = document.getElementById('autoContinueButton');
+const agentSelectButton = document.getElementById('agentSelectButton');
 
 const persistedState = vscode.getState?.() ?? {};
 
@@ -39,6 +41,7 @@ const uiState = {
   pendingTurns: new Map(),
   status: persistedState.status ?? '准备就绪',
   expandDetails: persistedState.expandDetails ?? true,
+  autoContinueEnabled: new Map(),
 };
 
 if (typeof boot.expandDetails === 'boolean') {
@@ -50,6 +53,12 @@ if (Array.isArray(persistedState.pendingTurns)) {
     if (turn?.sessionId) {
       uiState.pendingTurns.set(turn.sessionId, turn);
     }
+  }
+}
+
+if (Array.isArray(persistedState.autoContinueEnabled)) {
+  for (const [sessionId, enabled] of persistedState.autoContinueEnabled) {
+    uiState.autoContinueEnabled.set(sessionId, enabled);
   }
 }
 
@@ -65,6 +74,7 @@ function persistState() {
     status: uiState.status,
     expandDetails: uiState.expandDetails,
     pendingTurns: Array.from(uiState.pendingTurns.values()),
+    autoContinueEnabled: Array.from(uiState.autoContinueEnabled.entries()),
   });
 }
 
@@ -727,12 +737,24 @@ function renderTurn(turn, index, totalTurns) {
   `;
 }
 
+function updateAgentButtonLabel() {
+  const activeSession = getActiveSession();
+  if (agentSelectButton) {
+    if (activeSession?.agent_id) {
+      agentSelectButton.textContent = activeSession.agent_id.substring(0, 12);
+    } else {
+      agentSelectButton.textContent = 'default';
+    }
+  }
+}
+
 function renderTranscript() {
   const activeSession = getActiveSession();
   const sessionId = activeSession?.session_id;
   const turns = sessionId ? getTurnsForSession(sessionId) : [];
 
   workspaceEl.textContent = uiState.workspaceName || 'workspace';
+  updateAgentButtonLabel();
   workspaceEl.title = uiState.workspaceRoot || uiState.workspaceName || 'workspace';
   workspaceStatusEl.textContent = activeSession?.title ? activeSession.title : 'No active session';
   workspaceStatusEl.title = activeSession?.title || 'No active session';
@@ -927,6 +949,19 @@ function handleJobEvent(message) {
       sessionId,
       status: message.eventType,
     };
+    
+    // 自动继续逻辑
+    const autoContinueEnabled = uiState.autoContinueEnabled.get(sessionId) ?? false;
+    if (autoContinueEnabled && message.eventType === 'job_completed') {
+      postDebug('托管模式: 任务完成，自动发送继续消息');
+      setTimeout(() => {
+        try {
+          vscode.postMessage({ type: 'sendMessage', content: '继续' });
+        } catch (error) {
+          reportWebviewError(error);
+        }
+      }, 500);
+    }
   }
 
   renderTranscript();
@@ -948,6 +983,7 @@ function initializeWebview() {
     postDebug(`webview 脚本已启动，readyState=${document.readyState}`);
     vscode.postMessage({ type: 'ready' });
     render();
+    updateAgentDisplay();
   } catch (error) {
     reportWebviewError(error);
   }
@@ -974,6 +1010,182 @@ sendButton?.addEventListener('click', (event) => {
 attachButton?.addEventListener('click', (event) => {
   event.preventDefault();
   showTodoFeedback('附件选择');
+});
+
+function updateAgentDisplay() {
+  const agentNameDisplay = document.getElementById('agentNameDisplay');
+  const activeSession = getActiveSession();
+  
+  if (agentNameDisplay && activeSession) {
+    const agentId = activeSession.agent_id || 'default';
+    // 裁剪过长的agent_id，最多显示12字符，超出显示省略号
+    const displayName = agentId.length > 12 ? agentId.slice(0, 10) + '…' : agentId;
+    agentNameDisplay.textContent = displayName;
+    agentSelectButton.title = `当前Agent: ${agentId} - 点击切换`;
+  }
+}
+
+agentSelectButton?.addEventListener('click', async (event) => {
+  event.preventDefault();
+  postDebug('Agent选择按钮点击');
+  
+  const activeSession = getActiveSession();
+  if (!activeSession) {
+    setStatus('请先创建会话', true);
+    return;
+  }
+
+  // 检查是否已有打开的菜单，如有则关闭
+  const existingMenu = document.querySelector('.agent-select-menu');
+  if (existingMenu) {
+    existingMenu.remove();
+    return;
+  }
+
+  // 动态获取Agent列表 - 通过VS Code消息总线转发
+  let agents;
+  try {
+    // VS Code Webview沙箱中不能直接fetch，必须通过扩展后端转发
+    const response = await new Promise((resolve, reject) => {
+      const messageId = `agent_list_${Date.now()}`;
+      
+      const handler = (event) => {
+        if (event.data.type === 'api_response' && event.data.request_id === messageId) {
+          window.removeEventListener('message', handler);
+          if (event.data.ok) {
+            resolve(event.data);
+          } else {
+            reject(new Error(event.data.error || 'API请求失败'));
+          }
+        }
+      };
+      
+      window.addEventListener('message', handler);
+      
+      vscode.postMessage({
+        type: 'api_request',
+        request_id: messageId,
+        method: 'GET',
+        path: '/api/v1/agents'
+      });
+      
+      // 5秒超时
+      setTimeout(() => {
+        window.removeEventListener('message', handler);
+        reject(new Error('API请求超时'));
+      }, 5000);
+    });
+
+    agents = response.data;
+    
+    if (!Array.isArray(agents)) {
+      throw new Error('API返回格式错误: 期望数组类型');
+    }
+    
+    postDebug(`成功加载 ${agents.length} 个Agent`);
+  } catch (error) {
+    console.error('Agent列表加载失败:', error);
+    setStatus(`Agent列表加载失败: ${error.message}`, true);
+    return;
+  }
+
+  // 创建下拉菜单 - Copilot Chat 样式
+  const menu = document.createElement('div');
+  menu.className = 'agent-select-menu';
+  menu.style.cssText = `
+    position: fixed;
+    background: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    min-width: 220px;
+    max-width: 300px;
+    z-index: 10000;
+    padding: 4px 0;
+    font-family: var(--vscode-font-family);
+  `;
+
+  agents.forEach(agent => {
+    const isActive = activeSession.agent_id === agent.id;
+    const item = document.createElement('button');
+    item.style.cssText = `
+      width: 100%;
+      text-align: left;
+      padding: 6px 12px;
+      border: none;
+      background: ${isActive ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent'};
+      color: ${isActive ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)'};
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      transition: background 0.1s ease;
+    `;
+    item.innerHTML = `
+      <div style="font-weight: 500; font-size: 13px; display: flex; align-items: center; gap: 8px;">
+        ${isActive ? '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" style="fill: currentColor; flex-shrink: 0;"><path d="M13.7 4.3 6.7 11.3 2.3 6.9 3.7 5.5 6.7 8.5 12.3 2.9 13.7 4.3Z"/></svg>' : '<span style="width: 12px; flex-shrink: 0;"></span>'}
+        ${escapeHtml(agent.name)}
+      </div>
+      <div style="font-size: 11px; color: var(--vscode-descriptionForeground); padding-left: 20px;">${escapeHtml(agent.description)}</div>
+    `;
+    
+    item.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      menu.remove();
+      
+      try {
+        setStatus(`正在切换到 ${agent.name}...`);
+        
+        // 调用PATCH接口更新会话
+        vscode.postMessage({
+          type: 'updateSession',
+          sessionId: activeSession.session_id,
+          data: { agent_id: agent.id }
+        });
+        
+        // 更新本地状态
+        activeSession.agent_id = agent.id;
+        updateAgentDisplay();
+        
+        setStatus(`已切换到 ${agent.name}`);
+      } catch (error) {
+        reportWebviewError(error);
+      }
+    });
+    
+    item.addEventListener('mouseenter', () => {
+      if (!isActive) {
+        item.style.background = 'var(--vscode-list-hoverBackground)';
+      }
+    });
+    
+    item.addEventListener('mouseleave', () => {
+      if (!isActive) {
+        item.style.background = 'transparent';
+      }
+    });
+    
+    menu.appendChild(item);
+  });
+
+  // 点击外部关闭菜单
+  const closeHandler = (e) => {
+    if (!menu.contains(e.target) && !agentSelectButton.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
+
+  // 定位菜单位置 - 按钮正下方
+  agentSelectButton.parentElement.style.position = 'relative';
+  menu.style.position = 'absolute';
+  menu.style.left = '0';
+  menu.style.bottom = '100%';
+  menu.style.marginBottom = '4px';
+  
+  agentSelectButton.parentElement.appendChild(menu);
 });
 
 mentionButton?.addEventListener('click', (event) => {
@@ -1071,12 +1283,7 @@ viewToggleButton?.addEventListener('click', (event) => {
   // TODO: 实现视图切换功能
 });
 
-modelSelectButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('模型选择按钮点击');
-  showTodoFeedback('模型选择');
-  // TODO: 实现模型选择功能
-});
+
 
 contextButton?.addEventListener('click', (event) => {
   event.preventDefault();
@@ -1097,6 +1304,42 @@ settingsButton?.addEventListener('click', (event) => {
   postDebug('设置按钮点击');
   showTodoFeedback('设置');
   // TODO: 实现设置功能
+});
+
+autoContinueButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  postDebug('自动继续按钮点击');
+  
+  const activeSession = getActiveSession();
+  if (!activeSession) {
+    setStatus('请先创建会话', true);
+    return;
+  }
+  
+  const sessionId = activeSession.session_id;
+  const currentEnabled = uiState.autoContinueEnabled.get(sessionId) ?? false;
+  const newEnabled = !currentEnabled;
+  
+  uiState.autoContinueEnabled.set(sessionId, newEnabled);
+  
+  // 更新按钮状态
+  autoContinueButton.classList.toggle('active', newEnabled);
+  autoContinueButton.title = newEnabled ? '🔄 托管模式 - 开启' : '🔄 托管模式 - 关闭';
+  
+  // 调用后端API
+  try {
+    if (newEnabled) {
+      vscode.postMessage({ type: 'autoContinueStart', sessionId });
+      setStatus('托管模式已开启，代理完成后将自动继续');
+    } else {
+      vscode.postMessage({ type: 'autoContinueStop', sessionId });
+      setStatus('托管模式已关闭');
+    }
+  } catch (error) {
+    reportWebviewError(error);
+  }
+  
+  persistState();
 });
 
 expandDetailsToggle?.addEventListener('change', (event) => {
@@ -1149,6 +1392,12 @@ function updateButtonStates() {
   // 输入框有内容时显示清空按钮
   const hasContent = inputEl?.value?.trim().length > 0;
   clearInputButton.classList.toggle('hidden', !hasContent);
+  
+  // 更新自动继续按钮状态
+  const activeSession = getActiveSession();
+  const autoContinueEnabled = activeSession ? (uiState.autoContinueEnabled.get(activeSession.session_id) ?? false) : false;
+  autoContinueButton.classList.toggle('active', autoContinueEnabled);
+  autoContinueButton.title = autoContinueEnabled ? '🔄 托管模式 - 开启' : '🔄 托管模式 - 关闭';
 }
 
 // 在状态更新时调用
@@ -1156,6 +1405,7 @@ const originalRender = render;
 render = function() {
   originalRender();
   updateButtonStates();
+  updateAgentDisplay();
 };
 
 sessionListEl?.addEventListener('click', (event) => {
