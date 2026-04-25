@@ -6,7 +6,8 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import get_request_id, verify_local_token
 from app.schemas.artifact import ArtifactDTO
 from app.schemas.common import APIResponse
-from app.schemas.job import EventDTO, JobControlRequest, JobControlResponse, JobDTO, StepDTO
+from app.schemas.event import Event as SSEEvent
+from app.schemas.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
 from app.services.artifact_service import ArtifactService
 from app.services.event_service import EventService
 from app.services.job_service import JobService
@@ -34,7 +35,7 @@ async def list_job_steps(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{job_id}/events", response_model=APIResponse[list[EventDTO]], summary="获取任务事件")
+@router.get("/{job_id}/events", response_model=APIResponse[list[SSEEvent]], summary="获取任务事件")
 async def list_job_events(
     job_id: str,
     after: str | None = None,
@@ -58,7 +59,7 @@ async def stream_job_events(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.post("/{job_id}/control", response_model=APIResponse[JobControlResponse], summary="控制任务")
+@router.post("/{job_id}/control", response_model=APIResponse[JobControlResponseDTO], summary="控制任务")
 async def control_job(
     job_id: str,
     payload: JobControlRequest,

@@ -8,7 +8,7 @@ from typing import Optional
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
 from app.schemas.common import MessageRole, RunMode
-from app.schemas.message import MessageCreate, MessageRunRequest, RunOptions
+from app.schemas.message import MessageCreateRequest, MessageRunRequest, RunOptions
 from app.schemas.session import SessionAutoContinueStatusDTO
 from app.services.job_service import JobService
 from app.services.message_service import MessageService
@@ -174,7 +174,7 @@ class SessionAutoContinueService:
     async def _send_continue_message(self, state: _AutoContinueState, trigger_job_id: str, trigger_event_id: str) -> None:
         session = await SessionService.get(state.session_id)
         run_request = MessageRunRequest(
-            message=MessageCreate(
+            message=MessageCreateRequest(
                 role=MessageRole.user,
                 content="继续",
             ),

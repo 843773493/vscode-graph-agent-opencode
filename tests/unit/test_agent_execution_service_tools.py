@@ -8,7 +8,7 @@ import pytest
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
-from app.schemas.job import EventDTO
+from app.schemas.event import AgentEndEvent, AgentEndPayload
 from app.agents.agent_tools import (
     create_system_time_emitter_tool,
     create_monitor_session_agent_end_tool,
@@ -195,19 +195,27 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
                 }
             )
 
-            class _FakeMessage:
-                def model_dump(self, mode="json"):
-                    return emitted_messages[-1]
+        class _FakeMessage:
+            def model_dump(self, mode="json"):
+                return emitted_messages[-1]
 
-            return _FakeMessage()
+            def model_dump_json(self):
+                import json
+                return json.dumps(self.model_dump())
 
-    future_event = EventDTO(
+        return _FakeMessage()
+
+    # 使用新的事件类型构造
+    future_event = AgentEndEvent(
         event_id="evt_future_1",
         job_id="job_target_1",
         step_id=None,
-        type=EventType.AGENT_END,
         agent_id="deep_agent",
-        payload={"final_text": "橙子"},
+        payload=AgentEndPayload(
+            response_length=len("橙子"),
+            final_text="橙子",
+            agent_id="deep_agent"
+        ),
         timestamp=datetime.now() + timedelta(days=1),
     )
 

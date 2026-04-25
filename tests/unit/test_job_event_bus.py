@@ -4,7 +4,12 @@ import uuid
 import pytest
 
 from app.core.job_event_bus import EventType, JobEventBus
-from app.schemas.job import EventDTO
+
+
+# TODO: 本测试文件使用 EventType.LOG 进行基础测试。
+# LOG 事件为预留类型，其 payload 结构未规范化（使用原始 dict）。
+# 未来需定义 LogLevel 枚举、结构化日志字段（如 timestamp、level、message、source 等）
+# 并更新相关测试用例以验证新结构。
 
 
 class TestJobEventBus:
@@ -19,6 +24,7 @@ class TestJobEventBus:
     @pytest.mark.asyncio
     async def test_publish_subscribe_basic(self):
         """测试基本的事件发布订阅"""
+        # TODO: LOG 事件为预留类型，payload 结构未规范化，测试仅验证基础流程
         queue = await self.bus.subscribe(self.job_id)
 
         # 发布事件
@@ -39,8 +45,12 @@ class TestJobEventBus:
         queue2 = await self.bus.subscribe(self.job_id)
         queue3 = await self.bus.subscribe(self.job_id)
 
-        # 发布事件
-        event = await self.bus.publish(self.job_id, EventType.AGENT_START, {})
+        # 发布事件（AGENT_START需要提供message和agent_id）
+        event = await self.bus.publish(
+            self.job_id,
+            EventType.AGENT_START,
+            {"message": "test start", "agent_id": "test_agent"}
+        )
 
         # 所有订阅者都应该收到事件
         received1 = await asyncio.wait_for(queue1.get(), timeout=1.0)
@@ -156,7 +166,9 @@ class TestJobEventBus:
 
     @pytest.mark.asyncio
     async def test_event_metadata(self):
-        """测试事件元数据正确性"""
+        """测试事件元数据（step_id、agent_id）
+        TODO: TOOL_CALL 为预留事件类型，payload 结构未规范化，测试仅验证元数据传递
+        """
         step_id = "step-123"
         agent_id = "agent-456"
 

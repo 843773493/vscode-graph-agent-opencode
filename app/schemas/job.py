@@ -33,16 +33,6 @@ class StepDTO(BaseModel):
     ended_at: Optional[datetime] = None
 
 
-class EventDTO(BaseModel):
-    event_id: str
-    job_id: str
-    step_id: Optional[str] = None
-    type: str
-    agent_id: Optional[str] = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime
-
-
 class JobControlRequest(BaseModel):
     scope: ControlScope = ControlScope.job
     action: ControlAction
@@ -62,7 +52,7 @@ class JobControlRequest(BaseModel):
         return self
 
 
-class JobControlResponse(BaseModel):
+class JobControlResponseDTO(BaseModel):
     job_id: str
     status: JobStatus
     control_state: str

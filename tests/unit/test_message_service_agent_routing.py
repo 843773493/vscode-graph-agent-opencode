@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from app.schemas.message import MessageCreate, MessageRunRequest, RunOptions
+from app.schemas.message import MessageCreateRequest, MessageRunRequest, RunOptions
 from app.services.job_service import JobService
 from app.services.message_service import MessageService
 from app.services.session_service import SessionService
@@ -41,7 +41,7 @@ async def test_create_and_run_uses_session_current_agent_when_request_omits_agen
     result = await service.create_and_run(
         "ses_test",
         MessageRunRequest(
-            message=MessageCreate(content="hello"),
+            message=MessageCreateRequest(content="hello"),
             run=RunOptions(mode="single_agent"),
         ),
     )
@@ -73,7 +73,7 @@ async def test_create_and_run_prefers_request_agent_over_session_agent(monkeypat
     await service.create_and_run(
         "ses_test",
         MessageRunRequest(
-            message=MessageCreate(content="hello"),
+            message=MessageCreateRequest(content="hello"),
             run=RunOptions(mode="single_agent", agent_id="coder"),
         ),
     )

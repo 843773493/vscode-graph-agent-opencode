@@ -100,11 +100,27 @@ class SessionService:
             ConfigService.get_instance().validate_agent_id(session.agent_id)
         
         update_data = session.model_dump(exclude_unset=True)
+        
+        # 记录旧 agent_id，用于缓存清理
+        old_agent_id = existing.current_agent_id
+        new_agent_id = update_data.get("agent_id")
+        agent_id_changed = new_agent_id is not None and new_agent_id != old_agent_id
+        
+        # 批量更新字段
         for key, value in update_data.items():
             if key == "agent_id":
                 existing.current_agent_id = value
-                continue
-            setattr(existing, key, value)
+            else:
+                setattr(existing, key, value)
+        
+        # 当 agent_id 变更时，清除旧 agent 的运行时缓存，确保下次使用新 agent
+        if agent_id_changed:
+            try:
+                from app.services.agent_execution_service import AgentExecutionService
+                old_cache_key = f"{session_id}::{old_agent_id}"
+                AgentExecutionService._agent_cache.pop(old_cache_key, None)
+            except Exception:
+                pass  # 缓存清除失败不影响主流程
             
         # 确保时间戳递增，避免测试时毫秒级冲突
         import time

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 
-from app.schemas.job import JobDTO, StepDTO, JobControlRequest, JobControlResponse
+from app.schemas.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
 from app.schemas.common import JobStatus, RunMode, StepStatus, ControlAction
 from app.services.agent_execution_service import AgentExecutionService
 from app.core.job_event_bus import EventType, JobEventBus
@@ -91,7 +91,7 @@ class JobService:
             raise ValueError(f"Job {job_id} not found")
         return job.steps
 
-    async def control(self, job_id: str, control_request: JobControlRequest) -> JobControlResponse:
+    async def control(self, job_id: str, control_request: JobControlRequest) -> JobControlResponseDTO:
         job = self._jobs.get(job_id)
         if not job:
             raise ValueError(f"Job {job_id} not found")
@@ -110,7 +110,7 @@ class JobService:
                 job.task.cancel()
         
         job.updated_at = datetime.now()
-        return JobControlResponse(
+        return JobControlResponseDTO(
             job_id=job_id,
             status=job.status,
             control_state=f"Action {control_request.action.value} applied successfully"

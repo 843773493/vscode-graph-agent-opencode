@@ -1,20 +1,23 @@
 {
-  "$schema": "../config.json",
-  "llm":{
-    "providers":[
+  "$schema": "./config.json",
+  "llm": {
+    "providers": [
       {
+        "id": "primary",
         "endpoint": "https://opencode.ai/zen/v1",
         "model": "minimax-m2.5-free",
         "api_key": "${OPENCODE_ZEN_API_KEY}",
         "interface": "chat.completion"
       },
       {
+        "id": "backup_1",
         "endpoint": "https://api.kilo.ai/api/gateway",
         "model": "bytedance-seed/dola-seed-2.0-pro:free",
         "api_key": "${KILO_API_KEY}",
         "interface": "responses"
       },
       {
+        "id": "backup_2",
         "endpoint": "https://openrouter.ai/api/v1",
         "model": "openai/gpt-oss-120b:free",
         "api_key": "${OPENROUTER_API_KEY}",
@@ -23,6 +26,345 @@
     ]
   },
   "logger": {
+    "level": "info",
+    "pretty": true
+  },
+  "default_agent": "default",
+  "agents": {
+    "default": {
+      "name": "Workspace Assistant",
+      "description": "工作区默认助手，主要用于通用问答、代码解释、开发辅助和文档问答。",
+      "language": "zh-CN",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "workspace",
+        "assistant",
+        "qa",
+        "coding"
+      ],
+      "instructions": {
+        "system_prompt": "你是一个面向工程团队的默认工作区助手：Workspace Assistant。优先提供准确、可执行、可验证的回答。涉及代码时，优先给出问题分析、修改建议和可以直接使用的示例。信息不足时不要编造，要明确说明缺失信息并给出下一步建议。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1",
+          "backup_2"
+        ],
+        "temperature": 0.2,
+        "top_p": 1,
+        "max_output_tokens": 4000
+      },
+      "tools": {
+        "denylist": [
+        ],
+        "confirmation_required": []
+      },
+      "knowledge": {
+        "enabled": true,
+        "sources": [
+          {
+            "id": "workspace-docs",
+            "type": "directory",
+            "endpoint": "./docs",
+            "auth_ref": null,
+            "priority": 10
+          },
+          {
+            "id": "workspace-readme",
+            "type": "file",
+            "endpoint": "./README.md",
+            "auth_ref": null,
+            "priority": 9
+          }
+        ],
+        "retrieval": {
+          "strategy": "hybrid",
+          "top_k": 6,
+          "score_threshold": 0.65,
+          "rerank": true
+        }
+      },
+      "memory": {
+        "enabled": true,
+        "scope": "workspace",
+        "backend": "redis",
+        "ttl_seconds": 2592000,
+        "max_items": 500,
+        "store_user_preferences": true,
+        "store_sensitive_data": false
+      },
+      "safety": {
+        "policy_mode": "standard",
+        "prompt_injection_protection": true,
+        "pii_redaction": true,
+        "refuse_secrets_exfiltration": true
+      },
+      "execution": {
+        "stream": true,
+        "max_turns": 16,
+        "max_history_messages": 30,
+        "max_context_tokens": 32000
+      },
+      "env": {
+        "mode": "production",
+        "region": "cn-east-1",
+        "feature_flags": {
+          "enable_workspace_memory": true,
+          "enable_kb": true,
+          "enable_code_tools": true
+        }
+      }
+    },
+
+    "coder": {
+      "name": "Coding Assistant",
+      "description": "专门用于代码实现、重构、修复 bug 和生成补丁。",
+      "language": "zh-CN",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "coding",
+        "implementation",
+        "bugfix"
+      ],
+      "instructions": {
+        "system_prompt": "你是一个偏工程实践的编程助手：Coding Assistant。输出代码时优先保证正确性、可读性、边界条件和异常处理。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1",
+          "backup_2"
+        ],
+        "temperature": 0.15,
+        "top_p": 1,
+        "max_output_tokens": 5000
+      },
+      "tools": {
+        "denylist": [
+          "send_message_to_session",
+          "edit_file"
+        ],
+        "confirmation_required": [
+        ]
+      },
+      "knowledge": {
+        "enabled": true,
+        "sources": [
+          {
+            "id": "workspace-docs",
+            "type": "directory",
+            "endpoint": "./docs",
+            "auth_ref": null,
+            "priority": 10
+          }
+        ],
+        "retrieval": {
+          "strategy": "hybrid",
+          "top_k": 5,
+          "score_threshold": 0.65,
+          "rerank": true
+        }
+      },
+      "memory": {
+        "enabled": false
+      },
+      "safety": {
+        "policy_mode": "standard",
+        "prompt_injection_protection": true,
+        "pii_redaction": true,
+        "refuse_secrets_exfiltration": true
+      },
+      "execution": {
+        "stream": true,
+        "max_turns": 20,
+        "max_history_messages": 40,
+        "max_context_tokens": 40000
+      },
+      "env": {
+        "mode": "production",
+        "region": "cn-east-1",
+        "feature_flags": {
+          "enable_code_write": true,
+          "enable_test_run": true
+        }
+      }
+    },
+
+    "reviewer": {
+      "name": "Code Reviewer",
+      "description": "专门用于代码审查、风险检查、设计评估和质量把关。",
+      "language": "zh-CN",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "review",
+        "quality",
+        "security"
+      ],
+      "persona": {
+        "role": "代码审查助手",
+        "tone": "technical",
+        "identity": "你专注于正确性、可维护性、安全性和性能风险审查。",
+        "verbosity": "medium"
+      },
+      "instructions": {
+        "system_prompt": "你是一个严格的代码审查助手。优先指出正确性问题、边界缺陷、可维护性风险和潜在安全问题。",
+        "developer_prompt": "审查时尽量按问题级别分类，例如阻断问题、重要建议、可选优化。避免泛泛而谈。",
+        "fallback_prompt": "当信息不足时，请明确指出无法确认的部分，并给出建议的补充检查项。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1",
+          "backup_2"
+        ],
+        "temperature": 0.1,
+        "top_p": 1,
+        "max_output_tokens": 3500
+      },
+      "tools": {
+        "enabled": true,
+        "tool_choice": "auto",
+        "timeout_ms": 15000,
+        "allowlist": [
+          "read_file",
+          "search_code",
+          "grep_workspace",
+          "list_symbols"
+        ],
+        "confirmation_required": []
+      },
+      "knowledge": {
+        "enabled": true,
+        "sources": [
+          {
+            "id": "workspace-docs",
+            "type": "directory",
+            "endpoint": "./docs",
+            "auth_ref": null,
+            "priority": 10
+          }
+        ],
+        "retrieval": {
+          "strategy": "hybrid",
+          "top_k": 4,
+          "score_threshold": 0.7,
+          "rerank": true
+        }
+      },
+      "memory": {
+        "enabled": false
+      },
+      "safety": {
+        "policy_mode": "strict",
+        "prompt_injection_protection": true,
+        "pii_redaction": true,
+        "refuse_secrets_exfiltration": true
+      },
+      "execution": {
+        "stream": true,
+        "max_turns": 12,
+        "max_history_messages": 24,
+        "max_context_tokens": 28000
+      },
+      "env": {
+        "mode": "production",
+        "region": "cn-east-1",
+        "feature_flags": {
+          "enable_security_review": true
+        }
+      }
+    },
+
+    "researcher": {
+      "name": "Research Assistant",
+      "description": "专门用于资料检索、文档总结、方案调研和知识问答。",
+      "language": "zh-CN",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "research",
+        "docs",
+        "knowledge"
+      ],
+      "persona": {
+        "role": "调研助手",
+        "tone": "technical",
+        "identity": "你专注于检索资料、提炼重点、对比方案和总结结论。",
+        "verbosity": "medium"
+      },
+      "instructions": {
+        "system_prompt": "你是一个调研和知识问答助手。优先基于知识源进行检索、归纳和总结，不要编造未确认的信息。",
+        "developer_prompt": "当存在多个来源时，优先整理一致结论，并明确不确定点、差异点和假设前提。",
+        "fallback_prompt": "当检索结果不足时，先说明现有证据有限，再给出最稳妥的判断。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1",
+          "backup_2"
+        ],
+        "temperature": 0.2,
+        "top_p": 1,
+        "max_output_tokens": 4500
+      },
+      "tools": {
+        "enabled": true,
+        "tool_choice": "auto",
+        "timeout_ms": 15000,
+        "allowlist": [
+          "search_docs",
+          "read_file",
+          "grep_workspace"
+        ],
+        "confirmation_required": []
+      },
+      "knowledge": {
+        "enabled": true,
+        "sources": [
+          {
+            "id": "workspace-docs",
+            "type": "directory",
+            "endpoint": "./docs",
+            "auth_ref": null,
+            "priority": 10
+          },
+          {
+            "id": "workspace-readme",
+            "type": "file",
+            "endpoint": "./README.md",
+            "auth_ref": null,
+            "priority": 9
+          }
+        ],
+        "retrieval": {
+          "strategy": "hybrid",
+          "top_k": 8,
+          "score_threshold": 0.6,
+          "rerank": true
+        }
+      },
+      "memory": {
+        "enabled": false
+      },
+      "safety": {
+        "policy_mode": "standard",
+        "prompt_injection_protection": true,
+        "pii_redaction": true,
+        "refuse_secrets_exfiltration": true
+      },
+      "execution": {
+        "stream": true,
+        "max_turns": 14,
+        "max_history_messages": 24,
+        "max_context_tokens": 32000
+      },
+      "env": {
+        "mode": "production",
+        "region": "cn-east-1",
+        "feature_flags": {
+          "enable_doc_retrieval": true
+        }
+      }
+    }
   }
 }
-

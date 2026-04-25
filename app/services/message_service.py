@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from app.schemas.message import MessageDTO, MessageCreate, MessageRunRequest, MessageRunAccepted
+from app.schemas.message import MessageDTO, MessageCreateRequest, MessageRunRequest, MessageRunAccepted
 from app.schemas.common import MessageRole, JobStatus, CursorPage
 from app.core.path_utils import get_session_path
 
@@ -79,7 +79,7 @@ class MessageService:
 
         raise ValueError(f"Message {message_id} not found in session {session_id}")
 
-    async def create(self, session_id: str, message_create: MessageCreate) -> MessageDTO:
+    async def create(self, session_id: str, message_create: MessageCreateRequest) -> MessageDTO:
         message = MessageDTO(
             message_id=f"msg_{uuid.uuid4().hex[:12]}",
             session_id=session_id,
@@ -106,12 +106,20 @@ class MessageService:
         """
         message = await self.create(session_id, run_request.message)
 
-        # 无论前端HTTP调用还是后端内部调用，创建消息后统一广播事件到SSE流
+        # 消息创建事件：此时 job_id 还未生成，使用 session_id 作为关联ID
         from app.core.job_event_bus import JobEventBus, EventType
         await JobEventBus.get_instance().publish(
-            session_id,
+            session_id,  # ⚠️ 暂时使用 session_id，因为 job_id 尚未创建
             EventType.MESSAGE_CREATED,
-            message.dict()
+            {
+                "message_id": message.message_id,
+                "session_id": message.session_id,
+                "role": message.role,
+                "content": message.content,
+                "attachments": [a.model_dump() for a in message.attachments],
+                "metadata": message.metadata,
+                "created_at": message.created_at,  # datetime对象，Pydantic会处理
+            }
         )
 
         from app.services.session_service import SessionService
@@ -121,6 +129,8 @@ class MessageService:
         config_service = ConfigService.get_instance()
         
         requested_agent_id = run_request.run.agent_id if run_request.run else None
+        if requested_agent_id is None:
+            requested_agent_id = session.current_agent_id
         effective_agent_id = config_service.resolve_agent_id(requested_agent_id)
         
         try:

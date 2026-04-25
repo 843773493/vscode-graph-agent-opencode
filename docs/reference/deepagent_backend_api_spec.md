@@ -851,7 +851,7 @@ class AttachmentRef(BaseModel):
     name: Optional[str] = None
     content_type: Optional[str] = None
 
-class MessageCreate(BaseModel):
+class MessageCreateRequest(BaseModel):
     role: MessageRole = MessageRole.user
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)
@@ -867,7 +867,7 @@ class RunOptions(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 class MessageRunRequest(BaseModel):
-    message: MessageCreate
+    message: MessageCreateRequest
     run: RunOptions
 
 class MessageDTO(BaseModel):
@@ -945,7 +945,7 @@ class JobControlRequest(BaseModel):
             raise ValueError("instruction action requires message")
         return self
 
-class JobControlResponse(BaseModel):
+class JobControlResponseDTO(BaseModel):
     job_id: str
     status: JobStatus
     control_state: str
@@ -1258,7 +1258,7 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import get_request_id, verify_local_token
 from app.schemas.artifact import ArtifactDTO
 from app.schemas.common import APIResponse
-from app.schemas.job import EventDTO, JobControlRequest, JobControlResponse, JobDTO, StepDTO
+from app.schemas.job import EventDTO, JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
 from app.services.artifact_service import ArtifactService
 from app.services.event_service import EventService
 from app.services.job_service import JobService
@@ -1310,7 +1310,7 @@ async def stream_job_events(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.post("/{job_id}/control", response_model=APIResponse[JobControlResponse], summary="控制任务")
+@router.post("/{job_id}/control", response_model=APIResponse[JobControlResponseDTO], summary="控制任务")
 async def control_job(
     job_id: str,
     payload: JobControlRequest,

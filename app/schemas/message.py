@@ -11,7 +11,7 @@ class AttachmentRef(BaseModel):
     content_type: Optional[str] = None
 
 
-class MessageCreate(BaseModel):
+class MessageCreateRequest(BaseModel):
     role: MessageRole = MessageRole.user
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)
@@ -29,7 +29,7 @@ class RunOptions(BaseModel):
 
 
 class MessageRunRequest(BaseModel):
-    message: MessageCreate
+    message: MessageCreateRequest
     run: RunOptions
 
 

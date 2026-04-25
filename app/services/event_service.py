@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 from typing import AsyncGenerator, Optional
 
-from app.schemas.job import EventDTO
+from app.schemas.event import Event
 from app.core.job_event_bus import JobEventBus
 
 
@@ -18,20 +18,30 @@ class EventService:
             cls._instance = EventService()
         return cls._instance
     
-    async def list(self, job_id: str, after: str | None = None, limit: int = 100) -> list[EventDTO]:
+    async def list(self, job_id: str, after: str | None = None, limit: int = 100) -> list[Event]:
+        """获取事件列表"""
         return await self.bus.list_events(job_id, after, limit)
     
-    async def list_by_job(self, job_id: str) -> list[EventDTO]:
+    async def list_by_job(self, job_id: str) -> list[Event]:
+        """获取某个job的所有事件"""
         return await self.bus.list_events(job_id)
     
-    async def get(self, event_id: str) -> EventDTO | None:
+    async def get(self, event_id: str) -> Event | None:
+        """根据event_id获取单个事件"""
         for job_events in self.bus._job_events.values():
             for event in job_events:
                 if event.event_id == event_id:
                     return event
         return None
-    
+
     async def stream_sse(self, job_id: str) -> AsyncGenerator[str, None]:
+        """
+        SSE流式推送事件。
+        
+        返回的数据格式：
+        event: {event_type}
+        data: {event_json}
+        """
         queue = await self.bus.subscribe(job_id)
         try:
             while True:
