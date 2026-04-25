@@ -14,4 +14,5 @@ export const WebviewToHostMessageType = {
   selectSession: 'selectSession',
   sendMessage: 'sendMessage',
   debug: 'debug',
+  updateSession: 'updateSession',
 };

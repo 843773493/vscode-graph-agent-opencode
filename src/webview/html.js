@@ -179,11 +179,11 @@ export function renderSidebarHtml(webview, boot) {
       font-size: 11px;
     }
 
-    #status.error {
-      color: var(--danger);
-    }
+     #status.error {
+       color: var(--danger);
+     }
 
-    .content {
+     .content {
       display: flex;
       flex-direction: row;
       flex: 1 1 auto;
@@ -859,25 +859,44 @@ export function renderSidebarHtml(webview, boot) {
       gap: 0;
     }
 
-    .composer-actions button {
-      width: 24px;
-      height: 24px;
-      padding: 4px;
-      border: none;
-      border-radius: 2px;
-      background: transparent;
-      color: var(--vscode-icon-foreground);
-      font-weight: 400;
-      cursor: pointer;
-      font-size: 13px;
-      line-height: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0;
-    }
+     .composer-actions button {
+       width: 24px;
+       height: 24px;
+       padding: 4px;
+       border: none;
+       border-radius: 2px;
+       background: transparent;
+       color: var(--vscode-icon-foreground);
+       font-weight: 400;
+       cursor: pointer;
+       font-size: 13px;
+       line-height: 16px;
+       display: flex;
+       align-items: center;
+       justify-content: center;
+       gap: 0;
+     }
 
-    .composer-actions button.send-button {
+     /* Agent 选择按钮在底部 composer 的样式 */
+     #agentSelectButton {
+       width: auto;
+       min-width: 100px;
+       padding: 4px 8px;
+       justify-content: flex-start;
+       gap: 6px;
+       flex-shrink: 0;
+     }
+
+     #agentSelectButton span {
+       font-size: 12px;
+       line-height: 16px;
+       white-space: nowrap;
+       overflow: hidden;
+       text-overflow: ellipsis;
+       max-width: 80px;
+     }
+
+     .composer-actions button.send-button {
       width: auto;
       padding: 4px 12px 4px 8px;
     }
@@ -1110,46 +1129,34 @@ export function renderSidebarHtml(webview, boot) {
             <path d="M2 2H7V7H2V2ZM3 3V6H6V3H3ZM9 2H14V7H9V2ZM10 3V6H13V3H10ZM2 9H7V14H2V9ZM3 10V13H6V10H3ZM9 9H14V14H9V9ZM10 10V13H13V10H10Z"/>
           </svg>
         </button>
-      </div>
-       <div class="toolbar-group">
-         <!-- 右侧按钮组 -->
-         <button id="modelSelectButton" type="button" title="选择模型">
-           <span>GPT-4o</span>
+       </div>
+        <div class="toolbar-group">
+          <!-- 右侧按钮组 -->
+          <button id="contextButton" type="button" title="上下文设置">
            <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-             <path d="M8 10L4 6H12L8 10Z"/>
+             <path d="M8 1C5.79086 1 4 2.79086 4 5C4 6.8625 5.275 8.425 7 8.875V15H9V8.875C10.725 8.425 12 6.8625 12 5C12 2.79086 10.2091 1 8 1ZM8 2C9.65685 2 11 3.34315 11 5C11 6.65685 9.65685 8 8 8C6.34315 8 5 6.65685 5 5C5 3.34315 6.34315 2 8 2Z"/>
            </svg>
          </button>
-         <button id="agentSelectButton" type="button" title="选择Agent">
-           <span>default</span>
+         <button id="helpButton" type="button" title="帮助">
            <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-             <path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-2 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm0-6c-.55 0-1 .45-1 1s.45 1 1 1 1-.45 1-1-.45-1-1-1z"/>
+             <path d="M8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1ZM8 14C4.68629 14 2 11.3137 2 8C2 4.68629 4.68629 2 8 2C11.3137 2 14 4.68629 14 8C14 11.3137 11.3137 14 8 14ZM7 11H9V13H7V11ZM8 4C6.34315 4 5 5.34315 5 7H7C7 6.44772 7.44772 6 8 6C8.55228 6 9 6.44772 9 7C9 8 7 7.75 7 10H9C9 8.75 11 8.5 11 7C11 5.34315 9.65685 4 8 4Z"/>
            </svg>
          </button>
-         <div class="toolbar-separator" aria-hidden="true"></div>
-         <button id="contextButton" type="button" title="上下文设置">
-          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-            <path d="M8 1C5.79086 1 4 2.79086 4 5C4 6.8625 5.275 8.425 7 8.875V15H9V8.875C10.725 8.425 12 6.8625 12 5C12 2.79086 10.2091 1 8 1ZM8 2C9.65685 2 11 3.34315 11 5C11 6.65685 9.65685 8 8 8C6.34315 8 5 6.65685 5 5C5 3.34315 6.34315 2 8 2Z"/>
-          </svg>
-        </button>
-        <button id="helpButton" type="button" title="帮助">
-          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-            <path d="M8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1ZM8 14C4.68629 14 2 11.3137 2 8C2 4.68629 4.68629 2 8 2C11.3137 2 14 4.68629 14 8C14 11.3137 11.3137 14 8 14ZM7 11H9V13H7V11ZM8 4C6.34315 4 5 5.34315 5 7H7C7 6.44772 7.44772 6 8 6C8.55228 6 9 6.44772 9 7C9 8 7 7.75 7 10H9C9 8.75 11 8.5 11 7C11 5.34315 9.65685 4 8 4Z"/>
-          </svg>
-        </button>
-        <button id="settingsButton" type="button" title="设置">
-          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-            <path d="M7.5 0L7 2H9L8.5 0H7.5ZM12.1924 1.3934L10.8284 2.75736L12.2426 4.17157L13.6066 2.80761L12.1924 1.3934ZM14 7V7.5H16V8.5H14V9H14V7ZM13.6066 13.1924L12.2426 11.8284L10.8284 13.2426L12.1924 14.6066L13.6066 13.1924ZM8.5 16H7.5L7 14H9L8.5 16ZM2.80761 14.6066L4.17157 13.2426L2.75736 11.8284L1.3934 13.1924L2.80761 14.6066ZM2 9V8.5H0V7.5H2V7H2V9ZM1.3934 2.80761L2.75736 4.17157L4.17157 2.75736L2.80761 1.3934L1.3934 2.80761ZM8 5C6.34315 5 5 6.34315 5 8C5 9.65685 6.34315 11 8 11C9.65685 11 11 9.65685 11 8C11 6.34315 9.65685 5 8 5ZM8 6C9.10457 6 10 6.89543 10 8C10 9.10457 9.10457 10 8 10C6.89543 10 6 9.10457 6 8C6 6.89543 6.89543 6 8 6Z"/>
-          </svg>
-        </button>
-      </div>
+         <button id="settingsButton" type="button" title="设置">
+           <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+             <path d="M7.5 0L7 2H9L8.5 0H7.5ZM12.1924 1.3934L10.8284 2.75736L12.2426 4.17157L13.6066 2.80761L12.1924 1.3934ZM14 7V7.5H16V8.5H14V9H14V7ZM13.6066 13.1924L12.2426 11.8284L10.8284 13.2426L12.1924 14.6066L13.6066 13.1924ZM8.5 16H7.5L7 14H9L8.5 16ZM2.80761 14.6066L4.17157 13.2426L2.75736 11.8284L1.3934 13.1924L2.80761 14.6066ZM2 9V8.5H0V7.5H2V7H2V9ZM1.3934 2.80761L2.75736 4.17157L4.17157 2.75736L2.80761 1.3934L1.3934 2.80761ZM8 5C6.34315 5 5 6.34315 5 8C5 9.65685 6.34315 11 8 11C9.65685 11 11 9.65685 11 8C11 6.34315 9.65685 5 8 5ZM8 6C9.10457 6 10 6.89543 10 8C10 9.10457 9.10457 10 8 10C6.89543 10 6 9.10457 6 8C6 6.89543 6.89543 6 8 6Z"/>
+           </svg>
+         </button>
+       </div>
     </header>
 
-    <div class="info-row">
-      <div class="info-chip"><strong id="workspace">Workspace</strong><span id="workspaceStatus">ready</span></div>
-      <div class="info-chip"><span id="status" aria-live="polite">同步中…</span></div>
-    </div>
+     <div class="info-row">
+       <div class="info-chip"><strong id="workspace">Workspace</strong><span id="workspaceStatus">ready</span></div>
+       <div class="info-chip"><span id="status" aria-live="polite">同步中…</span></div>
+       <div id="agentNameDisplay" style="font-size: 12px; color: var(--vscode-descriptionForeground); opacity: 0.7; margin-left: 8px; font-family: var(--vscode-editor-font-family); user-select: text; cursor: text;">default</div>
+     </div>
 
-    <main class="content">
+     <main class="content">
       <!-- 历史会话面板 - 左侧滑入 -->
       <aside class="history-panel" id="historyPanel">
         <div class="panel-header">历史会话</div>
@@ -1181,8 +1188,14 @@ export function renderSidebarHtml(webview, boot) {
             </svg>
           </button>
         </div>
-        <div class="composer-actions-right">
-          <button id="quickPromptButton" type="button" title="快速提示" class="hover-only">
+         <div class="composer-actions-right">
+           <button id="agentSelectButton" type="button" title="选择Agent">
+             <span>default</span>
+             <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+               <path d="M8 1L9 4H12L9.5 6L10.5 9L8 7L5.5 9L6.5 6L4 4H7L8 1ZM4 10L5 13H8L6.5 15L7.5 12H10.5L9.5 15H12.5L11.5 12H14.5L13 10H4Z"/>
+             </svg>
+           </button>
+           <button id="quickPromptButton" type="button" title="快速提示" class="hover-only">
             <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
               <path d="M8 1L9 4H12L9.5 6L10.5 9L8 7L5.5 9L6.5 6L4 4H7L8 1ZM4 10L5 13H8L6.5 15L7.5 12H10.5L9.5 15H12.5L11.5 12H14.5L13 10H4Z"/>
             </svg>

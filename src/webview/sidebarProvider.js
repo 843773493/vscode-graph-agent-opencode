@@ -3,7 +3,7 @@ import path from 'node:path';
 import * as vscode from 'vscode';
 
 import { createSession, getSessionTraces, listAgents, listMessages, listSessions, sendMessage, streamJobEvents } from '../shared/api.js';
-import { DEFAULT_AGENT_ID, DEFAULT_SESSION_TITLE } from '../shared/constants.js';
+import { DEFAULT_AGENT_ID, DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_TOKEN, DEFAULT_SESSION_TITLE } from '../shared/constants.js';
 import { HostToWebviewMessageType, WebviewToHostMessageType } from '../shared/protocol.js';
 import { renderSidebarHtml } from './html.js';
 
@@ -36,6 +36,44 @@ function wait(ms) {
 
 function isCompletedJobStatus(status) {
   return status === 'completed' || status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'timed_out';
+}
+
+function buildBackendUrl(port, path) {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `http://${DEFAULT_BACKEND_HOST}:${port}${normalizedPath}`;
+}
+
+async function requestBackendJson(port, message) {
+  if (!message?.path) {
+    throw new Error('API请求缺少 path');
+  }
+
+  const url = buildBackendUrl(port, message.path);
+  const response = await fetch(url, {
+    method: message.method ?? 'GET',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'X-Local-Token': DEFAULT_BACKEND_TOKEN,
+      ...(message.headers ?? {}),
+    },
+    body: message.body === undefined ? undefined : (typeof message.body === 'string' ? message.body : JSON.stringify(message.body)),
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`后端请求失败 ${response.status}: ${responseText}`);
+  }
+
+  if (!responseText) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    return responseText;
+  }
 }
 
 export class SidebarProvider {
@@ -203,6 +241,11 @@ export class SidebarProvider {
       return;
     }
 
+    if (message.type === 'api_request') {
+      await this.handleApiRequest(message);
+      return;
+    }
+
     if (message.type === WebviewToHostMessageType.ready) {
       this.log('收到 webview ready');
       this.syncState('Webview 已就绪');
@@ -224,13 +267,19 @@ export class SidebarProvider {
       return;
     }
 
-    if (message.type === WebviewToHostMessageType.selectSession) {
-      this.log(`收到切换 session 请求: ${message.sessionId ?? ''}`);
-      await this.selectSession(message.sessionId);
-      return;
-    }
+     if (message.type === WebviewToHostMessageType.selectSession) {
+       this.log(`收到切换 session 请求: ${message.sessionId ?? ''}`);
+       await this.selectSession(message.sessionId);
+       return;
+     }
 
-    if (message.type === WebviewToHostMessageType.sendMessage) {
+     if (message.type === 'updateSession') {
+       this.log(`收到更新 session 请求: sessionId=${message.sessionId}, agentId=${message.data?.agent_id ?? 'unknown'}`);
+       await this.updateSessionAgent(message.sessionId, message.data?.agent_id);
+       return;
+     }
+
+     if (message.type === WebviewToHostMessageType.sendMessage) {
       this.log(`收到发送消息请求: ${String(message.content ?? '').slice(0, 80)}`);
       await this.sendCurrentMessage(message.content);
     }
@@ -249,21 +298,102 @@ export class SidebarProvider {
     this.syncState('已创建新 session');
   }
 
-  async selectSession(sessionId) {
-    if (!sessionId) {
-      return;
+   async selectSession(sessionId) {
+     if (!sessionId) {
+       return;
+     }
+
+     const selected = this.state.sessions.find((session) => session.session_id === sessionId);
+     if (!selected) {
+       throw new Error(`未找到 session: ${sessionId}`);
+     }
+
+     this.state.currentSession = selected;
+     this.state.activeJob = null;
+     await this.reloadMessages();
+     await this.reloadTraces();
+     this.syncState('已切换 session');
+   }
+
+    async updateSessionAgent(sessionId, agentId) {
+      if (!sessionId || !agentId) {
+        this.log(`更新 session agent 失败: sessionId=${sessionId}, agentId=${agentId}`);
+        return;
+      }
+
+      this.log(`开始更新 session ${sessionId} agent 为 ${agentId}`);
+
+      try {
+        // 1. 调用后端 PATCH API 更新
+        const { port } = await this.ensureBackendReady();
+        const url = `http://${DEFAULT_BACKEND_HOST}:${port}/api/v1/sessions/${sessionId}`;
+        const response = await fetch(url, {
+          method: 'PATCH',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            'X-Local-Token': DEFAULT_BACKEND_TOKEN,
+          },
+          body: JSON.stringify({ agent_id: agentId }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`PATCH ${url} failed: ${response.status} ${errorText}`);
+        }
+
+        const result = await response.json();
+        this.log(`后端返回: ${JSON.stringify(result)}`);
+
+        // 2. 以后端返回的完整 session 数据更新前端状态
+        const updatedSession = result.data ?? result;
+        const sessionIndex = this.state.sessions.findIndex((s) => s.session_id === sessionId);
+
+        if (sessionIndex !== -1) {
+          this.state.sessions[sessionIndex] = updatedSession;
+        } else {
+          this.log(`警告: sessions列表中未找到session ${sessionId}，添加到列表`);
+          this.state.sessions.push(updatedSession);
+        }
+
+        if (this.state.currentSession?.session_id === sessionId) {
+          this.state.currentSession = updatedSession;
+        }
+
+        this.syncState(`已切换Agent为 ${agentId}`);
+        this.log(`session ${sessionId} agent 更新成功: ${agentId}`);
+
+      } catch (error) {
+        this.log(`更新失败: ${error.message}`);
+        // 失败时重新拉取，确保前后端一致
+        await this.reloadSessions();
+        this.postError(new Error(`切换Agent失败: ${error.message}`));
+      }
     }
 
-    const selected = this.state.sessions.find((session) => session.session_id === sessionId);
-    if (!selected) {
-      throw new Error(`未找到 session: ${sessionId}`);
-    }
+   async handleApiRequest(message) {
+    const requestId = message.request_id ?? '';
+    this.log(`收到 webview API 请求: ${message.method ?? 'GET'} ${message.path ?? '(empty)'} request_id=${requestId}`);
 
-    this.state.currentSession = selected;
-    this.state.activeJob = null;
-    await this.reloadMessages();
-    await this.reloadTraces();
-    this.syncState('已切换 session');
+    try {
+      const { port } = await this.ensureBackendReady();
+      const data = await requestBackendJson(port, message);
+      this.postMessageToWebview({
+        type: 'api_response',
+        request_id: requestId,
+        ok: true,
+        data,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.log(`API请求失败: ${errorMessage}`);
+      this.postMessageToWebview({
+        type: 'api_response',
+        request_id: requestId,
+        ok: false,
+        error: errorMessage,
+      });
+    }
   }
 
   mergeMessages() {
@@ -295,14 +425,36 @@ export class SidebarProvider {
     this.mergeMessages();
   }
 
-  async reloadTraces() {
-    if (!this.state.currentSession || !this.state.apiPort) {
-      this.state.traceEvents = [];
-      return;
-    }
+   async reloadTraces() {
+     if (!this.state.currentSession || !this.state.apiPort) {
+       this.state.traceEvents = [];
+       return;
+     }
 
-    this.state.traceEvents = await getSessionTraces(this.state.apiPort, this.state.currentSession.session_id);
-  }
+     this.state.traceEvents = await getSessionTraces(this.state.apiPort, this.state.currentSession.session_id);
+   }
+
+   async reloadSessions() {
+     if (!this.state.apiPort) {
+       return;
+     }
+
+     const page = await listSessions(this.state.apiPort);
+     this.state.sessions = page.items ?? [];
+
+     if (!this.state.currentSession && this.state.sessions.length > 0) {
+       this.state.currentSession = this.state.sessions[0];
+     } else if (this.state.currentSession) {
+       const refreshed = this.state.sessions.find(
+         (s) => s.session_id === this.state.currentSession.session_id,
+       );
+       if (refreshed) {
+         this.state.currentSession = refreshed;
+       }
+     }
+
+     this.log(`session列表已刷新，共${this.state.sessions.length}个session`);
+   }
 
   async sendCurrentMessage(content) {
     this.log(`========== 开始发送消息 ==========`);

@@ -739,12 +739,10 @@ function renderTurn(turn, index, totalTurns) {
 
 function updateAgentButtonLabel() {
   const activeSession = getActiveSession();
-  if (agentSelectButton) {
-    if (activeSession?.agent_id) {
-      agentSelectButton.textContent = activeSession.agent_id.substring(0, 12);
-    } else {
-      agentSelectButton.textContent = 'default';
-    }
+  const span = agentSelectButton?.querySelector('span');
+  if (span) {
+    const agentId = activeSession?.agent_id || 'default';
+    span.textContent = agentId.length > 12 ? agentId.substring(0, 10) + '…' : agentId;
   }
 }
 
@@ -1049,8 +1047,13 @@ agentSelectButton?.addEventListener('click', async (event) => {
   const existingMenu = document.querySelector('.agent-select-menu');
   postDebug(`Agent选择按钮点击 - existingMenu: ${existingMenu ? '存在' : '不存在'}`);
   if (existingMenu) {
+    // 清理旧菜单的事件监听器
+    const handler = existingMenu._closeHandler;
+    if (handler) {
+      document.removeEventListener('click', handler);
+    }
     existingMenu.remove();
-    postDebug('Agent选择按钮点击 - 移除了现有菜单，返回');
+    postDebug('Agent选择按钮点击 - 移除了现有菜单及监听器，返回');
     return;
   }
 
@@ -1092,9 +1095,9 @@ agentSelectButton?.addEventListener('click', async (event) => {
       }, 5000);
     });
     
-    agents = response.data;
+    agents = response.data.data;
     postDebug(`Agent选择按钮点击 - 获取到Agent数据: ${JSON.stringify(agents)}`);
-    
+
     if (!Array.isArray(agents)) {
       throw new Error('API返回格式错误: 期望数组类型');
     }
@@ -1124,7 +1127,7 @@ agentSelectButton?.addEventListener('click', async (event) => {
   `;
 
   agents.forEach(agent => {
-    const isActive = activeSession.agent_id === agent.id;
+    const isActive = activeSession.agent_id === agent.agent_id;
     const item = document.createElement('button');
     item.style.cssText = `
       width: 100%;
@@ -1139,13 +1142,13 @@ agentSelectButton?.addEventListener('click', async (event) => {
       gap: 2px;
       transition: background 0.1s ease;
     `;
-    item.innerHTML = `
-      <div style="font-weight: 500; font-size: 13px; display: flex; align-items: center; gap: 8px;">
-        ${isActive ? '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" style="fill: currentColor; flex-shrink: 0;"><path d="M13.7 4.3 6.7 11.3 2.3 6.9 3.7 5.5 6.7 8.5 12.3 2.9 13.7 4.3Z"/></svg>' : '<span style="width: 12px; flex-shrink: 0;"></span>'}
-        ${escapeHtml(agent.name)}
-      </div>
-      <div style="font-size: 11px; color: var(--vscode-descriptionForeground); padding-left: 20px;">${escapeHtml(agent.description)}</div>
-    `;
+      item.innerHTML = `
+        <div style="font-weight: 500; font-size: 13px; display: flex; align-items: center; gap: 8px;">
+          ${isActive ? '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" style="fill: currentColor; flex-shrink: 0;"><path d="M8 11V5l4 4-4 4z"/></svg>' : '<span style="width: 12px; flex-shrink: 0;"></span>'}
+          ${escapeHtml(agent.name)}
+        </div>
+        <div style="font-size: 11px; color: var(--vscode-descriptionForeground); padding-left: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; line-height: 1.4;">${escapeHtml(agent.description)}</div>
+      `;
     
     item.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -1158,7 +1161,7 @@ agentSelectButton?.addEventListener('click', async (event) => {
         vscode.postMessage({
           type: 'updateSession',
           sessionId: activeSession.session_id,
-          data: { agent_id: agent.id }
+          data: { agent_id: agent.agent_id }
         });
         
         // 更新本地状态
@@ -1193,15 +1196,20 @@ agentSelectButton?.addEventListener('click', async (event) => {
       document.removeEventListener('click', closeHandler);
     }
   };
-  
-  setTimeout(() => document.addEventListener('click', closeHandler), 0);
 
-  // 定位菜单位置 - 按钮正下方
+  setTimeout(() => {
+    document.addEventListener('click', closeHandler);
+    // 存储 handler 引用以便后续清理
+    menu._closeHandler = closeHandler;
+  }, 0);
+
+  // 定位菜单位置 - 按钮正上方
   agentSelectButton.parentElement.style.position = 'relative';
   menu.style.position = 'absolute';
   menu.style.left = '0';
   menu.style.bottom = '100%';
   menu.style.marginBottom = '4px';
+  menu.style.marginTop = '0';
   
   agentSelectButton.parentElement.appendChild(menu);
 });
