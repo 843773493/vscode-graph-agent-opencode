@@ -1,23 +1,37 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
+from collections.abc import Sequence
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain.agents.middleware import TodoListMiddleware, HumanInTheLoopMiddleware
+from langchain.agents.middleware.types import (
+    AgentMiddleware,
+    AgentState,
+    ContextT,
+    ResponseT,
+    _InputAgentState,
+    _OutputAgentState,
+)
 from langchain.messages import SystemMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Checkpointer
 from langchain_openai import ChatOpenAI
 
-from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.backends import LocalShellBackend
-from deepagents.middleware.subagents import SubAgentMiddleware
+from deepagents.middleware.subagents import SubAgentMiddleware, SubAgent, CompiledSubAgent
+from deepagents.middleware.async_subagents import AsyncSubAgent
+from langchain.agents.middleware import InterruptOnConfig
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
-from deepagents.middleware.permissions import _PermissionMiddleware
+from deepagents.middleware.permissions import FilesystemPermission, _PermissionMiddleware
 
 from app.core.path_utils import get_workspace_root
 from app.agents.agent_middleware import LLMLoggingMiddleware, ExecutionTraceMiddleware
@@ -94,11 +108,14 @@ def _filter_middleware_tools(middleware: Any, denylist: set[str]) -> None:
     setattr(middleware, "tools", filtered_tools)
 
 
-def _filter_subagent_specs(subagent_specs: list[dict], denylist: set[str]) -> list[dict]:
+def _filter_subagent_specs(
+    subagent_specs: list[Any],
+    denylist: set[str]
+) -> list[Any]:
     if not denylist:
         return subagent_specs
 
-    filtered_specs: list[dict] = []
+    filtered_specs: list[Any] = []
     for spec in subagent_specs:
         processed_spec = dict(spec)
         if processed_spec.get("tools") is not None:
@@ -115,26 +132,28 @@ def _filter_subagent_specs(subagent_specs: list[dict], denylist: set[str]) -> li
 
 def create_my_deep_agent(
     *,
-    model,
-    system_prompt,
-    checkpointer=None,
+    model: BaseChatModel,
+    system_prompt: str | SystemMessage,
+    checkpointer: Checkpointer | None = None,
     session_id: str,
     agent_id: str,
-    fallback_middleware=None,
+    fallback_middleware: ModelFallbackMiddleware | None = None,
     sender_agent_id: str | None = None,
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
-    tools: list[Any] | None = None,
-    middleware: list[Any] | None = None,
-    subagents: list[dict] | None = None,
+    tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
+    middleware: Sequence[AgentMiddleware] | None = None,
+    subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
     skills: list[str] | None = None,
     memory: list[str] | None = None,
-    permissions: list[dict] | None = None,
-    interrupt_on: dict[str, bool] | None = None,
+    permissions: list[FilesystemPermission] | None = None,
+    interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     debug: bool = False,
     name: str | None = None,
-):
+) -> CompiledStateGraph[
+    AgentState[ResponseT], ContextT, _InputAgentState, _OutputAgentState[ResponseT]
+]:
     if checkpointer is None:
         checkpointer = MemorySaver()
 
