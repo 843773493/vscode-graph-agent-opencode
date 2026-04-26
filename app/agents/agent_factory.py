@@ -90,7 +90,7 @@ def resolve_agent_id(agent_id: str | None, config_service: ConfigService | None 
     return service.resolve_agent_id(agent_id)
 
 
-def _filter_tools_by_name(tools: list[Any], denylist: set[str]) -> list[Any]:
+def _filter_tools_by_name(tools: list[BaseTool | Callable[..., Any] | dict[str, Any]], denylist: set[str]) -> list[BaseTool | Callable[..., Any] | dict[str, Any]]:
     if not denylist:
         return tools
     return [tool for tool in tools if getattr(tool, "name", None) not in denylist]

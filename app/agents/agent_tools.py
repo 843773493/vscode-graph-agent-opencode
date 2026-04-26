@@ -8,10 +8,11 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from collections.abc import Awaitable
 
 from cachetools import LRUCache
-from langchain_core.tools import tool
+from langchain_core.tools import tool, BaseTool
 
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
@@ -55,7 +56,8 @@ def get_python_executable() -> Path:
     )
 
 
-def create_python_execution_tool(session_id: str, agent_id: str = "deep_agent"):
+def create_python_execution_tool(session_id: str, agent_id: str = "deep_agent") -> BaseTool:
+    """创建用于执行 Python 代码的工具。"""
     del session_id, agent_id
     python_executable = get_python_executable()
 
@@ -135,7 +137,8 @@ def create_python_execution_tool(session_id: str, agent_id: str = "deep_agent"):
     return python_exec
 
 
-def create_system_time_emitter_tool(session_id: str, agent_id: str = "deep_agent"):
+def create_system_time_emitter_tool(session_id: str, agent_id: str = "deep_agent") -> BaseTool:
+    """创建向后台消息总线发送系统时间的工具。"""
     @tool("emit_system_time_messages")
     async def emit_system_time_messages(
         interval_seconds: float = 1.0,
@@ -183,7 +186,8 @@ def create_system_time_emitter_tool(session_id: str, agent_id: str = "deep_agent
     return emit_system_time_messages
 
 
-def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep_agent"):
+def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep_agent") -> BaseTool:
+    """创建监控 session agent 结束事件的工具。"""
     @tool("monitor_session_agent_end")
     async def monitor_session_agent_end(
         target_session_id: str,
@@ -363,7 +367,8 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
     return monitor_session_agent_end
 
 
-def create_background_message_collection_tool(session_id: str, agent_id: str = "deep_agent"):
+def create_background_message_collection_tool(session_id: str, agent_id: str = "deep_agent") -> BaseTool:
+    """创建收集后台消息的工具。"""
     @tool("collect_background_messages")
     async def collect_background_messages(
         source_id: str | None = None,
@@ -387,7 +392,8 @@ def create_background_message_collection_tool(session_id: str, agent_id: str = "
     return collect_background_messages
 
 
-def create_send_message_to_session_tool(sender_agent_id: str = "deep_agent"):
+def create_send_message_to_session_tool(sender_agent_id: str = "deep_agent") -> BaseTool:
+    """创建向目标 session 发送消息的工具。"""
     @tool("send_message_to_session")
     async def send_message_to_session(
         target_session_id: str,
@@ -420,7 +426,8 @@ def build_default_tools(
     session_id: str,
     agent_id: str = "deep_agent",
     sender_agent_id: str = "deep_agent",
-) -> list:
+) -> list[BaseTool]:
+    """构建默认工具集。"""
     return [
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
         create_system_time_emitter_tool(session_id=session_id, agent_id=agent_id),
