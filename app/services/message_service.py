@@ -122,24 +122,24 @@ class MessageService:
             }
         )
 
-        from app.services.session_service import SessionService
-        session = await SessionService.get(session_id)
-        
-        from app.services.config_service import ConfigService
-        config_service = ConfigService.get_instance()
-        
+        # 通过 runtime 模块懒加载服务，避免循环依赖
+        from app.runtime import get_session_service, get_config_service, get_job_service
+
+        session = await get_session_service().get(session_id)
+
+        config_service = get_config_service()
+
         requested_agent_id = run_request.run.agent_id if run_request.run else None
         if requested_agent_id is None:
             requested_agent_id = session.current_agent_id
         effective_agent_id = config_service.resolve_agent_id(requested_agent_id)
-        
+
         try:
             config_service.validate_agent_id(effective_agent_id)
         except ValueError:
             effective_agent_id = config_service.get_default_agent_id()
-        
-        from app.services.job_service import JobService
-        job_service = JobService.get_instance()
+
+        job_service = get_job_service()
         job_id = await job_service.start_job(session_id, message.content, effective_agent_id)
         
         return MessageRunAccepted(

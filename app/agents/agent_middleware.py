@@ -8,16 +8,51 @@ from collections.abc import Awaitable
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse, StateT, ContextT
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.runtime import Runtime
 from langgraph.prebuilt.tool_node import ToolCallRequest as ToolCallRequestType
 from langgraph.types import Command
 from langchain.messages import ToolMessage
+from pydantic import BaseModel, Field
 
 from app.core.path_utils import get_logs_dir
 from app.core.job_event_bus import EventType, JobEventBus
 
 
+# ========== Pydantic 日志模型定义 ==========
+class _BaseLLMLog(BaseModel):
+    """LLM 日志基类"""
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class LLMRequestLog(_BaseLLMLog):
+    """LLM 请求日志"""
+    timestamp: int
+    session_id: str
+    job_id: str | None = None
+    model_name: str | None = None
+    messages: list[dict[str, Any]]
+    tools: list[Any] | None = None
+    system_message: dict[str, Any] | None = None
+    # 可以添加其他需要的字段
+
+
+class LLMResponseLog(_BaseLLMLog):
+    """LLM 响应日志"""
+    result: list[dict[str, Any]]
+    structured_response: Any | None = None
+
+
+class LLMFullLog(_BaseLLMLog):
+    """完整的 LLM 请求-响应日志"""
+    timestamp: int
+    session_id: str
+    job_id: str | None = None
+    request: LLMRequestLog
+    response: LLMResponseLog
+
+
+# ========== Middleware 实现 ==========
 class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     """唯一职责：存储每个LLM调用的完整原始请求/响应"""
 
@@ -68,37 +103,103 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             self._prepared_session_dirs.add(session_id)
         return logs_dir
 
-    def _save_log(self, session_id: str, request: ModelRequest, response: ModelResponse) -> None:
+    def _save_log(self, session_id: str, request: ModelRequest[Any], response: ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]) -> None:
         try:
             logs_dir = self._ensure_session_dir(session_id)
-
             timestamp = int(time.time() * 1000)
             log_file = logs_dir / f"{timestamp}.json"
 
-            def serialize_object(obj: Any) -> Any:
-                if hasattr(obj, "__dict__"):
-                    result: dict[str, Any] = {}
-                    for key, value in obj.__dict__.items():
-                        if not key.startswith("_"):
-                            try:
-                                json.dumps(value, default=str)
-                                result[key] = value
-                            except Exception:
-                                result[key] = str(value)
-                    return result
-                return str(obj)
-
-            log_data: dict[str, Any] = {
-                "timestamp": timestamp,
-                "session_id": session_id,
-                "request": serialize_object(request),
-                "response": serialize_object(response),
-            }
-
+            # 提取请求信息
+            model_name = getattr(request.model, "model_name", None)
+            
+            # 序列化消息列表
+            messages_list = []
+            for msg in request.messages:
+                if isinstance(msg, BaseMessage):
+                    messages_list.append(msg.model_dump())
+                else:
+                    messages_list.append(str(msg))
+            
+            # 序列化工具列表（templates 或 tools 字段，取决于 ModelRequest 版本）
+            tools_list = None
+            tools_attr = getattr(request, 'tools', None) or getattr(request, 'templates', None)
+            if tools_attr is not None:
+                tools_list = []
+                for tool in tools_attr:
+                    if isinstance(tool, BaseMessage):
+                        tools_list.append(tool.model_dump())
+                    elif hasattr(tool, 'model_dump'):
+                        try:
+                            tools_list.append(tool.model_dump())
+                        except Exception:
+                            tools_list.append(str(tool))
+                    else:
+                        tools_list.append(str(tool))
+            
+            # 序列化 system_message
+            system_msg = None
+            if hasattr(request, 'system_message') and request.system_message is not None:
+                if isinstance(request.system_message, BaseMessage):
+                    system_msg = request.system_message.model_dump()
+                else:
+                    system_msg = str(request.system_message)
+            
+            # 构建请求日志对象（使用 Pydantic 自动序列化）
+            req_log = LLMRequestLog(
+                timestamp=timestamp,
+                session_id=session_id,
+                job_id=self._get_job_id(request.runtime) if hasattr(request, 'runtime') else None,
+                model_name=model_name,
+                messages=messages_list,
+                tools=tools_list,
+                system_message=system_msg,
+            )
+            
+            # 提取响应信息
+            if isinstance(response, AIMessage):
+                result_list = [response.model_dump()]
+            elif isinstance(response, ModelResponse):
+                result_list = []
+                for item in response.result:
+                    if isinstance(item, BaseMessage):
+                        result_list.append(item.model_dump())
+                    else:
+                        result_list.append(str(item))
+            elif isinstance(response, ExtendedModelResponse):
+                # ExtendedModelResponse 包含 model_response 字段
+                mr = response.model_response
+                result_list = []
+                if isinstance(mr, ModelResponse):
+                    for item in mr.result:
+                        if isinstance(item, BaseMessage):
+                            result_list.append(item.model_dump())
+                        else:
+                            result_list.append(str(item))
+                else:
+                    result_list = [str(mr)]
+            else:
+                result_list = [str(response)]
+            
+            resp_log = LLMResponseLog(
+                result=result_list,
+                structured_response=getattr(response, 'structured_response', None),
+            )
+            
+            # 构建完整日志
+            full_log = LLMFullLog(
+                timestamp=timestamp,
+                session_id=session_id,
+                job_id=req_log.job_id,
+                request=req_log,
+                response=resp_log,
+            )
+            
+            # 写入文件（Pydantic 的 model_dump 可指定为 dict）
             with open(log_file, "w", encoding="utf-8") as f:
-                json.dump(log_data, f, ensure_ascii=False, indent=2, default=str)
+                json.dump(full_log.model_dump(), f, ensure_ascii=False, indent=2, default=str)
 
         except Exception:
+            # 日志保存失败不应影响主流程
             pass
 
     def wrap_model_call(
@@ -143,6 +244,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
 
         try:
             bus = JobEventBus.get_instance()
+            # asyncio 已在函数外通过 runtime 懒加载
             await bus.publish(
                 job_id=job_id,
                 event_type=EventType.LLM_REQUEST,

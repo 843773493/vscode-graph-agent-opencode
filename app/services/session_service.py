@@ -116,9 +116,10 @@ class SessionService:
         # 当 agent_id 变更时，清除旧 agent 的运行时缓存，确保下次使用新 agent
         if agent_id_changed:
             try:
-                from app.services.agent_execution_service import AgentExecutionService
+                from app.runtime import get_agent_execution_service
                 old_cache_key = f"{session_id}::{old_agent_id}"
-                AgentExecutionService._agent_cache.pop(old_cache_key, None)
+                agent_service = get_agent_execution_service()
+                agent_service._agent_cache.pop(old_cache_key, None)
             except Exception:
                 pass  # 缓存清除失败不影响主流程
             

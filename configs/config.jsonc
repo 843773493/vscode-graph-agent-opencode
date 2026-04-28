@@ -1,4 +1,14 @@
 {
+  // ============================================================
+  // BoxTeam 配置模式定义 (JSON Schema)
+  // ============================================================
+  // 此文件定义了 boxteam.json 配置文件的验证模式。
+  // 用于 JSON Schema 验证，确保配置文件结构正确。
+  //
+  // 文件位置: configs/config.jsonc
+  // 参考标准: https://json-schema.org/
+  // ============================================================
+
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.com/llm-config.schema.json",
   "title": "LLM Workspace Config Schema",

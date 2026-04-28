@@ -6,7 +6,7 @@ import pytest
 from scripts.setup_test_env import setup_test_environment
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs")
-TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "default.json")
+TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "default.jsonc")
 
 _test_config_path: str = TEST_CONFIG_PATH
 
@@ -30,7 +30,7 @@ def inject_workspace_root(monkeypatch: pytest.MonkeyPatch, workspace_root_path: 
 
 def use_config(name: str) -> None:
     global _test_config_path
-    _test_config_path = os.path.join(CONFIGS_DIR, "tests", f"{name}.json")
+    _test_config_path = os.path.join(CONFIGS_DIR, "tests", f"{name}.jsonc")
 
 
 def get_test_config_path() -> str:

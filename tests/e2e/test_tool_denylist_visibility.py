@@ -30,7 +30,7 @@ def setup_tool_denylist_config():
     from app.services.config_service import ConfigService, set_config_path
 
     ConfigService.reset_instance()
-    config_path = Path(__file__).resolve().parents[2] / "configs" / "tests" / "tool_denylist_check.json"
+    config_path = Path(__file__).resolve().parents[2] / "configs" / "tests" / "tool_denylist_check.jsonc"
     set_config_path(str(config_path))
     yield
     ConfigService.reset_instance()

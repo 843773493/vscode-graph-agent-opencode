@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 
 from app.schemas.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
 from app.schemas.common import JobStatus, RunMode, StepStatus, ControlAction
-from app.services.agent_execution_service import AgentExecutionService
 from app.core.job_event_bus import EventType, JobEventBus
 
 
@@ -127,7 +126,9 @@ class JobService:
         Returns:
             Agent响应内容
         """
-        agent_service = AgentExecutionService.get_instance()
+        # 通过 runtime 懒加载 AgentExecutionService，避免循环依赖
+        from app.runtime import get_agent_execution_service
+        agent_service = get_agent_execution_service()
         # 同步接口也必须生成真实的job_id，永远不要传递None
         import uuid
         job_id = str(uuid.uuid4())
@@ -266,11 +267,14 @@ class JobService:
                 agent_id="job_service"
             )
             
-            agent_service = AgentExecutionService.get_instance()
+            # 通过 runtime 懒加载 AgentExecutionService
+            from app.runtime import get_agent_execution_service
+            agent_service = get_agent_execution_service()
             result = await agent_service.run_step(session_id, message, agent_id=job.agent_id, job_id=job_id)
 
-            from app.services.message_service import MessageService
-            await MessageService.get_instance().append_assistant_message(
+            # 通过 runtime 懒加载 MessageService
+            from app.runtime import get_message_service
+            await get_message_service().append_assistant_message(
                 session_id,
                 result,
                 metadata={

@@ -1,5 +1,5 @@
 {
-  "$schema": "./config.json",
+  "$schema": "./config.jsonc",
   "llm": {
     "providers": [
       {
@@ -26,8 +26,7 @@
     ]
   },
   "logger": {
-    "level": "info",
-    "pretty": true
+    "level": "info"
   },
   "default_agent": "default",
   "agents": {
@@ -35,8 +34,8 @@
       "name": "Workspace Assistant",
       "description": "工作区默认助手，主要用于通用问答、代码解释、开发辅助和文档问答。",
       "language": "zh-CN",
-      "timezone": "Asia/Shanghai",
-      "tags": [
+      "timezone": "Asia/Shanghai", //TODO
+      "tags": [ //TODO
         "workspace",
         "assistant",
         "qa",
@@ -51,16 +50,16 @@
           "backup_1",
           "backup_2"
         ],
-        "temperature": 0.2,
-        "top_p": 1,
-        "max_output_tokens": 4000
+        "temperature": 0.2, //TODO
+        "top_p": 1, //TODO
+        "max_output_tokens": 4000 //TODO
       },
       "tools": {
         "denylist": [
         ],
-        "confirmation_required": []
+        "confirmation_required": [] //TODO
       },
-      "knowledge": {
+      "knowledge": { //TODO
         "enabled": true,
         "sources": [
           {
@@ -85,7 +84,7 @@
           "rerank": true
         }
       },
-      "memory": {
+      "memory": { //TODO
         "enabled": true,
         "scope": "workspace",
         "backend": "redis",
@@ -94,19 +93,19 @@
         "store_user_preferences": true,
         "store_sensitive_data": false
       },
-      "safety": {
+      "safety": { //TODO
         "policy_mode": "standard",
         "prompt_injection_protection": true,
         "pii_redaction": true,
         "refuse_secrets_exfiltration": true
       },
-      "execution": {
+      "execution": { //TODO
         "stream": true,
         "max_turns": 16,
         "max_history_messages": 30,
         "max_context_tokens": 32000
       },
-      "env": {
+      "env": { //TODO
         "mode": "production",
         "region": "cn-east-1",
         "feature_flags": {

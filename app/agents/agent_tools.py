@@ -13,6 +13,7 @@ from collections.abc import Awaitable
 
 from cachetools import LRUCache
 from langchain_core.tools import tool, BaseTool
+from langchain_tavily import TavilySearch, TavilyExtract
 
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
@@ -209,11 +210,12 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
         monitor_source_id = f"monitor:{target_session_id}:{uuid.uuid4().hex[:12]}"
 
         async def _monitor_background_task() -> dict[str, Any]:
-            from app.services.job_service import JobService
+            # 通过 runtime 模块懒加载 JobService，避免循环依赖
+            from app.runtime import get_job_service
 
             job_event_bus = JobEventBus.get_instance()
             message_bus = BackgroundMessageBus.get_instance()
-            job_service = JobService.get_instance()
+            job_service = get_job_service()
 
             deadline = None if timeout_seconds is None else asyncio.get_running_loop().time() + timeout_seconds
             seen_event_ids = LRUCache(maxsize=10000)

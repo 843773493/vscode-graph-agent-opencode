@@ -3,6 +3,7 @@ import json
 import os
 from typing import Optional, Any
 
+import commentjson
 import jsonschema
 from jsonschema import ValidationError
 
@@ -41,14 +42,21 @@ class ConfigService:
 
     def _load_schema(self) -> dict:
         if self._schema is None:
-            schema_path = os.path.join(CONFIGS_DIR, "config.json")
+            # 优先尝试 .jsonc，回退到 .json
+            schema_path = os.path.join(CONFIGS_DIR, "config.jsonc")
+            if not os.path.exists(schema_path):
+                schema_path = os.path.join(CONFIGS_DIR, "config.json")
             with open(schema_path, "r", encoding="utf-8") as f:
-                self._schema = json.load(f)
+                self._schema = commentjson.load(f)
         return self._schema
 
     def _get_boxteam_config_path(self) -> Optional[str]:
         if _config_path_override:
             return _config_path_override
+        # 优先尝试 .jsonc，回退到 .json
+        jsonc_path = os.path.join(CONFIGS_DIR, "boxteam.jsonc")
+        if os.path.exists(jsonc_path):
+            return jsonc_path
         return os.path.join(CONFIGS_DIR, "boxteam.json")
 
     def _load_boxteam_config(self) -> dict:
@@ -56,7 +64,7 @@ class ConfigService:
             config_path = self._get_boxteam_config_path()
             if config_path and os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
-                    self._boxteam_config = json.load(f)
+                    self._boxteam_config = commentjson.load(f)
             else:
                 self._boxteam_config = {}
         return self._boxteam_config
@@ -64,10 +72,19 @@ class ConfigService:
     def _apply_workspace_override(self, workspace_root: str) -> None:
         if self._boxteam_config is None:
             return
-        override_path = os.path.join(workspace_root, ".boxteam", "boxteam.json")
-        if os.path.exists(override_path):
+        # 优先尝试 .jsonc，回退到 .json
+        override_dir = os.path.join(workspace_root, ".boxteam")
+        override_path_jsonc = os.path.join(override_dir, "boxteam.jsonc")
+        override_path_json = os.path.join(override_dir, "boxteam.json")
+        override_path = None
+        if os.path.exists(override_path_jsonc):
+            override_path = override_path_jsonc
+        elif os.path.exists(override_path_json):
+            override_path = override_path_json
+        
+        if override_path:
             with open(override_path, "r", encoding="utf-8") as f:
-                override_config = json.load(f)
+                override_config = commentjson.load(f)
             self._boxteam_config = self._merge_config(self._boxteam_config, override_config)
 
     def _merge_config(self, base: dict, override: dict) -> dict:
