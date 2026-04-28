@@ -18,32 +18,50 @@ from pydantic import BaseModel, Field
 from app.core.path_utils import get_logs_dir
 from app.core.job_event_bus import EventType, JobEventBus
 
+from app.core.path_utils import get_logs_dir
+from app.core.job_event_bus import EventType, JobEventBus
+
+
+# ========== 类型定义 ==========
+class MessageDict(BaseModel):
+    """BaseMessage.model_dump() 返回的字典类型"""
+    type: str
+    content: str | list = Field(default="")
+    additional_kwargs: dict = Field(default_factory=dict)
+    response_metadata: dict = Field(default_factory=dict)
+    tool_calls: list = Field(default_factory=list)
+    tool_call_id: str | None = None
+    model_config = {"extra": "allow"}
+
+
+class ToolDict(BaseModel):
+    """工具序列化后的字典类型"""
+    type: str = "tool"
+    name: str | None = None
+    description: str | None = None
+    args: dict = Field(default_factory=dict)
+    model_config = {"extra": "allow"}
+
 
 # ========== Pydantic 日志模型定义 ==========
-class _BaseLLMLog(BaseModel):
-    """LLM 日志基类"""
-    model_config = {"arbitrary_types_allowed": True}
-
-
-class LLMRequestLog(_BaseLLMLog):
+class LLMRequestLog(BaseModel):
     """LLM 请求日志"""
     timestamp: int
     session_id: str
     job_id: str | None = None
     model_name: str | None = None
-    messages: list[dict[str, Any]]
-    tools: list[Any] | None = None
-    system_message: dict[str, Any] | None = None
-    # 可以添加其他需要的字段
+    messages: list[MessageDict]
+    tools: list[ToolDict | str] | None = None
+    system_message: MessageDict | None = None
 
 
-class LLMResponseLog(_BaseLLMLog):
+class LLMResponseLog(BaseModel):
     """LLM 响应日志"""
-    result: list[dict[str, Any]]
+    result: list[MessageDict]
     structured_response: Any | None = None
 
 
-class LLMFullLog(_BaseLLMLog):
+class LLMFullLog(BaseModel):
     """完整的 LLM 请求-响应日志"""
     timestamp: int
     session_id: str
