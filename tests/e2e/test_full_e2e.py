@@ -36,12 +36,30 @@ async def run_full_test():
             "--port",
             "8000",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
 
-    # 等待服务器启动
-    await asyncio.sleep(3)
+    # 等待服务器启动（增加等待时间）
+    print("Waiting for server to be ready...")
+    server_ready = False
+    for i in range(30):
+        try:
+            import urllib.request
+            urllib.request.urlopen("http://127.0.0.1:8000/docs", timeout=1)
+            print(f"Server is ready after {i+1} seconds")
+            server_ready = True
+            break
+        except Exception:
+            await asyncio.sleep(1)
+    
+    if not server_ready:
+        # 打印服务器错误输出
+        stderr_output = await asyncio.to_thread(server.stderr.read)
+        stdout_output = await asyncio.to_thread(server.stdout.read)
+        print("Server stdout:", stdout_output.decode())
+        print("Server stderr:", stderr_output.decode())
+        raise TimeoutError("Server failed to start within 30 seconds")
 
     try:
         async with AsyncClient(base_url=SERVER_URL, timeout=30) as client:

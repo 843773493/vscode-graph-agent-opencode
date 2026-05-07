@@ -3,6 +3,15 @@ from __future__ import annotations
 import os
 import pytest
 
+from app.core.env import load_project_env
+
+# 加载项目.env配置文件
+load_project_env(__file__)
+
+# 为测试填充缺失的API密钥（如果为空）
+if not os.environ.get("OPENROUTER_API_KEY"):
+    os.environ["OPENROUTER_API_KEY"] = "test-key-placeholder"
+
 from scripts.setup_test_env import setup_test_environment
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs")

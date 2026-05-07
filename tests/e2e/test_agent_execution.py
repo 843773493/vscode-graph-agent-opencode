@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from pathlib import Path
 from typing import AsyncGenerator
@@ -40,7 +41,7 @@ async def test_agent_initialization():
 
     agent = AgentExecutionService.get_for_session("test_session_init")
     assert agent is not None
-    print("✅ Agent initialized successfully")
+    print("[OK] Agent initialized successfully")
 
 
 @pytest.mark.asyncio
@@ -58,7 +59,7 @@ async def test_single_step_execution():
 
     assert isinstance(response, str)
     assert response.strip()
-    print("✅ Agent returned response")
+    print("[OK] Agent returned response")
     print(f"Response length: {len(response)}")
     print(f"Response: {response[:200]}")
 
@@ -84,11 +85,11 @@ async def test_session_isolation():
         isinstance(response, str) and response.strip()
         for response in [resp_a1, resp_b1, resp_a2, resp_b2]
     )
-    print("✅ Sessions are properly isolated")
+    print("[OK] Sessions are properly isolated")
 
 
 async def run_all_tests():
-    print("🔍 Running Agent Execution Service e2e tests")
+    print("=== Running Agent Execution Service e2e tests ===")
     print(f"Workspace root: {os.environ['WORKSPACE_ROOT']}")
 
     tests = [
@@ -107,19 +108,19 @@ async def run_all_tests():
             else:
                 failed += 1
         except Exception as e:
-            print(f"❌ Test {test.__name__} crashed: {e}")
+            print(f"[FAIL] Test {test.__name__} crashed: {e}")
             failed += 1
 
     print(f"\n{'='*60}")
-    print(f"✅ Passed: {passed}")
-    print(f"❌ Failed: {failed}")
+    print(f"Passed: {passed}")
+    print(f"Failed: {failed}")
     print(f"Total:  {len(tests)}")
 
     if failed == 0:
-        print("\n🎉 ALL TESTS PASSED!")
+        print("\nALL TESTS PASSED!")
         return True
     else:
-        print("\n⚠️ Some tests failed")
+        print("\nSome tests failed")
         return False
 
 
