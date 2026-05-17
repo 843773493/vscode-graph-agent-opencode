@@ -39,7 +39,9 @@ def get_python_executable() -> Path:
     candidates.extend(
         [
             get_workspace_root() / ".venv" / "Scripts" / "python.exe",
+            get_workspace_root() / ".venv" / "bin" / "python",
             _get_repo_root() / ".venv" / "Scripts" / "python.exe",
+            _get_repo_root() / ".venv" / "bin" / "python",
         ]
     )
 
@@ -52,7 +54,7 @@ def get_python_executable() -> Path:
         "未找到可用的 Python 解释器。\n"
         "已检查以下路径：\n"
         f"{candidate_list}\n"
-        "请确认仓库根目录或工作区根目录下存在 .venv\\Scripts\\python.exe，"
+        "请确认仓库根目录或工作区根目录下存在 .venv 虚拟环境，"
         "或者通过 BOXTEAM_PYTHON_EXECUTABLE 显式指定。"
     )
 
@@ -64,7 +66,7 @@ def create_python_execution_tool(session_id: str, agent_id: str = "deep_agent") 
 
     @tool("python_exec")
     async def python_exec(code: str, timeout_seconds: int = 30) -> dict[str, Any]:
-        """使用工作区 .venv\\Scripts\\python.exe 执行 Python 代码。"""
+        """使用工作区 .venv 虚拟环境中的 Python 解释器执行 Python 代码。"""
         if not code.strip():
             raise ValueError("code 不能为空")
 

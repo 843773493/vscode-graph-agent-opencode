@@ -29,7 +29,6 @@ ENV/
 !.env.example
 
 # Bun
-bun.lockb
 .bun-cache/
 
 # Node / frontend

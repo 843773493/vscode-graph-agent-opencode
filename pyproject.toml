@@ -20,8 +20,5 @@ dev = [
     "pytest>=7.0.0",
 ]
 
-[tool.uv]
-python-preference = "only-system"
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

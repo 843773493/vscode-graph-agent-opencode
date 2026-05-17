@@ -6,10 +6,11 @@ from app.core.exceptions import ForbiddenError
 
 
 def get_workspace_root() -> Path:
-    """获取工作区根目录，必须由外部进程显式传入 WORKSPACE_ROOT。"""
+    """获取工作区根目录。优先从 WORKSPACE_ROOT 环境变量读取，未设置时回退到项目根目录。"""
     workspace_root = os.environ.get("WORKSPACE_ROOT")
     if not workspace_root:
-        raise RuntimeError("未设置 WORKSPACE_ROOT，请在启动进程时显式传入工作区根目录")
+        from app.core.env import get_project_root
+        return get_project_root()
 
     return Path(workspace_root).resolve()
 
