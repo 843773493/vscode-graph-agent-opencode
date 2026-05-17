@@ -21,8 +21,9 @@
 ### 依赖与配置
 
 1. 不要在代码中给环境变量添加硬编码参数，
-2. 如果根目录下存在.venv目录，则使用.venv\Scripts\python.exe的python解释器和pytest而不是全局python
-3. 懒加载的包单独放runtime模块里
+2. JS/TS 依赖使用 `bun install` 安装，Python 依赖使用 `uv sync` 安装
+3. 如果根目录下存在.venv目录，则使用.venv\Scripts\python.exe的python解释器和pytest而不是全局python
+4. 懒加载的包单独放runtime模块里
 
 ### 运行与质量
 
@@ -91,13 +92,14 @@
 
 ### 运行方式
 
-1. 安装依赖使用 ` .\ .venv\Scripts\pip.exe install -r requirements.txt`
-2. 启动后端服务器使用 ` .\ .venv\Scripts\uvicorn.exe app.main:app --host 127.0.0.1 --port 8000`
+1. JS/TS 环境使用 bun 管理，安装依赖使用 `bun install`，启动前端开发使用 `bun start`
+2. Python 环境使用 uv 管理，安装依赖使用 `uv sync`，启动后端服务器使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000`
 3. API文档地址为 http://127.0.0.1:8000/api/v1/docs
 
 ### 配置
 
-1. python相关工具全程使用uv管理
+1. JS/TS 相关工具全程使用 bun 管理
+2. python相关工具全程使用uv管理
 
 ## Agent 协作
 

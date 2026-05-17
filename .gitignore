@@ -28,6 +28,10 @@ ENV/
 .env.*
 !.env.example
 
+# Bun
+bun.lockb
+.bun-cache/
+
 # Node / frontend
 node_modules/
 coverage/
