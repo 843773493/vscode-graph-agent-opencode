@@ -1,0 +1,23 @@
+# src/webview-ui
+
+## 目录作用
+
+`src/webview-ui/` 是 VS Code 侧边栏 Webview 的 React 前端源码。由 Vite 构建，产物输出到 `src/webview/dist/assets/`，由 `sidebarProvider.js` 通过 `webview.asWebviewUri()` 注入 webview。
+
+## 可以修改
+
+- `src/` 下的所有 React + TS 源码
+- `vite.config.ts`、`package.json`、`tsconfig.json`
+
+## 不要修改
+
+- 不要在此目录引入 Node.js built-in 模块（运行在 Webview 沙箱中）
+- 不要引入 Vite 以外的构建工具
+
+## 约定
+
+- React 18 + TypeScript + 纯 CSS（不引入 Tailwind）
+- 通信协议与 `src/shared/protocol.js` 保持一致
+- 组件逻辑就近组织，公共 hook 放在 `src/hooks.tsx`
+- 工具函数放在 `src/utils/` 下
+- Vite build 输出到 `dist/`，gitignore 中不跟踪 `node_modules/` 和 `dist/`

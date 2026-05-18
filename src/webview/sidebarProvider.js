@@ -132,7 +132,8 @@ export class SidebarProvider {
 
     webview.html = renderSidebarHtml(webview, {
       nonce: getNonce(),
-      scriptUri: webview.asWebviewUri(vscode.Uri.file(path.join(this.context.extensionUri.fsPath, 'src', 'webview', 'sidebarApp.js'))).toString(),
+      distCssUri: webview.asWebviewUri(vscode.Uri.file(path.join(this.context.extensionUri.fsPath, 'src', 'webview', 'dist', 'assets', 'index.css'))).toString(),
+      distJsUri: webview.asWebviewUri(vscode.Uri.file(path.join(this.context.extensionUri.fsPath, 'src', 'webview', 'dist', 'assets', 'index.js'))).toString(),
       apiPort: this.state.apiPort,
       workspaceRoot: this.state.workspace?.root_path ?? '',
       workspaceName: this.state.workspace?.name ?? 'workspace',
