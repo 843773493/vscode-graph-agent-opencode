@@ -1,6 +1,17 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import type { AppState, Message, Session, TraceEvent, ActiveJob, PendingTurn, HostToWebviewMessage } from './types';
-import { postMessage, postDebug } from './vscode';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import type React from 'react';
+import { HostToWebviewMessageType, WebviewToHostMessageType } from '../../shared/protocol.js';
+import type {
+  ActiveJob,
+  AppState,
+  HostStateMessage,
+  HostToWebviewMessage,
+  Message,
+  PendingTurn,
+  Session,
+  TraceEvent,
+} from './types';
+import { getPersistedState, postDebug, postMessage, setVsCodeState } from './vscode';
 
 const INITIAL_STATE: AppState = {
   workspaceRoot: '',
@@ -13,7 +24,6 @@ const INITIAL_STATE: AppState = {
   pendingTurns: new Map(),
   status: '准备就绪',
   expandDetails: true,
-  autoContinueEnabled: new Map(),
   historyPanelOpen: false,
 };
 
@@ -25,7 +35,6 @@ interface AppContextType {
   createSession: (title?: string) => void;
   toggleHistoryPanel: () => void;
   toggleExpandDetails: (expand: boolean) => void;
-  setAutoContinue: (sessionId: string, enabled: boolean) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -36,288 +45,220 @@ export function useAppState() {
   return ctx;
 }
 
-/** 深度复制 Map/Set 等高阶类型 */
 function cloneMaps(state: AppState): AppState {
-  return {
-    ...state,
-    pendingTurns: new Map(state.pendingTurns),
-    autoContinueEnabled: new Map(state.autoContinueEnabled),
-  };
+  return { ...state, pendingTurns: new Map(state.pendingTurns) };
 }
 
-/* ---- Message/Turn helpers ---- */
-
-export function normalizeMessage(msg: Partial<Message>): Required<Pick<Message, 'message_id' | 'session_id' | 'role' | 'content' | 'metadata' | 'attachments' | 'created_at'>> {
+function normalizeMessage(msg: Partial<Message> & { id?: string; createdAt?: string | null }): Message {
   return {
-    message_id: msg.message_id ?? (msg as any)?.id ?? '',
+    message_id: msg.message_id ?? msg.id ?? '',
     session_id: msg.session_id ?? '',
     role: msg.role ?? 'assistant',
     content: msg.content ?? '',
-    metadata: (msg.metadata as Record<string, unknown>) ?? {},
-    attachments: (msg.attachments as unknown[]) ?? [],
-    created_at: msg.created_at ?? (msg as any)?.createdAt ?? null,
+    metadata: msg.metadata ?? {},
+    attachments: msg.attachments ?? [],
+    created_at: msg.created_at ?? msg.createdAt ?? null,
   };
 }
 
-export interface Turn {
-  turnId: string;
-  sessionId: string;
-  userMessage: Message | null;
-  assistantMessages: Message[];
-  events: TraceEvent[];
-  status: 'running' | 'done' | 'error';
-  jobId: string | null;
-  pending?: boolean;
-}
-
-export function splitMessagesIntoTurns(messages: ReturnType<typeof normalizeMessage>[]): Turn[] {
-  const turns: Turn[] = [];
-  let currentTurn: Turn | null = null;
-  for (const rawMessage of messages) {
-    const message = normalizeMessage(rawMessage);
+export function splitMessagesIntoTurns(messages: Message[]): PendingTurn[] {
+  const turns: PendingTurn[] = [];
+  let current: PendingTurn | null = null;
+  for (const raw of messages) {
+    const message = normalizeMessage(raw);
     if (message.role === 'user') {
-      currentTurn = {
-        turnId: message.message_id || `turn_${turns.length}_${message.created_at ?? Date.now()}`,
+      current = {
+        turnId: message.message_id || `turn_${turns.length}`,
         sessionId: message.session_id,
         userMessage: message,
         assistantMessages: [],
         events: [],
         status: 'done',
-        jobId: (message.metadata as Record<string, unknown>)?.job_id ?? null,
+        jobId: String(message.metadata?.job_id ?? '') || null,
+        pending: false,
       };
-      turns.push(currentTurn);
+      turns.push(current);
       continue;
     }
-    if (!currentTurn) {
-      currentTurn = {
-        turnId: message.message_id || `turn_${turns.length}_${Date.now()}`,
+    if (!current) {
+      current = {
+        turnId: message.message_id || `turn_${turns.length}`,
         sessionId: message.session_id,
         userMessage: null,
         assistantMessages: [],
         events: [],
         status: 'done',
-        jobId: (message.metadata as Record<string, unknown>)?.job_id ?? null,
+        jobId: String(message.metadata?.job_id ?? '') || null,
+        pending: false,
       };
-      turns.push(currentTurn);
+      turns.push(current);
     }
-    currentTurn.assistantMessages.push(message);
+    current.assistantMessages.push(message);
   }
   return turns;
 }
 
-export function getTurnsForSession(sessionId: string, state: AppState): Turn[] {
-  const backendTurns = splitMessagesIntoTurns(
-    state.messages
-      .filter(m => m.session_id === sessionId)
-      .map(normalizeMessage)
-  );
-  const pendingTurn = state.pendingTurns.get(sessionId);
-  if (!pendingTurn) return backendTurns;
-  const lastBackendTurn = backendTurns[backendTurns.length - 1];
-  const pendingIsConfirmed =
-    pendingTurn.status === 'done' &&
-    Boolean(lastBackendTurn?.userMessage) &&
-    lastBackendTurn!.userMessage!.content === pendingTurn.userMessage?.content &&
-    lastBackendTurn!.assistantMessages.length > 0;
-  if (pendingIsConfirmed) {
-    return backendTurns;
-  }
-  return [...backendTurns, pendingTurn];
+export function getTurnsForSession(sessionId: string, state: AppState): PendingTurn[] {
+  const turns = splitMessagesIntoTurns(state.messages.filter(m => m.session_id === sessionId));
+  const pending = state.pendingTurns.get(sessionId);
+  return pending ? [...turns, pending] : turns;
 }
 
-/* ---- Main context/provider ---- */
+function readBootState(): Partial<AppState> {
+  const bootEl = document.getElementById('graph-agent-boot');
+  if (!bootEl?.textContent) return {};
+  try {
+    return JSON.parse(bootEl.textContent) as Partial<AppState>;
+  } catch (error) {
+    throw new Error(`读取 webview boot 数据失败: ${(error as Error).message}`);
+  }
+}
+
+function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppState {
+  const pendingTurns = new Map<string, PendingTurn>();
+  const bootPendingTurns = (boot as { pendingTurns?: PendingTurn[] }).pendingTurns ?? (persisted as { pendingTurns?: PendingTurn[] }).pendingTurns ?? [];
+  const bootSession = (boot as { session?: Session | null }).session ?? null;
+  const persistedSession = (persisted as { session?: Session | null }).session ?? null;
+  bootPendingTurns.forEach(turn => pendingTurns.set(turn.sessionId, turn));
+  return {
+    ...INITIAL_STATE,
+    workspaceRoot: boot.workspaceRoot ?? persisted.workspaceRoot ?? '',
+    workspaceName: boot.workspaceName ?? persisted.workspaceName ?? 'workspace',
+    sessions: (boot.sessions ?? persisted.sessions ?? []) as Session[],
+    currentSession: (boot.currentSession ?? bootSession ?? persisted.currentSession ?? persistedSession ?? null) as Session | null,
+    messages: (boot.messages ?? persisted.messages ?? []) as Message[],
+    traceEvents: (boot.traceEvents ?? persisted.traceEvents ?? []) as TraceEvent[],
+    activeJob: (boot.activeJob ?? persisted.activeJob ?? null) as ActiveJob | null,
+    status: String(boot.status ?? persisted.status ?? '准备就绪'),
+    expandDetails: Boolean(boot.expandDetails ?? persisted.expandDetails ?? true),
+    historyPanelOpen: Boolean(boot.historyPanelOpen ?? persisted.historyPanelOpen ?? false),
+    pendingTurns,
+  };
+}
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AppState>(() => {
-    const bootEl = document.getElementById('graph-agent-boot');
-    let boot: Record<string, unknown> = {};
-    try { boot = bootEl ? JSON.parse(bootEl.textContent || '{}') : {}; } catch { /* ignore */ }
-    const persisted = (window as any).acquireVsCodeApi?.().getState?.() ?? {};
-    return {
-      ...INITIAL_STATE,
-      workspaceRoot: String(boot.workspaceRoot ?? persisted.workspaceRoot ?? ''),
-      workspaceName: String(boot.workspaceName ?? persisted.workspaceName ?? 'workspace'),
-      sessions: Array.isArray(boot.sessions)
-        ? boot.sessions
-        : Array.isArray(persisted.sessions)
-          ? persisted.sessions
-          : [],
-      currentSession: boot.session ?? persisted.currentSession ?? null,
-      messages: Array.isArray(boot.messages)
-        ? (boot.messages as Message[])
-        : Array.isArray(persisted.messages)
-          ? (persisted.messages as Message[])
-          : [],
-      traceEvents: Array.isArray(boot.traceEvents)
-        ? (boot.traceEvents as TraceEvent[])
-        : Array.isArray(persisted.traceEvents)
-          ? (persisted.traceEvents as TraceEvent[])
-          : [],
-      activeJob: boot.activeJob != null
-        ? ({ jobId: (boot.activeJob as any).jobId ?? null, sessionId: (boot.activeJob as any).sessionId ?? null, status: String((boot.activeJob as any).status), messageId: (boot.activeJob as any).messageId ?? null, content: String((boot.activeJob as any).content) })
-        : null,
-      status: String(boot.status ?? persisted.status ?? '准备就绪'),
-      expandDetails: boot.expandDetails != null ? Boolean(boot.expandDetails) : true,
-    };
-  });
+  const [state, setState] = useState<AppState>(() => mergeState(readBootState(), getPersistedState<Partial<AppState>>() ?? {}));
 
   const setStatus = useCallback((text: string) => {
     setState(prev => ({ ...prev, status: text }));
   }, []);
 
   const sendMessage = useCallback((content: string) => {
-    postDebug('sendMessage 调用');
     const activeSession = state.currentSession;
     if (!activeSession) {
-      setStatus('请先创建 session');
+      setStatus('请先创建会话');
       return;
     }
     setState(prev => {
       const next = cloneMaps(prev);
-      let pendingTurn = next.pendingTurns.get(activeSession.session_id);
-      if (!pendingTurn) {
-        pendingTurn = {
-          turnId: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-          sessionId: activeSession.session_id,
-          userMessage: null,
-          assistantMessages: [],
-          events: [],
-          status: 'running',
-          jobId: null,
-          pending: true,
-        };
-        next.pendingTurns.set(activeSession.session_id, pendingTurn);
-      }
-      pendingTurn.userMessage = {
-        message_id: `local_user_${Date.now()}`,
-        session_id: activeSession.session_id,
-        role: 'user',
-        content,
-        metadata: { source: 'local_optimistic' },
-        attachments: [],
-        created_at: new Date().toISOString(),
+      const turn: PendingTurn = {
+        turnId: `local_${Date.now()}`,
+        sessionId: activeSession.session_id,
+        userMessage: {
+          message_id: `local_user_${Date.now()}`,
+          session_id: activeSession.session_id,
+          role: 'user',
+          content,
+          metadata: { source: 'optimistic' },
+          attachments: [],
+          created_at: new Date().toISOString(),
+        },
+        assistantMessages: [],
+        events: [],
+        status: 'running',
+        jobId: null,
+        pending: true,
       };
-      pendingTurn.assistantMessages = [];
-      pendingTurn.events = [];
-      pendingTurn.status = 'running';
-      pendingTurn.jobId = null;
-      pendingTurn.pending = true;
-      next.status = '已发送，正在等待模型响应...';
+      next.pendingTurns.set(activeSession.session_id, turn);
+      next.status = '已发送，等待 SSE 事件';
       return next;
     });
-    postMessage({ type: 'sendMessage', content });
+    postMessage({ type: WebviewToHostMessageType.sendMessage, content });
   }, [state.currentSession, setStatus]);
 
-  const selectSession = useCallback((sessionId: string) => {
-    postDebug(`selectSession: ${sessionId}`);
-    postMessage({ type: 'selectSession', sessionId });
-  }, []);
+  const selectSession = useCallback((sessionId: string) => postMessage({ type: WebviewToHostMessageType.selectSession, sessionId }), []);
+  const createSession = useCallback((title = '新会话') => postMessage({ type: WebviewToHostMessageType.createSession, title }), []);
+  const toggleHistoryPanel = useCallback(() => setState(prev => ({ ...prev, historyPanelOpen: !prev.historyPanelOpen })), []);
+  const toggleExpandDetails = useCallback((expand: boolean) => setState(prev => ({ ...prev, expandDetails: expand })), []);
 
-  const createSession = useCallback((title = '新会话') => {
-    postDebug(`createSession: ${title}`);
-    postMessage({ type: 'createSession', title });
-  }, []);
-
-  const toggleHistoryPanel = useCallback(() => {
-    setState(prev => ({ ...prev, historyPanelOpen: !prev.historyPanelOpen }));
-  }, []);
-
-  const toggleExpandDetails = useCallback((expand: boolean) => {
-    setState(prev => ({ ...prev, expandDetails: expand }));
-  }, []);
-
-  const setAutoContinue = useCallback((sessionId: string, enabled: boolean) => {
-    setState(prev => {
-      const next = cloneMaps(prev);
-      next.autoContinueEnabled.set(sessionId, enabled);
-      return next;
-    });
-    postMessage({ type: 'debug', detail: `setAutoContinue: ${sessionId} = ${enabled}` } satisfies any as any);
-  }, []);
-
-  // 处理 Host 消息
   useEffect(() => {
-    const handler = (event: MessageEvent) => {
+    const handler = (event: MessageEvent<HostToWebviewMessage>) => {
       const msg = event.data;
-      if (!msg || !msg.type) return;
-      switch (msg.type) {
-        case 'state':
-          setState(prev => {
-            const next = cloneMaps(prev);
-            if (msg.state.sessions) next.sessions = msg.state.sessions;
-            if (msg.state.workspaceRoot) next.workspaceRoot = msg.state.workspaceRoot;
-            if (msg.state.workspaceName) next.workspaceName = msg.state.workspaceName;
-            if (msg.state.session) next.currentSession = msg.state.session;
-            if (msg.state.messages) next.messages = msg.state.messages;
-            if (msg.state.traceEvents) next.traceEvents = msg.state.traceEvents;
-            if (msg.state.activeJob) next.activeJob = msg.state.activeJob;
-            next.status = msg.status ?? next.status;
-            return next;
-          } as any);
-          break;
-        case 'messageAccepted':
-          setState(prev => {
-            const next = cloneMaps(prev);
-            const pending = next.pendingTurns.get(msg.sessionId) ?? (() => {
-              const t: PendingTurn = { turnId: '', sessionId: msg.sessionId, userMessage: null, assistantMessages: [], events: [], status: 'running', jobId: null, pending: true };
-              next.pendingTurns.set(msg.sessionId, t);
-              return t;
-            })();
-            pending.jobId = msg.jobId ?? null;
-            pending.status = 'running';
-            pending.pending = true;
-            next.activeJob = { jobId: msg.jobId ?? null, sessionId: msg.sessionId, status: 'running', messageId: msg.messageId ?? null, content: msg.content ?? '' };
-            next.status = '任务已提交，开始接收思考过程...';
-            return next;
-          } as any);
-          break;
-        case 'jobEvent':
-          setState(prev => {
-            const next = cloneMaps(prev);
-            const pending = next.pendingTurns.get(msg.sessionId);
-            if (!pending) return next;
-            if (pending.jobId && pending.jobId !== msg.jobId) return next;
-            pending.jobId = msg.jobId;
-            pending.events = [...(pending.events ?? []), {
-              event_type: msg.eventType ?? 'event',
-              data: msg.payload ?? {},
-              timestamp: (msg.payload as Record<string, unknown>)?.timestamp
-                ? String((msg.payload as Record<string, unknown>)!.timestamp)
-                : new Date().toISOString(),
-            }];
-            if (['job_completed', 'job_failed', 'job_cancelled'].includes(String(msg.eventType ?? '').toLowerCase())) {
-              pending.status = msg.eventType === 'job_completed' ? 'done' : 'error';
-              pending.pending = false;
-              next.activeJob = { ...(next.activeJob ?? { jobId: null, sessionId: null, status: '', messageId: null, content: '' }), jobId: msg.jobId, sessionId: msg.sessionId, status: msg.eventType };
-              const autoContinueEnabled = next.autoContinueEnabled.get(msg.sessionId) ?? false;
-              if (autoContinueEnabled && msg.eventType === 'job_completed') {
-                setTimeout(() => postMessage({ type: 'sendMessage', content: '继续' }), 500);
-              }
-            }
-            return next;
-          } as any);
-          break;
-        case 'sessionCreated':
-          setState(prev => ({ ...prev, currentSession: (msg as any).session ?? prev.currentSession }));
-          break;
-        case 'error':
-          if (msg.message) setStatus(String(msg.message));
-          break;
+      if (!msg?.type) return;
+      if (msg.type === HostToWebviewMessageType.state) {
+        const stateMsg = msg as HostStateMessage;
+        setState(prev => {
+          const next = cloneMaps(prev);
+          next.workspaceRoot = stateMsg.state.workspaceRoot;
+          next.workspaceName = stateMsg.state.workspaceName;
+          next.sessions = stateMsg.state.sessions;
+          next.currentSession = stateMsg.state.session;
+          next.messages = stateMsg.state.messages;
+          next.traceEvents = stateMsg.state.traceEvents;
+          next.activeJob = stateMsg.state.activeJob;
+          next.status = stateMsg.status;
+          return next;
+        });
+        return;
+      }
+      if (msg.type === HostToWebviewMessageType.jobEvent) {
+        const jobEvent = msg as Extract<HostToWebviewMessage, { type: 'jobEvent' }>;
+        setState(prev => {
+          const next = cloneMaps(prev);
+          const pending = next.pendingTurns.get(jobEvent.sessionId);
+          if (!pending || (pending.jobId && pending.jobId !== jobEvent.jobId)) return next;
+          pending.jobId = jobEvent.jobId;
+          pending.events = [...pending.events, { event_type: jobEvent.eventType, data: jobEvent.payload, timestamp: new Date().toISOString() }];
+          if (jobEvent.eventType === 'job_completed' || jobEvent.eventType === 'job_failed' || jobEvent.eventType === 'job_cancelled') {
+            pending.status = jobEvent.eventType === 'job_completed' ? 'done' : 'error';
+            pending.pending = false;
+          }
+          return next;
+        });
+        return;
+      }
+      if (msg.type === HostToWebviewMessageType.messageAccepted) {
+        const accepted = msg as Extract<HostToWebviewMessage, { type: 'messageAccepted' }>;
+        setState(prev => {
+          const next = cloneMaps(prev);
+          const pending = next.pendingTurns.get(accepted.sessionId) ?? {
+            turnId: `local_${Date.now()}`,
+            sessionId: accepted.sessionId,
+            userMessage: null,
+            assistantMessages: [],
+            events: [],
+            status: 'running',
+            jobId: null,
+            pending: true,
+          };
+          pending.jobId = accepted.jobId;
+          pending.pending = true;
+          next.pendingTurns.set(accepted.sessionId, pending);
+          next.activeJob = { jobId: accepted.jobId, sessionId: accepted.sessionId, status: 'running', messageId: accepted.messageId, content: accepted.content };
+          next.status = '任务已接收';
+          return next;
+        });
+      }
+      if (msg.type === HostToWebviewMessageType.sessionCreated) {
+        const sessionCreated = msg as Extract<HostToWebviewMessage, { type: 'sessionCreated' }>;
+        setState(prev => ({ ...prev, currentSession: sessionCreated.session }));
+      }
+      if (msg.type === HostToWebviewMessageType.error) {
+        const errorMsg = msg as Extract<HostToWebviewMessage, { type: 'error' }>;
+        setStatus(errorMsg.message);
       }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
   }, [setStatus]);
 
-  // 初始化
   useEffect(() => {
-    postDebug('webview React 已启动');
-    postMessage({ type: 'ready' });
+    postDebug('webview ready');
+    postMessage({ type: WebviewToHostMessageType.ready });
   }, []);
 
-  // persist to VSCode state
   useEffect(() => {
-    (window as any).acquireVsCodeApi?.()?.setState?.({
+    setVsCodeState({
       workspaceRoot: state.workspaceRoot,
       workspaceName: state.workspaceName,
       sessions: state.sessions,
@@ -327,20 +268,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       activeJob: state.activeJob,
       status: state.status,
       expandDetails: state.expandDetails,
-      pendingTurns: Array.from(state.pendingTurns.values()),
-      autoContinueEnabled: Array.from(state.autoContinueEnabled.entries()),
+      historyPanelOpen: state.historyPanelOpen,
+      pendingTurns: Array.from(state.pendingTurns.entries()),
     });
   }, [state]);
 
-  const handleCodeAction = useCallback((action: string, _code: string) => {
-    postDebug(`代码块操作: ${action}`);
-  }, []);
-
-  const handleMessageAction = useCallback((action: string, _messageId?: string) => {
-    postDebug(`消息操作: ${action}`);
-  }, []);
-
-  const value: AppContextType = {
+  const value = useMemo<AppContextType>(() => ({
     state,
     setStatus,
     sendMessage,
@@ -348,8 +281,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     createSession,
     toggleHistoryPanel,
     toggleExpandDetails,
-    setAutoContinue,
-  };
+  }), [state, setStatus, sendMessage, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

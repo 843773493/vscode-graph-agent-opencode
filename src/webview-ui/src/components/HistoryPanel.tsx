@@ -1,7 +1,6 @@
-import React, { useRef, useEffect } from 'react';
-import type { Session, TraceEvent, PendingTurn } from '../types';
-import { formatTime, escapeHtml } from '../utils/format';
-import { postDebug } from '../vscode';
+import React from 'react';
+import type { Session } from '../types';
+import { formatTime } from '../utils/format';
 
 interface HistoryPanelProps {
   sessions: Session[];
@@ -10,68 +9,35 @@ interface HistoryPanelProps {
   isOpen: boolean;
 }
 
-function isActiveSession(session: Session, sessionId: string): string {
-  return session.session_id === sessionId ? 'active' : '';
+function sessionStatusBadge(session: Session, isActive: boolean): React.ReactNode {
+  if (isActive) return <span className="badge active">Active</span>;
+  const status = String(session.status ?? '').toLowerCase();
+  if (status.includes('fail') || status.includes('error')) return <span className="badge danger">Failed</span>;
+  if (status.includes('progress') || status.includes('run')) return <span className="badge warning">Running</span>;
+  return <span className="badge neutral">Ready</span>;
 }
 
-function sessionStatusBadge(session: Session, isActive: boolean): string {
-  if (isActive) return '<span class="badge active">Active</span>';
-  const status = String(session?.status ?? '').toLowerCase();
-  if (status.includes('fail') || status.includes('error')) return '<span class="badge danger">Failed</span>';
-  if (status.includes('progress') || status.includes('run')) return '<span class="badge warning">Running</span>';
-  return '<span class="badge neutral">Ready</span>';
-}
-
-const HistoryPanel: React.FC<HistoryPanelProps> = ({ sessions, currentSessionId, onSelectSession, isOpen }) => {
-  const listRef = useRef<HTMLDivElement>(null);
-  const [agentName, setAgentName] = React.useState('');
-
-  useEffect(() => {
-    if (isOpen) {
-      postDebug('历史会话面板打开');
-    }
-  }, [isOpen]);
-
-  const sorted = React.useMemo(
-    () => [...sessions].sort(
-      (a, b) => new Date(b.updated_at || b.created_at || '').getTime() - new Date(a.updated_at || a.created_at || '').getTime()
-    ),
-    [sessions]
-  );
-
+export default function HistoryPanel({ sessions, currentSessionId, onSelectSession, isOpen }: HistoryPanelProps) {
   return (
-    <aside className={`history-panel${isOpen ? ' open' : ''}`} id="historyPanel">
+    <aside className={`history-panel${isOpen ? ' open' : ''}`}>
       <div className="panel-header">历史会话</div>
-      <div className="panel-body" id="sessionList" ref={listRef}>
-        {sorted.length === 0 ? (
+      <div className="panel-body">
+        {sessions.length === 0 ? (
           <div className="empty-state small">暂无历史会话</div>
         ) : (
-          <ul className="session-list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {sorted.map(session => {
+          <ul className="session-list">
+            {sessions.map(session => {
               const isActive = session.session_id === currentSessionId;
-              const title = session.title || '未命名会话';
-              const time = formatTime(session.updated_at || session.created_at);
               return (
-                <li key={session.session_id} style={{ listStyle: 'none', margin: 0 }}>
-                  <button
-                    className={`session-item${isActive ? ' active' : ''}`}
-                    data-select-session={escapeHtml(session.session_id)}
-                    onClick={() => onSelectSession(session.session_id)}
-                    style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', padding: 0 }}
-                  >
-                    <div style={{ fontWeight: 600, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {escapeHtml(title)}
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, color: 'var(--muted)', fontSize: 11 }}>
+                <li key={session.session_id}>
+                  <button type="button" className={`session-item${isActive ? ' active' : ''}`} onClick={() => onSelectSession(session.session_id)}>
+                    <div className="session-title-row">
+                      <span className="session-title">{session.title || '未命名会话'}</span>
                       {sessionStatusBadge(session, isActive)}
-                      <span className="session-time" style={{ whiteSpace: 'nowrap' }}>{escapeHtml(time)}</span>
-                      <span
-                        className="session-id"
-                        style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', opacity: 0.7, marginLeft: 8, fontFamily: 'var(--vscode-editor-font-family)', userSelect: 'text', cursor: 'text' }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                      >
-                        {escapeHtml(session.session_id)}
-                      </span>
+                    </div>
+                    <div className="session-meta">
+                      <span className="session-time">{formatTime(session.updated_at || session.created_at)}</span>
+                      <span className="session-id">{session.session_id}</span>
                     </div>
                   </button>
                 </li>
@@ -82,6 +48,4 @@ const HistoryPanel: React.FC<HistoryPanelProps> = ({ sessions, currentSessionId,
       </div>
     </aside>
   );
-};
-
-export default HistoryPanel;
+}

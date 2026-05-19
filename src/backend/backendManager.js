@@ -2,11 +2,16 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import * as vscode from 'vscode';
 
 import { getWorkspace } from '../shared/api.js';
 import { DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_PORT } from '../shared/constants.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const EXTENSION_ROOT = path.resolve(__dirname, '..', '..');
 
 function getWorkspaceRoot() {
   const folders = vscode.workspace.workspaceFolders ?? [];
@@ -22,23 +27,12 @@ function getPort() {
   return config.get('port', DEFAULT_BACKEND_PORT);
 }
 
-function findProjectRoot(workspaceRoot) {
-  let current = path.resolve(workspaceRoot);
-
-  while (true) {
-    if (fs.existsSync(path.join(current, 'app', 'main.py'))) {
-      return current;
-    }
-
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-
-    current = parent;
+function findProjectRoot() {
+  if (fs.existsSync(path.join(EXTENSION_ROOT, 'app', 'main.py'))) {
+    return EXTENSION_ROOT;
   }
 
-  return path.resolve(workspaceRoot);
+  throw new Error(`未找到软件根目录下的 app/main.py: ${path.join(EXTENSION_ROOT, 'app', 'main.py')}`);
 }
 
 function getProjectPythonCandidates(projectRoot) {
@@ -50,21 +44,33 @@ function getProjectPythonCandidates(projectRoot) {
   ];
 }
 
+function getPythonVersionFile(projectRoot) {
+  return path.join(projectRoot, '.python-version');
+}
+
 function resolvePythonPath(projectRoot) {
   const config = vscode.workspace.getConfiguration('vscodeGraphAgent');
   const configuredPath = config.get('pythonPath', 'python');
   const candidates = getProjectPythonCandidates(projectRoot);
 
+  console.log(`[graph-agent] [backend] 解析 Python 路径，projectRoot=${projectRoot}`);
+  console.log(`[graph-agent] [backend] 配置项 pythonPath=${configuredPath}`);
+  console.log(`[graph-agent] [backend] .python-version=${getPythonVersionFile(projectRoot)} 存在=${fs.existsSync(getPythonVersionFile(projectRoot)) ? '✓ 是' : '✗ 否'}`);
+  console.log(`[graph-agent] [backend] 候选 Python 路径：${candidates.map((candidate) => `${candidate}(${fs.existsSync(candidate) ? '存在' : '不存在'})`).join(' | ')}`);
+
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
+      console.log(`[graph-agent] [backend] 命中 Python 候选路径: ${candidate}`);
       return candidate;
     }
   }
 
   if (configuredPath && configuredPath !== 'python') {
+    console.log(`[graph-agent] [backend] 未命中虚拟环境，回退到配置项 pythonPath: ${configuredPath}`);
     return configuredPath;
   }
 
+  console.log(`[graph-agent] [backend] 未命中任何 Python 候选路径，回退到默认值: ${configuredPath}`);
   return configuredPath;
 }
 
@@ -170,12 +176,15 @@ export class BackendManager {
     }
 
     this.workspaceRoot = getWorkspaceRoot();
-    this.projectRoot = findProjectRoot(this.workspaceRoot);
+    this.projectRoot = findProjectRoot();
     this.outputChannel.show(true);
     this.log(`========== 启动后端进程 ==========`);
+    this.log(`调试信息: 当前工作区 folders=${(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath).join(', ') || '(empty)'}`);
     this.log(`首选后端端口: ${this.port}`);
     this.log(`工作区根目录: ${this.workspaceRoot}`);
     this.log(`项目根目录: ${this.projectRoot}`);
+    this.log(`软件根目录: ${EXTENSION_ROOT}`);
+    this.log(`调试信息: workspaceRoot=${this.workspaceRoot}, projectRoot=${this.projectRoot}`);
 
     const candidatePorts = [...new Set([this.port, 8000])];
     this.log(`将要探测的端口列表: ${candidatePorts.join(', ')}`);
@@ -205,7 +214,7 @@ export class BackendManager {
     }
 
     const workspaceRoot = getWorkspaceRoot();
-    const projectRoot = this.projectRoot ?? findProjectRoot(workspaceRoot);
+    const projectRoot = this.projectRoot ?? findProjectRoot();
     const pythonPath = resolvePythonPath(projectRoot);
     const args = ['-m', 'uvicorn', 'app.main:app', '--host', DEFAULT_BACKEND_HOST, '--port', String(this.port)];
     const cwd = projectRoot;
@@ -217,6 +226,9 @@ export class BackendManager {
     this.log(`Python 路径: ${pythonPath}`);
     this.log(`Python 存在: ${fs.existsSync(pythonPath) ? '✓ 是' : '✗ 否'}`);
     this.log(`项目根目录(cwd): ${cwd}`);
+    this.log(`调试信息: projectRoot 下 app/main.py=${fs.existsSync(path.join(projectRoot, 'app', 'main.py')) ? '存在' : '不存在'}`);
+    this.log(`调试信息: projectRoot 下 .venv\\Scripts\\python.exe=${fs.existsSync(path.join(projectRoot, '.venv', 'Scripts', 'python.exe')) ? '存在' : '不存在'}`);
+    this.log(`调试信息: projectRoot 下 .venv\\bin\\python=${fs.existsSync(path.join(projectRoot, '.venv', 'bin', 'python')) ? '存在' : '不存在'}`);
     this.log(`启动命令: ${pythonPath} ${args.join(' ')}`);
     this.log(`环境变量: WORKSPACE_ROOT=${workspaceRoot}`);
 

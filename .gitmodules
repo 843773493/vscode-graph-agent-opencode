@@ -1,12 +1,12 @@
-[submodule "referen_repo/kilocode"]
-	path = referen_repo/kilocode
+[submodule "reference_repo/kilocode"]
+	path = reference_repo/kilocode
 	url = https://github.com/Kilo-Org/kilocode
-[submodule "referen_repo/codex"]
-	path = referen_repo/codex
+[submodule "reference_repo/codex"]
+	path = reference_repo/codex
 	url = https://github.com/openai/codex
-[submodule "referen_repo/vscode-copilot-chat"]
-	path = referen_repo/vscode-copilot-chat
+[submodule "reference_repo/vscode-copilot-chat"]
+	path = reference_repo/vscode-copilot-chat
 	url = https://github.com/microsoft/vscode-copilot-chat.git
-[submodule "referen_repo/cline"]
-	path = referen_repo/cline
+[submodule "reference_repo/cline"]
+	path = reference_repo/cline
 	url = https://github.com/cline/cline

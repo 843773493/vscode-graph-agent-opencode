@@ -54,7 +54,6 @@ export interface AppState {
   pendingTurns: Map<string, PendingTurn>;
   status: string;
   expandDetails: boolean;
-  autoContinueEnabled: Map<string, boolean>;
   historyPanelOpen: boolean;
 }
 

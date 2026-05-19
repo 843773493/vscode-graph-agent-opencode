@@ -31,7 +31,7 @@ from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
-from deepagents.middleware.permissions import FilesystemPermission, _PermissionMiddleware
+from deepagents.middleware.permissions import FilesystemPermission
 
 from app.core.path_utils import get_workspace_root
 from app.agents.agent_middleware import LLMLoggingMiddleware, ExecutionTraceMiddleware
@@ -188,7 +188,7 @@ def create_my_deep_agent(
 
     gp_middleware = [
         TodoListMiddleware(),
-        FilesystemMiddleware(backend=backend),
+        FilesystemMiddleware(backend=backend, _permissions=permissions),
         create_summarization_middleware(model, backend),
         PatchToolCallsMiddleware(),
     ]
@@ -211,7 +211,7 @@ def create_my_deep_agent(
 
             subagent_middleware = [
                 TodoListMiddleware(),
-                FilesystemMiddleware(backend=backend),
+                FilesystemMiddleware(backend=backend, _permissions=spec.get("permissions")),
                 create_summarization_middleware(model, backend),
                 PatchToolCallsMiddleware(),
             ]
@@ -264,9 +264,6 @@ def create_my_deep_agent(
 
     if interrupt_on:
         deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
-
-    if permissions:
-        deepagent_middleware.append(_PermissionMiddleware(rules=permissions, backend=backend))
 
     if isinstance(system_prompt, SystemMessage):
         final_system_prompt = SystemMessage(

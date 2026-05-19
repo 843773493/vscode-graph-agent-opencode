@@ -1,10 +1,9 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAppState } from '../hooks';
-import { postDebug } from '../vscode';
 
 export default function Composer() {
-  const { state, sendMessage, toggleExpandDetails } = useAppState();
-  const [input, setInput] = React.useState('');
+  const { state, sendMessage } = useAppState();
+  const [input, setInput] = useState('');
   const isGenerating = state.activeJob?.status === 'running';
   const hasContent = input.trim().length > 0;
 
@@ -21,8 +20,7 @@ export default function Composer() {
       e.preventDefault();
       const start = e.currentTarget.selectionStart ?? input.length;
       const end = e.currentTarget.selectionEnd ?? input.length;
-      const value = input;
-      setInput(value.slice(0, start) + '\n' + value.slice(end));
+      setInput(input.slice(0, start) + '\n' + input.slice(end));
       return;
     }
     e.preventDefault();
@@ -52,8 +50,8 @@ export default function Composer() {
       </div>
       <div className="composer-actions">
         <div className="composer-actions-left">
-          <button id="attachButton" type="button" title="添加附件" onClick={() => postDebug('TODO: attach')} />
-          <button id="mentionButton" type="button" title="@提及" onClick={() => postDebug('TODO: mention')} />
+          <button id="attachButton" type="button" title="添加附件" disabled />
+          <button id="mentionButton" type="button" title="@提及" disabled />
         </div>
         <div className="composer-actions-right">
           <button id="agentSelectButton" type="button" title="选择Agent">

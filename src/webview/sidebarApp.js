@@ -27,6 +27,7 @@ const helpButton = document.getElementById('helpButton');
 const settingsButton = document.getElementById('settingsButton');
 const autoContinueButton = document.getElementById('autoContinueButton');
 const agentSelectButton = document.getElementById('agentSelectButton');
+const rootEl = document.getElementById('root');
 
 const persistedState = vscode.getState?.() ?? {};
 
@@ -968,6 +969,18 @@ function handleJobEvent(message) {
 
 function initializeWebview() {
   try {
+    postDebug(`启动诊断 - readyState=${document.readyState}`);
+    postDebug(`启动诊断 - root=${rootEl ? '存在' : '不存在'}`);
+    postDebug(`启动诊断 - workspace=${workspaceEl ? '存在' : '不存在'}, sessionList=${sessionListEl ? '存在' : '不存在'}, turnList=${turnListEl ? '存在' : '不存在'}, input=${inputEl ? '存在' : '不存在'}, status=${statusEl ? '存在' : '不存在'}`);
+
+    if (!rootEl) {
+      throw new Error('webview 根节点 #root 不存在，页面无法渲染');
+    }
+
+    if (!workspaceEl || !sessionListEl || !turnListEl || !inputEl || !statusEl) {
+      throw new Error('webview 关键挂载节点缺失，请检查 HTML 模板是否完整');
+    }
+
     setStatus(uiState.status || '前端已加载');
     if (expandDetailsToggle) {
       expandDetailsToggle.checked = Boolean(uiState.expandDetails);
