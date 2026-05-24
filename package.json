@@ -278,9 +278,16 @@
   },
   "scripts": {
     "start": "bun ./src/extension.js",
-    "dev:backend": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
+    "dev:backend": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
+    "test:extension": "vscode-test"
   },
   "dependencies": {
     "@vscode/webview-ui-toolkit": "^1.4.0"
+  },
+  "devDependencies": {
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.2",
+    "mocha": "^11.7.1"
   }
 }

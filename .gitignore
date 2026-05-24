@@ -45,6 +45,7 @@ coverage/
 
 # VS Code
 reference_repo/
+.vscode-test/
 
 # OS / editor junk
 .DS_Store
