@@ -10,3 +10,6 @@
 [submodule "reference_repo/cline"]
 	path = reference_repo/cline
 	url = https://github.com/cline/cline
+[submodule "reference_repo/vscode-docs"]
+	path = reference_repo/vscode-docs
+	url = https://github.com/microsoft/vscode-docs.git
