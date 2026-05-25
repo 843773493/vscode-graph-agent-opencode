@@ -15,11 +15,16 @@ const EXTENSION_ROOT = path.resolve(__dirname, '..', '..');
 
 function getWorkspaceRoot() {
   const folders = vscode.workspace.workspaceFolders ?? [];
-  if (folders.length === 0) {
-    throw new Error('当前没有打开工作区，无法启动本地后端');
+  if (folders.length > 0) {
+    return folders[0].uri.fsPath;
   }
 
-  return folders[0].uri.fsPath;
+  const homeDir = process.env.HOME || process.env.USERPROFILE;
+  if (!homeDir) {
+    throw new Error('无法解析用户主目录，无法创建默认用户级工作区');
+  }
+
+  return path.join(homeDir, '.BoxTeamWorkspace');
 }
 
 function getPort() {
@@ -176,6 +181,10 @@ export class BackendManager {
     }
 
     this.workspaceRoot = getWorkspaceRoot();
+    if (!fs.existsSync(this.workspaceRoot)) {
+      fs.mkdirSync(this.workspaceRoot, { recursive: true });
+      this.log(`已创建默认工作区目录: ${this.workspaceRoot}`);
+    }
     this.projectRoot = findProjectRoot();
     this.outputChannel.show(true);
     this.log(`========== 启动后端进程 ==========`);
@@ -231,6 +240,11 @@ export class BackendManager {
     this.log(`调试信息: projectRoot 下 .venv\\bin\\python=${fs.existsSync(path.join(projectRoot, '.venv', 'bin', 'python')) ? '存在' : '不存在'}`);
     this.log(`启动命令: ${pythonPath} ${args.join(' ')}`);
     this.log(`环境变量: WORKSPACE_ROOT=${workspaceRoot}`);
+
+    if (!fs.existsSync(workspaceRoot)) {
+      fs.mkdirSync(workspaceRoot, { recursive: true });
+      this.log(`已创建默认工作区目录: ${workspaceRoot}`);
+    }
 
     if (!fs.existsSync(pythonPath)) {
       const error = new Error(`Python 路径不存在: ${pythonPath}`);

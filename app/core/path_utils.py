@@ -5,12 +5,21 @@ from typing import Optional
 from app.core.exceptions import ForbiddenError
 
 
+def get_user_workspace_root() -> Path:
+    """获取用户级持久工作区根目录。优先使用显式配置，未配置时回退到用户主目录下的隐藏目录。"""
+    configured_root = os.environ.get("BOXTEAM_USER_WORKSPACE_ROOT")
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+
+    home_dir = Path.home().resolve()
+    return home_dir / ".BoxTeamWorkspace"
+
+
 def get_workspace_root() -> Path:
-    """获取工作区根目录。优先从 WORKSPACE_ROOT 环境变量读取，未设置时回退到项目根目录。"""
+    """获取工作区根目录。优先从 WORKSPACE_ROOT 环境变量读取，未设置时回退到用户级持久工作区根目录。"""
     workspace_root = os.environ.get("WORKSPACE_ROOT")
     if not workspace_root:
-        from app.core.env import get_project_root
-        return get_project_root()
+        return get_user_workspace_root()
 
     return Path(workspace_root).resolve()
 
@@ -36,6 +45,7 @@ def initialize_directories() -> None:
     get_logs_dir().mkdir(exist_ok=True, parents=True)
     get_artifacts_dir().mkdir(exist_ok=True, parents=True)
     get_cache_dir().mkdir(exist_ok=True, parents=True)
+    get_user_workspace_root().mkdir(exist_ok=True, parents=True)
 
 
 def safe_join(base_path: Path, *paths: str) -> Path:

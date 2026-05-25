@@ -3,7 +3,13 @@ import tempfile
 import uuid
 from pathlib import Path
 import pytest
-from app.core.path_utils import safe_join, validate_workspace_path, get_session_path, ensure_session_dir
+from app.core.path_utils import (
+    ensure_session_dir,
+    get_session_path,
+    get_user_workspace_root,
+    safe_join,
+    validate_workspace_path,
+)
 from app.core.exceptions import ForbiddenError
 
 
@@ -146,3 +152,9 @@ class TestPathUtils:
         special_path = "test with spaces and_safe-special.chars"
         result = safe_join(self.base_path, special_path)
         assert result.name == special_path
+
+    def test_get_user_workspace_root_uses_hidden_directory_under_home(self):
+        """测试用户级持久工作区根目录命名"""
+        root = get_user_workspace_root()
+        assert root.name == ".BoxTeamWorkspace"
+        assert root.parent == Path.home().resolve()

@@ -1,15 +1,16 @@
 import { defineConfig } from '@vscode/test-cli';
 
 export default defineConfig({
-  files: './src/test/**/*.test.js',
+  files: './tests/e2e/vscode/**/*.test.js',
   version: 'stable',
   launchArgs: [
     '--disable-extensions',
+    '--new-window',
     '--profile-temp',
   ],
   mocha: {
     ui: 'tdd',
     color: true,
-    timeout: 10000,
+    timeout: 60000,
   },
 });

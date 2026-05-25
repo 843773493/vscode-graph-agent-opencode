@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from app.schemas.workspace import WorkspaceDTO, WorkspaceContextDTO
-from app.core.path_utils import get_workspace_root
+from app.core.path_utils import get_workspace_root, get_user_workspace_root
 
 
 class WorkspaceService:
@@ -14,7 +14,8 @@ class WorkspaceService:
     def __init__(self):
         self.workspace_id = "ws_local"
         self.root_path = str(get_workspace_root())
-        self.name = os.path.basename(os.getcwd())
+        self.user_workspace_root = str(get_user_workspace_root())
+        self.name = os.path.basename(self.root_path)
 
     @classmethod
     def get_instance(cls) -> "WorkspaceService":

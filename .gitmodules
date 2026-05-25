@@ -1,6 +1,6 @@
 [submodule "reference_repo/kilocode"]
 	path = reference_repo/kilocode
-	url = https://github.com/Kilo-Org/kilocode
+	url = https://github.com/Kilo-Org/kilocode.git
 [submodule "reference_repo/codex"]
 	path = reference_repo/codex
 	url = https://github.com/openai/codex

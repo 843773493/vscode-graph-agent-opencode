@@ -15,6 +15,13 @@ export function activate(context) {
   outputChannel.show(true);
   outputChannel.appendLine('[graph-agent] 扩展已激活');
 
+  void backendManager.ensureStarted().then(() => {
+    outputChannel.appendLine('[graph-agent] 后端已在扩展激活阶段初始化完成');
+  }).catch((error) => {
+    outputChannel.appendLine(`[graph-agent] 后端初始化失败: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+    throw error;
+  });
+
   if (!sidebarViewProviderRegistered) {
     context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebarProvider, {
