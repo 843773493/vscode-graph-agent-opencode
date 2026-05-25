@@ -12,6 +12,18 @@ export function applyInlineMarkdown(text: string): string {
   return value;
 }
 
+function renderCodeBlock(codeLang: string, code: string): string {
+  const language = codeLang.trim() || 'text';
+  return `
+<div class="markdown-code-block" data-code-block="true">
+  <div class="markdown-code-header">
+    <span class="markdown-code-language">${escapeHtml(language)}</span>
+    <button class="markdown-code-copy" type="button" title="复制代码" data-code-action="copy">复制</button>
+  </div>
+  <pre><code data-code-language="${escapeHtml(language)}">${escapeHtml(code)}</code></pre>
+</div>`;
+}
+
 // 完整 Markdown 渲染：代码块 + 标题 + 无序/有序列表 + 引用
 export function renderMarkdown(source: string): string {
   const lines = (source ?? '').replace(/\r\n/g, '\n').split('\n');
@@ -25,30 +37,7 @@ export function renderMarkdown(source: string): string {
 
   const flushCode = () => {
     if (!codeLines.length) return;
-    output.push(`
-<div class="code-block-container">
-  <div class="code-block-actions">
-    <button class="code-action-btn" title="复制代码" data-code-action="copy">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-    </button>
-    <button class="code-action-btn" title="插入光标处" data-code-action="insert-cursor">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><line x1="2" y1="12" x2="22" y2="12"></line></svg>
-    </button>
-    <button class="code-action-btn" title="替换选中内容" data-code-action="replace-selection">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>
-    </button>
-    <button class="code-action-btn" title="在终端执行" data-code-action="run-terminal">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-    </button>
-    <button class="code-action-btn" title="新建文件" data-code-action="new-file">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
-    </button>
-    <button class="code-action-btn" title="查看差异" data-code-action="view-diff">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line><circle cx="12" cy="12" r="3"></circle></svg>
-    </button>
-  </div>
-  <pre><code data-lang="${escapeHtml(codeLang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>
-</div>`);
+    output.push(renderCodeBlock(codeLang, codeLines.join('\n')));
     codeLines = [];
     codeLang = '';
   };

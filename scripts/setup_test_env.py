@@ -4,8 +4,12 @@ Test environment setup script.
 Clears playground directory and copies asset/workspace to playground/workspace.
 Sets WORKSPACE_ROOT environment variable for testing.
 """
+from __future__ import annotations
+
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 def setup_test_environment():
@@ -47,5 +51,55 @@ def setup_test_environment():
     print(f"   All tests will run in isolated playground environment")
     return target_workspace
 
+
+def ensure_local_bun() -> Path:
+    """确保仓库内 bun 运行时可用。"""
+    project_root = Path(__file__).parent.parent.resolve()
+    bun_path = project_root / "tools" / "bun.exe"
+
+    if bun_path.exists():
+        print(f"Found local bun: {bun_path}")
+        return bun_path
+
+    print("Local bun not found, trying to install via corepack...")
+    result = subprocess.run(
+        ["corepack", "prepare", "bun@latest", "--activate"],
+        cwd=project_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to prepare bun via corepack. "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+    print("bun prepared successfully via corepack")
+    return bun_path
+
+
+def sync_bun_dependencies() -> None:
+    """同步前端依赖，配合 uv sync 的后处理使用。"""
+    project_root = Path(__file__).parent.parent.resolve()
+    bun_path = ensure_local_bun()
+    webview_ui_dir = project_root / "src" / "webview-ui"
+
+    if not webview_ui_dir.exists():
+        raise FileNotFoundError(f"webview-ui 目录不存在: {webview_ui_dir}")
+
+    result = subprocess.run(
+        [str(bun_path), "install"],
+        cwd=webview_ui_dir,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"bun install failed with exit code {result.returncode}")
+
+    print("bun dependencies synchronized successfully")
+
 if __name__ == "__main__":
-    setup_test_environment()
+    if len(sys.argv) > 1 and sys.argv[1] == "sync-bun":
+        sync_bun_dependencies()
+    else:
+        setup_test_environment()

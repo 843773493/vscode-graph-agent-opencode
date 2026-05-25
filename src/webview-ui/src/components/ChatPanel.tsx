@@ -1,119 +1,231 @@
 import React from 'react';
 import type { PendingTurn, TraceEvent, Message } from '../types';
 import { renderMarkdown } from '../utils/markdown';
-import { formatTime, escapeHtml } from '../utils/format';
+import { escapeHtml, formatTime } from '../utils/format';
+import { useAppState } from '../hooks';
+
+type TraceTone = 'running' | 'done' | 'danger';
 
 function isErrorTrace(event: TraceEvent): boolean {
   const type = String(event.event_type ?? '').toLowerCase();
   return type === 'error' || type === 'job_failed' || type === 'job_cancelled';
 }
 
-function renderTraceGroupTitle(eventType: string, payload: Record<string, unknown>): string {
-  const type = eventType?.toLowerCase();
-  if (type === 'agent_start') return `开始处理：${payload?.message ? String(payload.message) : '启动 agent'}`;
-  if (type === 'agent_step') return payload?.phase ? `阶段：${String(payload.phase)}` : '执行中';
-  if (type === 'tool_call_start') return `调用工具：${String(payload?.tool_name || 'unknown_tool')}`;
-  if (type === 'tool_call_end') return `工具完成：${String(payload?.tool_name || 'unknown_tool')}`;
-  if (type === 'file_write') return `文件写入：${String(payload?.path || payload?.file_path || 'unknown path')}`;
-  if (type === 'llm_request' || type === 'model_call') return `模型调用：${String(payload?.model || 'unknown model')}`;
-  if (type === 'agent_end') return `结束处理：${String(payload?.final_message_count ?? 0)} 条消息`;
-  if (type === 'error') return `错误：${String(payload?.error || 'unknown error')}`;
-  return `事件：${eventType}`;
+function traceTone(eventType: string): TraceTone {
+  const type = String(eventType ?? '').toLowerCase();
+  if (type === 'error' || type === 'job_failed' || type === 'job_cancelled') return 'danger';
+  if (type === 'agent_end' || type === 'tool_call_end') return 'done';
+  return 'running';
 }
 
-function renderOutputStream(label: string, events: TraceEvent[]): React.ReactNode {
-  if (!events.length) return null;
+function traceTitle(eventType: string, payload: Record<string, unknown>): string {
+  const type = String(eventType ?? '').toLowerCase();
+  if (type === 'agent_start') return '开始处理';
+  if (type === 'agent_step') return payload.phase ? String(payload.phase) : '执行中';
+  if (type === 'tool_call_start') return `调用工具 ${String(payload.tool_name ?? 'unknown_tool')}`;
+  if (type === 'tool_call_end') return `工具完成 ${String(payload.tool_name ?? 'unknown_tool')}`;
+  if (type === 'file_write') return `写入文件 ${String(payload.path ?? payload.file_path ?? 'unknown path')}`;
+  if (type === 'llm_request' || type === 'model_call') return `模型调用 ${String(payload.model ?? 'unknown model')}`;
+  if (type === 'agent_end') return '任务结束';
+  if (type === 'error') return '发生错误';
+  return `事件 ${eventType}`;
+}
+
+function traceSummary(eventType: string, payload: Record<string, unknown>): string[] {
+  const fields = [
+    ['工具', payload.tool_name],
+    ['阶段', payload.phase],
+    ['模型', payload.model],
+    ['文件', payload.path ?? payload.file_path],
+    ['消息', payload.message],
+    ['错误', payload.error],
+  ] as const;
+  return fields
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim().length > 0)
+    .map(([label, value]) => `${label}: ${String(value)}`)
+    .slice(0, 3)
+    .concat(eventType === 'agent_end' && payload.final_message_count !== undefined ? [`消息数: ${String(payload.final_message_count)}`] : []);
+}
+
+function TraceEventCard({ event, index }: { event: TraceEvent; index: number }): React.ReactNode {
+  const payload = event.data ?? {};
+  const tone = traceTone(event.event_type);
+  const details = traceSummary(event.event_type, payload);
+
   return (
-    <section className="output-stream">
-      <h3 className="output-stream-title">{escapeHtml(label)}</h3>
-      <div className="output-stream-body">
-        {events.map((ev, index) => (
-          <article key={`${ev.event_type}-${ev.timestamp ?? index}`} className="output-event-card">
-            <div className="editor-head">
-              <span>{escapeHtml(renderTraceGroupTitle(ev.event_type, ev.data))}</span>
-              <span className="badge neutral">{escapeHtml(formatTime(ev.timestamp) || 'now')}</span>
-            </div>
-            <div className="editor-body">
-              <pre>{escapeHtml(JSON.stringify(ev.data, null, 2))}</pre>
-            </div>
-          </article>
-        ))}
+    <article className={`trace-event-card tone-${tone}`}>
+      <div className="trace-event-head">
+        <div className="trace-event-title-row">
+          <span className={`trace-dot trace-${tone}`} />
+          <span className="trace-event-title">{escapeHtml(traceTitle(event.event_type, payload))}</span>
+        </div>
+        <span className="badge neutral trace-event-time">{escapeHtml(formatTime(event.timestamp) || `#${index + 1}`)}</span>
       </div>
-    </section>
+      {details.length > 0 && (
+        <div className="trace-event-meta">
+          {details.map(item => (
+            <span key={item} className="trace-meta-pill">{escapeHtml(item)}</span>
+          ))}
+        </div>
+      )}
+      <details className="trace-event-details">
+        <summary>查看原始数据</summary>
+        <pre>{escapeHtml(JSON.stringify(payload, null, 2))}</pre>
+      </details>
+    </article>
   );
 }
 
 function TracePanel({ events }: { events: TraceEvent[] }): React.ReactNode {
+  if (!events.length) return null;
+
   const stdout = events.filter(event => !isErrorTrace(event));
   const stderr = events.filter(event => isErrorTrace(event));
-  if (!events.length) return null;
 
   return (
     <details className="request-container output-container" open>
       <summary className="title">
         <div className="request-main">
           <span className="request-chevron">▼</span>
-          <span className="request-title">Output</span>
+          <span className="request-title">执行轨迹</span>
         </div>
         <div className="request-stats">
           <span className="badge neutral">{String(events.length)} events</span>
+          <span className="badge neutral">{String(stdout.length)} stdout</span>
+          <span className="badge danger">{String(stderr.length)} stderr</span>
         </div>
       </summary>
       <div className="request-details">
-        {renderOutputStream('stdout', stdout)}
-        {renderOutputStream('stderr', stderr)}
+        {stdout.length > 0 && (
+          <section className="output-stream">
+            <h3 className="output-stream-title">stdout</h3>
+            <div className="output-stream-body">
+              {stdout.map((event, index) => (
+                <TraceEventCard key={`${event.event_type}-${event.timestamp ?? index}`} event={event} index={index} />
+              ))}
+            </div>
+          </section>
+        )}
+        {stderr.length > 0 && (
+          <section className="output-stream">
+            <h3 className="output-stream-title">stderr</h3>
+            <div className="output-stream-body">
+              {stderr.map((event, index) => (
+                <TraceEventCard key={`${event.event_type}-${event.timestamp ?? index}`} event={event} index={index} />
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </details>
   );
 }
 
-function MessageActions({ onAction }: { onAction: (action: string) => void }): React.ReactNode {
-  return <div className="message-actions" />;
+async function copyText(text: string): Promise<void> {
+  if (!text) return;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  throw new Error('当前环境不支持剪贴板写入');
 }
 
-function compileTurn(
-  userMessage: Message | null,
-  assistantMessages: Message[],
-  events: TraceEvent[],
-  expandDetails: boolean,
-  onMessageAction: (action: string, messageId: string) => void,
-): React.ReactNode {
+function MessageHeader({ label, time, extra }: { label: string; time: string; extra?: React.ReactNode }): React.ReactNode {
   return (
-    <div className="request-container">
-      {userMessage && (
-        <section className="chat-message user">
-          <div className="chat-message-head">
-            <span>You</span>
-            <span>{escapeHtml(formatTime(userMessage.created_at) || '')}</span>
-          </div>
-          <div className="chat-message-body reply" dangerouslySetInnerHTML={{ __html: renderMarkdown(userMessage.content || '') }} />
-        </section>
-      )}
-      <section>
-        <div className="turn-section-body">
-          {assistantMessages.map((msg, index) => (
-            <div key={`${msg.message_id}_${index}`} className="chat-message assistant">
-              <div className="chat-message-head">
-                <span>{index === 0 ? 'Assistant' : `Assistant #${index + 1}`}</span>
-                <span>{escapeHtml(formatTime(msg.created_at) || '')}</span>
-                <MessageActions onAction={action => onMessageAction(action, msg.message_id)} />
-              </div>
-              <div className="chat-message-body reply" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content || '') }} />
-            </div>
-          ))}
-          {!assistantMessages.length && (
-            <div className="chat-message assistant">
-              <div className="chat-message-head">
-                <span>Assistant</span>
-                <span>running</span>
-              </div>
-              <div className="chat-message-body reply">正在思考并调用工具...</div>
-            </div>
-          )}
-        </div>
-      </section>
-      {expandDetails && events.length > 0 && <TracePanel events={events} />}
+    <div className="chat-message-head">
+      <div className="chat-message-head-main">
+        <span className="chat-message-role">{label}</span>
+        {extra}
+      </div>
+      <span className="chat-message-time">{escapeHtml(time)}</span>
     </div>
+  );
+}
+
+function AssistantMessageCard({ message }: { message: Message }): React.ReactNode {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = React.useCallback(async () => {
+    try {
+      await copyText(message.content || '');
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch (error) {
+      console.error('[webview] copy assistant message failed', error);
+    }
+  }, [message.content]);
+
+  return (
+    <article className="chat-message assistant">
+      <MessageHeader
+        label="Assistant"
+        time={formatTime(message.created_at) || 'now'}
+        extra={<span className="badge neutral">回复</span>}
+      />
+      <div className="chat-message-body reply" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content || '') }} />
+      <div className="message-actions" aria-label="消息操作">
+        <button type="button" className="message-action-button" onClick={handleCopy}>{copied ? '已复制' : '复制'}</button>
+      </div>
+    </article>
+  );
+}
+
+function UserMessageCard({ message }: { message: Message }): React.ReactNode {
+  return (
+    <article className="chat-message user">
+      <MessageHeader label="You" time={formatTime(message.created_at) || 'now'} extra={<span className="badge neutral">输入</span>} />
+      <div className="chat-message-body user-copy">{message.content}</div>
+    </article>
+  );
+}
+
+function TurnCard({ turn, onPrompt, showTrace }: { turn: PendingTurn; onPrompt: (prompt: string) => void; showTrace: boolean }): React.ReactNode {
+  const pending = turn.pending || turn.status === 'running';
+  const assistantCount = turn.assistantMessages.length;
+  const eventCount = turn.events.length;
+  const statusTone = turn.status === 'error' ? 'danger' : pending ? 'warning' : 'active';
+  const statusLabel = turn.status === 'error' ? '失败' : pending ? '运行中' : '已完成';
+
+  return (
+    <article className={`request-container turn-card turn-${turn.status}${pending ? ' turn-pending' : ''}`}>
+      <div className="turn-card-top">
+        <div className="turn-card-top-left">
+          <span className={`badge ${statusTone}`}>{statusLabel}</span>
+          <span className="turn-card-title">{turn.userMessage?.content?.trim() ? '用户请求' : '未命名请求'}</span>
+        </div>
+        <div className="turn-card-stats">
+          <span className="badge neutral">{String(assistantCount)} replies</span>
+          <span className="badge neutral">{String(eventCount)} events</span>
+        </div>
+      </div>
+
+      <div className="turn-context-row">
+        <span className="context-chip">@workspace</span>
+        <span className="context-chip">#session</span>
+        <span className="context-chip">{turn.pending ? 'streaming' : 'stable'}</span>
+      </div>
+
+      {turn.userMessage && <UserMessageCard message={turn.userMessage} />}
+
+      <section className="turn-section-body">
+        {assistantCount > 0 ? (
+          turn.assistantMessages.map(message => <AssistantMessageCard key={message.message_id} message={message} />)
+        ) : (
+          <div className="chat-message assistant pending-message">
+            <MessageHeader label="Assistant" time={formatTime(new Date().toISOString()) || 'now'} extra={<span className="badge warning">思考中</span>} />
+            <div className="chat-message-body reply">正在整理上下文并生成结果…</div>
+          </div>
+        )}
+      </section>
+
+      <div className="followup-actions" aria-label="后续建议">
+        <button type="button" className="followup-pill" onClick={() => onPrompt('请继续解释上面的结论，给出更具体的实现步骤。')}>继续解释</button>
+        <button type="button" className="followup-pill" onClick={() => onPrompt('请把上面的方案整理成可执行的任务清单。')}>任务清单</button>
+        <button type="button" className="followup-pill" onClick={() => onPrompt('请补充边界情况和风险点。')}>补充风险</button>
+      </div>
+
+      {showTrace && turn.events.length > 0 && <TracePanel events={turn.events} />}
+    </article>
   );
 }
 
@@ -123,24 +235,23 @@ interface ChatPanelProps {
 }
 
 export default function ChatPanel({ turns, expandDetails }: ChatPanelProps) {
-  const handleMessageAction = (action: string) => {
-    void action;
-  };
+  const { sendMessage } = useAppState();
+
+  const handlePrompt = React.useCallback((prompt: string) => {
+    sendMessage(prompt);
+  }, [sendMessage]);
 
   return (
-    <section className="chat-stream">
+    <section className="chat-stream" data-expand-details={String(expandDetails)}>
       {turns.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-state-title">会话</div>
-          <div>输入内容开始聊天。</div>
+          <div className="empty-state-title">对话区</div>
+          <div>输入消息后，这里会显示完整的会话卡片、回复和 trace 细节。</div>
         </div>
       ) : (
-        turns.map(turn => (
-          <React.Fragment key={turn.turnId}>
-            {compileTurn(turn.userMessage, turn.assistantMessages, turn.events, expandDetails, handleMessageAction)}
-          </React.Fragment>
-        ))
+        turns.map(turn => <TurnCard key={turn.turnId} turn={turn} onPrompt={handlePrompt} showTrace={expandDetails} />)
       )}
+      <div className="chat-stream-bottom-spacer" />
     </section>
   );
 }

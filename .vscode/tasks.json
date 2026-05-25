@@ -4,7 +4,7 @@
     {
       "label": "build:webview-ui",
       "type": "shell",
-      "command": "bun",
+      "command": "${workspaceFolder}\\tools\\bun.exe",
       "args": ["run", "build"],
       "options": {
         "cwd": "${workspaceFolder}/src/webview-ui"
