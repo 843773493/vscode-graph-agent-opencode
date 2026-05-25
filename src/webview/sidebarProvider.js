@@ -7,6 +7,10 @@ import { DEFAULT_AGENT_ID, DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_TOKEN, DEFAULT_
 import { HostToWebviewMessageType, WebviewToHostMessageType } from '../shared/protocol.js';
 import { renderSidebarHtml } from './html.js';
 
+function getWebviewUiDistDir(extensionUri) {
+  return path.join(extensionUri.fsPath, 'src', 'webview-ui', 'dist');
+}
+
 function getNonce() {
   return String(Date.now()) + String(Math.random()).slice(2);
 }
@@ -132,8 +136,8 @@ export class SidebarProvider {
 
     webview.html = renderSidebarHtml(webview, {
       nonce: getNonce(),
-      distCssUri: webview.asWebviewUri(vscode.Uri.file(path.join(this.context.extensionUri.fsPath, 'src', 'webview', 'dist', 'assets', 'index.css'))).toString(),
-      distJsUri: webview.asWebviewUri(vscode.Uri.file(path.join(this.context.extensionUri.fsPath, 'src', 'webview', 'dist', 'assets', 'index.js'))).toString(),
+      distCssUri: webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.css'))).toString(),
+      distJsUri: webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.js'))).toString(),
       apiPort: this.state.apiPort,
       workspaceRoot: this.state.workspace?.root_path ?? '',
       workspaceName: this.state.workspace?.name ?? 'workspace',

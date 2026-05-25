@@ -5,6 +5,7 @@
             "name": "Run VS Code Extension",
             "type": "extensionHost",
             "request": "launch",
+            "preLaunchTask": "build:webview-ui",
             "runtimeExecutable": "${execPath}",
             "args": [
                 "--extensionDevelopmentPath=${workspaceFolder}"
