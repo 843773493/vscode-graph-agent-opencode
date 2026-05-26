@@ -3,8 +3,6 @@
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
   font-weight: var(--vscode-font-weight);
-  --layout-history-width: clamp(260px, 24vw, 340px);
-  --layout-history-width-drawer: min(var(--layout-history-width), calc(100vw - 48px));
   --panel-radius: 14px;
   --surface-gap: 10px;
   --surface-border: 1px solid var(--vscode-panel-border);
@@ -49,19 +47,41 @@ body { display: flex; }
   background: rgba(127, 127, 127, 0.03);
   backdrop-filter: blur(14px) saturate(1.08);
   flex: 0 0 auto;
+  min-width: 0;
 }
 
 .toolbar-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .toolbar-group-left { flex: 0 0 auto; }
-.toolbar-group-right { justify-content: flex-end; flex: 0 0 auto; }
-.toolbar-center { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; }
+.toolbar-group-right { justify-content: flex-end; flex: 1 1 auto; margin-left: auto; min-width: 0; }
+.toolbar-center { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; overflow: hidden; }
 .toolbar-center-stack { display: flex; flex-direction: column; align-items: center; min-width: 0; gap: 2px; }
-.toolbar-agent { font-size: 12px; color: var(--vscode-editor-foreground); font-weight: 700; line-height: 1.1; }
+.toolbar-agent { font-size: 12px; color: var(--vscode-editor-foreground); font-weight: 700; line-height: 1.1; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .toolbar-subtitle,
 .toolbar-path { font-size: 10px; color: var(--vscode-descriptionForeground); }
 .toolbar-subtitle,
 .toolbar-center .toolbar-agent,
 .toolbar-path { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.toolbar-agent > span,
+.toolbar-path > span,
+.toolbar-button-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.toolbar-path,
+.toolbar-agent {
+  min-width: 0;
+}
+
+.toolbar-path > span:last-child,
+.toolbar-agent > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .toolbar-icon-button {
   border: 1px solid transparent;
@@ -257,11 +277,19 @@ body { display: flex; }
 }
 .layout-drawer.history-open .content-scrim { opacity: 1; pointer-events: auto; }
 
-.layout-docked .history-panel { width: var(--layout-history-width); max-width: 100%; z-index: 1; }
-.layout-docked.history-closed .history-panel { display: none; }
 .layout-drawer .history-panel,
-.layout-hidden .history-panel { position: absolute; inset: 0 auto 0 0; width: var(--layout-history-width-drawer); max-width: 100%; }
-.layout-drawer .history-panel { transform: translateX(-102%); transition: transform 180ms ease; z-index: 20; box-shadow: var(--surface-shadow); }
+.layout-hidden .history-panel {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: min(280px, calc(100vw - 24px));
+  max-width: 100%;
+}
+.layout-drawer .history-panel {
+  transform: translateX(-102%);
+  transition: transform 180ms ease;
+  z-index: 20;
+  box-shadow: var(--surface-shadow);
+}
 .layout-drawer.history-open .history-panel { transform: translateX(0); }
 .layout-drawer.history-closed .history-panel { pointer-events: none; }
 .layout-hidden .history-panel { display: none; }
@@ -450,8 +478,12 @@ body { display: flex; }
 }
 .composer textarea:focus { border-color: var(--vscode-focusBorder); }
 .composer-hint { font-size: 11px; color: var(--vscode-descriptionForeground); }
-.composer-actions { align-items: center; justify-content: space-between; }
-.composer-actions-left, .composer-actions-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.composer-actions { align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.composer-actions-left,
+.composer-actions-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.composer-actions-right { margin-left: auto; flex: 1 1 auto; justify-content: flex-end; }
+.composer-actions-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
+.composer-agent-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 18ch; display: inline-block; }
 .composer-actions-left button,
 .composer-actions button {
   border: 1px solid var(--vscode-panel-border);
@@ -466,12 +498,17 @@ body { display: flex; }
 .composer-actions button:disabled { opacity: .45; cursor: default; }
 .composer-actions-right #agentSelectButton {
   background: var(--vscode-input-background);
+  max-width: 100%;
+  width: auto;
 }
 .composer-actions-right #agentSelectButton svg {
   width: 12px;
   height: 12px;
   margin-left: 6px;
   fill: currentColor;
+}
+.composer-actions-right #agentSelectButton span {
+  min-width: 0;
 }
 .send-button {
   background: var(--vscode-button-background) !important;
