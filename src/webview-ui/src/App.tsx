@@ -2,41 +2,14 @@ import React from 'react';
 import ChatPanel from './components/ChatPanel';
 import Composer from './components/Composer';
 import HistoryPanel from './components/HistoryPanel';
+import Toolbar from './components/Toolbar';
 import { getTurnsForSession, useAppState } from './hooks';
 
 type LayoutMode = 'docked' | 'drawer' | 'hidden';
 
 function resolveLayoutMode(width: number): LayoutMode {
-  if (width >= 960) return 'docked';
-  if (width >= 600) return 'drawer';
+  if (width >= 900) return 'drawer';
   return 'hidden';
-}
-
-function Toolbar({ workspaceName, workspaceRoot, status, layoutMode }: { workspaceName: string; workspaceRoot: string; status: string; layoutMode: LayoutMode }) {
-  const { createSession, toggleHistoryPanel } = useAppState();
-  const wsLabel = workspaceRoot || workspaceName;
-  const canToggleHistory = layoutMode !== 'hidden';
-
-  return (
-    <header className="toolbar">
-      <div className="toolbar-group toolbar-group-left">
-        <button type="button" className="toolbar-icon-button toolbar-icon-primary" title="新建会话" onClick={() => createSession('新会话')}>＋</button>
-        <button type="button" className="toolbar-icon-button" title={canToggleHistory ? '历史记录' : '当前宽度下隐藏历史栏'} onClick={toggleHistoryPanel} disabled={!canToggleHistory}>
-          {layoutMode === 'drawer' ? '抽屉' : '历史'}
-        </button>
-      </div>
-      <div className="toolbar-center" title={wsLabel}>
-        <div className="toolbar-center-stack">
-          <span className="toolbar-agent">default</span>
-          <span className="toolbar-subtitle">{workspaceName || 'workspace'}</span>
-        </div>
-      </div>
-      <div className="toolbar-group toolbar-group-right">
-        <span className="badge neutral toolbar-path" title={wsLabel}>{wsLabel}</span>
-        <span className="badge neutral" aria-live="polite">{status}</span>
-      </div>
-    </header>
-  );
 }
 
 export default function AppShell() {
@@ -77,7 +50,7 @@ export default function AppShell() {
       data-layout-mode={layoutMode}
       data-history-open={String(historyVisible)}
     >
-      <Toolbar workspaceName={state.workspaceName} workspaceRoot={state.workspaceRoot} status={state.status} layoutMode={layoutMode} />
+      <Toolbar workspaceName={state.workspaceName} workspaceRoot={state.workspaceRoot} status={state.status} layoutMode={layoutMode} agentId={state.currentSession?.agent_id ?? 'default'} />
       <main className="content">
         <div className="content-layout">
           <HistoryPanel

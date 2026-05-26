@@ -1,23 +1,63 @@
 import React from 'react';
 import { useAppState } from '../hooks';
 
-export default function Toolbar() {
-  const { state, createSession, toggleHistoryPanel } = useAppState();
-  const wsLabel = state.workspaceRoot || state.workspaceName;
+function shortLabel(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return 'workspace';
+  const parts = trimmed.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || trimmed;
+}
+
+function Icon({ children }: { children: React.ReactNode }) {
+  return <span className="toolbar-button-icon" aria-hidden="true">{children}</span>;
+}
+
+export default function Toolbar({ workspaceName, workspaceRoot, status, layoutMode, agentId }: { workspaceName: string; workspaceRoot: string; status: string; layoutMode: 'docked' | 'drawer' | 'hidden'; agentId: string }) {
+  const { createSession, toggleHistoryPanel } = useAppState();
+  const wsLabel = workspaceRoot || workspaceName;
+  const wsShort = shortLabel(wsLabel);
+  const canToggleHistory = layoutMode !== 'hidden';
+  const compact = layoutMode !== 'docked';
+  const agentLabel = agentId || 'default';
 
   return (
     <header className="toolbar">
       <div className="toolbar-group toolbar-group-left">
-        <button type="button" className="toolbar-icon-button" title="新建会话" onClick={() => createSession('新会话')}>+</button>
-        <button type="button" className="toolbar-icon-button" title="历史记录" onClick={toggleHistoryPanel}>历史</button>
-        <button type="button" className="toolbar-icon-button" title="固定会话" disabled>置顶</button>
+        <button type="button" className="toolbar-icon-button toolbar-icon-primary" title="新建会话" onClick={() => createSession('新会话')}>
+          <Icon>
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+          </Icon>
+        </button>
+        <button type="button" className="toolbar-icon-button" title={canToggleHistory ? '历史记录' : '当前宽度下隐藏历史栏'} onClick={toggleHistoryPanel} disabled={!canToggleHistory}>
+          <Icon>
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2a6 6 0 1 0 6 6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 4v5l3 2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </Icon>
+        </button>
       </div>
-      <div className="toolbar-center" title={state.currentSession?.agent_id || 'default'}>
-        <span className="toolbar-agent">{state.currentSession?.agent_id || 'default'}</span>
+      <div className="toolbar-center" title={agentLabel}>
+        <div className="toolbar-center-stack">
+          <span className="toolbar-agent">
+            <Icon>
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2.5a2 2 0 0 1 2 2V5h1.5A2.5 2.5 0 0 1 14 7.5v4A2.5 2.5 0 0 1 11.5 14h-7A2.5 2.5 0 0 1 2 11.5v-4A2.5 2.5 0 0 1 4.5 5H6v-.5a2 2 0 0 1 2-2Zm-1 4.5h2v1h-2v-1Zm0 2.5h2v1h-2v-1Z" fill="currentColor"/></svg>
+            </Icon>
+            {!compact && <span>{agentLabel}</span>}
+          </span>
+          {!compact && <span className="toolbar-subtitle">{workspaceName || 'workspace'}</span>}
+        </div>
       </div>
       <div className="toolbar-group toolbar-group-right">
-        <span className="badge neutral" title={wsLabel}>{wsLabel}</span>
-        <span className="badge neutral" aria-live="polite">{state.status}</span>
+        <span className="badge neutral toolbar-path" title={wsLabel} aria-label={wsLabel}>
+          <Icon>
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 5A1.5 1.5 0 0 1 4 3.5h2.8l1.4 1.5H12A1.5 1.5 0 0 1 13.5 6.5v5A1.5 1.5 0 0 1 12 13H4A1.5 1.5 0 0 1 2.5 11.5z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/></svg>
+          </Icon>
+          {!compact && <span>{wsShort}</span>}
+        </span>
+        <span className="badge neutral" aria-live="polite" title={status} aria-label={status}>
+          <Icon>
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" strokeWidth="1.2"/><path d="M8 5v3l2 1" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </Icon>
+          {!compact && <span>{status}</span>}
+        </span>
       </div>
     </header>
   );
