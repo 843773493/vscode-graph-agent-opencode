@@ -1,17 +1,17 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type React from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { HostToWebviewMessageType, WebviewToHostMessageType } from '../../shared/protocol.js';
 import type {
-  ActiveJob,
-  AppState,
-  HostStateMessage,
-  HostToWebviewMessage,
-  Message,
-  PendingTurn,
-  Session,
-  TraceEvent,
+    ActiveJob,
+    AppState,
+    HostStateMessage,
+    HostToWebviewMessage,
+    Message,
+    PendingTurn,
+    Session,
+    TraceEvent,
 } from './types';
-import { getPersistedState, postDebug, postMessage, setVsCodeState } from './vscode';
+import { postDebug, postMessage, setVsCodeState } from './vscode';
 
 const INITIAL_STATE: AppState = {
   workspaceRoot: '',
@@ -114,6 +114,23 @@ function readBootState(): Partial<AppState> {
   }
 }
 
+function readPersistedState(): Partial<AppState> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  const acquire = (window as Window & { acquireVsCodeApi?: () => { getState: <T>() => T | undefined } }).acquireVsCodeApi;
+  if (!acquire) {
+    return {};
+  }
+
+  try {
+    return acquire().getState<Partial<AppState>>() ?? {};
+  } catch {
+    return {};
+  }
+}
+
 function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppState {
   const pendingTurns = new Map<string, PendingTurn>();
   const bootPendingTurns = (boot as { pendingTurns?: PendingTurn[] }).pendingTurns ?? (persisted as { pendingTurns?: PendingTurn[] }).pendingTurns ?? [];
@@ -137,7 +154,7 @@ function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppS
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AppState>(() => mergeState(readBootState(), getPersistedState<Partial<AppState>>() ?? {}));
+  const [state, setState] = useState<AppState>(() => mergeState(readBootState(), readPersistedState()));
 
   const setStatus = useCallback((text: string) => {
     setState(prev => ({ ...prev, status: text }));

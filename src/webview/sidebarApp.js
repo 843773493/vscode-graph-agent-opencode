@@ -1008,28 +1008,19 @@ function initializeWebview() {
   }
 }
 
-newSessionButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('新建 session');
+bindButtonClick(newSessionButton, '新建 session', () => {
   vscode.postMessage({ type: 'createSession', title: '新会话' });
 });
 
-refreshButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('刷新');
+bindButtonClick(refreshButton, '刷新', () => {
   vscode.postMessage({ type: 'refresh' });
 });
 
-sendButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('发送按钮点击');
+bindButtonClick(sendButton, '发送按钮点击', () => {
   void submitCurrentMessage();
 });
 
-attachButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  showTodoFeedback('附件选择');
-});
+bindSimpleTodoButton(attachButton, '附件选择', '附件选择按钮点击');
 
 function updateAgentDisplay() {
   const agentNameDisplay = document.getElementById('agentNameDisplay');
@@ -1041,6 +1032,135 @@ function updateAgentDisplay() {
     const displayName = agentId.length > 12 ? agentId.slice(0, 10) + '…' : agentId;
     agentNameDisplay.textContent = displayName;
     agentSelectButton.title = `当前Agent: ${agentId} - 点击切换`;
+  }
+}
+
+function bindButtonClick(button, debugLabel, handler) {
+  button?.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (debugLabel) {
+      postDebug(debugLabel);
+    }
+    handler(event);
+  });
+}
+
+function bindSimpleTodoButton(button, label, debugLabel) {
+  bindButtonClick(button, debugLabel, () => showTodoFeedback(label));
+}
+
+function toggleHistoryPanelVisibility() {
+  const historyPanel = document.getElementById('historyPanel');
+  const chatPanel = document.getElementById('chatPanel');
+
+  if (!historyPanel || !chatPanel) return;
+
+  const isOpen = historyPanel.classList.contains('open');
+
+  if (isOpen) {
+    historyPanel.classList.remove('open');
+    chatPanel.classList.remove('with-history');
+    historyButton.classList.remove('active');
+    return;
+  }
+
+  historyPanel.classList.add('open');
+  chatPanel.classList.add('with-history');
+  historyButton.classList.add('active');
+  renderSessionList();
+  vscode.postMessage({ type: 'listSessions' });
+}
+
+function toggleAutoContinueForActiveSession() {
+  const activeSession = getActiveSession();
+  if (!activeSession) {
+    setStatus('请先创建会话', true);
+    return;
+  }
+
+  const sessionId = activeSession.session_id;
+  const currentEnabled = uiState.autoContinueEnabled.get(sessionId) ?? false;
+  const newEnabled = !currentEnabled;
+
+  uiState.autoContinueEnabled.set(sessionId, newEnabled);
+  autoContinueButton.classList.toggle('active', newEnabled);
+  autoContinueButton.title = newEnabled ? '🔄 托管模式 - 开启' : '🔄 托管模式 - 关闭';
+
+  try {
+    vscode.postMessage({ type: newEnabled ? 'autoContinueStart' : 'autoContinueStop', sessionId });
+    setStatus(newEnabled ? '托管模式已开启，代理完成后将自动继续' : '托管模式已关闭');
+  } catch (error) {
+    reportWebviewError(error);
+  }
+
+  persistState();
+}
+
+function handleMessageAction(action) {
+  postDebug(`消息操作按钮点击: ${action}`);
+
+  switch (action) {
+    case 'copy':
+      showTodoFeedback('复制完整回复');
+      break;
+    case 'regenerate':
+      showTodoFeedback('重新生成');
+      break;
+    case 'thumbs-up':
+      showTodoFeedback('点赞');
+      break;
+    case 'thumbs-down':
+      showTodoFeedback('点踩');
+      break;
+    case 'edit-retry':
+      showTodoFeedback('编辑并重试');
+      break;
+    case 'insert-editor':
+      showTodoFeedback('插入到编辑器');
+      break;
+    case 'run-terminal':
+      showTodoFeedback('在终端运行');
+      break;
+    case 'create-file':
+      showTodoFeedback('创建新文件');
+      break;
+    case 'explain-code':
+      showTodoFeedback('解释代码');
+      break;
+    case 'optimize-code':
+      showTodoFeedback('优化代码');
+      break;
+    case 'add-comments':
+      showTodoFeedback('添加注释');
+      break;
+    case 'share':
+      showTodoFeedback('分享');
+      break;
+  }
+}
+
+function handleCodeAction(action) {
+  postDebug(`代码块操作按钮点击: ${action}`);
+
+  switch (action) {
+    case 'copy':
+      showTodoFeedback('复制代码块');
+      break;
+    case 'insert-cursor':
+      showTodoFeedback('插入光标处');
+      break;
+    case 'replace-selection':
+      showTodoFeedback('替换选中内容');
+      break;
+    case 'run-terminal':
+      showTodoFeedback('在终端执行');
+      break;
+    case 'new-file':
+      showTodoFeedback('新建文件');
+      break;
+    case 'view-diff':
+      showTodoFeedback('查看差异');
+      break;
   }
 }
 
@@ -1242,37 +1362,9 @@ voiceInputButton?.addEventListener('click', (event) => {
   showTodoFeedback('语音输入');
 });
 
-stopButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  showTodoFeedback('停止生成');
-});
+bindSimpleTodoButton(mentionButton, '@提及', '@提及按钮点击');
+bindSimpleTodoButton(quickPromptButton, '快速提示', '快速提示按钮点击');
 
-mentionButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('@提及按钮点击');
-  // TODO: 实现@提及选择器
-});
-
-quickPromptButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('快速提示按钮点击');
-  // TODO: 实现快速提示菜单
-});
-
-clearInputButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('清空输入按钮点击');
-  inputEl.value = '';
-  inputEl.focus();
-});
-
-voiceInputButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('语音输入按钮点击');
-  // TODO: 实现语音输入功能
-});
-
-stopButton?.addEventListener('click', (event) => {
   event.preventDefault();
   postDebug('停止生成按钮点击');
   // TODO: 实现停止生成功能
@@ -1280,24 +1372,9 @@ stopButton?.addEventListener('click', (event) => {
 
 pinButton?.addEventListener('click', (event) => {
   event.preventDefault();
-  postDebug('固定会话按钮点击');
-  showTodoFeedback('固定会话');
-  // TODO: 实现固定会话功能
-});
-
-historyButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('历史会话按钮点击');
-  
-  const historyPanel = document.getElementById('historyPanel');
-  const chatPanel = document.getElementById('chatPanel');
-  
-  if (!historyPanel || !chatPanel) return;
-  
-  // 切换面板状态
-  const isOpen = historyPanel.classList.contains('open');
-  
-  if (isOpen) {
+bindSimpleTodoButton(voiceInputButton, '语音输入', '语音输入按钮点击');
+bindSimpleTodoButton(stopButton, '停止生成', '停止生成按钮点击');
+bindSimpleTodoButton(pinButton, '固定会话', '固定会话按钮点击');
     // 关闭面板
     historyPanel.classList.remove('open');
     chatPanel.classList.remove('with-history');
@@ -1315,70 +1392,13 @@ historyButton?.addEventListener('click', (event) => {
   }
 });
 
-viewToggleButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('视图切换按钮点击');
-  showTodoFeedback('视图切换');
-  // TODO: 实现视图切换功能
-});
+bindSimpleTodoButton(viewToggleButton, '视图切换', '视图切换按钮点击');
+bindSimpleTodoButton(contextButton, '上下文管理', '上下文按钮点击');
+bindSimpleTodoButton(helpButton, '帮助', '帮助按钮点击');
+bindSimpleTodoButton(settingsButton, '设置', '设置按钮点击');
 
-
-
-contextButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('上下文按钮点击');
-  showTodoFeedback('上下文管理');
-  // TODO: 实现上下文管理功能
-});
-
-helpButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('帮助按钮点击');
-  showTodoFeedback('帮助');
-  // TODO: 实现帮助功能
-});
-
-settingsButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('设置按钮点击');
-  showTodoFeedback('设置');
-  // TODO: 实现设置功能
-});
-
-autoContinueButton?.addEventListener('click', (event) => {
-  event.preventDefault();
-  postDebug('自动继续按钮点击');
-  
-  const activeSession = getActiveSession();
-  if (!activeSession) {
-    setStatus('请先创建会话', true);
-    return;
-  }
-  
-  const sessionId = activeSession.session_id;
-  const currentEnabled = uiState.autoContinueEnabled.get(sessionId) ?? false;
-  const newEnabled = !currentEnabled;
-  
-  uiState.autoContinueEnabled.set(sessionId, newEnabled);
-  
-  // 更新按钮状态
-  autoContinueButton.classList.toggle('active', newEnabled);
-  autoContinueButton.title = newEnabled ? '🔄 托管模式 - 开启' : '🔄 托管模式 - 关闭';
-  
-  // 调用后端API
-  try {
-    if (newEnabled) {
-      vscode.postMessage({ type: 'autoContinueStart', sessionId });
-      setStatus('托管模式已开启，代理完成后将自动继续');
-    } else {
-      vscode.postMessage({ type: 'autoContinueStop', sessionId });
-      setStatus('托管模式已关闭');
-    }
-  } catch (error) {
-    reportWebviewError(error);
-  }
-  
-  persistState();
+bindButtonClick(autoContinueButton, '自动继续按钮点击', () => {
+  toggleAutoContinueForActiveSession();
 });
 
 expandDetailsToggle?.addEventListener('change', (event) => {
@@ -1471,91 +1491,17 @@ sessionListEl?.addEventListener('click', (event) => {
   event.stopPropagation();
 });
 
-// 消息操作按钮点击事件
+// 消息/代码块操作按钮点击事件
 turnListEl?.addEventListener('click', (event) => {
-  const button = event.target?.closest?.('.action-btn');
-  if (!button) {
+  const messageButton = event.target?.closest?.('.action-btn');
+  if (messageButton) {
+    handleMessageAction(messageButton.getAttribute('data-action'));
     return;
   }
 
-  const action = button.getAttribute('data-action');
-  const messageElement = button.closest('.chat-message');
-  
-  postDebug(`消息操作按钮点击: ${action}`);
-
-  switch (action) {
-    case 'copy':
-      showTodoFeedback('复制完整回复');
-      break;
-    case 'regenerate':
-      showTodoFeedback('重新生成');
-      break;
-    case 'thumbs-up':
-      showTodoFeedback('点赞');
-      break;
-    case 'thumbs-down':
-      showTodoFeedback('点踩');
-      break;
-    case 'edit-retry':
-      showTodoFeedback('编辑并重试');
-      break;
-    case 'insert-editor':
-      showTodoFeedback('插入到编辑器');
-      break;
-    case 'run-terminal':
-      showTodoFeedback('在终端运行');
-      break;
-    case 'create-file':
-      showTodoFeedback('创建新文件');
-      break;
-    case 'explain-code':
-      showTodoFeedback('解释代码');
-      break;
-    case 'optimize-code':
-      showTodoFeedback('优化代码');
-      break;
-    case 'add-comments':
-      showTodoFeedback('添加注释');
-      break;
-    case 'share':
-      showTodoFeedback('分享');
-      break;
-  }
-});
-
-// 代码块操作按钮点击事件
-turnListEl?.addEventListener('click', (event) => {
-  const button = event.target?.closest?.('.code-action-btn');
-  if (!button) {
-    return;
-  }
-
-  const action = button.getAttribute('data-code-action');
-  const codeBlock = button.closest('.code-block-container');
-  const codeElement = codeBlock?.querySelector('code');
-  const codeContent = codeElement?.textContent || '';
-  
-  postDebug(`代码块操作按钮点击: ${action}`);
-
-  switch (action) {
-    case 'copy':
-      showTodoFeedback('复制代码块');
-      break;
-    case 'insert-cursor':
-      showTodoFeedback('插入光标处');
-      break;
-    case 'replace-selection':
-      showTodoFeedback('替换选中内容');
-      break;
-    case 'run-terminal':
-      showTodoFeedback('在终端执行');
-      break;
-    case 'new-file':
-      showTodoFeedback('新建文件');
-      break;
-    case 'view-diff':
-      showTodoFeedback('查看差异');
-      break;
+  const codeButton = event.target?.closest?.('.code-action-btn');
+  if (codeButton) {
+    handleCodeAction(codeButton.getAttribute('data-code-action'));
   }
 });
 

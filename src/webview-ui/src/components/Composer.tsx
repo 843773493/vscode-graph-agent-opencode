@@ -7,6 +7,14 @@ function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
 }
 
+function insertLineBreak(value: string, start: number, end: number): string {
+  return value.slice(0, start) + '\n' + value.slice(end);
+}
+
+function isSendShortcut(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
+  return event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+}
+
 export default function Composer() {
   const { state, sendMessage } = useAppState();
   const [input, setInput] = useState('');
@@ -37,9 +45,14 @@ export default function Composer() {
       e.preventDefault();
       const start = e.currentTarget.selectionStart ?? input.length;
       const end = e.currentTarget.selectionEnd ?? input.length;
-      setInput(input.slice(0, start) + '\n' + input.slice(end));
+      setInput(insertLineBreak(input, start, end));
       return;
     }
+
+    if (!isSendShortcut(e)) {
+      return;
+    }
+
     e.preventDefault();
     handleSend();
   };

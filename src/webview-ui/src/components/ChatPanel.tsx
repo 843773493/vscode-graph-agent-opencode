@@ -1,8 +1,8 @@
 import React from 'react';
-import type { PendingTurn, TraceEvent, Message } from '../types';
-import { renderMarkdown } from '../utils/markdown';
-import { escapeHtml, formatTime } from '../utils/format';
 import { useAppState } from '../hooks';
+import type { Message, PendingTurn, TraceEvent } from '../types';
+import { escapeHtml, formatTime } from '../utils/format';
+import { renderMarkdown } from '../utils/markdown';
 
 type TraceTone = 'running' | 'done' | 'danger';
 
@@ -59,7 +59,7 @@ function TraceEventCard({ event, index }: { event: TraceEvent; index: number }):
           <span className={`trace-dot trace-${tone}`} />
           <span className="trace-event-title">{escapeHtml(traceTitle(event.event_type, payload))}</span>
         </div>
-        <span className="badge neutral trace-event-time">{escapeHtml(formatTime(event.timestamp) || `#${index + 1}`)}</span>
+        <span className="badge neutral trace-event-time">{escapeHtml(displayTime(event.timestamp) || `#${index + 1}`)}</span>
       </div>
       {details.length > 0 && (
         <div className="trace-event-meta">
@@ -130,6 +130,10 @@ async function copyText(text: string): Promise<void> {
   throw new Error('当前环境不支持剪贴板写入');
 }
 
+function displayTime(value: unknown): string {
+  return formatTime(value) || 'now';
+}
+
 function MessageHeader({ label, time, extra }: { label: string; time: string; extra?: React.ReactNode }): React.ReactNode {
   return (
     <div className="chat-message-head">
@@ -159,7 +163,7 @@ function AssistantMessageCard({ message }: { message: Message }): React.ReactNod
     <article className="chat-message assistant">
       <MessageHeader
         label="Assistant"
-        time={formatTime(message.created_at) || 'now'}
+        time={displayTime(message.created_at)}
         extra={<span className="badge neutral">回复</span>}
       />
       <div className="chat-message-body reply" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content || '') }} />
@@ -173,7 +177,7 @@ function AssistantMessageCard({ message }: { message: Message }): React.ReactNod
 function UserMessageCard({ message }: { message: Message }): React.ReactNode {
   return (
     <article className="chat-message user">
-      <MessageHeader label="You" time={formatTime(message.created_at) || 'now'} extra={<span className="badge neutral">输入</span>} />
+      <MessageHeader label="You" time={displayTime(message.created_at)} extra={<span className="badge neutral">输入</span>} />
       <div className="chat-message-body user-copy">{message.content}</div>
     </article>
   );
@@ -212,7 +216,7 @@ function TurnCard({ turn, onPrompt, showTrace }: { turn: PendingTurn; onPrompt: 
           turn.assistantMessages.map(message => <AssistantMessageCard key={message.message_id} message={message} />)
         ) : (
           <div className="chat-message assistant pending-message">
-            <MessageHeader label="Assistant" time={formatTime(new Date().toISOString()) || 'now'} extra={<span className="badge warning">思考中</span>} />
+            <MessageHeader label="Assistant" time={displayTime(new Date().toISOString())} extra={<span className="badge warning">思考中</span>} />
             <div className="chat-message-body reply">正在整理上下文并生成结果…</div>
           </div>
         )}

@@ -26,9 +26,6 @@ const vscode = getVsCodeApi();
 export function postMessage(msg: WebviewToHostMessage): void {
   if (vscode) {
     vscode.postMessage(msg);
-  } else {
-    // dev fallback
-    window.dispatchEvent(new MessageEvent('message', { data: msg }));
   }
 }
 
@@ -46,8 +43,4 @@ export function postError(message: string): void {
 
 export function setVsCodeState(state: unknown): void {
   vscode?.setState(state);
-}
-
-export function getPersistedState<T>(): T | undefined {
-  return vscode?.getState<T>();
 }
