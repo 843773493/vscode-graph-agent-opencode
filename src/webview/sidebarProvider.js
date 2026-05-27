@@ -81,9 +81,10 @@ async function requestBackendJson(port, message) {
 }
 
 export class SidebarProvider {
-  constructor(context, backendManager) {
+  constructor(context, backendManager, options = {}) {
     this.context = context;
     this.backendManager = backendManager;
+    this.shellMode = Boolean(options.shellMode || process.env.GRAPH_AGENT_UI_SHELL_DEBUG === '1');
     this.view = null;
     this.webviewMessageDisposable = null;
     this.visibilityDisposable = null;
@@ -103,6 +104,37 @@ export class SidebarProvider {
       agents: [],
       traceEvents: [],
     };
+  }
+
+  async createShellDebugPanel() {
+    if (!this.shellMode) {
+      this.log('shellMode 未开启，按纯壳调试面板逻辑打开');
+    }
+    const panel = vscode.window.createWebviewPanel(
+      'vscode-graph-agent-shell-debug',
+      'Graph Agent UI Shell Debug',
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [this.context.extensionUri],
+      },
+    );
+
+    panel.webview.html = renderSidebarHtml(panel.webview, {
+      nonce: getNonce(),
+      shellMode: true,
+      apiPort: this.state.apiPort,
+      workspaceRoot: this.state.workspace?.root_path ?? '',
+      workspaceName: this.state.workspace?.name ?? 'workspace',
+      sessions: [],
+      session: null,
+      messages: [],
+      traceEvents: [],
+      activeJob: null,
+    });
+
+    return panel;
   }
 
   log(message) {
@@ -136,8 +168,9 @@ export class SidebarProvider {
 
     webview.html = renderSidebarHtml(webview, {
       nonce: getNonce(),
-      distCssUri: webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.css'))).toString(),
-      distJsUri: webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.js'))).toString(),
+      shellMode: this.shellMode,
+      distCssUri: this.shellMode ? '' : webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.css'))).toString(),
+      distJsUri: this.shellMode ? '' : webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.js'))).toString(),
       apiPort: this.state.apiPort,
       workspaceRoot: this.state.workspace?.root_path ?? '',
       workspaceName: this.state.workspace?.name ?? 'workspace',

@@ -2,7 +2,7 @@
 
 ## 目录作用
 
-`src/webview-ui/` 是 VS Code 侧边栏 Webview 的 React 前端源码。由 Vite 构建，产物输出到 `src/webview/dist/assets/`，由 `sidebarProvider.js` 通过 `webview.asWebviewUri()` 注入 webview。
+`src/webview-ui/` 是 VS Code 侧边栏 Webview 的 React 前端源码。由 Vite 构建，产物输出到 `src/webview-ui/dist/assets/`，由 `sidebarProvider.js` 通过 `webview.asWebviewUri()` 注入 webview。
 
 如果你主要写后端，这里可以理解成“真正写页面的前端工程”：
 

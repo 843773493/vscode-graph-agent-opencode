@@ -1,6 +1,7 @@
 export const EXTENSION_ID = 'vscode-graph-agent';
 export const SIDEBAR_VIEW_ID = 'vscode-graph-agent.sidebar';
 export const OPEN_SIDEBAR_COMMAND = 'vscode-graph-agent.openSidebar';
+export const OPEN_UI_SHELL_DEBUG_COMMAND = 'graph-agent.openUiShellDebug';
 
 export const DEFAULT_BACKEND_HOST = '127.0.0.1';
 export const DEFAULT_BACKEND_PORT = 8000;

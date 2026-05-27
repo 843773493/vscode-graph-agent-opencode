@@ -7,7 +7,6 @@ interface HistoryPanelProps {
   currentSessionId: string;
   onSelectSession: (sessionId: string) => void;
   isOpen: boolean;
-  layoutMode: 'docked' | 'drawer' | 'hidden';
   onClose: () => void;
   workspaceName: string;
   workspaceRoot: string;
@@ -30,24 +29,22 @@ function sessionLabel(session: Session, isActive: boolean): React.ReactNode {
   return <span className="badge neutral">就绪</span>;
 }
 
-export default function HistoryPanel({ sessions, currentSessionId, onSelectSession, isOpen, layoutMode, onClose, workspaceName, workspaceRoot, activeSession }: HistoryPanelProps) {
-  if (layoutMode === 'hidden') {
+export default function HistoryPanel({ sessions, currentSessionId, onSelectSession, isOpen, onClose, workspaceName, workspaceRoot, activeSession }: HistoryPanelProps) {
+  if (!isOpen) {
     return null;
   }
 
   return (
-    <aside className={`history-panel layout-${layoutMode}${isOpen ? ' open' : ' closed'}`} aria-hidden={layoutMode === 'drawer' && !isOpen}>
+    <aside className="history-panel">
       <div className="history-panel-shell">
         <header className="panel-header history-panel-header">
           <div className="panel-header-main">
             <span className="panel-title">历史</span>
             <span className="badge neutral panel-count-badge">{String(sessions.length)}</span>
           </div>
-          {layoutMode === 'drawer' && (
-            <button type="button" className="panel-icon-button" title="关闭" onClick={onClose} aria-label="关闭">
-              ×
-            </button>
-          )}
+          <button type="button" className="panel-icon-button" title="关闭历史栏" onClick={onClose} aria-label="关闭历史栏">
+            ×
+          </button>
         </header>
 
         <div className="panel-body history-panel-body">

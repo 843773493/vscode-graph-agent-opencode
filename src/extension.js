@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { BackendManager } from './backend/backendManager.js';
-import { OPEN_SIDEBAR_COMMAND, SIDEBAR_VIEW_ID } from './shared/constants.js';
+import { OPEN_SIDEBAR_COMMAND, OPEN_UI_SHELL_DEBUG_COMMAND, SIDEBAR_VIEW_ID } from './shared/constants.js';
 import { SidebarProvider } from './webview/sidebarProvider.js';
 
 let sidebarViewProviderRegistered = false;
@@ -10,6 +10,7 @@ export function activate(context) {
   const outputChannel = vscode.window.createOutputChannel('Graph Agent');
   const backendManager = new BackendManager(outputChannel);
   const sidebarProvider = new SidebarProvider(context, backendManager);
+  const shellModeEnabled = process.env.GRAPH_AGENT_UI_SHELL_DEBUG === '1';
 
   context.subscriptions.push(outputChannel);
   outputChannel.show(true);
@@ -39,6 +40,20 @@ export function activate(context) {
       await vscode.commands.executeCommand('workbench.view.extension.vscode-graph-agent');
     }),
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(OPEN_UI_SHELL_DEBUG_COMMAND, async () => {
+      const shellDebugProvider = new SidebarProvider(context, backendManager, { shellMode: true });
+      await shellDebugProvider.createShellDebugPanel();
+    }),
+  );
+
+  if (shellModeEnabled) {
+    void vscode.commands.executeCommand(OPEN_UI_SHELL_DEBUG_COMMAND).catch((error) => {
+      outputChannel.appendLine(`[graph-agent] 纯壳调试面板自动打开失败: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+      throw error;
+    });
+  }
 
   // 1. Copilot状态按钮
   const copilotStatusButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);

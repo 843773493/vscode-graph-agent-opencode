@@ -13,24 +13,17 @@
   ],
   "main": "./src/extension.js",
   "activationEvents": [
-    "onStartupFinished",
-    "onView:vscode-graph-agent.sidebar",
-    "onCommand:vscode-graph-agent.openSidebar",
-    "onCommand:graph-agent.pinSession",
-    "onCommand:graph-agent.toggleView",
-    "onCommand:graph-agent.selectModel",
-    "onCommand:graph-agent.contextSettings",
-    "onCommand:graph-agent.showHistory",
-    "onCommand:graph-agent.showHelp",
-    "onCommand:graph-agent.openSettings",
-    "onCommand:graph-agent.showStatus",
-    "onCommand:graph-agent.toggleAgent"
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
       {
         "command": "vscode-graph-agent.openSidebar",
         "title": "Graph Agent: Open Sidebar"
+      },
+      {
+        "command": "graph-agent.openUiShellDebug",
+        "title": "Graph Agent: Open UI Shell Debug"
       },
       {
         "command": "graph-agent.showHistory",
