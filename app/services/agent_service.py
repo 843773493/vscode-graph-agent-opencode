@@ -1,24 +1,22 @@
 from __future__ import annotations
 
 from typing import Optional
-from app.schemas.agent import AgentDTO
+
 from app.services.config_service import ConfigService
+from app.schemas.agent import AgentDTO
 
 
 class AgentService:
-    _instance: Optional["AgentService"] = None
-
     def __init__(self):
-        pass
+        self._config_service: ConfigService | None = None
 
-    @classmethod
-    def get_instance(cls) -> "AgentService":
-        if cls._instance is None:
-            cls._instance = AgentService()
-        return cls._instance
+    def bind_config_service(self, config_service: ConfigService) -> None:
+        self._config_service = config_service
 
     async def list(self) -> list[AgentDTO]:
-        config_service = ConfigService.get_instance()
+        if self._config_service is None:
+            raise RuntimeError("AgentService 未绑定 ConfigService")
+        config_service = self._config_service
         agents_config = config_service.list_agents()
         
         if agents_config:

@@ -7,9 +7,11 @@ from typing import Optional
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
+from app.core.background_message_bus import BackgroundMessageBus
 from app.schemas.common import MessageRole, RunMode
 from app.schemas.message import MessageCreateRequest, MessageRunRequest, RunOptions
 from app.schemas.session import SessionAutoContinueStatusDTO
+from app.services.config_service import ConfigService
 from app.services.job_service import JobService
 from app.services.message_service import MessageService
 from app.services.session_service import SessionService
@@ -29,28 +31,54 @@ class _AutoContinueState:
 
 
 class SessionAutoContinueService:
-    _instance: Optional["SessionAutoContinueService"] = None
-
     def __init__(self):
         self._states: dict[str, _AutoContinueState] = {}
         self._lock = asyncio.Lock()
+        self._background_task_registry: BackgroundTaskRegistry | None = None
+        self._background_message_bus: BackgroundMessageBus | None = None
+        self._job_event_bus: JobEventBus | None = None
+        self._session_service: SessionService | None = None
+        self._message_service: MessageService | None = None
+        self._job_service: JobService | None = None
+        self._config_service: ConfigService | None = None
 
-    @classmethod
-    def get_instance(cls) -> "SessionAutoContinueService":
-        if cls._instance is None:
-            cls._instance = SessionAutoContinueService()
-        return cls._instance
+    def bind_dependencies(
+        self,
+        *,
+        background_task_registry: BackgroundTaskRegistry,
+        background_message_bus: BackgroundMessageBus,
+        job_event_bus: JobEventBus,
+        session_service: SessionService,
+        message_service: MessageService,
+        job_service: JobService,
+        config_service: ConfigService,
+    ) -> None:
+        self._background_task_registry = background_task_registry
+        self._background_message_bus = background_message_bus
+        self._job_event_bus = job_event_bus
+        self._session_service = session_service
+        self._message_service = message_service
+        self._job_service = job_service
+        self._config_service = config_service
 
-    async def start(self, session_id: str, poll_interval_seconds: float = 1.0) -> SessionAutoContinueStatusDTO:
+    async def start(
+        self,
+        session_id: str,
+        poll_interval_seconds: float = 1.0,
+    ) -> SessionAutoContinueStatusDTO:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds 必须大于 0")
 
-        await SessionService.get(session_id)
+        if self._session_service is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 SessionService")
+        await self._session_service.get(session_id)
 
         async with self._lock:
             existing = self._states.get(session_id)
             if existing is not None:
-                task = BackgroundTaskRegistry.get_instance().get_task(session_id, existing.task_id)
+                if self._background_task_registry is None:
+                    raise RuntimeError("SessionAutoContinueService 未绑定 BackgroundTaskRegistry")
+                task = self._background_task_registry.get_task(session_id, existing.task_id)
                 if task is not None and not task.done():
                     return self._to_status(existing, enabled=True)
                 self._states.pop(session_id, None)
@@ -61,7 +89,9 @@ class SessionAutoContinueService:
             async def _runner() -> None:
                 await self._run_auto_continue_loop(state_holder["state"])
 
-            handle = BackgroundTaskRegistry.get_instance().spawn(
+            if self._background_task_registry is None:
+                raise RuntimeError("SessionAutoContinueService 未绑定 BackgroundTaskRegistry")
+            handle = self._background_task_registry.spawn(
                 session_id=session_id,
                 task_name="managed_auto_continue",
                 runner=_runner,
@@ -82,8 +112,10 @@ class SessionAutoContinueService:
             self._states[session_id] = state
             return self._to_status(state, enabled=True)
 
-    async def stop(self, session_id: str) -> SessionAutoContinueStatusDTO:
-        await SessionService.get(session_id)
+    async def stop(self, session_id: str, *, session_service: SessionService) -> SessionAutoContinueStatusDTO:
+        if self._session_service is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 SessionService")
+        await self._session_service.get(session_id)
 
         state: _AutoContinueState | None = None
         task: asyncio.Task | None = None
@@ -105,7 +137,9 @@ class SessionAutoContinueService:
                     last_enqueued_job_id=None,
                 )
 
-            task = BackgroundTaskRegistry.get_instance().get_task(session_id, state.task_id)
+            if self._background_task_registry is None:
+                raise RuntimeError("SessionAutoContinueService 未绑定 BackgroundTaskRegistry")
+            task = self._background_task_registry.get_task(session_id, state.task_id)
             self._states.pop(session_id, None)
 
         if task is not None and not task.done():
@@ -117,8 +151,10 @@ class SessionAutoContinueService:
 
         return self._to_status(state, enabled=False)
 
-    async def get_status(self, session_id: str) -> SessionAutoContinueStatusDTO:
-        await SessionService.get(session_id)
+    async def get_status(self, session_id: str, *, session_service: SessionService) -> SessionAutoContinueStatusDTO:
+        if self._session_service is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 SessionService")
+        await self._session_service.get(session_id)
 
         async with self._lock:
             state = self._states.get(session_id)
@@ -137,7 +173,9 @@ class SessionAutoContinueService:
                     last_enqueued_job_id=None,
                 )
 
-            task = BackgroundTaskRegistry.get_instance().get_task(session_id, state.task_id)
+            if self._background_task_registry is None:
+                raise RuntimeError("SessionAutoContinueService 未绑定 BackgroundTaskRegistry")
+            task = self._background_task_registry.get_task(session_id, state.task_id)
             if task is None or task.done():
                 self._states.pop(session_id, None)
                 return self._to_status(state, enabled=False)
@@ -145,8 +183,16 @@ class SessionAutoContinueService:
             return self._to_status(state, enabled=True)
 
     async def _run_auto_continue_loop(self, state: _AutoContinueState) -> None:
-        job_event_bus = JobEventBus.get_instance()
-        job_service = JobService.get_instance()
+        if self._job_event_bus is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 JobEventBus")
+        job_event_bus = self._job_event_bus
+        if self._job_service is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 JobService")
+        if self._message_service is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 MessageService")
+        if self._config_service is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 ConfigService")
+        job_service = self._job_service
         seen_event_ids: set[str] = set()
 
         while True:
@@ -172,7 +218,9 @@ class SessionAutoContinueService:
             await asyncio.sleep(state.poll_interval_seconds)
 
     async def _send_continue_message(self, state: _AutoContinueState, trigger_job_id: str, trigger_event_id: str) -> None:
-        session = await SessionService.get(state.session_id)
+        if self._session_service is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 SessionService")
+        session = await self._session_service.get(state.session_id)
         run_request = MessageRunRequest(
             message=MessageCreateRequest(
                 role=MessageRole.user,
@@ -184,7 +232,13 @@ class SessionAutoContinueService:
             ),
         )
 
-        result = await MessageService.get_instance().create_and_run(state.session_id, run_request)
+        result = await self._message_service.create_and_run(
+            state.session_id,
+            run_request,
+            session_service=self._session_service,
+            config_service=self._config_service,
+            job_service=self._job_service,
+        )
         state.forwarded_count += 1
         state.last_forwarded_at = datetime.now()
         state.last_trigger_job_id = trigger_job_id
@@ -194,7 +248,9 @@ class SessionAutoContinueService:
     def _to_status(self, state: _AutoContinueState, enabled: bool) -> SessionAutoContinueStatusDTO:
         task_status = "stopped"
         if enabled:
-            handle = BackgroundTaskRegistry.get_instance().get_handle(state.session_id, state.task_id)
+            if self._background_task_registry is None:
+                raise RuntimeError("SessionAutoContinueService 未绑定 BackgroundTaskRegistry")
+            handle = self._background_task_registry.get_handle(state.session_id, state.task_id)
             if handle is not None:
                 task_status = handle.status
             else:

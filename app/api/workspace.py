@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
+from app.runtime import get_workspace_service
 from app.schemas.common import APIResponse
 from app.schemas.workspace import WorkspaceContextDTO, WorkspaceDTO
 from app.services.workspace_service import WorkspaceService
@@ -14,8 +15,9 @@ router = APIRouter(prefix="/workspace", tags=["workspace"])
 async def get_workspace(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
-    result = await WorkspaceService.get_instance().get()
+    result = await workspace_service.get()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -23,8 +25,9 @@ async def get_workspace(
 async def get_workspace_context(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
-    result = await WorkspaceService.get_instance().get_context()
+    result = await workspace_service.get_context()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -32,8 +35,9 @@ async def get_workspace_context(
 async def get_workspace_index(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
-    result = await WorkspaceService.get_instance().get_index_status()
+    result = await workspace_service.get_index_status()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -41,6 +45,7 @@ async def get_workspace_index(
 async def rebuild_workspace_index(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
-    result = await WorkspaceService.get_instance().rebuild_index()
+    result = await workspace_service.rebuild_index()
     return APIResponse(data=result, request_id=request_id)

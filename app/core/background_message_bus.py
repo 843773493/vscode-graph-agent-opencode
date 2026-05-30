@@ -14,18 +14,10 @@ from app.schemas.background_message import (
 
 
 class BackgroundMessageBus:
-    _instance: "BackgroundMessageBus | None" = None
-
     def __init__(self):
         self._messages: Dict[tuple[str, str], Deque[BackgroundMessageDTO]] = {}
         self._subscribers: Dict[tuple[str, str], Set[asyncio.Queue[BackgroundMessageDTO]]] = {}
         self._max_history = 1000
-
-    @classmethod
-    def get_instance(cls) -> "BackgroundMessageBus":
-        if cls._instance is None:
-            cls._instance = BackgroundMessageBus()
-        return cls._instance
 
     def _key(self, session_id: str, agent_id: str) -> tuple[str, str]:
         return session_id, agent_id
@@ -225,15 +217,7 @@ def emit_background_message(
     if not agent_id:
         raise RuntimeError("agent_id 不能为空，必须显式传入")
 
-    return BackgroundMessageBus.get_instance().emit(
-        session_id,
-        agent_id,
-        content,
-        kind=kind,
-        source_id=source_id,
-        payload=payload,
-        message_id=message_id,
-    )
+    raise RuntimeError("BackgroundMessageBus 需要通过应用容器显式注入，不能直接调用 emit_background_message")
 
 
 def emit_interrupt_background_message(

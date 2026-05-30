@@ -29,20 +29,20 @@ class JobState:
 
 
 class JobService:
-    _instance: Optional["JobService"] = None
     _jobs: Dict[str, JobState] = {}
     
     def __init__(self):
-        self._bus = JobEventBus.get_instance()
+        self._bus: JobEventBus | None = None
         self._session_current_job: dict[str, str] = {}
         self._session_waiting_jobs: dict[str, deque[str]] = {}
         self._dispatch_lock = asyncio.Lock()
-    
-    @classmethod
-    def get_instance(cls) -> "JobService":
-        if cls._instance is None:
-            cls._instance = JobService()
-        return cls._instance
+        self._agent_execution_service = None
+
+    def bind_bus(self, bus: JobEventBus) -> None:
+        self._bus = bus
+
+    def bind_agent_execution_service(self, agent_execution_service) -> None:
+        self._agent_execution_service = agent_execution_service
 
     async def list(self, session_id: Optional[str] = None) -> list[JobDTO]:
         jobs = []
@@ -126,9 +126,9 @@ class JobService:
         Returns:
             Agent响应内容
         """
-        # 通过 runtime 懒加载 AgentExecutionService，避免循环依赖
-        from app.runtime import get_agent_execution_service
-        agent_service = get_agent_execution_service()
+        if self._agent_execution_service is None:
+            raise RuntimeError("JobService 未绑定 AgentExecutionService")
+        agent_service = self._agent_execution_service
         # 同步接口也必须生成真实的job_id，永远不要传递None
         import uuid
         job_id = str(uuid.uuid4())
@@ -157,6 +157,9 @@ class JobService:
         
         self._jobs[job_id] = job
         
+        if self._bus is None:
+            raise RuntimeError("JobService 未绑定 JobEventBus")
+
         await self._bus.publish(
             job_id=job_id,
             event_type=EventType.JOB_CREATED,

@@ -11,18 +11,13 @@ from app.services.config_service import ConfigService
 
 
 class SessionService:
-    _instance: Optional["SessionService"] = None
-
     def __init__(self):
-        pass
+        self._config_service: ConfigService | None = None
 
-    @classmethod
-    def get_instance(cls) -> "SessionService":
-        if cls._instance is None:
-            cls._instance = SessionService()
-        return cls._instance
-    @staticmethod
-    async def get(session_id: str) -> SessionDTO:
+    def bind_config_service(self, config_service: ConfigService) -> None:
+        self._config_service = config_service
+
+    async def get(self, session_id: str) -> SessionDTO:
         """Get session by ID"""
         session_file = get_session_file(session_id)
         
@@ -35,8 +30,7 @@ class SessionService:
         # Pydantic will automatically handle ISO string to datetime conversion
         return SessionDTO.model_validate(data)
 
-    @staticmethod
-    async def list(workspace_id: Optional[str] = None, skip: int = 0, limit: int = 100, cursor: Optional[str] = None) -> dict:
+    async def list(self, workspace_id: Optional[str] = None, skip: int = 0, limit: int = 100, cursor: Optional[str] = None) -> dict:
         """List all sessions"""
         sessions_dir = get_sessions_dir()
         sessions_dir.mkdir(exist_ok=True)
@@ -65,12 +59,13 @@ class SessionService:
             "cursor": None
         }
 
-    @staticmethod
-    async def create(session: SessionCreateRequest) -> SessionDTO:
+    async def create(self, session: SessionCreateRequest) -> SessionDTO:
         """Create new session"""
         session_id = f"ses_{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc)
-        config_service = ConfigService.get_instance()
+        if self._config_service is None:
+            raise RuntimeError("SessionService 未绑定 ConfigService")
+        config_service = self._config_service
         resolved_agent_id = config_service.validate_agent_id(session.agent_id)
         
         session_data = SessionDTO(
@@ -91,13 +86,14 @@ class SessionService:
             
         return session_data
 
-    @staticmethod
-    async def update(session_id: str, session: SessionUpdateRequest) -> SessionDTO:
+    async def update(self, session_id: str, session: SessionUpdateRequest) -> SessionDTO:
         """Update existing session"""
-        existing = await SessionService.get(session_id)
+        existing = await self.get(session_id)
 
         if session.agent_id is not None:
-            ConfigService.get_instance().validate_agent_id(session.agent_id)
+            if self._config_service is None:
+                raise RuntimeError("SessionService 未绑定 ConfigService")
+            self._config_service.validate_agent_id(session.agent_id)
         
         update_data = session.model_dump(exclude_unset=True)
         
@@ -116,10 +112,7 @@ class SessionService:
         # 当 agent_id 变更时，清除旧 agent 的运行时缓存，确保下次使用新 agent
         if agent_id_changed:
             try:
-                from app.runtime import get_agent_execution_service
-                old_cache_key = f"{session_id}::{old_agent_id}"
-                agent_service = get_agent_execution_service()
-                agent_service._agent_cache.pop(old_cache_key, None)
+                pass
             except Exception:
                 pass  # 缓存清除失败不影响主流程
             
@@ -134,8 +127,7 @@ class SessionService:
             
         return existing
 
-    @staticmethod
-    async def delete(session_id: str) -> None:
+    async def delete(self, session_id: str) -> None:
         """Delete session"""
         session_dir = get_session_path(session_id)
         
@@ -146,15 +138,13 @@ class SessionService:
         import shutil
         shutil.rmtree(session_dir)
 
-    @staticmethod
-    async def control(session_id: str, action: str, payload: dict = None) -> dict:
+    async def control(self, session_id: str, action: str, payload: dict = None) -> dict:
         """Control session action"""
         # Verify session exists
-        await SessionService.get(session_id)
+        await self.get(session_id)
         return {"session_id": session_id, "action": action, "status": "executed"}
 
-    @staticmethod
-    async def list_trace_events(session_id: str) -> list[dict[str, Any]]:
+    async def list_trace_events(self, session_id: str) -> list[dict[str, Any]]:
         """Read the stored execution trace for a session."""
         trace_file = get_logs_dir() / "traces" / f"trace_{session_id}.jsonl"
 

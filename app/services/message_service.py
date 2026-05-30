@@ -5,26 +5,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from app.services.config_service import ConfigService
+from app.services.job_service import JobService
+from app.services.session_service import SessionService
+from app.core.job_event_bus import EventType, JobEventBus
 from app.schemas.message import MessageDTO, MessageCreateRequest, MessageRunRequest, MessageRunAccepted
 from app.schemas.common import MessageRole, JobStatus, CursorPage
 from app.core.path_utils import get_session_path
 
 
 class MessageService:
-
-    _instance: Optional["MessageService"] = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = object.__new__(cls)
-        return cls._instance
-
     def __init__(self):
         pass
-
-    @classmethod
-    def get_instance(cls) -> "MessageService":
-        return cls()
 
     def _message_file(self, session_id: str) -> Path:
         return get_session_path(session_id) / "messages.jsonl"
@@ -99,7 +91,16 @@ class MessageService:
             status=JobStatus.accepted
         )
     
-    async def create_and_run(self, session_id: str, run_request: MessageRunRequest) -> MessageRunAccepted:
+    async def create_and_run(
+        self,
+        session_id: str,
+        run_request: MessageRunRequest,
+        *,
+        session_service: SessionService,
+        config_service: ConfigService,
+        job_service: JobService,
+        job_event_bus: JobEventBus,
+    ) -> MessageRunAccepted:
         """
         创建消息并启动异步Job执行
         供路由层调用的实例方法
@@ -107,8 +108,7 @@ class MessageService:
         message = await self.create(session_id, run_request.message)
 
         # 消息创建事件：此时 job_id 还未生成，使用 session_id 作为关联ID
-        from app.core.job_event_bus import JobEventBus, EventType
-        await JobEventBus.get_instance().publish(
+        await job_event_bus.publish(
             session_id,  # ⚠️ 暂时使用 session_id，因为 job_id 尚未创建
             EventType.MESSAGE_CREATED,
             {
@@ -122,12 +122,7 @@ class MessageService:
             }
         )
 
-        # 通过 runtime 模块懒加载服务，避免循环依赖
-        from app.runtime import get_session_service, get_config_service, get_job_service
-
-        session = await get_session_service().get(session_id)
-
-        config_service = get_config_service()
+        session = await session_service.get(session_id)
 
         requested_agent_id = run_request.run.agent_id if run_request.run else None
         if requested_agent_id is None:
@@ -139,7 +134,6 @@ class MessageService:
         except ValueError:
             effective_agent_id = config_service.get_default_agent_id()
 
-        job_service = get_job_service()
         job_id = await job_service.start_job(session_id, message.content, effective_agent_id)
         
         return MessageRunAccepted(

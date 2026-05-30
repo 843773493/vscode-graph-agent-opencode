@@ -1,23 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from app.schemas.artifact import ArtifactDTO
 from app.core.path_utils import get_artifacts_dir, safe_join
 
 
 class ArtifactService:
-    _instance: Optional["ArtifactService"] = None
-
     def __init__(self):
         pass
-
-    @classmethod
-    def get_instance(cls) -> "ArtifactService":
-        if cls._instance is None:
-            cls._instance = ArtifactService()
-        return cls._instance
 
     async def get_response(self, artifact_id: str) -> Any:
         artifacts_dir = get_artifacts_dir()

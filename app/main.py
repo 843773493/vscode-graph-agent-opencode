@@ -22,15 +22,18 @@ load_project_env(__file__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     from app.core import path_utils
+    from app.runtime import clear_app_services, init_app_services
 
     path_utils.initialize_directories()
+    init_app_services()
 
-    from app.services.config_service import ConfigService
+    from app.runtime import get_config_service
 
-    config_service = ConfigService.get_instance()
-    workspace_root = os.environ.get("WORKSPACE_ROOT", "")
+    workspace_root = os.environ.get("WORKSPACE_ROOT", "") or None
+    config_service = get_config_service()
 
     if workspace_root:
+        config_service._workspace_root = workspace_root
         config_service._apply_workspace_override(workspace_root)
 
     try:
@@ -41,6 +44,8 @@ async def lifespan(_: FastAPI):
         logging.warning(f"boxteam.json 配置验证失败: {e}")
 
     yield
+
+    clear_app_services()
 
 app = FastAPI(
     title="BoxTeam Local Workspace API",

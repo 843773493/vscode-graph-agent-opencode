@@ -28,12 +28,13 @@ async def client(workspace_root_path: str) -> AsyncGenerator[httpx.AsyncClient, 
 @pytest.fixture(autouse=True)
 def setup_agent_name_config():
     from app.services.config_service import ConfigService, set_config_path
+    from app.runtime import clear_app_services
 
-    ConfigService.reset_instance()
     config_path = Path(__file__).resolve().parents[2] / "configs" / "tests" / "agent_name_check.jsonc"
     set_config_path(str(config_path))
+    clear_app_services()
     yield
-    ConfigService.reset_instance()
+    clear_app_services()
     set_config_path(None)
 
 

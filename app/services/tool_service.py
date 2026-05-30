@@ -6,16 +6,16 @@ from app.services.agent_execution_service import AgentExecutionService
 
 
 class ToolService:
-    _instance: Optional[ToolService] = None
-    
-    @classmethod
-    def get_instance(cls) -> ToolService:
-        if cls._instance is None:
-            cls._instance = ToolService()
-        return cls._instance
+    def __init__(self):
+        self._agent_execution_service: AgentExecutionService | None = None
+
+    def bind_agent_execution_service(self, agent_execution_service: AgentExecutionService) -> None:
+        self._agent_execution_service = agent_execution_service
     
     async def list(self) -> list[ToolDTO]:
-        tools = AgentExecutionService.get_instance().get_available_tools()
+        if self._agent_execution_service is None:
+            raise RuntimeError("ToolService 未绑定 AgentExecutionService")
+        tools = self._agent_execution_service.get_available_tools()
         return [
             ToolDTO(
                 tool_id=tool["id"],

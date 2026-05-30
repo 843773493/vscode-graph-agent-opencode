@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import verify_local_token
+from app.runtime import get_artifact_service
 from app.services.artifact_service import ArtifactService
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
@@ -12,5 +13,6 @@ router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 async def get_artifact(
     artifact_id: str,
     _: str = Depends(verify_local_token),
+    artifact_service: ArtifactService = Depends(get_artifact_service),
 ):
-    return await ArtifactService.get_instance().get_response(artifact_id)
+    return await artifact_service.get_response(artifact_id)

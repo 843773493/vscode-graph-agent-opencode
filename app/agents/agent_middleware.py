@@ -18,9 +18,6 @@ from pydantic import BaseModel, Field
 from app.core.path_utils import get_logs_dir
 from app.core.job_event_bus import EventType, JobEventBus
 
-from app.core.path_utils import get_logs_dir
-from app.core.job_event_bus import EventType, JobEventBus
-
 
 # ========== 类型定义 ==========
 class MessageDict(BaseModel):
@@ -76,6 +73,10 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
 
     def __init__(self) -> None:
         self._prepared_session_dirs: set[str] = set()
+        self._job_event_bus: JobEventBus | None = None
+
+    def bind_job_event_bus(self, job_event_bus: JobEventBus) -> None:
+        self._job_event_bus = job_event_bus
 
     def _get_session_id(self, runtime: Runtime[Any]) -> str:
         """直接读取 LangChain 的 thread_id。"""
@@ -234,7 +235,9 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         self._save_log(session_id, request, response)
 
         try:
-            bus = JobEventBus.get_instance()
+            if self._job_event_bus is None:
+                raise RuntimeError("LLMLoggingMiddleware 未绑定 JobEventBus")
+            bus = self._job_event_bus
             import asyncio
             asyncio.create_task(bus.publish(
                 job_id=job_id,
@@ -261,8 +264,9 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         self._save_log(session_id, request, response)
 
         try:
-            bus = JobEventBus.get_instance()
-            # asyncio 已在函数外通过 runtime 懒加载
+            if self._job_event_bus is None:
+                raise RuntimeError("LLMLoggingMiddleware 未绑定 JobEventBus")
+            bus = self._job_event_bus
             await bus.publish(
                 job_id=job_id,
                 event_type=EventType.LLM_REQUEST,

@@ -1,5 +1,4 @@
 from __future__ import annotations
-import json
 import os
 from typing import Optional, Any
 
@@ -24,21 +23,10 @@ def get_config_path() -> Optional[str]:
 
 
 class ConfigService:
-    _instance: Optional[ConfigService] = None
-
-    def __init__(self):
+    def __init__(self, workspace_root: Optional[str] = None):
         self._boxteam_config: Optional[dict] = None
         self._schema: Optional[dict] = None
-
-    @classmethod
-    def get_instance(cls) -> "ConfigService":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
-
-    @classmethod
-    def reset_instance(cls) -> None:
-        cls._instance = None
+        self._workspace_root = workspace_root
 
     def _load_schema(self) -> dict:
         if self._schema is None:

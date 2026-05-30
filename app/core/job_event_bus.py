@@ -60,20 +60,12 @@ class EventType:
 
 
 class JobEventBus:
-    _instance: "JobEventBus | None" = None
-
     def __init__(self):
         self._job_events: Dict[str, Deque[Event]] = {}
         self._subscribers: Dict[str, Set[asyncio.Queue[Event]]] = {}
         self._max_history: int = 1000
         self._lock = asyncio.Lock()
         self._listener_count: int = 0
-
-    @classmethod
-    def get_instance(cls) -> "JobEventBus":
-        if cls._instance is None:
-            cls._instance = JobEventBus()
-        return cls._instance
 
     async def publish(
         self,

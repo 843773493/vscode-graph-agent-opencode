@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
+from app.runtime import get_agent_service
 from app.schemas.agent import AgentDTO
 from app.schemas.common import APIResponse
 from app.services.agent_service import AgentService
@@ -14,8 +15,9 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 async def list_agents(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    agent_service: AgentService = Depends(get_agent_service),
 ):
-    result = await AgentService.get_instance().list()
+    result = await agent_service.list()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -24,6 +26,7 @@ async def get_agent(
     agent_id: str,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    agent_service: AgentService = Depends(get_agent_service),
 ):
-    result = await AgentService.get_instance().get(agent_id)
+    result = await agent_service.get(agent_id)
     return APIResponse(data=result, request_id=request_id)

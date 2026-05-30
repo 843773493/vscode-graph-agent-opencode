@@ -38,16 +38,8 @@ class _BackgroundTaskRecord:
 
 
 class BackgroundTaskRegistry:
-    _instance: "BackgroundTaskRegistry | None" = None
-
     def __init__(self):
         self._tasks: dict[str, dict[str, _BackgroundTaskRecord]] = {}
-
-    @classmethod
-    def get_instance(cls) -> "BackgroundTaskRegistry":
-        if cls._instance is None:
-            cls._instance = BackgroundTaskRegistry()
-        return cls._instance
 
     def spawn(
         self,

@@ -23,6 +23,8 @@ from app.schemas.background_message import BackgroundMessageKind
 from app.schemas.common import RunMode
 from app.schemas.message import MessageCreateRequest, MessageRunRequest, RunOptions
 from app.services.message_service import MessageService
+from app.services.job_service import JobService
+from app.services.session_service import SessionService
 
 
 def _get_repo_root() -> Path:
@@ -140,7 +142,12 @@ def create_python_execution_tool(session_id: str, agent_id: str = "deep_agent") 
     return python_exec
 
 
-def create_system_time_emitter_tool(session_id: str, agent_id: str = "deep_agent") -> BaseTool:
+def create_system_time_emitter_tool(
+    session_id: str,
+    agent_id: str = "deep_agent",
+    *,
+    background_message_bus: BackgroundMessageBus,
+) -> BaseTool:
     """创建向后台消息总线发送系统时间的工具。"""
     @tool("emit_system_time_messages")
     async def emit_system_time_messages(
@@ -156,7 +163,7 @@ def create_system_time_emitter_tool(session_id: str, agent_id: str = "deep_agent
 
         resolved_source_id = source_id or f"time_{session_id}_{int(time.time() * 1000)}"
         emitted_messages = []
-        message_service = BackgroundMessageBus.get_instance()
+        message_service = background_message_bus
 
         for index in range(message_count):
             current_time = datetime.now().isoformat(timespec="seconds")
@@ -189,7 +196,15 @@ def create_system_time_emitter_tool(session_id: str, agent_id: str = "deep_agent
     return emit_system_time_messages
 
 
-def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep_agent") -> BaseTool:
+def create_monitor_session_agent_end_tool(
+    session_id: str,
+    agent_id: str = "deep_agent",
+    *,
+    background_task_registry: BackgroundTaskRegistry,
+    background_message_bus: BackgroundMessageBus,
+    job_event_bus: JobEventBus,
+    job_service: JobService,
+) -> BaseTool:
     """创建监控 session agent 结束事件的工具。"""
     @tool("monitor_session_agent_end")
     async def monitor_session_agent_end(
@@ -214,10 +229,6 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
         async def _monitor_background_task() -> dict[str, Any]:
             # 通过 runtime 模块懒加载 JobService，避免循环依赖
             from app.runtime import get_job_service
-
-            job_event_bus = JobEventBus.get_instance()
-            message_bus = BackgroundMessageBus.get_instance()
-            job_service = get_job_service()
 
             deadline = None if timeout_seconds is None else asyncio.get_running_loop().time() + timeout_seconds
             seen_event_ids = LRUCache(maxsize=10000)
@@ -305,7 +316,7 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
                         continue
 
                     # 发送中断消息
-                    emitted_message = message_bus.emit(
+                    emitted_message = background_message_bus.emit(
                         session_id,
                         agent_id,
                         final_text,
@@ -352,7 +363,7 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
                     task.cancel()
                 await asyncio.gather(manager_task, *forward_tasks.values(), return_exceptions=True)
 
-        handle = BackgroundTaskRegistry.get_instance().spawn(
+        handle = background_task_registry.spawn(
             session_id=session_id,
             task_name="monitor_session_agent_end",
             runner=_monitor_background_task,
@@ -371,7 +382,12 @@ def create_monitor_session_agent_end_tool(session_id: str, agent_id: str = "deep
     return monitor_session_agent_end
 
 
-def create_background_message_collection_tool(session_id: str, agent_id: str = "deep_agent") -> BaseTool:
+def create_background_message_collection_tool(
+    session_id: str,
+    agent_id: str = "deep_agent",
+    *,
+    background_message_bus: BackgroundMessageBus,
+) -> BaseTool:
     """创建收集后台消息的工具。"""
     @tool("collect_background_messages")
     async def collect_background_messages(
@@ -382,7 +398,7 @@ def create_background_message_collection_tool(session_id: str, agent_id: str = "
         stop_on_interrupt: bool = True,
     ) -> dict[str, Any]:
         """持续收集当前 session/agent 的后台消息。"""
-        batch = await BackgroundMessageBus.get_instance().collect(
+        batch = await background_message_bus.collect(
             session_id,
             agent_id,
             source_id=source_id,
@@ -396,7 +412,14 @@ def create_background_message_collection_tool(session_id: str, agent_id: str = "
     return collect_background_messages
 
 
-def create_send_message_to_session_tool(sender_agent_id: str = "deep_agent") -> BaseTool:
+def create_send_message_to_session_tool(
+    sender_agent_id: str = "deep_agent",
+    *,
+    message_service: MessageService,
+    session_service: SessionService,
+    config_service: Any,
+    job_service: JobService,
+) -> BaseTool:
     """创建向目标 session 发送消息的工具。"""
     @tool("send_message_to_session")
     async def send_message_to_session(
@@ -420,7 +443,13 @@ def create_send_message_to_session_tool(sender_agent_id: str = "deep_agent") -> 
             ),
         )
 
-        result = await MessageService.get_instance().create_and_run(target_session_id, run_request)
+        result = await message_service.create_and_run(
+            target_session_id,
+            run_request,
+            session_service=session_service,
+            config_service=config_service,
+            job_service=job_service,
+        )
         return result.model_dump(mode="json")
 
     return send_message_to_session
@@ -430,12 +459,41 @@ def build_default_tools(
     session_id: str,
     agent_id: str = "deep_agent",
     sender_agent_id: str = "deep_agent",
+    *,
+    background_task_registry: BackgroundTaskRegistry,
+    background_message_bus: BackgroundMessageBus,
+    job_event_bus: JobEventBus,
+    job_service: JobService,
+    message_service: MessageService,
+    session_service: SessionService,
+    config_service,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
     return [
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
-        create_system_time_emitter_tool(session_id=session_id, agent_id=agent_id),
-        create_monitor_session_agent_end_tool(session_id=session_id, agent_id=agent_id),
-        create_background_message_collection_tool(session_id=session_id, agent_id=agent_id),
-        create_send_message_to_session_tool(sender_agent_id=sender_agent_id),
+        create_system_time_emitter_tool(
+            session_id=session_id,
+            agent_id=agent_id,
+            background_message_bus=background_message_bus,
+        ),
+        create_monitor_session_agent_end_tool(
+            session_id=session_id,
+            agent_id=agent_id,
+            background_task_registry=background_task_registry,
+            background_message_bus=background_message_bus,
+            job_event_bus=job_event_bus,
+            job_service=job_service,
+        ),
+        create_background_message_collection_tool(
+            session_id=session_id,
+            agent_id=agent_id,
+            background_message_bus=background_message_bus,
+        ),
+        create_send_message_to_session_tool(
+            sender_agent_id=sender_agent_id,
+            message_service=message_service,
+            session_service=session_service,
+            config_service=config_service,
+            job_service=job_service,
+        ),
     ]

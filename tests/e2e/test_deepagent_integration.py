@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -33,6 +34,9 @@ async def client(workspace_root_path: str) -> AsyncGenerator[httpx.AsyncClient, 
 
 @pytest.mark.asyncio
 async def test_real_deepagent(client: httpx.AsyncClient, workspace_root_path: str):
+    if not os.environ.get("OPENCODE_ZEN_API_KEY"):
+        pytest.skip("缺少 OPENCODE_ZEN_API_KEY，跳过真实模型验证")
+
     print("\n=== 测试真实DeepAgent端到端执行 ===")
 
     create_session_response = await client.post(
@@ -126,6 +130,9 @@ async def test_real_deepagent(client: httpx.AsyncClient, workspace_root_path: st
 
 @pytest.mark.asyncio
 async def test_real_deepagent_can_call_python_tool(client: httpx.AsyncClient, workspace_root_path: str):
+    if not os.environ.get("OPENCODE_ZEN_API_KEY"):
+        pytest.skip("缺少 OPENCODE_ZEN_API_KEY，跳过真实模型验证")
+
     print("\n=== 测试真实DeepAgent调用 Python 工具 ===")
 
     create_session_response = await client.post(
@@ -195,6 +202,9 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
     client: httpx.AsyncClient,
     workspace_root_path: str,
 ):
+    if not os.environ.get("OPENCODE_ZEN_API_KEY"):
+        pytest.skip("缺少 OPENCODE_ZEN_API_KEY，跳过真实模型验证")
+
     print("\n=== 测试真实DeepAgent监控另一个 session 的 final_text ===")
 
     session1_response = await client.post(
@@ -367,6 +377,9 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
 
 @pytest.mark.asyncio
 async def test_real_deepagent_interrupt_and_resume(client: httpx.AsyncClient, workspace_root_path: str):
+    if not os.environ.get("OPENCODE_ZEN_API_KEY"):
+        pytest.skip("缺少 OPENCODE_ZEN_API_KEY，跳过真实模型验证")
+
     print("\n=== 测试真实DeepAgent打断和恢复 ===")
 
     create_session_response = await client.post(
@@ -516,7 +529,8 @@ async def _wait_for_trace_event(trace_file: Path, event_type: str, tool_name: st
 def _collect_monitor_timeout_debug(session_id: str, job_id: str, trace_file: Path) -> str:
     debug_lines = [f"session_id={session_id}", f"job_id={job_id}", f"trace_file={trace_file}"]
 
-    handles = BackgroundTaskRegistry.get_instance().list_handles(session_id)
+    # 这里仅用于测试调试信息收集，直接创建一个实例查看当前进程内的任务状态。
+    handles = BackgroundTaskRegistry().list_handles(session_id)
     if not handles:
         debug_lines.append("background_tasks=[]")
     else:

@@ -9,17 +9,13 @@ from app.core.path_utils import get_workspace_root, get_artifacts_dir, get_logs_
 
 
 class RuntimeService:
-    _instance: Optional["RuntimeService"] = None
     _start_time = None
 
     def __init__(self):
-        pass
+        self._job_service = None
 
-    @classmethod
-    def get_instance(cls) -> "RuntimeService":
-        if cls._instance is None:
-            cls._instance = RuntimeService()
-        return cls._instance
+    def bind_job_service(self, job_service) -> None:
+        self._job_service = job_service
 
     async def status(self) -> dict:
         if self._start_time is None:

@@ -24,8 +24,8 @@ class DummyTask:
 
 @pytest.mark.asyncio
 async def test_job_control_pause_cancels_running_task(monkeypatch):
-    service = JobService.get_instance()
-    monkeypatch.setattr(JobService, "_jobs", {})
+    service = JobService()
+    service._jobs = {}
 
     job = JobState(
         job_id="job_test_pause",
@@ -47,8 +47,8 @@ async def test_job_control_pause_cancels_running_task(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_job_control_resume_restarts_completed_pause(monkeypatch):
-    service = JobService.get_instance()
-    monkeypatch.setattr(JobService, "_jobs", {})
+    service = JobService()
+    service._jobs = {}
 
     job = JobState(
         job_id="job_test_resume",
@@ -85,8 +85,8 @@ async def test_job_control_resume_restarts_completed_pause(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_job_control_cancel_requests_task_cancel(monkeypatch):
-    service = JobService.get_instance()
-    monkeypatch.setattr(JobService, "_jobs", {})
+    service = JobService()
+    service._jobs = {}
 
     task = DummyTask()
     job = JobState(
@@ -109,10 +109,11 @@ async def test_job_control_cancel_requests_task_cancel(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch):
-    service = JobService.get_instance()
-    monkeypatch.setattr(JobService, "_jobs", {})
+    service = JobService()
+    service._jobs = {}
     service._session_current_job = {}
     service._session_waiting_jobs = {}
+    service.bind_bus(__import__("app.core.job_event_bus", fromlist=["JobEventBus"]).JobEventBus())
 
     started_jobs: list[str] = []
 

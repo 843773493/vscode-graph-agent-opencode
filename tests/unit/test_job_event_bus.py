@@ -16,9 +16,8 @@ class TestJobEventBus:
     """测试事件总线功能"""
 
     def setup_method(self):
-        """每个测试前重置事件总线单例"""
-        JobEventBus._instance = None
-        self.bus = JobEventBus.get_instance()
+        """每个测试前创建新的事件总线实例"""
+        self.bus = JobEventBus()
         self.job_id = f"test-job-{uuid.uuid4().hex[:8]}"
 
     @pytest.mark.asyncio
@@ -206,8 +205,8 @@ class TestJobEventBus:
         events = await self.bus.list_events(self.job_id, limit=200)
         assert len(events) == 150
 
-    def test_singleton_instance(self):
-        """测试事件总线是单例"""
-        bus1 = JobEventBus.get_instance()
-        bus2 = JobEventBus.get_instance()
-        assert bus1 is bus2
+    def test_instance_isolated(self):
+        """测试事件总线实例彼此隔离"""
+        bus1 = JobEventBus()
+        bus2 = JobEventBus()
+        assert bus1 is not bus2

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
+from app.runtime import get_runtime_service
 from app.schemas.common import APIResponse
 from app.services.runtime_service import RuntimeService
 
@@ -13,8 +14,9 @@ router = APIRouter(prefix="/runtime", tags=["runtime"])
 async def get_runtime_status(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
 ):
-    result = await RuntimeService.get_instance().status()
+    result = await runtime_service.status()
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -22,6 +24,7 @@ async def get_runtime_status(
 async def shutdown_runtime(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
 ):
-    result = await RuntimeService.get_instance().shutdown()
+    result = await runtime_service.shutdown()
     return APIResponse(data=result, request_id=request_id)

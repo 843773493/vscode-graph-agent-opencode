@@ -33,6 +33,9 @@ def test_node_pty_smoke_runs_a_real_shell_command(tmp_path: Path) -> None:
         check=False,
     )
 
+    if completed.returncode == 2 and "node-pty not installed" in (completed.stderr or completed.stdout):
+        pytest.skip("node-pty not installed")
+
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
     payload = json.loads(completed.stdout.strip().splitlines()[-1])

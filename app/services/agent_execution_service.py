@@ -3,22 +3,25 @@ from typing import Optional, Dict, Any, List
 
 from app.core.job_event_bus import EventType, JobEventBus
 from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
+from app.services.config_service import ConfigService
 
 
 class AgentExecutionService:
-    _instance: Optional[AgentExecutionService] = None
-    
     def __init__(self):
         self._agent_cache = {}
-    
-    @classmethod
-    def get_instance(cls) -> AgentExecutionService:
-        if cls._instance is None:
-            cls._instance = AgentExecutionService()
-        return cls._instance
+        self._config_service: ConfigService | None = None
+        self._bus: JobEventBus | None = None
+
+    def bind_config_service(self, config_service: ConfigService) -> None:
+        self._config_service = config_service
+
+    def bind_bus(self, bus: JobEventBus) -> None:
+        self._bus = bus
     
     def _get_or_create_agent(self, session_id: str, agent_id: str | None = None):
-        resolved_agent_id = resolve_agent_id(agent_id)
+        if self._config_service is None:
+            raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
+        resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
         cache_key = f"{session_id}::{resolved_agent_id}"
         if cache_key in self._agent_cache:
             return self._agent_cache[cache_key]
@@ -26,14 +29,14 @@ class AgentExecutionService:
         agent = create_runtime_deep_agent_for_session(
             session_id=session_id,
             agent_id=resolved_agent_id,
+            config_service=self._config_service,
             name=resolved_agent_id,
         )
         
         self._agent_cache[cache_key] = agent
         return agent
     
-    @classmethod
-    async def run_step(cls, session_id: str, message: str, agent_id: str | None = None, job_id: str | None = None) -> str:
+    async def run_step(self, session_id: str, message: str, agent_id: str | None = None, job_id: str | None = None) -> str:
         """
         执行单步Agent调用
         
@@ -46,10 +49,13 @@ class AgentExecutionService:
         Returns:
             Agent响应内容
         """
-        instance = cls.get_instance()
-        resolved_agent_id = resolve_agent_id(agent_id)
-        agent = instance._get_or_create_agent(session_id, resolved_agent_id)
-        bus = JobEventBus.get_instance()
+        if self._config_service is None:
+            raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
+        resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
+        agent = self._get_or_create_agent(session_id, resolved_agent_id)
+        if self._bus is None:
+            raise RuntimeError("AgentExecutionService 未绑定 JobEventBus")
+        bus = self._bus
         
         # 确定用于事件发布的job_id
         if job_id is None:
@@ -120,16 +126,13 @@ class AgentExecutionService:
             )
             raise
 
-    @classmethod
-    def get_for_session(cls, session_id: str, agent_id: str | None = None):
+    def get_for_session(self, session_id: str, agent_id: str | None = None):
         """
         获取指定会话的Agent实例
         """
-        instance = cls.get_instance()
-        return instance._get_or_create_agent(session_id, agent_id)
+        return self._get_or_create_agent(session_id, agent_id)
     
-    @classmethod
-    def get_available_tools(cls) -> List[Dict[str, Any]]:
+    def get_available_tools(self) -> List[Dict[str, Any]]:
         """
         获取DeepAgent支持的所有可用工具列表
         
@@ -137,7 +140,7 @@ class AgentExecutionService:
         """
         # 从agent实例动态获取真实工具列表
         session_id = "tools_inspection_session"
-        agent = cls.get_instance()._get_or_create_agent(session_id)
+        agent = self._get_or_create_agent(session_id)
         
         # 使用正确的inspect_agent_tools实现
         tool_map = {}

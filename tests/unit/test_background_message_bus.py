@@ -12,38 +12,19 @@ from app.schemas.background_message import BackgroundMessageKind
 
 @pytest.fixture(autouse=True)
 def reset_background_message_service():
-    BackgroundMessageBus._instance = None
     yield
-    BackgroundMessageBus._instance = None
 
 
 @pytest.mark.asyncio
 async def test_collect_background_messages_stops_on_interrupt():
-    service = BackgroundMessageBus.get_instance()
+    service = BackgroundMessageBus()
     session_id = "session_test"
     agent_id = "deep_agent"
     source_id = "clock-stream"
 
-    emit_background_message(
-        "first",
-        session_id=session_id,
-        agent_id=agent_id,
-        source_id=source_id,
-        kind=BackgroundMessageKind.normal,
-    )
-    emit_background_message(
-        "second",
-        session_id=session_id,
-        agent_id=agent_id,
-        source_id=source_id,
-        kind=BackgroundMessageKind.normal,
-    )
-    emit_interrupt_background_message(
-        "stop",
-        session_id=session_id,
-        agent_id=agent_id,
-        source_id=source_id,
-    )
+    service.emit(session_id, agent_id, "first", kind=BackgroundMessageKind.normal, source_id=source_id)
+    service.emit(session_id, agent_id, "second", kind=BackgroundMessageKind.normal, source_id=source_id)
+    service.emit(session_id, agent_id, "stop", kind=BackgroundMessageKind.interrupt, source_id=source_id)
 
     batch = await service.collect(
         session_id,
@@ -61,22 +42,12 @@ async def test_collect_background_messages_stops_on_interrupt():
 
 @pytest.mark.asyncio
 async def test_collect_background_messages_filters_source():
-    service = BackgroundMessageBus.get_instance()
+    service = BackgroundMessageBus()
     session_id = "session_test"
     agent_id = "deep_agent"
 
-    emit_background_message(
-        "alpha-1",
-        session_id=session_id,
-        agent_id=agent_id,
-        source_id="alpha",
-    )
-    emit_background_message(
-        "beta-1",
-        session_id=session_id,
-        agent_id=agent_id,
-        source_id="beta",
-    )
+    service.emit(session_id, agent_id, "alpha-1", source_id="alpha")
+    service.emit(session_id, agent_id, "beta-1", source_id="beta")
 
     batch = await service.collect(
         session_id,

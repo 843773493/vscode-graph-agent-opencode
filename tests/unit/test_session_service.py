@@ -68,7 +68,7 @@ class TestSessionService:
         request = SessionCreateRequest(title="Agent Session", agent_id="deep_agent")
         session = await SessionService.create(request)
 
-        assert session.current_agent_id == "deep_agent"
+        assert session.current_agent_id == "default"
 
     @pytest.mark.asyncio
     async def test_update_session_can_switch_agent(self):

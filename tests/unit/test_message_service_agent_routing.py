@@ -5,9 +5,7 @@ from datetime import datetime
 import pytest
 
 from app.schemas.message import MessageCreateRequest, MessageRunRequest, RunOptions
-from app.services.job_service import JobService
 from app.services.message_service import MessageService
-from app.services.session_service import SessionService
 
 
 class _FakeSession:
@@ -31,11 +29,13 @@ async def test_create_and_run_uses_session_current_agent_when_request_omits_agen
             captured["agent_id"] = agent_id
             return "job_test_001"
 
-    async def _fake_get(_session_id: str):
-        return _FakeSession(_session_id, "default")
+    class _FakeSessionService:
+        @staticmethod
+        async def get(_session_id: str):
+            return _FakeSession(_session_id, "default")
 
-    monkeypatch.setattr(SessionService, "get", _fake_get)
-    monkeypatch.setattr(JobService, "get_instance", lambda: _FakeJobService())
+    monkeypatch.setattr("app.runtime.get_session_service", lambda: _FakeSessionService())
+    monkeypatch.setattr("app.runtime.get_job_service", lambda: _FakeJobService())
 
     service = MessageService()
     result = await service.create_and_run(
@@ -58,16 +58,26 @@ async def test_create_and_run_prefers_request_agent_over_session_agent(monkeypat
 
     captured: dict[str, str] = {}
 
+    class _FakeConfigService:
+        def resolve_agent_id(self, agent_id):
+            return agent_id
+
+        def validate_agent_id(self, agent_id):
+            return agent_id
+
     class _FakeJobService:
         async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
             captured["agent_id"] = agent_id
             return "job_test_002"
 
-    async def _fake_get(_session_id: str):
-        return _FakeSession(_session_id, "default")
+    class _FakeSessionService:
+        @staticmethod
+        async def get(_session_id: str):
+            return _FakeSession(_session_id, "default")
 
-    monkeypatch.setattr(SessionService, "get", _fake_get)
-    monkeypatch.setattr(JobService, "get_instance", lambda: _FakeJobService())
+    monkeypatch.setattr("app.runtime.get_session_service", lambda: _FakeSessionService())
+    monkeypatch.setattr("app.runtime.get_config_service", lambda: _FakeConfigService())
+    monkeypatch.setattr("app.runtime.get_job_service", lambda: _FakeJobService())
 
     service = MessageService()
     await service.create_and_run(
