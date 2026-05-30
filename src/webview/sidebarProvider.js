@@ -121,7 +121,7 @@ export class SidebarProvider {
       },
     );
 
-    panel.webview.html = renderSidebarHtml(panel.webview, {
+    panel.webview.html = await renderSidebarHtml(panel.webview, {
       nonce: getNonce(),
       shellMode: true,
       apiPort: this.state.apiPort,
@@ -154,7 +154,7 @@ export class SidebarProvider {
     this.view = null;
   }
 
-  resolveWebviewView(webviewView, _context, _token) {
+  async resolveWebviewView(webviewView, _context, _token) {
     this.webviewMessageDisposable?.dispose();
     this.visibilityDisposable?.dispose();
 
@@ -166,7 +166,7 @@ export class SidebarProvider {
       localResourceRoots: [this.context.extensionUri],
     };
 
-    webview.html = renderSidebarHtml(webview, {
+    webview.html = await renderSidebarHtml(webview, {
       nonce: getNonce(),
       shellMode: this.shellMode,
       distCssUri: this.shellMode ? '' : webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.css'))).toString(),

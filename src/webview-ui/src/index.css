@@ -20,11 +20,22 @@ html, body {
   color: var(--vscode-editor-foreground);
 }
 
-body { display: flex; }
+body {
+  display: flex;
+  min-width: 0;
+}
+
+body > #root {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
 
 .app-shell {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -139,6 +150,30 @@ body { display: flex; }
 .content-layout.history-open .chat-panel,
 .content-layout.history-closed .chat-panel {
   flex: 1 1 0;
+}
+
+.content-layout.history-closed {
+  gap: 0;
+}
+
+.content-layout.history-closed > .history-panel {
+  display: none;
+}
+
+.content-layout.history-closed .chat-panel {
+  width: 100%;
+  max-width: none;
+  flex: 1 1 auto;
+}
+
+.content-layout.history-closed .chat-stream {
+  width: 100%;
+}
+
+.content-layout.history-closed .turn-card,
+.content-layout.history-closed .request-container,
+.content-layout.history-closed .chat-message {
+  width: 100%;
 }
 
 .history-panel {

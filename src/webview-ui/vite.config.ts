@@ -12,7 +12,10 @@ export default defineConfig({
     outDirResolved: path.resolve(process.cwd(), 'dist'),
     emptyOutDir: true,
     rollupOptions: {
-      input: path.resolve(process.cwd(), 'index.html'),
+      input: {
+        main: path.resolve(process.cwd(), 'index.html'),
+        preview: path.resolve(process.cwd(), 'preview.html'),
+      },
       output: {
         entryFileNames: `assets/[name].js`,
         chunkFileNames: `assets/[name].js`,
