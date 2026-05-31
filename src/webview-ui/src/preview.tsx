@@ -2,8 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AppProvider } from './hooks';
-import type { AppState, Session, Message, TraceEvent, ActiveJob } from './types';
 import './index.css';
+import type { ActiveJob, AppState, Message, Session, TraceEvent } from './types';
 
 declare global {
   interface ImportMeta {

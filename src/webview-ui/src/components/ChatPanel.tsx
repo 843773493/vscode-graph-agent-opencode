@@ -203,12 +203,6 @@ function TurnCard({ turn, onPrompt, showTrace }: { turn: PendingTurn; onPrompt: 
         </div>
       </div>
 
-      <div className="turn-context-row">
-        <span className="context-chip">@workspace</span>
-        <span className="context-chip">#session</span>
-        <span className="context-chip">{turn.pending ? 'streaming' : 'stable'}</span>
-      </div>
-
       {turn.userMessage && <UserMessageCard message={turn.userMessage} />}
 
       <section className="turn-section-body">

@@ -1,40 +1,10 @@
 import asyncio
+import json
+
 import httpx
 import pytest
-import json
-from typing import AsyncGenerator
 
-from tests.conftest import use_config
-from app.main import app
-
-use_config("default")
-
-
-@pytest.fixture
-async def client(workspace_root_path: str) -> AsyncGenerator[httpx.AsyncClient, None]:
-    print(f"使用测试工作区: {workspace_root_path}")
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-        timeout=30,
-        headers={"X-Local-Token": "local-dev-token"},
-    ) as client:
-        yield client
-
-
-async def _wait_job_done(client: httpx.AsyncClient, job_id: str, timeout_seconds: int = 60) -> dict:
-    max_attempts = max(1, timeout_seconds)
-    for attempt in range(max_attempts):
-        response = await client.get(f"/api/v1/jobs/{job_id}")
-        assert response.status_code == 200
-        data = response.json()["data"]
-        status = data["status"]
-        if status in {"completed", "succeeded", "failed", "cancelled", "timed_out"}:
-            return data
-        await asyncio.sleep(1)
-
-    pytest.fail(f"Job {job_id} did not complete in {timeout_seconds}s")
+from tests.e2e.utils import wait_for_job_done
 
 
 @pytest.mark.asyncio
@@ -53,8 +23,6 @@ async def test_full_session_flow(client: httpx.AsyncClient):
     
     # 2. 先订阅 SSE 事件流，再触发任务，避免错过事件
     print("Testing job event history...")
-    events = []
-
     # 3. 启动异步Job
     start_job_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
@@ -74,23 +42,8 @@ async def test_full_session_flow(client: httpx.AsyncClient):
     print(f"Started job: {job_id}")
 
     # 4. 轮询Job状态直到完成
-    max_attempts = 30
-    for attempt in range(max_attempts):
-        job_status_response = await client.get(f"/api/v1/jobs/{job_id}")
-        assert job_status_response.status_code == 200
-        job_status = job_status_response.json()["data"]
-
-        print(f"Job status (attempt {attempt+1}): {job_status['status']}")
-
-        if job_status["status"] in {"completed", "succeeded"}:
-            print("Job completed successfully!")
-            break
-        elif job_status["status"] == "failed":
-            pytest.fail(f"Job failed: {job_status['error_message']}")
-
-        await asyncio.sleep(1)
-    else:
-        pytest.fail("Job timed out after 30 seconds")
+    job_status = await wait_for_job_done(client, job_id, max_attempts=30)
+    assert job_status["status"] in {"completed", "succeeded"}
 
     # 5. 获取事件历史，验证事件链路已经产出
     events_response = await client.get(f"/api/v1/jobs/{job_id}/events")
@@ -134,21 +87,9 @@ async def test_multiple_same_session_jobs_are_queued(client: httpx.AsyncClient):
         print(f"Started queued job {i}: {job_ids[i]}")
     
     # 等待所有Job完成（串行执行可能更慢）
-    completed = 0
-    for attempt in range(90):
-        for job_id in job_ids:
-            response = await client.get(f"/api/v1/jobs/{job_id}")
-            status = response.json()["data"]["status"]
-            if status in ["completed", "succeeded", "failed"]:
-                completed += 1
-        
-        if completed == len(job_ids):
-            break
-        
-        completed = 0
-        await asyncio.sleep(1)
-    else:
-        pytest.fail("Not all queued jobs completed in time")
+    for job_id in job_ids:
+        result = await wait_for_job_done(client, job_id, max_attempts=90)
+        assert result["status"] in {"completed", "succeeded"}
     
     print(f"✅ All {len(job_ids)} queued jobs completed successfully!")
 
@@ -231,7 +172,7 @@ async def test_session_auto_continue_start_and_stop(client: httpx.AsyncClient):
     )
     assert trigger_response.status_code == 200
     trigger_job_id = trigger_response.json()["data"]["job_id"]
-    await _wait_job_done(client, trigger_job_id)
+    await wait_for_job_done(client, trigger_job_id)
 
     continue_seen = False
     for _ in range(40):
@@ -279,7 +220,7 @@ async def test_session_auto_continue_start_and_stop(client: httpx.AsyncClient):
     )
     assert manual_response.status_code == 200
     manual_job_id = manual_response.json()["data"]["job_id"]
-    await _wait_job_done(client, manual_job_id)
+    await wait_for_job_done(client, manual_job_id)
 
     await asyncio.sleep(2)
     final_messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")

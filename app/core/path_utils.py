@@ -12,7 +12,7 @@ def get_user_workspace_root() -> Path:
         return Path(configured_root).expanduser().resolve()
 
     home_dir = Path.home().resolve()
-    return home_dir / ".BoxTeamWorkspace"
+    return home_dir / ".boxteams" / "boxteam_workspace"
 
 
 def get_workspace_root() -> Path:

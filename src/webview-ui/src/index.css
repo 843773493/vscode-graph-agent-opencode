@@ -327,7 +327,6 @@ body > #root {
 .turn-card-stats { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .turn-card-title { font-size: 12px; font-weight: 700; color: var(--vscode-editor-foreground); }
 
-.turn-context-row { padding: 10px 12px 0; }
 .context-chip,
 .followup-pill,
 .message-action-button,

@@ -5,37 +5,62 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
-import os
+import asyncio
+import time
 from pathlib import Path
-from typing import AsyncGenerator
 
 import httpx
 import pytest
 
-from app.core.background_task_registry import BackgroundTaskRegistry
-from app.main import app
+from tests.e2e.utils import requires_real_model, wait_for_job_done
 
 
-@pytest.fixture
-async def client(workspace_root_path: str) -> AsyncGenerator[httpx.AsyncClient, None]:
-    print(f"使用测试工作区: {workspace_root_path}")
-    transport = httpx.ASGITransport(app=app)
-    async with app.router.lifespan_context(app):
-        async with httpx.AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-            timeout=30,
-            headers={"X-Local-Token": "local-dev-token"},
-        ) as client:
-            yield client
+async def _wait_for_trace_event(
+    trace_file: Path,
+    *,
+    event_type: str,
+    tool_name: str,
+    timeout_seconds: int = 60,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if trace_file.exists():
+            trace_lines = trace_file.read_text(encoding="utf-8").splitlines()
+            for line in trace_lines:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                if event.get("event_type") == event_type and event.get("data", {}).get("tool_name") == tool_name:
+                    return
+        await asyncio.sleep(1)
+
+    pytest.fail(f"在 trace 中未等到 {event_type}:{tool_name} 事件: {trace_file}")
+
+
+async def _wait_for_session_assistant_messages(
+    client: httpx.AsyncClient,
+    session_id: str,
+    *,
+    min_count: int,
+    timeout_seconds: int = 60,
+) -> list[dict]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = await client.get(f"/api/v1/sessions/{session_id}/messages")
+        assert response.status_code == 200
+        messages = response.json()["data"]["items"]
+        assistant_messages = [message for message in messages if message.get("role") == "assistant"]
+        if len(assistant_messages) >= min_count:
+            return assistant_messages
+        await asyncio.sleep(1)
+
+    pytest.fail(f"session {session_id} 未在超时时间内获得至少 {min_count} 条 assistant 消息")
 
 
 @pytest.mark.asyncio
 async def test_real_deepagent(client: httpx.AsyncClient, workspace_root_path: str):
-    if not os.environ.get("OPENCODE_ZEN_API_KEY"):
-        pytest.skip("缺少 OPENCODE_ZEN_API_KEY，跳过真实模型验证")
+    requires_real_model()
 
     print("\n=== 测试真实DeepAgent端到端执行 ===")
 
@@ -63,7 +88,7 @@ async def test_real_deepagent(client: httpx.AsyncClient, workspace_root_path: st
     first_job_id = first_message_response.json()["data"]["job_id"]
     print(f"First job started: {first_job_id}")
 
-    first_result = await _wait_for_job_completion(client, first_job_id)
+    first_result = await wait_for_job_done(client, first_job_id)
     assert first_result["status"] in {"completed", "succeeded"}
     assert not first_result.get("error_message")
 
@@ -83,7 +108,7 @@ async def test_real_deepagent(client: httpx.AsyncClient, workspace_root_path: st
     second_job_id = second_message_response.json()["data"]["job_id"]
     print(f"Second job started: {second_job_id}")
 
-    second_result = await _wait_for_job_completion(client, second_job_id)
+    second_result = await wait_for_job_done(client, second_job_id)
     assert second_result["status"] in {"completed", "succeeded"}
     assert not second_result.get("error_message")
 
@@ -107,7 +132,7 @@ async def test_real_deepagent(client: httpx.AsyncClient, workspace_root_path: st
     third_job_id = third_message_response.json()["data"]["job_id"]
     print(f"Third job started: {third_job_id}")
 
-    third_result = await _wait_for_job_completion(client, third_job_id)
+    third_result = await wait_for_job_done(client, third_job_id)
     assert third_result["status"] in {"completed", "succeeded"}
     assert not third_result.get("error_message")
 
@@ -130,8 +155,7 @@ async def test_real_deepagent(client: httpx.AsyncClient, workspace_root_path: st
 
 @pytest.mark.asyncio
 async def test_real_deepagent_can_call_python_tool(client: httpx.AsyncClient, workspace_root_path: str):
-    if not os.environ.get("OPENCODE_ZEN_API_KEY"):
-        pytest.skip("缺少 OPENCODE_ZEN_API_KEY，跳过真实模型验证")
+    requires_real_model()
 
     print("\n=== 测试真实DeepAgent调用 Python 工具 ===")
 
@@ -163,7 +187,7 @@ async def test_real_deepagent_can_call_python_tool(client: httpx.AsyncClient, wo
     job_id = message_response.json()["data"]["job_id"]
     print(f"Job started: {job_id}")
 
-    result = await _wait_for_job_completion(client, job_id)
+    result = await wait_for_job_done(client, job_id)
     assert result["status"] in {"completed", "succeeded"}
     assert not result.get("error_message")
 
@@ -202,8 +226,7 @@ async def test_real_deepagent_can_monitor_other_session_final_text_and_repeat(
     client: httpx.AsyncClient,
     workspace_root_path: str,
 ):
-    if not os.environ.get("OPENCODE_ZEN_API_KEY"):
-        pytest.skip("缺少 OPENCODE_ZEN_API_KEY，跳过真实模型验证")
+    requires_real_model()
 
     print("\n=== 测试真实DeepAgent监控另一个 session 的 final_text ===")
 
@@ -507,23 +530,6 @@ async def _wait_for_job_state(client: httpx.AsyncClient, job_id: str, expected_s
         await asyncio.sleep(1)
 
     pytest.fail(f"Job timed out waiting for states {expected_states}: {job_id}")
-
-
-async def _wait_for_trace_event(trace_file: Path, event_type: str, tool_name: str | None = None) -> dict:
-    for attempt in range(60):
-        if trace_file.exists():
-            trace_events = [json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-            for event in trace_events:
-                if event.get("event_type") != event_type:
-                    continue
-                if tool_name is not None and event.get("data", {}).get("tool_name") != tool_name:
-                    continue
-                return event
-
-        print(f"Trace event wait (attempt {attempt + 1}): {trace_file}")
-        await asyncio.sleep(1)
-
-    pytest.fail(f"Job trace timed out waiting for {event_type} / {tool_name}: {trace_file}")
 
 
 def _collect_monitor_timeout_debug(session_id: str, job_id: str, trace_file: Path) -> str:
