@@ -27,6 +27,17 @@ function getWorkspaceRoot() {
   return path.join(homeDir, '.BoxTeamWorkspace');
 }
 
+function ensureDefaultWorkspaceLayout(workspaceRoot) {
+  if (!fs.existsSync(workspaceRoot)) {
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+  }
+
+  const boxteamDir = path.join(workspaceRoot, '.boxteam');
+  if (!fs.existsSync(boxteamDir)) {
+    fs.mkdirSync(boxteamDir, { recursive: true });
+  }
+}
+
 function getPort() {
   const config = vscode.workspace.getConfiguration('vscodeGraphAgent');
   return config.get('port', DEFAULT_BACKEND_PORT);
@@ -181,10 +192,7 @@ export class BackendManager {
     }
 
     this.workspaceRoot = getWorkspaceRoot();
-    if (!fs.existsSync(this.workspaceRoot)) {
-      fs.mkdirSync(this.workspaceRoot, { recursive: true });
-      this.log(`已创建默认工作区目录: ${this.workspaceRoot}`);
-    }
+    ensureDefaultWorkspaceLayout(this.workspaceRoot);
     this.projectRoot = findProjectRoot();
     this.outputChannel.show(true);
     this.log(`========== 启动后端进程 ==========`);
@@ -245,6 +253,7 @@ export class BackendManager {
       fs.mkdirSync(workspaceRoot, { recursive: true });
       this.log(`已创建默认工作区目录: ${workspaceRoot}`);
     }
+    ensureDefaultWorkspaceLayout(workspaceRoot);
 
     if (!fs.existsSync(pythonPath)) {
       const error = new Error(`Python 路径不存在: ${pythonPath}`);

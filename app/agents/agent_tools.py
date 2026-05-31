@@ -227,9 +227,6 @@ def create_monitor_session_agent_end_tool(
         monitor_source_id = f"monitor:{target_session_id}:{uuid.uuid4().hex[:12]}"
 
         async def _monitor_background_task() -> dict[str, Any]:
-            # 通过 runtime 模块懒加载 JobService，避免循环依赖
-            from app.runtime import get_job_service
-
             deadline = None if timeout_seconds is None else asyncio.get_running_loop().time() + timeout_seconds
             seen_event_ids = LRUCache(maxsize=10000)
             emitted_events: list[dict[str, Any]] = []

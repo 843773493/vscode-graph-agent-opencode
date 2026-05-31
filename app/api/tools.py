@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_request_id, verify_local_token
-from app.runtime import get_tool_service
 from app.schemas.common import APIResponse
 from app.schemas.tool import ToolDTO, ToolInvokeRequest
 from app.services.tool_service import ToolService
@@ -13,10 +12,11 @@ router = APIRouter(prefix="/tools", tags=["tools"])
 
 @router.get("", response_model=APIResponse[list[ToolDTO]], summary="获取 Tool 列表")
 async def list_tools(
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    tool_service: ToolService = Depends(get_tool_service),
 ):
+    tool_service: ToolService = request.app.state.container.tool_service
     result = await tool_service.list()
     return APIResponse(data=result, request_id=request_id)
 
@@ -24,10 +24,11 @@ async def list_tools(
 @router.get("/{tool_id}", response_model=APIResponse[ToolDTO], summary="获取 Tool 详情")
 async def get_tool(
     tool_id: str,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    tool_service: ToolService = Depends(get_tool_service),
 ):
+    tool_service: ToolService = request.app.state.container.tool_service
     result = await tool_service.get(tool_id)
     return APIResponse(data=result, request_id=request_id)
 
@@ -36,9 +37,10 @@ async def get_tool(
 async def invoke_tool(
     tool_id: str,
     payload: ToolInvokeRequest,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    tool_service: ToolService = Depends(get_tool_service),
 ):
+    tool_service: ToolService = request.app.state.container.tool_service
     result = await tool_service.invoke(tool_id, payload)
     return APIResponse(data=result, request_id=request_id)

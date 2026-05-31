@@ -44,6 +44,14 @@ class JobService:
     def bind_agent_execution_service(self, agent_execution_service) -> None:
         self._agent_execution_service = agent_execution_service
 
+    def bind_message_service(self, message_service) -> None:
+        self._message_service = message_service
+
+    def _normalize_result_text(self, result: object) -> str:
+        if isinstance(result, str):
+            return result
+        return str(result)
+
     async def list(self, session_id: Optional[str] = None) -> list[JobDTO]:
         jobs = []
         for job in self._jobs.values():
@@ -270,23 +278,30 @@ class JobService:
                 agent_id="job_service"
             )
             
-            # 通过 runtime 懒加载 AgentExecutionService
-            from app.runtime import get_agent_execution_service
-            agent_service = get_agent_execution_service()
-            result = await agent_service.run_step(session_id, message, agent_id=job.agent_id, job_id=job_id)
+            if self._agent_execution_service is None:
+                raise RuntimeError("JobService 未绑定 AgentExecutionService")
+            if self._message_service is None:
+                raise RuntimeError("JobService 未绑定 MessageService")
 
-            # 通过 runtime 懒加载 MessageService
-            from app.runtime import get_message_service
-            await get_message_service().append_assistant_message(
+            result = await self._agent_execution_service.run_step(
                 session_id,
-                result,
+                message,
+                agent_id=job.agent_id,
+                job_id=job_id,
+            )
+
+            result_text = self._normalize_result_text(result)
+
+            await self._message_service.append_assistant_message(
+                session_id,
+                result_text,
                 metadata={
                     "source": "agent_execution",
                     "job_id": job_id,
                 },
             )
             
-            job.result = result
+            job.result = result_text
             job.status = JobStatus.completed
             job.progress = 100
             job.ended_at = datetime.now()
@@ -295,7 +310,7 @@ class JobService:
             await self._bus.publish(
                 job_id=job_id,
                 event_type=EventType.JOB_COMPLETED,
-                payload={"result": result},
+                payload={"result": result_text},
                 agent_id="job_service"
             )
             

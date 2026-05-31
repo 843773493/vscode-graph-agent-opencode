@@ -1,9 +1,14 @@
 from __future__ import annotations
 from typing import Optional, Dict, Any, List
 
+from app.core.background_message_bus import BackgroundMessageBus
+from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
 from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
 from app.services.config_service import ConfigService
+from app.services.job_service import JobService
+from app.services.message_service import MessageService
+from app.services.session_service import SessionService
 
 
 class AgentExecutionService:
@@ -11,12 +16,32 @@ class AgentExecutionService:
         self._agent_cache = {}
         self._config_service: ConfigService | None = None
         self._bus: JobEventBus | None = None
+        self._background_task_registry: BackgroundTaskRegistry | None = None
+        self._background_message_bus: BackgroundMessageBus | None = None
+        self._job_service: JobService | None = None
+        self._message_service: MessageService | None = None
+        self._session_service: SessionService | None = None
 
     def bind_config_service(self, config_service: ConfigService) -> None:
         self._config_service = config_service
 
     def bind_bus(self, bus: JobEventBus) -> None:
         self._bus = bus
+
+    def bind_dependencies(
+        self,
+        *,
+        background_task_registry: BackgroundTaskRegistry,
+        background_message_bus: BackgroundMessageBus,
+        job_service: JobService,
+        message_service: MessageService,
+        session_service: SessionService,
+    ) -> None:
+        self._background_task_registry = background_task_registry
+        self._background_message_bus = background_message_bus
+        self._job_service = job_service
+        self._message_service = message_service
+        self._session_service = session_service
     
     def _get_or_create_agent(self, session_id: str, agent_id: str | None = None):
         if self._config_service is None:
@@ -30,6 +55,12 @@ class AgentExecutionService:
             session_id=session_id,
             agent_id=resolved_agent_id,
             config_service=self._config_service,
+            background_task_registry=self._background_task_registry,
+            background_message_bus=self._background_message_bus,
+            job_event_bus=self._bus,
+            job_service=self._job_service,
+            message_service=self._message_service,
+            session_service=self._session_service,
             name=resolved_agent_id,
         )
         
@@ -51,6 +82,16 @@ class AgentExecutionService:
         """
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
+        if self._background_task_registry is None:
+            raise RuntimeError("AgentExecutionService 未绑定 BackgroundTaskRegistry")
+        if self._background_message_bus is None:
+            raise RuntimeError("AgentExecutionService 未绑定 BackgroundMessageBus")
+        if self._job_service is None:
+            raise RuntimeError("AgentExecutionService 未绑定 JobService")
+        if self._message_service is None:
+            raise RuntimeError("AgentExecutionService 未绑定 MessageService")
+        if self._session_service is None:
+            raise RuntimeError("AgentExecutionService 未绑定 SessionService")
         resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
         agent = self._get_or_create_agent(session_id, resolved_agent_id)
         if self._bus is None:

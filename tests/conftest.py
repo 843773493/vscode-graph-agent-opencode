@@ -50,14 +50,11 @@ def get_test_config_path() -> str:
 @pytest.fixture(autouse=True)
 def setup_test_config():
     from app.services.config_service import ConfigService, set_config_path
-    from app.runtime import clear_app_services
 
     config_path = get_test_config_path()
     if os.path.exists(config_path):
         set_config_path(config_path)
-    clear_app_services()
     yield
-    clear_app_services()
     set_config_path(None)
     global _test_config_path
     _test_config_path = TEST_CONFIG_PATH

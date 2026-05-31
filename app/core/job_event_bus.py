@@ -186,9 +186,12 @@ class JobEventBus:
             )
 
         elif t == EventType.AGENT_END:
+            final_text = payload.get("final_text")
+            if not isinstance(final_text, str):
+                final_text = str(final_text)
             return AgentEndEvent(
                 type="agent_end",
-                payload=AgentEndPayload(**payload),
+                payload=AgentEndPayload(**{**payload, "final_text": final_text}),
                 **common
             )
 

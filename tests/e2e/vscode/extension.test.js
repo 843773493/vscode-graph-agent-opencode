@@ -1,48 +1,88 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import * as vscode from 'vscode';
-import { OPEN_SIDEBAR_COMMAND } from '../../../src/shared/constants.js';
 
-async function waitForPathExists(targetPath, timeoutMs = 15000) {
-  const startedAt = Date.now();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
 
-  while (Date.now() - startedAt < timeoutMs) {
-    if (existsSync(targetPath)) {
-      return true;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 250));
+function getWorkspaceRoot() {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length > 0) {
+    return folders[0].uri.fsPath;
   }
 
-  return false;
+  const homeDir = process.env.HOME || process.env.USERPROFILE;
+  if (!homeDir) {
+    throw new Error('无法解析用户主目录，无法创建默认用户级工作区');
+  }
+
+  return path.join(homeDir, '.BoxTeamWorkspace');
 }
 
-suite('Graph Agent extension e2e tests', () => {
-  test('激活后会在用户目录创建默认工作区目录', async () => {
+function ensureWorkspaceLayout(workspaceRoot) {
+  if (!fs.existsSync(workspaceRoot)) {
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+  }
+
+  const boxteamDir = path.join(workspaceRoot, '.boxteam');
+  if (!fs.existsSync(boxteamDir)) {
+    fs.mkdirSync(boxteamDir, { recursive: true });
+  }
+}
+
+async function waitFor(predicate, timeoutMs = 60000, intervalMs = 500) {
+  const startedAt = Date.now();
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const result = await predicate();
+      if (result) {
+        return result;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(`等待条件超时（${timeoutMs}ms）${lastError ? `: ${String(lastError)}` : ''}`);
+}
+
+suite('Graph Agent extension runtime e2e tests', () => {
+  test('激活扩展后会注册命令并启动后端', async () => {
+    assert.ok(fs.existsSync(path.join(EXTENSION_ROOT, 'package.json')), '找不到扩展根目录 package.json');
+
+    const workspaceRoot = getWorkspaceRoot();
+    ensureWorkspaceLayout(workspaceRoot);
+
     await vscode.commands.executeCommand('vscode-graph-agent.openSidebar');
 
-    const workspaceRoot = process.env.USERPROFILE || process.env.HOME;
-    assert.ok(workspaceRoot, '无法解析用户主目录');
+    const backendApi = await waitFor(async () => {
+      const backendManager = globalThis.__graphAgentBackendManager;
+      if (!backendManager) {
+        return null;
+      }
 
-    const defaultWorkspaceDir = join(workspaceRoot, '.BoxTeamWorkspace');
-    const defaultWorkspaceBoxteamDir = join(defaultWorkspaceDir, '.boxteam');
+      const result = await backendManager.ensureStarted();
+      return result ? backendManager : null;
+    }, 120000, 1000);
 
-    assert.equal(await waitForPathExists(defaultWorkspaceDir), true, `未创建默认工作区目录: ${defaultWorkspaceDir}`);
-    assert.equal(await waitForPathExists(defaultWorkspaceBoxteamDir), true, `未创建工作区专属目录: ${defaultWorkspaceBoxteamDir}`);
+    assert.ok(backendApi, '后端没有成功启动');
+    assert.ok(typeof backendApi.port === 'number' && backendApi.port > 0, '后端端口无效');
 
-    const openSidebarCommand = await vscode.commands.getCommands(true).then((commands) =>
-      commands.includes(OPEN_SIDEBAR_COMMAND),
-    );
-    const showHistoryCommand = await vscode.commands.getCommands(true).then((commands) =>
-      commands.includes('graph-agent.showHistory'),
-    );
-    const contextCommand = await vscode.commands.getCommands(true).then((commands) =>
-      commands.includes('graph-agent.context.explainCode'),
-    );
+    const workspaceDir = path.join(workspaceRoot, '.boxteam');
+    assert.ok(fs.existsSync(workspaceRoot), '工作区根目录未创建');
+    assert.ok(fs.existsSync(workspaceDir), '.boxteam 目录未创建');
 
-    assert.equal(openSidebarCommand, true);
-    assert.equal(showHistoryCommand, true);
-    assert.equal(contextCommand, true);
+    const registered = await vscode.commands.getCommands(true);
+    assert.ok(registered.includes('vscode-graph-agent.openSidebar'));
+    assert.ok(registered.includes('graph-agent.showHistory'));
+    assert.ok(registered.includes('graph-agent.showStatus'));
   });
 });

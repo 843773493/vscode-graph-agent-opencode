@@ -24,16 +24,19 @@ async def client(workspace_root_path: str) -> AsyncIterator[httpx.AsyncClient]:
             yield client
 
 
+@pytest.fixture
+async def container() -> AsyncIterator[object]:
+    async with app.router.lifespan_context(app):
+        yield app.state.container
+
+
 @pytest.fixture(autouse=True)
 def setup_e2e_test_config() -> None:
-    from app.runtime import clear_app_services
     from app.services.config_service import set_config_path
 
     config_path = Path(__file__).resolve().parents[2] / "configs" / "tests" / "default.jsonc"
     set_config_path(str(config_path))
-    clear_app_services()
     yield
-    clear_app_services()
     set_config_path(None)
 
 

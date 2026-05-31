@@ -13,6 +13,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.main import app
+
 from tests.e2e.utils import requires_real_model, wait_for_job_done
 
 
@@ -535,8 +537,12 @@ async def _wait_for_job_state(client: httpx.AsyncClient, job_id: str, expected_s
 def _collect_monitor_timeout_debug(session_id: str, job_id: str, trace_file: Path) -> str:
     debug_lines = [f"session_id={session_id}", f"job_id={job_id}", f"trace_file={trace_file}"]
 
-    # 这里仅用于测试调试信息收集，直接创建一个实例查看当前进程内的任务状态。
-    handles = BackgroundTaskRegistry().list_handles(session_id)
+    container = getattr(app.state, "container", None)
+    if container is None:
+        debug_lines.append("background_tasks=<container unavailable>")
+        handles = []
+    else:
+        handles = container.background_task_registry.list_handles(session_id)
     if not handles:
         debug_lines.append("background_tasks=[]")
     else:

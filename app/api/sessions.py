@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_request_id, verify_local_token
-from app.runtime import get_session_auto_continue_service, get_session_service
 from app.schemas.common import APIResponse, CursorPage
 from app.schemas.session import (
     SessionAutoContinueStartRequest,
@@ -21,22 +20,24 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 @router.post("", response_model=APIResponse[SessionDTO], summary="创建会话")
 async def create_session(
     payload: SessionCreateRequest,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    session_service: SessionService = Depends(get_session_service),
 ):
+    session_service: SessionService = request.app.state.container.session_service
     result = await session_service.create(payload)
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.get("", response_model=APIResponse[CursorPage[SessionDTO]], summary="获取会话列表")
 async def list_sessions(
+    request: Request,
     limit: int = 20,
     cursor: str | None = None,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    session_service: SessionService = Depends(get_session_service),
 ):
+    session_service: SessionService = request.app.state.container.session_service
     result = await session_service.list(limit=limit, cursor=cursor)
     return APIResponse(data=result, request_id=request_id)
 
@@ -44,10 +45,11 @@ async def list_sessions(
 @router.get("/{session_id}", response_model=APIResponse[SessionDTO], summary="获取会话详情")
 async def get_session(
     session_id: str,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    session_service: SessionService = Depends(get_session_service),
 ):
+    session_service: SessionService = request.app.state.container.session_service
     result = await session_service.get(session_id)
     return APIResponse(data=result, request_id=request_id)
 
@@ -55,10 +57,11 @@ async def get_session(
 @router.get("/{session_id}/traces", response_model=APIResponse[list[dict]], summary="获取会话执行轨迹")
 async def list_session_traces(
     session_id: str,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    session_service: SessionService = Depends(get_session_service),
 ):
+    session_service: SessionService = request.app.state.container.session_service
     result = await session_service.list_trace_events(session_id)
     return APIResponse(data=result, request_id=request_id)
 
@@ -67,10 +70,11 @@ async def list_session_traces(
 async def update_session(
     session_id: str,
     payload: SessionUpdateRequest,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    session_service: SessionService = Depends(get_session_service),
 ):
+    session_service: SessionService = request.app.state.container.session_service
     result = await session_service.update(session_id, payload)
     return APIResponse(data=result, request_id=request_id)
 
@@ -78,10 +82,11 @@ async def update_session(
 @router.delete("/{session_id}", response_model=APIResponse[dict], summary="删除会话")
 async def delete_session(
     session_id: str,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    session_service: SessionService = Depends(get_session_service),
 ):
+    session_service: SessionService = request.app.state.container.session_service
     result = await session_service.delete(session_id)
     return APIResponse(data=result, request_id=request_id)
 
@@ -94,10 +99,11 @@ async def delete_session(
 async def start_session_auto_continue(
     session_id: str,
     payload: SessionAutoContinueStartRequest,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
 ):
+    auto_continue_service: SessionAutoContinueService = request.app.state.container.session_auto_continue_service
     result = await auto_continue_service.start(session_id=session_id, poll_interval_seconds=payload.poll_interval_seconds)
     return APIResponse(message="accepted", data=result, request_id=request_id)
 
@@ -109,11 +115,12 @@ async def start_session_auto_continue(
 )
 async def stop_session_auto_continue(
     session_id: str,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
-    session_service: SessionService = Depends(get_session_service),
 ):
+    auto_continue_service: SessionAutoContinueService = request.app.state.container.session_auto_continue_service
+    session_service: SessionService = request.app.state.container.session_service
     result = await auto_continue_service.stop(session_id=session_id, session_service=session_service)
     return APIResponse(data=result, request_id=request_id)
 
@@ -125,10 +132,11 @@ async def stop_session_auto_continue(
 )
 async def get_session_auto_continue_status(
     session_id: str,
+    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
-    session_service: SessionService = Depends(get_session_service),
 ):
+    auto_continue_service: SessionAutoContinueService = request.app.state.container.session_auto_continue_service
+    session_service: SessionService = request.app.state.container.session_service
     result = await auto_continue_service.get_status(session_id=session_id, session_service=session_service)
     return APIResponse(data=result, request_id=request_id)

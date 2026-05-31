@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.core.trace_middleware import TraceMiddleware
+from app.container import build_app_container
 from app.api.agents import router as agents_router
 from app.api.artifacts import router as artifacts_router
 from app.api.config import router as config_router
@@ -22,15 +23,13 @@ load_project_env(__file__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     from app.core import path_utils
-    from app.runtime import clear_app_services, init_app_services
 
     path_utils.initialize_directories()
-    init_app_services()
-
-    from app.runtime import get_config_service
+    container = build_app_container()
+    _.state.container = container
 
     workspace_root = os.environ.get("WORKSPACE_ROOT", "") or None
-    config_service = get_config_service()
+    config_service = container.config_service
 
     if workspace_root:
         config_service._workspace_root = workspace_root
@@ -45,7 +44,7 @@ async def lifespan(_: FastAPI):
 
     yield
 
-    clear_app_services()
+    _.state.container = None
 
 app = FastAPI(
     title="BoxTeam Local Workspace API",

@@ -17,7 +17,8 @@ def verify_local_token(x_local_token: str | None = Header(default=None)) -> str:
 
 
 def get_config_service(request: Request) -> ConfigService:
-    config_service = getattr(request.app.state, "config_service", None)
+    container = getattr(request.app.state, "container", None)
+    config_service = getattr(container, "config_service", None) if container is not None else None
     if not isinstance(config_service, ConfigService):
         raise RuntimeError("ConfigService 尚未在应用启动阶段初始化")
     return config_service

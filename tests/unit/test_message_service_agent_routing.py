@@ -16,6 +16,17 @@ class _FakeSession:
         self.updated_at = self.created_at
 
 
+class _FakeConfigService:
+    def resolve_agent_id(self, agent_id):
+        return agent_id
+
+    def validate_agent_id(self, agent_id):
+        return agent_id
+
+    def get_default_agent_id(self):
+        return "deep_agent"
+
+
 @pytest.mark.asyncio
 async def test_create_and_run_uses_session_current_agent_when_request_omits_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
@@ -34,9 +45,6 @@ async def test_create_and_run_uses_session_current_agent_when_request_omits_agen
         async def get(_session_id: str):
             return _FakeSession(_session_id, "default")
 
-    monkeypatch.setattr("app.runtime.get_session_service", lambda: _FakeSessionService())
-    monkeypatch.setattr("app.runtime.get_job_service", lambda: _FakeJobService())
-
     service = MessageService()
     result = await service.create_and_run(
         "ses_test",
@@ -44,6 +52,10 @@ async def test_create_and_run_uses_session_current_agent_when_request_omits_agen
             message=MessageCreateRequest(content="hello"),
             run=RunOptions(mode="single_agent"),
         ),
+        session_service=_FakeSessionService(),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=__import__("app.core.job_event_bus", fromlist=["JobEventBus"]).JobEventBus(),
     )
 
     assert captured["session_id"] == "ses_test"
@@ -75,10 +87,6 @@ async def test_create_and_run_prefers_request_agent_over_session_agent(monkeypat
         async def get(_session_id: str):
             return _FakeSession(_session_id, "default")
 
-    monkeypatch.setattr("app.runtime.get_session_service", lambda: _FakeSessionService())
-    monkeypatch.setattr("app.runtime.get_config_service", lambda: _FakeConfigService())
-    monkeypatch.setattr("app.runtime.get_job_service", lambda: _FakeJobService())
-
     service = MessageService()
     await service.create_and_run(
         "ses_test",
@@ -86,6 +94,10 @@ async def test_create_and_run_prefers_request_agent_over_session_agent(monkeypat
             message=MessageCreateRequest(content="hello"),
             run=RunOptions(mode="single_agent", agent_id="coder"),
         ),
+        session_service=_FakeSessionService(),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=__import__("app.core.job_event_bus", fromlist=["JobEventBus"]).JobEventBus(),
     )
 
     assert captured["agent_id"] == "coder"
