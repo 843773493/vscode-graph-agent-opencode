@@ -19,15 +19,14 @@ function getWorkspaceRoot() {
     return folders[0].uri.fsPath;
   }
 
-  const homeDir = process.env.HOME || process.env.USERPROFILE;
-  if (!homeDir) {
-    throw new Error('无法解析用户主目录，无法创建默认用户级工作区');
-  }
-
-  return path.join(homeDir, '.BoxTeamWorkspace');
+  return null;
 }
 
 function ensureDefaultWorkspaceLayout(workspaceRoot) {
+  if (!workspaceRoot) {
+    return;
+  }
+
   if (!fs.existsSync(workspaceRoot)) {
     fs.mkdirSync(workspaceRoot, { recursive: true });
   }
@@ -247,13 +246,15 @@ export class BackendManager {
     this.log(`调试信息: projectRoot 下 .venv\\Scripts\\python.exe=${fs.existsSync(path.join(projectRoot, '.venv', 'Scripts', 'python.exe')) ? '存在' : '不存在'}`);
     this.log(`调试信息: projectRoot 下 .venv\\bin\\python=${fs.existsSync(path.join(projectRoot, '.venv', 'bin', 'python')) ? '存在' : '不存在'}`);
     this.log(`启动命令: ${pythonPath} ${args.join(' ')}`);
-    this.log(`环境变量: WORKSPACE_ROOT=${workspaceRoot}`);
+    this.log(`环境变量: WORKSPACE_ROOT=${workspaceRoot ?? '(未设置，交由后端默认工作区处理)'}`);
 
-    if (!fs.existsSync(workspaceRoot)) {
-      fs.mkdirSync(workspaceRoot, { recursive: true });
-      this.log(`已创建默认工作区目录: ${workspaceRoot}`);
+    if (workspaceRoot) {
+      if (!fs.existsSync(workspaceRoot)) {
+        fs.mkdirSync(workspaceRoot, { recursive: true });
+        this.log(`已创建工作区目录: ${workspaceRoot}`);
+      }
+      ensureDefaultWorkspaceLayout(workspaceRoot);
     }
-    ensureDefaultWorkspaceLayout(workspaceRoot);
 
     if (!fs.existsSync(pythonPath)) {
       const error = new Error(`Python 路径不存在: ${pythonPath}`);
@@ -266,7 +267,7 @@ export class BackendManager {
       cwd,
       env: {
         ...process.env,
-        WORKSPACE_ROOT: workspaceRoot,
+        ...(workspaceRoot ? { WORKSPACE_ROOT: workspaceRoot } : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,

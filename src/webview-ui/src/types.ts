@@ -24,8 +24,8 @@ export interface Session {
   updated_at: string | null;
 }
 
-export interface PendingTurn {
-  turnId: string;
+export interface ConversationView {
+  conversationId: string;
   sessionId: string;
   userMessage: Message | null;
   assistantMessages: Message[];
@@ -33,6 +33,7 @@ export interface PendingTurn {
   status: 'running' | 'done' | 'error';
   jobId: string | null;
   pending: boolean;
+  source: 'messages' | 'pending';
 }
 
 export interface ActiveJob {
@@ -51,7 +52,7 @@ export interface AppState {
   messages: Message[];
   traceEvents: TraceEvent[];
   activeJob: ActiveJob | null;
-  pendingTurns: Map<string, PendingTurn>;
+  pendingConversations: Map<string, ConversationView>;
   status: string;
   expandDetails: boolean;
   historyPanelOpen: boolean;

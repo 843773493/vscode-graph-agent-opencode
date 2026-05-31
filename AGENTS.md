@@ -28,6 +28,7 @@
 ### Execution and Quality
 
 1. Every time you write a code file, run static analysis.
+2. Every time you modify the webview UI (`src/webview-ui/`), rebuild it with `cd src/webview-ui && ..\\..\\tools\\bun.exe run build` and verify the build succeeds before finishing.
 
 ### Code Organization
 

@@ -2,14 +2,14 @@ import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { HostToWebviewMessageType, WebviewToHostMessageType } from '../../shared/protocol.js';
 import type {
-  ActiveJob,
-  AppState,
-  HostStateMessage,
-  HostToWebviewMessage,
-  Message,
-  PendingTurn,
-  Session,
-  TraceEvent,
+    ActiveJob,
+    AppState,
+    ConversationView,
+    HostStateMessage,
+    HostToWebviewMessage,
+    Message,
+    Session,
+    TraceEvent,
 } from './types';
 import { postMessage, setVsCodeState } from './vscode';
 
@@ -21,7 +21,7 @@ const INITIAL_STATE: AppState = {
   messages: [],
   traceEvents: [],
   activeJob: null,
-  pendingTurns: new Map(),
+  pendingConversations: new Map(),
   status: '准备就绪',
   expandDetails: true,
   historyPanelOpen: false,
@@ -46,7 +46,7 @@ export function useAppState() {
 }
 
 function cloneMaps(state: AppState): AppState {
-  return { ...state, pendingTurns: new Map(state.pendingTurns) };
+  return { ...state, pendingConversations: new Map(state.pendingConversations) };
 }
 
 function normalizeMessage(msg: Partial<Message> & { id?: string; createdAt?: string | null }): Message {
@@ -61,14 +61,14 @@ function normalizeMessage(msg: Partial<Message> & { id?: string; createdAt?: str
   };
 }
 
-export function splitMessagesIntoTurns(messages: Message[]): PendingTurn[] {
-  const turns: PendingTurn[] = [];
-  let current: PendingTurn | null = null;
+export function groupMessagesIntoConversations(messages: Message[]): ConversationView[] {
+  const conversations: ConversationView[] = [];
+  let current: ConversationView | null = null;
   for (const raw of messages) {
     const message = normalizeMessage(raw);
     if (message.role === 'user') {
       current = {
-        turnId: message.message_id || `turn_${turns.length}`,
+        conversationId: message.message_id || `conversation_${conversations.length}`,
         sessionId: message.session_id,
         userMessage: message,
         assistantMessages: [],
@@ -76,13 +76,14 @@ export function splitMessagesIntoTurns(messages: Message[]): PendingTurn[] {
         status: 'done',
         jobId: String(message.metadata?.job_id ?? '') || null,
         pending: false,
+        source: 'messages',
       };
-      turns.push(current);
+      conversations.push(current);
       continue;
     }
     if (!current) {
       current = {
-        turnId: message.message_id || `turn_${turns.length}`,
+        conversationId: message.message_id || `conversation_${conversations.length}`,
         sessionId: message.session_id,
         userMessage: null,
         assistantMessages: [],
@@ -90,18 +91,55 @@ export function splitMessagesIntoTurns(messages: Message[]): PendingTurn[] {
         status: 'done',
         jobId: String(message.metadata?.job_id ?? '') || null,
         pending: false,
+        source: 'messages',
       };
-      turns.push(current);
+      conversations.push(current);
     }
     current.assistantMessages.push(message);
   }
-  return turns;
+  return conversations;
 }
 
-export function getTurnsForSession(sessionId: string, state: AppState): PendingTurn[] {
-  const turns = splitMessagesIntoTurns(state.messages.filter(m => m.session_id === sessionId));
-  const pending = state.pendingTurns.get(sessionId);
-  return pending ? [...turns, pending] : turns;
+export function getConversationsForSession(sessionId: string, state: AppState): ConversationView[] {
+  const conversations = groupMessagesIntoConversations(state.messages.filter(m => m.session_id === sessionId));
+  const pending = state.pendingConversations.get(sessionId);
+
+  if (!pending) {
+    return conversations;
+  }
+
+  const matchedConversationIndex = conversations.findIndex(conversation => {
+    const userMessageId = conversation.userMessage?.message_id ?? '';
+    const pendingUserMessageId = pending.userMessage?.message_id ?? '';
+    const conversationJobId = conversation.jobId ?? '';
+    const pendingJobId = pending.jobId ?? '';
+
+    if (pendingUserMessageId && userMessageId && pendingUserMessageId === userMessageId) {
+      return true;
+    }
+
+    if (pendingJobId && conversationJobId && pendingJobId === conversationJobId) {
+      return true;
+    }
+
+    return false;
+  });
+
+  if (matchedConversationIndex >= 0) {
+    const mergedConversation = conversations[matchedConversationIndex];
+    const merged: ConversationView = {
+      ...mergedConversation,
+      assistantMessages: pending.assistantMessages.length > 0 ? pending.assistantMessages : mergedConversation.assistantMessages,
+      events: [...mergedConversation.events, ...pending.events],
+      status: pending.status,
+      jobId: pending.jobId ?? mergedConversation.jobId,
+      pending: pending.pending,
+      source: mergedConversation.source,
+    };
+    return conversations.map((conversation, index) => (index === matchedConversationIndex ? merged : conversation));
+  }
+
+  return pending.userMessage ? [...conversations, { ...pending, source: 'pending' }] : conversations;
 }
 
 function readBootState(): Partial<AppState> {
@@ -132,11 +170,11 @@ function readPersistedState(): Partial<AppState> {
 }
 
 function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppState {
-  const pendingTurns = new Map<string, PendingTurn>();
-  const bootPendingTurns = (boot as { pendingTurns?: PendingTurn[] }).pendingTurns ?? (persisted as { pendingTurns?: PendingTurn[] }).pendingTurns ?? [];
+  const pendingConversations = new Map<string, ConversationView>();
+  const bootPendingConversations = (boot as { pendingConversations?: ConversationView[] }).pendingConversations ?? (persisted as { pendingConversations?: ConversationView[] }).pendingConversations ?? [];
   const bootSession = (boot as { session?: Session | null }).session ?? null;
   const persistedSession = (persisted as { session?: Session | null }).session ?? null;
-  bootPendingTurns.forEach(turn => pendingTurns.set(turn.sessionId, turn));
+  bootPendingConversations.forEach(conversation => pendingConversations.set(conversation.sessionId, conversation));
   return {
     ...INITIAL_STATE,
     workspaceRoot: boot.workspaceRoot ?? persisted.workspaceRoot ?? '',
@@ -149,7 +187,7 @@ function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppS
     status: String(boot.status ?? persisted.status ?? '准备就绪'),
     expandDetails: Boolean(boot.expandDetails ?? persisted.expandDetails ?? true),
     historyPanelOpen: Boolean(boot.historyPanelOpen ?? persisted.historyPanelOpen ?? false),
-    pendingTurns,
+    pendingConversations,
   };
 }
 
@@ -168,8 +206,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     setState(prev => {
       const next = cloneMaps(prev);
-      const turn: PendingTurn = {
-        turnId: `local_${Date.now()}`,
+      const conversation: ConversationView = {
+        conversationId: `local_${Date.now()}`,
         sessionId: activeSession.session_id,
         userMessage: {
           message_id: `local_user_${Date.now()}`,
@@ -186,7 +224,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         jobId: null,
         pending: true,
       };
-      next.pendingTurns.set(activeSession.session_id, turn);
+      next.pendingConversations.set(activeSession.session_id, conversation);
       next.status = '已发送，等待 SSE 事件';
       return next;
     });
@@ -222,7 +260,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const jobEvent = msg as Extract<HostToWebviewMessage, { type: 'jobEvent' }>;
         setState(prev => {
           const next = cloneMaps(prev);
-          const pending = next.pendingTurns.get(jobEvent.sessionId);
+          const pending = next.pendingConversations.get(jobEvent.sessionId);
           if (!pending || (pending.jobId && pending.jobId !== jobEvent.jobId)) return next;
           pending.jobId = jobEvent.jobId;
           pending.events = [...pending.events, { event_type: jobEvent.eventType, data: jobEvent.payload, timestamp: new Date().toISOString() }];
@@ -238,10 +276,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const accepted = msg as Extract<HostToWebviewMessage, { type: 'messageAccepted' }>;
         setState(prev => {
           const next = cloneMaps(prev);
-          const pending = next.pendingTurns.get(accepted.sessionId) ?? {
-            turnId: `local_${Date.now()}`,
+          const pending = next.pendingConversations.get(accepted.sessionId) ?? {
+            conversationId: `local_${Date.now()}`,
             sessionId: accepted.sessionId,
-            userMessage: null,
+            userMessage: next.messages.filter(m => m.session_id === accepted.sessionId && m.role === 'user').at(-1) ?? null,
             assistantMessages: [],
             events: [],
             status: 'running',
@@ -250,7 +288,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           };
           pending.jobId = accepted.jobId;
           pending.pending = true;
-          next.pendingTurns.set(accepted.sessionId, pending);
+          next.pendingConversations.set(accepted.sessionId, pending);
           next.activeJob = { jobId: accepted.jobId, sessionId: accepted.sessionId, status: 'running', messageId: accepted.messageId, content: accepted.content };
           next.status = '任务已接收';
           return next;
@@ -285,7 +323,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       status: state.status,
       expandDetails: state.expandDetails,
       historyPanelOpen: state.historyPanelOpen,
-      pendingTurns: Array.from(state.pendingTurns.entries()),
+      pendingConversations: Array.from(state.pendingConversations.entries()),
     });
   }, [state]);
 

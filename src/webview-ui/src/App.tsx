@@ -2,12 +2,12 @@ import ChatPanel from './components/ChatPanel';
 import Composer from './components/Composer';
 import HistoryPanel from './components/HistoryPanel';
 import Toolbar from './components/Toolbar';
-import { getTurnsForSession, useAppState } from './hooks';
+import { getConversationsForSession, useAppState } from './hooks';
 
 export default function AppShell() {
   const { state, selectSession, toggleHistoryPanel } = useAppState();
   const activeSession = state.currentSession;
-  const turns = activeSession ? getTurnsForSession(activeSession.session_id, state) : [];
+  const conversations = activeSession ? getConversationsForSession(activeSession.session_id, state) : [];
   const sortedSessions = [...state.sessions].sort((a, b) => new Date(b.updated_at || b.created_at || '').getTime() - new Date(a.updated_at || a.created_at || '').getTime());
   const historyVisible = state.historyPanelOpen;
 
@@ -30,7 +30,7 @@ export default function AppShell() {
             activeSession={activeSession}
           />
           <section className="chat-panel">
-            <ChatPanel turns={turns} expandDetails={state.expandDetails} />
+            <ChatPanel conversations={conversations} expandDetails={state.expandDetails} />
           </section>
         </div>
       </main>

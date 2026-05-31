@@ -28,6 +28,7 @@
 ### 执行和质量
 
 1. 每次编写代码文件时，都运行静态分析。
+2. 每次修改 Webview UI（`src/webview-ui/`）后，都要执行 `cd src/webview-ui && ..\\..\\tools\\bun.exe run build` 重新编译，并在结束前确认构建成功。
 
 ### 代码组织
 
