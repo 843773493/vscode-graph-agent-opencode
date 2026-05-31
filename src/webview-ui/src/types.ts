@@ -88,6 +88,5 @@ export type WebviewToHostMessage =
   | { type: 'createSession'; title?: string }
   | { type: 'selectSession'; sessionId: string }
   | { type: 'sendMessage'; content: string }
-  | { type: 'debug'; detail?: string }
   | { type: 'error'; message: string }
   | { type: 'updateSession'; sessionId: string; data: Record<string, unknown> };

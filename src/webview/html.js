@@ -58,6 +58,9 @@ export async function renderSidebarHtml(webview, boot) {
 
   const templateFile = shellMode ? 'shell.html' : 'main.html';
   const templatePath = path.join(path.dirname(fileURLToPath(import.meta.url)), templateFile);
+  if (typeof boot.log === 'function') {
+    boot.log(`renderSidebarHtml: templateFile=${templateFile}, templatePath=${templatePath}, shellMode=${shellMode}, distCssUri=${distCssUri || '(空)'}, distJsUri=${distJsUri || '(空)'}, cspSource=${cspSource || '(空)'}`);
+  }
 
   return renderTemplate(templatePath, {
     CSP_SOURCE: cspSource,

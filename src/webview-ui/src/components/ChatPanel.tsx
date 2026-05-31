@@ -147,18 +147,6 @@ function MessageHeader({ label, time, extra }: { label: string; time: string; ex
 }
 
 function AssistantMessageCard({ message }: { message: Message }): React.ReactNode {
-  const [copied, setCopied] = React.useState(false);
-
-  const handleCopy = React.useCallback(async () => {
-    try {
-      await copyText(message.content || '');
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch (error) {
-      console.error('[webview] copy assistant message failed', error);
-    }
-  }, [message.content]);
-
   return (
     <article className="chat-message assistant">
       <MessageHeader
@@ -167,9 +155,6 @@ function AssistantMessageCard({ message }: { message: Message }): React.ReactNod
         extra={<span className="badge neutral">回复</span>}
       />
       <div className="chat-message-body reply" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content || '') }} />
-      <div className="message-actions" aria-label="消息操作">
-        <button type="button" className="message-action-button" onClick={handleCopy}>{copied ? '已复制' : '复制'}</button>
-      </div>
     </article>
   );
 }
@@ -215,12 +200,6 @@ function TurnCard({ turn, onPrompt, showTrace }: { turn: PendingTurn; onPrompt: 
           </div>
         )}
       </section>
-
-      <div className="followup-actions" aria-label="后续建议">
-        <button type="button" className="followup-pill" onClick={() => onPrompt('请继续解释上面的结论，给出更具体的实现步骤。')}>继续解释</button>
-        <button type="button" className="followup-pill" onClick={() => onPrompt('请把上面的方案整理成可执行的任务清单。')}>任务清单</button>
-        <button type="button" className="followup-pill" onClick={() => onPrompt('请补充边界情况和风险点。')}>补充风险</button>
-      </div>
 
       {showTrace && turn.events.length > 0 && <TracePanel events={turn.events} />}
     </article>

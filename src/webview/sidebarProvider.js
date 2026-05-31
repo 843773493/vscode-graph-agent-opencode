@@ -11,6 +11,10 @@ function getWebviewUiDistDir(extensionUri) {
   return path.join(extensionUri.fsPath, 'src', 'webview-ui', 'dist');
 }
 
+function getWebviewUiAssetUri(webview, extensionUri, assetFileName) {
+  return webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(extensionUri), 'assets', assetFileName))).toString();
+}
+
 function getNonce() {
   return String(Date.now()) + String(Math.random()).slice(2);
 }
@@ -106,6 +110,18 @@ export class SidebarProvider {
     };
   }
 
+  logEnvironment(prefix = 'webview 环境') {
+    const envSummary = {
+      GRAPH_AGENT_UI_SHELL_DEBUG: process.env.GRAPH_AGENT_UI_SHELL_DEBUG ?? '(未设置)',
+      NODE_ENV: process.env.NODE_ENV ?? '(未设置)',
+      WORKSPACE_ROOT: process.env.WORKSPACE_ROOT ?? '(未设置)',
+      shellMode: this.shellMode,
+      hasWorkspaceFolder: Boolean(vscode.workspace.workspaceFolders?.length),
+    };
+
+    this.log(`${prefix}: ${JSON.stringify(envSummary)}`);
+  }
+
   async createShellDebugPanel() {
     if (!this.shellMode) {
       this.log('shellMode 未开启，按纯壳调试面板逻辑打开');
@@ -122,6 +138,7 @@ export class SidebarProvider {
     );
 
     panel.webview.html = await renderSidebarHtml(panel.webview, {
+      log: (message) => this.log(message),
       nonce: getNonce(),
       shellMode: true,
       apiPort: this.state.apiPort,
@@ -133,6 +150,12 @@ export class SidebarProvider {
       traceEvents: [],
       activeJob: null,
     });
+
+    const htmlPreview = panel.webview.html.slice(0, 2000).replaceAll(/\s+/g, ' ').trim();
+    const hasMainScript = panel.webview.html.includes('main.js');
+    const hasAppCss = panel.webview.html.includes('App.css');
+    const hasBootState = panel.webview.html.includes('graph-agent-boot');
+    this.log(`shell webview html 预览: hasMainScript=${hasMainScript}, hasAppCss=${hasAppCss}, hasBootState=${hasBootState}, html=${htmlPreview}`);
 
     return panel;
   }
@@ -160,6 +183,9 @@ export class SidebarProvider {
 
     this.view = webviewView;
     const webview = webviewView.webview;
+    const distDir = getWebviewUiDistDir(this.context.extensionUri);
+    const cssPath = path.join(distDir, 'assets', 'App.css');
+    const jsPath = path.join(distDir, 'assets', 'main.js');
 
     webview.options = {
       enableScripts: true,
@@ -167,10 +193,11 @@ export class SidebarProvider {
     };
 
     webview.html = await renderSidebarHtml(webview, {
+      log: (message) => this.log(message),
       nonce: getNonce(),
       shellMode: this.shellMode,
-      distCssUri: this.shellMode ? '' : webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.css'))).toString(),
-      distJsUri: this.shellMode ? '' : webview.asWebviewUri(vscode.Uri.file(path.join(getWebviewUiDistDir(this.context.extensionUri), 'assets', 'index.js'))).toString(),
+      distCssUri: this.shellMode ? '' : getWebviewUiAssetUri(webview, this.context.extensionUri, 'App.css'),
+      distJsUri: this.shellMode ? '' : getWebviewUiAssetUri(webview, this.context.extensionUri, 'main.js'),
       apiPort: this.state.apiPort,
       workspaceRoot: this.state.workspace?.root_path ?? '',
       workspaceName: this.state.workspace?.name ?? 'workspace',
@@ -274,19 +301,8 @@ export class SidebarProvider {
       return;
     }
 
-    if (message.type === WebviewToHostMessageType.debug) {
-      this.log(`webview 调试: ${message.detail ?? '(empty)'}`);
-      return;
-    }
-
     if (message.type === 'api_request') {
       await this.handleApiRequest(message);
-      return;
-    }
-
-    if (message.type === WebviewToHostMessageType.ready) {
-      this.log('收到 webview ready');
-      this.syncState('Webview 已就绪');
       return;
     }
 
@@ -305,19 +321,19 @@ export class SidebarProvider {
       return;
     }
 
-     if (message.type === WebviewToHostMessageType.selectSession) {
-       this.log(`收到切换 session 请求: ${message.sessionId ?? ''}`);
-       await this.selectSession(message.sessionId);
-       return;
-     }
+    if (message.type === WebviewToHostMessageType.selectSession) {
+      this.log(`收到切换 session 请求: ${message.sessionId ?? ''}`);
+      await this.selectSession(message.sessionId);
+      return;
+    }
 
-     if (message.type === 'updateSession') {
-       this.log(`收到更新 session 请求: sessionId=${message.sessionId}, agentId=${message.data?.agent_id ?? 'unknown'}`);
-       await this.updateSessionAgent(message.sessionId, message.data?.agent_id);
-       return;
-     }
+    if (message.type === 'updateSession') {
+      this.log(`收到更新 session 请求: sessionId=${message.sessionId}, agentId=${message.data?.agent_id ?? 'unknown'}`);
+      await this.updateSessionAgent(message.sessionId, message.data?.agent_id);
+      return;
+    }
 
-     if (message.type === WebviewToHostMessageType.sendMessage) {
+    if (message.type === WebviewToHostMessageType.sendMessage) {
       this.log(`收到发送消息请求: ${String(message.content ?? '').slice(0, 80)}`);
       await this.sendCurrentMessage(message.content);
     }

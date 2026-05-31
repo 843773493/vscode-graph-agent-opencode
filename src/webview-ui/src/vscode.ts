@@ -33,10 +33,6 @@ export function getVsCodeState<T>(): T | null {
   return vscode?.getState<T>() ?? null;
 }
 
-export function postDebug(detail: string): void {
-  postMessage({ type: 'debug', detail });
-}
-
 export function postError(message: string): void {
   postMessage({ type: 'error', message });
 }

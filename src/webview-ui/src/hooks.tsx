@@ -2,16 +2,16 @@ import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { HostToWebviewMessageType, WebviewToHostMessageType } from '../../shared/protocol.js';
 import type {
-    ActiveJob,
-    AppState,
-    HostStateMessage,
-    HostToWebviewMessage,
-    Message,
-    PendingTurn,
-    Session,
-    TraceEvent,
+  ActiveJob,
+  AppState,
+  HostStateMessage,
+  HostToWebviewMessage,
+  Message,
+  PendingTurn,
+  Session,
+  TraceEvent,
 } from './types';
-import { postDebug, postMessage, setVsCodeState } from './vscode';
+import { postMessage, setVsCodeState } from './vscode';
 
 const INITIAL_STATE: AppState = {
   workspaceRoot: '',
@@ -270,7 +270,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [setStatus]);
 
   useEffect(() => {
-    postDebug('webview ready');
     postMessage({ type: WebviewToHostMessageType.ready });
   }, []);
 
