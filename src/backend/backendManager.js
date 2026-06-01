@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -116,6 +117,16 @@ function createTailBuffer(limit = 20) {
   };
 }
 
+function ensureDirSync(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+function getHostLogPath() {
+  return path.join(process.env.USERPROFILE ?? os.homedir(), '.boxteams', 'logs', 'vscode_host.log');
+}
+
 function formatCommandLine(pythonPath, args, cwd, workspaceRoot, port) {
   return [
     `pythonPath=${pythonPath}`,
@@ -124,6 +135,29 @@ function formatCommandLine(pythonPath, args, cwd, workspaceRoot, port) {
     `port=${port}`,
     `command=${pythonPath} ${args.join(' ')}`,
   ].join(' | ');
+}
+
+function formatLogHeader(kind, extras = []) {
+  const lines = [
+    `========== ${kind} ==========`,
+    `timestamp=${new Date().toISOString()}`,
+    ...extras,
+  ];
+
+  return `${lines.join('\n')}\n`;
+}
+
+function getRuntimeAppLogPath() {
+  return path.join(process.env.USERPROFILE ?? os.homedir(), '.boxteams', 'logs', 'vscode_runtime_app.log');
+}
+
+function writeFileOverwritten(filePath, content) {
+  if (!filePath) {
+    return;
+  }
+
+  ensureDirSync(path.dirname(filePath));
+  fs.writeFileSync(filePath, content, { encoding: 'utf8' });
 }
 
 async function probeBackend(port) {
@@ -174,33 +208,141 @@ export class BackendManager {
     this.outputChannel = outputChannel;
     this.process = null;
     this.readyPromise = null;
+    this.readyState = 'idle';
     this.port = getPort();
     this.workspaceRoot = null;
     this.stdoutTail = createTailBuffer();
     this.stderrTail = createTailBuffer();
+    this.hostLogPath = null;
+    this.runtimeAppLogPath = null;
   }
 
   log(message) {
     this.outputChannel.appendLine(`[graph-agent] ${message}`);
+    this.appendHostLog(`[graph-agent] ${message}`);
+  }
+
+  appendHostLog(line) {
+    if (!this.hostLogPath) {
+      return;
+    }
+
+    try {
+      ensureDirSync(path.dirname(this.hostLogPath));
+      fs.appendFileSync(this.hostLogPath, `${line}\n`, { encoding: 'utf8' });
+    } catch (error) {
+      this.outputChannel.appendLine(`[graph-agent] [vscode_host.log 写入失败] ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  resetHostLog() {
+    if (!this.hostLogPath) {
+      return;
+    }
+
+    try {
+      ensureDirSync(path.dirname(this.hostLogPath));
+      fs.writeFileSync(this.hostLogPath, '', { encoding: 'utf8' });
+    } catch (error) {
+      this.outputChannel.appendLine(`[graph-agent] [vscode_host.log 清空失败] ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  writeHostLogHeader() {
+    if (!this.hostLogPath) {
+      return;
+    }
+
+    try {
+      ensureDirSync(path.dirname(this.hostLogPath));
+      fs.appendFileSync(
+        this.hostLogPath,
+        formatLogHeader('extension host console 日志', [
+          `workspaceRoot=${this.workspaceRoot ?? '(unknown)'}`,
+          `projectRoot=${this.projectRoot ?? '(unknown)'}`,
+          `port=${this.port}`,
+        ]),
+        { encoding: 'utf8' },
+      );
+    } catch (error) {
+      this.outputChannel.appendLine(`[graph-agent] [vscode_host.log 写入失败] ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  resetRuntimeAppLog() {
+    const runtimeAppLogPath = getRuntimeAppLogPath();
+    if (!runtimeAppLogPath) {
+      return;
+    }
+
+    try {
+      ensureDirSync(path.dirname(runtimeAppLogPath));
+      fs.writeFileSync(runtimeAppLogPath, '', { encoding: 'utf8' });
+    } catch (error) {
+      this.outputChannel.appendLine(`[graph-agent] [vscode_runtime_app.log 清空失败] ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  writeRuntimeAppLogCommandBlock(commandLine, cwd, workspaceRoot) {
+    if (!this.runtimeAppLogPath) {
+      return;
+    }
+
+    try {
+      ensureDirSync(path.dirname(this.runtimeAppLogPath));
+      fs.appendFileSync(
+        this.runtimeAppLogPath,
+        formatLogHeader('backend runtime app 启动命令信息', [
+          `COMMAND=${commandLine}`,
+          `CWD=${cwd}`,
+          `WORKSPACE_ROOT=${workspaceRoot ?? ''}`,
+        ]),
+        { encoding: 'utf8' },
+      );
+    } catch (error) {
+      this.outputChannel.appendLine(`[graph-agent] [vscode_runtime_app.log 写入失败] ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  createRuntimeAppShellCommand(pythonPath, args, runtimeAppLogPath) {
+    const quotedCommand = [this.quoteForShell(pythonPath), ...args.map((arg) => this.quoteForShell(arg))].join(' ');
+    const quotedLogPath = this.quoteForShell(runtimeAppLogPath);
+    return `${quotedCommand} 1>> ${quotedLogPath} 2>>&1`;
+  }
+
+  quoteForShell(value) {
+    return `"${String(value).replace(/"/g, '\\"')}"`;
   }
 
   async ensureStarted() {
-    if (this.readyPromise) {
+    if (this.readyState === 'ready' && this.readyPromise) {
       this.log(`复用现有后端实例`);
       return this.readyPromise;
     }
 
+    if (this.readyState === 'starting' && this.readyPromise) {
+      this.log(`复用正在启动中的后端实例`);
+      return this.readyPromise;
+    }
+
+    this.readyState = 'starting';
     this.workspaceRoot = getWorkspaceRoot();
     ensureDefaultWorkspaceLayout(this.workspaceRoot);
+    this.hostLogPath = getHostLogPath();
+    this.runtimeAppLogPath = getRuntimeAppLogPath();
     this.projectRoot = findProjectRoot();
     this.outputChannel.show(true);
+    this.resetHostLog();
     this.log(`========== 启动后端进程 ==========`);
     this.log(`调试信息: 当前工作区 folders=${(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath).join(', ') || '(empty)'}`);
     this.log(`首选后端端口: ${this.port}`);
     this.log(`工作区根目录: ${this.workspaceRoot}`);
     this.log(`项目根目录: ${this.projectRoot}`);
     this.log(`软件根目录: ${EXTENSION_ROOT}`);
+    this.log(`vscode_host.log 路径: ${this.hostLogPath ?? '(未设置)'}`);
+    this.log(`vscode_runtime_app.log 路径: ${this.runtimeAppLogPath ?? '(未设置)'}`);
     this.log(`调试信息: workspaceRoot=${this.workspaceRoot}, projectRoot=${this.projectRoot}`);
+    this.writeHostLogHeader();
 
     const candidatePorts = [...new Set([this.port, 8000])];
     this.log(`将要探测的端口列表: ${candidatePorts.join(', ')}`);
@@ -211,6 +353,7 @@ export class BackendManager {
       if (existing) {
         this.port = candidatePort;
         this.log(`✓ 检测到已存在的后端实例，使用端口 ${candidatePort}`);
+        this.readyState = 'ready';
         this.readyPromise = Promise.resolve(existing);
         return this.readyPromise;
       }
@@ -229,14 +372,12 @@ export class BackendManager {
       return this.waitForReady();
     }
 
-    const workspaceRoot = getWorkspaceRoot();
     const projectRoot = this.projectRoot ?? findProjectRoot();
     const pythonPath = resolvePythonPath(projectRoot);
     const args = ['-m', 'uvicorn', 'app.main:app', '--host', DEFAULT_BACKEND_HOST, '--port', String(this.port)];
     const cwd = projectRoot;
 
-    this.stdoutTail = createTailBuffer();
-    this.stderrTail = createTailBuffer();
+    this.resetRuntimeAppLog();
 
     this.log(`========== 启动后端进程 ==========`);
     this.log(`Python 路径: ${pythonPath}`);
@@ -246,15 +387,8 @@ export class BackendManager {
     this.log(`调试信息: projectRoot 下 .venv\\Scripts\\python.exe=${fs.existsSync(path.join(projectRoot, '.venv', 'Scripts', 'python.exe')) ? '存在' : '不存在'}`);
     this.log(`调试信息: projectRoot 下 .venv\\bin\\python=${fs.existsSync(path.join(projectRoot, '.venv', 'bin', 'python')) ? '存在' : '不存在'}`);
     this.log(`启动命令: ${pythonPath} ${args.join(' ')}`);
-    this.log(`环境变量: WORKSPACE_ROOT=${workspaceRoot ?? '(未设置，交由后端默认工作区处理)'}`);
-
-    if (workspaceRoot) {
-      if (!fs.existsSync(workspaceRoot)) {
-        fs.mkdirSync(workspaceRoot, { recursive: true });
-        this.log(`已创建工作区目录: ${workspaceRoot}`);
-      }
-      ensureDefaultWorkspaceLayout(workspaceRoot);
-    }
+    this.log(`环境变量: WORKSPACE_ROOT=${this.workspaceRoot ?? '(未设置，交由后端默认工作区处理)'}`);
+    this.writeRuntimeAppLogCommandBlock(`${pythonPath} ${args.join(' ')}`, cwd, this.workspaceRoot);
 
     if (!fs.existsSync(pythonPath)) {
       const error = new Error(`Python 路径不存在: ${pythonPath}`);
@@ -262,14 +396,18 @@ export class BackendManager {
       throw error;
     }
 
+    const runtimeAppLogPath = this.runtimeAppLogPath;
+    const command = this.createRuntimeAppShellCommand(pythonPath, args, runtimeAppLogPath);
+
     this.log(`>> 创建子进程...`);
-    this.process = spawn(pythonPath, args, {
+    this.process = spawn(command, {
       cwd,
       env: {
         ...process.env,
-        ...(workspaceRoot ? { WORKSPACE_ROOT: workspaceRoot } : {}),
+        ...(this.workspaceRoot ? { WORKSPACE_ROOT: this.workspaceRoot } : {}),
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true,
+      stdio: 'ignore',
       windowsHide: true,
     });
 
@@ -277,41 +415,17 @@ export class BackendManager {
       this.log(`✓ 子进程已创建，pid=${this.process?.pid ?? 'unknown'}`);
     });
 
-    this.process.stdout?.on('data', (chunk) => {
-      this.stdoutTail.push(chunk);
-      const text = chunk.toString().trim();
-      if (text) {
-        this.log(`[backend stdout] ${text}`);
-      }
-    });
-
-    this.process.stderr?.on('data', (chunk) => {
-      this.stderrTail.push(chunk);
-      const text = chunk.toString().trim();
-      if (text) {
-        this.log(`[backend stderr] ${text}`);
-      }
-    });
-
     const processFailure = new Promise((_, reject) => {
       this.process.once('error', (error) => {
         const reason = error instanceof Error ? error.stack ?? error.message : String(error);
-        const diagnostic = [
-          `后端进程启动错误: ${reason}`,
-          `stdout_tail:\n${this.stdoutTail.toString()}`,
-          `stderr_tail:\n${this.stderrTail.toString()}`,
-        ].join('\n\n');
+        const diagnostic = `后端进程启动错误: ${reason}`;
         this.log(`✗ ${diagnostic}`);
         reject(error instanceof Error ? error : new Error(String(error)));
       });
 
       this.process.once('exit', (code, signal) => {
         if (code !== 0) {
-          const diagnostic = [
-            `后端进程提前退出: code=${code}, signal=${signal ?? ''}`,
-            `stdout_tail:\n${this.stdoutTail.toString()}`,
-            `stderr_tail:\n${this.stderrTail.toString()}`,
-          ].join('\n\n');
+          const diagnostic = `后端进程提前退出: code=${code}, signal=${signal ?? ''}`;
           this.log(`✗ ${diagnostic}`);
           reject(new Error(diagnostic));
         }
@@ -322,6 +436,7 @@ export class BackendManager {
       this.log(`后端进程退出: code=${code}, signal=${signal ?? ''}`);
       this.process = null;
       this.readyPromise = null;
+      this.readyState = 'idle';
     });
 
     this.log(`>> 等待后端就绪（最多60次，间隔500ms）...`);
@@ -336,6 +451,7 @@ export class BackendManager {
         const workspace = await getWorkspace(this.port);
         this.log(`✓ 后端就绪! 探测成功: http://127.0.0.1:${this.port}/api/v1/workspace`);
         this.log(`   workspace: ${JSON.stringify(workspace).slice(0, 150)}`);
+        this.readyState = 'ready';
         return { port: this.port, workspace };
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
@@ -351,10 +467,9 @@ export class BackendManager {
     const diagnostic = [
       '!!! 本地后端启动超时，未能完成 workspace 就绪探测',
       `port=${this.port}`,
-      `stdout_tail:\n${this.stdoutTail.toString()}`,
-      `stderr_tail:\n${this.stderrTail.toString()}`,
     ].join('\n\n');
     this.log(`✗ ${diagnostic}`);
+    this.readyState = 'idle';
     throw new Error(diagnostic);
   }
 
@@ -366,5 +481,6 @@ export class BackendManager {
     }
 
     this.readyPromise = null;
+    this.readyState = 'idle';
   }
 }

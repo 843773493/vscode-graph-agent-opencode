@@ -95,7 +95,7 @@
 
 1. Use `bun` for JS/TS environments; use `bun install` to install dependencies and `bun start` to start frontend development.
 2. Use `uv` for Python environments; use `uv sync` to install dependencies and `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000` to start the backend server.
-3. API documentation is available at http://127.0.0.1:8000/api/v1/docs
+3. API documentation is available at [http://127.0.0.1:8000/api/v1/docs](http://127.0.0.1:8000/api/v1/docs)
 
 ### Configuration
 

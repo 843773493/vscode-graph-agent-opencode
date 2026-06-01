@@ -15,6 +15,7 @@ from app.services.message_service import MessageService
 from app.services.runtime_service import RuntimeService
 from app.services.session_auto_continue_service import SessionAutoContinueService
 from app.services.session_service import SessionService
+from app.services.log_service import LogService
 from app.services.tool_service import ToolService
 from app.services.workspace_service import WorkspaceService
 from app.agents.agent_middleware import LLMLoggingMiddleware
@@ -31,6 +32,7 @@ class AppContainer:
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
     session_service: SessionService
+    log_service: LogService
     tool_service: ToolService
     workspace_service: WorkspaceService
     agent_execution_service: AgentExecutionService
@@ -54,6 +56,7 @@ def build_app_container() -> AppContainer:
     runtime_service = RuntimeService()
     session_auto_continue_service = SessionAutoContinueService()
     session_service = SessionService()
+    log_service = LogService()
     tool_service = ToolService()
     workspace_service = WorkspaceService()
     agent_execution_service = AgentExecutionService()
@@ -99,6 +102,7 @@ def build_app_container() -> AppContainer:
         runtime_service=runtime_service,
         session_auto_continue_service=session_auto_continue_service,
         session_service=session_service,
+        log_service=log_service,
         tool_service=tool_service,
         workspace_service=workspace_service,
         agent_execution_service=agent_execution_service,

@@ -12,7 +12,7 @@ async def test_denied_tools_are_hidden_from_model(client: httpx.AsyncClient):
 
     create_response = await client.post(
         "/api/v1/sessions",
-        json={"title": "Tool Denylist Visibility Test"},
+        json={"title": "Tool Denylist Visibility Test", "agent_id": "coder"},
     )
     assert create_response.status_code == 200
     session_data = create_response.json()["data"]

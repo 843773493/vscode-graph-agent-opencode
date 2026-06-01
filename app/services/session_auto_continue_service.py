@@ -220,7 +220,10 @@ class SessionAutoContinueService:
     async def _send_continue_message(self, state: _AutoContinueState, trigger_job_id: str, trigger_event_id: str) -> None:
         if self._session_service is None:
             raise RuntimeError("SessionAutoContinueService 未绑定 SessionService")
+        if self._job_event_bus is None:
+            raise RuntimeError("SessionAutoContinueService 未绑定 JobEventBus")
         session = await self._session_service.get(state.session_id)
+        job_event_bus = self._job_event_bus
         run_request = MessageRunRequest(
             message=MessageCreateRequest(
                 role=MessageRole.user,
@@ -238,6 +241,7 @@ class SessionAutoContinueService:
             session_service=self._session_service,
             config_service=self._config_service,
             job_service=self._job_service,
+            job_event_bus=job_event_bus,
         )
         state.forwarded_count += 1
         state.last_forwarded_at = datetime.now()

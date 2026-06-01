@@ -86,6 +86,8 @@ export interface HostStateMessage {
 export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'refresh' }
+  | { type: 'writeWebviewPreview'; content: string }
+  | { type: 'writeRuntimeWebviewUiLog'; content: string }
   | { type: 'createSession'; title?: string }
   | { type: 'selectSession'; sessionId: string }
   | { type: 'sendMessage'; content: string }

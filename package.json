@@ -216,7 +216,7 @@
         {
           "id": "vscode-graph-agent",
           "title": "Graph Agent",
-          "icon": "media/graph-agent.svg"
+          "icon": "asset/graph-agent.svg"
         }
       ]
     },

@@ -17,6 +17,9 @@ class RuntimeService:
     def bind_job_service(self, job_service) -> None:
         self._job_service = job_service
 
+    def get_log_dir(self):
+        return get_workspace_root() / ".boxteam" / "logs"
+
     async def status(self) -> dict:
         if self._start_time is None:
             self._start_time = time.time()

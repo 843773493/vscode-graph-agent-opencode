@@ -15,4 +15,6 @@ export const WebviewToHostMessageType = {
   sendMessage: 'sendMessage',
   debug: 'debug',
   updateSession: 'updateSession',
+  writeWebviewPreview: 'writeWebviewPreview',
+  writeRuntimeWebviewUiLog: 'writeRuntimeWebviewUiLog',
 };

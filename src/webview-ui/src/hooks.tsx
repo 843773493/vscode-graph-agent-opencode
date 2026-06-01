@@ -2,16 +2,71 @@ import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { HostToWebviewMessageType, WebviewToHostMessageType } from '../../shared/protocol.js';
 import type {
-    ActiveJob,
-    AppState,
-    ConversationView,
-    HostStateMessage,
-    HostToWebviewMessage,
-    Message,
-    Session,
-    TraceEvent,
+  ActiveJob,
+  AppState,
+  ConversationView,
+  HostStateMessage,
+  HostToWebviewMessage,
+  Message,
+  Session,
+  TraceEvent,
 } from './types';
-import { postMessage, setVsCodeState } from './vscode';
+import { formatLocalLogBlock, interceptConsoleToMessageSink, postMessage, setVsCodeState } from './vscode';
+
+function escapeHtml(value: string): string {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function collectCurrentPageCss(): string {
+  if (typeof document === 'undefined') {
+    return '';
+  }
+
+  const pieces: string[] = [];
+
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      const rules = sheet.cssRules;
+      if (!rules) {
+        continue;
+      }
+
+      const cssText = Array.from(rules).map((rule) => rule.cssText).join('\n');
+      if (cssText) {
+        pieces.push(cssText);
+      }
+    } catch {
+      const owner = sheet.ownerNode as HTMLStyleElement | HTMLLinkElement | null;
+      if (owner instanceof HTMLStyleElement && owner.textContent) {
+        pieces.push(owner.textContent);
+      }
+    }
+  }
+
+  return pieces.join('\n');
+}
+
+function buildBundledPreviewHtml(): string {
+  if (typeof document === 'undefined') {
+    return '';
+  }
+
+  const domHtml = document.documentElement.outerHTML;
+  const cssText = collectCurrentPageCss();
+  const runtimeMeta = `<meta name="graph-agent-preview-bundled" content="true" />`;
+  const inlineStyle = cssText ? `<style id="graph-agent-bundled-css">${escapeHtml(cssText)}</style>` : '';
+
+  if (domHtml.includes('</head>')) {
+    return domHtml.replace('</head>', `${runtimeMeta}${inlineStyle}</head>`);
+  }
+
+  return domHtml;
+}
 
 const INITIAL_STATE: AppState = {
   workspaceRoot: '',
@@ -194,6 +249,15 @@ function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppS
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(() => mergeState(readBootState(), readPersistedState()));
 
+  useEffect(() => {
+    interceptConsoleToMessageSink((line) => {
+      postMessage({
+        type: 'writeRuntimeWebviewUiLog',
+        content: `${line}\n`,
+      });
+    });
+  }, []);
+
   const setStatus = useCallback((text: string) => {
     setState(prev => ({ ...prev, status: text }));
   }, []);
@@ -223,6 +287,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         status: 'running',
         jobId: null,
         pending: true,
+        source: 'pending',
       };
       next.pendingConversations.set(activeSession.session_id, conversation);
       next.status = '已发送，等待 SSE 事件';
@@ -235,6 +300,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const createSession = useCallback((title = '新会话') => postMessage({ type: WebviewToHostMessageType.createSession, title }), []);
   const toggleHistoryPanel = useCallback(() => setState(prev => ({ ...prev, historyPanelOpen: !prev.historyPanelOpen })), []);
   const toggleExpandDetails = useCallback((expand: boolean) => setState(prev => ({ ...prev, expandDetails: expand })), []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const html = buildBundledPreviewHtml();
+
+      postMessage({
+        type: 'writeWebviewPreview',
+        content: formatLocalLogBlock('ui html snapshot', html),
+      });
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const handler = (event: MessageEvent<HostToWebviewMessage>) => {
@@ -279,12 +359,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const pending = next.pendingConversations.get(accepted.sessionId) ?? {
             conversationId: `local_${Date.now()}`,
             sessionId: accepted.sessionId,
-            userMessage: next.messages.filter(m => m.session_id === accepted.sessionId && m.role === 'user').at(-1) ?? null,
+            userMessage: next.messages.filter(m => m.session_id === accepted.sessionId && m.role === 'user').slice(-1)[0] ?? null,
             assistantMessages: [],
             events: [],
             status: 'running',
             jobId: null,
             pending: true,
+            source: 'pending',
           };
           pending.jobId = accepted.jobId;
           pending.pending = true;

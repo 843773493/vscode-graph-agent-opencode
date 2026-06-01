@@ -416,6 +416,7 @@ def create_send_message_to_session_tool(
     session_service: SessionService,
     config_service: Any,
     job_service: JobService,
+    job_event_bus: JobEventBus,
 ) -> BaseTool:
     """创建向目标 session 发送消息的工具。"""
     @tool("send_message_to_session")
@@ -446,6 +447,7 @@ def create_send_message_to_session_tool(
             session_service=session_service,
             config_service=config_service,
             job_service=job_service,
+            job_event_bus=job_event_bus,
         )
         return result.model_dump(mode="json")
 
@@ -492,5 +494,6 @@ def build_default_tools(
             session_service=session_service,
             config_service=config_service,
             job_service=job_service,
+            job_event_bus=job_event_bus,
         ),
     ]

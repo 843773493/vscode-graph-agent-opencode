@@ -1,4 +1,4 @@
-
+import fs from 'node:fs';
 import path from 'node:path';
 import * as vscode from 'vscode';
 
@@ -38,26 +38,37 @@ function workspaceFromVscode() {
   };
 }
 
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function ensureDirSync(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
 }
 
-function isCompletedJobStatus(status) {
-  return status === 'completed' || status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'timed_out';
+function writeFileOverwritten(filePath, content) {
+  ensureDirSync(path.dirname(filePath));
+  fs.writeFileSync(filePath, content, { encoding: 'utf8' });
 }
 
-function buildBackendUrl(port, path) {
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `http://${DEFAULT_BACKEND_HOST}:${port}${normalizedPath}`;
+function getUserLogRoot() {
+  return path.join(process.env.USERPROFILE ?? require('node:os').homedir(), '.boxteams', 'logs');
 }
 
-async function requestBackendJson(port, message) {
+function getWebviewPreviewPath() {
+  return path.join(getUserLogRoot(), 'ui', 'preview.html');
+}
+
+function getRuntimeWebviewUiLogPath() {
+  return path.join(getUserLogRoot(), 'vscode_runtime_webview_ui.log');
+}
+
+function requestBackendJson(port, message) {
   if (!message?.path) {
     throw new Error('API请求缺少 path');
   }
 
-  const url = buildBackendUrl(port, message.path);
-  const response = await fetch(url, {
+  const normalizedPath = message.path.startsWith('/') ? message.path : `/${message.path}`;
+  const url = `http://${DEFAULT_BACKEND_HOST}:${port}/api/v1${normalizedPath}`;
+  return fetch(url, {
     method: message.method ?? 'GET',
     headers: {
       accept: 'application/json',
@@ -66,22 +77,13 @@ async function requestBackendJson(port, message) {
       ...(message.headers ?? {}),
     },
     body: message.body === undefined ? undefined : (typeof message.body === 'string' ? message.body : JSON.stringify(message.body)),
+  }).then(async (response) => {
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new Error(`后端请求失败 ${response.status}: ${responseText}`);
+    }
+    return responseText ? JSON.parse(responseText) : null;
   });
-
-  const responseText = await response.text();
-  if (!response.ok) {
-    throw new Error(`后端请求失败 ${response.status}: ${responseText}`);
-  }
-
-  if (!responseText) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(responseText);
-  } catch {
-    return responseText;
-  }
 }
 
 export class SidebarProvider {
@@ -107,34 +109,31 @@ export class SidebarProvider {
       localMessages: [],
       agents: [],
       traceEvents: [],
+      activeJob: null,
     };
   }
 
-  logEnvironment(prefix = 'webview 环境') {
-    const envSummary = {
-      GRAPH_AGENT_UI_SHELL_DEBUG: process.env.GRAPH_AGENT_UI_SHELL_DEBUG ?? '(未设置)',
-      NODE_ENV: process.env.NODE_ENV ?? '(未设置)',
-      WORKSPACE_ROOT: process.env.WORKSPACE_ROOT ?? '(未设置)',
-      shellMode: this.shellMode,
-      hasWorkspaceFolder: Boolean(vscode.workspace.workspaceFolders?.length),
-    };
+  log(message) {
+    this.backendManager.log(`[sidebar] ${message}`);
+  }
 
-    this.log(`${prefix}: ${JSON.stringify(envSummary)}`);
+  dispose() {
+    this.disposed = true;
+    this.webviewMessageDisposable?.dispose();
+    this.visibilityDisposable?.dispose();
+    for (const controller of this.jobStreams.values()) {
+      controller.abort();
+    }
+    this.jobStreams.clear();
+    this.view = null;
   }
 
   async createShellDebugPanel() {
-    if (!this.shellMode) {
-      this.log('shellMode 未开启，按纯壳调试面板逻辑打开');
-    }
     const panel = vscode.window.createWebviewPanel(
       'vscode-graph-agent-shell-debug',
       'Graph Agent UI Shell Debug',
       vscode.ViewColumn.Beside,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [this.context.extensionUri],
-      },
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [this.context.extensionUri] },
     );
 
     panel.webview.html = await renderSidebarHtml(panel.webview, {
@@ -151,30 +150,7 @@ export class SidebarProvider {
       activeJob: null,
     });
 
-    const htmlPreview = panel.webview.html.slice(0, 2000).replaceAll(/\s+/g, ' ').trim();
-    const hasMainScript = panel.webview.html.includes('main.js');
-    const hasAppCss = panel.webview.html.includes('App.css');
-    const hasBootState = panel.webview.html.includes('graph-agent-boot');
-    this.log(`shell webview html 预览: hasMainScript=${hasMainScript}, hasAppCss=${hasAppCss}, hasBootState=${hasBootState}, html=${htmlPreview}`);
-
     return panel;
-  }
-
-  log(message) {
-    this.backendManager.log(`[sidebar] ${message}`);
-  }
-
-  dispose() {
-    this.disposed = true;
-    this.webviewMessageDisposable?.dispose();
-    this.webviewMessageDisposable = null;
-    this.visibilityDisposable?.dispose();
-    this.visibilityDisposable = null;
-    for (const controller of this.jobStreams.values()) {
-      controller.abort();
-    }
-    this.jobStreams.clear();
-    this.view = null;
   }
 
   async resolveWebviewView(webviewView, _context, _token) {
@@ -183,15 +159,8 @@ export class SidebarProvider {
 
     this.view = webviewView;
     const webview = webviewView.webview;
-    const distDir = getWebviewUiDistDir(this.context.extensionUri);
-    const cssPath = path.join(distDir, 'assets', 'App.css');
-    const jsPath = path.join(distDir, 'assets', 'main.js');
 
-    webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this.context.extensionUri],
-    };
-
+    webview.options = { enableScripts: true, localResourceRoots: [this.context.extensionUri] };
     webview.html = await renderSidebarHtml(webview, {
       log: (message) => this.log(message),
       nonce: getNonce(),
@@ -217,31 +186,18 @@ export class SidebarProvider {
     });
 
     this.visibilityDisposable = webviewView.onDidChangeVisibility(() => {
-      if (!webviewView.visible) {
-        return;
+      if (webviewView.visible) {
+        this.flushState();
       }
-
-      this.log('webview 重新可见，刷新最新状态');
-      this.flushState();
     });
 
-    webviewView.onDidDispose(() => {
-      this.dispose();
-    });
-
+    webviewView.onDidDispose(() => this.dispose());
     this.flushState();
-
-    void this.initialize().catch((error) => {
-      this.postError(error);
-    });
+    void this.initialize().catch((error) => this.postError(error));
   }
 
   async initialize() {
-    if (this.disposed) {
-      return;
-    }
-
-    if (this.initializePromise) {
+    if (this.disposed || this.initializePromise) {
       return this.initializePromise;
     }
 
@@ -254,17 +210,9 @@ export class SidebarProvider {
         this.state.workspace = workspaceFromVscode();
       }
 
-      this.log(`webview 初始化完成，workspace=${this.state.workspace?.root_path ?? 'unknown'}`);
       this.syncState('正在预热后端...');
-
-      await this.ensureBackendReady()
-        .then(() => {
-          this.log('后端预热完成');
-          this.syncState('后端已就绪');
-        })
-        .catch((error) => {
-          this.postError(error);
-        });
+      await this.ensureBackendReady();
+      this.syncState('后端已就绪');
     })().finally(() => {
       this.initializePromise = null;
     });
@@ -274,11 +222,9 @@ export class SidebarProvider {
 
   async ensureBackendReady() {
     if (this.state.apiPort && this.state.currentSession) {
-      this.log(`复用现有后端端口 ${this.state.apiPort}`);
       return { port: this.state.apiPort, workspace: this.state.workspace };
     }
 
-    this.log('开始启动或探测后端');
     const ready = await this.backendManager.ensureStarted();
     this.state.apiPort = ready.port;
     this.state.workspace = ready.workspace;
@@ -294,10 +240,25 @@ export class SidebarProvider {
     await this.reloadMessages();
     await this.reloadTraces();
     this.syncState('初始化完成');
+    return ready;
   }
 
   async handleMessage(message) {
-    if (!message || !message.type) {
+    if (!message?.type) {
+      return;
+    }
+
+    if (message.type === 'writeWebviewPreview') {
+      const targetPath = getWebviewPreviewPath();
+      this.log(`收到 webview preview 写入请求: ${targetPath}`);
+      writeFileOverwritten(targetPath, String(message.content ?? ''));
+      return;
+    }
+
+    if (message.type === 'writeRuntimeWebviewUiLog') {
+      const targetPath = getRuntimeWebviewUiLogPath();
+      this.log(`收到 webview runtime 日志写入请求: ${targetPath}`);
+      writeFileOverwritten(targetPath, String(message.content ?? ''));
       return;
     }
 
@@ -307,7 +268,6 @@ export class SidebarProvider {
     }
 
     if (message.type === WebviewToHostMessageType.refresh) {
-      this.log('收到刷新请求');
       await this.ensureBackendReady();
       await this.reloadMessages();
       await this.reloadTraces();
@@ -316,25 +276,21 @@ export class SidebarProvider {
     }
 
     if (message.type === WebviewToHostMessageType.createSession) {
-      this.log(`收到创建 session 请求: ${message.title ?? ''}`);
       await this.createNewSession(message.title);
       return;
     }
 
     if (message.type === WebviewToHostMessageType.selectSession) {
-      this.log(`收到切换 session 请求: ${message.sessionId ?? ''}`);
       await this.selectSession(message.sessionId);
       return;
     }
 
     if (message.type === 'updateSession') {
-      this.log(`收到更新 session 请求: sessionId=${message.sessionId}, agentId=${message.data?.agent_id ?? 'unknown'}`);
       await this.updateSessionAgent(message.sessionId, message.data?.agent_id);
       return;
     }
 
     if (message.type === WebviewToHostMessageType.sendMessage) {
-      this.log(`收到发送消息请求: ${String(message.content ?? '').slice(0, 80)}`);
       await this.sendCurrentMessage(message.content);
     }
   }
@@ -352,118 +308,78 @@ export class SidebarProvider {
     this.syncState('已创建新 session');
   }
 
-   async selectSession(sessionId) {
-     if (!sessionId) {
-       return;
-     }
-
-     const selected = this.state.sessions.find((session) => session.session_id === sessionId);
-     if (!selected) {
-       throw new Error(`未找到 session: ${sessionId}`);
-     }
-
-     this.state.currentSession = selected;
-     this.state.activeJob = null;
-     await this.reloadMessages();
-     await this.reloadTraces();
-     this.syncState('已切换 session');
-   }
-
-    async updateSessionAgent(sessionId, agentId) {
-      if (!sessionId || !agentId) {
-        this.log(`更新 session agent 失败: sessionId=${sessionId}, agentId=${agentId}`);
-        return;
-      }
-
-      this.log(`开始更新 session ${sessionId} agent 为 ${agentId}`);
-
-      try {
-        // 1. 调用后端 PATCH API 更新
-        const { port } = await this.ensureBackendReady();
-        const url = `http://${DEFAULT_BACKEND_HOST}:${port}/api/v1/sessions/${sessionId}`;
-        const response = await fetch(url, {
-          method: 'PATCH',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            'X-Local-Token': DEFAULT_BACKEND_TOKEN,
-          },
-          body: JSON.stringify({ agent_id: agentId }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`PATCH ${url} failed: ${response.status} ${errorText}`);
-        }
-
-        const result = await response.json();
-        this.log(`后端返回: ${JSON.stringify(result)}`);
-
-        // 2. 以后端返回的完整 session 数据更新前端状态
-        const updatedSession = result.data ?? result;
-        const sessionIndex = this.state.sessions.findIndex((s) => s.session_id === sessionId);
-
-        if (sessionIndex !== -1) {
-          this.state.sessions[sessionIndex] = updatedSession;
-        } else {
-          this.log(`警告: sessions列表中未找到session ${sessionId}，添加到列表`);
-          this.state.sessions.push(updatedSession);
-        }
-
-        if (this.state.currentSession?.session_id === sessionId) {
-          this.state.currentSession = updatedSession;
-        }
-
-        this.syncState(`已切换Agent为 ${agentId}`);
-        this.log(`session ${sessionId} agent 更新成功: ${agentId}`);
-
-      } catch (error) {
-        this.log(`更新失败: ${error.message}`);
-        // 失败时重新拉取，确保前后端一致
-        await this.reloadSessions();
-        this.postError(new Error(`切换Agent失败: ${error.message}`));
-      }
+  async selectSession(sessionId) {
+    if (!sessionId) {
+      return;
     }
 
-   async handleApiRequest(message) {
+    const selected = this.state.sessions.find((session) => session.session_id === sessionId);
+    if (!selected) {
+      throw new Error(`未找到 session: ${sessionId}`);
+    }
+
+    this.state.currentSession = selected;
+    this.state.activeJob = null;
+    await this.reloadMessages();
+    await this.reloadTraces();
+    this.syncState('已切换 session');
+  }
+
+  async updateSessionAgent(sessionId, agentId) {
+    if (!sessionId || !agentId) {
+      return;
+    }
+
+    const { port } = await this.ensureBackendReady();
+    const url = `http://${DEFAULT_BACKEND_HOST}:${port}/api/v1/sessions/${sessionId}`;
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'X-Local-Token': DEFAULT_BACKEND_TOKEN,
+      },
+      body: JSON.stringify({ agent_id: agentId }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`PATCH ${url} failed: ${response.status} ${await response.text()}`);
+    }
+
+    const result = await response.json();
+    const updatedSession = result.data ?? result;
+    const sessionIndex = this.state.sessions.findIndex((s) => s.session_id === sessionId);
+    if (sessionIndex !== -1) {
+      this.state.sessions[sessionIndex] = updatedSession;
+    } else {
+      this.state.sessions.push(updatedSession);
+    }
+
+    if (this.state.currentSession?.session_id === sessionId) {
+      this.state.currentSession = updatedSession;
+    }
+
+    this.syncState(`已切换Agent为 ${agentId}`);
+  }
+
+  async handleApiRequest(message) {
     const requestId = message.request_id ?? '';
-    this.log(`收到 webview API 请求: ${message.method ?? 'GET'} ${message.path ?? '(empty)'} request_id=${requestId}`);
-
-    try {
-      const { port } = await this.ensureBackendReady();
-      const data = await requestBackendJson(port, message);
-      this.postMessageToWebview({
-        type: 'api_response',
-        request_id: requestId,
-        ok: true,
-        data,
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.log(`API请求失败: ${errorMessage}`);
-      this.postMessageToWebview({
-        type: 'api_response',
-        request_id: requestId,
-        ok: false,
-        error: errorMessage,
-      });
-    }
+    const { port } = await this.ensureBackendReady();
+    const data = await requestBackendJson(port, message);
+    this.postMessageToWebview({ type: 'api_response', request_id: requestId, ok: true, data });
   }
 
   mergeMessages() {
     const seenIds = new Set();
     const messages = [];
-
     for (const message of [...this.state.backendMessages, ...this.state.localMessages]) {
       const key = message.message_id ?? `${message.role}:${message.content}`;
       if (seenIds.has(key)) {
         continue;
       }
-
       seenIds.add(key);
       messages.push(message);
     }
-
     this.state.messages = messages;
   }
 
@@ -479,68 +395,46 @@ export class SidebarProvider {
     this.mergeMessages();
   }
 
-   async reloadTraces() {
-     if (!this.state.currentSession || !this.state.apiPort) {
-       this.state.traceEvents = [];
-       return;
-     }
+  async reloadTraces() {
+    if (!this.state.currentSession || !this.state.apiPort) {
+      this.state.traceEvents = [];
+      return;
+    }
 
-     this.state.traceEvents = await getSessionTraces(this.state.apiPort, this.state.currentSession.session_id);
-   }
+    this.state.traceEvents = await getSessionTraces(this.state.apiPort, this.state.currentSession.session_id);
+  }
 
-   async reloadSessions() {
-     if (!this.state.apiPort) {
-       return;
-     }
+  async reloadSessions() {
+    if (!this.state.apiPort) {
+      return;
+    }
 
-     const page = await listSessions(this.state.apiPort);
-     this.state.sessions = page.items ?? [];
+    const page = await listSessions(this.state.apiPort);
+    this.state.sessions = page.items ?? [];
 
-     if (!this.state.currentSession && this.state.sessions.length > 0) {
-       this.state.currentSession = this.state.sessions[0];
-     } else if (this.state.currentSession) {
-       const refreshed = this.state.sessions.find(
-         (s) => s.session_id === this.state.currentSession.session_id,
-       );
-       if (refreshed) {
-         this.state.currentSession = refreshed;
-       }
-     }
-
-     this.log(`session列表已刷新，共${this.state.sessions.length}个session`);
-   }
+    if (!this.state.currentSession && this.state.sessions.length > 0) {
+      this.state.currentSession = this.state.sessions[0];
+    } else if (this.state.currentSession) {
+      const refreshed = this.state.sessions.find((s) => s.session_id === this.state.currentSession.session_id);
+      if (refreshed) {
+        this.state.currentSession = refreshed;
+      }
+    }
+  }
 
   async sendCurrentMessage(content) {
-    this.log(`========== 开始发送消息 ==========`);
-    this.log(`消息内容: ${String(content ?? '').slice(0, 100)}`);
-
     if (!this.state.currentSession) {
-      this.log('错误: 当前无活动session，创建新session');
       await this.createNewSession(DEFAULT_SESSION_TITLE);
     }
 
-    this.log(`当前session: ${this.state.currentSession?.session_id}`);
-    this.log(`当前端口: ${this.state.apiPort}`);
-
     const ready = await this.ensureBackendReady();
-    const port = ready.port;
-    this.log(`后端就绪确认成功，端口=${port}`);
-
     const defaultAgent = this.state.agents.find((agent) => agent.agent_id === DEFAULT_AGENT_ID) ?? this.state.agents[0];
     if (!defaultAgent) {
-      const error = new Error('未找到可用 agent');
-      this.log(`错误: ${error.message}`);
-      throw error;
+      throw new Error('未找到可用 agent');
     }
-    this.log(`使用agent: ${defaultAgent.agent_id}`);
 
     const payload = {
-      message: {
-        role: 'user',
-        content,
-        attachments: [],
-        metadata: {},
-      },
+      message: { role: 'user', content, attachments: [], metadata: {} },
       run: {
         mode: 'single_agent',
         agent_id: defaultAgent.agent_id,
@@ -555,104 +449,51 @@ export class SidebarProvider {
       },
     };
 
-    this.log(`发送API请求到: POST /api/v1/sessions/${this.state.currentSession.session_id}/messages`);
-    this.log(`Payload: ${JSON.stringify(payload).slice(0, 200)}...`);
-
-    try {
-      const accepted = await sendMessage(port, this.state.currentSession.session_id, payload);
-      this.log(`✓ API响应成功: job_id=${accepted?.job_id ?? '(none)'}, message_id=${accepted?.message_id ?? '(none)'}, status=${accepted?.status}`);
-
-      this.state.activeJob = accepted?.job_id
-        ? {
-            jobId: accepted.job_id,
-            sessionId: this.state.currentSession.session_id,
-            status: 'running',
-            messageId: accepted.message_id ?? null,
-            content,
-          }
-        : null;
-
-      if (accepted?.job_id) {
-        this.postMessageToWebview({
-          type: HostToWebviewMessageType.messageAccepted,
+    const accepted = await sendMessage(ready.port, this.state.currentSession.session_id, payload);
+    this.state.activeJob = accepted?.job_id
+      ? {
           jobId: accepted.job_id,
           sessionId: this.state.currentSession.session_id,
+          status: 'running',
           messageId: accepted.message_id ?? null,
           content,
-        });
-        this.log(`✓ 已通知webview消息已接受，开始监听job事件: job_id=${accepted.job_id}`);
-        void this.observeJobEvents(port, accepted.job_id, this.state.currentSession.session_id);
-      } else {
-        this.log('⚠ 后端返回的job_id为空，非流式响应模式');
-      }
+        }
+      : null;
 
-      this.syncState('任务已提交，正在更新回复...');
-
-      if (!accepted?.job_id) {
-        void this.reloadMessages().then(() => {
-          this.syncState('消息已提交到后端');
-        });
-      }
-    } catch (error) {
-      this.log(`✗ API请求失败: ${error.message}`);
-      this.log(`错误堆栈: ${error.stack?.split('\n')[0] || 'no stack'}`);
-      throw error; // 抛出给外层，会被handleMessage捕获并显示
+    if (accepted?.job_id) {
+      this.postMessageToWebview({
+        type: HostToWebviewMessageType.messageAccepted,
+        jobId: accepted.job_id,
+        sessionId: this.state.currentSession.session_id,
+        messageId: accepted.message_id ?? null,
+        content,
+      });
+      void this.observeJobEvents(ready.port, accepted.job_id, this.state.currentSession.session_id);
     }
 
-    this.log(`========== 发送消息流程结束 ==========`);
+    this.syncState('任务已提交，正在更新回复...');
   }
 
   async observeJobEvents(port, jobId, sessionId) {
-    this.log(`>> 开始监听job事件: job_id=${jobId}, session_id=${sessionId}, port=${port}`);
     const controller = new AbortController();
     this.jobStreams.set(jobId, controller);
 
     try {
-      this.log(`>> 连接SSE流: /api/v1/jobs/${jobId}/events/stream`);
       await streamJobEvents(port, jobId, {
         signal: controller.signal,
         onEvent: ({ eventType, payload }) => {
-          this.log(`>> 收到job事件: type=${eventType}, payload=${JSON.stringify(payload).slice(0, 100)}`);
-          this.postMessageToWebview({
-            type: HostToWebviewMessageType.jobEvent,
-            jobId,
-            sessionId,
-            eventType,
-            payload,
-          });
-
+          this.postMessageToWebview({ type: HostToWebviewMessageType.jobEvent, jobId, sessionId, eventType, payload });
           if (['job_completed', 'job_failed', 'job_cancelled'].includes(eventType)) {
-            this.log(`>> Job结束: ${eventType}`);
-            this.state.activeJob = {
-              ...(this.state.activeJob ?? {}),
-              jobId,
-              sessionId,
-              status: eventType,
-            };
-
+            this.state.activeJob = { ...(this.state.activeJob ?? {}), jobId, sessionId, status: eventType };
             controller.abort();
             this.jobStreams.delete(jobId);
-            void Promise.all([this.reloadMessages(), this.reloadTraces()]).then(() => {
-              this.syncState(eventType === 'job_completed' ? '模型回复已更新' : `任务已结束: ${eventType}`);
-            });
+            void Promise.all([this.reloadMessages(), this.reloadTraces()]);
           }
         },
-        onError: (error) => {
-          const errorMsg = `SSE流错误: ${error.message}`;
-          this.log(`✗ ${errorMsg}`);
-          this.postError(new Error(errorMsg));
-        },
+        onError: (error) => this.postError(error),
       });
-      this.log(`>> SSE流正常结束`);
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        const errorMsg = `监听job事件失败: ${error.message}`;
-        this.log(`✗ ${errorMsg}`);
-        this.postError(new Error(errorMsg));
-      }
     } finally {
       this.jobStreams.delete(jobId);
-      this.log(`>> 清理job监听: job_id=${jobId}`);
     }
   }
 
@@ -660,13 +501,11 @@ export class SidebarProvider {
     if (!this.view) {
       return;
     }
-
     void this.view.webview.postMessage(message);
   }
 
   syncState(status) {
     this.lastStatus = status;
-
     const { workspaceRoot, workspaceName } = workspaceSummary(this.state.workspace);
     this.lastStatePayload = {
       type: HostToWebviewMessageType.state,
@@ -681,34 +520,24 @@ export class SidebarProvider {
         activeJob: this.state.activeJob,
       },
     };
-
-    if (!this.view) {
-      return;
+    if (this.view) {
+      void this.view.webview.postMessage(this.lastStatePayload);
     }
-
-    void this.view.webview.postMessage(this.lastStatePayload);
   }
 
   flushState() {
-    if (!this.view || !this.lastStatePayload) {
-      return;
+    if (this.view && this.lastStatePayload) {
+      void this.view.webview.postMessage(this.lastStatePayload);
     }
-
-    void this.view.webview.postMessage(this.lastStatePayload);
   }
 
   postError(error) {
     this.lastStatus = '发生错误';
     this.lastStatePayload = null;
-
     if (!this.view) {
       this.log(`webview 错误: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-
-    this.view.webview.postMessage({
-      type: HostToWebviewMessageType.error,
-      message: error instanceof Error ? error.message : String(error),
-    });
+    this.view.webview.postMessage({ type: HostToWebviewMessageType.error, message: error instanceof Error ? error.message : String(error) });
   }
 }
