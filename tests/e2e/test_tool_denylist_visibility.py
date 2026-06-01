@@ -3,12 +3,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from tests.e2e.utils import last_assistant_message, normalize_text, requires_real_model, wait_for_job_done
+from tests.e2e.utils import last_assistant_message, normalize_text, wait_for_job_done
 
 
 @pytest.mark.asyncio
 async def test_denied_tools_are_hidden_from_model(client: httpx.AsyncClient):
-    requires_real_model()
 
     create_response = await client.post(
         "/api/v1/sessions",

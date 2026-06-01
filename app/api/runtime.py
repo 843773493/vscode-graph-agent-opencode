@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_request_id, verify_local_token
+from app.api.deps import get_log_service, get_request_id, get_runtime_service, verify_local_token
 from app.schemas.common import APIResponse
+from app.schemas.runtime import RuntimeShutdownDTO, RuntimeStatusDTO, UiSnapshotResultDTO
 from app.services.log_service import LogService, LogSnapshotRecord
 from app.services.runtime_service import RuntimeService
 
@@ -20,37 +21,34 @@ class UiSnapshotRequest(BaseModel):
     source: str = "webview"
 
 
-@router.get("/status", response_model=APIResponse[dict], summary="获取运行时状态")
+@router.get("/status", response_model=APIResponse[RuntimeStatusDTO], summary="获取运行时状态")
 async def get_runtime_status(
-    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
 ):
-    runtime_service: RuntimeService = request.app.state.container.runtime_service
     result = await runtime_service.status()
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.post("/shutdown", response_model=APIResponse[dict], summary="关闭运行时")
+@router.post("/shutdown", response_model=APIResponse[RuntimeShutdownDTO], summary="关闭运行时")
 async def shutdown_runtime(
-    request: Request,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
 ):
-    runtime_service: RuntimeService = request.app.state.container.runtime_service
     result = await runtime_service.shutdown()
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.post("/log-snapshot", response_model=APIResponse[dict], summary="保存前端 HTML 快照")
+@router.post("/log-snapshot", response_model=APIResponse[UiSnapshotResultDTO], summary="保存前端 HTML 快照")
 async def save_log_snapshot(
-    request: Request,
     payload: UiSnapshotRequest,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
+    log_service: LogService = Depends(get_log_service),
 ):
-    runtime_service: RuntimeService = request.app.state.container.runtime_service
-    log_service: LogService = request.app.state.container.log_service
     _ = runtime_service.get_log_dir()
     result = log_service.write_html_snapshot(
         LogSnapshotRecord(

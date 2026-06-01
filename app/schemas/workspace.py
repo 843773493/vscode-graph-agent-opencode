@@ -20,3 +20,14 @@ class WorkspaceContextDTO(BaseModel):
     git: dict[str, Any] = Field(default_factory=dict)
     index_status: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkspaceIndexStatusDTO(BaseModel):
+    status: str
+    indexed_files: int = 0
+    last_updated: Optional[str] = None
+
+
+class WorkspaceIndexRebuildDTO(BaseModel):
+    status: str
+    job_id: str

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from app.schemas.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
 from app.schemas.common import JobStatus, RunMode, StepStatus, ControlAction
 from app.core.job_event_bus import EventType, JobEventBus
+from app.services.job_execution_service import JobExecutionService, JobRuntimeState
 
 
 @dataclass
@@ -31,21 +32,12 @@ class JobState:
 class JobService:
     _jobs: Dict[str, JobState] = {}
     
-    def __init__(self):
-        self._bus: JobEventBus | None = None
+    def __init__(self, *, job_event_bus: JobEventBus, job_executor: JobExecutionService):
+        self._bus: JobEventBus | None = job_event_bus
         self._session_current_job: dict[str, str] = {}
         self._session_waiting_jobs: dict[str, deque[str]] = {}
         self._dispatch_lock = asyncio.Lock()
-        self._agent_execution_service = None
-
-    def bind_bus(self, bus: JobEventBus) -> None:
-        self._bus = bus
-
-    def bind_agent_execution_service(self, agent_execution_service) -> None:
-        self._agent_execution_service = agent_execution_service
-
-    def bind_message_service(self, message_service) -> None:
-        self._message_service = message_service
+        self._job_executor = job_executor
 
     def _normalize_result_text(self, result: object) -> str:
         if isinstance(result, str):
@@ -134,13 +126,14 @@ class JobService:
         Returns:
             Agent响应内容
         """
-        if self._agent_execution_service is None:
-            raise RuntimeError("JobService 未绑定 AgentExecutionService")
-        agent_service = self._agent_execution_service
-        # 同步接口也必须生成真实的job_id，永远不要传递None
-        import uuid
         job_id = str(uuid.uuid4())
-        return await agent_service.run_step(session_id, message, agent_id=agent_id, job_id=job_id)
+        job = JobRuntimeState(
+            job_id=job_id,
+            session_id=session_id,
+            message=message,
+            agent_id=agent_id,
+        )
+        return await self._job_executor.run(job)
     
     async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
         """
@@ -278,35 +271,30 @@ class JobService:
                 agent_id="job_service"
             )
             
-            if self._agent_execution_service is None:
-                raise RuntimeError("JobService 未绑定 AgentExecutionService")
-            if self._message_service is None:
-                raise RuntimeError("JobService 未绑定 MessageService")
-
-            result = await self._agent_execution_service.run_step(
-                session_id,
-                message,
-                agent_id=job.agent_id,
+            runtime_job = JobRuntimeState(
                 job_id=job_id,
+                session_id=session_id,
+                message=message,
+                agent_id=job.agent_id,
+                status=job.status,
+                progress=job.progress,
+                error_message=job.error_message,
+                result=job.result,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+                ended_at=job.ended_at,
+                task=job.task,
             )
 
-            result_text = self._normalize_result_text(result)
+            result_text = await self._job_executor.run(runtime_job)
 
-            await self._message_service.append_assistant_message(
-                session_id,
-                result_text,
-                metadata={
-                    "source": "agent_execution",
-                    "job_id": job_id,
-                },
-            )
-            
-            job.result = result_text
-            job.status = JobStatus.completed
-            job.progress = 100
-            job.ended_at = datetime.now()
-            job.updated_at = datetime.now()
-            
+            job.result = runtime_job.result
+            job.status = runtime_job.status
+            job.progress = runtime_job.progress
+            job.error_message = runtime_job.error_message
+            job.ended_at = runtime_job.ended_at
+            job.updated_at = runtime_job.updated_at
+
             await self._bus.publish(
                 job_id=job_id,
                 event_type=EventType.JOB_COMPLETED,

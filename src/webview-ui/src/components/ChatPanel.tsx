@@ -8,126 +8,25 @@ function displayTime(value: unknown): string {
   return formatTime(value) || 'now';
 }
 
-function safeJsonParse(value: string): unknown | null {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-function extractTextFromValue(value: unknown): string {
-  if (typeof value === 'string') {
-    return value.trim();
-  }
-
-  if (Array.isArray(value)) {
-    const parts = value
-      .map(item => extractTextFromValue(item))
-      .filter(Boolean);
-    return parts.join('\n');
-  }
-
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    const directText = String(record.text ?? record.content ?? record.message ?? '').trim();
-    if (directText) {
-      return directText;
-    }
-
-    const nested = record.value ?? record.items ?? record.children;
-    if (nested !== undefined) {
-      return extractTextFromValue(nested);
-    }
-  }
-
-  return '';
-}
-
-function normalizeAssistantPayload(content: string): { thought: string; response: string; rawText: string; rawJson: unknown | null } {
+function normalizeAssistantPayload(content: string): { thought: string; response: string; rawText: string; rawJson: { thought?: string; response?: string } | null } {
   const trimmed = String(content ?? '').trim();
   if (!trimmed) {
     return { thought: '', response: '', rawText: '', rawJson: null };
   }
 
-  const parsed = safeJsonParse(trimmed);
-  if (!parsed) {
+  try {
+    const parsed = JSON.parse(trimmed) as { thought?: unknown; response?: unknown };
+    const thought = String(parsed?.thought ?? '').trim();
+    const response = String(parsed?.response ?? '').trim();
+
+    if (!thought && !response) {
+      throw new Error('assistant content 缺少 thought/response 字段');
+    }
+
+    return { thought, response, rawText: trimmed, rawJson: { thought, response } };
+  } catch {
     return { thought: '', response: trimmed, rawText: trimmed, rawJson: null };
   }
-
-  if (Array.isArray(parsed)) {
-    const thoughtParts: string[] = [];
-    const responseParts: string[] = [];
-
-    for (const item of parsed) {
-      if (!item || typeof item !== 'object') {
-        continue;
-      }
-
-      const record = item as Record<string, unknown>;
-      const type = String(record.type ?? '').toLowerCase();
-      const text = extractTextFromValue(record.text ?? record.content ?? record.summary ?? record.message);
-
-      if (type === 'reasoning' || type === 'reasoning_text' || type === 'thinking') {
-        const thought = text || extractTextFromValue(record.content) || extractTextFromValue(record.summary);
-        if (thought) {
-          thoughtParts.push(thought);
-        }
-        continue;
-      }
-
-      if (type === 'text' || type === 'response' || type === 'final') {
-        const response = text || extractTextFromValue(record.content) || extractTextFromValue(record.summary);
-        if (response) {
-          responseParts.push(response);
-        }
-        continue;
-      }
-
-      const fallbackText = text || extractTextFromValue(record.content);
-      if (!fallbackText) {
-        continue;
-      }
-
-      if (type.includes('reason')) {
-        thoughtParts.push(fallbackText);
-        continue;
-      }
-
-      if (type === 'assistant' || type === 'message') {
-        responseParts.push(fallbackText);
-      }
-    }
-
-    const thought = thoughtParts.join('\n');
-    const response = responseParts.join('\n');
-    if (!response && thought) {
-      return {
-        thought,
-        response: '',
-        rawText: trimmed,
-        rawJson: parsed,
-      };
-    }
-
-    return {
-      thought,
-      response: response || (thought ? '' : trimmed),
-      rawText: trimmed,
-      rawJson: parsed,
-    };
-  }
-
-  if (typeof parsed === 'object' && parsed) {
-    const record = parsed as Record<string, unknown>;
-    const thought = String(record.thought ?? record.reasoning ?? record.thinking ?? '').trim();
-    const response = String(record.response ?? record.text ?? record.content ?? '').trim();
-    if (thought || response) {
-      return { thought, response, rawText: trimmed, rawJson: parsed };
-    }
-  }
-
-  return { thought: '', response: trimmed, rawText: trimmed, rawJson: parsed };
 }
 
 type TimelineItem =
@@ -141,18 +40,22 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
   content: string;
 } {
   const type = String(eventType ?? '').toLowerCase();
-  const toolName = String(payload.tool_name ?? payload.tool ?? payload.name ?? 'unknown_tool');
-  const modelName = String(payload.model ?? 'unknown model');
-  const filePath = String(payload.path ?? payload.file_path ?? '');
-  const message = String(payload.message ?? payload.content ?? payload.text ?? '');
-  const resultText = String(payload.result ?? payload.output ?? payload.response ?? payload.data ?? '');
+  const toolName = String(payload.tool_name ?? '');
+  const modelName = String(payload.model ?? '');
+  const filePath = String(payload.path ?? '');
+  const message = String(payload.message ?? '');
+  const resultText = String(payload.result ?? '');
 
   if (type === 'agent_start' || type === 'agent_step' || type === 'llm_request' || type === 'model_call') {
+    if (type === 'model_call') {
+      throw new Error('已废弃的事件类型 model_call 不应再出现');
+    }
+
     return {
       kind: 'thought',
       title: type === 'agent_start' ? 'Agent 思考' : 'Agent 思考中',
-      summary: [payload.phase ? `阶段: ${String(payload.phase)}` : '', `模型: ${modelName}`].filter(Boolean).join(' · '),
-      content: message || resultText || '',
+      summary: String(payload.phase ?? ''),
+      content: message || resultText,
     };
   }
 
@@ -160,8 +63,8 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
     return {
       kind: 'tool_call',
       title: `调用工具 ${toolName}`,
-      summary: [payload.arguments ? '有参数' : '', payload.phase ? `阶段: ${String(payload.phase)}` : ''].filter(Boolean).join(' · '),
-      content: message || resultText || filePath || '',
+      summary: String(payload.phase ?? ''),
+      content: message || resultText || filePath,
     };
   }
 
@@ -170,7 +73,7 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
       kind: 'tool_result',
       title: type === 'tool_call_end' ? `工具结果 ${toolName}` : `文件写入 ${filePath || 'unknown path'}`,
       summary: type === 'tool_call_end' ? '工具执行完成' : '文件已写入',
-      content: resultText || message || filePath || '',
+      content: resultText || message || filePath,
     };
   }
 
@@ -179,8 +82,8 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
     return {
       kind: 'response',
       title: '最终响应',
-      summary: payload.response_length !== undefined ? `长度: ${String(payload.response_length)}` : '',
-      content: finalText || '',
+      summary: `长度: ${String(payload.response_length)}`,
+      content: finalText,
     };
   }
 
@@ -188,7 +91,7 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
     return {
       kind: 'error',
       title: '执行异常',
-      summary: String(payload.error ?? payload.message ?? eventType),
+      summary: String(payload.error ?? ''),
       content: String(payload.stack ?? payload.detail ?? payload.message ?? payload.error ?? ''),
     };
   }
@@ -196,8 +99,8 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
   return {
     kind: 'system',
     title: `事件 ${eventType}`,
-    summary: [toolName !== 'unknown_tool' ? `工具: ${toolName}` : '', modelName !== 'unknown model' ? `模型: ${modelName}` : ''].filter(Boolean).join(' · '),
-    content: message || resultText || filePath || '',
+    summary: [toolName ? `工具: ${toolName}` : '', modelName ? `模型: ${modelName}` : ''].filter(Boolean).join(' · '),
+    content: message || resultText || filePath,
   };
 }
 

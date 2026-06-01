@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 from collections.abc import Sequence
 
 from langchain.agents import create_agent
@@ -35,14 +35,15 @@ from deepagents.middleware.permissions import FilesystemPermission
 
 from app.core.path_utils import get_workspace_root
 from app.agents.agent_middleware import LLMLoggingMiddleware, ExecutionTraceMiddleware
-from app.agents.agent_tools import build_default_tools
+from app.agents.tool_builder import build_default_tools
 from app.services.config_service import ConfigService
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import JobEventBus
-from app.services.job_service import JobService
-from app.services.message_service import MessageService
-from app.services.session_service import SessionService
+
+if TYPE_CHECKING:
+    from app.services.message_service import MessageService
+    from app.services.session_service import SessionService
 
 
 BASE_AGENT_PROMPT = """"""
@@ -164,7 +165,7 @@ def create_my_deep_agent(
     background_task_registry: BackgroundTaskRegistry | None = None,
     background_message_bus: BackgroundMessageBus | None = None,
     job_event_bus: JobEventBus | None = None,
-    job_service: JobService | None = None,
+    job_service: object | None = None,
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     config_service: ConfigService | None = None,
@@ -183,8 +184,6 @@ def create_my_deep_agent(
         raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundMessageBus")
     if job_event_bus is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 JobEventBus")
-    if job_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 JobService")
     if message_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 MessageService")
     if session_service is None:
@@ -209,12 +208,9 @@ def create_my_deep_agent(
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
 
     runtime_middleware = list(middleware) if middleware is not None else [
-        LLMLoggingMiddleware(),
+        LLMLoggingMiddleware(job_event_bus=job_event_bus),
         ExecutionTraceMiddleware(),
     ]
-    for middleware_item in runtime_middleware:
-        if hasattr(middleware_item, "bind_job_event_bus"):
-            middleware_item.bind_job_event_bus(job_event_bus)
     if fallback_middleware is not None:
         runtime_middleware.append(fallback_middleware)
     if enabled_runtime_middleware_names is not None:

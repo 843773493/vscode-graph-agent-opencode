@@ -12,32 +12,40 @@ from app.agents.agent_factory import create_runtime_deep_agent_for_session
 
 
 @pytest.mark.asyncio
-async def test_agent_initialization(container):
+async def test_agent_initialization(
+    config_service,
+    background_task_registry,
+    background_message_bus,
+    job_event_bus,
+    job_service,
+    message_service,
+    session_service,
+):
     """Test agent can be initialized correctly"""
     print("\n=== Test 1: Agent Initialization ===")
 
     agent = create_runtime_deep_agent_for_session(
         session_id="test_session_init",
         agent_id="deep_agent",
-        config_service=container.config_service,
-        background_task_registry=container.background_task_registry,
-        background_message_bus=container.background_message_bus,
-        job_event_bus=container.job_event_bus,
-        job_service=container.job_service,
-        message_service=container.message_service,
-        session_service=container.session_service,
+        config_service=config_service,
+        background_task_registry=background_task_registry,
+        background_message_bus=background_message_bus,
+        job_event_bus=job_event_bus,
+        job_service=job_service,
+        message_service=message_service,
+        session_service=session_service,
     )
     assert agent is not None
     print("[OK] Agent initialized successfully")
 
 
 @pytest.mark.asyncio
-async def test_single_step_execution(container):
+async def test_single_step_execution(agent_execution_service):
     """Test minimal single step execution"""
     print("\n=== Test 2: Single Step Execution ===")
 
     job_id = str(uuid.uuid4())
-    response = await container.agent_execution_service.run_step(
+    response = await agent_execution_service.run_step(
         "test_session_001",
         "简单回复一句话：你好，我是测试助手",
         agent_id="deep_agent",
@@ -52,32 +60,32 @@ async def test_single_step_execution(container):
 
 
 @pytest.mark.asyncio
-async def test_session_isolation(container):
+async def test_session_isolation(agent_execution_service):
     """Test different sessions have isolated state"""
     print("\n=== Test 3: Session Isolation ===")
 
-    resp_a1 = await container.agent_execution_service.run_step(
+    resp_a1 = await agent_execution_service.run_step(
         "session_a",
         "记住这个数字：42",
         agent_id="deep_agent",
         job_id=str(uuid.uuid4()),
     )
 
-    resp_b1 = await container.agent_execution_service.run_step(
+    resp_b1 = await agent_execution_service.run_step(
         "session_b",
         "记住这个数字：88",
         agent_id="deep_agent",
         job_id=str(uuid.uuid4()),
     )
 
-    resp_a2 = await container.agent_execution_service.run_step(
+    resp_a2 = await agent_execution_service.run_step(
         "session_a",
         "我刚才告诉你的数字是什么？",
         agent_id="deep_agent",
         job_id=str(uuid.uuid4()),
     )
 
-    resp_b2 = await container.agent_execution_service.run_step(
+    resp_b2 = await agent_execution_service.run_step(
         "session_b",
         "我刚才告诉你的数字是什么？",
         agent_id="deep_agent",

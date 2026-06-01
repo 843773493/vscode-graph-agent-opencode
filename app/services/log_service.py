@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.path_utils import get_workspace_root
+from app.schemas.common import LogSnapshotResultDTO
 
 
 @dataclass(slots=True)
@@ -34,7 +35,7 @@ class LogService:
         safe_session_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in safe_session_id)
         return f"{timestamp}_{safe_session_id}"
 
-    def write_html_snapshot(self, record: LogSnapshotRecord) -> dict[str, str]:
+    def write_html_snapshot(self, record: LogSnapshotRecord) -> LogSnapshotResultDTO:
         workspace_root = Path(record.workspace_root).expanduser().resolve()
         base_dir = workspace_root / ".boxteam" / "logs" / record.category
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -57,7 +58,4 @@ class LogService:
         html_path.write_text(record.html, encoding="utf-8")
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        return {
-            "html_path": str(html_path),
-            "meta_path": str(meta_path),
-        }
+        return LogSnapshotResultDTO(html_path=str(html_path), meta_path=str(meta_path))

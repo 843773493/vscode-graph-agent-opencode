@@ -25,14 +25,27 @@ body {
   min-width: 0;
 }
 
+body > #graph-agent-boot {
+  display: none;
+}
+
+body[data-preview='true'] > #graph-agent-boot {
+  display: none;
+}
+
 body > #root {
+  position: fixed;
+  inset: 0;
   display: flex;
-  flex: 1 1 auto;
+  width: 100vw;
+  height: 100vh;
   min-width: 0;
   min-height: 0;
 }
 
 .app-shell {
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -53,7 +66,7 @@ body > #root {
   justify-content: space-between;
   gap: 10px;
   min-height: 38px;
-  padding: 0 10px;
+  padding: 0;
   border-bottom: var(--surface-border);
   background: rgba(127, 127, 127, 0.03);
   backdrop-filter: blur(14px) saturate(1.08);
@@ -152,6 +165,10 @@ body > #root {
   flex: 1 1 0;
 }
 
+.content-layout.history-open {
+  gap: 0;
+}
+
 .content-layout.history-closed {
   gap: 0;
 }
@@ -176,6 +193,16 @@ body > #root {
   width: 100%;
 }
 
+.chat-panel {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .history-panel {
   display: flex;
   flex-direction: column;
@@ -183,7 +210,8 @@ body > #root {
   min-height: 0;
   border-right: var(--surface-border);
   background: rgba(127, 127, 127, 0.02);
-  flex: 0 0 auto;
+  flex: 0 0 260px;
+  max-width: 260px;
 }
 
 .history-panel-shell {
@@ -227,7 +255,7 @@ body > #root {
 .panel-body {
   min-height: 0;
   overflow: auto;
-  padding: 10px;
+  padding: 8px;
   scrollbar-gutter: stable;
 }
 
@@ -359,10 +387,10 @@ body > #root {
 }
 
 .workspace-summary-card {
-  padding: 12px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 .workspace-summary-title,
 .history-section-title,
@@ -386,17 +414,17 @@ body > #root {
 .composer-actions,
 .toolbar-group { display: flex; flex-wrap: wrap; gap: 6px; }
 
-.history-section { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-.history-list-section { padding-bottom: 12px; }
+.history-section { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.history-list-section { padding-bottom: 8px; }
 
-.empty-state { padding: 18px 12px; color: var(--vscode-descriptionForeground); }
+.empty-state { padding: 12px 10px; color: var(--vscode-descriptionForeground); }
 .empty-state-title { font-weight: 700; margin-bottom: 4px; color: var(--vscode-editor-foreground); }
-.empty-state.small { padding: 10px 12px; }
+.empty-state.small { padding: 8px 10px; }
 
-.session-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.session-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .session-item {
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 10px;
   text-align: left;
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
@@ -417,13 +445,13 @@ body > #root {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 8px 8px 0;
+  padding: 0;
   scrollbar-gutter: stable;
 }
 .event-stream-bottom-spacer { height: 0; }
 
 .event-card-container {
-  margin-bottom: 8px;
+  margin: 0 0 6px 0;
   overflow: hidden;
   background: rgba(127, 127, 127, 0.03);
 }
@@ -464,12 +492,12 @@ body > #root {
 .composer-actions button:hover,
 .markdown-code-copy:hover { background: var(--vscode-list-hoverBackground); }
 
-.event-stream-body { display: flex; flex-direction: column; gap: 1px; padding: 1px; }
+.event-stream-body { display: flex; flex-direction: column; gap: 1px; padding: 0; }
 .event-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 0 0;
+  gap: 6px;
+  padding: 0;
 }
 
 .event-section-title-row {
@@ -495,6 +523,35 @@ body > #root {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.event-stream-flow,
+.chat-stream,
+.event-stream-body,
+.event-section,
+.event-card-container,
+.event-card,
+.chat-panel,
+.composer,
+.composer-surface,
+.composer-copy {
+  width: 100%;
+  max-width: none;
+}
+
+.composer {
+  padding: 0;
+}
+
+.composer-surface {
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
+}
+
+.composer-copy {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .event-stream-flow .event-card {
@@ -611,7 +668,7 @@ body > #root {
 .composer {
   flex: 0 0 auto;
   border-top: var(--surface-border);
-  padding: 10px 12px 12px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -621,7 +678,7 @@ body > #root {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
+  padding: 0;
 }
 .composer-copy { display: flex; flex-direction: column; gap: 6px; }
 .composer textarea {

@@ -20,10 +20,6 @@ from app.schemas.event import (
     AgentEndEvent, AgentEndPayload,
     ErrorEvent, ErrorPayload,
     LLMRequestEvent, LLMRequestPayload,
-    LogEvent,
-    ToolCallEvent,
-    FileWriteEvent,
-    ModelCallEvent,
 )
 
 
@@ -51,12 +47,6 @@ class EventType:
     ERROR = "error"
     STATUS_CHANGE = "status_change"
 
-    # 预留事件（为兼容性保留，当前未广泛使用）
-    # TODO: LOG 事件需定义明确的 payload schema（如 LogLevel 枚举、结构化日志字段）
-    LOG = "log"
-    TOOL_CALL = "tool_call"  # TODO: 工具调用事件需规范化参数
-    FILE_WRITE = "file_write"  # TODO: 文件写入事件需补充权限、路径校验
-    MODEL_CALL = "model_call"  # TODO: 已废弃，使用 LLM_REQUEST 替代
 
 
 class JobEventBus:
@@ -171,6 +161,13 @@ class JobEventBus:
                 **common
             )
 
+        elif t == EventType.LLM_REQUEST:
+            return LLMRequestEvent(
+                type="llm_request",
+                payload=LLMRequestPayload(**payload),
+                **common
+            )
+
         elif t == EventType.AGENT_START:
             return AgentStartEvent(
                 type="agent_start",
@@ -186,12 +183,9 @@ class JobEventBus:
             )
 
         elif t == EventType.AGENT_END:
-            final_text = payload.get("final_text")
-            if not isinstance(final_text, str):
-                final_text = str(final_text)
             return AgentEndEvent(
                 type="agent_end",
-                payload=AgentEndPayload(**{**payload, "final_text": final_text}),
+                payload=AgentEndPayload(**payload),
                 **common
             )
 
@@ -199,66 +193,6 @@ class JobEventBus:
             return ErrorEvent(
                 type="error",
                 payload=ErrorPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.LLM_REQUEST:
-            return LLMRequestEvent(
-                type="llm_request",
-                payload=LLMRequestPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.LOG:
-            # TODO: LOG 事件为预留类型，payload 使用原始 dict，需定义 LogLevel 枚举和结构化字段
-            return LogEvent(
-                type="log",
-                payload=payload,  # dict directly
-                **common
-            )
-
-        elif t == EventType.TOOL_CALL:
-            # TODO: TOOL_CALL 事件需规范化 payload 结构（tool_id、parameters、result 等字段）
-            return ToolCallEvent(
-                type="tool_call",
-                payload=payload,
-                **common
-            )
-
-        elif t == EventType.FILE_WRITE:
-            # TODO: FILE_WRITE 事件需补充文件路径、权限、操作类型等结构化字段
-            return FileWriteEvent(
-                type="file_write",
-                payload=payload,
-                **common
-            )
-
-        elif t == EventType.MODEL_CALL:
-            # TODO: MODEL_CALL 已废弃，应使用 LLM_REQUEST 替代。保留仅为了向后兼容。
-            return ModelCallEvent(
-                type="model_call",
-                payload=payload,
-                **common
-            )
-
-        elif t == EventType.TOOL_CALL:
-            return ToolCallEvent(
-                type="tool_call",
-                payload=payload,
-                **common
-            )
-
-        elif t == EventType.FILE_WRITE:
-            return FileWriteEvent(
-                type="file_write",
-                payload=payload,
-                **common
-            )
-
-        elif t == EventType.MODEL_CALL:
-            return ModelCallEvent(
-                type="model_call",
-                payload=payload,
                 **common
             )
 

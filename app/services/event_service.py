@@ -7,10 +7,7 @@ from app.core.job_event_bus import JobEventBus
 
 
 class EventService:
-    def __init__(self):
-        self.bus: JobEventBus | None = None
-
-    def bind_bus(self, bus: JobEventBus) -> None:
+    def __init__(self, *, bus: JobEventBus):
         self.bus = bus
     
     async def list(self, job_id: str, after: str | None = None, limit: int = 100) -> list[Event]:

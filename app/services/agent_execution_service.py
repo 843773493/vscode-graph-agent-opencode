@@ -1,45 +1,33 @@
 from __future__ import annotations
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
 from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
 from app.services.config_service import ConfigService
-from app.services.job_service import JobService
-from app.services.message_service import MessageService
-from app.services.session_service import SessionService
+
+if TYPE_CHECKING:
+    from app.services.message_service import MessageService
+    from app.services.session_service import SessionService
 
 
 class AgentExecutionService:
-    def __init__(self):
-        self._agent_cache = {}
-        self._config_service: ConfigService | None = None
-        self._bus: JobEventBus | None = None
-        self._background_task_registry: BackgroundTaskRegistry | None = None
-        self._background_message_bus: BackgroundMessageBus | None = None
-        self._job_service: JobService | None = None
-        self._message_service: MessageService | None = None
-        self._session_service: SessionService | None = None
-
-    def bind_config_service(self, config_service: ConfigService) -> None:
-        self._config_service = config_service
-
-    def bind_bus(self, bus: JobEventBus) -> None:
-        self._bus = bus
-
-    def bind_dependencies(
+    def __init__(
         self,
         *,
+        config_service: ConfigService,
         background_task_registry: BackgroundTaskRegistry,
         background_message_bus: BackgroundMessageBus,
-        job_service: JobService,
-        message_service: MessageService,
-        session_service: SessionService,
-    ) -> None:
+        job_event_bus: JobEventBus,
+        message_service: "MessageService",
+        session_service: "SessionService",
+    ):
+        self._agent_cache = {}
+        self._config_service = config_service
         self._background_task_registry = background_task_registry
         self._background_message_bus = background_message_bus
-        self._job_service = job_service
+        self._bus = job_event_bus
         self._message_service = message_service
         self._session_service = session_service
     
@@ -58,7 +46,6 @@ class AgentExecutionService:
             background_task_registry=self._background_task_registry,
             background_message_bus=self._background_message_bus,
             job_event_bus=self._bus,
-            job_service=self._job_service,
             message_service=self._message_service,
             session_service=self._session_service,
             name=resolved_agent_id,
@@ -86,8 +73,6 @@ class AgentExecutionService:
             raise RuntimeError("AgentExecutionService 未绑定 BackgroundTaskRegistry")
         if self._background_message_bus is None:
             raise RuntimeError("AgentExecutionService 未绑定 BackgroundMessageBus")
-        if self._job_service is None:
-            raise RuntimeError("AgentExecutionService 未绑定 JobService")
         if self._message_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 MessageService")
         if self._session_service is None:
@@ -116,6 +101,7 @@ class AgentExecutionService:
         
         config = {
             "configurable": {
+                "session_id": session_id,
                 "thread_id": session_id,
                 "job_id": effective_job_id,  # 将job_id注入到LangChain配置中，供middleware使用
             }
@@ -148,8 +134,7 @@ class AgentExecutionService:
                 job_id=effective_job_id,
                 event_type=EventType.AGENT_END,
                 payload={
-                    "response_length": len(response_content),
-                    "final_text": response_content,
+                    "response": result,
                     "agent_id": resolved_agent_id,
                 },
                 agent_id=resolved_agent_id

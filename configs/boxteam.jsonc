@@ -22,6 +22,13 @@
         "model": "openai/gpt-oss-120b:free",
         "api_key": "${OPENROUTER_API_KEY}",
         "interface": "responses"
+      },
+      {
+        "id": "backup_3",
+        "endpoint": "https://www.cctq.ai",
+        "model": "gpt-5.4-mini",
+        "api_key": "${CCTQ_API_KEY}",
+        "interface": "chat.completion"
       }
     ]
   },

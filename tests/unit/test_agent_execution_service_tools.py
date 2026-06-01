@@ -300,7 +300,7 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
         step_id=None,
         agent_id="deep_agent",
         payload=AgentEndPayload(
-            response_length=len("橙子"),
+            response={"text": "橙子"},
             final_text="橙子",
             agent_id="deep_agent"
         ),
@@ -356,6 +356,7 @@ async def test_send_message_to_session_tool_creates_job(monkeypatch, tmp_path):
         session_service=session_service,
         config_service=config_service,
         job_service=job_service,
+        job_event_bus=job_event_bus,
     )
 
     result = await tool.ainvoke({"target_session_id": "ses_target", "content": "请再次只重复前面的话"})

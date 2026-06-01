@@ -7,10 +7,7 @@ from app.schemas.agent import AgentDTO
 
 
 class AgentService:
-    def __init__(self):
-        self._config_service: ConfigService | None = None
-
-    def bind_config_service(self, config_service: ConfigService) -> None:
+    def __init__(self, *, config_service: ConfigService):
         self._config_service = config_service
 
     async def list(self) -> list[AgentDTO]:

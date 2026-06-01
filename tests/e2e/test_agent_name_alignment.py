@@ -3,12 +3,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from tests.e2e.utils import requires_real_model, wait_for_job_done
+from tests.e2e.utils import  wait_for_job_done
 
 
 @pytest.mark.asyncio
 async def test_agent_name_matches_system_prompt_after_switch(client: httpx.AsyncClient):
-    requires_real_model()
 
     create_response = await client.post(
         "/api/v1/sessions",

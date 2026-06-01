@@ -16,7 +16,7 @@ import pytest
 
 from app.main import app
 
-from tests.e2e.utils import requires_real_model, wait_for_job_done
+from tests.e2e.utils import  wait_for_job_done
 
 
 async def _wait_for_trace_event(
@@ -63,7 +63,6 @@ async def _wait_for_session_assistant_messages(
 
 @pytest.mark.asyncio
 async def test_real_deepagent(client: httpx.AsyncClient, workspace_root_path: str):
-    requires_real_model()
 
     print("\n=== 测试真实DeepAgent端到端执行 ===")
 

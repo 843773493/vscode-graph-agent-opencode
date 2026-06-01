@@ -95,12 +95,9 @@ export function createPreviewBootDomElement(previewState: PreviewUiState): HTMLD
 
 export function initializePreviewState(): PreviewUiState {
   const previewState = buildPreviewStateFromBackend(previewBackendPayload);
-  const boot = createPreviewBootDomElement(previewState);
-
-  document.body.appendChild(boot);
   setVsCodeState({
     ...previewState,
-    bootDomElement: boot.outerHTML,
+    bootDomElement: '',
   });
 
   return previewState;

@@ -10,7 +10,8 @@ from app.services.job_service import JobService
 from app.services.session_service import SessionService
 from app.core.job_event_bus import EventType, JobEventBus
 from app.schemas.message import MessageDTO, MessageCreateRequest, MessageRunRequest, MessageRunAccepted
-from app.schemas.common import MessageRole, JobStatus, CursorPage
+from app.schemas.job import JobStatus
+from app.schemas.common import MessageRole, CursorPage
 from app.core.path_utils import get_session_path
 
 
@@ -83,14 +84,6 @@ class MessageService:
         )
         return self._append_message(message)
 
-    async def run(self, session_id: str, run_request: MessageRunRequest) -> MessageRunAccepted:
-        message = await self.create(session_id, run_request.message)
-        return MessageRunAccepted(
-            message_id=message.message_id,
-            job_id=f"job_{uuid.uuid4().hex[:12]}",
-            status=JobStatus.accepted
-        )
-    
     async def create_and_run(
         self,
         session_id: str,
@@ -135,9 +128,9 @@ class MessageService:
             effective_agent_id = config_service.get_default_agent_id()
 
         job_id = await job_service.start_job(session_id, message.content, effective_agent_id)
-        
+
         return MessageRunAccepted(
             message_id=message.message_id,
             job_id=job_id,
-            status=JobStatus.accepted
+            status=JobStatus.accepted,
         )

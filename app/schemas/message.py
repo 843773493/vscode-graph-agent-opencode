@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
-from app.schemas.common import MessageRole, RunMode, JobStatus
+from app.schemas.common import MessageRole, RunMode
 
 
 class AttachmentRef(BaseModel):
@@ -33,6 +33,12 @@ class MessageRunRequest(BaseModel):
     run: RunOptions
 
 
+class MessageRunAccepted(BaseModel):
+    message_id: str
+    job_id: str
+    status: str
+
+
 class MessageDTO(BaseModel):
     message_id: str
     session_id: str
@@ -41,9 +47,3 @@ class MessageDTO(BaseModel):
     attachments: list[AttachmentRef] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
-
-
-class MessageRunAccepted(BaseModel):
-    message_id: str
-    job_id: str
-    status: JobStatus

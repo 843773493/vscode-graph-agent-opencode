@@ -70,3 +70,8 @@ class CursorPage(BaseModel, Generic[T]):
     items: list[T]
     next_cursor: Optional[str] = None
     has_more: bool = False
+
+
+class LogSnapshotResultDTO(BaseModel):
+    html_path: str
+    meta_path: str

@@ -22,6 +22,12 @@ class SessionDTO(BaseModel):
     updated_at: datetime
 
 
+class SessionListResultDTO(BaseModel):
+    items: list[SessionDTO]
+    total: int
+    cursor: Optional[str] = None
+
+
 class SessionAutoContinueStartRequest(BaseModel):
     poll_interval_seconds: float = 1.0
 
@@ -38,3 +44,14 @@ class SessionAutoContinueStatusDTO(BaseModel):
     last_trigger_event_id: Optional[str]
     last_trigger_job_id: Optional[str]
     last_enqueued_job_id: Optional[str]
+
+
+class DeleteSessionResultDTO(BaseModel):
+    session_id: str
+    status: str
+
+
+class SessionControlResultDTO(BaseModel):
+    session_id: str
+    action: str
+    status: str

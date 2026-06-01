@@ -31,18 +31,7 @@ class _AutoContinueState:
 
 
 class SessionAutoContinueService:
-    def __init__(self):
-        self._states: dict[str, _AutoContinueState] = {}
-        self._lock = asyncio.Lock()
-        self._background_task_registry: BackgroundTaskRegistry | None = None
-        self._background_message_bus: BackgroundMessageBus | None = None
-        self._job_event_bus: JobEventBus | None = None
-        self._session_service: SessionService | None = None
-        self._message_service: MessageService | None = None
-        self._job_service: JobService | None = None
-        self._config_service: ConfigService | None = None
-
-    def bind_dependencies(
+    def __init__(
         self,
         *,
         background_task_registry: BackgroundTaskRegistry,
@@ -52,7 +41,9 @@ class SessionAutoContinueService:
         message_service: MessageService,
         job_service: JobService,
         config_service: ConfigService,
-    ) -> None:
+    ):
+        self._states: dict[str, _AutoContinueState] = {}
+        self._lock = asyncio.Lock()
         self._background_task_registry = background_task_registry
         self._background_message_bus = background_message_bus
         self._job_event_bus = job_event_bus

@@ -12,3 +12,17 @@ class ToolDTO(BaseModel):
 
 class ToolInvokeRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolInvokeResultDTO(BaseModel):
+    tool_id: str
+    status: str
+    result: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolInvokeResultDTO(BaseModel):
+    tool_id: str
+    status: str
+    result: str
+    parameters: dict[str, Any] = Field(default_factory=dict)

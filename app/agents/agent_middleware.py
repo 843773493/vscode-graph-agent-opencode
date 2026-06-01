@@ -71,15 +71,18 @@ class LLMFullLog(BaseModel):
 class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     """唯一职责：存储每个LLM调用的完整原始请求/响应"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, job_event_bus: JobEventBus) -> None:
         self._prepared_session_dirs: set[str] = set()
-        self._job_event_bus: JobEventBus | None = None
-
-    def bind_job_event_bus(self, job_event_bus: JobEventBus) -> None:
         self._job_event_bus = job_event_bus
 
     def _get_session_id(self, runtime: Runtime[Any]) -> str:
-        """直接读取 LangChain 的 thread_id。"""
+        """优先读取显式注入的 session_id，其次回退到 thread_id。"""
+        configurable = getattr(runtime, 'configurable', None)
+        if isinstance(configurable, dict):
+            session_id = configurable.get('session_id')
+            if session_id:
+                return session_id
+
         execution_info = runtime.execution_info
         return execution_info.thread_id
 
@@ -286,7 +289,13 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
         self._session_start_times: dict[str, float] = {}
 
     def _get_session_id(self, runtime: Runtime[Any]) -> str:
-        """直接读取 LangChain 的 thread_id。"""
+        """优先读取显式注入的 session_id，其次回退到 thread_id。"""
+        configurable = getattr(runtime, 'configurable', None)
+        if isinstance(configurable, dict):
+            session_id = configurable.get('session_id')
+            if session_id:
+                return session_id
+
         execution_info = runtime.execution_info
         return execution_info.thread_id
 

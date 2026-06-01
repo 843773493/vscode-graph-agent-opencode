@@ -4,17 +4,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional
-from app.schemas.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest
+from app.schemas.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest, SessionListResultDTO, SessionControlResultDTO
 from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir, get_logs_dir
 from app.core.exceptions import NotFoundError
 from app.services.config_service import ConfigService
 
 
 class SessionService:
-    def __init__(self):
-        self._config_service: ConfigService | None = None
-
-    def bind_config_service(self, config_service: ConfigService) -> None:
+    def __init__(self, *, config_service: ConfigService):
         self._config_service = config_service
 
     async def get(self, session_id: str) -> SessionDTO:
@@ -30,7 +27,7 @@ class SessionService:
         # Pydantic will automatically handle ISO string to datetime conversion
         return SessionDTO.model_validate(data)
 
-    async def list(self, workspace_id: Optional[str] = None, skip: int = 0, limit: int = 100, cursor: Optional[str] = None) -> dict:
+    async def list(self, workspace_id: Optional[str] = None, skip: int = 0, limit: int = 100, cursor: Optional[str] = None) -> SessionListResultDTO:
         """List all sessions"""
         sessions_dir = get_sessions_dir()
         sessions_dir.mkdir(exist_ok=True)
@@ -53,11 +50,7 @@ class SessionService:
         # Apply pagination
         paginated = sessions[skip:skip+limit]
         
-        return {
-            "items": paginated,
-            "total": len(sessions),
-            "cursor": None
-        }
+        return SessionListResultDTO(items=paginated, total=len(sessions), cursor=None)
 
     async def create(self, session: SessionCreateRequest) -> SessionDTO:
         """Create new session"""
@@ -138,11 +131,11 @@ class SessionService:
         import shutil
         shutil.rmtree(session_dir)
 
-    async def control(self, session_id: str, action: str, payload: dict = None) -> dict:
+    async def control(self, session_id: str, action: str, payload: dict = None) -> SessionControlResultDTO:
         """Control session action"""
         # Verify session exists
         await self.get(session_id)
-        return {"session_id": session_id, "action": action, "status": "executed"}
+        return SessionControlResultDTO(session_id=session_id, action=action, status="executed")
 
     async def list_trace_events(self, session_id: str) -> list[dict[str, Any]]:
         """Read the stored execution trace for a session."""

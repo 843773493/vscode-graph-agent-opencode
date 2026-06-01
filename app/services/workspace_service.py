@@ -6,18 +6,16 @@ from pathlib import Path
 from typing import Optional
 from app.services.config_service import ConfigService
 from app.schemas.workspace import WorkspaceDTO, WorkspaceContextDTO
+from app.schemas.workspace_index import WorkspaceIndexStatusDTO, WorkspaceIndexRebuildDTO
 from app.core.path_utils import get_workspace_root, get_user_workspace_root
 
 
 class WorkspaceService:
-    def __init__(self):
+    def __init__(self, *, config_service: ConfigService):
         self.workspace_id = "ws_local"
         self.root_path = str(get_workspace_root())
         self.user_workspace_root = str(get_user_workspace_root())
         self.name = os.path.basename(self.root_path)
-        self._config_service: ConfigService | None = None
-
-    def bind_config_service(self, config_service: ConfigService) -> None:
         self._config_service = config_service
 
     async def get(self) -> WorkspaceDTO:
@@ -48,15 +46,15 @@ class WorkspaceService:
             config={}
         )
 
-    async def get_index_status(self) -> dict:
-        return {
-            "status": "ready",
-            "indexed_files": 0,
-            "last_updated": datetime.now(timezone.utc).isoformat() + "Z"
-        }
+    async def get_index_status(self) -> WorkspaceIndexStatusDTO:
+        return WorkspaceIndexStatusDTO(
+            status="ready",
+            indexed_files=0,
+            last_updated=datetime.now(timezone.utc).isoformat() + "Z",
+        )
 
-    async def rebuild_index(self) -> dict:
-        return {
-            "status": "started",
-            "job_id": "index_001"
-        }
+    async def rebuild_index(self) -> WorkspaceIndexRebuildDTO:
+        return WorkspaceIndexRebuildDTO(
+            status="started",
+            job_id="index_001",
+        )

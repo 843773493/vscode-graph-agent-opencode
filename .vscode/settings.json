@@ -1,4 +1,11 @@
 {
     "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+    "python.analysis.exclude": [
+        "${env:USERPROFILE}\\.boxteams"
+    ],
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "testing.automaticallyOpenTestResults": "neverOpen"
 
 }

@@ -72,19 +72,18 @@ class StatusChangePayload(BaseModel):
 
 class AgentStartPayload(BaseModel):
     """AGENT_START 事件的 payload"""
-    message: str
+    message: str | None = None
     agent_id: str
 
 
 class AgentStepPayload(BaseModel):
     """AGENT_STEP 事件的 payload"""
-    phase: str
+    phase: str | None = None
 
 
 class AgentEndPayload(BaseModel):
     """AGENT_END 事件的 payload"""
-    response_length: int
-    final_text: str
+    response: Any
     agent_id: str
 
 
@@ -174,40 +173,6 @@ class LLMRequestEvent(BaseEvent):
     payload: LLMRequestPayload
 
 
-# ============= 预留事件（当前未广泛使用，为兼容性保留） =============
-
-class LogEvent(BaseEvent):
-    """日志事件（预留）
-    TODO: 需定义结构化 payload  schema（level、message、timestamp、source 等）
-    """
-    type: Literal["log"] = "log"
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class ToolCallEvent(BaseEvent):
-    """工具调用事件（预留）
-    TODO: 需定义 ToolCallPayload（tool_id、parameters、result、duration 等字段）
-    """
-    type: Literal["tool_call"] = "tool_call"
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class FileWriteEvent(BaseEvent):
-    """文件写入事件（预留）
-    TODO: 需定义 FileWritePayload（path、operation、size、checksum 等字段）
-    """
-    type: Literal["file_write"] = "file_write"
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class ModelCallEvent(BaseEvent):
-    """模型调用事件（已废弃，使用 LLM_REQUEST）
-    TODO: 已废弃，未来版本移除，请迁移到 LLMRequestEvent
-    """
-    type: Literal["model_call"] = "model_call"
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
 # ============= 4. Discriminated Union 类型 =============
 
 """
@@ -233,9 +198,4 @@ Event = Union[
     AgentEndEvent,
     ErrorEvent,
     LLMRequestEvent,
-    # 预留事件（保持兼容）
-    LogEvent,
-    ToolCallEvent,
-    FileWriteEvent,
-    ModelCallEvent,
 ]
