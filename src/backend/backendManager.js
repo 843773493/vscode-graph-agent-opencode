@@ -203,6 +203,71 @@ async function findAvailablePort(preferredPort) {
   throw new Error(`无法找到可用端口，起始端口为 ${preferredPort}`);
 }
 
+function terminateProcessByPid(pid, signal = 'SIGTERM') {
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH') {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function killProcessOnPort(port, logger) {
+  if (process.platform === 'win32') {
+    const command = `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique`;
+    const child = spawn('powershell.exe', ['-NoProfile', '-Command', command], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const output = [];
+    const errors = [];
+
+    child.stdout.on('data', (chunk) => output.push(String(chunk)));
+    child.stderr.on('data', (chunk) => errors.push(String(chunk)));
+
+    const exitCode = await new Promise((resolve) => {
+      child.on('close', (code) => resolve(code ?? 0));
+    });
+
+    if (exitCode !== 0) {
+      logger?.(`启动前清理端口 ${port} 时 PowerShell 退出码异常: ${exitCode}，stderr=${errors.join('').trim() || '(empty)'}`);
+      return false;
+    }
+
+    const pidList = output.join('').split(/\s+/).map((value) => Number.parseInt(value, 10)).filter((value) => Number.isInteger(value) && value > 0);
+    if (pidList.length === 0) {
+      return false;
+    }
+
+    let killedAny = false;
+    for (const pid of pidList) {
+      logger?.(`启动前尝试释放端口 ${port}，目标 PID=${pid}`);
+      if (!terminateProcessByPid(pid, 'SIGTERM')) {
+        continue;
+      }
+
+      killedAny = true;
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        if (await isPortFree(port)) {
+          logger?.(`端口 ${port} 已释放`);
+          return true;
+        }
+
+        if (attempt === 5) {
+          terminateProcessByPid(pid, 'SIGKILL');
+        }
+
+        await wait(200);
+      }
+    }
+
+    return killedAny;
+  }
+
+  return false;
+}
+
 export class BackendManager {
   constructor(outputChannel) {
     this.outputChannel = outputChannel;
@@ -343,6 +408,14 @@ export class BackendManager {
     this.log(`vscode_runtime_app.log 路径: ${this.runtimeAppLogPath ?? '(未设置)'}`);
     this.log(`调试信息: workspaceRoot=${this.workspaceRoot}, projectRoot=${this.projectRoot}`);
     this.writeHostLogHeader();
+
+    this.log(`启动前尝试清理首选端口占用: ${this.port}`);
+    const portFreed = await killProcessOnPort(this.port, (message) => this.log(message));
+    if (portFreed) {
+      this.log(`启动前端口 ${this.port} 已成功清理`);
+    } else {
+      this.log(`启动前端口 ${this.port} 未发现可清理的监听进程，或清理未成功`);
+    }
 
     const candidatePorts = [...new Set([this.port, 8000])];
     this.log(`将要探测的端口列表: ${candidatePorts.join(', ')}`);

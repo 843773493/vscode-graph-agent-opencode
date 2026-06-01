@@ -2,14 +2,14 @@ import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { HostToWebviewMessageType, WebviewToHostMessageType } from '../../shared/protocol.js';
 import type {
-  ActiveJob,
-  AppState,
-  ConversationView,
-  HostStateMessage,
-  HostToWebviewMessage,
-  Message,
-  Session,
-  TraceEvent,
+    ActiveJob,
+    AppState,
+    ConversationView,
+    HostStateMessage,
+    HostToWebviewMessage,
+    Message,
+    Session,
+    TraceEvent,
 } from './types';
 import { formatLocalLogBlock, interceptConsoleToMessageSink, postMessage, setVsCodeState } from './vscode';
 
@@ -207,6 +207,19 @@ function readBootState(): Partial<AppState> {
   }
 }
 
+function getBootDomElementSnapshot(): string {
+  if (typeof document === 'undefined') {
+    return '';
+  }
+
+  const bootEl = document.getElementById('graph-agent-boot');
+  if (!bootEl) {
+    return '';
+  }
+
+  return bootEl.outerHTML;
+}
+
 function readPersistedState(): Partial<AppState> {
   if (typeof window === 'undefined') {
     return {};
@@ -246,6 +259,14 @@ function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppS
   };
 }
 
+function persistCurrentState(state: AppState): void {
+  const snapshot = getBootDomElementSnapshot();
+  setVsCodeState({
+    ...cloneMaps(state),
+    bootDomElement: snapshot,
+  });
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(() => mergeState(readBootState(), readPersistedState()));
 
@@ -257,6 +278,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
     });
   }, []);
+
+  useEffect(() => {
+    persistCurrentState(state);
+  }, [state]);
 
   const setStatus = useCallback((text: string) => {
     setState(prev => ({ ...prev, status: text }));

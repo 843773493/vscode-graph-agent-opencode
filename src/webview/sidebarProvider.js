@@ -54,11 +54,15 @@ function getUserLogRoot() {
 }
 
 function getWebviewPreviewPath() {
-  return path.join(getUserLogRoot(), 'ui', 'preview.html');
+  return path.join(getUserLogRoot(), 'ui', 'snapshot.html');
 }
 
 function getRuntimeWebviewUiLogPath() {
   return path.join(getUserLogRoot(), 'vscode_runtime_webview_ui.log');
+}
+
+function formatLogTimestamp() {
+  return new Date().toISOString();
 }
 
 function requestBackendJson(port, message) {
@@ -250,7 +254,7 @@ export class SidebarProvider {
 
     if (message.type === 'writeWebviewPreview') {
       const targetPath = getWebviewPreviewPath();
-      this.log(`收到 webview preview 写入请求: ${targetPath}`);
+      this.log(`[${formatLogTimestamp()}] 收到 webview preview 写入请求: ${targetPath}`);
       writeFileOverwritten(targetPath, String(message.content ?? ''));
       return;
     }
