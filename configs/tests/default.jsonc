@@ -5,14 +5,14 @@
       {
         "id": "primary",
         "endpoint": "https://opencode.ai/zen/v1",
-        "model": "minimax-m2.5-free",
+        "model": "big-pickle",
         "api_key": "${OPENCODE_ZEN_API_KEY}",
         "interface": "chat.completion"
       },
       {
         "id": "backup_1",
         "endpoint": "https://api.kilo.ai/api/gateway",
-        "model": "bytedance-seed/dola-seed-2.0-pro:free",
+        "model": "openrouter/free",
         "api_key": "${KILO_API_KEY}",
         "interface": "responses"
       },
