@@ -1,119 +1,125 @@
-# General Instructions
+# 通用指引
 
-## Development Standards
+## 开发标准
 
-### Communication and Delivery
+### 沟通与交付
 
-1. Communicate in Chinese; code comments should also be in Chinese, except for professional terms.
-2. Do not write summary documents unless the user explicitly requests them.
+1. 使用中文进行沟通；代码注释也应使用中文，专业术语除外。
+2. 除非用户明确要求，否则不要编写总结性文档。
 
-### Implementation Approach
+### 实现方法
 
-1. When implementing a feature for the first time, reduce `try/except` usage and focus on core functionality.
-2. Whenever you are not confident about a piece of code, add a TODO comment in the code.
-3. Whenever you or the user asks you to skip an important implementation detail, add a TODO comment in the code.
-4. Whenever you use compatibility-oriented code, add a TODO comment above it.
-5. Avoid using `any` where possible; keep it only when necessary for generics or other complex cases.
-6. Prefer third-party libraries when appropriate; do not reinvent the wheel.
-7. Classes: do not use prototype mixins or mutation. Prefer inheritance or composition.
-8. When the user asks you to refactor or modify existing functionality, clean up the original code and implement the feature directly; do not keep compatibility layers.
+1. 第一次实现功能时，尽量减少使用 `try/except`，专注于核心功能。
+2. 对于自己不确定的代码部分，在代码中添加 TODO 注释。
+3. 当你或用户要求跳过某个重要实现细节时，在代码中添加 TODO 注释。
+4. 当使用面向兼容性的代码时，在其上方添加 TODO 注释。
+5. 尽量避免使用 `any`；仅在处理泛型或其他复杂情况时使用。
+6. 在适当情况下优先使用第三方库；不要重复造轮子。
+7. 类：不要使用原型混入或变异，优先使用继承或组合。
+8. 当用户要求你重构时或修改现有功能，清理原始代码并直接实现功能；不要保留兼容层。
 
-### Dependencies and Configuration
+### 依赖和配置
 
-1. Do not hardcode environment variable values in code.
-2. Use `bun install` for JS/TS dependencies and `uv sync` for Python dependencies.
-3. If a `.venv` directory exists in the repository root, use `.venv\Scripts\python.exe` and its `pytest` instead of the global Python interpreter.
-4. Put lazily loaded packages in the `runtime` module separately.
+1. 不要在代码中硬编码环境变量值。
+2. 使用 `bun install` 安装 JS/TS 依赖，使用 `uv sync` 安装 Python 依赖。
+3. 如果仓库根目录下存在 `.venv` 目录，请使用 `.venv\Scripts\python.exe` 及其 `pytest`，而不是全局 Python 解释器。
+4. 将懒加载的包单独放在 `runtime` 模块中。
+5. 解析仓库内路径时，优先基于运行时工作目录 `Path.cwd()` 或显式传入的绝对路径；不要使用 `parent` / `parents` 级联推导仓库根目录。
 
-### Execution and Quality
+### 执行和质量
 
-1. Every time you write a code file, run static analysis.
-2. Every time you modify the webview UI (`src/webview-ui/`), rebuild it with `cd src/webview-ui && ..\\..\\tools\\bun.exe run build` and verify the build succeeds before finishing.
+1. 每次编写代码文件时，都运行静态分析。
+2. 每次修改 Webview UI（`src/webview-ui/`）后，都要执行 `cd src/webview-ui && ..\\..\\tools\\bun.exe run build` 重新编译，并在结束前确认构建成功。
 
-### Code Organization
+### 代码组织
 
-1. If a command in `package.json` becomes too long, move it into an `.mjs` script under `scripts/`.
-2. JavaScript code in the repository must consistently use ESM (ES Modules) with `import`/`export`, avoiding CommonJS.
-3. The frontend directory is responsible for pages, interactions, state, API calls, and a small amount of presentation logic.
-4. The backend directory is responsible for business rules, permissions, databases, order flow, risk control, and core computation.
+1. 如果 `package.json` 中的命令过长，将其移到 `scripts/` 下的 `.mjs` 脚本中。
+2. 仓库中的 JavaScript 代码必须始终使用 ESM（ES 模块）通过 `import`/`export`，避免使用 CommonJS。
+3. 前端目录负责页面、交互、状态、API 调用以及少量展示逻辑。
+4. 前端后端目录负责业务规则、权限、数据库、订单流程、风险控制和核心计算。
 
-### Commit and Directory Conventions
+### 提交和目录规范
 
-1. Git commits should follow a conventional style, be concise, and be grouped logically.
-2. Every created subdirectory must include an `AGENTS.md` file with four sections: "Directory Purpose", "May Modify", "Do Not Modify", and "Conventions".
+1. Git 提交应遵循规范的风格，简明扼要，并按逻辑分组。
+2. 每个源码目录下创建的子目录必须包含一个 `AGENTS.md` 文件，文件中包含四个部分：“目录用途”、“可修改内容”、“不可修改内容”和“规范”。
 
-### Failure Handling
+### 故障处理
 
-1. The program must never fail silently.
+1. 程序绝不能默默失败。
 
-## Local Agent Design Principles
+## 本地代理设计原则
 
-### Core Philosophy
+### 核心理念
 
-1. For tools running on the user's own computer: an honest crash is infinitely better than lying that everything is fine.
+1. 对于在用户自己电脑上运行的工具：诚实地崩溃远比虚假地显示一切正常要好得多。
 
-### Specific Principles
+### 具体原则
 
-1. Fail fast instead of degrading gracefully.
-2. Never fail silently.
-3. Never return fake default values.
-4. Throw errors with as much detail as possible.
-5. Expose problems immediately.
-6. Never hide errors.
+1. 快速失败，而不是优雅降级。
+2. 永不默默失败。
+3. 永不返回虚假的默认值。
+4. 抛出尽可能详细的错误。
+5. 立即暴露问题。
+6. 永不隐藏错误。
 
-## Project-Specific
+## 项目相关
 
-### Goal
+### 目标
 
-1. This is a backend for an AI coding assistant running in the user's local workspace, paired with a frontend VS Code extension to provide IDE-level autonomous coding experience.
+1. 这是一个 AI 编程助手的后端在用户的本地工作区运行，并配合前端 VS Code 扩展以提供 IDE 级的自主编码体验。
 
-### Local Runtime Design
+### 本地运行时设计
 
-1. There are no cloud-service features; there is no graceful degradation, high availability, or multi-tenancy.
-2. Failures must be transparent: throw detailed errors directly and never fail silently.
-3. Be developer-friendly: crash directly when problems occur to make debugging easier.
-4. Zero external dependencies: no database, no message queue, and no cloud services required.
+1. 没有云服务功能；没有优雅降级、高可用性或多租户功能。
+2. 故障必须透明：直接抛出详细错误，绝不悄无声息地失败。
+3. 友好开发者：问题发生时直接崩溃，以便调试。
+4. 零外部依赖：不需要数据库、消息队列或云服务。
 
-### Workspace Safety
+### 工作区安全性
 
-1. All software data must be stored in the independent `${workspace_abs_path}/.boxteam/` directory.
+1. 所有软件数据必须存储在独立的 `${workspace_abs_path}/.boxteam/` 目录中。
 
-### Architecture Principles
+### 架构原则
 
-1. The frontend communicates with FastAPI; `JobService` schedules `AgentExecutionService`, and `AgentExecutionService` drives `DeepAgent` to execute built-in tools.
-2. The event bus pushes real-time updates to the frontend through SSE.
+1. 前端与 FastAPI 通信；`JobService` 调度 `AgentExecutionService`，`AgentExecutionService` 驱动 `DeepAgent` 执行内置工具。
+2. 事件总线通过 SSE 向前端推送实时更新。
 
-### Frontend State Management Principles
+### 前端状态管理原则
 
-1. The backend is the single source of truth (Backend-First State Management).
-2. The frontend does not own the authoritative source of business state; all state changes must go through backend APIs.
-3. On success, replace the frontend state entirely with the full object returned by the backend, rather than partially patching fields.
-4. On failure, proactively re-fetch data from the backend to ensure consistency.
-5. This applies to core business states such as agent switching, session management, and message sending.
+1. 前后端是唯一的真实来源（后端优先的状态管理）。
+2. 前端不拥有业务状态的权威来源；所有状态更改必须通过后端 API。
+3. 成功时，用后端返回的完整对象完全替换前端状态，而不是部分修补字段。
+4. 失败时，主动从后端重新获取数据以确保一致性。
+5. 这适用于核心业务状态，如代理切换、会话管理和消息发送。
 
-### Runtime Instructions
+### 测试与依赖注入分层
 
-1. Use `bun` for JS/TS environments; use `bun install` to install dependencies and `bun start` to start frontend development.
-2. Use `uv` for Python environments; use `uv sync` to install dependencies and `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000` to start the backend server.
-3. API documentation is available at [http://127.0.0.1:8000/api/v1/docs](http://127.0.0.1:8000/api/v1/docs)
+1. 测试文件里统一用 pytest fixture 进行依赖注入。
+2. 应用代码里统一用 FastAPI Depends 进行依赖注入。
 
-### Configuration
+### 运行时说明
 
-1. Use `bun` for all JS/TS-related tooling.
-2. Use `uv` for all Python-related tooling.
+1. 在 JS/TS 环境中使用 `bun`；使用 `bun install` 安装依赖，使用 `bun start` 启动前端开发。
+2. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖，并使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000` 启动后端服务器。
+3. API 文档可访问 http://127.0.0.1:8000/api/v1/docs
 
-## Agent Collaboration
+### 配置
 
-### Collaboration Style
+1. 对所有 JS/TS 相关工具使用 `bun`。
+2. 使用 `uv`适用于所有与 Python 相关的工具。
 
-1. This project is generated with vibe coding assistance throughout. The agent has limited context and intelligence, so if you encounter anything that does not follow the development standards, actively inform the user.
+## 代理协作
 
-### Environment Configuration
+### 协作方式
 
-1. If you encounter environment configuration issues during development, prioritize skipping them, implement the other parts first, and ask the user for configuration at the end; do not make random changes to environment settings.
+1. 本项目在整个过程中由 vibe 编码辅助生成。代理的上下文和智能有限，因此如果遇到任何不符合开发标准的情况，请主动告知用户。
 
-## Additional
+### 环境配置
 
-### Extra Instructions Manually Added by the User Based on Agent Feedback
+1. 如果在开发过程中遇到环境配置问题，请优先跳过它们，先实现其他部分，并在最后向用户询问配置；不要随意更改环境设置。
 
-1. Template example; keep this line when organizing `AGENTS.md`.
+## 其他
+
+### 基于代理反馈由用户手动添加的额外说明
+
+1. 模板示例；在整理 `AGENTS.md` 时请保留此行。

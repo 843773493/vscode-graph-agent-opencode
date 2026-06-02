@@ -1,96 +1,129 @@
 #!/usr/bin/env python3
-"""
-真实 Agent 执行端到端测试。
-运行在独立的 e2e 环境中，依赖真实 KILO API 调用。
-"""
+"""真实 Agent 执行端到端测试。"""
 from __future__ import annotations
 
-import uuid
 import pytest
+import httpx
 
-from app.agents.agent_factory import create_runtime_deep_agent_for_session
+from tests.e2e.utils import wait_for_job_done
 
 
 @pytest.mark.asyncio
-async def test_agent_initialization(
-    config_service,
-    background_task_registry,
-    background_message_bus,
-    job_event_bus,
-    job_service,
-    message_service,
-    session_service,
-):
-    """Test agent can be initialized correctly"""
-    print("\n=== Test 1: Agent Initialization ===")
-
-    agent = create_runtime_deep_agent_for_session(
-        session_id="test_session_init",
-        agent_id="deep_agent",
-        config_service=config_service,
-        background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
-        job_event_bus=job_event_bus,
-        job_service=job_service,
-        message_service=message_service,
-        session_service=session_service,
+async def test_agent_initialization(client: httpx.AsyncClient):
+    """验证后端可通过 HTTP 正常创建会话并接受消息。"""
+    response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Agent Initialization Test"},
     )
-    assert agent is not None
-    print("[OK] Agent initialized successfully")
+    assert response.status_code == 200
+    session_id = response.json()["data"]["session_id"]
+
+    message_response = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "message": {"content": "简单回复一句话：你好，我是测试助手"},
+            "run": {"mode": "single_agent", "agent_id": "deep_agent"},
+        },
+    )
+    assert message_response.status_code == 200
+    job_id = message_response.json()["data"]["job_id"]
+
+    job_data = await wait_for_job_done(client, job_id)
+    assert job_data["status"] in {"completed", "succeeded"}
 
 
 @pytest.mark.asyncio
-async def test_single_step_execution(agent_execution_service):
+async def test_single_step_execution(client: httpx.AsyncClient):
     """Test minimal single step execution"""
-    print("\n=== Test 2: Single Step Execution ===")
-
-    job_id = str(uuid.uuid4())
-    response = await agent_execution_service.run_step(
-        "test_session_001",
-        "简单回复一句话：你好，我是测试助手",
-        agent_id="deep_agent",
-        job_id=job_id
+    response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Single Step Execution Test"},
     )
+    assert response.status_code == 200
+    session_id = response.json()["data"]["session_id"]
 
-    assert response is not None
-    assert response
-    print("[OK] Agent returned response")
-    print(f"Response type: {type(response).__name__}")
-    print(f"Response: {str(response)[:200]}")
+    message_response = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "message": {"content": "简单回复一句话：你好，我是测试助手"},
+            "run": {"mode": "single_agent", "agent_id": "deep_agent"},
+        },
+    )
+    assert message_response.status_code == 200
+    job_id = message_response.json()["data"]["job_id"]
+
+    job_data = await wait_for_job_done(client, job_id)
+    assert job_data["status"] in {"completed", "succeeded"}
+    assert job_data["session_id"] == session_id
 
 
 @pytest.mark.asyncio
-async def test_session_isolation(agent_execution_service):
+async def test_session_isolation(client: httpx.AsyncClient):
     """Test different sessions have isolated state"""
-    print("\n=== Test 3: Session Isolation ===")
-
-    resp_a1 = await agent_execution_service.run_step(
-        "session_a",
-        "记住这个数字：42",
-        agent_id="deep_agent",
-        job_id=str(uuid.uuid4()),
+    create_a_response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Session A Isolation Test"},
     )
+    assert create_a_response.status_code == 200
+    session_a = create_a_response.json()["data"]["session_id"]
 
-    resp_b1 = await agent_execution_service.run_step(
-        "session_b",
-        "记住这个数字：88",
-        agent_id="deep_agent",
-        job_id=str(uuid.uuid4()),
+    create_b_response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Session B Isolation Test"},
     )
+    assert create_b_response.status_code == 200
+    session_b = create_b_response.json()["data"]["session_id"]
 
-    resp_a2 = await agent_execution_service.run_step(
-        "session_a",
-        "我刚才告诉你的数字是什么？",
-        agent_id="deep_agent",
-        job_id=str(uuid.uuid4()),
+    job_a1_response = await client.post(
+        f"/api/v1/sessions/{session_a}/messages",
+        json={
+            "message": {"content": "记住这个数字：42"},
+            "run": {"mode": "single_agent", "agent_id": "deep_agent"},
+        },
     )
+    assert job_a1_response.status_code == 200
+    job_a1 = job_a1_response.json()["data"]["job_id"]
 
-    resp_b2 = await agent_execution_service.run_step(
-        "session_b",
-        "我刚才告诉你的数字是什么？",
-        agent_id="deep_agent",
-        job_id=str(uuid.uuid4()),
+    job_b1_response = await client.post(
+        f"/api/v1/sessions/{session_b}/messages",
+        json={
+            "message": {"content": "记住这个数字：88"},
+            "run": {"mode": "single_agent", "agent_id": "deep_agent"},
+        },
     )
+    assert job_b1_response.status_code == 200
+    job_b1 = job_b1_response.json()["data"]["job_id"]
 
-    assert all(response is not None for response in [resp_a1, resp_b1, resp_a2, resp_b2])
-    print("[OK] Sessions are properly isolated")
+    job_a2_response = await client.post(
+        f"/api/v1/sessions/{session_a}/messages",
+        json={
+            "message": {"content": "我刚才告诉你的数字是什么？"},
+            "run": {"mode": "single_agent", "agent_id": "deep_agent"},
+        },
+    )
+    assert job_a2_response.status_code == 200
+    job_a2 = job_a2_response.json()["data"]["job_id"]
+
+    job_b2_response = await client.post(
+        f"/api/v1/sessions/{session_b}/messages",
+        json={
+            "message": {"content": "我刚才告诉你的数字是什么？"},
+            "run": {"mode": "single_agent", "agent_id": "deep_agent"},
+        },
+    )
+    assert job_b2_response.status_code == 200
+    job_b2 = job_b2_response.json()["data"]["job_id"]
+
+    resp_a1 = await wait_for_job_done(client, job_a1)
+    resp_b1 = await wait_for_job_done(client, job_b1)
+    resp_a2 = await wait_for_job_done(client, job_a2)
+    resp_b2 = await wait_for_job_done(client, job_b2)
+
+    assert all(response["status"] in {"completed", "succeeded"} for response in [resp_a1, resp_b1, resp_a2, resp_b2])
+
+    session_a_messages = await client.get(f"/api/v1/sessions/{session_a}/messages")
+    session_b_messages = await client.get(f"/api/v1/sessions/{session_b}/messages")
+    assert session_a_messages.status_code == 200
+    assert session_b_messages.status_code == 200
+    assert session_a_messages.json()["data"]["items"]
+    assert session_b_messages.json()["data"]["items"]

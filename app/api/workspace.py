@@ -11,6 +11,11 @@ from app.services.workspace_service import WorkspaceService
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
 
+@router.get("/health", summary="健康检查")
+async def health():
+    return {"status": "ok"}
+
+
 @router.get("", response_model=APIResponse[WorkspaceDTO], summary="获取当前工作区信息")
 async def get_workspace(
     _: str = Depends(verify_local_token),

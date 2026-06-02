@@ -56,14 +56,6 @@ class _DummyConfigService:
         }
 
 
-class _DummyAgent:
-    def get_graph(self):
-        class _DummyGraph:
-            nodes = {}
-
-        return _DummyGraph()
-
-
 class _FakeBackgroundMessageBus:
     def __init__(self):
         self.messages = []
