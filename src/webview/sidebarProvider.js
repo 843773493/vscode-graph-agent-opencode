@@ -49,6 +49,11 @@ function writeFileOverwritten(filePath, content) {
   fs.writeFileSync(filePath, content, { encoding: 'utf8' });
 }
 
+function appendFileSync(filePath, content) {
+  ensureDirSync(path.dirname(filePath));
+  fs.appendFileSync(filePath, content, { encoding: 'utf8' });
+}
+
 function getUserLogRoot() {
   return path.join(process.env.USERPROFILE ?? require('node:os').homedir(), '.boxteams', 'logs');
 }
@@ -252,17 +257,23 @@ export class SidebarProvider {
       return;
     }
 
+    this.log(`[${formatLogTimestamp()}] 收到 webview 消息: ${message.type} ${JSON.stringify(message).slice(0, 500)}`);
+
     if (message.type === 'writeWebviewPreview') {
       const targetPath = getWebviewPreviewPath();
-      this.log(`[${formatLogTimestamp()}] 收到 webview preview 写入请求: ${targetPath}`);
-      writeFileOverwritten(targetPath, String(message.content ?? ''));
+      appendFileSync(targetPath, `${String(message.content ?? '')}\n`);
       return;
     }
 
     if (message.type === 'writeRuntimeWebviewUiLog') {
       const targetPath = getRuntimeWebviewUiLogPath();
-      this.log(`收到 webview runtime 日志写入请求: ${targetPath}`);
-      writeFileOverwritten(targetPath, String(message.content ?? ''));
+      appendFileSync(targetPath, `${String(message.content ?? '')}\n`);
+      return;
+    }
+
+    if (message.type === 'clearRuntimeWebviewUiLog') {
+      const targetPath = getRuntimeWebviewUiLogPath();
+      writeFileOverwritten(targetPath, '');
       return;
     }
 
@@ -427,15 +438,20 @@ export class SidebarProvider {
   }
 
   async sendCurrentMessage(content) {
+    this.log(`[${formatLogTimestamp()}] 准备发送消息到后端，contentLength=${String(content ?? '').length}`);
     if (!this.state.currentSession) {
+      this.log(`[${formatLogTimestamp()}] 当前没有会话，先创建默认会话`);
       await this.createNewSession(DEFAULT_SESSION_TITLE);
     }
 
     const ready = await this.ensureBackendReady();
+    this.log(`[${formatLogTimestamp()}] 后端已就绪，port=${ready.port}，sessionId=${this.state.currentSession?.session_id ?? 'null'}`);
     const defaultAgent = this.state.agents.find((agent) => agent.agent_id === DEFAULT_AGENT_ID) ?? this.state.agents[0];
     if (!defaultAgent) {
       throw new Error('未找到可用 agent');
     }
+
+    this.log(`[${formatLogTimestamp()}] 选中 agent: ${defaultAgent.agent_id}`);
 
     const payload = {
       message: { role: 'user', content, attachments: [], metadata: {} },
@@ -454,6 +470,7 @@ export class SidebarProvider {
     };
 
     const accepted = await sendMessage(ready.port, this.state.currentSession.session_id, payload);
+    this.log(`[${formatLogTimestamp()}] 后端 sendMessage 返回: ${JSON.stringify(accepted).slice(0, 1000)}`);
     this.state.activeJob = accepted?.job_id
       ? {
           jobId: accepted.job_id,
@@ -465,6 +482,7 @@ export class SidebarProvider {
       : null;
 
     if (accepted?.job_id) {
+      this.log(`[${formatLogTimestamp()}] job_id 存在，向 webview 发送 messageAccepted，并开始监听 SSE: ${accepted.job_id}`);
       this.postMessageToWebview({
         type: HostToWebviewMessageType.messageAccepted,
         jobId: accepted.job_id,
@@ -479,6 +497,7 @@ export class SidebarProvider {
   }
 
   async observeJobEvents(port, jobId, sessionId) {
+    this.log(`[${formatLogTimestamp()}] 开始监听 job 事件: jobId=${jobId}, sessionId=${sessionId}, port=${port}`);
     const controller = new AbortController();
     this.jobStreams.set(jobId, controller);
 
@@ -486,17 +505,23 @@ export class SidebarProvider {
       await streamJobEvents(port, jobId, {
         signal: controller.signal,
         onEvent: ({ eventType, payload }) => {
+          this.log(`[${formatLogTimestamp()}] 收到 SSE 事件: jobId=${jobId}, sessionId=${sessionId}, eventType=${eventType}, payload=${JSON.stringify(payload).slice(0, 1000)}`);
           this.postMessageToWebview({ type: HostToWebviewMessageType.jobEvent, jobId, sessionId, eventType, payload });
           if (['job_completed', 'job_failed', 'job_cancelled'].includes(eventType)) {
+            this.log(`[${formatLogTimestamp()}] job 结束事件到达: ${eventType}，准备刷新 messages/traces`);
             this.state.activeJob = { ...(this.state.activeJob ?? {}), jobId, sessionId, status: eventType };
             controller.abort();
             this.jobStreams.delete(jobId);
             void Promise.all([this.reloadMessages(), this.reloadTraces()]);
           }
         },
-        onError: (error) => this.postError(error),
+        onError: (error) => {
+          this.log(`[${formatLogTimestamp()}] SSE 监听出错: ${error instanceof Error ? error.message : String(error)}`);
+          this.postError(error);
+        },
       });
     } finally {
+      this.log(`[${formatLogTimestamp()}] 结束监听 job 事件: jobId=${jobId}`);
       this.jobStreams.delete(jobId);
     }
   }
@@ -511,6 +536,7 @@ export class SidebarProvider {
   syncState(status) {
     this.lastStatus = status;
     const { workspaceRoot, workspaceName } = workspaceSummary(this.state.workspace);
+    this.log(`[${formatLogTimestamp()}] syncState: status=${status}, sessionId=${this.state.currentSession?.session_id ?? 'null'}, messages=${this.state.messages.length}, traces=${this.state.traceEvents.length}, activeJob=${this.state.activeJob?.jobId ?? 'null'}`);
     this.lastStatePayload = {
       type: HostToWebviewMessageType.state,
       status,

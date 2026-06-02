@@ -97,5 +97,7 @@ def pytest_collection_modifyitems(items: Sequence[pytest.Item]) -> None:
     for index, item in enumerate(items):
         group_name = f"e2e_group_{index % E2E_MAX_PARALLEL_GROUPS}"
         item.add_marker(pytest.mark.xdist_group(name=group_name))
+        if item.path.name == "test_deepagent_integration_real_model.py" and not os.environ.get("OPENCODE_ZEN_API_KEY"):
+            item.add_marker(pytest.mark.skip(reason="缺少 OPENCODE_ZEN_API_KEY，跳过真实模型测试"))
 
 

@@ -23,6 +23,15 @@ def get_workspace_root() -> Path:
 
     return Path(workspace_root).resolve()
 
+
+def get_runtime_workspace_root() -> Path:
+    """获取当前后端进程应使用的工作区根目录。"""
+    workspace_root = os.environ.get("WORKSPACE_ROOT")
+    if workspace_root:
+        return Path(workspace_root).resolve()
+
+    return get_user_workspace_root()
+
 def get_boxteam_root() -> Path:
     return get_workspace_root() / ".boxteam"
 

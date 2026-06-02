@@ -90,6 +90,9 @@ class AgentExecutionService:
                            f"This is a deliberate design choice following local agent principles: "
                            f"fail fast, never hide errors, never return fake defaults.")
         effective_job_id = job_id
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("[agent_execution_service] run_step begin: session_id=%s job_id=%s agent_id=%s message_length=%s", session_id, effective_job_id, resolved_agent_id, len(message or ""))
         
         # 发布AGENT_START事件
         await bus.publish(
@@ -98,6 +101,7 @@ class AgentExecutionService:
             payload={"message": message, "agent_id": resolved_agent_id},
             agent_id=resolved_agent_id
         )
+        logger.info("[agent_execution_service] AGENT_START published: job_id=%s", effective_job_id)
         
         config = {
             "configurable": {
@@ -114,16 +118,17 @@ class AgentExecutionService:
             payload={"phase": "invoking_agent"},
             agent_id=resolved_agent_id
         )
+        logger.info("[agent_execution_service] AGENT_STEP published: job_id=%s", effective_job_id)
         
         try:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.debug(f"About to invoke agent: session_id={session_id}, message={message[:50]}...")
             
+            logger.info("[agent_execution_service] agent.ainvoke begin: job_id=%s", effective_job_id)
             result = await agent.ainvoke(
                 {"messages": [{"role": "user", "content": message}]},
                 config=config
             )
+            logger.info("[agent_execution_service] agent.ainvoke done: job_id=%s result_keys=%s", effective_job_id, list(result.keys()) if isinstance(result, dict) else type(result).__name__)
             
             logger.debug(f"Agent invoke completed, result messages count: {len(result.get('messages', []))}")
             
@@ -139,6 +144,7 @@ class AgentExecutionService:
                 },
                 agent_id=resolved_agent_id
             )
+            logger.info("[agent_execution_service] AGENT_END published: job_id=%s response_length=%s", effective_job_id, len(str(response_content or "")))
             
             return response_content
 
@@ -150,6 +156,7 @@ class AgentExecutionService:
                 payload={"error": str(e), "phase": "agent_execution"},
                 agent_id=resolved_agent_id
             )
+            logger.exception("[agent_execution_service] ERROR published: job_id=%s error=%s", effective_job_id, str(e))
             raise
 
     def get_for_session(self, session_id: str, agent_id: str | None = None):

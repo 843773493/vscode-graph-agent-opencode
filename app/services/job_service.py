@@ -147,6 +147,14 @@ class JobService:
             job_id: 新创建的Job ID
         """
         job_id = f"job_{uuid.uuid4().hex[:12]}"
+        import logging
+        logging.getLogger(__name__).info(
+            "[job_service] start_job: session_id=%s agent_id=%s message_length=%s job_id=%s",
+            session_id,
+            agent_id,
+            len(message or ""),
+            job_id,
+        )
         
         job = JobState(
             job_id=job_id,
@@ -167,8 +175,10 @@ class JobService:
                 payload={"session_id": session_id, "message": message, "agent_id": agent_id},
             agent_id="job_service"
         )
+        logging.getLogger(__name__).info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", job_id, session_id)
 
         queued, blocked_by = await self._enqueue_or_dispatch(job)
+        logging.getLogger(__name__).info("[job_service] enqueue_or_dispatch result: job_id=%s queued=%s blocked_by=%s", job_id, queued, blocked_by)
         if queued:
             await self._bus.publish(
                 job_id=job_id,
@@ -259,6 +269,9 @@ class JobService:
     async def _run_job_background(self, job_id: str, session_id: str, message: str):
         """后台执行Job的实际逻辑"""
         job = self._jobs[job_id]
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("[job_service] _run_job_background begin: job_id=%s session_id=%s agent_id=%s message_length=%s", job_id, session_id, job.agent_id, len(message or ""))
         
         try:
             job.status = JobStatus.running
@@ -270,6 +283,7 @@ class JobService:
                 payload={},
                 agent_id="job_service"
             )
+            logger.info("[job_service] JOB_STARTED published: job_id=%s", job_id)
             
             runtime_job = JobRuntimeState(
                 job_id=job_id,
@@ -287,6 +301,7 @@ class JobService:
             )
 
             result_text = await self._job_executor.run(runtime_job)
+            logger.info("[job_service] job_executor finished: job_id=%s result_length=%s runtime_status=%s", job_id, len(str(result_text or "")), runtime_job.status)
 
             job.result = runtime_job.result
             job.status = runtime_job.status
@@ -301,6 +316,7 @@ class JobService:
                 payload={"result": result_text},
                 agent_id="job_service"
             )
+            logger.info("[job_service] JOB_COMPLETED published: job_id=%s", job_id)
             
         except asyncio.CancelledError:
             if job.status == JobStatus.paused:
@@ -320,6 +336,7 @@ class JobService:
                     payload={},
                     agent_id="job_service"
                 )
+                logger.info("[job_service] JOB_CANCELLED published: job_id=%s", job_id)
 
             job.updated_at = datetime.now()
             
@@ -334,7 +351,9 @@ class JobService:
                 payload={"error": str(e)},
                 agent_id="job_service"
             )
+            logger.exception("[job_service] JOB_FAILED published: job_id=%s error=%s", job_id, str(e))
         finally:
+            logger.info("[job_service] _run_job_background finally: job_id=%s status=%s", job_id, job.status)
             await self._schedule_next_job_if_needed(job)
 
     def get_active_job_for_session(self, session_id: str) -> JobState | None:

@@ -166,8 +166,8 @@ function EventCard({
 }
 
 function TraceLine({ event, index }: { event: TraceEvent; index: number }): React.ReactNode {
-  const payload = event.data ?? {};
-  const normalized = normalizeTraceData(event.event_type, payload);
+  const payload = event.payload as unknown as Record<string, unknown>;
+  const normalized = normalizeTraceData(event.type, payload);
   const tone = normalized.kind === 'error' ? 'danger' : normalized.kind === 'response' ? 'done' : 'running';
   const content = normalized.content.trim();
   const summary = normalized.summary.trim();
@@ -259,12 +259,15 @@ export default function ChatPanel({ conversations, expandDetails }: ChatPanelPro
       }
 
       for (const event of conversation.events) {
+        const eventType = 'type' in event ? event.type : event.event_type;
+        const payload = 'payload' in event ? (event.payload as Record<string, unknown>) : ((event.data ?? {}) as Record<string, unknown>);
+        const timestamp = 'timestamp' in event ? event.timestamp : null;
         items.push({
           kind: 'trace',
-          id: `${event.event_type}-${event.timestamp ?? items.length}`,
-          eventType: event.event_type,
-          payload: event.data,
-          timestamp: event.timestamp,
+          id: `${eventType}-${timestamp ?? items.length}`,
+          eventType,
+          payload,
+          timestamp,
         });
       }
     }

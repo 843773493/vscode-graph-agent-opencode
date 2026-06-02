@@ -74,6 +74,9 @@ class JobEventBus:
 
         # 根据 event_type 构建具体的事件对象
         event = self._build_event(job_id, event_type, payload, step_id, agent_id)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("[job_event_bus] publish: job_id=%s event_type=%s listener_count=%s payload_keys=%s", job_id, event_type, self._listener_count, list(payload.keys()))
 
         # 存储并广播
         async with self._lock:
@@ -87,6 +90,8 @@ class JobEventBus:
                         queue.put_nowait(event)
                     except asyncio.QueueFull:
                         pass
+
+        logger.info("[job_event_bus] publish done: job_id=%s event_type=%s event_id=%s", job_id, event_type, event.event_id)
 
         return event
 

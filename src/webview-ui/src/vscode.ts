@@ -52,6 +52,14 @@ export function formatLocalLogBlock(kind: string, body: string): string {
   return [`========== ${kind} ==========`,'timestamp=' + new Date().toISOString(), body, ''].join('\n');
 }
 
+export function writeRuntimeLog(message: string): void {
+  postMessage({ type: 'writeRuntimeWebviewUiLog', content: message });
+}
+
+export function clearRuntimeLog(): void {
+  postMessage({ type: 'clearRuntimeWebviewUiLog' } as WebviewToHostMessage);
+}
+
 export function interceptConsoleToMessageSink(sink: (line: string) => void): void {
   if (typeof console === 'undefined') {
     return;

@@ -7,13 +7,13 @@ from typing import Optional
 from app.services.config_service import ConfigService
 from app.schemas.workspace import WorkspaceDTO, WorkspaceContextDTO
 from app.schemas.workspace_index import WorkspaceIndexStatusDTO, WorkspaceIndexRebuildDTO
-from app.core.path_utils import get_workspace_root, get_user_workspace_root
+from app.core.path_utils import get_runtime_workspace_root, get_user_workspace_root
 
 
 class WorkspaceService:
     def __init__(self, *, config_service: ConfigService):
         self.workspace_id = "ws_local"
-        self.root_path = str(get_workspace_root())
+        self.root_path = str(get_runtime_workspace_root())
         self.user_workspace_root = str(get_user_workspace_root())
         self.name = os.path.basename(self.root_path)
         self._config_service = config_service

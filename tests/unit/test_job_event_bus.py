@@ -6,12 +6,6 @@ import pytest
 from app.core.job_event_bus import EventType, JobEventBus
 
 
-# TODO: 本测试文件使用 EventType.LOG 进行基础测试。
-# LOG 事件为预留类型，其 payload 结构未规范化（使用原始 dict）。
-# 未来需定义 LogLevel 枚举、结构化日志字段（如 timestamp、level、message、source 等）
-# 并更新相关测试用例以验证新结构。
-
-
 class TestJobEventBus:
     """测试事件总线功能"""
 
@@ -23,18 +17,18 @@ class TestJobEventBus:
     @pytest.mark.asyncio
     async def test_publish_subscribe_basic(self):
         """测试基本的事件发布订阅"""
-        # TODO: LOG 事件为预留类型，payload 结构未规范化，测试仅验证基础流程
         queue = await self.bus.subscribe(self.job_id)
 
         # 发布事件
-        test_payload = {"message": "test event"}
-        event = await self.bus.publish(self.job_id, EventType.LOG, test_payload)
+        test_payload = {"message": "test event", "agent_id": "test_agent"}
+        event = await self.bus.publish(self.job_id, EventType.AGENT_START, test_payload)
 
         # 验证事件被接收
         received = await asyncio.wait_for(queue.get(), timeout=1.0)
         assert received.event_id == event.event_id
-        assert received.type == EventType.LOG
-        assert received.payload == test_payload
+        assert received.type == EventType.AGENT_START
+        assert received.payload.message == "test event"
+        assert received.payload.agent_id == "test_agent"
         assert received.job_id == self.job_id
 
     @pytest.mark.asyncio
@@ -66,7 +60,7 @@ class TestJobEventBus:
         queue = await self.bus.subscribe(self.job_id)
 
         # 发布第一个事件
-        await self.bus.publish(self.job_id, EventType.LOG, {"msg": "1"})
+        await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": "1"})
         received = await asyncio.wait_for(queue.get(), timeout=1.0)
         assert received is not None
 
@@ -74,7 +68,7 @@ class TestJobEventBus:
         await self.bus.unsubscribe(self.job_id, queue)
 
         # 发布第二个事件，应该收不到
-        await self.bus.publish(self.job_id, EventType.LOG, {"msg": "2"})
+        await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": "2"})
 
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(queue.get(), timeout=0.5)
@@ -89,11 +83,11 @@ class TestJobEventBus:
         queue2 = await self.bus.subscribe(job2)
 
         # 向job1发布事件
-        await self.bus.publish(job1, EventType.LOG, {"for": "job1"})
+        await self.bus.publish(job1, EventType.AGENT_STEP, {"phase": "job1"})
 
         # job1收到，job2收不到
         received1 = await asyncio.wait_for(queue1.get(), timeout=1.0)
-        assert received1.payload["for"] == "job1"
+        assert received1.payload.phase == "job1"
 
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(queue2.get(), timeout=0.5)
@@ -104,15 +98,15 @@ class TestJobEventBus:
         # 发布超过缓冲区大小的事件
         total_events = 1500
         for i in range(total_events):
-            await self.bus.publish(self.job_id, EventType.LOG, {"index": i})
+            await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": str(i)})
 
         # 获取历史事件
         events = await self.bus.list_events(self.job_id, limit=2000)
 
         # 应该只保留最新的1000个事件
         assert len(events) == 1000
-        assert events[0].payload["index"] == 500  # 第一个保留的是第500个
-        assert events[-1].payload["index"] == 1499  # 最后一个是第1499个
+        assert events[0].payload.phase == "500"
+        assert events[-1].payload.phase == "1499"
 
     @pytest.mark.asyncio
     async def test_list_events_after_cursor(self):
@@ -120,7 +114,7 @@ class TestJobEventBus:
         # 发布多个事件
         events = []
         for i in range(10):
-            evt = await self.bus.publish(self.job_id, EventType.LOG, {"index": i})
+            evt = await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": str(i)})
             events.append(evt)
 
         # 获取第5个事件之后的事件
@@ -135,12 +129,12 @@ class TestJobEventBus:
     async def test_list_events_limit(self):
         """测试事件列表限制"""
         for i in range(50):
-            await self.bus.publish(self.job_id, EventType.LOG, {"index": i})
+            await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": str(i)})
 
         result = await self.bus.list_events(self.job_id, limit=10)
         assert len(result) == 10
-        assert result[0].payload["index"] == 40
-        assert result[-1].payload["index"] == 49
+        assert result[0].payload.phase == "40"
+        assert result[-1].payload.phase == "49"
 
     @pytest.mark.asyncio
     async def test_subscriber_queue_full(self):
@@ -149,11 +143,11 @@ class TestJobEventBus:
 
         # 填满队列 (maxsize=100)
         for i in range(100):
-            await self.bus.publish(self.job_id, EventType.LOG, {"index": i})
+            await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": str(i)})
 
         # 发布更多事件，应该不会阻塞，旧事件会被丢弃
-        await self.bus.publish(self.job_id, EventType.LOG, {"index": 100})
-        await self.bus.publish(self.job_id, EventType.LOG, {"index": 101})
+            await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": "100"})
+        await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": "101"})
 
         # 验证队列仍然只有100个事件
         count = 0
@@ -165,16 +159,14 @@ class TestJobEventBus:
 
     @pytest.mark.asyncio
     async def test_event_metadata(self):
-        """测试事件元数据（step_id、agent_id）
-        TODO: TOOL_CALL 为预留事件类型，payload 结构未规范化，测试仅验证元数据传递
-        """
+        """测试事件元数据（step_id、agent_id）"""
         step_id = "step-123"
         agent_id = "agent-456"
 
         event = await self.bus.publish(
             self.job_id,
-            EventType.TOOL_CALL,
-            {"tool": "git"},
+            EventType.AGENT_STEP,
+            {"phase": "tooling"},
             step_id=step_id,
             agent_id=agent_id,
         )
@@ -191,7 +183,7 @@ class TestJobEventBus:
 
         async def publish_events(count: int, start: int):
             for i in range(start, start + count):
-                await self.bus.publish(self.job_id, EventType.LOG, {"i": i})
+                await self.bus.publish(self.job_id, EventType.AGENT_STEP, {"phase": str(i)})
 
         # 启动多个并发发布任务
         tasks = [

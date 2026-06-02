@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from collections.abc import Awaitable
@@ -17,6 +18,32 @@ from pydantic import BaseModel, Field
 
 from app.core.path_utils import get_logs_dir
 from app.core.job_event_bus import EventType, JobEventBus
+from app.schemas.event import (
+    AgentEndEvent,
+    AgentEndPayload,
+    AgentStartEvent,
+    AgentStartPayload,
+    AgentStepEvent,
+    AgentStepPayload,
+    ErrorEvent,
+    ErrorPayload,
+    JobCancelledEvent,
+    JobCancelledPayload,
+    JobCompletedEvent,
+    JobCompletedPayload,
+    JobCreatedEvent,
+    JobCreatedPayload,
+    JobFailedEvent,
+    JobFailedPayload,
+    JobStartedEvent,
+    JobStartedPayload,
+    LLMRequestEvent,
+    LLMRequestPayload,
+    MessageCreatedEvent,
+    MessageCreatedPayload,
+    StatusChangeEvent,
+    StatusChangePayload,
+)
 
 
 # ========== 类型定义 ==========
@@ -306,18 +333,50 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
 
             log_file = logs_dir / f"trace_{session_id}.jsonl"
 
-            timestamp = int(time.time() * 1000)
-            log_data: dict[str, Any] = {
-                "timestamp": timestamp,
-                "event_type": event_type,
-                "data": data,
-            }
+            event = self._build_trace_event(session_id=session_id, event_type=event_type, data=data)
 
             with open(log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_data, ensure_ascii=False, default=str) + "\n")
+                f.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False, default=str) + "\n")
 
         except Exception:
             pass
+
+    def _build_trace_event(self, session_id: str, event_type: str, data: dict[str, Any]):
+        timestamp = datetime.now(timezone.utc)
+        common = {
+            "event_id": f"trace_{session_id}_{int(time.time() * 1000)}",
+            "job_id": str(data.get("job_id") or session_id),
+            "step_id": data.get("step_id") if isinstance(data.get("step_id"), str) else None,
+            "agent_id": data.get("agent_id") if isinstance(data.get("agent_id"), str) else None,
+            "timestamp": timestamp,
+        }
+
+        if event_type == EventType.AGENT_START:
+            return AgentStartEvent(**common, type="agent_start", payload=AgentStartPayload.model_validate(data))
+        if event_type == EventType.AGENT_STEP:
+            return AgentStepEvent(**common, type="agent_step", payload=AgentStepPayload.model_validate(data))
+        if event_type == EventType.AGENT_END:
+            return AgentEndEvent(**common, type="agent_end", payload=AgentEndPayload.model_validate(data))
+        if event_type == EventType.LLM_REQUEST:
+            return LLMRequestEvent(**common, type="llm_request", payload=LLMRequestPayload.model_validate(data))
+        if event_type == EventType.MESSAGE_CREATED:
+            return MessageCreatedEvent(**common, type="message_created", payload=MessageCreatedPayload.model_validate(data))
+        if event_type == EventType.JOB_CREATED:
+            return JobCreatedEvent(**common, type="job_created", payload=JobCreatedPayload.model_validate(data))
+        if event_type == EventType.JOB_STARTED:
+            return JobStartedEvent(**common, type="job_started", payload=JobStartedPayload.model_validate(data))
+        if event_type == EventType.JOB_COMPLETED:
+            return JobCompletedEvent(**common, type="job_completed", payload=JobCompletedPayload.model_validate(data))
+        if event_type == EventType.JOB_CANCELLED:
+            return JobCancelledEvent(**common, type="job_cancelled", payload=JobCancelledPayload.model_validate(data))
+        if event_type == EventType.JOB_FAILED:
+            return JobFailedEvent(**common, type="job_failed", payload=JobFailedPayload.model_validate(data))
+        if event_type == EventType.STATUS_CHANGE:
+            return StatusChangeEvent(**common, type="status_change", payload=StatusChangePayload.model_validate(data))
+        if event_type == EventType.ERROR:
+            return ErrorEvent(**common, type="error", payload=ErrorPayload.model_validate(data))
+
+        raise ValueError(f"Unsupported trace event_type: {event_type!r}")
 
     def before_agent(
         self,

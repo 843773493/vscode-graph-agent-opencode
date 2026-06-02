@@ -42,14 +42,21 @@ class EventService:
         """
         if self.bus is None:
             raise RuntimeError("EventService 未绑定 JobEventBus")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("[event_service] stream_sse subscribe begin: job_id=%s", job_id)
         queue = await self.bus.subscribe(job_id)
+        logger.info("[event_service] stream_sse subscribed: job_id=%s", job_id)
         try:
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30)
+                    logger.info("[event_service] stream_sse event: job_id=%s event_type=%s event_id=%s", job_id, event.type, event.event_id)
                     yield f"event: {event.type}\n"
                     yield f"data: {event.model_dump_json()}\n\n"
                 except asyncio.TimeoutError:
+                    logger.info("[event_service] stream_sse ping: job_id=%s", job_id)
                     yield ": ping\n\n"
         finally:
+            logger.info("[event_service] stream_sse unsubscribe: job_id=%s", job_id)
             await self.bus.unsubscribe(job_id, queue)

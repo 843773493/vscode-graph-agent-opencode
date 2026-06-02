@@ -1,9 +1,14 @@
 from __future__ import annotations
+
 import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Optional
+
+from pydantic import ValidationError
+
+from app.schemas.event import Event, MessageCreatedEvent, JobCreatedEvent, JobStartedEvent, JobCompletedEvent, JobCancelledEvent, JobFailedEvent, StatusChangeEvent, AgentStartEvent, AgentStepEvent, AgentEndEvent, ErrorEvent, LLMRequestEvent
 from app.schemas.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest, SessionListResultDTO, SessionControlResultDTO
 from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir, get_logs_dir
 from app.core.exceptions import NotFoundError
@@ -137,14 +142,14 @@ class SessionService:
         await self.get(session_id)
         return SessionControlResultDTO(session_id=session_id, action=action, status="executed")
 
-    async def list_trace_events(self, session_id: str) -> list[dict[str, Any]]:
+    async def list_trace_events(self, session_id: str) -> list[Event]:
         """Read the stored execution trace for a session."""
         trace_file = get_logs_dir() / "traces" / f"trace_{session_id}.jsonl"
 
         if not trace_file.exists():
             return []
 
-        events: list[dict[str, Any]] = []
+        events: list[Event] = []
         with open(trace_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -156,8 +161,39 @@ class SessionService:
                 except json.JSONDecodeError:
                     continue
 
-                if isinstance(event, dict):
-                    events.append(event)
+                if not isinstance(event, dict):
+                    continue
 
-        events.sort(key=lambda item: item.get("timestamp", 0))
+                try:
+                    event_type = event.get("type")
+                    if event_type == "message_created":
+                        events.append(MessageCreatedEvent.model_validate(event))
+                    elif event_type == "job_created":
+                        events.append(JobCreatedEvent.model_validate(event))
+                    elif event_type == "job_started":
+                        events.append(JobStartedEvent.model_validate(event))
+                    elif event_type == "job_completed":
+                        events.append(JobCompletedEvent.model_validate(event))
+                    elif event_type == "job_cancelled":
+                        events.append(JobCancelledEvent.model_validate(event))
+                    elif event_type == "job_failed":
+                        events.append(JobFailedEvent.model_validate(event))
+                    elif event_type == "status_change":
+                        events.append(StatusChangeEvent.model_validate(event))
+                    elif event_type == "agent_start":
+                        events.append(AgentStartEvent.model_validate(event))
+                    elif event_type == "agent_step":
+                        events.append(AgentStepEvent.model_validate(event))
+                    elif event_type == "agent_end":
+                        events.append(AgentEndEvent.model_validate(event))
+                    elif event_type == "error":
+                        events.append(ErrorEvent.model_validate(event))
+                    elif event_type == "llm_request":
+                        events.append(LLMRequestEvent.model_validate(event))
+                    else:
+                        continue
+                except (ValidationError, ValueError):
+                    continue
+
+        events.sort(key=lambda item: item.timestamp)
         return events

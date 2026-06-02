@@ -391,11 +391,11 @@ export class BackendManager {
     }
 
     this.readyState = 'starting';
-    this.workspaceRoot = getWorkspaceRoot();
-    ensureDefaultWorkspaceLayout(this.workspaceRoot);
     this.hostLogPath = getHostLogPath();
     this.runtimeAppLogPath = getRuntimeAppLogPath();
     this.projectRoot = findProjectRoot();
+    this.workspaceRoot = getWorkspaceRoot() ?? this.projectRoot;
+    ensureDefaultWorkspaceLayout(this.workspaceRoot);
     this.outputChannel.show(true);
     this.resetHostLog();
     this.log(`========== 启动后端进程 ==========`);
@@ -510,10 +510,25 @@ export class BackendManager {
       this.process = null;
       this.readyPromise = null;
       this.readyState = 'idle';
+      this.log(`后端运行时日志尾部: ${this.readRuntimeAppLogTail()}`);
     });
 
     this.log(`>> 等待后端就绪（最多60次，间隔500ms）...`);
     return Promise.race([this.waitForReady(), processFailure]);
+  }
+
+  readRuntimeAppLogTail() {
+    if (!this.runtimeAppLogPath || !fs.existsSync(this.runtimeAppLogPath)) {
+      return '(runtime app log unavailable)';
+    }
+
+    try {
+      const content = fs.readFileSync(this.runtimeAppLogPath, 'utf8');
+      const lines = content.replace(/\r\n/g, '\n').split('\n').filter(Boolean);
+      return lines.slice(-20).join('\\n') || '(empty)';
+    } catch (error) {
+      return `(failed to read runtime app log tail: ${error instanceof Error ? error.message : String(error)})`;
+    }
   }
 
   async waitForReady() {
