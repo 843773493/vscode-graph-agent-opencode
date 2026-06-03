@@ -12,7 +12,7 @@
 - `components/`：页面上的具体区块，比如聊天区、输入框、历史面板
 - `utils/`：纯工具函数，比如 Markdown 渲染、文本格式化
 - `vscode.ts`：Webview 和 VS Code 通信的小封装
-- `types.ts` / `shared.d.ts`：前端类型定义
+- `types/`：前端类型定义
 
 ## 可以修改
 
@@ -20,7 +20,6 @@
 - `hooks.tsx`
 - `main.tsx`
 - `types.ts`
-- `shared.d.ts`
 - `vscode.ts`
 - `components/` 和 `utils/` 下面的前端文件
 - `index.css`
@@ -35,6 +34,6 @@
 
 - 页面状态尽量走 `hooks.tsx`，不要每个组件自己私藏一份业务状态
 - 组件只负责展示和局部交互，通用逻辑放到 hook 或 utils 里
-- 前端消息类型要和 `src/shared/protocol.js` 保持一致
+- 共享类型要和 `src/shared/protocol.js` 保持一致；如果协议已废弃，优先删掉对应前端引用
 - 新增页面能力时，优先先补类型，再补 UI，再补消息流
 - 这里的代码默认运行在浏览器环境，不要依赖文件系统、进程、路径等 Node 能力

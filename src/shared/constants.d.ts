@@ -1,0 +1,10 @@
+export declare const EXTENSION_ID: 'vscode-graph-agent';
+export declare const SIDEBAR_VIEW_ID: 'vscode-graph-agent.sidebar';
+export declare const OPEN_SIDEBAR_COMMAND: 'vscode-graph-agent.openSidebar';
+export declare const OPEN_UI_SHELL_DEBUG_COMMAND: 'graph-agent.openUiShellDebug';
+export declare const DEFAULT_BACKEND_HOST: '127.0.0.1';
+export declare const DEFAULT_BACKEND_PORT: 8000;
+export declare const DEFAULT_BACKEND_TOKEN: 'local-dev-token';
+export declare const API_PREFIX: '/api/v1';
+export declare const DEFAULT_SESSION_TITLE: '新会话';
+export declare const DEFAULT_AGENT_ID: 'default';

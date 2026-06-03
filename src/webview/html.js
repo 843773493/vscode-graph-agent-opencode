@@ -44,6 +44,7 @@ export async function renderSidebarHtml(webview, boot) {
   const distCssUri = boot.distCssUri ?? '';
   const distJsUri = boot.distJsUri ?? '';
   const initialState = {
+    apiPort: boot.apiPort ?? null,
     workspaceRoot: boot.workspaceRoot ?? '',
     workspaceName: boot.workspaceName ?? 'workspace',
     sessions: Array.isArray(boot.sessions) ? boot.sessions : [],

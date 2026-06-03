@@ -58,6 +58,11 @@ app = FastAPI(
 # Add trace middleware
 app.add_middleware(TraceMiddleware)
 
+
+@app.get("/api/v1/health", summary="健康检查")
+async def health():
+    return {"status": "ok"}
+
 app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(runtime_router, prefix="/api/v1")
 app.include_router(sessions_router, prefix="/api/v1")

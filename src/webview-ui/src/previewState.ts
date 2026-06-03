@@ -2,6 +2,7 @@ import type { ActiveJob, AppState, Message, Session, TraceEvent } from './types'
 import { setVsCodeState } from './vscode';
 
 export type PreviewBackendPayload = {
+  apiPort: number | null;
   workspaceRoot: string;
   workspaceName: string;
   session: Session;
@@ -23,6 +24,7 @@ const previewSession: Session = {
 };
 
 export const previewBackendPayload: PreviewBackendPayload = {
+  apiPort: null,
   workspaceRoot: 'F:/code/2026/20260126_agent/vscode-graph-agent-opencode',
   workspaceName: 'vscode-graph-agent-opencode',
   session: previewSession,
@@ -76,7 +78,7 @@ export const previewBackendPayload: PreviewBackendPayload = {
       agent_id: 'preview-agent',
       type: 'agent_end',
       timestamp: now(),
-      payload: { response: { ok: true, changed: true }, agent_id: 'preview-agent' },
+      payload: { final_text: '预览模式任务已完成', agent_id: 'preview-agent' },
     },
   ],
   activeJob: {
@@ -93,6 +95,7 @@ export type PreviewUiState = Partial<AppState>;
 
 export function buildPreviewStateFromBackend(payload: PreviewBackendPayload): PreviewUiState {
   return {
+    apiPort: payload.apiPort ?? null,
     workspaceRoot: payload.workspaceRoot,
     workspaceName: payload.workspaceName,
     sessions: [payload.session],

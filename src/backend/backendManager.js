@@ -394,7 +394,7 @@ export class BackendManager {
     this.hostLogPath = getHostLogPath();
     this.runtimeAppLogPath = getRuntimeAppLogPath();
     this.projectRoot = findProjectRoot();
-    this.workspaceRoot = getWorkspaceRoot() ?? this.projectRoot;
+    this.workspaceRoot = getWorkspaceRoot();
     ensureDefaultWorkspaceLayout(this.workspaceRoot);
     this.outputChannel.show(true);
     this.resetHostLog();
@@ -513,7 +513,7 @@ export class BackendManager {
       this.log(`后端运行时日志尾部: ${this.readRuntimeAppLogTail()}`);
     });
 
-    this.log(`>> 等待后端就绪（最多60次，间隔500ms）...`);
+    this.log(`>> 等待后端就绪（最多60次，间隔1000ms）...`);
     return Promise.race([this.waitForReady(), processFailure]);
   }
 
@@ -532,7 +532,7 @@ export class BackendManager {
   }
 
   async waitForReady() {
-    this.log(`>> 开始后端就绪探测（最多60次，间隔500ms）`);
+    this.log(`>> 开始后端就绪探测（最多60次，间隔1000ms）`);
     for (let attempt = 1; attempt <= 60; attempt += 1) {
       try {
         this.log(`>> 探测尝试 ${attempt}/60: GET /api/v1/workspace`);
@@ -546,9 +546,9 @@ export class BackendManager {
         this.log(`× 探测失败(${attempt}/60): ${errorMsg}`);
         if (attempt >= 5) {
           // 每5次提示一次等待
-          this.log(`>> 继续等待... (已等待 ${(attempt * 0.5).toFixed(1)}秒)`);
+          this.log(`>> 继续等待... (已等待 ${(attempt * 1).toFixed(1)}秒)`);
         }
-        await wait(500);
+        await wait(1000);
       }
     }
 

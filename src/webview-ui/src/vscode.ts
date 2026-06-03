@@ -1,7 +1,4 @@
-import type { WebviewToHostMessage } from './types';
-
 interface VsCodeApi {
-  postMessage: (msg: WebviewToHostMessage) => void;
   getState: <T>() => T | undefined;
   setState: (state: unknown) => void;
 }
@@ -23,18 +20,8 @@ function getVsCodeApi(): VsCodeApi | null {
 
 const vscode = getVsCodeApi();
 
-export function postMessage(msg: WebviewToHostMessage): void {
-  if (vscode) {
-    vscode.postMessage(msg);
-  }
-}
-
 export function getVsCodeState<T>(): T | null {
   return vscode?.getState<T>() ?? null;
-}
-
-export function postError(message: string): void {
-  postMessage({ type: 'error', message });
 }
 
 export function setVsCodeState(state: unknown): void {
@@ -53,11 +40,15 @@ export function formatLocalLogBlock(kind: string, body: string): string {
 }
 
 export function writeRuntimeLog(message: string): void {
-  postMessage({ type: 'writeRuntimeWebviewUiLog', content: message });
+  if (typeof console !== 'undefined') {
+    console.log(message);
+  }
 }
 
 export function clearRuntimeLog(): void {
-  postMessage({ type: 'clearRuntimeWebviewUiLog' } as WebviewToHostMessage);
+  if (typeof console !== 'undefined') {
+    console.clear();
+  }
 }
 
 export function interceptConsoleToMessageSink(sink: (line: string) => void): void {

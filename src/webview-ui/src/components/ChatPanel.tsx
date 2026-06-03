@@ -1,9 +1,9 @@
 import React from 'react';
-import { useAppState } from '../hooks';
+import { useAppState } from '../hooks.tsx';
 import type { ConversationView, Message, TraceEvent } from '../types';
 import { escapeHtml, formatTime } from '../utils/format';
 import { renderMarkdown } from '../utils/markdown';
-import { formatLocalLogBlock, postMessage } from '../vscode';
+import { formatLocalLogBlock } from '../vscode';
 
 function displayTime(value: unknown): string {
   return formatTime(value) || 'now';
@@ -13,10 +13,7 @@ function getRequiredString(payload: Record<string, unknown>, key: string, eventT
   const value = payload[key];
   if (typeof value !== 'string' || value.trim() === '') {
     const detail = JSON.stringify(payload, null, 2);
-    postMessage({
-      type: 'writeRuntimeWebviewUiLog',
-      content: formatLocalLogBlock(`事件结构异常 ${eventType}`, detail),
-    });
+    console.error(formatLocalLogBlock(`事件结构异常 ${eventType}`, detail));
     throw new Error(`事件 ${eventType} 缺少必需字段 ${key}\n完整结构:\n${detail}`);
   }
   return value;
@@ -115,7 +112,7 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
       kind: 'error',
       title: '执行异常',
       summary: errorText,
-      content: String(payload.stack ?? payload.detail ?? payload.message ?? payload.error ?? finalText ?? ''),
+      content: String(payload.stack ?? payload.detail ?? payload.message ?? payload.error ?? errorText ?? ''),
     };
   }
 
@@ -123,7 +120,7 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
     kind: 'system',
     title: `事件 ${eventType}`,
     summary: [toolName ? `工具: ${toolName}` : '', modelName ? `模型: ${modelName}` : ''].filter(Boolean).join(' · '),
-    content: message || resultText || filePath,
+    content: message || resultText || errorText,
   };
 }
 
@@ -281,12 +278,13 @@ export default function ChatPanel({ conversations, expandDetails }: ChatPanelPro
       }
 
       for (const event of conversation.events) {
-        const eventType = 'type' in event ? event.type : event.event_type;
+        const legacyEvent = event as { event_type?: string; data?: Record<string, unknown>; timestamp?: string | null };
+        const eventType = 'type' in event ? event.type : (legacyEvent.event_type ?? 'unknown');
         if (String(eventType).toLowerCase() === 'job_completed') {
           continue;
         }
-        const payload = 'payload' in event ? (event.payload as Record<string, unknown>) : ((event.data ?? {}) as Record<string, unknown>);
-        const timestamp = 'timestamp' in event ? event.timestamp : null;
+        const payload = 'payload' in event ? (event.payload as Record<string, unknown>) : (legacyEvent.data ?? {});
+        const timestamp = 'timestamp' in event ? event.timestamp : legacyEvent.timestamp ?? null;
         items.push({
           kind: 'trace',
           id: `${eventType}-${timestamp ?? items.length}`,
