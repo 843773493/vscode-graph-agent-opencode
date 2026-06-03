@@ -1,89 +1,111 @@
-import path from 'node:path';
+import path from "node:path";
 
 const scriptsDir = import.meta.dir;
-const workspaceRoot = path.resolve(scriptsDir, '..', '..', '..');
-const webRoot = path.resolve(scriptsDir, '..');
-const bunBin = path.resolve(workspaceRoot, 'tools', 'bun.exe');
-const port = '8001';
-const host = '127.0.0.1';
+const workspaceRoot = path.resolve(scriptsDir, "..", "..", "..");
+const webRoot = path.resolve(scriptsDir, "..");
+const bunBin = path.resolve(workspaceRoot, "tools", "bun.exe");
+const port = "8000";
+const host = "127.0.0.1";
+const isWindows = process.platform === "win32";
 
 function spawnDetached(command, args, cwd) {
   return Bun.spawn([command, ...args], {
     cwd,
     env: { ...process.env },
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
   });
+}
+
+function runQuiet(command, args, cwd = workspaceRoot) {
+  const proc = Bun.spawn([command, ...args], {
+    cwd,
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+
+  return proc.exited.catch(() => 0);
 }
 
 async function killWindowsPort() {
-  const proc = Bun.spawn([
-    'pwsh',
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    path.join(scriptsDir, 'kill-port.ps1'),
-    '-Port',
-    port,
-  ], {
-    cwd: workspaceRoot,
-    stdin: 'ignore',
-    stdout: 'ignore',
-    stderr: 'ignore',
-  });
-
-  await proc.exited.catch(() => 0);
-}
-
-async function killUnixPort() {
-  const hasSs = Bun.spawnSync(['sh', '-lc', 'command -v ss >/dev/null 2>&1'], {
-    cwd: workspaceRoot,
-    stdout: 'ignore',
-    stderr: 'ignore',
-  }).exitCode === 0;
-
-  if (hasSs) {
-    const command = `ss -ltnp "sport = :${port}" 2>/dev/null | awk -F'pid=|,' 'NR>1 {print $2}' | sort -u | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done`;
-    const proc = Bun.spawn(['sh', '-lc', command], {
+  const netstat = Bun.spawnSync(
+    ["cmd", "/c", `netstat -ano -p tcp | findstr :${port}`],
+    {
       cwd: workspaceRoot,
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
+      stdout: "pipe",
+      stderr: "ignore",
+    },
+  );
 
-    await proc.exited.catch(() => 0);
+  if (netstat.exitCode !== 0) {
     return;
   }
 
-  const hasLsof = Bun.spawnSync(['sh', '-lc', 'command -v lsof >/dev/null 2>&1'], {
-    cwd: workspaceRoot,
-    stdout: 'ignore',
-    stderr: 'ignore',
-  }).exitCode === 0;
+  const output = new TextDecoder().decode(netstat.stdout).trim();
+  if (!output) {
+    return;
+  }
 
-  if (hasLsof) {
-    const command = `lsof -ti tcp:${port} 2>/dev/null | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done`;
-    const proc = Bun.spawn(['sh', '-lc', command], {
-      cwd: workspaceRoot,
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
+  const pids = new Set();
+  for (const line of output.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.includes(`:${port}`) || !trimmed.includes('LISTENING')) {
+      continue;
+    }
 
-    await proc.exited.catch(() => 0);
+    const columns = trimmed.split(/\s+/);
+    const pid = columns.at(-1);
+    if (pid && /^\d+$/.test(pid)) {
+      pids.add(pid);
+    }
+  }
+
+  for (const pid of pids) {
+    await runQuiet("cmd", ["/c", "taskkill", "/F", "/PID", pid]);
   }
 }
 
-if (process.platform === 'win32') {
-  await killWindowsPort();
-} else {
-  await killUnixPort();
+async function killUnixPort() {
+  const hasSs =
+    Bun.spawnSync(["sh", "-lc", "command -v ss >/dev/null 2>&1"], {
+      cwd: workspaceRoot,
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exitCode === 0;
+
+  if (hasSs) {
+    const command = `ss -ltnp "sport = :${port}" 2>/dev/null | awk -F'pid=|,' 'NR>1 {print $2}' | sort -u | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done`;
+    await runQuiet("sh", ["-lc", command]);
+    return;
+  }
+
+  const hasLsof =
+    Bun.spawnSync(["sh", "-lc", "command -v lsof >/dev/null 2>&1"], {
+      cwd: workspaceRoot,
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exitCode === 0;
+
+  if (hasLsof) {
+    const command = `lsof -ti tcp:${port} 2>/dev/null | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done`;
+    await runQuiet("sh", ["-lc", command]);
+  }
 }
 
-const frontend = spawnDetached(bunBin, ['x', 'vite', '--host', '127.0.0.1'], webRoot);
-const backend = spawnDetached('uv', ['run', 'uvicorn', 'app.main:app', '--host', host, '--port', port], workspaceRoot);
+await (isWindows ? killWindowsPort() : killUnixPort());
+
+const frontend = spawnDetached(
+  bunBin,
+  ["x", "vite", "--host", "127.0.0.1"],
+  webRoot,
+);
+const backend = spawnDetached(
+  "uv",
+  ["run", "uvicorn", "app.main:app", "--host", host, "--port", port],
+  workspaceRoot,
+);
 
 const stopBoth = async (exitCode) => {
   const processes = [frontend, backend];
@@ -97,17 +119,21 @@ const stopBoth = async (exitCode) => {
   process.exit(exitCode);
 };
 
-frontend.exited.then(code => stopBoth(code)).catch(error => {
-  console.error(error);
-  stopBoth(1);
-});
+frontend.exited
+  .then((code) => stopBoth(code))
+  .catch((error) => {
+    console.error(error);
+    void stopBoth(1);
+  });
 
-backend.exited.then(code => stopBoth(code)).catch(error => {
-  console.error(error);
-  stopBoth(1);
-});
+backend.exited
+  .then((code) => stopBoth(code))
+  .catch((error) => {
+    console.error(error);
+    void stopBoth(1);
+  });
 
-process.on('SIGINT', () => void stopBoth(130));
-process.on('SIGTERM', () => void stopBoth(143));
+process.on("SIGINT", () => void stopBoth(130));
+process.on("SIGTERM", () => void stopBoth(143));
 
 await Promise.race([frontend.exited, backend.exited]);

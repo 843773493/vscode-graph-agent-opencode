@@ -1,9 +1,9 @@
-$ErrorActionPreference = 'SilentlyContinue'
-
 param(
   [Parameter(Mandatory = $true)]
   [int]$Port
 )
+
+$ErrorActionPreference = 'SilentlyContinue'
 
 $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if (-not $connections) {
