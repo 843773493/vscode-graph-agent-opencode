@@ -309,14 +309,6 @@ class JobService:
             job.error_message = runtime_job.error_message
             job.ended_at = runtime_job.ended_at
             job.updated_at = runtime_job.updated_at
-
-            await self._bus.publish(
-                job_id=job_id,
-                event_type=EventType.JOB_COMPLETED,
-                payload={"result": result_text},
-                agent_id="job_service"
-            )
-            logger.info("[job_service] JOB_COMPLETED published: job_id=%s", job_id)
             
         except asyncio.CancelledError:
             if job.status == JobStatus.paused:

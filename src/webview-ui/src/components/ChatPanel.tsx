@@ -3,9 +3,28 @@ import { useAppState } from '../hooks';
 import type { ConversationView, Message, TraceEvent } from '../types';
 import { escapeHtml, formatTime } from '../utils/format';
 import { renderMarkdown } from '../utils/markdown';
+import { formatLocalLogBlock, postMessage } from '../vscode';
 
 function displayTime(value: unknown): string {
   return formatTime(value) || 'now';
+}
+
+function getRequiredString(payload: Record<string, unknown>, key: string, eventType: string): string {
+  const value = payload[key];
+  if (typeof value !== 'string' || value.trim() === '') {
+    const detail = JSON.stringify(payload, null, 2);
+    postMessage({
+      type: 'writeRuntimeWebviewUiLog',
+      content: formatLocalLogBlock(`事件结构异常 ${eventType}`, detail),
+    });
+    throw new Error(`事件 ${eventType} 缺少必需字段 ${key}\n完整结构:\n${detail}`);
+  }
+  return value;
+}
+
+function getOptionalString(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  return typeof value === 'string' ? value : '';
 }
 
 function normalizeAssistantPayload(content: string): { thought: string; response: string; rawText: string; rawJson: { thought?: string; response?: string } | null } {
@@ -20,7 +39,7 @@ function normalizeAssistantPayload(content: string): { thought: string; response
     const response = String(parsed?.response ?? '').trim();
 
     if (!thought && !response) {
-      throw new Error('assistant content 缺少 thought/response 字段');
+      return { thought: '', response: trimmed, rawText: trimmed, rawJson: null };
     }
 
     return { thought, response, rawText: trimmed, rawJson: { thought, response } };
@@ -40,11 +59,12 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
   content: string;
 } {
   const type = String(eventType ?? '').toLowerCase();
-  const toolName = String(payload.tool_name ?? '');
-  const modelName = String(payload.model ?? '');
-  const filePath = String(payload.path ?? '');
-  const message = String(payload.message ?? '');
-  const resultText = String(payload.result ?? '');
+  const agentEndPayload = payload.payload && typeof payload.payload === 'object' ? (payload.payload as Record<string, unknown>) : payload;
+  const message = getOptionalString(payload, 'message');
+  const resultText = getOptionalString(payload, 'result');
+  const toolName = getOptionalString(payload, 'tool_name');
+  const modelName = getOptionalString(payload, 'model');
+  const errorText = String(payload.error ?? payload.message ?? payload.detail ?? '').trim();
 
   if (type === 'agent_start' || type === 'agent_step' || type === 'llm_request' || type === 'model_call') {
     if (type === 'model_call') {
@@ -60,30 +80,33 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
   }
 
   if (type === 'tool_call_start') {
+    const requiredToolName = getRequiredString(payload, 'tool_name', type);
     return {
       kind: 'tool_call',
-      title: `调用工具 ${toolName}`,
+      title: `调用工具 ${requiredToolName}`,
       summary: String(payload.phase ?? ''),
-      content: message || resultText || filePath,
+      content: message || resultText || getRequiredString(payload, 'path', type),
     };
   }
 
   if (type === 'tool_call_end' || type === 'file_write') {
+    const requiredToolName = type === 'tool_call_end' ? getRequiredString(payload, 'tool_name', type) : '';
+    const requiredPath = type === 'file_write' ? getRequiredString(payload, 'path', type) : '';
     return {
       kind: 'tool_result',
-      title: type === 'tool_call_end' ? `工具结果 ${toolName}` : `文件写入 ${filePath || 'unknown path'}`,
+      title: type === 'tool_call_end' ? `工具结果 ${requiredToolName}` : `文件写入 ${requiredPath}`,
       summary: type === 'tool_call_end' ? '工具执行完成' : '文件已写入',
-      content: resultText || message || filePath,
+      content: resultText || message || requiredPath,
     };
   }
 
   if (type === 'agent_end') {
-    const finalText = String(payload.final_text ?? '').trim();
+    const finalTextValue = getRequiredString(agentEndPayload, 'final_text', type);
     return {
       kind: 'response',
       title: '最终响应',
-      summary: `长度: ${String(payload.response_length)}`,
-      content: finalText,
+      summary: `长度: ${finalTextValue.trim().length}`,
+      content: finalTextValue.trim(),
     };
   }
 
@@ -91,8 +114,8 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
     return {
       kind: 'error',
       title: '执行异常',
-      summary: String(payload.error ?? ''),
-      content: String(payload.stack ?? payload.detail ?? payload.message ?? payload.error ?? ''),
+      summary: errorText,
+      content: String(payload.stack ?? payload.detail ?? payload.message ?? payload.error ?? finalText ?? ''),
     };
   }
 
@@ -171,7 +194,6 @@ function TraceLine({ event, index }: { event: TraceEvent; index: number }): Reac
   const tone = normalized.kind === 'error' ? 'danger' : normalized.kind === 'response' ? 'done' : 'running';
   const content = normalized.content.trim();
   const summary = normalized.summary.trim();
-  const [open, setOpen] = React.useState(false);
   const collapsedText = content || summary || '（无可读内容）';
 
   return (
@@ -260,6 +282,9 @@ export default function ChatPanel({ conversations, expandDetails }: ChatPanelPro
 
       for (const event of conversation.events) {
         const eventType = 'type' in event ? event.type : event.event_type;
+        if (String(eventType).toLowerCase() === 'job_completed') {
+          continue;
+        }
         const payload = 'payload' in event ? (event.payload as Record<string, unknown>) : ((event.data ?? {}) as Record<string, unknown>);
         const timestamp = 'timestamp' in event ? event.timestamp : null;
         items.push({

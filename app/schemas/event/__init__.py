@@ -83,7 +83,7 @@ class AgentStepPayload(BaseModel):
 
 class AgentEndPayload(BaseModel):
     """AGENT_END 事件的 payload"""
-    response: Any
+    final_text: str = ""
     agent_id: str
 
 

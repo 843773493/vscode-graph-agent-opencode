@@ -84,7 +84,7 @@ interface AgentStepPayload {
 }
 
 interface AgentEndPayload {
-  response: unknown;
+  final_text: string;
   agent_id: string;
 }
 

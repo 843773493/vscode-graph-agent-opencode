@@ -257,11 +257,13 @@ export class SidebarProvider {
       return;
     }
 
-    this.log(`[${formatLogTimestamp()}] 收到 webview 消息: ${message.type} ${JSON.stringify(message).slice(0, 500)}`);
+    if (message.type !== 'writeWebviewPreview') {
+      this.log(`[${formatLogTimestamp()}] 收到 webview 消息: ${message.type} ${JSON.stringify(message).slice(0, 500)}`);
+    }
 
     if (message.type === 'writeWebviewPreview') {
       const targetPath = getWebviewPreviewPath();
-      appendFileSync(targetPath, `${String(message.content ?? '')}\n`);
+      writeFileOverwritten(targetPath, String(message.content ?? ''));
       return;
     }
 

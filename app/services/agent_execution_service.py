@@ -53,6 +53,23 @@ class AgentExecutionService:
         
         self._agent_cache[cache_key] = agent
         return agent
+
+    def _extract_final_text(self, result: Dict[str, Any]) -> str:
+        messages = result.get("messages", []) if isinstance(result, dict) else []
+        for message in reversed(messages):
+            content = getattr(message, "content", None)
+            if content is None:
+                continue
+            if isinstance(content, list):
+                content = "".join(str(part) for part in content)
+            text = str(content).strip()
+            if text:
+                return text
+        raise RuntimeError(
+            "Agent 执行完成但没有提取到任何最终文本。"
+            f" session_id={result.get('session_id') if isinstance(result, dict) else 'unknown'}"
+            " 这通常表示最终消息不是 assistant 文本，或者消息链路中出现了空响应。"
+        )
     
     async def run_step(self, session_id: str, message: str, agent_id: str | None = None, job_id: str | None = None) -> str:
         """
@@ -132,14 +149,14 @@ class AgentExecutionService:
             
             logger.debug(f"Agent invoke completed, result messages count: {len(result.get('messages', []))}")
             
-            response_content = result["messages"][-1].content
+            response_content = self._extract_final_text(result)
             
             # 发布AGENT_END事件
             await bus.publish(
                 job_id=effective_job_id,
                 event_type=EventType.AGENT_END,
                 payload={
-                    "response": result,
+                    "final_text": response_content,
                     "agent_id": resolved_agent_id,
                 },
                 agent_id=resolved_agent_id
