@@ -4,9 +4,12 @@ const scriptsDir = import.meta.dir;
 const workspaceRoot = path.resolve(scriptsDir, "..", "..", "..");
 const webRoot = path.resolve(scriptsDir, "..");
 const bunBin = path.resolve(workspaceRoot, "tools", "bun.exe");
+const pythonBin = path.resolve(workspaceRoot, ".venv", "Scripts", "python.exe");
 const port = "8000";
 const host = "127.0.0.1";
 const isWindows = process.platform === "win32";
+const frontendInspectPort = "9229";
+const backendDebugPort = "5678";
 
 function spawnDetached(command, args, cwd) {
   return Bun.spawn([command, ...args], {
@@ -30,80 +33,88 @@ function runQuiet(command, args, cwd = workspaceRoot) {
 }
 
 async function killWindowsPort() {
-  const netstat = Bun.spawnSync(
-    ["cmd", "/c", `netstat -ano -p tcp | findstr :${port}`],
-    {
-      cwd: workspaceRoot,
-      stdout: "pipe",
-      stderr: "ignore",
-    },
-  );
+  // Run netstat directly (no shell) and parse output to find PIDs
+  const netstat = Bun.spawnSync(["netstat", "-ano", "-p", "tcp"], {
+    cwd: workspaceRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 
   if (netstat.exitCode !== 0) {
     return;
   }
 
   const output = new TextDecoder().decode(netstat.stdout).trim();
-  if (!output) {
-    return;
-  }
+  if (!output) return;
 
   const pids = new Set();
   for (const line of output.split(/\r?\n/)) {
     const trimmed = line.trim();
-    if (!trimmed || !trimmed.includes(`:${port}`) || !trimmed.includes('LISTENING')) {
-      continue;
-    }
-
-    const columns = trimmed.split(/\s+/);
-    const pid = columns.at(-1);
-    if (pid && /^\d+$/.test(pid)) {
-      pids.add(pid);
-    }
+    if (!trimmed) continue;
+    // netstat columns: Proto Local Address Foreign Address State PID
+    if (!trimmed.includes(`:${port}`) || !/LISTENING/i.test(trimmed)) continue;
+    const cols = trimmed.split(/\s+/);
+    const pid = cols.at(-1);
+    if (pid && /^\d+$/.test(pid)) pids.add(pid);
   }
 
   for (const pid of pids) {
-    await runQuiet("cmd", ["/c", "taskkill", "/F", "/PID", pid]);
+    Bun.spawnSync(["taskkill", "/F", "/PID", pid], { cwd: workspaceRoot, stdout: "ignore", stderr: "ignore" });
   }
 }
 
 async function killUnixPort() {
-  const hasSs =
-    Bun.spawnSync(["sh", "-lc", "command -v ss >/dev/null 2>&1"], {
-      cwd: workspaceRoot,
-      stdout: "ignore",
-      stderr: "ignore",
-    }).exitCode === 0;
-
-  if (hasSs) {
-    const command = `ss -ltnp "sport = :${port}" 2>/dev/null | awk -F'pid=|,' 'NR>1 {print $2}' | sort -u | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done`;
-    await runQuiet("sh", ["-lc", command]);
+  // Try ss, then lsof, then netstat parsing — all invoked directly without a shell
+  const ss = Bun.spawnSync(["ss", "-ltnp"], { cwd: workspaceRoot, stdout: "pipe", stderr: "ignore" });
+  if (ss.exitCode === 0) {
+    const out = new TextDecoder().decode(ss.stdout).trim();
+    const pids = new Set();
+    for (const line of out.split(/\r?\n/)) {
+      if (!line.includes(`:${port}`)) continue;
+      // try to extract pid=NUMBER
+      const m = line.match(/pid=(\d+)/);
+      if (m) pids.add(m[1]);
+    }
+    for (const pid of pids) {
+      Bun.spawnSync(["kill", "-9", pid], { cwd: workspaceRoot, stdout: "ignore", stderr: "ignore" });
+    }
     return;
   }
 
-  const hasLsof =
-    Bun.spawnSync(["sh", "-lc", "command -v lsof >/dev/null 2>&1"], {
-      cwd: workspaceRoot,
-      stdout: "ignore",
-      stderr: "ignore",
-    }).exitCode === 0;
-
-  if (hasLsof) {
-    const command = `lsof -ti tcp:${port} 2>/dev/null | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done`;
-    await runQuiet("sh", ["-lc", command]);
+  const lsof = Bun.spawnSync(["lsof", "-ti", `tcp:${port}`], { cwd: workspaceRoot, stdout: "pipe", stderr: "ignore" });
+  if (lsof.exitCode === 0) {
+    const out = new TextDecoder().decode(lsof.stdout).trim();
+    if (out) {
+      for (const pid of out.split(/\r?\n/)) {
+        if (/^\d+$/.test(pid)) Bun.spawnSync(["kill", "-9", pid], { cwd: workspaceRoot, stdout: "ignore", stderr: "ignore" });
+      }
+    }
+    return;
   }
+
+  // fallback: try netstat -nlp and parse PID column (may require privileges)
+  const netstat = Bun.spawnSync(["netstat", "-nlp", "tcp"], { cwd: workspaceRoot, stdout: "pipe", stderr: "ignore" });
+  if (netstat.exitCode !== 0) return;
+  const out = new TextDecoder().decode(netstat.stdout).trim();
+  const pids = new Set();
+  for (const line of out.split(/\r?\n/)) {
+    if (!line.includes(`:${port}`)) continue;
+    const m = line.match(/\b(\d+)\/(?:\S+)/); // PID/Program
+    if (m) pids.add(m[1]);
+  }
+  for (const pid of pids) Bun.spawnSync(["kill", "-9", pid], { cwd: workspaceRoot, stdout: "ignore", stderr: "ignore" });
 }
 
 await (isWindows ? killWindowsPort() : killUnixPort());
 
 const frontend = spawnDetached(
   bunBin,
-  ["x", "vite", "--host", "127.0.0.1"],
+  [`--inspect=${host}:${frontendInspectPort}`, "x", "vite", "--host", host],
   webRoot,
 );
 const backend = spawnDetached(
-  "uv",
-  ["run", "uvicorn", "app.main:app", "--host", host, "--port", port],
+  pythonBin,
+  ["-m", "debugpy", "--listen", `${host}:${backendDebugPort}`, "-m", "uvicorn", "app.main:app", "--host", host, "--port", port],
   workspaceRoot,
 );
 
