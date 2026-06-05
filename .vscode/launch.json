@@ -22,6 +22,26 @@
             ]
         },
         {
+            "name": "Open Browser 8001",
+            "type": "msedge",
+            "request": "launch",
+            "url": "http://127.0.0.1:8001",
+            "webRoot": "${workspaceFolder}/src/web",
+            "preLaunchTask": "dev:web",
+            "userDataDir": "${workspaceFolder}/.vscode/.edge-debug-profile"
+        },
+        {
+            "name": "Attach Backend 8002",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "127.0.0.1",
+                "port": 8002
+            },
+            "justMyCode": false,
+            "preLaunchTask": "dev:web"
+        },
+        {
             "name": "Run UI Shell Debug",
             "type": "extensionHost",
             "request": "launch",
@@ -43,6 +63,16 @@
             "skipFiles": [
                 "<node_internals>/**"
             ]
+        }
+    ],
+    "compounds": [
+        {
+            "name": "F5: Frontend + Backend",
+            "configurations": [
+                "Open Browser 8001",
+                "Attach Backend 8002"
+            ],
+            "stopAll": true
         }
     ]
 }

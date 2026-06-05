@@ -5,6 +5,13 @@
   "version": "0.0.1",
   "publisher": "local",
   "type": "module",
+  "scripts": {
+    "dev:backend": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
+    "test:extension": "vscode-test",
+    "dev": "tools/bun run scripts/dev.mjs",
+    "dev:web": "tools/bun run scripts/dev.mjs",
+    "build:webview-ui": "tools/bun run build --cwd src/webview-ui"
+  },
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -268,10 +275,6 @@
         }
       }
     }
-  },
-  "scripts": {
-    "dev:backend": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
-    "test:extension": "vscode-test"
   },
   "dependencies": {
     "@vscode/webview-ui-toolkit": "^1.4.0"

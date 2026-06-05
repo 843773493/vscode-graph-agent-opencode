@@ -10,6 +10,27 @@
         "cwd": "${workspaceFolder}/src/webview-ui"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "dev:web",
+      "type": "shell",
+      "command": "${workspaceFolder}\\tools\\bun.exe",
+      "args": ["run", "dev:web"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "dev:web",
+        "pattern": {
+          "regexp": "^(?!)"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[dev:web\\]",
+          "endsPattern": "^\\[dev:web\\] backend ready: http://127\\.0\\.0\\.1:8000/api/v1/health$"
+        }
+      }
     }
   ]
 }

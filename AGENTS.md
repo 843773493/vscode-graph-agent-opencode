@@ -24,7 +24,7 @@
 2. 使用 `bun install` 安装 JS/TS 依赖，使用 `uv sync` 安装 Python 依赖。
 3. 如果仓库根目录下存在 `.venv` 目录，请使用 `.venv\Scripts\python.exe` 及其 `pytest`，而不是全局 Python 解释器。
 4. 将懒加载的包单独放在 `runtime` 模块中。
-5. 解析仓库内路径时，优先基于运行时工作目录 `Path.cwd()` 或显式传入的绝对路径；不要使用 `parent` / `parents` 级联推导仓库根目录。
+5. 解析仓库内路径时，默认以项目根目录为起点，优先基于运行时工作目录 `Path.cwd()` 或显式传入的绝对路径，从根目录向下查找各个文件；不要使用 `parent` / `parents` 这类方式通过文件位置向上推导仓库根目录。
 
 ### 执行和质量
 

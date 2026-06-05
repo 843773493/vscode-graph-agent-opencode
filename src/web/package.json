@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "tools/bun run scripts/dev.mjs",
+    "dev": "vite --host 127.0.0.1 --port 8001 --strictPort",
     "preview": "vite preview"
   },
   "dependencies": {
