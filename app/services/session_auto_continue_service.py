@@ -8,9 +8,9 @@ from typing import Optional
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
 from app.core.background_message_bus import BackgroundMessageBus
-from app.schemas.common import MessageRole, RunMode
-from app.schemas.message import MessageCreateRequest, MessageRunRequest, RunOptions
-from app.schemas.session import SessionAutoContinueStatusDTO
+from app.schemas.public_v2.common import MessageRole, RunMode
+from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions
+from app.schemas.public_v2.session import SessionAutoContinueStatusDTO
 from app.services.config_service import ConfigService
 from app.services.job_service import JobService
 from app.services.message_service import MessageService

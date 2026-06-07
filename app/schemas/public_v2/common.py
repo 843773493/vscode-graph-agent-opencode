@@ -1,7 +1,10 @@
+from __future__ import annotations
+
+from datetime import datetime
 from enum import Enum
 from typing import Generic, Optional, TypeVar
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 T = TypeVar("T")
 
@@ -75,3 +78,13 @@ class CursorPage(BaseModel, Generic[T]):
 class LogSnapshotResultDTO(BaseModel):
     html_path: str
     meta_path: str
+
+
+class EntityRef(BaseModel):
+    id: str
+    name: Optional[str] = None
+
+
+class TimestampedDTO(BaseModel):
+    created_at: datetime
+    updated_at: datetime

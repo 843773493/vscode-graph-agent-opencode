@@ -107,7 +107,7 @@ def client_base_url(e2e_backend_port: int) -> str:
     return f"http://127.0.0.1:{e2e_backend_port}"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 async def client(
     e2e_backend_process: subprocess.Popen[str],
     client_base_url: str,
@@ -132,7 +132,7 @@ def pytest_collection_modifyitems(items: Sequence[pytest.Item]) -> None:
 
 def _wait_for_backend_ready(port: int, process: subprocess.Popen[str]) -> None:
     deadline = time.monotonic() + E2E_READY_TIMEOUT_SECONDS
-    url = f"http://127.0.0.1:{port}/api/v1/workspace/health"
+    url = f"http://127.0.0.1:{port}/api/v1/health"
 
     while time.monotonic() < deadline:
         if process.poll() is not None:

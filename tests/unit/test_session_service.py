@@ -7,7 +7,7 @@ import pytest
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, get_session_path
 from app.schemas.event import AgentStartEvent
-from app.schemas.session import SessionCreateRequest, SessionUpdateRequest
+from app.schemas.public_v2.session import SessionCreateRequest, SessionUpdateRequest
 from app.services.config_service import ConfigService
 from app.services.session_service import SessionService
 

@@ -4,6 +4,7 @@ from typing import AsyncGenerator
 
 from app.schemas.event import Event
 from app.core.job_event_bus import JobEventBus
+from app.services.observation_event_mapper import map_event_to_observation_sse
 
 
 class EventService:
@@ -52,8 +53,9 @@ class EventService:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30)
                     logger.info("[event_service] stream_sse event: job_id=%s event_type=%s event_id=%s", job_id, event.type, event.event_id)
-                    yield f"event: {event.type}\n"
-                    yield f"data: {event.model_dump_json()}\n\n"
+                    observation = map_event_to_observation_sse(event)
+                    yield f"event: {observation.event.type}\n"
+                    yield f"data: {observation.model_dump_json()}\n\n"
                 except asyncio.TimeoutError:
                     logger.info("[event_service] stream_sse ping: job_id=%s", job_id)
                     yield ": ping\n\n"

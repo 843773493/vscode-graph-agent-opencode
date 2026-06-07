@@ -9,9 +9,9 @@ from app.services.config_service import ConfigService
 from app.services.job_service import JobService
 from app.services.session_service import SessionService
 from app.core.job_event_bus import EventType, JobEventBus
-from app.schemas.message import MessageDTO, MessageCreateRequest, MessageRunRequest, MessageRunAccepted
-from app.schemas.job import JobStatus
-from app.schemas.common import MessageRole, CursorPage
+from app.schemas.public_v2.message import MessageDTO, MessageCreateRequest, MessageRunRequest, MessageRunAccepted
+from app.schemas.public_v2.job import JobStatus
+from app.schemas.public_v2.common import MessageRole, CursorPage
 from app.core.path_utils import get_session_path
 
 
@@ -50,6 +50,7 @@ class MessageService:
         return message
 
     async def append_assistant_message(self, session_id: str, content: str, metadata: dict | None = None) -> MessageDTO:
+        now = datetime.now()
         message = MessageDTO(
             message_id=f"msg_{uuid.uuid4().hex[:12]}",
             session_id=session_id,
@@ -57,13 +58,21 @@ class MessageService:
             content=content,
             attachments=[],
             metadata=metadata or {},
-            created_at=datetime.now(),
+            created_at=now,
+            updated_at=now,
         )
         return self._append_message(message)
     
     async def list(self, session_id: str, limit: int = 50, cursor: str | None = None) -> CursorPage[MessageDTO]:
-        items = self._read_messages(session_id)
-        return CursorPage(items=items[:limit], next_cursor=None, has_more=len(items) > limit)
+        import logging
+
+        logger = logging.getLogger(__name__)
+        try:
+            items = self._read_messages(session_id)
+            return CursorPage(items=items[:limit], next_cursor=None, has_more=len(items) > limit)
+        except Exception as e:
+            logger.exception("读取消息列表失败: session_id=%s error=%s", session_id, e)
+            raise
 
     async def get(self, session_id: str, message_id: str) -> MessageDTO:
         for message in self._read_messages(session_id):
@@ -73,6 +82,7 @@ class MessageService:
         raise ValueError(f"Message {message_id} not found in session {session_id}")
 
     async def create(self, session_id: str, message_create: MessageCreateRequest) -> MessageDTO:
+        now = datetime.now()
         message = MessageDTO(
             message_id=f"msg_{uuid.uuid4().hex[:12]}",
             session_id=session_id,
@@ -80,7 +90,8 @@ class MessageService:
             content=message_create.content,
             attachments=message_create.attachments,
             metadata=message_create.metadata,
-            created_at=datetime.now(),
+            created_at=now,
+            updated_at=now,
         )
         return self._append_message(message)
 

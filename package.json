@@ -8,9 +8,10 @@
   "scripts": {
     "dev:backend": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
     "test:extension": "vscode-test",
-    "dev": "tools/bun run scripts/dev.mjs",
-    "dev:web": "tools/bun run scripts/dev.mjs",
-    "build:webview-ui": "tools/bun run build --cwd src/webview-ui"
+    "dev": "./tools/bun.exe run scripts/dev.mjs",
+    "dev:web": "./tools/bun.exe run scripts/dev.mjs",
+    "build:webview-ui": "./tools/bun.exe run build --cwd src/webview-ui",
+    "gen:public-types": "./tools/bun.exe run ./scripts/generate_public_types.mjs"
   },
   "engines": {
     "vscode": "^1.93.0"
@@ -283,7 +284,9 @@
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.6.2",
+    "json-schema-to-typescript": "^15.0.4",
     "mocha": "^11.7.1",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "openapi-typescript": "^7.13.0"
   }
 }

@@ -91,7 +91,7 @@ async def test_multiple_different_session_jobs_can_run_in_parallel(client: httpx
         response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
             json={
-                "message": {"content": f"Please respond quickly from session {index}"},
+                "message": {"content": f"不要调用任何工具，只回复一句简短中文问候。session={index}"},
                 "run": {"mode": "single_agent", "agent_id": "deep_agent"},
             },
         )

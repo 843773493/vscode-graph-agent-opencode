@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.services.config_service import ConfigService
-from app.schemas.agent import AgentDTO
+from app.schemas.public_v2.agent import AgentDTO
 
 
 class AgentService:

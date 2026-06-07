@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 from app.core.path_utils import get_workspace_root, get_artifacts_dir, get_logs_dir, get_cache_dir
-from app.schemas.runtime import RuntimeInfoDTO, RuntimeShutdownResultDTO, RuntimeStorageDTO
+from app.schemas.public_v2.runtime import RuntimeInfoDTO, RuntimeShutdownResultDTO, RuntimeStorageDTO
 
 
 class RuntimeService:

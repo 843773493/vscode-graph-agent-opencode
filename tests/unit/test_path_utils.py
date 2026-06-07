@@ -156,5 +156,5 @@ class TestPathUtils:
     def test_get_user_workspace_root_uses_hidden_directory_under_home(self):
         """测试用户级持久工作区根目录命名"""
         root = get_user_workspace_root()
-        assert root.name == ".BoxTeamWorkspace"
-        assert root.parent == Path.home().resolve()
+        assert root.name == "boxteam_workspace"
+        assert root.parent == Path.home().resolve() / ".boxteams"

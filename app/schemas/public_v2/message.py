@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
-from app.schemas.common import MessageRole, RunMode
+from .common import MessageRole, RunMode, TimestampedDTO
 
 
 class AttachmentRef(BaseModel):
@@ -15,7 +18,7 @@ class MessageCreateRequest(BaseModel):
     role: MessageRole = MessageRole.user
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class RunOptions(BaseModel):
@@ -25,7 +28,7 @@ class RunOptions(BaseModel):
     async_run: bool = Field(default=True, alias="async")
     max_steps: int = 20
     timeout_seconds: int = 600
-    context: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, object] = Field(default_factory=dict)
 
 
 class MessageRunRequest(BaseModel):
@@ -39,11 +42,10 @@ class MessageRunAccepted(BaseModel):
     status: str
 
 
-class MessageDTO(BaseModel):
+class MessageDTO(TimestampedDTO):
     message_id: str
     session_id: str
     role: MessageRole
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime
+    metadata: dict[str, object] = Field(default_factory=dict)

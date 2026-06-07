@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Any, Dict, List
 
-from app.schemas.tool import ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO
+from app.schemas.public_v2.tool import ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO
 from app.services.agent_execution_service import AgentExecutionService
 
 

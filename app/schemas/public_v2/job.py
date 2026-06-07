@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
+
 from pydantic import BaseModel, Field, model_validator
 
-from app.schemas.common import RunMode, JobStatus, StepStatus, ControlScope, ControlAction
+from .common import ControlAction, ControlScope, JobStatus, RunMode, StepStatus, TimestampedDTO
 
 
-class JobDTO(BaseModel):
+class JobDTO(TimestampedDTO):
     job_id: str
     session_id: str
     mode: RunMode
@@ -14,21 +17,19 @@ class JobDTO(BaseModel):
     progress: int = 0
     current_step: Optional[str] = None
     error_message: Optional[str] = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime
-    updated_at: datetime
+    metadata: dict[str, object] = Field(default_factory=dict)
     ended_at: Optional[datetime] = None
 
 
-class StepDTO(BaseModel):
+class StepDTO(TimestampedDTO):
     step_id: str
     job_id: str
     parent_step_id: Optional[str] = None
     agent_id: Optional[str] = None
     step_type: str
     status: StepStatus
-    input_payload: dict[str, Any] = Field(default_factory=dict)
-    output_payload: dict[str, Any] = Field(default_factory=dict)
+    input_payload: dict[str, object] = Field(default_factory=dict)
+    output_payload: dict[str, object] = Field(default_factory=dict)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
 
@@ -39,7 +40,7 @@ class JobControlRequest(BaseModel):
     agent_id: Optional[str] = None
     step_id: Optional[str] = None
     message: Optional[str] = None
-    input: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_scope_target(self):

@@ -1,5 +1,5 @@
 // webview 和 extension host 之间的数据类型
-import type { ActiveJob, Message, Session, TraceEvent } from './backend';
+import type { ActiveJob, Message, ObservationSseMessage, PermissionRequest, QuestionRequest, Session, SessionObservationState, SessionStatusInfo, TraceEvent } from './backend';
 
 export interface HostStatePayload {
   apiPort: number | null;
@@ -10,6 +10,11 @@ export interface HostStatePayload {
   messages: Message[];
   traceEvents: TraceEvent[];
   activeJob: ActiveJob | null;
+  observationEvents?: Array<ObservationSseMessage>;
+  observationState?: SessionObservationState | null;
+  sessionStatus?: SessionStatusInfo | null;
+  pendingQuestions?: QuestionRequest[];
+  pendingPermissions?: PermissionRequest[];
 }
 
 export interface HostStateMessage {

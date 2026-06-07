@@ -1,5 +1,5 @@
 // 前端内部类型
-import type { ActiveJob, Message, Session, TraceEvent } from './backend';
+import type { ActiveJob, Message, ObservationSseMessage, PermissionRequest, QuestionRequest, Session, SessionObservationState, SessionStatusInfo, TraceEvent } from './backend';
 
 export interface ConversationView {
   conversationId: string;
@@ -7,10 +7,15 @@ export interface ConversationView {
   userMessage: Message | null;
   assistantMessages: Message[];
   events: TraceEvent[];
+  observationEvents?: ObservationSseMessage[];
   status: 'running' | 'done' | 'error';
   jobId: string | null;
   pending: boolean;
   source: 'messages' | 'pending';
+  sessionStatus?: SessionStatusInfo | null;
+  observationState?: SessionObservationState | null;
+  pendingQuestions?: QuestionRequest[];
+  pendingPermissions?: PermissionRequest[];
 }
 
 export interface AppState {
@@ -22,6 +27,10 @@ export interface AppState {
   messages: Message[];
   traceEvents: TraceEvent[];
   activeJob: ActiveJob | null;
+  observationState: SessionObservationState | null;
+  sessionStatus: SessionStatusInfo | null;
+  pendingQuestions: QuestionRequest[];
+  pendingPermissions: PermissionRequest[];
   pendingConversations: Map<string, ConversationView>;
   status: string;
   expandDetails: boolean;

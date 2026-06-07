@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_artifact_service, get_event_service, get_job_service, get_request_id, verify_local_token
-from app.schemas.artifact import ArtifactDTO
-from app.schemas.common import APIResponse
 from app.schemas.event import Event as SSEEvent
-from app.schemas.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
+from app.schemas.public_v2.artifact import ArtifactDTO
+from app.schemas.public_v2.common import APIResponse
+from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
 from app.services.artifact_service import ArtifactService
 from app.services.event_service import EventService
 from app.services.job_service import JobService

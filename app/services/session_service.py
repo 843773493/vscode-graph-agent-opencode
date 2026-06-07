@@ -9,7 +9,7 @@ from typing import Any, Optional
 from pydantic import ValidationError
 
 from app.schemas.event import Event, MessageCreatedEvent, JobCreatedEvent, JobStartedEvent, JobCompletedEvent, JobCancelledEvent, JobFailedEvent, StatusChangeEvent, AgentStartEvent, AgentStepEvent, AgentEndEvent, ErrorEvent, LLMRequestEvent
-from app.schemas.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest, SessionListResultDTO, SessionControlResultDTO
+from app.schemas.public_v2.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest, SessionListResultDTO, SessionControlResultDTO
 from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir, get_logs_dir
 from app.core.exceptions import NotFoundError
 from app.services.config_service import ConfigService

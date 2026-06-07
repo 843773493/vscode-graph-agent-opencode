@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from app.schemas.artifact import ArtifactDTO
+from app.schemas.public_v2.artifact import ArtifactDTO
 from app.core.path_utils import get_artifacts_dir, safe_join
 
 

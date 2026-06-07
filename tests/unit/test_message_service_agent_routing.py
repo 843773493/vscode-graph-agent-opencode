@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from app.schemas.message import MessageCreateRequest, MessageRunRequest, RunOptions
+from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions
 from app.services.message_service import MessageService
 
 

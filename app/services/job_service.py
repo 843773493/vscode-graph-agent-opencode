@@ -6,8 +6,8 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 
-from app.schemas.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
-from app.schemas.common import JobStatus, RunMode, StepStatus, ControlAction
+from app.schemas.public_v2.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
+from app.schemas.public_v2.common import JobStatus, RunMode, StepStatus, ControlAction
 from app.core.job_event_bus import EventType, JobEventBus
 from app.services.job_execution_service import JobExecutionService, JobRuntimeState
 

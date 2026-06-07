@@ -26,6 +26,78 @@ export interface ActiveJob {
   content: string;
 }
 
+export interface QuestionOption {
+  label: string;
+  description: string;
+  labelKey?: string;
+  descriptionKey?: string;
+  mode?: string;
+}
+
+export interface QuestionInfo {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multiple?: boolean;
+  questionKey?: string;
+  headerKey?: string;
+  custom?: boolean;
+}
+
+export interface QuestionRequest {
+  id: string;
+  sessionId: string;
+  questions: QuestionInfo[];
+  blocking?: boolean;
+  tool?: {
+    messageId: string;
+    callId: string;
+  };
+}
+
+export interface PermissionRequest {
+  id: string;
+  sessionId: string;
+  permission: string;
+  patterns: string[];
+  metadata: Record<string, unknown>;
+  always: string[];
+  tool?: {
+    messageId: string;
+    callId: string;
+  };
+}
+
+export type SessionStatus = 'idle' | 'busy' | 'question' | 'permission' | 'retry' | 'offline';
+
+export interface SessionNetworkWait {
+  id: string;
+  sessionId: string;
+  message: string;
+  restored: boolean;
+  time: {
+    created: number;
+    restored?: number;
+  };
+}
+
+export interface SessionStatusInfo {
+  sessionId: string;
+  status: SessionStatus;
+  message?: string;
+  activeJobId?: string;
+  waiting?: SessionNetworkWait;
+}
+
+export interface SessionObservationState {
+  sessionId: string;
+  activeJobId?: string | null;
+  lastEventId?: string | null;
+  isStreaming: boolean;
+  isIdle: boolean;
+  error?: string | null;
+}
+
 export type TraceEventType =
   | 'message_created'
   | 'job_created'
@@ -119,3 +191,31 @@ export type TraceEvent =
   | (BaseTraceEvent & { type: 'agent_end'; payload: AgentEndPayload })
   | (BaseTraceEvent & { type: 'error'; payload: ErrorPayload })
   | (BaseTraceEvent & { type: 'llm_request'; payload: LLMRequestPayload });
+
+export type ObservationEventType =
+  | 'message.updated'
+  | 'message.delta'
+  | 'job.updated'
+  | 'job.step.updated'
+  | 'job.status.changed'
+  | 'session.status.changed'
+  | 'session.completed'
+  | 'session.error'
+  | 'question.requested'
+  | 'permission.requested'
+  | 'network.waiting';
+
+export interface ObservationEvent<TPayload = unknown> {
+  eventId: string;
+  sessionId: string;
+  jobId?: string | null;
+  type: ObservationEventType;
+  time: string;
+  payload: TPayload;
+}
+
+export interface ObservationSseMessage<TPayload = unknown> {
+  event: ObservationEvent<TPayload>;
+  rawType: string;
+  rawPayload: Record<string, unknown>;
+}

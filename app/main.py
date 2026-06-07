@@ -3,6 +3,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.trace_middleware import TraceMiddleware
 from app.container import build_app_container
@@ -57,6 +58,16 @@ app = FastAPI(
 
 # Add trace middleware
 app.add_middleware(TraceMiddleware)
+
+# 允许本地前端开发服务器通过浏览器跨域访问后端接口。
+# TODO: 这会放宽为允许所有来源，仅适合本地开发；若后续引入生产部署，请改成可配置项。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/api/v1/health", summary="健康检查")

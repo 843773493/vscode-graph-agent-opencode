@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { createSession as apiCreateSession, sendMessage as apiSendMessage, DEFAULT_AGENT_ID, DEFAULT_SESSION_TITLE, getWorkspace, listMessages, listSessions } from './api';
-import type { Message } from './types/backend';
+import { createSession as apiCreateSession, sendUserMessage as apiSendMessage, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions } from './api';
+import type { Message, TraceEvent } from './types/backend';
 import type { AppState, ConversationView } from './types/frontend';
 
 function normalizeMessage(msg: Partial<Message> & { id?: string; createdAt?: string | null }): Message {
@@ -58,14 +58,33 @@ function groupMessagesIntoConversations(messages: Message[]): ConversationView[]
   return conversations;
 }
 
+function attachTraceEventsToConversations(conversations: ConversationView[], traceEvents: TraceEvent[]): ConversationView[] {
+  if (conversations.length === 0 || traceEvents.length === 0) {
+    return conversations;
+  }
+
+  return conversations.map((conversation) => {
+    const jobId = conversation.jobId;
+    if (!jobId) {
+      return conversation;
+    }
+
+    return {
+      ...conversation,
+      events: traceEvents.filter(event => event.job_id === jobId),
+    };
+  });
+}
+
 export function getConversationsForSession(sessionId: string, state: AppState): ConversationView[] {
-  return groupMessagesIntoConversations(state.messages.filter(message => message.session_id === sessionId));
+  const conversations = groupMessagesIntoConversations(state.messages.filter(message => message.session_id === sessionId));
+  return attachTraceEventsToConversations(conversations, state.traceEvents);
 }
 
 const INITIAL_STATE: AppState = {
   apiPort: 8000,
-  workspaceRoot: '',
-  workspaceName: 'workspace',
+  workspaceRoot: null,
+  workspaceName: null,
   sessions: [],
   currentSession: null,
   messages: [],
@@ -73,6 +92,8 @@ const INITIAL_STATE: AppState = {
   activeJob: null,
   pendingConversations: new Map(),
   status: '准备就绪',
+  error: null,
+  isBootstrapping: true,
   expandDetails: true,
   historyPanelOpen: true,
 };
@@ -105,22 +126,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshSessions = useCallback(async () => {
-    const [workspace, sessions] = await Promise.all([getWorkspace(state.apiPort ?? 8000), listSessions(state.apiPort ?? 8000)]);
-    setState(prev => ({
-      ...prev,
-      workspaceRoot: workspace.root_path,
-      workspaceName: workspace.name,
-      sessions: sessions.items,
-      currentSession: prev.currentSession ?? sessions.items[0] ?? null,
-    }));
+    try {
+      const [workspace, sessions] = await Promise.all([getWorkspace(state.apiPort ?? 8000), listSessions(state.apiPort ?? 8000)]);
+      const nextCurrentSession = state.currentSession ?? sessions.items[0] ?? null;
+      const traceEvents = nextCurrentSession ? await getSessionTraces(state.apiPort ?? 8000, nextCurrentSession.session_id) : [];
+      setState(prev => ({
+        ...prev,
+        workspaceRoot: workspace.root_path,
+        workspaceName: workspace.name,
+        sessions: sessions.items,
+        currentSession: nextCurrentSession,
+        traceEvents,
+        error: null,
+        isBootstrapping: false,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setState(prev => ({
+        ...prev,
+        error: message,
+        status: '初始化失败',
+        isBootstrapping: false,
+      }));
+    }
   }, [state.apiPort]);
 
   const selectSession = useCallback((sessionId: string) => {
-    setState(prev => ({
-      ...prev,
-      currentSession: prev.sessions.find(session => session.session_id === sessionId) ?? prev.currentSession,
-    }));
-  }, []);
+    void (async () => {
+      const nextSession = state.sessions.find(session => session.session_id === sessionId) ?? state.currentSession;
+      const traceEvents = nextSession ? await getSessionTraces(state.apiPort ?? 8000, nextSession.session_id) : [];
+      setState(prev => ({
+        ...prev,
+        currentSession: prev.sessions.find(session => session.session_id === sessionId) ?? prev.currentSession,
+        traceEvents,
+      }));
+    })();
+  }, [state.apiPort, state.currentSession, state.sessions]);
 
   const createSession = useCallback(async (title: string = DEFAULT_SESSION_TITLE) => {
     const session = await apiCreateSession(state.apiPort ?? 8000, title);
@@ -128,6 +169,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ...prev,
       sessions: [session, ...prev.sessions],
       currentSession: session,
+      traceEvents: [],
       status: '已创建会话',
     }));
   }, [state.apiPort]);
@@ -137,11 +179,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error('当前没有可发送消息的会话');
     }
 
-    await apiSendMessage(state.apiPort ?? 8000, state.currentSession.session_id, { content, agent_id: DEFAULT_AGENT_ID });
+    await apiSendMessage(state.apiPort ?? 8000, state.currentSession.session_id, content, state.currentSession.agent_id);
     const messages = await listMessages(state.apiPort ?? 8000, state.currentSession.session_id);
+    const traceEvents = await getSessionTraces(state.apiPort ?? 8000, state.currentSession.session_id);
     setState(prev => ({
       ...prev,
       messages: messages.items,
+      traceEvents,
       status: '消息已发送',
     }));
   }, [state.apiPort, state.currentSession]);

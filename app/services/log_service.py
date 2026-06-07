@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.path_utils import get_workspace_root
-from app.schemas.common import LogSnapshotResultDTO
+from app.schemas.public_v2.common import LogSnapshotResultDTO
 
 
 @dataclass(slots=True)

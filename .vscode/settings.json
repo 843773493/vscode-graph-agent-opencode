@@ -3,4 +3,13 @@
     "python.testing.pytestArgs": [
         "tests"
     ],
+    "files.watcherExclude": {
+        "**/reference_repo/**": true
+    },
+    "js/ts.tsserver.watchOptions": {
+        "excludeDirectories": [
+            "**/reference_repo/**"
+        ]
+    },
+    "js/ts.tsserver.experimental.enableProjectDiagnostics": false
 }

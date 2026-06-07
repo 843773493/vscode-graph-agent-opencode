@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_agent_service, get_request_id, verify_local_token
-from app.schemas.agent import AgentDTO
-from app.schemas.common import APIResponse
+from app.schemas.public_v2.agent import AgentDTO
+from app.schemas.public_v2.common import APIResponse
 from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/agents", tags=["agents"])

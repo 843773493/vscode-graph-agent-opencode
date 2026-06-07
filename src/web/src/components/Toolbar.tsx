@@ -1,8 +1,8 @@
 import React from 'react';
 import { useAppState } from '../hooks';
 
-function shortLabel(value: string): string {
-  const trimmed = value.trim();
+function shortLabel(value: string | null | undefined): string {
+  const trimmed = String(value ?? '').trim();
   if (!trimmed) {
     return 'workspace';
   }
@@ -15,7 +15,7 @@ function Icon({ children }: { children: React.ReactNode }) {
   return <span className="toolbar-button-icon" aria-hidden="true">{children}</span>;
 }
 
-export default function Toolbar({ workspaceName, workspaceRoot, status, agentId }: { workspaceName: string; workspaceRoot: string; status: string; agentId: string }) {
+export default function Toolbar({ workspaceName, workspaceRoot, status, agentId }: { workspaceName: string | null | undefined; workspaceRoot: string | null | undefined; status: string; agentId: string | null | undefined }) {
   const { createSession, toggleHistoryPanel } = useAppState();
   const wsLabel = workspaceRoot || workspaceName;
   const wsShort = shortLabel(wsLabel);

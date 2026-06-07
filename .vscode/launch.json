@@ -23,12 +23,11 @@
         },
         {
             "name": "Open Browser 8001",
-            "type": "msedge",
+            "type": "editor-browser",
             "request": "launch",
             "url": "http://127.0.0.1:8001",
             "webRoot": "${workspaceFolder}/src/web",
             "preLaunchTask": "dev:web",
-            "userDataDir": "${workspaceFolder}/.vscode/.edge-debug-profile"
         },
         {
             "name": "Attach Backend 8002",

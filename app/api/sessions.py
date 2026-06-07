@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, get_session_auto_continue_service, get_session_service, verify_local_token
-from app.schemas.common import APIResponse, CursorPage
 from app.schemas.event import Event
-from app.schemas.session import (
+from app.schemas.public_v2.common import APIResponse, CursorPage
+from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
     SessionAutoContinueStartRequest,
     SessionAutoContinueStatusDTO,

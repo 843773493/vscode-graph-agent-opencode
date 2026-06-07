@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
-from typing import Any, Optional
 
 
 class ArtifactDTO(BaseModel):
@@ -8,4 +9,4 @@ class ArtifactDTO(BaseModel):
     type: str
     name: str
     path: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)

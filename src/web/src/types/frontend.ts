@@ -15,8 +15,8 @@ export interface ConversationView {
 
 export interface AppState {
   apiPort: number | null;
-  workspaceRoot: string;
-  workspaceName: string;
+  workspaceRoot: string | null;
+  workspaceName: string | null;
   sessions: Session[];
   currentSession: Session | null;
   messages: Message[];
@@ -24,6 +24,8 @@ export interface AppState {
   activeJob: ActiveJob | null;
   pendingConversations: Map<string, ConversationView>;
   status: string;
+  error: string | null;
+  isBootstrapping: boolean;
   expandDetails: boolean;
   historyPanelOpen: boolean;
 }

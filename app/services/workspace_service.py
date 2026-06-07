@@ -5,8 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from app.services.config_service import ConfigService
-from app.schemas.workspace import WorkspaceDTO, WorkspaceContextDTO
-from app.schemas.workspace_index import WorkspaceIndexStatusDTO, WorkspaceIndexRebuildDTO
+from app.schemas.public_v2.workspace import WorkspaceContextDTO, WorkspaceDTO, WorkspaceIndexRebuildDTO, WorkspaceIndexStatusDTO
 from app.core.path_utils import get_runtime_workspace_root, get_user_workspace_root
 
 

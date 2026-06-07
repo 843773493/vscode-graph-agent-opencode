@@ -6,7 +6,7 @@ import commentjson
 import jsonschema
 from jsonschema import ValidationError
 
-from app.schemas.config import ConfigDTO, ConfigUpdateRequest
+from app.schemas.public_v2.config import ConfigDTO, ConfigUpdateRequest
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "configs")
 

@@ -892,6 +892,8 @@ from datetime import datetime
 from typing import Any, Optional
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.event import Event
+
 class JobDTO(BaseModel):
     job_id: str
     session_id: str
@@ -918,22 +920,13 @@ class StepDTO(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
 
-class EventDTO(BaseModel):
-    event_id: str
-    job_id: str
-    step_id: Optional[str] = None
-    type: str
-    agent_id: Optional[str] = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime
-
 class JobControlRequest(BaseModel):
     scope: ControlScope = ControlScope.job
     action: ControlAction
     agent_id: Optional[str] = None
     step_id: Optional[str] = None
     message: Optional[str] = None
-    input: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_scope_target(self):
@@ -1056,8 +1049,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.common import APIResponse
-from app.schemas.workspace import WorkspaceContextDTO, WorkspaceDTO
+from app.schemas.public_v2.common import APIResponse
+from app.schemas.public_v2.workspace import WorkspaceContextDTO, WorkspaceDTO
 from app.services.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -1107,7 +1100,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.common import APIResponse
+from app.schemas.public_v2.common import APIResponse
 from app.services.runtime_service import RuntimeService
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
@@ -1139,8 +1132,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.common import APIResponse, CursorPage
-from app.schemas.session import SessionCreateRequest, SessionDTO, SessionUpdateRequest
+from app.schemas.public_v2.common import APIResponse, CursorPage
+from app.schemas.public_v2.session import SessionCreateRequest, SessionDTO, SessionUpdateRequest
 from app.services.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -1206,8 +1199,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.common import APIResponse, CursorPage
-from app.schemas.message import MessageDTO, MessageRunAccepted, MessageRunRequest
+from app.schemas.public_v2.common import APIResponse, CursorPage
+from app.schemas.public_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
 from app.services.message_service import MessageService
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
@@ -1256,9 +1249,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.artifact import ArtifactDTO
-from app.schemas.common import APIResponse
-from app.schemas.job import EventDTO, JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
+from app.schemas.public_v2.artifact import ArtifactDTO
+from app.schemas.event import Event as SSEEvent
+from app.schemas.public_v2.common import APIResponse
+from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
 from app.services.artifact_service import ArtifactService
 from app.services.event_service import EventService
 from app.services.job_service import JobService
@@ -1286,7 +1280,7 @@ async def list_job_steps(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{job_id}/events", response_model=APIResponse[list[EventDTO]], summary="获取任务事件")
+@router.get("/{job_id}/events", response_model=APIResponse[list[SSEEvent]], summary="获取任务事件")
 async def list_job_events(
     job_id: str,
     after: str | None = None,
@@ -1339,8 +1333,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.agent import AgentDTO
-from app.schemas.common import APIResponse
+from app.schemas.public_v2.agent import AgentDTO
+from app.schemas.public_v2.common import APIResponse
 from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -1373,8 +1367,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.common import APIResponse
-from app.schemas.tool import ToolDTO, ToolInvokeRequest
+from app.schemas.public_v2.common import APIResponse
+from app.schemas.public_v2.tool import ToolDTO, ToolInvokeRequest
 from app.services.tool_service import ToolService
 
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -1439,8 +1433,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.common import APIResponse
-from app.schemas.config import ConfigDTO, ConfigUpdateRequest
+from app.schemas.public_v2.common import APIResponse
+from app.schemas.public_v2.config import ConfigDTO, ConfigUpdateRequest
 from app.services.config_service import ConfigService
 
 router = APIRouter(prefix="/config", tags=["config"])

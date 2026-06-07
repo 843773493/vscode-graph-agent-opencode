@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_config_service, get_job_service, get_message_service, get_request_id, get_session_service, verify_local_token, get_job_event_bus
-from app.schemas.common import APIResponse, CursorPage
-from app.schemas.message import MessageDTO, MessageRunAccepted, MessageRunRequest
+from app.schemas.public_v2.common import APIResponse, CursorPage
+from app.schemas.public_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
 from app.services.message_service import MessageService
 from app.services.config_service import ConfigService
 from app.services.job_service import JobService

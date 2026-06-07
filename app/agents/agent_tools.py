@@ -20,8 +20,8 @@ from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
 from app.core.path_utils import get_workspace_root
 from app.schemas.background_message import BackgroundMessageKind
-from app.schemas.common import RunMode
-from app.schemas.message import MessageCreateRequest, MessageRunRequest, RunOptions
+from app.schemas.public_v2.common import RunMode
+from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions
 from app.services.message_service import MessageService
 from app.services.job_service import JobService
 from app.services.session_service import SessionService

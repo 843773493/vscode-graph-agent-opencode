@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+
+from pydantic import BaseModel, Field
+
+from .common import CursorPage, RunMode, TimestampedDTO
 
 
 class SessionCreateRequest(BaseModel):
@@ -13,13 +18,11 @@ class SessionUpdateRequest(BaseModel):
     agent_id: Optional[str] = None
 
 
-class SessionDTO(BaseModel):
+class SessionDTO(TimestampedDTO):
     session_id: str
     workspace_id: str
     title: str
     current_agent_id: str
-    created_at: datetime
-    updated_at: datetime
 
 
 class SessionListResultDTO(BaseModel):

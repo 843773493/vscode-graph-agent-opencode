@@ -185,12 +185,24 @@ function groupMessagesIntoConversations(messages: Message[]): ConversationView[]
   return conversations;
 }
 
+function attachObservationEvents(conversations: ConversationView[], observationEvents: unknown): ConversationView[] {
+  if (!Array.isArray(observationEvents) || conversations.length === 0) {
+    return conversations;
+  }
+
+  return conversations.map((conversation) => ({
+    ...conversation,
+    observationEvents: conversation.observationEvents ?? [],
+  }));
+}
+
 export function getConversationsForSession(sessionId: string, state: AppState): ConversationView[] {
   const conversations = groupMessagesIntoConversations(state.messages.filter(m => m.session_id === sessionId));
   const pending = state.pendingConversations.get(sessionId);
+  const withObservationEvents = attachObservationEvents(conversations, (state as { observationEvents?: unknown }).observationEvents);
 
   if (!pending) {
-    return conversations;
+    return withObservationEvents;
   }
 
   const matchedConversationIndex = conversations.findIndex(conversation => {
@@ -211,15 +223,15 @@ export function getConversationsForSession(sessionId: string, state: AppState): 
   });
 
   if (matchedConversationIndex === -1) {
-    return pending.userMessage ? [...conversations, { ...pending, source: 'pending' }] : conversations;
+    return pending.userMessage ? [...withObservationEvents, { ...pending, source: 'pending' }] : withObservationEvents;
   }
 
   const merged = {
-    ...conversations[matchedConversationIndex],
+    ...withObservationEvents[matchedConversationIndex],
     ...pending,
-    source: conversations[matchedConversationIndex].source,
+    source: withObservationEvents[matchedConversationIndex].source,
   };
-  return conversations.map((conversation, index) => (index === matchedConversationIndex ? merged : conversation));
+  return withObservationEvents.map((conversation, index) => (index === matchedConversationIndex ? merged : conversation));
 }
 
 const INITIAL_STATE: AppState = {
@@ -231,6 +243,10 @@ const INITIAL_STATE: AppState = {
   messages: [],
   traceEvents: [],
   activeJob: null,
+  observationState: null,
+  sessionStatus: null,
+  pendingQuestions: [],
+  pendingPermissions: [],
   pendingConversations: new Map(),
   status: '准备就绪',
   expandDetails: true,
@@ -313,6 +329,10 @@ function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppS
   const bootPendingConversations = (boot as { pendingConversations?: ConversationView[] }).pendingConversations ?? (persisted as { pendingConversations?: ConversationView[] }).pendingConversations ?? [];
   const bootSession = (boot as { session?: Session | null }).session ?? null;
   const persistedSession = (persisted as { session?: Session | null }).session ?? null;
+  const bootObservationState = (boot as { observationState?: AppState['observationState'] }).observationState ?? (persisted as { observationState?: AppState['observationState'] }).observationState ?? null;
+  const bootSessionStatus = (boot as { sessionStatus?: AppState['sessionStatus'] }).sessionStatus ?? (persisted as { sessionStatus?: AppState['sessionStatus'] }).sessionStatus ?? null;
+  const bootPendingQuestions = (boot as { pendingQuestions?: AppState['pendingQuestions'] }).pendingQuestions ?? (persisted as { pendingQuestions?: AppState['pendingQuestions'] }).pendingQuestions ?? [];
+  const bootPendingPermissions = (boot as { pendingPermissions?: AppState['pendingPermissions'] }).pendingPermissions ?? (persisted as { pendingPermissions?: AppState['pendingPermissions'] }).pendingPermissions ?? [];
   bootPendingConversations.forEach(conversation => pendingConversations.set(conversation.sessionId, conversation));
   return {
     ...INITIAL_STATE,
@@ -324,6 +344,10 @@ function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppS
     messages: normalizeMessageList(boot.messages ?? []),
     traceEvents: normalizeTraceEventList(boot.traceEvents),
     activeJob: (boot.activeJob ?? null) as ActiveJob | null,
+    observationState: bootObservationState,
+    sessionStatus: bootSessionStatus,
+    pendingQuestions: bootPendingQuestions,
+    pendingPermissions: bootPendingPermissions,
     status: String(boot.status ?? '准备就绪'),
     expandDetails: Boolean(boot.expandDetails ?? true),
     historyPanelOpen: Boolean(boot.historyPanelOpen ?? false),

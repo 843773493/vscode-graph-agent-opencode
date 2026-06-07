@@ -4,9 +4,19 @@ import asyncio
 
 import pytest
 
-from app.schemas.common import ControlAction, JobStatus
-from app.schemas.job import JobControlRequest
+from app.core.job_event_bus import JobEventBus
+from app.schemas.public_v2.common import ControlAction, JobStatus
+from app.schemas.public_v2.job import JobControlRequest
 from app.services.job_service import JobService, JobState
+
+
+class _DummyJobExecutor:
+    async def run(self, job):
+        return "ok"
+
+
+def create_job_service() -> JobService:
+    return JobService(job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor())
 
 
 class DummyTask:
@@ -24,7 +34,7 @@ class DummyTask:
 
 @pytest.mark.asyncio
 async def test_job_control_pause_cancels_running_task(monkeypatch):
-    service = JobService()
+    service = create_job_service()
     service._jobs = {}
 
     job = JobState(
@@ -47,7 +57,7 @@ async def test_job_control_pause_cancels_running_task(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_job_control_resume_restarts_completed_pause(monkeypatch):
-    service = JobService()
+    service = create_job_service()
     service._jobs = {}
 
     job = JobState(
@@ -75,7 +85,7 @@ async def test_job_control_resume_restarts_completed_pause(monkeypatch):
 
     result = await service.control(
         job.job_id,
-        JobControlRequest(action=ControlAction.resume, input={"reason": "continue"}),
+        JobControlRequest(action=ControlAction.resume, params={"reason": "continue"}),
     )
 
     assert job.status == JobStatus.running
@@ -85,7 +95,7 @@ async def test_job_control_resume_restarts_completed_pause(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_job_control_cancel_requests_task_cancel(monkeypatch):
-    service = JobService()
+    service = create_job_service()
     service._jobs = {}
 
     task = DummyTask()
@@ -109,11 +119,10 @@ async def test_job_control_cancel_requests_task_cancel(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch):
-    service = JobService()
+    service = create_job_service()
     service._jobs = {}
     service._session_current_job = {}
     service._session_waiting_jobs = {}
-    service.bind_bus(__import__("app.core.job_event_bus", fromlist=["JobEventBus"]).JobEventBus())
 
     started_jobs: list[str] = []
 
