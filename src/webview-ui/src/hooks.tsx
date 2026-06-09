@@ -196,13 +196,42 @@ function attachObservationEvents(conversations: ConversationView[], observationE
   }));
 }
 
+function attachTraceEvents(conversations: ConversationView[], traceEvents: TraceEvent[]): ConversationView[] {
+  if (!Array.isArray(traceEvents) || conversations.length === 0) {
+    return conversations;
+  }
+
+  return conversations.map((conversation) => ({
+    ...conversation,
+    events: traceEvents.filter((event) => {
+      const payload = event.payload as Record<string, unknown>;
+      const eventSessionId = typeof payload.session_id === 'string' ? payload.session_id : null;
+      const eventJobId = typeof event.job_id === 'string' ? event.job_id : null;
+
+      if (eventSessionId && eventSessionId === conversation.sessionId) {
+        return true;
+      }
+
+      if (eventJobId && conversation.jobId && eventJobId === conversation.jobId) {
+        return true;
+      }
+
+      return false;
+    }),
+  }));
+}
+
 export function getConversationsForSession(sessionId: string, state: AppState): ConversationView[] {
   const conversations = groupMessagesIntoConversations(state.messages.filter(m => m.session_id === sessionId));
   const pending = state.pendingConversations.get(sessionId);
   const withObservationEvents = attachObservationEvents(conversations, (state as { observationEvents?: unknown }).observationEvents);
+  const withTraceEvents = attachTraceEvents(withObservationEvents, normalizeTraceEventList(state.traceEvents).filter(event => {
+    const payload = event.payload as Record<string, unknown>;
+    return typeof payload.session_id === 'string' ? payload.session_id === sessionId : true;
+  }));
 
   if (!pending) {
-    return withObservationEvents;
+    return withTraceEvents;
   }
 
   const matchedConversationIndex = conversations.findIndex(conversation => {
@@ -223,15 +252,15 @@ export function getConversationsForSession(sessionId: string, state: AppState): 
   });
 
   if (matchedConversationIndex === -1) {
-    return pending.userMessage ? [...withObservationEvents, { ...pending, source: 'pending' }] : withObservationEvents;
+    return pending.userMessage ? [...withTraceEvents, { ...pending, source: 'pending' }] : withTraceEvents;
   }
 
   const merged = {
-    ...withObservationEvents[matchedConversationIndex],
+    ...withTraceEvents[matchedConversationIndex],
     ...pending,
-    source: withObservationEvents[matchedConversationIndex].source,
+    source: withTraceEvents[matchedConversationIndex].source,
   };
-  return withObservationEvents.map((conversation, index) => (index === matchedConversationIndex ? merged : conversation));
+  return withTraceEvents.map((conversation, index) => (index === matchedConversationIndex ? merged : conversation));
 }
 
 const INITIAL_STATE: AppState = {

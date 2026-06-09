@@ -1,4 +1,5 @@
 import json
+import asyncio
 import tempfile
 from pathlib import Path
 
@@ -6,9 +7,10 @@ import pytest
 
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, get_session_path
-from app.schemas.event import AgentStartEvent
 from app.schemas.public_v2.session import SessionCreateRequest, SessionUpdateRequest
+from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.config_service import ConfigService
+from app.services.trace_event_mapper import TraceEventMapper
 from app.services.session_service import SessionService
 
 
@@ -193,6 +195,7 @@ class TestSessionService:
 
         trace_event = {
             "event_id": "evt_1",
+            "session_id": created.session_id,
             "job_id": "job_1",
             "step_id": None,
             "agent_id": "deep_agent",
@@ -211,13 +214,16 @@ class TestSessionService:
 
         assert len(events) == 1
         event = events[0]
-        assert isinstance(event, AgentStartEvent)
+        assert isinstance(event, TraceEventDTO)
         assert event.type == "agent_start"
         assert event.event_id == "evt_1"
+        assert event.session_id == created.session_id
         assert event.job_id == "job_1"
-        assert event.agent_id == "deep_agent"
-        assert event.payload.message == "hello"
-        assert event.payload.agent_id == "deep_agent"
+        assert event.phase == "agent"
+        assert event.title == "开始执行"
+        assert event.content == "hello"
+        assert event.status == "running"
+        assert event.raw["payload"]["agent_id"] == "deep_agent"
 
     @pytest.mark.asyncio
     async def test_list_trace_events_ignores_legacy_format(self):
@@ -239,6 +245,69 @@ class TestSessionService:
         events = await self.service.list_trace_events(created.session_id)
 
         assert events == []
+
+    @pytest.mark.asyncio
+    async def test_stream_trace_events_emits_existing_and_new_events(self):
+        created = await self.service.create(SessionCreateRequest(title="Stream Trace Session"))
+
+        trace_dir = Path(self.temp_dir) / ".boxteam" / "logs" / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        trace_file = trace_dir / f"trace_{created.session_id}.jsonl"
+
+        first_event = {
+            "event_id": "evt_1",
+            "session_id": created.session_id,
+            "job_id": "job_1",
+            "timestamp": "2024-03-09T12:00:00+00:00",
+            "type": "agent_start",
+            "payload": {"message": "hello", "agent_id": "deep_agent"},
+        }
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps(first_event, ensure_ascii=False) + "\n")
+
+        stream = self.service.stream_trace_events(created.session_id)
+
+        first = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+        assert first.event_id == "evt_1"
+        assert first.type == "agent_start"
+
+        second_event = {
+            "event_id": "evt_2",
+            "session_id": created.session_id,
+            "job_id": "job_1",
+            "timestamp": "2024-03-09T12:00:01+00:00",
+            "type": "tool_call_start",
+            "payload": {"tool_name": "search_files"},
+        }
+        with open(trace_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(second_event, ensure_ascii=False) + "\n")
+
+        second = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+        assert second.event_id == "evt_2"
+        assert second.type == "tool_call_start"
+        assert second.tool_name == "search_files"
+
+    def test_trace_event_mapper_maps_tool_events(self):
+        mapper = TraceEventMapper()
+
+        event = mapper.map_one(
+            {
+                "event_id": "evt_tool",
+                "job_id": "job_1",
+                "step_id": "step_1",
+                "timestamp": "2024-03-09T12:00:00+00:00",
+                "type": "tool_call_end",
+                "payload": {"tool_name": "search_files"},
+            }
+        )
+
+        assert event is not None
+        assert event.type == "tool_call_end"
+        assert event.phase == "tool"
+        assert event.title == "工具返回"
+        assert event.content == "工具 search_files 已返回结果"
+        assert event.tool_name == "search_files"
+        assert event.status == "completed"
 
     @pytest.mark.asyncio
     async def test_delete_cleans_all_files(self):

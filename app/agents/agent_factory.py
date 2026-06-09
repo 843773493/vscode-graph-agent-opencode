@@ -35,7 +35,7 @@ from deepagents.middleware.permissions import FilesystemPermission
 
 from app.core.path_utils import get_workspace_root
 from app.agents.agent_middleware import LLMLoggingMiddleware, ExecutionTraceMiddleware
-from app.agents.tool_builder import build_default_tools
+from app.agents.agent_tools import build_default_tools
 from app.services.config_service import ConfigService
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry

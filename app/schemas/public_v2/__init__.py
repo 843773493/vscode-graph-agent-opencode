@@ -9,5 +9,6 @@ from .session_interaction import *
 from .runtime import *
 from .session import *
 from .session_status import *
+from .trace import *
 from .tool import *
 from .workspace import *

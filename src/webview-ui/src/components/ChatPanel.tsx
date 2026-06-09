@@ -263,38 +263,58 @@ interface ChatPanelProps {
   expandDetails: boolean;
 }
 
+function normalizeTraceEventKind(eventType: string): TimelineItem['kind'] {
+  const type = String(eventType ?? '').toLowerCase();
+  if (type === 'error') {
+    return 'error';
+  }
+  if (type === 'agent_end') {
+    return 'response';
+  }
+  if (type === 'agent_start' || type === 'llm_request') {
+    return 'thought';
+  }
+  if (type === 'tool_call_start') {
+    return 'tool_call';
+  }
+  if (type === 'tool_call_end') {
+    return 'tool_result';
+  }
+  return 'system';
+}
+
+function buildTraceTimelineItems(conversations: ConversationView[]): TimelineItem[] {
+  const items: TimelineItem[] = [];
+
+  for (const conversation of conversations) {
+    for (const event of conversation.events) {
+      const legacyEvent = event as { event_type?: string; data?: Record<string, unknown>; timestamp?: string | null };
+      const eventType = 'type' in event ? event.type : (legacyEvent.event_type ?? 'unknown');
+      if (String(eventType).toLowerCase() === 'job_completed') {
+        continue;
+      }
+
+      const payload = 'payload' in event ? (event.payload as Record<string, unknown>) : (legacyEvent.data ?? {});
+      const timestamp = 'timestamp' in event ? event.timestamp : legacyEvent.timestamp ?? null;
+
+      items.push({
+        kind: 'trace',
+        id: `${conversation.conversationId}-trace-${eventType}-${timestamp ?? items.length}`,
+        eventType,
+        payload,
+        timestamp,
+      });
+    }
+  }
+
+  return items;
+}
+
 export default function ChatPanel({ conversations, expandDetails }: ChatPanelProps) {
   void useAppState;
 
   const timelineItems = React.useMemo<TimelineItem[]>(() => {
-    const items: TimelineItem[] = [];
-    for (const conversation of conversations) {
-      if (conversation.userMessage) {
-        items.push(normalizeTimelineMessage(conversation.userMessage));
-      }
-
-      for (const assistantMessage of conversation.assistantMessages) {
-        items.push(normalizeTimelineMessage(assistantMessage));
-      }
-
-      for (const event of conversation.events) {
-        const legacyEvent = event as { event_type?: string; data?: Record<string, unknown>; timestamp?: string | null };
-        const eventType = 'type' in event ? event.type : (legacyEvent.event_type ?? 'unknown');
-        if (String(eventType).toLowerCase() === 'job_completed') {
-          continue;
-        }
-        const payload = 'payload' in event ? (event.payload as Record<string, unknown>) : (legacyEvent.data ?? {});
-        const timestamp = 'timestamp' in event ? event.timestamp : legacyEvent.timestamp ?? null;
-        items.push({
-          kind: 'trace',
-          id: `${eventType}-${timestamp ?? items.length}`,
-          eventType,
-          payload,
-          timestamp,
-        });
-      }
-    }
-    return items;
+    return buildTraceTimelineItems(conversations);
   }, [conversations]);
 
   return (

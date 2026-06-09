@@ -454,6 +454,16 @@ def create_send_message_to_session_tool(
     return send_message_to_session
 
 
+def create_test_tool() -> BaseTool:
+    """创建一个用于测试工具调用链路的工具。"""
+    @tool("test_tool")
+    def test_tool() -> str:
+        """用于验证工具调用流程是否正确。"""
+        return "2333"
+
+    return test_tool
+
+
 def build_default_tools(
     session_id: str,
     agent_id: str = "deep_agent",
@@ -469,6 +479,7 @@ def build_default_tools(
 ) -> list[BaseTool]:
     """构建默认工具集。"""
     return [
+        create_test_tool(),
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
         create_system_time_emitter_tool(
             session_id=session_id,

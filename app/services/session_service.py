@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
@@ -10,14 +11,17 @@ from pydantic import ValidationError
 
 from app.schemas.event import Event, MessageCreatedEvent, JobCreatedEvent, JobStartedEvent, JobCompletedEvent, JobCancelledEvent, JobFailedEvent, StatusChangeEvent, AgentStartEvent, AgentStepEvent, AgentEndEvent, ErrorEvent, LLMRequestEvent
 from app.schemas.public_v2.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest, SessionListResultDTO, SessionControlResultDTO
+from app.schemas.public_v2.trace import TraceEventDTO
 from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir, get_logs_dir
 from app.core.exceptions import NotFoundError
 from app.services.config_service import ConfigService
+from app.services.trace_event_mapper import TraceEventMapper
 
 
 class SessionService:
     def __init__(self, *, config_service: ConfigService):
         self._config_service = config_service
+        self._trace_event_mapper = TraceEventMapper()
 
     async def get(self, session_id: str) -> SessionDTO:
         """Get session by ID"""
@@ -142,14 +146,14 @@ class SessionService:
         await self.get(session_id)
         return SessionControlResultDTO(session_id=session_id, action=action, status="executed")
 
-    async def list_trace_events(self, session_id: str) -> list[Event]:
+    async def list_trace_events(self, session_id: str) -> list[TraceEventDTO]:
         """Read the stored execution trace for a session."""
         trace_file = get_logs_dir() / "traces" / f"trace_{session_id}.jsonl"
 
         if not trace_file.exists():
             return []
 
-        events: list[Event] = []
+        raw_events: list[dict[str, Any]] = []
         with open(trace_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -164,36 +168,50 @@ class SessionService:
                 if not isinstance(event, dict):
                     continue
 
-                try:
-                    event_type = event.get("type")
-                    if event_type == "message_created":
-                        events.append(MessageCreatedEvent.model_validate(event))
-                    elif event_type == "job_created":
-                        events.append(JobCreatedEvent.model_validate(event))
-                    elif event_type == "job_started":
-                        events.append(JobStartedEvent.model_validate(event))
-                    elif event_type == "job_completed":
-                        events.append(JobCompletedEvent.model_validate(event))
-                    elif event_type == "job_cancelled":
-                        events.append(JobCancelledEvent.model_validate(event))
-                    elif event_type == "job_failed":
-                        events.append(JobFailedEvent.model_validate(event))
-                    elif event_type == "status_change":
-                        events.append(StatusChangeEvent.model_validate(event))
-                    elif event_type == "agent_start":
-                        events.append(AgentStartEvent.model_validate(event))
-                    elif event_type == "agent_step":
-                        events.append(AgentStepEvent.model_validate(event))
-                    elif event_type == "agent_end":
-                        events.append(AgentEndEvent.model_validate(event))
-                    elif event_type == "error":
-                        events.append(ErrorEvent.model_validate(event))
-                    elif event_type == "llm_request":
-                        events.append(LLMRequestEvent.model_validate(event))
-                    else:
-                        continue
-                except (ValidationError, ValueError):
-                    continue
+                raw_events.append(event)
 
-        events.sort(key=lambda item: item.timestamp)
-        return events
+        return self._trace_event_mapper.map_many(raw_events)
+
+    async def stream_trace_events(self, session_id: str):
+        """流式输出会话轨迹，先补历史，再持续轮询新增内容。"""
+        trace_file = get_logs_dir() / "traces" / f"trace_{session_id}.jsonl"
+        emitted_count = 0
+
+        ready_event = {
+            "event_id": f"trace-stream-ready-{session_id}",
+            "session_id": session_id,
+            "job_id": None,
+            "type": "agent_start",
+            "phase": "agent",
+            "title": "轨迹流已连接",
+            "content": "轨迹流已建立连接，等待新事件",
+            "status": "completed",
+            "tool_name": None,
+            "step_id": None,
+            "timestamp": datetime.now(),
+            "raw": {"type": "stream_ready"},
+        }
+        yield ready_event
+
+        while True:
+            if trace_file.exists():
+                with open(trace_file, "r", encoding="utf-8") as f:
+                    lines = [line.strip() for line in f if line.strip()]
+
+                if len(lines) > emitted_count:
+                    new_events: list[dict[str, Any]] = []
+                    for line in lines[emitted_count:]:
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+
+                        if isinstance(event, dict):
+                            new_events.append(event)
+
+                    for event in self._trace_event_mapper.map_many(new_events):
+                        yield event
+
+                    emitted_count = len(lines)
+
+            await asyncio.sleep(0.5)

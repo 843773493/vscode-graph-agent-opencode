@@ -384,7 +384,10 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
         session_id = self._get_session_id(runtime)
-        self._save_trace_event(session_id, "agent_start", {"message_count": len(state.get("messages", []))})
+        self._save_trace_event(session_id, "agent_start", {
+            "message": "agent 启动，准备处理用户请求",
+            "message_count": len(state.get("messages", [])),
+        })
         return None
 
     def wrap_tool_call(
@@ -439,93 +442,8 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
         session_id = self._get_session_id(runtime)
-        self._save_trace_event(session_id, "agent_end", {"final_message_count": len(state.get("messages", []))})
-        return None
-
-
-class ExecutionTraceMiddleware(AgentMiddleware):
-    """唯一职责：存储完整的执行轨迹事件"""
-
-    def __init__(self):
-        self._session_start_times = {}
-
-    def _get_session_id(self, runtime) -> str:
-        """直接读取 LangChain 的 thread_id。"""
-        execution_info = runtime.execution_info
-        return execution_info.thread_id
-
-    def _save_trace_event(self, session_id: str, event_type: str, data: dict) -> None:
-        try:
-            logs_dir = get_logs_dir() / "traces"
-            logs_dir.mkdir(exist_ok=True, parents=True)
-
-            log_file = logs_dir / f"trace_{session_id}.jsonl"
-
-            timestamp = int(time.time() * 1000)
-            log_data = {
-                "timestamp": timestamp,
-                "event_type": event_type,
-                "data": data,
-            }
-
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_data, ensure_ascii=False, default=str) + "\n")
-
-        except Exception:
-            pass
-
-    def before_agent(self, state: dict[str, Any], runtime):
-        session_id = self._get_session_id(runtime)
-        self._save_trace_event(session_id, "agent_start", {"message_count": len(state.get("messages", []))})
-        return None
-
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command],
-    ) -> ToolMessage | Command:
-        session_id = self._get_session_id(request.runtime)
-        tool_call = request.tool_call
-        tool_name = tool_call.get("name", "unknown_tool")
-
-        self._save_trace_event(session_id, "tool_call_start", {
-            "tool_name": tool_name,
-            "args": tool_call.get("args", {}),
+        self._save_trace_event(session_id, "agent_end", {
+            "final_text": "agent 已完成本轮处理",
+            "final_message_count": len(state.get("messages", [])),
         })
-
-        result = handler(request)
-
-        self._save_trace_event(session_id, "tool_call_end", {
-            "tool_name": tool_name,
-            "result": str(result),
-        })
-
-        return result
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command],
-    ) -> ToolMessage | Command:
-        session_id = self._get_session_id(request.runtime)
-        tool_call = request.tool_call
-        tool_name = tool_call.get("name", "unknown_tool")
-
-        self._save_trace_event(session_id, "tool_call_start", {
-            "tool_name": tool_name,
-            "args": tool_call.get("args", {}),
-        })
-
-        result = await handler(request)
-
-        self._save_trace_event(session_id, "tool_call_end", {
-            "tool_name": tool_name,
-            "result": str(result),
-        })
-
-        return result
-
-    def after_agent(self, state: dict[str, Any], runtime):
-        session_id = self._get_session_id(runtime)
-        self._save_trace_event(session_id, "agent_end", {"final_message_count": len(state.get("messages", []))})
         return None

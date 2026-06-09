@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_request_id, get_session_auto_continue_service, get_session_service, verify_local_token
-from app.schemas.event import Event
 from app.schemas.public_v2.common import APIResponse, CursorPage
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
@@ -13,6 +13,7 @@ from app.schemas.public_v2.session import (
     SessionDTO,
     SessionUpdateRequest,
 )
+from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.session_auto_continue_service import SessionAutoContinueService
 from app.services.session_service import SessionService
 
@@ -53,7 +54,7 @@ async def get_session(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{session_id}/traces", response_model=APIResponse[list[Event]], summary="获取会话执行轨迹")
+@router.get("/{session_id}/traces", response_model=APIResponse[list[TraceEventDTO]], summary="获取会话执行轨迹")
 async def list_session_traces(
     session_id: str,
     _: str = Depends(verify_local_token),
@@ -62,6 +63,27 @@ async def list_session_traces(
 ):
     result = await session_service.list_trace_events(session_id)
     return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/{session_id}/traces/stream", summary="订阅会话执行轨迹流")
+async def stream_session_traces(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    session_service: SessionService = Depends(get_session_service),
+):
+    async def event_generator():
+        async for event in session_service.stream_trace_events(session_id):
+            if hasattr(event, "model_dump_json"):
+                data = event.model_dump_json()
+            else:
+                import json
+
+                data = json.dumps(event, ensure_ascii=False, default=str)
+
+            yield f"event: trace\n"
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.patch("/{session_id}", response_model=APIResponse[SessionDTO], summary="更新会话")
