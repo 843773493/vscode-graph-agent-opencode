@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../.boxteams"
+		}
+	],
+	"settings": {
+		"testing.automaticallyOpenTestResults": "neverOpen"
+	}
+}
