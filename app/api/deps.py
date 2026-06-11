@@ -18,6 +18,7 @@ from app.services.session_service import SessionService
 from app.services.log_service import LogService
 from app.services.tool_service import ToolService
 from app.services.workspace_service import WorkspaceService
+from app.runtime.session_orchestrator import SessionOrchestrator
 
 
 class _AppContainerProtocol:
@@ -37,6 +38,7 @@ class _AppContainerProtocol:
     tool_service: ToolService
     workspace_service: WorkspaceService
     agent_execution_service: AgentExecutionService
+    session_orchestrator: SessionOrchestrator
 
 
 def get_request_id(x_request_id: str | None = Header(default=None)) -> str | None:
@@ -167,4 +169,11 @@ def get_agent_execution_service(request: Request) -> AgentExecutionService:
     service = getattr(_get_container(request), "agent_execution_service", None)
     if not isinstance(service, AgentExecutionService):
         raise RuntimeError("AgentExecutionService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_session_orchestrator(request: Request) -> SessionOrchestrator:
+    service = getattr(_get_container(request), "session_orchestrator", None)
+    if not isinstance(service, SessionOrchestrator):
+        raise RuntimeError("SessionOrchestrator 尚未在应用启动阶段初始化")
     return service

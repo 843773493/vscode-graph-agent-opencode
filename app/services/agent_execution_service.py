@@ -1,15 +1,16 @@
 from __future__ import annotations
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List, Protocol
 
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
-from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
+from app.agents.agent_factory import resolve_agent_id
 from app.services.config_service import ConfigService
+from app.runtime.agent_runtime import AgentRuntimeDependencyProvider, build_session_agent_runtime
 
-if TYPE_CHECKING:
-    from app.services.message_service import MessageService
-    from app.services.session_service import SessionService
+
+class _RuntimeBuilder(Protocol):
+    def __call__(self, *, session_id: str, agent_id: str | None = None) -> Any: ...
 
 
 class AgentExecutionService:
@@ -20,35 +21,32 @@ class AgentExecutionService:
         background_task_registry: BackgroundTaskRegistry,
         background_message_bus: BackgroundMessageBus,
         job_event_bus: JobEventBus,
-        message_service: "MessageService",
-        session_service: "SessionService",
+        dependency_provider: AgentRuntimeDependencyProvider,
     ):
         self._agent_cache = {}
         self._config_service = config_service
         self._background_task_registry = background_task_registry
         self._background_message_bus = background_message_bus
         self._bus = job_event_bus
-        self._message_service = message_service
-        self._session_service = session_service
+        self._dependency_provider = dependency_provider
     
     def _get_or_create_agent(self, session_id: str, agent_id: str | None = None):
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
+
         resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
         cache_key = f"{session_id}::{resolved_agent_id}"
         if cache_key in self._agent_cache:
             return self._agent_cache[cache_key]
 
-        agent = create_runtime_deep_agent_for_session(
+        agent = build_session_agent_runtime(
             session_id=session_id,
-            agent_id=resolved_agent_id,
+            agent_id=agent_id or resolved_agent_id,
             config_service=self._config_service,
             background_task_registry=self._background_task_registry,
             background_message_bus=self._background_message_bus,
             job_event_bus=self._bus,
-            message_service=self._message_service,
-            session_service=self._session_service,
-            name=resolved_agent_id,
+            dependency_provider=self._dependency_provider,
         )
         
         self._agent_cache[cache_key] = agent
@@ -90,10 +88,6 @@ class AgentExecutionService:
             raise RuntimeError("AgentExecutionService 未绑定 BackgroundTaskRegistry")
         if self._background_message_bus is None:
             raise RuntimeError("AgentExecutionService 未绑定 BackgroundMessageBus")
-        if self._message_service is None:
-            raise RuntimeError("AgentExecutionService 未绑定 MessageService")
-        if self._session_service is None:
-            raise RuntimeError("AgentExecutionService 未绑定 SessionService")
         resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
         agent = self._get_or_create_agent(session_id, resolved_agent_id)
         if self._bus is None:

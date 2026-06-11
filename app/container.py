@@ -20,6 +20,20 @@ from app.services.log_service import LogService
 from app.services.tool_service import ToolService
 from app.services.workspace_service import WorkspaceService
 from app.agents.agent_middleware import LLMLoggingMiddleware
+from app.runtime.session_orchestrator import SessionOrchestrator
+from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
+
+
+class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
+    def __init__(self, *, message_service: MessageService, session_service: SessionService) -> None:
+        self._message_service = message_service
+        self._session_service = session_service
+
+    def get_message_service(self) -> MessageService:
+        return self._message_service
+
+    def get_session_service(self) -> SessionService:
+        return self._session_service
 
 
 @dataclass(slots=True)
@@ -33,6 +47,7 @@ class AppContainer:
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
     session_service: SessionService
+    session_orchestrator: SessionOrchestrator
     log_service: LogService
     tool_service: ToolService
     workspace_service: WorkspaceService
@@ -51,13 +66,16 @@ def build_app_container() -> AppContainer:
     config_service = ConfigService()
     message_service = MessageService()
     session_service = SessionService(config_service=config_service)
+    dependency_provider = _AgentRuntimeDependencyProvider(
+        message_service=message_service,
+        session_service=session_service,
+    )
     agent_execution_service = AgentExecutionService(
         config_service=config_service,
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
-        message_service=message_service,
-        session_service=session_service,
+        dependency_provider=dependency_provider,
     )
     job_executor = JobExecutionService(
         agent_execution_service=agent_execution_service,
@@ -65,6 +83,13 @@ def build_app_container() -> AppContainer:
         job_event_bus=job_event_bus,
     )
     job_service = JobService(job_event_bus=job_event_bus, job_executor=job_executor)
+    session_orchestrator = SessionOrchestrator(
+        message_service=message_service,
+        session_service=session_service,
+        config_service=config_service,
+        job_service=job_service,
+        job_event_bus=job_event_bus,
+    )
 
     agent_service = AgentService(config_service=config_service)
     artifact_service = ArtifactService()
@@ -75,12 +100,11 @@ def build_app_container() -> AppContainer:
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
         session_service=session_service,
-        message_service=message_service,
         job_service=job_service,
-        config_service=config_service,
+        session_orchestrator=session_orchestrator,
     )
     log_service = LogService()
-    tool_service = ToolService(agent_execution_service=agent_execution_service)
+    tool_service = ToolService(tool_catalog=agent_execution_service)
     workspace_service = WorkspaceService(config_service=config_service)
     llm_logging_middleware = LLMLoggingMiddleware(job_event_bus=job_event_bus)
 
@@ -94,6 +118,7 @@ def build_app_container() -> AppContainer:
         runtime_service=runtime_service,
         session_auto_continue_service=session_auto_continue_service,
         session_service=session_service,
+        session_orchestrator=session_orchestrator,
         log_service=log_service,
         tool_service=tool_service,
         workspace_service=workspace_service,

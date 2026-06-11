@@ -1,16 +1,20 @@
 from __future__ import annotations
-from typing import Any, Dict, List
+from typing import Protocol
 
 from app.schemas.public_v2.tool import ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO
-from app.services.agent_execution_service import AgentExecutionService
+
+
+class ToolCatalog(Protocol):
+    def get_available_tools(self) -> list[dict]:
+        ...
 
 
 class ToolService:
-    def __init__(self, *, agent_execution_service: AgentExecutionService):
-        self._agent_execution_service = agent_execution_service
+    def __init__(self, *, tool_catalog: ToolCatalog):
+        self._tool_catalog = tool_catalog
     
     async def list(self) -> list[ToolDTO]:
-        tools = self._agent_execution_service.get_available_tools()
+        tools = self._tool_catalog.get_available_tools()
         return [
             ToolDTO(
                 tool_id=tool["id"],

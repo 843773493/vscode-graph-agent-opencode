@@ -7,9 +7,9 @@ from typing import Optional, TYPE_CHECKING
 
 from app.core.job_event_bus import EventType, JobEventBus
 from app.schemas.public_v2.common import JobStatus
-from app.services.agent_execution_service import AgentExecutionService
 
 if TYPE_CHECKING:
+    from app.services.agent_execution_service import AgentExecutionService
     from app.services.message_service import MessageService
 
 

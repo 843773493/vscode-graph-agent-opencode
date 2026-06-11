@@ -110,8 +110,13 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             if session_id:
                 return session_id
 
-        execution_info = runtime.execution_info
-        return execution_info.thread_id
+        execution_info = getattr(runtime, 'execution_info', None)
+        if execution_info is not None:
+            thread_id = getattr(execution_info, 'thread_id', None)
+            if isinstance(thread_id, str) and thread_id:
+                return thread_id
+
+        return "unknown_session"
 
     def _get_job_id(self, runtime: Runtime[Any]) -> str:
         """
@@ -275,8 +280,14 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 payload={"model": model_name, "timestamp": int(time.time() * 1000)},
                 agent_id="deep_agent",
             ))
-        except Exception:
-            pass
+        except Exception as error:
+            import logging
+            logging.getLogger(__name__).exception(
+                "[execution_trace_middleware] 保存轨迹失败: session_id=%s event_type=%s error=%s",
+                session_id,
+                event_type,
+                error,
+            )
 
         return response
 

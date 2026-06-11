@@ -62,6 +62,20 @@
             "skipFiles": [
                 "<node_internals>/**"
             ]
+        },
+        {
+            "name": "Python: Debug Tests",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "purpose": [
+                "debug-test"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "LAUNCH_DEBUG": "1"
+            }
         }
     ],
     "compounds": [

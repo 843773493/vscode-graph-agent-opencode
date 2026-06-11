@@ -5,12 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from app.services.config_service import ConfigService
-from app.services.job_service import JobService
-from app.services.session_service import SessionService
-from app.core.job_event_bus import EventType, JobEventBus
 from app.schemas.public_v2.message import MessageDTO, MessageCreateRequest, MessageRunRequest, MessageRunAccepted
-from app.schemas.public_v2.job import JobStatus
 from app.schemas.public_v2.common import MessageRole, CursorPage
 from app.core.path_utils import get_session_path
 
@@ -94,54 +89,3 @@ class MessageService:
             updated_at=now,
         )
         return self._append_message(message)
-
-    async def create_and_run(
-        self,
-        session_id: str,
-        run_request: MessageRunRequest,
-        *,
-        session_service: SessionService,
-        config_service: ConfigService,
-        job_service: JobService,
-        job_event_bus: JobEventBus,
-    ) -> MessageRunAccepted:
-        """
-        创建消息并启动异步Job执行
-        供路由层调用的实例方法
-        """
-        message = await self.create(session_id, run_request.message)
-
-        # 消息创建事件：此时 job_id 还未生成，使用 session_id 作为关联ID
-        await job_event_bus.publish(
-            session_id,  # ⚠️ 暂时使用 session_id，因为 job_id 尚未创建
-            EventType.MESSAGE_CREATED,
-            {
-                "message_id": message.message_id,
-                "session_id": message.session_id,
-                "role": message.role,
-                "content": message.content,
-                "attachments": [a.model_dump() for a in message.attachments],
-                "metadata": message.metadata,
-                "created_at": message.created_at,  # datetime对象，Pydantic会处理
-            }
-        )
-
-        session = await session_service.get(session_id)
-
-        requested_agent_id = run_request.run.agent_id if run_request.run else None
-        if requested_agent_id is None:
-            requested_agent_id = session.current_agent_id
-        effective_agent_id = config_service.resolve_agent_id(requested_agent_id)
-
-        try:
-            config_service.validate_agent_id(effective_agent_id)
-        except ValueError:
-            effective_agent_id = config_service.get_default_agent_id()
-
-        job_id = await job_service.start_job(session_id, message.content, effective_agent_id)
-
-        return MessageRunAccepted(
-            message_id=message.message_id,
-            job_id=job_id,
-            status=JobStatus.accepted,
-        )

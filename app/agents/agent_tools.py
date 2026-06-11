@@ -20,11 +20,7 @@ from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
 from app.core.path_utils import get_workspace_root
 from app.schemas.background_message import BackgroundMessageKind
-from app.schemas.public_v2.common import RunMode
-from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions
-from app.services.message_service import MessageService
-from app.services.job_service import JobService
-from app.services.session_service import SessionService
+from app.runtime.session_orchestrator import SessionOrchestrator
 
 
 def _get_repo_root() -> Path:
@@ -412,11 +408,7 @@ def create_background_message_collection_tool(
 def create_send_message_to_session_tool(
     sender_agent_id: str = "deep_agent",
     *,
-    message_service: MessageService,
-    session_service: SessionService,
-    config_service: Any,
-    job_service: JobService,
-    job_event_bus: JobEventBus,
+    session_orchestrator: SessionOrchestrator,
 ) -> BaseTool:
     """创建向目标 session 发送消息的工具。"""
     @tool("send_message_to_session")
@@ -430,26 +422,8 @@ def create_send_message_to_session_tool(
         if not content.strip():
             raise ValueError("content 不能为空")
 
-        run_request = MessageRunRequest(
-            message=MessageCreateRequest(
-                role="user",
-                content=content,
-            ),
-            run=RunOptions(
-                mode=RunMode.single_agent,
-                agent_id=sender_agent_id,
-            ),
-        )
-
-        result = await message_service.create_and_run(
-            target_session_id,
-            run_request,
-            session_service=session_service,
-            config_service=config_service,
-            job_service=job_service,
-            job_event_bus=job_event_bus,
-        )
-        return result.model_dump(mode="json")
+        result = await session_orchestrator.create_and_run(target_session_id, content)
+        return {"job_id": result.job_id, "sender_agent_id": sender_agent_id, "target_session_id": target_session_id, "message_id": result.message_id, "status": result.status}
 
     return send_message_to_session
 
@@ -501,10 +475,12 @@ def build_default_tools(
         ),
         create_send_message_to_session_tool(
             sender_agent_id=sender_agent_id,
-            message_service=message_service,
-            session_service=session_service,
-            config_service=config_service,
-            job_service=job_service,
-            job_event_bus=job_event_bus,
+            session_orchestrator=SessionOrchestrator(
+                message_service=message_service,
+                session_service=session_service,
+                config_service=config_service,
+                job_service=job_service,
+                job_event_bus=job_event_bus,
+            ),
         ),
     ]

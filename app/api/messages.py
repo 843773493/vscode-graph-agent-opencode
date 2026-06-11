@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_config_service, get_job_service, get_message_service, get_request_id, get_session_service, verify_local_token, get_job_event_bus
+from app.api.deps import get_message_service, get_request_id, get_session_orchestrator, verify_local_token
 from app.schemas.public_v2.common import APIResponse, CursorPage
 from app.schemas.public_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
 from app.services.message_service import MessageService
-from app.services.config_service import ConfigService
-from app.services.job_service import JobService
-from app.services.session_service import SessionService
+from app.runtime.session_orchestrator import SessionOrchestrator
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 
@@ -20,19 +18,9 @@ async def create_message_and_run(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
-    session_service: SessionService = Depends(get_session_service),
-    config_service: ConfigService = Depends(get_config_service),
-    job_service: JobService = Depends(get_job_service),
-    job_event_bus=Depends(get_job_event_bus),
+    session_orchestrator: SessionOrchestrator = Depends(get_session_orchestrator),
 ):
-    result = await message_service.create_and_run(
-        session_id,
-        payload,
-        session_service=session_service,
-        config_service=config_service,
-        job_service=job_service,
-        job_event_bus=job_event_bus,
-    )
+    result = await session_orchestrator.create_message(session_id, payload)
     return APIResponse(message="ok", data=result, request_id=request_id)
 
 

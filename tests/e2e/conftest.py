@@ -69,21 +69,44 @@ def e2e_backend_process(e2e_workspace_root_path: str, e2e_backend_port: int) -> 
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = e2e_workspace_root_path
     env["PYTHONUNBUFFERED"] = "1"
-
+    launch_debug = env.get("LAUNCH_DEBUG")
+    if launch_debug:
+        e2e_backend_port = 8000
+    
     python_executable = _resolve_workspace_python_executable(Path.cwd())
 
-    cmd = [
-        str(python_executable),
-        "-m",
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(e2e_backend_port),
-        "--log-level",
-        "warning",
-    ]
+    if launch_debug:
+        cmd = [
+            str(python_executable),
+            "-m",
+            "debugpy",
+            "--listen",
+            "127.0.0.1:8002",
+            "--wait-for-client",
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(e2e_backend_port),
+            "--log-level",
+            "warning",
+        ]
+        print("检测到 LAUNCH_DEBUG，e2e 后端将通过 debugpy --wait-for-client 启动")
+    else:
+        cmd = [
+            str(python_executable),
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(e2e_backend_port),
+            "--log-level",
+            "warning",
+        ]
 
     process = subprocess.Popen(
         cmd,

@@ -146,15 +146,17 @@ class JobService:
         Returns:
             job_id: 新创建的Job ID
         """
-        job_id = f"job_{uuid.uuid4().hex[:12]}"
         import logging
-        logging.getLogger(__name__).info(
+        logger = logging.getLogger(__name__)
+        logger.info(
             "[job_service] start_job: session_id=%s agent_id=%s message_length=%s job_id=%s",
             session_id,
             agent_id,
             len(message or ""),
-            job_id,
+            "pending",
         )
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        logger.info("[job_service] start_job assigned id: job_id=%s", job_id)
         
         job = JobState(
             job_id=job_id,
@@ -175,10 +177,10 @@ class JobService:
                 payload={"session_id": session_id, "message": message, "agent_id": agent_id},
             agent_id="job_service"
         )
-        logging.getLogger(__name__).info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", job_id, session_id)
+        logger.info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", job_id, session_id)
 
         queued, blocked_by = await self._enqueue_or_dispatch(job)
-        logging.getLogger(__name__).info("[job_service] enqueue_or_dispatch result: job_id=%s queued=%s blocked_by=%s", job_id, queued, blocked_by)
+        logger.info("[job_service] enqueue_or_dispatch result: job_id=%s queued=%s blocked_by=%s", job_id, queued, blocked_by)
         if queued:
             await self._bus.publish(
                 job_id=job_id,
