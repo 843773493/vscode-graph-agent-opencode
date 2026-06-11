@@ -12,11 +12,15 @@ from urllib.request import urlopen
 
 import httpx
 import pytest
+import debugpy
 
 E2E_PORT_START = 18600
 E2E_PORT_END = 18799
 E2E_READY_TIMEOUT_SECONDS = 60
 
+@pytest.fixture(scope="session", autouse=True)
+def is_debug() -> bool:
+    return os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY") == "1"
 
 @pytest.fixture(scope="module")
 def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
@@ -63,50 +67,42 @@ def e2e_backend_port(e2e_workspace_root_path: str) -> int:
 
 
 @pytest.fixture(scope="module")
-def e2e_backend_process(e2e_workspace_root_path: str, e2e_backend_port: int) -> Generator[subprocess.Popen[str], None, None]:
+def e2e_backend_process(
+    e2e_workspace_root_path: str,
+    e2e_backend_port: int,
+    is_debug: bool,
+) -> Generator[subprocess.Popen[str], None, None]:
     _kill_process_on_port(e2e_backend_port)
 
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = e2e_workspace_root_path
     env["PYTHONUNBUFFERED"] = "1"
-    launch_debug = env.get("LAUNCH_DEBUG")
-    if launch_debug:
-        e2e_backend_port = 8000
-    
-    python_executable = _resolve_workspace_python_executable(Path.cwd())
 
-    if launch_debug:
-        cmd = [
-            str(python_executable),
+    python_executable = _resolve_workspace_python_executable(Path.cwd())
+    enable_backend_debugpy = is_debug
+    
+    cmd = [str(python_executable)]
+    if enable_backend_debugpy:
+        backend_debugpy_port = int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT"))
+        _kill_process_on_port(backend_debugpy_port)
+        cmd.extend([
             "-m",
             "debugpy",
             "--listen",
-            "127.0.0.1:8002",
+            f"127.0.0.1:{backend_debugpy_port}",
             "--wait-for-client",
-            "-m",
-            "uvicorn",
-            "app.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(e2e_backend_port),
-            "--log-level",
-            "warning",
-        ]
-        print("检测到 LAUNCH_DEBUG，e2e 后端将通过 debugpy --wait-for-client 启动")
-    else:
-        cmd = [
-            str(python_executable),
-            "-m",
-            "uvicorn",
-            "app.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(e2e_backend_port),
-            "--log-level",
-            "warning",
-        ]
+        ])
+    cmd.extend([
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(e2e_backend_port),
+        "--log-level",
+        "warning",
+    ])
 
     process = subprocess.Popen(
         cmd,
@@ -115,7 +111,12 @@ def e2e_backend_process(e2e_workspace_root_path: str, e2e_backend_port: int) -> 
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    print(f"启动 e2e 后端进程: port={e2e_backend_port}, workspace={e2e_workspace_root_path}, pid={process.pid}")
+    if enable_backend_debugpy:
+        print(
+            f"启动 e2e 后端进程: port={e2e_backend_port}, debugpy_port={backend_debugpy_port}, workspace={e2e_workspace_root_path}, pid={process.pid}"
+        )
+    else:
+        print(f"启动 e2e 后端进程: port={e2e_backend_port}, workspace={e2e_workspace_root_path}, pid={process.pid}")
 
     try:
         _wait_for_backend_ready(e2e_backend_port, process)
@@ -134,10 +135,11 @@ def client_base_url(e2e_backend_port: int) -> str:
 async def client(
     e2e_backend_process: subprocess.Popen[str],
     client_base_url: str,
+    is_debug: bool
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         base_url=client_base_url,
-        timeout=30,
+        timeout=30 if not is_debug else None,
         headers={"X-Local-Token": "local-dev-token"},
     ) as client:
         yield client

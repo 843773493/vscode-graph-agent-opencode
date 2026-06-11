@@ -18,7 +18,7 @@ class JobState:
     session_id: str
     status: JobStatus
     message: str = ""
-    agent_id: str = "deep_agent"
+    agent_id: str = "default"
     progress: int = 0
     error_message: Optional[str] = None
     result: Optional[str] = None
@@ -115,27 +115,7 @@ class JobService:
             control_state=f"Action {control_request.action.value} applied successfully"
         )
     
-    async def run_agent(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
-        """
-        启动Agent执行单步调用（同步阻塞模式，保持向后兼容）
-        
-        Args:
-            session_id: 会话ID
-            message: 用户输入消息
-            
-        Returns:
-            Agent响应内容
-        """
-        job_id = str(uuid.uuid4())
-        job = JobRuntimeState(
-            job_id=job_id,
-            session_id=session_id,
-            message=message,
-            agent_id=agent_id,
-        )
-        return await self._job_executor.run(job)
-    
-    async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
+    async def start_job(self, session_id: str, message: str, agent_id: str = "default") -> str:
         """
         启动异步后台Job，不阻塞HTTP请求
         

@@ -25,6 +25,10 @@ from app.schemas.event import (
     AgentStartPayload,
     AgentStepEvent,
     AgentStepPayload,
+    ToolCallEndEvent,
+    ToolCallEndPayload,
+    ToolCallStartEvent,
+    ToolCallStartPayload,
     ErrorEvent,
     ErrorPayload,
     JobCancelledEvent,
@@ -285,7 +289,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             logging.getLogger(__name__).exception(
                 "[execution_trace_middleware] 保存轨迹失败: session_id=%s event_type=%s error=%s",
                 session_id,
-                event_type,
+                EventType.LLM_REQUEST,
                 error,
             )
 
@@ -349,8 +353,17 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False, default=str) + "\n")
 
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.exception(
+                "[execution_trace_middleware] 保存轨迹失败: session_id=%s event_type=%s error=%s",
+                session_id,
+                event_type,
+                exc,
+            )
+            raise
 
     def _build_trace_event(self, session_id: str, event_type: str, data: dict[str, Any]):
         timestamp = datetime.now(timezone.utc)
@@ -368,6 +381,10 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
             return AgentStepEvent(**common, type="agent_step", payload=AgentStepPayload.model_validate(data))
         if event_type == EventType.AGENT_END:
             return AgentEndEvent(**common, type="agent_end", payload=AgentEndPayload.model_validate(data))
+        if event_type == "tool_call_start":
+            return ToolCallStartEvent(**common, type="tool_call_start", payload=ToolCallStartPayload.model_validate(data))
+        if event_type == "tool_call_end":
+            return ToolCallEndEvent(**common, type="tool_call_end", payload=ToolCallEndPayload.model_validate(data))
         if event_type == EventType.LLM_REQUEST:
             return LLMRequestEvent(**common, type="llm_request", payload=LLMRequestPayload.model_validate(data))
         if event_type == EventType.MESSAGE_CREATED:
@@ -395,9 +412,11 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
         session_id = self._get_session_id(runtime)
+        agent_id = getattr(runtime.execution_info, "agent_id", None) or "unknown_agent"
         self._save_trace_event(session_id, "agent_start", {
             "message": "agent 启动，准备处理用户请求",
             "message_count": len(state.get("messages", [])),
+            "agent_id": agent_id,
         })
         return None
 
@@ -453,8 +472,10 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
         session_id = self._get_session_id(runtime)
+        agent_id = getattr(runtime.execution_info, "agent_id", None) or "unknown_agent"
         self._save_trace_event(session_id, "agent_end", {
             "final_text": "agent 已完成本轮处理",
             "final_message_count": len(state.get("messages", [])),
+            "agent_id": agent_id,
         })
         return None

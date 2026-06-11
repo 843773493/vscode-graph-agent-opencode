@@ -87,6 +87,20 @@ class AgentEndPayload(BaseModel):
     agent_id: str
 
 
+class ToolCallStartPayload(BaseModel):
+    """TOOL_CALL_START 事件的 payload"""
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    agent_id: str | None = None
+
+
+class ToolCallEndPayload(BaseModel):
+    """TOOL_CALL_END 事件的 payload"""
+    tool_name: str
+    result: str = ""
+    agent_id: str | None = None
+
+
 class ErrorPayload(BaseModel):
     """ERROR 事件的 payload"""
     error: str
@@ -161,6 +175,18 @@ class AgentEndEvent(BaseEvent):
     payload: AgentEndPayload
 
 
+class ToolCallStartEvent(BaseEvent):
+    """工具调用开始事件"""
+    type: Literal["tool_call_start"] = "tool_call_start"
+    payload: ToolCallStartPayload
+
+
+class ToolCallEndEvent(BaseEvent):
+    """工具调用结束事件"""
+    type: Literal["tool_call_end"] = "tool_call_end"
+    payload: ToolCallEndPayload
+
+
 class ErrorEvent(BaseEvent):
     """错误事件"""
     type: Literal["error"] = "error"
@@ -196,6 +222,8 @@ Event = Union[
     AgentStartEvent,
     AgentStepEvent,
     AgentEndEvent,
+    ToolCallStartEvent,
+    ToolCallEndEvent,
     ErrorEvent,
     LLMRequestEvent,
 ] 

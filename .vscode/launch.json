@@ -67,15 +67,19 @@
             "name": "Python: Debug Tests",
             "type": "debugpy",
             "request": "launch",
-            "program": "${file}",
-            "purpose": [
-                "debug-test"
+            "purpose": ["debug-test"],
+            "program": "${workspaceFolder}/.venv/Scripts/pytest.exe",
+            "args": [
+                "tests/e2e"
             ],
-            "console": "integratedTerminal",
-            "justMyCode": false,
+            "cwd": "${workspaceFolder}",
             "env": {
-                "LAUNCH_DEBUG": "1"
-            }
+                "BOXTEAM_E2E_BACKEND_DEBUGPY": "1",
+                "BOXTEAM_E2E_BACKEND_DEBUGPY_PORT": "8000"
+            },
+            "subProcess": true,
+            "console": "integratedTerminal",
+            "justMyCode": false
         }
     ],
     "compounds": [
