@@ -2,17 +2,19 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
-from app.services.config_service import ConfigService
+from app.services.infrastructure.config_service import ConfigService
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.job_event_bus import JobEventBus
 
 
 class AgentRuntimeDependencyProvider(Protocol):
     def get_message_service(self) -> Any: ...
 
     def get_session_service(self) -> Any: ...
+
+    def get_session_orchestrator(self) -> Any: ...
 
 
 def build_session_agent_runtime(
@@ -22,7 +24,7 @@ def build_session_agent_runtime(
     config_service: ConfigService,
     background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBus,
-    job_event_bus: JobEventBus,
+    job_event_bus: JobEventBusProtocol,
     dependency_provider: AgentRuntimeDependencyProvider,
     name: str | None = None,
 ) -> Any:
@@ -36,5 +38,6 @@ def build_session_agent_runtime(
         job_event_bus=job_event_bus,
         message_service=dependency_provider.get_message_service(),
         session_service=dependency_provider.get_session_service(),
+        session_orchestrator=dependency_provider.get_session_orchestrator(),
         name=name or resolved_agent_id,
     )

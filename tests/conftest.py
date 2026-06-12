@@ -29,7 +29,7 @@ def use_config(name: str) -> str:
 
 @pytest.fixture(autouse=True)
 def setup_test_config(test_config_path: str):
-    from app.services.config_service import set_config_path
+    from app.services.infrastructure.config_service import set_config_path
 
     if os.path.exists(test_config_path):
         set_config_path(test_config_path)

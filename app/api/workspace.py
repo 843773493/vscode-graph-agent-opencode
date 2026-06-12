@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_request_id, get_workspace_service, verify_local_token
 from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.workspace import WorkspaceContextDTO, WorkspaceDTO, WorkspaceIndexStatusDTO, WorkspaceIndexRebuildDTO
-from app.services.workspace_service import WorkspaceService
+from app.services.infrastructure.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 

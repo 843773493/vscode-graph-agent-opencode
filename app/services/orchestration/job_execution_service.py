@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
-from app.core.job_event_bus import EventType, JobEventBus
+from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.core.job_event_bus import EventType
 from app.schemas.public_v2.common import JobStatus
 
-if TYPE_CHECKING:
-    from app.services.agent_execution_service import AgentExecutionService
-    from app.services.message_service import MessageService
+from app.services.business.message_service import MessageService
+from app.abstractions.job_step_executor import JobStepExecutor
 
 
 @dataclass
@@ -33,9 +33,9 @@ class JobExecutionService:
     def __init__(
         self,
         *,
-        agent_execution_service: AgentExecutionService,
+        agent_execution_service: JobStepExecutor,
         message_service: "MessageService",
-        job_event_bus: JobEventBus,
+        job_event_bus: JobEventBusProtocol,
     ) -> None:
         self._agent_execution_service = agent_execution_service
         self._message_service = message_service
@@ -91,3 +91,5 @@ class JobExecutionService:
             payload={"error": str(error)},
             agent_id="job_service",
         )
+        
+        

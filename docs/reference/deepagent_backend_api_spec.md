@@ -1134,7 +1134,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_request_id, verify_local_token
 from app.schemas.public_v2.common import APIResponse, CursorPage
 from app.schemas.public_v2.session import SessionCreateRequest, SessionDTO, SessionUpdateRequest
-from app.services.session_service import SessionService
+from app.services.business.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -1435,7 +1435,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_request_id, verify_local_token
 from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.config import ConfigDTO, ConfigUpdateRequest
-from app.services.config_service import ConfigService
+from app.services.infrastructure.config_service import ConfigService
 
 router = APIRouter(prefix="/config", tags=["config"])
 

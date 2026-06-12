@@ -5,13 +5,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.job_event_bus import EventType, JobEventBus
+from app.core.job_event_bus import EventType
 from app.core.background_message_bus import BackgroundMessageBus
 from app.schemas.public_v2.session import SessionAutoContinueStatusDTO
-from app.services.job_service import JobService
-from app.services.session_service import SessionService
-from app.runtime.session_orchestrator import SessionOrchestrator
+from app.services.business.session_service import SessionService
 
 
 @dataclass
@@ -33,10 +34,10 @@ class SessionAutoContinueService:
         *,
         background_task_registry: BackgroundTaskRegistry,
         background_message_bus: BackgroundMessageBus,
-        job_event_bus: JobEventBus,
+        job_event_bus: JobEventBusProtocol,
         session_service: SessionService,
-        job_service: JobService,
-        session_orchestrator: SessionOrchestrator,
+        job_service: JobServiceProtocol,
+        session_orchestrator: SessionOrchestratorProtocol,
     ):
         self._states: dict[str, _AutoContinueState] = {}
         self._lock = asyncio.Lock()
@@ -47,11 +48,7 @@ class SessionAutoContinueService:
         self._job_service = job_service
         self._session_orchestrator = session_orchestrator
 
-    async def start(
-        self,
-        session_id: str,
-        poll_interval_seconds: float = 1.0,
-    ) -> SessionAutoContinueStatusDTO:
+    async def start(self, session_id: str, poll_interval_seconds: float = 1.0) -> SessionAutoContinueStatusDTO:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds 必须大于 0")
 
@@ -98,7 +95,7 @@ class SessionAutoContinueService:
             self._states[session_id] = state
             return self._to_status(state, enabled=True)
 
-    async def stop(self, session_id: str, *, session_service: SessionService) -> SessionAutoContinueStatusDTO:
+    async def stop(self, session_id: str) -> SessionAutoContinueStatusDTO:
         if self._session_service is None:
             raise RuntimeError("SessionAutoContinueService 未绑定 SessionService")
         await self._session_service.get(session_id)
@@ -128,16 +125,59 @@ class SessionAutoContinueService:
             task = self._background_task_registry.get_task(session_id, state.task_id)
             self._states.pop(session_id, None)
 
+        if state is None:
+            return SessionAutoContinueStatusDTO(
+                session_id=session_id,
+                enabled=False,
+                task_id=None,
+                task_status="stopped",
+                poll_interval_seconds=None,
+                started_at=None,
+                forwarded_count=0,
+                last_forwarded_at=None,
+                last_trigger_event_id=None,
+                last_trigger_job_id=None,
+                last_enqueued_job_id=None,
+            )
+
         if task is not None and not task.done():
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+            except Exception as exc:
+                raise RuntimeError(f"停止会话自动继续任务失败: {exc}") from exc
+        elif task is None:
+            return SessionAutoContinueStatusDTO(
+                session_id=session_id,
+                enabled=False,
+                task_id=None,
+                task_status="stopped",
+                poll_interval_seconds=None,
+                started_at=None,
+                forwarded_count=state.forwarded_count,
+                last_forwarded_at=state.last_forwarded_at,
+                last_trigger_event_id=state.last_trigger_event_id,
+                last_trigger_job_id=state.last_trigger_job_id,
+                last_enqueued_job_id=state.last_enqueued_job_id,
+            )
 
-        return self._to_status(state, enabled=False)
+        return SessionAutoContinueStatusDTO(
+            session_id=session_id,
+            enabled=False,
+            task_id=None,
+            task_status="stopped",
+            poll_interval_seconds=None,
+            started_at=None,
+            forwarded_count=state.forwarded_count,
+            last_forwarded_at=state.last_forwarded_at,
+            last_trigger_event_id=state.last_trigger_event_id,
+            last_trigger_job_id=state.last_trigger_job_id,
+            last_enqueued_job_id=state.last_enqueued_job_id,
+        )
 
-    async def get_status(self, session_id: str, *, session_service: SessionService) -> SessionAutoContinueStatusDTO:
+    async def get_status(self, session_id: str) -> SessionAutoContinueStatusDTO:
         if self._session_service is None:
             raise RuntimeError("SessionAutoContinueService 未绑定 SessionService")
         await self._session_service.get(session_id)
@@ -202,12 +242,12 @@ class SessionAutoContinueService:
     async def _send_continue_message(self, state: _AutoContinueState, trigger_job_id: str, trigger_event_id: str) -> None:
         if self._session_service is None:
             raise RuntimeError("SessionAutoContinueService 未绑定 SessionService")
-        result_job_id = await self._session_orchestrator.create_and_run(state.session_id, "继续")
+        result = await self._session_orchestrator.create_and_run(state.session_id, "继续")
         state.forwarded_count += 1
         state.last_forwarded_at = datetime.now()
         state.last_trigger_job_id = trigger_job_id
         state.last_trigger_event_id = trigger_event_id
-        state.last_enqueued_job_id = result_job_id
+        state.last_enqueued_job_id = result.job_id
 
     def _to_status(self, state: _AutoContinueState, enabled: bool) -> SessionAutoContinueStatusDTO:
         task_status = "stopped"

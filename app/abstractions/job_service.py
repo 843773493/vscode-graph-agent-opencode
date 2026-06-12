@@ -1,0 +1,16 @@
+from __future__ import annotations
+
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class JobServiceProtocol(Protocol):
+    async def list(self, session_id: str | None = None) -> list[Any]: ...
+
+    async def get(self, job_id: str) -> Any: ...
+
+    async def list_steps(self, job_id: str) -> list[Any]: ...
+
+    async def control(self, job_id: str, control_request: Any) -> Any: ...
+
+    async def start_job(self, session_id: str, message: str, agent_id: str = "default") -> str: ...

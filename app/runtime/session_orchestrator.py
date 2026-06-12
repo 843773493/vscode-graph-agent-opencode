@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from app.core.job_event_bus import JobEventBus
+from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_service import JobServiceProtocol
 from app.core.job_event_bus import EventType
 from app.schemas.public_v2.common import MessageRole, RunMode
 from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions, MessageRunAccepted
-from app.services.config_service import ConfigService
-from app.services.job_service import JobService
-from app.services.message_service import MessageService
-from app.services.session_service import SessionService
+from app.services.infrastructure.config_service import ConfigService
+from app.services.business.message_service import MessageService
+from app.services.business.session_service import SessionService
 
 
 class SessionOrchestrator:
@@ -17,8 +17,8 @@ class SessionOrchestrator:
         message_service: MessageService,
         session_service: SessionService,
         config_service: ConfigService,
-        job_service: JobService,
-        job_event_bus: JobEventBus,
+        job_service: JobServiceProtocol,
+        job_event_bus: JobEventBusProtocol,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service

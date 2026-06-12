@@ -1,15 +1,18 @@
 from __future__ import annotations
+
 import asyncio
 import uuid
 from collections import deque
 from datetime import datetime
-from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
+from typing import Optional, Dict
 
+from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.core.job_event_bus import EventType
+from app.schemas.public_v2.common import JobStatus, RunMode, ControlAction
 from app.schemas.public_v2.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
-from app.schemas.public_v2.common import JobStatus, RunMode, StepStatus, ControlAction
-from app.core.job_event_bus import EventType, JobEventBus
-from app.services.job_execution_service import JobExecutionService, JobRuntimeState
+
+from app.services.orchestration.job_execution_service import JobExecutionService, JobRuntimeState
 
 
 @dataclass
@@ -31,9 +34,9 @@ class JobState:
 
 class JobService:
     _jobs: Dict[str, JobState] = {}
-    
-    def __init__(self, *, job_event_bus: JobEventBus, job_executor: JobExecutionService):
-        self._bus: JobEventBus | None = job_event_bus
+
+    def __init__(self, *, job_event_bus: JobEventBusProtocol, job_executor: JobExecutionService):
+        self._bus: JobEventBusProtocol | None = job_event_bus
         self._session_current_job: dict[str, str] = {}
         self._session_waiting_jobs: dict[str, deque[str]] = {}
         self._dispatch_lock = asyncio.Lock()
@@ -68,7 +71,7 @@ class JobService:
         job = self._jobs.get(job_id)
         if not job:
             raise ValueError(f"Job {job_id} not found")
-        
+
         return JobDTO(
             job_id=job.job_id,
             session_id=job.session_id,
@@ -94,7 +97,7 @@ class JobService:
         job = self._jobs.get(job_id)
         if not job:
             raise ValueError(f"Job {job_id} not found")
-        
+
         if control_request.action == ControlAction.pause:
             job.status = JobStatus.paused
             if job.task and not job.task.done():
@@ -107,25 +110,15 @@ class JobService:
             job.status = JobStatus.cancelling
             if job.task and not job.task.done():
                 job.task.cancel()
-        
+
         job.updated_at = datetime.now()
         return JobControlResponseDTO(
             job_id=job_id,
             status=job.status,
             control_state=f"Action {control_request.action.value} applied successfully"
         )
-    
+
     async def start_job(self, session_id: str, message: str, agent_id: str = "default") -> str:
-        """
-        启动异步后台Job，不阻塞HTTP请求
-        
-        Args:
-            session_id: 会话ID
-            message: 用户输入消息
-            
-        Returns:
-            job_id: 新创建的Job ID
-        """
         import logging
         logger = logging.getLogger(__name__)
         logger.info(
@@ -137,7 +130,7 @@ class JobService:
         )
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         logger.info("[job_service] start_job assigned id: job_id=%s", job_id)
-        
+
         job = JobState(
             job_id=job_id,
             session_id=session_id,
@@ -145,16 +138,16 @@ class JobService:
             agent_id=agent_id,
             status=JobStatus.queued
         )
-        
+
         self._jobs[job_id] = job
-        
+
         if self._bus is None:
             raise RuntimeError("JobService 未绑定 JobEventBus")
 
         await self._bus.publish(
             job_id=job_id,
             event_type=EventType.JOB_CREATED,
-                payload={"session_id": session_id, "message": message, "agent_id": agent_id},
+            payload={"session_id": session_id, "message": message, "agent_id": agent_id},
             agent_id="job_service"
         )
         logger.info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", job_id, session_id)
@@ -172,7 +165,7 @@ class JobService:
                 },
                 agent_id="job_service",
             )
-        
+
         return job_id
 
     def _is_terminal_status(self, status: JobStatus) -> bool:
@@ -186,16 +179,15 @@ class JobService:
 
     def _start_job_task(self, job: JobState) -> None:
         loop = asyncio.get_running_loop()
-        
+
         def _task_done_callback(task):
             try:
-                # 强制捕获任务异常，永远不要静默失败
                 task.result()
             except Exception as e:
                 import logging
                 logging.error(f"Job task failed: job_id={job.job_id}, error={str(e)}", exc_info=True)
                 self._job_failed(job.job_id, e)
-        
+
         job.task = loop.create_task(self._run_job_background(job.job_id, job.session_id, job.message))
         job.task.add_done_callback(_task_done_callback)
 
@@ -247,30 +239,29 @@ class JobService:
             self._session_current_job[finished_job.session_id] = next_job.job_id
 
         self._start_job_task(next_job)
-    
+
     async def _run_job_background(self, job_id: str, session_id: str, message: str):
-        """后台执行Job的实际逻辑"""
         job = self._jobs[job_id]
         import logging
         logger = logging.getLogger(__name__)
         logger.info("[job_service] _run_job_background begin: job_id=%s session_id=%s agent_id=%s message_length=%s", job_id, session_id, job.agent_id, len(message or ""))
-        
+
         try:
             job.status = JobStatus.running
             job.updated_at = datetime.now()
-            
-            await self._bus.publish(
-                job_id=job_id,
-                event_type=EventType.JOB_STARTED,
-                payload={},
-                agent_id="job_service"
-            )
-            logger.info("[job_service] JOB_STARTED published: job_id=%s", job_id)
-            
-            runtime_job = JobRuntimeState(
-                job_id=job_id,
-                session_id=session_id,
-                message=message,
+
+            if self._bus is not None:
+                await self._bus.publish(
+                    job_id=job_id,
+                    event_type=EventType.JOB_STARTED,
+                    payload={"session_id": session_id, "agent_id": job.agent_id, "message": message},
+                    agent_id="job_service",
+                )
+
+            result = await self._job_executor.run(JobRuntimeState(
+                job_id=job.job_id,
+                session_id=job.session_id,
+                message=job.message,
                 agent_id=job.agent_id,
                 status=job.status,
                 progress=job.progress,
@@ -280,74 +271,23 @@ class JobService:
                 updated_at=job.updated_at,
                 ended_at=job.ended_at,
                 task=job.task,
-            )
-
-            result_text = await self._job_executor.run(runtime_job)
-            logger.info("[job_service] job_executor finished: job_id=%s result_length=%s runtime_status=%s", job_id, len(str(result_text or "")), runtime_job.status)
-
-            job.result = runtime_job.result
-            job.status = runtime_job.status
-            job.progress = runtime_job.progress
-            job.error_message = runtime_job.error_message
-            job.ended_at = runtime_job.ended_at
-            job.updated_at = runtime_job.updated_at
-            
-        except asyncio.CancelledError:
-            if job.status == JobStatus.paused:
-                job.updated_at = datetime.now()
-                await self._bus.publish(
-                    job_id=job_id,
-                    event_type=EventType.STATUS_CHANGE,
-                    payload={"status": JobStatus.paused.value, "reason": "pause_requested"},
-                    agent_id="job_service"
-                )
-            else:
-                job.status = JobStatus.cancelled
-                job.ended_at = datetime.now()
-                await self._bus.publish(
-                    job_id=job_id,
-                    event_type=EventType.JOB_CANCELLED,
-                    payload={},
-                    agent_id="job_service"
-                )
-                logger.info("[job_service] JOB_CANCELLED published: job_id=%s", job_id)
-
-            job.updated_at = datetime.now()
-            
-        except Exception as e:
-            job.status = JobStatus.failed
-            job.error_message = str(e)
+            ))
+            job.result = result
+            job.status = JobStatus.completed
+            job.progress = 100
             job.ended_at = datetime.now()
             job.updated_at = datetime.now()
-            await self._bus.publish(
-                job_id=job_id,
-                event_type=EventType.JOB_FAILED,
-                payload={"error": str(e)},
-                agent_id="job_service"
-            )
-            logger.exception("[job_service] JOB_FAILED published: job_id=%s error=%s", job_id, str(e))
+        except Exception as error:
+            job.status = JobStatus.failed
+            job.error_message = str(error)
+            job.ended_at = datetime.now()
+            job.updated_at = datetime.now()
+            if self._bus is not None:
+                await self._bus.publish(
+                    job_id=job_id,
+                    event_type=EventType.JOB_FAILED,
+                    payload={"error": str(error)},
+                    agent_id="job_service",
+                )
         finally:
-            logger.info("[job_service] _run_job_background finally: job_id=%s status=%s", job_id, job.status)
             await self._schedule_next_job_if_needed(job)
-
-    def get_active_job_for_session(self, session_id: str) -> JobState | None:
-        active_statuses = {
-            JobStatus.accepted,
-            JobStatus.queued,
-            JobStatus.running,
-            JobStatus.streaming,
-            JobStatus.waiting_input,
-            JobStatus.paused,
-            JobStatus.interrupt_pending,
-            JobStatus.cancelling,
-        }
-
-        candidates = [
-            job
-            for job in self._jobs.values()
-            if job.session_id == session_id and job.status in active_statuses
-        ]
-        if not candidates:
-            return None
-
-        return max(candidates, key=lambda item: item.updated_at)

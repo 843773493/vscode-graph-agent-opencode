@@ -15,12 +15,14 @@ from cachetools import LRUCache
 from langchain_core.tools import tool, BaseTool
 from langchain_tavily import TavilySearch, TavilyExtract
 
+from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType, JobEventBus
 from app.core.path_utils import get_workspace_root
 from app.schemas.background_message import BackgroundMessageKind
-from app.runtime.session_orchestrator import SessionOrchestrator
 
 
 def _get_repo_root() -> Path:
@@ -198,8 +200,8 @@ def create_monitor_session_agent_end_tool(
     *,
     background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBus,
-    job_event_bus: JobEventBus,
-    job_service: JobService,
+    job_event_bus: JobEventBusProtocol,
+    job_service: JobServiceProtocol,
 ) -> BaseTool:
     """创建监控 session agent 结束事件的工具。"""
     @tool("monitor_session_agent_end")
@@ -445,13 +447,22 @@ def build_default_tools(
     *,
     background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBus,
-    job_event_bus: JobEventBus,
-    job_service: JobService,
-    message_service: MessageService,
-    session_service: SessionService,
-    config_service,
+    job_event_bus: JobEventBusProtocol,
+    job_service: JobServiceProtocol,
+    session_orchestrator: SessionOrchestratorProtocol | None = None,
+    message_service: Any | None = None,
+    session_service: Any | None = None,
+    config_service: Any | None = None,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
+    if session_orchestrator is None:
+        raise RuntimeError("build_default_tools 需要显式传入 SessionOrchestrator")
+    if message_service is None:
+        raise RuntimeError("build_default_tools 需要显式传入 MessageService")
+    if session_service is None:
+        raise RuntimeError("build_default_tools 需要显式传入 SessionService")
+    if config_service is None:
+        raise RuntimeError("build_default_tools 需要显式传入 ConfigService")
     return [
         create_test_tool(),
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
@@ -475,12 +486,6 @@ def build_default_tools(
         ),
         create_send_message_to_session_tool(
             sender_agent_id=sender_agent_id,
-            session_orchestrator=SessionOrchestrator(
-                message_service=message_service,
-                session_service=session_service,
-                config_service=config_service,
-                job_service=job_service,
-                job_event_bus=job_event_bus,
-            ),
+            session_orchestrator=session_orchestrator,
         ),
     ]

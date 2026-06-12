@@ -2,13 +2,13 @@ from __future__ import annotations
 import asyncio
 from typing import AsyncGenerator
 
+from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.schemas.event import Event
-from app.core.job_event_bus import JobEventBus
-from app.services.observation_event_mapper import map_event_to_observation_sse
+from app.services.mapping.observation_event_mapper import map_event_to_observation_sse
 
 
 class EventService:
-    def __init__(self, *, bus: JobEventBus):
+    def __init__(self, *, bus: JobEventBusProtocol):
         self.bus = bus
     
     async def list(self, job_id: str, after: str | None = None, limit: int = 100) -> list[Event]:

@@ -1,11 +1,11 @@
 from __future__ import annotations
+
 import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from app.schemas.public_v2.message import MessageDTO, MessageCreateRequest, MessageRunRequest, MessageRunAccepted
+from app.schemas.public_v2.message import MessageDTO, MessageCreateRequest
 from app.schemas.public_v2.common import MessageRole, CursorPage
 from app.core.path_utils import get_session_path
 
@@ -57,7 +57,7 @@ class MessageService:
             updated_at=now,
         )
         return self._append_message(message)
-    
+
     async def list(self, session_id: str, limit: int = 50, cursor: str | None = None) -> CursorPage[MessageDTO]:
         import logging
 

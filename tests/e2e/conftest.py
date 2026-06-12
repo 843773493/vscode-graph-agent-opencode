@@ -51,7 +51,7 @@ def e2e_config_path() -> str:
 
 @pytest.fixture(autouse=True)
 def setup_e2e_test_config(e2e_config_path: str):
-    from app.services.config_service import set_config_path
+    from app.services.infrastructure.config_service import set_config_path
 
     set_config_path(e2e_config_path)
     yield
@@ -104,12 +104,19 @@ def e2e_backend_process(
         "warning",
     ])
 
+    log_dir = Path(e2e_workspace_root_path) / ".boxteam" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = log_dir / "e2e-backend.stdout.log"
+    stderr_path = log_dir / "e2e-backend.stderr.log"
+    stdout_file = open(stdout_path, "a", encoding="utf-8")
+    stderr_file = open(stderr_path, "a", encoding="utf-8")
+
     process = subprocess.Popen(
         cmd,
         cwd=Path(__file__).resolve().parents[2],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout_file,
+        stderr=stderr_file,
     )
     if enable_backend_debugpy:
         print(
@@ -124,6 +131,8 @@ def e2e_backend_process(
     finally:
         _terminate_process(process)
         _kill_process_on_port(e2e_backend_port)
+        stdout_file.close()
+        stderr_file.close()
 
 
 @pytest.fixture(scope="module")

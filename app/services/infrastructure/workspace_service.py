@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
-from app.services.config_service import ConfigService
+
+from app.services.infrastructure.config_service import ConfigService
 from app.schemas.public_v2.workspace import WorkspaceContextDTO, WorkspaceDTO, WorkspaceIndexRebuildDTO, WorkspaceIndexStatusDTO
 from app.core.path_utils import get_runtime_workspace_root, get_user_workspace_root
 

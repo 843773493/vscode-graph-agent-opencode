@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
-import asyncio
-from datetime import datetime
-from typing import Optional
-from app.core.path_utils import get_workspace_root, get_artifacts_dir, get_logs_dir, get_cache_dir
+
+from app.core.path_utils import get_cache_dir, get_artifacts_dir, get_logs_dir, get_workspace_root
 from app.schemas.public_v2.runtime import RuntimeInfoDTO, RuntimeShutdownResultDTO, RuntimeStorageDTO
 
 
@@ -21,7 +20,7 @@ class RuntimeService:
     async def status(self) -> RuntimeInfoDTO:
         if self._start_time is None:
             self._start_time = time.time()
-        
+
         return RuntimeInfoDTO(
             pid=os.getpid(),
             uptime_seconds=int(time.time() - self._start_time),

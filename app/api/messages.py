@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_message_service, get_request_id, get_session_orchestrator, verify_local_token
 from app.schemas.public_v2.common import APIResponse, CursorPage
 from app.schemas.public_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
-from app.services.message_service import MessageService
+from app.services.business.message_service import MessageService
 from app.runtime.session_orchestrator import SessionOrchestrator
 
 router = APIRouter(prefix="/sessions", tags=["messages"])

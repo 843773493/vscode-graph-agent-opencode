@@ -9,9 +9,9 @@ from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, get_session_path
 from app.schemas.public_v2.session import SessionCreateRequest, SessionUpdateRequest
 from app.schemas.public_v2.trace import TraceEventDTO
-from app.services.config_service import ConfigService
-from app.services.trace_event_mapper import TraceEventMapper
-from app.services.session_service import SessionService
+from app.services.infrastructure.config_service import ConfigService
+from app.services.mapping.trace_event_mapper import TraceEventMapper
+from app.services.business.session_service import SessionService
 
 
 class TestSessionService:
@@ -268,8 +268,13 @@ class TestSessionService:
         stream = self.service.stream_trace_events(created.session_id)
 
         first = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
-        assert first.event_id == "evt_1"
-        assert first.type == "agent_start"
+        assert first["event_id"].startswith("trace-stream-ready-")
+        assert first["type"] == "agent_start"
+        assert first["raw"] == {"type": "stream_ready"}
+
+        first_trace = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+        assert first_trace.event_id == "evt_1"
+        assert first_trace.type == "agent_start"
 
         second_event = {
             "event_id": "evt_2",

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_request_id, get_tool_service, verify_local_token
 from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.tool import ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO
-from app.services.tool_service import ToolService
+from app.services.infrastructure.tool_service import ToolService
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 

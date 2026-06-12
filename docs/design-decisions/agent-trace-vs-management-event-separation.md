@@ -32,7 +32,7 @@
 同时，仓库里已经存在轨迹持久化能力：
 
 - [`app/agents/agent_middleware.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\agents\agent_middleware.py) 的 `ExecutionTraceMiddleware` 会写入 `trace_{session_id}.jsonl`
-- [`app/services/session_service.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\services\session_service.py) 已经可以读取轨迹文件
+- [`app/services/business/session_service.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\services\business\session_service.py) 已经可以读取轨迹文件
 - [`app/api/sessions.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\api\sessions.py) 已经暴露了 `GET /sessions/{session_id}/traces`
 - [`src/webview-ui/src/types/protocol.ts`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\src\webview-ui\src\types\protocol.ts) 已经预留了 `traceEvents`
 
@@ -198,7 +198,7 @@ error
 
 建议新增文件：
 
-- `app/services/trace_event_mapper.py`
+- `app/services/mapping/trace_event_mapper.py`
 
 职责：
 
@@ -220,7 +220,7 @@ error
 对应实现位置：
 
 - [`app/api/sessions.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\api\sessions.py)
-- [`app/services/session_service.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\services\session_service.py)
+- [`app/services/business/session_service.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\services\business\session_service.py)
 
 ---
 

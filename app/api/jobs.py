@@ -8,9 +8,9 @@ from app.schemas.event import Event as SSEEvent
 from app.schemas.public_v2.artifact import ArtifactDTO
 from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
-from app.services.artifact_service import ArtifactService
+from app.abstractions.job_service import JobServiceProtocol
+from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.event_service import EventService
-from app.services.job_service import JobService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -20,7 +20,7 @@ async def get_job(
     job_id: str,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    job_service: JobService = Depends(get_job_service),
+    job_service: JobServiceProtocol = Depends(get_job_service),
 ):
     result = await job_service.get(job_id)
     return APIResponse(data=result, request_id=request_id)
@@ -31,7 +31,7 @@ async def list_job_steps(
     job_id: str,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    job_service: JobService = Depends(get_job_service),
+    job_service: JobServiceProtocol = Depends(get_job_service),
 ):
     result = await job_service.list_steps(job_id)
     return APIResponse(data=result, request_id=request_id)
@@ -69,7 +69,7 @@ async def control_job(
     payload: JobControlRequest,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    job_service: JobService = Depends(get_job_service),
+    job_service: JobServiceProtocol = Depends(get_job_service),
 ):
     result = await job_service.control(job_id, payload)
     return APIResponse(data=result, request_id=request_id)

@@ -5,7 +5,6 @@ from typing import Any
 from app.schemas.event import Event
 from app.schemas.public_v2.session_interaction import (
     JobProgressDTO,
-    MessageDeltaDTO,
     SessionExecutionEventDTO,
     SessionExecutionSseDTO,
 )

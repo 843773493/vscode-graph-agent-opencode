@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from app.schemas.public_v2.artifact import ArtifactDTO
@@ -20,7 +19,7 @@ class ArtifactService:
             name="sample.md",
             path=str(safe_join(artifacts_dir, "sample.md"))
         )
-    
+
     async def list_by_job(self, job_id: str) -> list[ArtifactDTO]:
         artifacts_dir = get_artifacts_dir()
         return [

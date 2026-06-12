@@ -16,8 +16,9 @@ from langgraph.types import Command
 from langchain.messages import ToolMessage
 from pydantic import BaseModel, Field
 
+from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.path_utils import get_logs_dir
-from app.core.job_event_bus import EventType, JobEventBus
+from app.core.job_event_bus import EventType
 from app.schemas.event import (
     AgentEndEvent,
     AgentEndPayload,
@@ -102,7 +103,7 @@ class LLMFullLog(BaseModel):
 class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     """唯一职责：存储每个LLM调用的完整原始请求/响应"""
 
-    def __init__(self, *, job_event_bus: JobEventBus) -> None:
+    def __init__(self, *, job_event_bus: JobEventBusProtocol) -> None:
         self._prepared_session_dirs: set[str] = set()
         self._job_event_bus = job_event_bus
 

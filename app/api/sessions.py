@@ -14,8 +14,8 @@ from app.schemas.public_v2.session import (
     SessionUpdateRequest,
 )
 from app.schemas.public_v2.trace import TraceEventDTO
-from app.services.session_auto_continue_service import SessionAutoContinueService
-from app.services.session_service import SessionService
+from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
+from app.services.business.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -135,9 +135,8 @@ async def stop_session_auto_continue(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
     auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
-    session_service: SessionService = Depends(get_session_service),
 ):
-    result = await auto_continue_service.stop(session_id=session_id, session_service=session_service)
+    result = await auto_continue_service.stop(session_id=session_id)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -151,7 +150,6 @@ async def get_session_auto_continue_status(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
     auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
-    session_service: SessionService = Depends(get_session_service),
 ):
-    result = await auto_continue_service.get_status(session_id=session_id, session_service=session_service)
+    result = await auto_continue_service.get_status(session_id=session_id)
     return APIResponse(data=result, request_id=request_id)

@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_log_service, get_request_id, get_runtime_service, verify_local_token
 from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.runtime import RuntimeShutdownDTO, RuntimeStatusDTO, UiSnapshotResultDTO
-from app.services.log_service import LogService, LogSnapshotRecord
-from app.services.runtime_service import RuntimeService
+from app.services.infrastructure.log_service import LogService, LogSnapshotRecord
+from app.services.infrastructure.runtime_service import RuntimeService
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
 

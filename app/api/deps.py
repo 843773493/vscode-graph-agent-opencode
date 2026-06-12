@@ -2,22 +2,24 @@ from __future__ import annotations
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
+from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import JobEventBus
-from app.services.agent_execution_service import AgentExecutionService
-from app.services.agent_service import AgentService
-from app.services.artifact_service import ArtifactService
-from app.services.config_service import ConfigService
+from app.services.orchestration.agent_execution_service import AgentExecutionService
+from app.services.business.agent_service import AgentService
+from app.services.infrastructure.artifact_service import ArtifactService
+from app.services.infrastructure.config_service import ConfigService
 from app.services.event_service import EventService
-from app.services.job_service import JobService
-from app.services.message_service import MessageService
-from app.services.runtime_service import RuntimeService
-from app.services.session_auto_continue_service import SessionAutoContinueService
-from app.services.session_service import SessionService
-from app.services.log_service import LogService
-from app.services.tool_service import ToolService
-from app.services.workspace_service import WorkspaceService
+from app.services.business.job_service import JobService
+from app.services.business.message_service import MessageService
+from app.services.infrastructure.runtime_service import RuntimeService
+from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
+from app.services.business.session_service import SessionService
+from app.services.infrastructure.log_service import LogService
+from app.services.infrastructure.tool_service import ToolService
+from app.services.infrastructure.workspace_service import WorkspaceService
 from app.runtime.session_orchestrator import SessionOrchestrator
 
 
@@ -28,8 +30,8 @@ class _AppContainerProtocol:
     background_message_bus: BackgroundMessageBus
     background_task_registry: BackgroundTaskRegistry
     event_service: EventService
-    job_event_bus: JobEventBus
-    job_service: JobService
+    job_event_bus: JobEventBusProtocol
+    job_service: JobServiceProtocol
     message_service: MessageService
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
@@ -102,16 +104,16 @@ def get_event_service(request: Request) -> EventService:
     return service
 
 
-def get_job_event_bus(request: Request) -> JobEventBus:
+def get_job_event_bus(request: Request) -> JobEventBusProtocol:
     service = getattr(_get_container(request), "job_event_bus", None)
-    if not isinstance(service, JobEventBus):
+    if not isinstance(service, JobEventBusProtocol):
         raise RuntimeError("JobEventBus 尚未在应用启动阶段初始化")
     return service
 
 
-def get_job_service(request: Request) -> JobService:
+def get_job_service(request: Request) -> JobServiceProtocol:
     service = getattr(_get_container(request), "job_service", None)
-    if not isinstance(service, JobService):
+    if not isinstance(service, JobServiceProtocol):
         raise RuntimeError("JobService 尚未在应用启动阶段初始化")
     return service
 

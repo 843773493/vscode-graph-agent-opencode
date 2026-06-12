@@ -36,14 +36,16 @@ from deepagents.middleware.permissions import FilesystemPermission
 from app.core.path_utils import get_workspace_root
 from app.agents.agent_middleware import LLMLoggingMiddleware, ExecutionTraceMiddleware
 from app.agents.agent_tools import build_default_tools
-from app.services.config_service import ConfigService
+from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_service import JobServiceProtocol
+from app.services.infrastructure.config_service import ConfigService
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import JobEventBus
 
 if TYPE_CHECKING:
-    from app.services.message_service import MessageService
-    from app.services.session_service import SessionService
+    from app.services.business.message_service import MessageService
+    from app.services.business.session_service import SessionService
 
 
 BASE_AGENT_PROMPT = """"""
@@ -164,10 +166,11 @@ def create_my_deep_agent(
     name: str | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
     background_message_bus: BackgroundMessageBus | None = None,
-    job_event_bus: JobEventBus | None = None,
+    job_event_bus: JobEventBusProtocol | None = None,
     job_service: object | None = None,
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
+    session_orchestrator: object | None = None,
     config_service: ConfigService | None = None,
 ) -> CompiledStateGraph[
     AgentState[ResponseT], ContextT, _InputAgentState, _OutputAgentState[ResponseT]
@@ -188,6 +191,8 @@ def create_my_deep_agent(
         raise RuntimeError("create_my_deep_agent 需要显式传入 MessageService")
     if session_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 SessionService")
+    if session_orchestrator is None:
+        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionOrchestrator")
     if config_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 ConfigService")
 
@@ -201,6 +206,7 @@ def create_my_deep_agent(
         job_service=job_service,
         message_service=message_service,
         session_service=session_service,
+        session_orchestrator=session_orchestrator,
         config_service=config_service,
     )
     resolved_tools = _filter_tools_by_name(resolved_tools, resolved_tool_denylist)
@@ -349,10 +355,11 @@ def create_runtime_deep_agent_for_session(
     config_service: ConfigService | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
     background_message_bus: BackgroundMessageBus | None = None,
-    job_event_bus: JobEventBus | None = None,
-    job_service: JobService | None = None,
+    job_event_bus: JobEventBusProtocol | None = None,
+    job_service: JobServiceProtocol | None = None,
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
+    session_orchestrator: object | None = None,
     sender_agent_id: str | None = None,
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
@@ -383,5 +390,6 @@ def create_runtime_deep_agent_for_session(
         job_service=job_service,
         message_service=message_service,
         session_service=session_service,
+        session_orchestrator=session_orchestrator,
         config_service=service,
     )

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import Protocol
 
 from app.schemas.public_v2.tool import ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO
@@ -12,7 +13,7 @@ class ToolCatalog(Protocol):
 class ToolService:
     def __init__(self, *, tool_catalog: ToolCatalog):
         self._tool_catalog = tool_catalog
-    
+
     async def list(self) -> list[ToolDTO]:
         tools = self._tool_catalog.get_available_tools()
         return [
