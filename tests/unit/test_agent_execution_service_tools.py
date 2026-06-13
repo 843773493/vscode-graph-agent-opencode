@@ -16,7 +16,7 @@ from app.agents.agent_tools import (
     create_send_message_to_session_tool,
     build_default_tools,
 )
-from app.services.agent_execution_service import AgentExecutionService
+from app.services.orchestration.agent_execution_service import AgentExecutionService
 
 
 class _DummyConfigService:
@@ -177,12 +177,21 @@ class _FakeMessageService:
         return _FakeResult()
 
 
+class _FakeSessionOrchestrator:
+    async def create_and_run(self, session_id: str, content: str):
+        return _FakeResult()
+
+
 class _FakeResult:
+    message_id = "msg_test"
+    job_id = "job_test"
+    status = "accepted"
+
     def model_dump(self, mode="json"):
         return {
-            "message_id": "msg_test",
-            "job_id": "job_test",
-            "status": "accepted",
+            "message_id": self.message_id,
+            "job_id": self.job_id,
+            "status": self.status,
         }
 
 
@@ -206,16 +215,18 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
         job_service=job_service,
         message_service=message_service,
         session_service=session_service,
+        session_orchestrator=_FakeSessionOrchestrator(),
         config_service=config_service,
     )
 
     tool_names = [tool.name for tool in tools]
+    assert "test_tool" in tool_names
     assert "python_exec" in tool_names
     assert "emit_system_time_messages" in tool_names
     assert "monitor_session_agent_end" in tool_names
     assert "collect_background_messages" in tool_names
     assert "send_message_to_session" in tool_names
-    assert len(tools) == 5
+    assert len(tools) == 6
 
 
 
@@ -242,11 +253,13 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService(),
+        session_orchestrator=_FakeSessionOrchestrator(),
         config_service=config_service,
     )
 
     direct_tool_names = [tool.name for tool in tools]
     assert direct_tool_names == [
+        "test_tool",
         "python_exec",
         "emit_system_time_messages",
         "monitor_session_agent_end",
@@ -337,20 +350,14 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
 @pytest.mark.asyncio
 async def test_send_message_to_session_tool_creates_job(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    job_event_bus = _FakeJobEventBus()
-    job_service = _FakeJobService()
-    session_service = _FakeSessionService()
-    config_service = _DummyConfigService()
-    message_service = _FakeMessageService()
 
     tool = create_send_message_to_session_tool(
-        message_service=message_service,
-        session_service=session_service,
-        config_service=config_service,
-        job_service=job_service,
-        job_event_bus=job_event_bus,
+        sender_agent_id="deep_agent",
+        session_orchestrator=_FakeSessionOrchestrator(),
     )
 
     result = await tool.ainvoke({"target_session_id": "ses_target", "content": "请再次只重复前面的话"})
 
     assert result["job_id"] == "job_test"
+    assert result["message_id"] == "msg_test"
+    assert result["status"] == "accepted"

@@ -7,7 +7,7 @@ import pytest
 from app.core.job_event_bus import JobEventBus
 from app.schemas.public_v2.common import ControlAction, JobStatus
 from app.schemas.public_v2.job import JobControlRequest
-from app.services.job_service import JobService, JobState
+from app.services.business.job_service import JobService, JobState
 
 
 class _DummyJobExecutor:

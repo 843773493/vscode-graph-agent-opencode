@@ -4,8 +4,8 @@ from datetime import datetime
 
 import pytest
 
-from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions
-from app.services.message_service import MessageService
+from app.core.job_event_bus import JobEventBus
+from app.runtime.session_orchestrator import SessionOrchestrator
 
 
 class _FakeSession:
@@ -27,8 +27,31 @@ class _FakeConfigService:
         return "deep_agent"
 
 
+class _FakeMessageService:
+    async def create(self, session_id: str, message_create):
+        from app.schemas.public_v2.message import MessageDTO
+        from app.schemas.public_v2.common import MessageRole
+
+        return MessageDTO(
+            message_id="msg_test",
+            session_id=session_id,
+            role=MessageRole.user,
+            content=message_create.content,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+
+class _FakeSessionService:
+    def __init__(self, current_agent_id: str = "default"):
+        self._current_agent_id = current_agent_id
+
+    async def get(self, session_id: str):
+        return _FakeSession(session_id, self._current_agent_id)
+
+
 @pytest.mark.asyncio
-async def test_create_and_run_uses_session_current_agent_when_request_omits_agent(monkeypatch, tmp_path):
+async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
     captured: dict[str, str] = {}
@@ -40,23 +63,14 @@ async def test_create_and_run_uses_session_current_agent_when_request_omits_agen
             captured["agent_id"] = agent_id
             return "job_test_001"
 
-    class _FakeSessionService:
-        @staticmethod
-        async def get(_session_id: str):
-            return _FakeSession(_session_id, "default")
-
-    service = MessageService()
-    result = await service.create_and_run(
-        "ses_test",
-        MessageRunRequest(
-            message=MessageCreateRequest(content="hello"),
-            run=RunOptions(mode="single_agent"),
-        ),
-        session_service=_FakeSessionService(),
+    orchestrator = SessionOrchestrator(
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
         job_service=_FakeJobService(),
-        job_event_bus=__import__("app.core.job_event_bus", fromlist=["JobEventBus"]).JobEventBus(),
+        job_event_bus=JobEventBus(),
     )
+    result = await orchestrator.create_and_run("ses_test", "hello")
 
     assert captured["session_id"] == "ses_test"
     assert captured["message"] == "hello"
@@ -65,39 +79,32 @@ async def test_create_and_run_uses_session_current_agent_when_request_omits_agen
 
 
 @pytest.mark.asyncio
-async def test_create_and_run_prefers_request_agent_over_session_agent(monkeypatch, tmp_path):
+async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
     captured: dict[str, str] = {}
-
-    class _FakeConfigService:
-        def resolve_agent_id(self, agent_id):
-            return agent_id
-
-        def validate_agent_id(self, agent_id):
-            return agent_id
 
     class _FakeJobService:
         async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
             captured["agent_id"] = agent_id
             return "job_test_002"
 
-    class _FakeSessionService:
-        @staticmethod
-        async def get(_session_id: str):
-            return _FakeSession(_session_id, "default")
+    orchestrator = SessionOrchestrator(
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService("default"),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=JobEventBus(),
+    )
 
-    service = MessageService()
-    await service.create_and_run(
+    from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions
+
+    await orchestrator.create_message(
         "ses_test",
         MessageRunRequest(
             message=MessageCreateRequest(content="hello"),
             run=RunOptions(mode="single_agent", agent_id="coder"),
         ),
-        session_service=_FakeSessionService(),
-        config_service=_FakeConfigService(),
-        job_service=_FakeJobService(),
-        job_event_bus=__import__("app.core.job_event_bus", fromlist=["JobEventBus"]).JobEventBus(),
     )
 
     assert captured["agent_id"] == "coder"

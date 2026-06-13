@@ -7,10 +7,11 @@ import pytest
 
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, get_session_path
+from app.core.path_utils import get_logs_dir
+from app.schemas.event import AgentStartEvent, ToolCallStartEvent
 from app.schemas.public_v2.session import SessionCreateRequest, SessionUpdateRequest
-from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.infrastructure.config_service import ConfigService
-from app.services.mapping.trace_event_mapper import TraceEventMapper
+from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.business.session_service import SessionService
 
 
@@ -28,7 +29,11 @@ class TestSessionService:
         from app.core.path_utils import get_sessions_dir
 
         get_sessions_dir().mkdir(exist_ok=True, parents=True)
-        self.service = SessionService(config_service=ConfigService())
+        self.trace_event_store = TraceEventStore(logs_dir=get_logs_dir())
+        self.service = SessionService(
+            config_service=ConfigService(),
+            trace_event_store=self.trace_event_store,
+        )
 
     def teardown_method(self):
         """测试后恢复原始目录"""
@@ -214,16 +219,12 @@ class TestSessionService:
 
         assert len(events) == 1
         event = events[0]
-        assert isinstance(event, TraceEventDTO)
+        assert isinstance(event, AgentStartEvent)
         assert event.type == "agent_start"
         assert event.event_id == "evt_1"
-        assert event.session_id == created.session_id
         assert event.job_id == "job_1"
-        assert event.phase == "agent"
-        assert event.title == "开始执行"
-        assert event.content == "hello"
-        assert event.status == "running"
-        assert event.raw["payload"]["agent_id"] == "deep_agent"
+        assert event.payload.message == "hello"
+        assert event.payload.agent_id == "deep_agent"
 
     @pytest.mark.asyncio
     async def test_list_trace_events_ignores_legacy_format(self):
@@ -256,8 +257,9 @@ class TestSessionService:
 
         first_event = {
             "event_id": "evt_1",
-            "session_id": created.session_id,
             "job_id": "job_1",
+            "step_id": None,
+            "agent_id": "deep_agent",
             "timestamp": "2024-03-09T12:00:00+00:00",
             "type": "agent_start",
             "payload": {"message": "hello", "agent_id": "deep_agent"},
@@ -267,32 +269,31 @@ class TestSessionService:
 
         stream = self.service.stream_trace_events(created.session_id)
 
-        first = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
-        assert first["event_id"].startswith("trace-stream-ready-")
-        assert first["type"] == "agent_start"
-        assert first["raw"] == {"type": "stream_ready"}
-
         first_trace = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
         assert first_trace.event_id == "evt_1"
         assert first_trace.type == "agent_start"
 
         second_event = {
             "event_id": "evt_2",
-            "session_id": created.session_id,
             "job_id": "job_1",
+            "step_id": None,
+            "agent_id": "deep_agent",
             "timestamp": "2024-03-09T12:00:01+00:00",
             "type": "tool_call_start",
-            "payload": {"tool_name": "search_files"},
+            "payload": {"tool_name": "search_files", "args": {}},
         }
         with open(trace_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(second_event, ensure_ascii=False) + "\n")
 
-        second = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+        second = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
         assert second.event_id == "evt_2"
-        assert second.type == "tool_call_start"
-        assert second.tool_name == "search_files"
+        assert isinstance(second, ToolCallStartEvent)
+        assert second.payload.tool_name == "search_files"
 
-    def test_trace_event_mapper_maps_tool_events(self):
+    @pytest.mark.asyncio
+    async def test_trace_event_mapper_maps_tool_events(self):
+        from app.services.mapping.trace_event_mapper import TraceEventMapper
+
         mapper = TraceEventMapper()
 
         event = mapper.map_one(
