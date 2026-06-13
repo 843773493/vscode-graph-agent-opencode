@@ -24,6 +24,10 @@ from app.services.infrastructure.workspace_service import WorkspaceService
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 
+from app.core.path_utils import get_logs_dir
+from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.orchestration.trace_event_recorder import TraceEventRecorder
+
 
 class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
     def __init__(self, *, message_service: MessageService, session_service: SessionService) -> None:
@@ -65,12 +69,16 @@ class AppContainer:
     job_event_bus: JobEventBusProtocol
     background_task_registry: BackgroundTaskRegistry
     background_message_bus: BackgroundMessageBus
+    trace_event_store: TraceEventStore
+    trace_event_recorder: TraceEventRecorder
 
 
 def build_app_container() -> AppContainer:
     job_event_bus = JobEventBus()
     background_task_registry = BackgroundTaskRegistry()
     background_message_bus = BackgroundMessageBus()
+    trace_event_store = TraceEventStore(logs_dir=get_logs_dir())
+    trace_event_recorder = TraceEventRecorder(bus=job_event_bus, store=trace_event_store)
 
     config_service = ConfigService()
     message_service = MessageService()
@@ -135,4 +143,6 @@ def build_app_container() -> AppContainer:
         job_event_bus=job_event_bus,
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
+        trace_event_store=trace_event_store,
+        trace_event_recorder=trace_event_recorder,
     )

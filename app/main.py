@@ -43,8 +43,11 @@ async def lifespan(_: FastAPI):
 
         logging.warning(f"boxteam.json 配置验证失败: {e}")
 
+    await container.trace_event_recorder.start()
+
     yield
 
+    await container.trace_event_recorder.stop()
     _.state.container = None
 
 app = FastAPI(
