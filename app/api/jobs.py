@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_artifact_service, get_event_service, get_job_service, get_request_id, verify_local_token
-from app.schemas.event import Event as SSEEvent
+from app.schemas.event import Event
 from app.schemas.public_v2.artifact import ArtifactDTO
+
 from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
 from app.abstractions.job_service import JobServiceProtocol
@@ -37,7 +38,7 @@ async def list_job_steps(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{job_id}/events", response_model=APIResponse[list[SSEEvent]], summary="获取任务事件")
+@router.get("/{job_id}/events", response_model=APIResponse[list[Event]], summary="获取任务事件")
 async def list_job_events(
     job_id: str,
     after: str | None = None,
