@@ -13,7 +13,7 @@ from app.schemas.public_v2.session import (
     SessionDTO,
     SessionUpdateRequest,
 )
-from app.schemas.public_v2.trace import TraceEventDTO
+from app.schemas.event import Event
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_service import SessionService
 
@@ -54,7 +54,7 @@ async def get_session(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{session_id}/traces", response_model=APIResponse[list[TraceEventDTO]], summary="获取会话执行轨迹")
+@router.get("/{session_id}/traces", response_model=APIResponse[list[Event]], summary="获取会话执行轨迹")
 async def list_session_traces(
     session_id: str,
     _: str = Depends(verify_local_token),
@@ -73,13 +73,7 @@ async def stream_session_traces(
 ):
     async def event_generator():
         async for event in session_service.stream_trace_events(session_id):
-            if hasattr(event, "model_dump_json"):
-                data = event.model_dump_json()
-            else:
-                import json
-
-                data = json.dumps(event, ensure_ascii=False, default=str)
-
+            data = event.model_dump_json()
             yield f"event: trace\n"
             yield f"data: {data}\n\n"
 

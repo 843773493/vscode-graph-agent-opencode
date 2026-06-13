@@ -7,18 +7,20 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.core.exceptions import NotFoundError
-from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir, get_logs_dir
+from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir
 from app.schemas.event import Event
 from app.schemas.public_v2.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest, SessionListResultDTO, SessionControlResultDTO
-from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.infrastructure.config_service import ConfigService
-from app.services.mapping.trace_event_mapper import TraceEventMapper
+from app.services.infrastructure.trace_event_store import TraceEventStore
+
+
+from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
 class SessionService:
-    def __init__(self, *, config_service: ConfigService):
+    def __init__(self, *, config_service: ConfigService, trace_event_store: TraceEventStore):
         self._config_service = config_service
-        self._trace_event_mapper = TraceEventMapper()
+        self._trace_event_store = trace_event_store
 
     async def get(self, session_id: str) -> SessionDTO:
         session_file = get_session_file(session_id)
@@ -126,70 +128,11 @@ class SessionService:
         await self.get(session_id)
         return SessionControlResultDTO(session_id=session_id, action=action, status="executed")
 
-    async def list_trace_events(self, session_id: str) -> list[TraceEventDTO]:
-        trace_file = get_logs_dir() / "traces" / f"trace_{session_id}.jsonl"
-
-        if not trace_file.exists():
-            return []
-
-        raw_events: list[dict[str, Any]] = []
-        with open(trace_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                if not isinstance(event, dict):
-                    continue
-
-                raw_events.append(event)
-
-        return self._trace_event_mapper.map_many(raw_events)
+    async def list_trace_events(self, session_id: str) -> list[Event]:
+        await self.get(session_id)
+        return self._trace_event_store.read_events(session_id)
 
     async def stream_trace_events(self, session_id: str):
-        trace_file = get_logs_dir() / "traces" / f"trace_{session_id}.jsonl"
-        emitted_count = 0
-
-        ready_event = {
-            "event_id": f"trace-stream-ready-{session_id}",
-            "session_id": session_id,
-            "job_id": None,
-            "type": "agent_start",
-            "phase": "agent",
-            "title": "轨迹流已连接",
-            "content": "轨迹流已建立连接，等待新事件",
-            "status": "completed",
-            "tool_name": None,
-            "step_id": None,
-            "timestamp": datetime.now(),
-            "raw": {"type": "stream_ready"},
-        }
-        yield ready_event
-
-        while True:
-            if trace_file.exists():
-                with open(trace_file, "r", encoding="utf-8") as f:
-                    lines = [line.strip() for line in f if line.strip()]
-
-                if len(lines) > emitted_count:
-                    new_events: list[dict[str, Any]] = []
-                    for line in lines[emitted_count:]:
-                        try:
-                            event = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-
-                        if isinstance(event, dict):
-                            new_events.append(event)
-
-                    for event in self._trace_event_mapper.map_many(new_events):
-                        yield event
-
-                    emitted_count = len(lines)
-
-            await asyncio.sleep(0.5)
+        await self.get(session_id)
+        async for event in self._trace_event_store.stream_events(session_id):
+            yield event

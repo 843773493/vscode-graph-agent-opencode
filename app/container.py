@@ -82,7 +82,7 @@ def build_app_container() -> AppContainer:
 
     config_service = ConfigService()
     message_service = MessageService()
-    session_service = SessionService(config_service=config_service)
+    session_service = SessionService(config_service=config_service, trace_event_store=trace_event_store)
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
