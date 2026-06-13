@@ -215,7 +215,7 @@ def create_my_deep_agent(
 
     runtime_middleware = list(middleware) if middleware is not None else [
         LLMLoggingMiddleware(job_event_bus=job_event_bus),
-        ExecutionTraceMiddleware(),
+        ExecutionTraceMiddleware(job_event_bus=job_event_bus),
     ]
     if fallback_middleware is not None:
         runtime_middleware.append(fallback_middleware)

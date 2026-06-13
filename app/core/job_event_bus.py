@@ -18,6 +18,8 @@ from app.schemas.event import (
     AgentStartEvent, AgentStartPayload,
     AgentStepEvent, AgentStepPayload,
     AgentEndEvent, AgentEndPayload,
+    ToolCallStartEvent, ToolCallStartPayload,
+    ToolCallEndEvent, ToolCallEndPayload,
     ErrorEvent, ErrorPayload,
     LLMRequestEvent, LLMRequestPayload,
 )
@@ -39,6 +41,10 @@ class EventType:
 
     # LLM 调用
     LLM_REQUEST = "llm_request"
+
+    # 工具调用
+    TOOL_CALL_START = "tool_call_start"
+    TOOL_CALL_END = "tool_call_end"
 
     # 消息事件
     MESSAGE_CREATED = "message_created"
@@ -199,6 +205,20 @@ class JobEventBus:
             return AgentEndEvent(
                 type="agent_end",
                 payload=AgentEndPayload(**payload),
+                **common
+            )
+
+        elif t == EventType.TOOL_CALL_START:
+            return ToolCallStartEvent(
+                type="tool_call_start",
+                payload=ToolCallStartPayload(**payload),
+                **common
+            )
+
+        elif t == EventType.TOOL_CALL_END:
+            return ToolCallEndEvent(
+                type="tool_call_end",
+                payload=ToolCallEndPayload(**payload),
                 **common
             )
 
