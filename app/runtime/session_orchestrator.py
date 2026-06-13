@@ -62,6 +62,7 @@ class SessionOrchestrator:
                 "metadata": message.metadata,
                 "created_at": message.created_at,
             },
+            agent_id=effective_agent_id,
         )
         logger.info("[session_orchestrator] message_created event published: session_id=%s message_id=%s", session_id, message.message_id)
         job_id = await self._job_service.start_job(session_id, message.content, effective_agent_id)

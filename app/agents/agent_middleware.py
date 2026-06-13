@@ -17,7 +17,7 @@ from langchain.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
-from app.core.job_context import get_current_job_id
+from app.core.job_context import get_current_agent_id, get_current_job_id
 from app.core.job_event_bus import EventType
 from app.schemas.event import (
     LLMRequestPayload,
@@ -98,21 +98,24 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
 
     def _get_job_id(self, runtime: Runtime[Any]) -> str:
         """
-        从runtime中提取job_id。
+        从上下文变量或 runtime 中提取 job_id。
         优先级：
-        1. runtime.configurable.job_id
-        2. runtime.execution_info.configurable.job_id
-        3. runtime.execution_info.job_id
-        4. 回退到 thread_id (session_id)
+        1. 当前上下文变量中的 job_id（AgentExecutionService 设置）
+        2. runtime.configurable.job_id
+        3. runtime.execution_info.configurable.job_id
+        4. runtime.execution_info.job_id
+        5. 回退到 thread_id (session_id)
         """
-        # 尝试 runtime.configurable
+        context_job_id = get_current_job_id()
+        if context_job_id:
+            return context_job_id
+
         configurable = getattr(runtime, 'configurable', None)
         if isinstance(configurable, dict):
             job_id = configurable.get('job_id')
             if job_id:
                 return job_id
 
-        # 尝试 runtime.execution_info.configurable
         execution_info = getattr(runtime, 'execution_info', None)
         if execution_info is not None:
             configurable = getattr(execution_info, 'configurable', None)
@@ -120,12 +123,10 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 job_id = configurable.get('job_id')
                 if job_id:
                     return job_id
-            # 有些实现可能直接把 job_id 放在 execution_info 上
             job_id = getattr(execution_info, 'job_id', None)
             if job_id:
                 return job_id
 
-        # 回退到 thread_id (session_id)
         return self._get_session_id(runtime)
 
     def _ensure_session_dir(self, session_id: str) -> Path:
@@ -256,7 +257,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 job_id=job_id,
                 event_type=EventType.LLM_REQUEST,
                 payload={"model": model_name, "timestamp": int(time.time() * 1000)},
-                agent_id="deep_agent",
+                agent_id=get_current_agent_id() or "deep_agent",
             ))
         except Exception as error:
             import logging
@@ -290,7 +291,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 job_id=job_id,
                 event_type=EventType.LLM_REQUEST,
                 payload={"model": model_name, "timestamp": int(time.time() * 1000)},
-                agent_id="deep_agent",
+                agent_id=get_current_agent_id() or "deep_agent",
             )
         except Exception:
             pass
@@ -318,6 +319,10 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
 
     def _get_job_id(self, runtime: Runtime[Any]) -> str:
         """从 runtime 中提取 job_id，回退到 session_id。"""
+        job_id = get_current_job_id()
+        if job_id:
+            return job_id
+
         configurable = getattr(runtime, 'configurable', None)
         if isinstance(configurable, dict):
             job_id = configurable.get('job_id')
@@ -336,6 +341,20 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
                 return job_id
 
         return self._get_session_id(runtime)
+
+    def _get_agent_id(self, runtime: Runtime[Any]) -> str:
+        """从 job_context 或 runtime 中提取 agent_id。"""
+        agent_id = get_current_agent_id()
+        if agent_id:
+            return agent_id
+
+        execution_info = getattr(runtime, 'execution_info', None)
+        if execution_info is not None:
+            agent_id = getattr(execution_info, 'agent_id', None)
+            if agent_id:
+                return agent_id
+
+        return "unknown_agent"
 
     def _publish_trace_event(self, session_id: str, job_id: str, event_type: str, data: dict[str, Any]) -> None:
         try:
@@ -380,7 +399,7 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
     ) -> dict[str, Any] | None:
         session_id = self._get_session_id(runtime)
         job_id = self._get_job_id(runtime)
-        agent_id = getattr(runtime.execution_info, "agent_id", None) or "unknown_agent"
+        agent_id = self._get_agent_id(runtime)
         self._publish_trace_event(session_id, job_id, "agent_start", {
             "message": "agent 启动，准备处理用户请求",
             "message_count": len(state.get("messages", [])),
@@ -395,12 +414,14 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
     ) -> ToolMessage | Command[Any]:
         session_id = self._get_session_id(request.runtime)
         job_id = self._get_job_id(request.runtime)
+        agent_id = self._get_agent_id(request.runtime)
         tool_call = request.tool_call
         tool_name = tool_call.get("name", "unknown_tool")
 
         self._publish_trace_event(session_id, job_id, "tool_call_start", {
             "tool_name": tool_name,
             "args": tool_call.get("args", {}),
+            "agent_id": agent_id,
         })
 
         result = handler(request)
@@ -408,6 +429,7 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
         self._publish_trace_event(session_id, job_id, "tool_call_end", {
             "tool_name": tool_name,
             "result": str(result),
+            "agent_id": agent_id,
         })
 
         return result
@@ -419,12 +441,14 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
     ) -> ToolMessage | Command[Any]:
         session_id = self._get_session_id(request.runtime)
         job_id = self._get_job_id(request.runtime)
+        agent_id = self._get_agent_id(request.runtime)
         tool_call = request.tool_call
         tool_name = tool_call.get("name", "unknown_tool")
 
         self._publish_trace_event(session_id, job_id, "tool_call_start", {
             "tool_name": tool_name,
             "args": tool_call.get("args", {}),
+            "agent_id": agent_id,
         })
 
         result = await handler(request)
@@ -432,6 +456,7 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
         self._publish_trace_event(session_id, job_id, "tool_call_end", {
             "tool_name": tool_name,
             "result": str(result),
+            "agent_id": agent_id,
         })
 
         return result

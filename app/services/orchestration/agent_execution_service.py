@@ -5,7 +5,12 @@ from typing import Dict, Any, List
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.job_context import set_current_job_id, reset_current_job_id
+from app.core.job_context import (
+    reset_current_agent_id,
+    reset_current_job_id,
+    set_current_agent_id,
+    set_current_job_id,
+)
 from app.core.job_event_bus import EventType
 from app.agents.agent_factory import resolve_agent_id
 from app.services.infrastructure.config_service import ConfigService
@@ -100,7 +105,8 @@ class AgentExecutionService(JobStepExecutor):
             }
         }
 
-        token = set_current_job_id(effective_job_id)
+        job_token = set_current_job_id(effective_job_id)
+        agent_token = set_current_agent_id(resolved_agent_id)
         try:
             logger.debug(f"About to invoke agent: session_id={session_id}, message={message[:50]}...")
 
@@ -139,7 +145,8 @@ class AgentExecutionService(JobStepExecutor):
             logger.exception("[agent_execution_service] ERROR published: job_id=%s error=%s", effective_job_id, str(e))
             raise
         finally:
-            reset_current_job_id(token)
+            reset_current_job_id(job_token)
+            reset_current_agent_id(agent_token)
 
     def get_for_session(self, session_id: str, agent_id: str | None = None):
         return self._get_or_create_agent(session_id, agent_id)
