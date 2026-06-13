@@ -53,6 +53,7 @@ class JobEventBus:
     def __init__(self):
         self._job_events: Dict[str, Deque[Event]] = {}
         self._subscribers: Dict[str, Set[asyncio.Queue[Event]]] = {}
+        self._global_subscribers: Set[asyncio.Queue[Event]] = set()
         self._max_history: int = 1000
         self._lock = asyncio.Lock()
         self._listener_count: int = 0
@@ -86,6 +87,13 @@ class JobEventBus:
 
             if self._listener_count > 0 and job_id in self._subscribers:
                 for queue in list(self._subscribers[job_id]):
+                    try:
+                        queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
+
+            if self._listener_count > 0 and self._global_subscribers:
+                for queue in list(self._global_subscribers):
                     try:
                         queue.put_nowait(event)
                     except asyncio.QueueFull:
@@ -220,6 +228,18 @@ class JobEventBus:
                 self._listener_count -= 1
                 if not self._subscribers[job_id]:
                     del self._subscribers[job_id]
+
+    async def subscribe_all(self) -> asyncio.Queue[Event]:
+        queue = asyncio.Queue(maxsize=1000)
+        async with self._lock:
+            self._global_subscribers.add(queue)
+            self._listener_count += 1
+        return queue
+
+    async def unsubscribe_all(self, queue: asyncio.Queue[Event]) -> None:
+        async with self._lock:
+            self._global_subscribers.discard(queue)
+            self._listener_count -= 1
 
     async def list_events(self, job_id: str, after: str | None = None, limit: int = 20) -> list[Event]:
         """获取事件列表（返回 discriminated union 类型）"""
