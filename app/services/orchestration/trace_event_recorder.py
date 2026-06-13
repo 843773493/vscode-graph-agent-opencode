@@ -72,4 +72,13 @@ class TraceEventRecorder:
             if isinstance(value, str) and value:
                 return value
 
-        return self._job_sessions.get(event.job_id)
+        mapped = self._job_sessions.get(event.job_id)
+        if mapped:
+            return mapped
+
+        # 兜底：当 Agent Runtime 未把真实 job_id 传入 middleware 时，
+        # job_id 可能被回退成 session_id。
+        if event.job_id.startswith("ses_"):
+            return event.job_id
+
+        return None

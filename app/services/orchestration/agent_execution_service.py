@@ -91,14 +91,6 @@ class AgentExecutionService(JobStepExecutor):
         logger = logging.getLogger(__name__)
         logger.info("[agent_execution_service] run_step begin: session_id=%s job_id=%s agent_id=%s message_length=%s", session_id, effective_job_id, resolved_agent_id, len(message or ""))
 
-        await bus.publish(
-            job_id=effective_job_id,
-            event_type=EventType.AGENT_START,
-            payload={"message": message, "agent_id": resolved_agent_id},
-            agent_id=resolved_agent_id
-        )
-        logger.info("[agent_execution_service] AGENT_START published: job_id=%s", effective_job_id)
-
         config = {
             "configurable": {
                 "session_id": session_id,
@@ -106,14 +98,6 @@ class AgentExecutionService(JobStepExecutor):
                 "job_id": effective_job_id,
             }
         }
-
-        await bus.publish(
-            job_id=effective_job_id,
-            event_type=EventType.AGENT_STEP,
-            payload={"phase": "invoking_agent"},
-            agent_id=resolved_agent_id
-        )
-        logger.info("[agent_execution_service] AGENT_STEP published: job_id=%s", effective_job_id)
 
         try:
             logger.debug(f"About to invoke agent: session_id={session_id}, message={message[:50]}...")
@@ -129,16 +113,7 @@ class AgentExecutionService(JobStepExecutor):
 
             response_content = self._extract_final_text(result)
 
-            await bus.publish(
-                job_id=effective_job_id,
-                event_type=EventType.AGENT_END,
-                payload={
-                    "final_text": response_content,
-                    "agent_id": resolved_agent_id,
-                },
-                agent_id=resolved_agent_id
-            )
-            logger.info("[agent_execution_service] AGENT_END published: job_id=%s response_length=%s", effective_job_id, len(str(response_content or "")))
+            logger.info("[agent_execution_service] response ready: job_id=%s response_length=%s", effective_job_id, len(str(response_content or "")))
 
             return response_content
 

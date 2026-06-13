@@ -2,6 +2,7 @@
 """DeepAgent 工具调用链路端到端测试。"""
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -10,35 +11,34 @@ import pytest
 from tests.e2e.utils import wait_for_job_done
 
 
-async def _read_sse_event(response: httpx.Response, expected_event: str, timeout_seconds: float = 10.0) -> dict:
-    import asyncio
-
-    buffer: list[str] = []
+async def _read_sse_events_until(
+    response: httpx.Response,
+    predicate,
+    timeout_seconds: float = 30.0,
+) -> list[dict]:
+    events: list[dict] = []
     deadline = asyncio.get_running_loop().time() + timeout_seconds
 
-    async for chunk in response.aiter_text():
-        for raw_line in chunk.splitlines():
-            line = raw_line.strip()
-            if not line:
-                event_name = None
-                data_line = None
-                for item in buffer:
-                    if item.startswith("event: "):
-                        event_name = item.removeprefix("event: ").strip()
-                    elif item.startswith("data: "):
-                        data_line = item.removeprefix("data: ").strip()
-
-                buffer = []
-                if event_name == expected_event and data_line:
-                    return json.loads(data_line)
-                continue
-
-            buffer.append(line)
-
+    async for line in response.aiter_lines():
         if asyncio.get_running_loop().time() >= deadline:
             break
 
-    raise AssertionError(f"未在超时时间内收到 SSE 事件: {expected_event}")
+        line = line.strip()
+        if not line or line.startswith(":") or line.startswith("event:"):
+            continue
+
+        if line.startswith("data:"):
+            raw = line.removeprefix("data:").strip()
+            if raw:
+                try:
+                    events.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    continue
+
+        if events and predicate(events[-1]):
+            break
+
+    return events
 
 
 @pytest.mark.asyncio
@@ -52,12 +52,10 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
     assert create_session_response.status_code == 200
     session_id = create_session_response.json()["data"]["session_id"]
 
-    async with client.stream("GET", f"/api/v1/sessions/{session_id}/traces/stream") as stream_response:
+    timeout = 100000 if is_debug else 60.0
+
+    async with client.stream("GET", f"/api/v1/sessions/{session_id}/events/stream", timeout=None) as stream_response:
         assert stream_response.status_code == 200
-        ready_event = await _read_sse_event(stream_response, "trace", timeout_seconds=10.0 if not is_debug else 100000)
-        assert ready_event["type"] == "agent_start"
-        assert ready_event["session_id"] == session_id
-        assert ready_event["title"] == "轨迹流已连接"
 
         message_response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
@@ -74,28 +72,39 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
         assert message_response.status_code == 200
         job_id = message_response.json()["data"]["job_id"]
 
+        events = await _read_sse_events_until(
+            stream_response,
+            lambda event: event.get("type") == "agent_end",
+            timeout_seconds=timeout,
+        )
+
         result = await wait_for_job_done(client, job_id)
         assert result["status"] in {"completed", "succeeded"}
+
+    trace_types = [event.get("type") for event in events]
+    print(f"\n=== 实时事件类型: {trace_types} ===")
+
+    assert "tool_call_start" in trace_types, f"未收到 tool_call_start: {trace_types}"
+    assert "tool_call_end" in trace_types, f"未收到 tool_call_end: {trace_types}"
+    assert "agent_end" in trace_types, f"未收到 agent_end: {trace_types}"
+
+    tool_start = next(event for event in events if event.get("type") == "tool_call_start")
+    tool_end = next(event for event in events if event.get("type") == "tool_call_end")
+    agent_end = next(event for event in events if event.get("type") == "agent_end")
+
+    assert tool_start["payload"]["tool_name"] == "test_tool"
+    assert tool_end["payload"]["tool_name"] == "test_tool"
+    assert "2333" in tool_end["payload"].get("result", "") or "2333" in json.dumps(tool_end["payload"], ensure_ascii=False)
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
     assert traces_response.status_code == 200
     traces = traces_response.json()["data"]
     assert isinstance(traces, list)
-    trace_types = [trace.get("type") for trace in traces]
-    print(f"\n=== 实际轨迹类型: {trace_types} ===")
-    trace_events = [trace for trace in traces if trace["type"] in {"tool_call_start", "tool_call_end", "agent_end"}]
-    assert trace_events, f"未找到任何关键轨迹事件，实际轨迹类型: {trace_types}"
+    persisted_types = [trace.get("type") for trace in traces]
+    print(f"\n=== 持久化轨迹类型: {persisted_types} ===")
 
-    tool_start = next((trace for trace in trace_events if trace["type"] == "tool_call_start"), None)
-    tool_end = next((trace for trace in trace_events if trace["type"] == "tool_call_end"), None)
-    agent_end = next((trace for trace in trace_events if trace["type"] == "agent_end"), None)
+    assert "tool_call_start" in persisted_types
+    assert "tool_call_end" in persisted_types
+    assert "agent_end" in persisted_types
 
-    assert tool_start is not None
-    assert tool_end is not None
-    assert agent_end is not None
-    assert tool_start.get("tool_name") == "test_tool"
-    assert tool_end.get("tool_name") == "test_tool"
-    assert "2333" in tool_end.get("content", "") or "2333" in json.dumps(tool_end.get("raw", {}), ensure_ascii=False)
-    assert agent_end.get("type") == "agent_end"
-
-    print("\n🎉 test_tool 工具调用链路测试通过！")
+    print("\n test_tool 工具调用链路测试通过！")

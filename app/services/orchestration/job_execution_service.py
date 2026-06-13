@@ -45,13 +45,6 @@ class JobExecutionService:
         job.status = JobStatus.running
         job.updated_at = datetime.now()
 
-        await self._bus.publish(
-            job_id=job.job_id,
-            event_type=EventType.JOB_STARTED,
-            payload={},
-            agent_id="job_service",
-        )
-
         result = await self._agent_execution_service.run_step(
             job.session_id,
             job.message,

@@ -80,6 +80,21 @@ async def stream_session_traces(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+@router.get("/{session_id}/events/stream", summary="订阅会话统一事件流")
+async def stream_session_events(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    session_service: SessionService = Depends(get_session_service),
+):
+    async def event_generator():
+        async for event in session_service.stream_trace_events(session_id):
+            data = event.model_dump_json()
+            yield f"event: {event.type}\n"
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @router.patch("/{session_id}", response_model=APIResponse[SessionDTO], summary="更新会话")
 async def update_session(
     session_id: str,
