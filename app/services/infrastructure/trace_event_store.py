@@ -25,6 +25,13 @@ class TraceEventStore:
     def _trace_file(self, session_id: str) -> Path:
         return self._logs_dir / "traces" / f"trace_{session_id}.jsonl"
 
+    async def _notify(self, session_id: str) -> None:
+        condition = self._conditions.get(session_id)
+        if condition is None:
+            return
+        async with condition:
+            condition.notify_all()
+
     def append(self, session_id: str, event: Event) -> None:
         file = self._trace_file(session_id)
         file.parent.mkdir(parents=True, exist_ok=True)
@@ -36,13 +43,9 @@ class TraceEventStore:
             logger.exception("写入 trace 文件失败: session_id=%s event_id=%s", session_id, event.event_id)
             raise
 
-        condition = self._conditions.get(session_id)
-        if condition is None:
-            return
-
         try:
             loop = asyncio.get_running_loop()
-            loop.call_soon_threadsafe(condition.notify_all)
+            asyncio.run_coroutine_threadsafe(self._notify(session_id), loop)
         except RuntimeError:
             pass
 
@@ -60,8 +63,8 @@ class TraceEventStore:
                 try:
                     events.append(self._parse_event(line))
                 except Exception as exc:
-                    logger.exception("解析 trace 事件失败: session_id=%s line=%r", session_id, line[:200])
-                    raise
+                    logger.warning("跳过无法解析的 trace 行: session_id=%s error=%s line=%r", session_id, exc, line[:200])
+                    continue
         return events
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[Event, None]:

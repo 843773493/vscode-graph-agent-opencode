@@ -17,6 +17,7 @@ from langchain.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.core.job_context import get_current_job_id
 from app.core.job_event_bus import EventType
 from app.schemas.event import (
     LLMRequestPayload,
@@ -440,12 +441,4 @@ class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
         state: dict[str, Any],
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
-        session_id = self._get_session_id(runtime)
-        job_id = self._get_job_id(runtime)
-        agent_id = getattr(runtime.execution_info, "agent_id", None) or "unknown_agent"
-        self._publish_trace_event(session_id, job_id, "agent_end", {
-            "final_text": "agent 已完成本轮处理",
-            "final_message_count": len(state.get("messages", [])),
-            "agent_id": agent_id,
-        })
         return None
