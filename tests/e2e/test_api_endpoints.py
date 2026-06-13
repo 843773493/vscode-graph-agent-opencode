@@ -59,7 +59,7 @@ async def test_full_session_flow(client: httpx.AsyncClient):
     assert len(messages) >= 2, "Expected at least user and assistant messages"
     print(f"Session has {len(messages)} messages")
     
-    print("✅ Full end-to-end flow completed successfully!")
+    print("Full end-to-end flow completed successfully!")
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_frontend_response_diagnostic_flow(client: httpx.AsyncClient):
     assert created_user_message["role"] == "user"
     assert normalize_text(created_user_message["content"]) == normalize_text(message_content)
 
-    print("✅ Diagnostic flow completed successfully: accepted → job_done → events → assistant reply")
+    print("Diagnostic flow completed successfully: accepted -> job_done -> events -> assistant reply")
 
 
 @pytest.mark.asyncio
@@ -159,7 +159,7 @@ async def test_multiple_same_session_jobs_are_queued(client: httpx.AsyncClient):
         result = await wait_for_job_done(client, job_id, max_attempts=90)
         assert result["status"] in {"completed", "succeeded"}
     
-    print(f"✅ All {len(job_ids)} queued jobs completed successfully!")
+    print(f"All {len(job_ids)} queued jobs completed successfully!")
 
 
 @pytest.mark.asyncio
