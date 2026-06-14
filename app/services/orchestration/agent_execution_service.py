@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+import time
 from typing import Dict, Any, List
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_context import (
+    get_recent_tool_results,
     reset_current_agent_id,
     reset_current_job_id,
+    reset_last_turn_status,
+    reset_recent_tool_results,
     set_current_agent_id,
     set_current_job_id,
+    set_last_turn_status,
+    set_recent_tool_results,
 )
 from app.core.job_event_bus import EventType
+from app.core.session_interrupt_state import SessionInterruptState
 from app.agents.agent_factory import resolve_agent_id
 from app.services.infrastructure.config_service import ConfigService
 from app.abstractions.job_step_executor import JobStepExecutor
@@ -52,6 +59,7 @@ class AgentExecutionService(JobStepExecutor):
             background_message_bus=self._background_message_bus,
             job_event_bus=self._bus,
             dependency_provider=self._dependency_provider,
+            system_reminder_trigger_registry=self._dependency_provider.get_system_reminder_trigger_registry(),
         )
 
         self._agent_cache[cache_key] = agent
@@ -107,46 +115,144 @@ class AgentExecutionService(JobStepExecutor):
 
         job_token = set_current_job_id(effective_job_id)
         agent_token = set_current_agent_id(resolved_agent_id)
-        try:
-            logger.debug(f"About to invoke agent: session_id={session_id}, message={message[:50]}...")
+        last_turn_token = set_last_turn_status("ok")
+        tool_results_token = set_recent_tool_results([])
+        SessionInterruptState.set(session_id, phase=None, tool_name=None)
 
-            logger.info("[agent_execution_service] agent.ainvoke begin: job_id=%s", effective_job_id)
-            result = await agent.ainvoke(
-                {"messages": [{"role": "user", "content": message}]},
-                config=config
-            )
-            logger.info("[agent_execution_service] agent.ainvoke done: job_id=%s result_keys=%s", effective_job_id, list(result.keys()) if isinstance(result, dict) else type(result).__name__)
-
-            logger.debug(f"Agent invoke completed, result messages count: {len(result.get('messages', []))}")
-
-            response_content = self._extract_final_text(result)
-
+        async def _publish(event_type: str, payload: dict[str, Any]) -> None:
             await bus.publish(
                 job_id=effective_job_id,
-                event_type=EventType.AGENT_END,
-                payload={
-                    "final_text": response_content,
-                    "agent_id": resolved_agent_id,
-                },
+                event_type=event_type,
+                payload=payload,
                 agent_id=resolved_agent_id,
             )
 
-            logger.info("[agent_execution_service] response ready: job_id=%s response_length=%s", effective_job_id, len(str(response_content or "")))
+        collected_text_parts: list[str] = []
+        final_text = ""
+        active_tool_call_id: str | None = None
+        active_tool_name: str | None = None
+        active_tool_args: dict[str, Any] = {}
 
-            return response_content
+        try:
+            await _publish(EventType.AGENT_START, {
+                "message": "agent 启动，准备处理用户请求",
+                "agent_id": resolved_agent_id,
+            })
+
+            logger.info("[agent_execution_service] agent.astream_events begin: job_id=%s", effective_job_id)
+
+            async for event in agent.astream_events(
+                {"messages": [{"role": "user", "content": message}]},
+                config=config,
+                version="v2",
+            ):
+                event_type = event.get("event")
+                name = event.get("name", "")
+                data = event.get("data", {})
+                metadata = event.get("metadata", {})
+
+                if event_type == "on_chat_model_start" and name == "ChatOpenAI":
+                    model_name = metadata.get("ls_model_name") or "unknown_model"
+                    await _publish(EventType.LLM_REQUEST, {
+                        "model": model_name,
+                        "timestamp": int(time.time() * 1000),
+                    })
+
+                elif event_type == "on_chat_model_stream" and name == "ChatOpenAI":
+                    chunk = data.get("chunk")
+                    if chunk is None:
+                        continue
+                    content = getattr(chunk, "content", None) or ""
+                    tool_calls = getattr(chunk, "tool_calls", None) or []
+
+                    if isinstance(content, list):
+                        content = "".join(str(part) for part in content)
+                    content = str(content)
+
+                    if content.strip() and not collected_text_parts:
+                        SessionInterruptState.set(session_id, phase="text", tool_name=None)
+                        await _publish(EventType.TEXT_START, {})
+
+                    if content:
+                        collected_text_parts.append(content)
+                        SessionInterruptState.set(
+                            session_id,
+                            current_text="".join(collected_text_parts),
+                        )
+                        await _publish(EventType.TEXT_DELTA, {"text": content})
+
+                    for tc in tool_calls:
+                        tc_id = tc.get("id")
+                        tc_name = tc.get("name")
+                        tc_args = tc.get("args") or {}
+                        if tc_id and tc_id != active_tool_call_id:
+                            if active_tool_call_id is not None:
+                                await _publish(EventType.TOOL_CALL_END, {
+                                    "tool_name": active_tool_name or "unknown_tool",
+                                    "result": "",
+                                    "agent_id": resolved_agent_id,
+                                })
+                            active_tool_call_id = tc_id
+                            active_tool_name = tc_name
+                            active_tool_args = dict(tc_args) if isinstance(tc_args, dict) else {}
+                            SessionInterruptState.set(
+                                session_id,
+                                phase="tool",
+                                tool_name=active_tool_name or "unknown_tool",
+                            )
+                            await _publish(EventType.TOOL_CALL_START, {
+                                "tool_name": active_tool_name or "unknown_tool",
+                                "args": active_tool_args,
+                                "agent_id": resolved_agent_id,
+                            })
+                        elif tc_id == active_tool_call_id and isinstance(tc_args, dict):
+                            active_tool_args.update(tc_args)
+
+                elif event_type == "on_chat_model_end" and name == "ChatOpenAI":
+                    pass
+
+                elif event_type == "on_tool_end":
+                    tool_name = name
+                    output = data.get("output")
+                    result_text = str(output) if output is not None else ""
+                    recent_results = get_recent_tool_results()
+                    if recent_results is not None:
+                        recent_results.append({
+                            "tool_name": tool_name,
+                            "result": result_text,
+                            "interrupted": False,
+                        })
+                    SessionInterruptState.set(session_id, phase=None, tool_name=None)
+                    await _publish(EventType.TOOL_CALL_END, {
+                        "tool_name": tool_name,
+                        "result": result_text,
+                        "agent_id": resolved_agent_id,
+                    })
+
+            final_text = "".join(collected_text_parts).strip()
+
+            if collected_text_parts:
+                SessionInterruptState.set(session_id, phase=None, tool_name=None)
+                await _publish(EventType.TEXT_END, {"text": final_text})
+
+            await _publish(EventType.AGENT_END, {
+                "final_text": final_text,
+                "agent_id": resolved_agent_id,
+            })
+
+            logger.info("[agent_execution_service] response ready: job_id=%s response_length=%s", effective_job_id, len(final_text))
+            return final_text
 
         except Exception as e:
-            await bus.publish(
-                job_id=effective_job_id,
-                event_type=EventType.ERROR,
-                payload={"error": str(e), "phase": "agent_execution"},
-                agent_id=resolved_agent_id
-            )
+            await _publish(EventType.ERROR, {"error": str(e), "phase": "agent_execution"})
             logger.exception("[agent_execution_service] ERROR published: job_id=%s error=%s", effective_job_id, str(e))
             raise
         finally:
             reset_current_job_id(job_token)
             reset_current_agent_id(agent_token)
+            reset_last_turn_status(last_turn_token)
+            reset_recent_tool_results(tool_results_token)
+            SessionInterruptState.clear(session_id)
 
     def get_for_session(self, session_id: str, agent_id: str | None = None):
         return self._get_or_create_agent(session_id, agent_id)

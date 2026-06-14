@@ -3,7 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_request_id, get_session_auto_continue_service, get_session_service, verify_local_token
+from app.api.deps import (
+    get_request_id,
+    get_session_auto_continue_service,
+    get_session_interrupt_service,
+    get_session_service,
+    verify_local_token,
+)
 from app.schemas.public_v2.common import APIResponse, CursorPage
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
@@ -11,10 +17,12 @@ from app.schemas.public_v2.session import (
     SessionAutoContinueStatusDTO,
     SessionCreateRequest,
     SessionDTO,
+    SessionInterruptResultDTO,
     SessionUpdateRequest,
 )
 from app.schemas.event import Event
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
+from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -161,4 +169,19 @@ async def get_session_auto_continue_status(
     auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
 ):
     result = await auto_continue_service.get_status(session_id=session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/interrupt",
+    response_model=APIResponse[SessionInterruptResultDTO],
+    summary="打断当前会话正在运行的任务",
+)
+async def interrupt_session(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    session_interrupt_service: SessionInterruptService = Depends(get_session_interrupt_service),
+):
+    result = await session_interrupt_service.interrupt(session_id)
     return APIResponse(data=result, request_id=request_id)

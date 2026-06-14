@@ -114,8 +114,8 @@ export async function getSessionTraces(port, sessionId) {
   return result.data ?? [];
 }
 
-export async function streamJobEvents(port, jobId, { onEvent, onError, signal } = {}) {
-  const response = await fetch(buildUrl(port, `/jobs/${encodeURIComponent(jobId)}/events/stream`), {
+export async function streamSessionEvents(port, sessionId, { onEvent, onError, signal } = {}) {
+  const response = await fetch(buildUrl(port, `/sessions/${encodeURIComponent(sessionId)}/events/stream`), {
     headers: {
       accept: 'text/event-stream',
       'X-Local-Token': DEFAULT_BACKEND_TOKEN,

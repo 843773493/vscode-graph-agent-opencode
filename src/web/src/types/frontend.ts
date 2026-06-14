@@ -11,6 +11,8 @@ export interface ConversationView {
   jobId: string | null;
   pending: boolean;
   source: 'messages' | 'pending';
+  streamingText?: string;
+  streamingTextActive?: boolean;
 }
 
 export interface AppState {

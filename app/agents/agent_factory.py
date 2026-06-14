@@ -34,11 +34,13 @@ from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
 
 from app.core.path_utils import get_workspace_root
-from app.agents.agent_middleware import LLMLoggingMiddleware, ExecutionTraceMiddleware
+from app.agents.agent_middleware import LLMLoggingMiddleware
+from app.agents.system_reminder_middleware import SystemReminderMiddleware
 from app.agents.agent_tools import build_default_tools
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.system_reminder_triggers import SystemReminderTriggerRegistry
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import JobEventBus
@@ -171,6 +173,7 @@ def create_my_deep_agent(
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
+    system_reminder_trigger_registry: SystemReminderTriggerRegistry,
     config_service: ConfigService | None = None,
 ) -> CompiledStateGraph[
     AgentState[ResponseT], ContextT, _InputAgentState, _OutputAgentState[ResponseT]
@@ -214,8 +217,11 @@ def create_my_deep_agent(
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
 
     runtime_middleware = list(middleware) if middleware is not None else [
-        LLMLoggingMiddleware(job_event_bus=job_event_bus),
-        ExecutionTraceMiddleware(job_event_bus=job_event_bus),
+        LLMLoggingMiddleware(),
+        SystemReminderMiddleware(
+            trigger_registry=system_reminder_trigger_registry,
+            job_event_bus=job_event_bus,
+        ),
     ]
     if fallback_middleware is not None:
         runtime_middleware.append(fallback_middleware)
@@ -364,6 +370,7 @@ def create_runtime_deep_agent_for_session(
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
+    system_reminder_trigger_registry: SystemReminderTriggerRegistry,
     name: str | None = None,
 ):
     if config_service is None:
@@ -391,5 +398,6 @@ def create_runtime_deep_agent_for_session(
         message_service=message_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
+        system_reminder_trigger_registry=system_reminder_trigger_registry,
         config_service=service,
     )

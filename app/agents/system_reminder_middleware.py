@@ -1,0 +1,254 @@
+"""SystemReminderMiddleware：在模型调用前注入 <system_reminder>。"""
+from __future__ import annotations
+
+import asyncio
+from typing import Any, Callable
+from collections.abc import Awaitable
+
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware.types import ExtendedModelResponse, StateT
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+
+from app.core.job_context import get_current_agent_id, get_current_job_id
+from app.core.job_event_bus import EventType
+from app.schemas.event import SystemReminderInjectedPayload
+from app.schemas.system_reminder import (
+    ReminderTriggerContext,
+    SystemReminder,
+    SystemReminderPosition,
+    ToolResultSnapshot,
+)
+from app.services.infrastructure.system_reminder_triggers import (
+    SystemReminderTriggerRegistry,
+)
+
+
+class SystemReminderMiddleware(AgentMiddleware[StateT, Any, Any]):
+    """在消息列表的断点处注入 <system_reminder> 上下文提醒。"""
+
+    def __init__(
+        self,
+        *,
+        trigger_registry: SystemReminderTriggerRegistry,
+        job_event_bus: Any | None = None,
+    ) -> None:
+        self._trigger_registry = trigger_registry
+        self._job_event_bus = job_event_bus
+
+    def _get_session_id(self, runtime: Any) -> str:
+        configurable = getattr(runtime, "configurable", None)
+        if isinstance(configurable, dict):
+            session_id = configurable.get("session_id")
+            if session_id:
+                return session_id
+        execution_info = getattr(runtime, "execution_info", None)
+        if execution_info is not None:
+            thread_id = getattr(execution_info, "thread_id", None)
+            if isinstance(thread_id, str) and thread_id:
+                return thread_id
+        return "unknown_session"
+
+    def _get_job_id(self, runtime: Any) -> str:
+        context_job_id = get_current_job_id()
+        if context_job_id:
+            return context_job_id
+
+        configurable = getattr(runtime, "configurable", None)
+        if isinstance(configurable, dict):
+            job_id = configurable.get("job_id")
+            if job_id:
+                return job_id
+
+        execution_info = getattr(runtime, "execution_info", None)
+        if execution_info is not None:
+            configurable = getattr(execution_info, "configurable", None)
+            if isinstance(configurable, dict):
+                job_id = configurable.get("job_id")
+                if job_id:
+                    return job_id
+            job_id = getattr(execution_info, "job_id", None)
+            if job_id:
+                return job_id
+
+        return self._get_session_id(runtime)
+
+    def _get_agent_id(self, runtime: Any) -> str:
+        agent_id = get_current_agent_id()
+        if agent_id:
+            return agent_id
+        return "unknown_agent"
+
+    def _build_trigger_context(
+        self,
+        request: ModelRequest[Any],
+    ) -> ReminderTriggerContext:
+        from app.core.job_context import get_last_turn_status, get_recent_tool_results
+
+        messages = list(getattr(request, "messages", []))
+        recent_tool_results = get_recent_tool_results() or []
+
+        return ReminderTriggerContext(
+            session_id=self._get_session_id(request.runtime),
+            job_id=self._get_job_id(request.runtime),
+            agent_id=self._get_agent_id(request.runtime),
+            messages=messages,
+            last_turn_status=get_last_turn_status() or "ok",
+            recent_tool_results=[
+                raw if isinstance(raw, ToolResultSnapshot) else ToolResultSnapshot(**raw)
+                for raw in recent_tool_results
+            ],
+        )
+
+    def _inject_reminders(
+        self,
+        messages: list[BaseMessage],
+        reminders: list[SystemReminder],
+    ) -> list[BaseMessage]:
+        if not reminders:
+            return messages
+
+        by_position: dict[SystemReminderPosition, list[SystemReminder]] = {}
+        for r in reminders:
+            by_position.setdefault(r.position, []).append(r)
+
+        for pos in by_position:
+            by_position[pos].sort(key=lambda r: (r.priority, r.content))
+
+        result = list(messages)
+
+        def find_last_indices(msgs: list[BaseMessage]) -> tuple[int, int, int]:
+            last_assistant_idx = -1
+            last_tool_idx = -1
+            last_user_idx = -1
+            for i, msg in enumerate(msgs):
+                if isinstance(msg, AIMessage):
+                    last_assistant_idx = i
+                elif isinstance(msg, ToolMessage):
+                    last_tool_idx = i
+                elif isinstance(msg, HumanMessage):
+                    last_user_idx = i
+                elif isinstance(msg, BaseMessage):
+                    role = getattr(msg, "type", "") or getattr(msg, "role", "")
+                    if role in {"human", "user"}:
+                        last_user_idx = i
+                    elif role in {"ai", "assistant"}:
+                        last_assistant_idx = i
+                    elif role == "tool":
+                        last_tool_idx = i
+            return last_assistant_idx, last_tool_idx, last_user_idx
+
+        def insert_after(index: int, reminders_for_pos: list[SystemReminder]) -> None:
+            nonlocal result
+            wrapped = [
+                HumanMessage(
+                    content=f"\u003csystem_reminder\u003e\n{r.content}\n\u003c/system_reminder\u003e"
+                )
+                for r in reminders_for_pos
+            ]
+            result = result[: index + 1] + wrapped + result[index + 1 :]
+
+        def fallback_to_append(position: SystemReminderPosition) -> None:
+            by_position[SystemReminderPosition.APPEND] = (
+                by_position.get(SystemReminderPosition.APPEND, [])
+                + by_position[position]
+            )
+            del by_position[position]
+
+        if SystemReminderPosition.AFTER_LAST_ASSISTANT in by_position:
+            last_assistant_idx, _, _ = find_last_indices(result)
+            if last_assistant_idx >= 0:
+                insert_after(last_assistant_idx, by_position[SystemReminderPosition.AFTER_LAST_ASSISTANT])
+                del by_position[SystemReminderPosition.AFTER_LAST_ASSISTANT]
+            else:
+                fallback_to_append(SystemReminderPosition.AFTER_LAST_ASSISTANT)
+
+        if SystemReminderPosition.AFTER_TOOL_CALLS in by_position:
+            _, last_tool_idx, _ = find_last_indices(result)
+            if last_tool_idx >= 0:
+                insert_after(last_tool_idx, by_position[SystemReminderPosition.AFTER_TOOL_CALLS])
+                del by_position[SystemReminderPosition.AFTER_TOOL_CALLS]
+            else:
+                fallback_to_append(SystemReminderPosition.AFTER_TOOL_CALLS)
+
+        if SystemReminderPosition.AFTER_LAST_USER in by_position:
+            _, _, last_user_idx = find_last_indices(result)
+            if last_user_idx >= 0:
+                insert_after(last_user_idx, by_position[SystemReminderPosition.AFTER_LAST_USER])
+                del by_position[SystemReminderPosition.AFTER_LAST_USER]
+            else:
+                fallback_to_append(SystemReminderPosition.AFTER_LAST_USER)
+
+        if SystemReminderPosition.APPEND in by_position:
+            result.extend(
+                HumanMessage(
+                    content=f"\u003csystem_reminder\u003e\n{r.content}\n\u003c/system_reminder\u003e"
+                )
+                for r in by_position[SystemReminderPosition.APPEND]
+            )
+
+        return result
+
+    async def _publish_injected_event(
+        self,
+        job_id: str,
+        agent_id: str,
+        reminder: SystemReminder,
+    ) -> None:
+        if self._job_event_bus is None:
+            return
+        await self._job_event_bus.publish(
+            job_id=job_id,
+            event_type=EventType.SYSTEM_REMINDER_INJECTED,
+            payload=SystemReminderInjectedPayload(
+                position=reminder.position.value,
+                content=reminder.content,
+                dedup_key=reminder.dedup_key,
+            ).model_dump(),
+            agent_id=agent_id,
+        )
+
+    def _publish_injected_event_sync(
+        self,
+        job_id: str,
+        agent_id: str,
+        reminder: SystemReminder,
+    ) -> None:
+        if self._job_event_bus is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                self._publish_injected_event(job_id, agent_id, reminder)
+            )
+        except RuntimeError:
+            pass
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse],
+    ) -> ModelResponse | AIMessage | ExtendedModelResponse:
+        ctx = self._build_trigger_context(request)
+        reminders = self._trigger_registry.collect(ctx)
+
+        if reminders:
+            request.messages = self._inject_reminders(list(request.messages), reminders)
+            for reminder in reminders:
+                self._publish_injected_event_sync(ctx.job_id, ctx.agent_id, reminder)
+
+        return handler(request)
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse]],
+    ) -> ModelResponse | AIMessage | ExtendedModelResponse:
+        ctx = self._build_trigger_context(request)
+        reminders = self._trigger_registry.collect(ctx)
+
+        if reminders:
+            request.messages = self._inject_reminders(list(request.messages), reminders)
+            for reminder in reminders:
+                await self._publish_injected_event(ctx.job_id, ctx.agent_id, reminder)
+
+        return await handler(request)

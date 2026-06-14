@@ -116,12 +116,13 @@ class ConfigService:
         if default_agent_id and default_agent_id in agents:
             return default_agent_id
 
-        return "deep_agent"
+        return "default"
 
     def _normalize_agent_id(self, agent_id: str | None) -> str:
         if not agent_id:
             return self.get_default_agent_id()
 
+        # TODO: 兼容历史别名 deep_agent，后续移除
         if agent_id == "deep_agent":
             return self.get_default_agent_id()
 
@@ -136,7 +137,7 @@ class ConfigService:
         agents = config.get("agents", {})
 
         if not agents:
-            if resolved_agent_id != "deep_agent":
+            if resolved_agent_id != "default":
                 raise ValueError(f"agent {resolved_agent_id} 不存在")
             return resolved_agent_id
 
@@ -164,7 +165,7 @@ class ConfigService:
 
         resolved_agent_id = self._normalize_agent_id(agent_id)
         if not agents or resolved_agent_id not in agents:
-            if resolved_agent_id != "deep_agent":
+            if resolved_agent_id != "default":
                 raise ValueError(f"agent {resolved_agent_id} 不存在")
             return default_runtime
 
@@ -214,7 +215,7 @@ class ConfigService:
         }
 
         if not agents or resolved_agent_id not in agents:
-            if resolved_agent_id != "deep_agent":
+            if resolved_agent_id != "default":
                 raise ValueError(f"agent {resolved_agent_id} 不存在")
             return default_tool_config
 

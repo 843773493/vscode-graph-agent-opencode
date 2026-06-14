@@ -47,7 +47,8 @@ function normalizeAssistantPayload(content: string): { thought: string; response
 
 type TimelineItem =
   | { kind: 'message'; id: string; role: Message['role']; content: string; createdAt: string | null; metadata: Record<string, unknown> }
-  | { kind: 'trace'; id: string; eventType: string; payload: Record<string, unknown>; timestamp: string | null };
+  | { kind: 'trace'; id: string; eventType: string; payload: Record<string, unknown>; timestamp: string | null }
+  | { kind: 'streaming'; id: string; content: string };
 
 function normalizeTraceData(eventType: string, payload: Record<string, unknown>): {
   kind: 'thought' | 'tool_call' | 'tool_result' | 'response' | 'system' | 'error';
@@ -113,6 +114,27 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
       title: '执行异常',
       summary: errorText,
       content: String(payload.stack ?? payload.detail ?? payload.message ?? payload.error ?? errorText ?? ''),
+    };
+  }
+
+  if (type === 'system_reminder_injected') {
+    const content = getOptionalString(payload, 'content');
+    const position = getOptionalString(payload, 'position');
+    return {
+      kind: 'system',
+      title: '系统提示',
+      summary: position ? `注入位置: ${position}` : '',
+      content: content || message || resultText,
+    };
+  }
+
+  if (type === 'text_start' || type === 'text_delta' || type === 'text_end') {
+    const text = getOptionalString(payload, 'text');
+    return {
+      kind: 'thought',
+      title: type === 'text_start' ? '文本开始' : type === 'text_delta' ? '文本流' : '文本结束',
+      summary: `长度: ${text.length}`,
+      content: text,
     };
   }
 
@@ -218,7 +240,26 @@ function normalizeTimelineMessage(message: Message): TimelineItem {
   };
 }
 
+function StreamingCard({ content, index }: { content: string; index: number }): React.ReactNode {
+  return (
+    <EventCard
+      title="Assistant 生成中"
+      kind="response"
+      tone="running"
+      time={displayTime(new Date().toISOString())}
+      summary=""
+      content={content}
+      raw={{ streaming: true, content }}
+      index={index}
+    />
+  );
+}
+
 function TimelineCard({ item, index }: { item: TimelineItem; index: number }): React.ReactNode {
+  if (item.kind === 'streaming') {
+    return <StreamingCard content={item.content} index={index} />;
+  }
+
   if (item.kind === 'message') {
     const isUser = item.role === 'user';
     const assistantParsed = item.role === 'assistant' ? normalizeAssistantPayload(item.content) : null;
@@ -287,6 +328,14 @@ function buildTraceTimelineItems(conversations: ConversationView[]): TimelineIte
   const items: TimelineItem[] = [];
 
   for (const conversation of conversations) {
+    if (conversation.streamingTextActive && conversation.streamingText != null) {
+      items.push({
+        kind: 'streaming',
+        id: `${conversation.conversationId}-streaming-${Date.now()}`,
+        content: conversation.streamingText,
+      });
+    }
+
     for (const event of conversation.events) {
       const legacyEvent = event as { event_type?: string; data?: Record<string, unknown>; timestamp?: string | null };
       const eventType = 'type' in event ? event.type : (legacyEvent.event_type ?? 'unknown');

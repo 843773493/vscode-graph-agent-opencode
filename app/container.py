@@ -11,12 +11,17 @@ from app.services.orchestration.agent_execution_service import AgentExecutionSer
 from app.services.business.agent_service import AgentService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.system_reminder_triggers import (
+    build_default_trigger_registry,
+    SystemReminderTriggerRegistry,
+)
 from app.services.event_service import EventService
 from app.services.business.job_service import JobService
 from app.services.orchestration.job_execution_service import JobExecutionService
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
+from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.tool_service import ToolService
@@ -30,9 +35,16 @@ from app.services.orchestration.trace_event_recorder import TraceEventRecorder
 
 
 class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
-    def __init__(self, *, message_service: MessageService, session_service: SessionService) -> None:
+    def __init__(
+        self,
+        *,
+        message_service: MessageService,
+        session_service: SessionService,
+        system_reminder_trigger_registry: SystemReminderTriggerRegistry,
+    ) -> None:
         self._message_service = message_service
         self._session_service = session_service
+        self._system_reminder_trigger_registry = system_reminder_trigger_registry
         self._session_orchestrator: SessionOrchestrator | None = None
 
     def get_message_service(self) -> MessageService:
@@ -49,6 +61,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
             raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionOrchestrator")
         return self._session_orchestrator
 
+    def get_system_reminder_trigger_registry(self) -> SystemReminderTriggerRegistry:
+        return self._system_reminder_trigger_registry
+
 
 @dataclass(slots=True)
 class AppContainer:
@@ -60,6 +75,7 @@ class AppContainer:
     message_service: MessageService
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
+    session_interrupt_service: SessionInterruptService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
     log_service: LogService
@@ -81,11 +97,13 @@ def build_app_container() -> AppContainer:
     trace_event_recorder = TraceEventRecorder(bus=job_event_bus, store=trace_event_store)
 
     config_service = ConfigService()
+    system_reminder_trigger_registry = build_default_trigger_registry()
     message_service = MessageService()
     session_service = SessionService(config_service=config_service, trace_event_store=trace_event_store)
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
+        system_reminder_trigger_registry=system_reminder_trigger_registry,
     )
     agent_execution_service = AgentExecutionService(
         config_service=config_service,
@@ -121,6 +139,11 @@ def build_app_container() -> AppContainer:
         job_service=job_service,
         session_orchestrator=session_orchestrator,
     )
+    session_interrupt_service = SessionInterruptService(
+        job_service=job_service,
+        message_service=message_service,
+        job_event_bus=job_event_bus,
+    )
     log_service = LogService()
     tool_service = ToolService(tool_catalog=agent_execution_service)
     workspace_service = WorkspaceService(config_service=config_service)
@@ -134,6 +157,7 @@ def build_app_container() -> AppContainer:
         message_service=message_service,
         runtime_service=runtime_service,
         session_auto_continue_service=session_auto_continue_service,
+        session_interrupt_service=session_interrupt_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
         log_service=log_service,

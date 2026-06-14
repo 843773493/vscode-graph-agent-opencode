@@ -1,7 +1,12 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { createSession as apiCreateSession, sendUserMessage as apiSendMessage, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions } from './api';
-import type { Message, TraceEvent } from './types/backend';
+import { createSession as apiCreateSession, sendUserMessage as apiSendMessage, interruptSession as apiInterruptSession, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions } from './api';
+import type { Message, TraceEvent } from './types/gen';
 import type { AppState, ConversationView } from './types/frontend';
+
+function getTraceEventTimestamp(event: TraceEvent): string {
+  const legacy = (event as TraceEvent & { time?: string | null }).time;
+  return event.timestamp || legacy || '';
+}
 
 function normalizeMessage(msg: Partial<Message> & { id?: string; createdAt?: string | null }): Message {
   return {
@@ -71,7 +76,9 @@ function attachTraceEventsToConversations(conversations: ConversationView[], tra
 
     return {
       ...conversation,
-      events: traceEvents.filter(event => event.job_id === jobId),
+      events: traceEvents
+        .filter(event => event.job_id === jobId)
+        .sort((a, b) => new Date(getTraceEventTimestamp(a)).getTime() - new Date(getTraceEventTimestamp(b)).getTime()),
     };
   });
 }
@@ -102,6 +109,7 @@ interface AppContextType {
   state: AppState;
   setStatus: (text: string) => void;
   sendMessage: (content: string) => void;
+  interruptSession: () => void;
   selectSession: (sessionId: string) => void;
   createSession: (title?: string) => void;
   toggleHistoryPanel: () => void;
@@ -136,7 +144,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         workspaceName: workspace.name,
         sessions: sessions.items,
         currentSession: nextCurrentSession,
-        traceEvents,
+        traceEvents: [...traceEvents].sort((a, b) => new Date(getTraceEventTimestamp(a)).getTime() - new Date(getTraceEventTimestamp(b)).getTime()),
         error: null,
         isBootstrapping: false,
       }));
@@ -153,12 +161,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const selectSession = useCallback((sessionId: string) => {
     void (async () => {
+      stopSessionStream();
       const nextSession = state.sessions.find(session => session.session_id === sessionId) ?? state.currentSession;
       const traceEvents = nextSession ? await getSessionTraces(state.apiPort ?? 8000, nextSession.session_id) : [];
       setState(prev => ({
         ...prev,
         currentSession: prev.sessions.find(session => session.session_id === sessionId) ?? prev.currentSession,
-        traceEvents,
+        traceEvents: [...traceEvents].sort((a, b) => new Date(getTraceEventTimestamp(a)).getTime() - new Date(getTraceEventTimestamp(b)).getTime()),
       }));
     })();
   }, [state.apiPort, state.currentSession, state.sessions]);
@@ -185,9 +194,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({
       ...prev,
       messages: messages.items,
-      traceEvents,
+      traceEvents: [...traceEvents].sort((a, b) => new Date(getTraceEventTimestamp(a)).getTime() - new Date(getTraceEventTimestamp(b)).getTime()),
       status: '消息已发送',
     }));
+  }, [state.apiPort, state.currentSession]);
+
+  const interruptSessionCallback = useCallback(async () => {
+    if (!state.currentSession) {
+      throw new Error('当前没有可中断的会话');
+    }
+
+    setState(prev => ({ ...prev, status: '正在中断生成...' }));
+    const result = await apiInterruptSession(state.apiPort ?? 8000, state.currentSession.session_id);
+    setState(prev => ({ ...prev, status: `已中断: ${result.phase}` }));
   }, [state.apiPort, state.currentSession]);
 
   const toggleHistoryPanel = useCallback(() => {
@@ -202,7 +221,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void refreshSessions();
   }, [refreshSessions]);
 
-  const value = useMemo(() => ({ state, setStatus, sendMessage, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails }), [state, setStatus, sendMessage, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails]);
+  const value = useMemo(() => ({ state, setStatus, sendMessage, interruptSession: interruptSessionCallback, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails }), [state, setStatus, sendMessage, interruptSessionCallback, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

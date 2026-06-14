@@ -39,6 +39,72 @@ async def _read_sse_events_until(
             break
 
     return events
+y
+
+def _assert_event_order(events: list[dict]) -> None:
+    """断言事件序列符合 DeepAgent 单次工具调用 + 可选文本生成的合理顺序。"""
+    types = [event.get("type") for event in events]
+
+    required_order = [
+        "message_created",
+        "job_created",
+        "job_started",
+        "agent_start",
+        "llm_request",
+        "tool_call_start",
+        "tool_call_end",
+        "agent_end",
+    ]
+
+    cursor = 0
+    for expected in required_order:
+        try:
+            idx = types.index(expected, cursor)
+        except ValueError:
+            raise AssertionError(
+                f"事件顺序错误：未在合适位置找到 '{expected}'。当前事件序列：{types}"
+            )
+        cursor = idx + 1
+
+    if "job_completed" in types:
+        assert types.index("agent_end") < types.index("job_completed"), (
+            f"agent_end 必须在 job_completed 之前：{types}"
+        )
+
+    if "text_start" in types:
+        text_start_idx = types.index("text_start")
+        text_end_idx = types.index("text_end")
+        agent_end_idx = types.index("agent_end")
+        llm_indices = [i for i, t in enumerate(types) if t == "llm_request"]
+        assert len(llm_indices) >= 2, f"存在文本输出时需要至少两次 llm_request：{types}"
+        second_llm_idx = llm_indices[1]
+        assert second_llm_idx < text_start_idx < text_end_idx < agent_end_idx, (
+            f"文本事件位置错误：需要在第二次 llm_request 之后、agent_end 之前。序列：{types}"
+        )
+
+        for j in range(text_start_idx + 1, text_end_idx):
+            if types[j] != "text_delta":
+                raise AssertionError(
+                    f"事件顺序错误：text_start 与 text_end 之间出现非 text_delta 事件 '{types[j]}'。"
+                    f"序列：{types}"
+                )
+
+    tool_start_idx = types.index("tool_call_start")
+    tool_end_idx = types.index("tool_call_end")
+    agent_start_idx = types.index("agent_start")
+    agent_end_idx = types.index("agent_end")
+
+    assert tool_start_idx < tool_end_idx, f"tool_call_start 必须在 tool_call_end 之前：{types}"
+    assert agent_start_idx < agent_end_idx, f"agent_start 必须在 agent_end 之前：{types}"
+
+    if "system_reminder_injected" in types:
+        sri_idx = types.index("system_reminder_injected")
+        assert tool_end_idx < sri_idx < agent_end_idx, (
+            f"system_reminder_injected 必须在 tool_call_end 之后、agent_end 之前：{types}"
+        )
+
+    if "job_completed" in types:
+        assert agent_end_idx < types.index("job_completed"), f"agent_end 必须在 job_completed 之前：{types}"
 
 
 @pytest.mark.asyncio
@@ -84,9 +150,16 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
     trace_types = [event.get("type") for event in events]
     print(f"\n=== 实时事件类型: {trace_types} ===")
 
+    _assert_event_order(events)
+
     assert "tool_call_start" in trace_types, f"未收到 tool_call_start: {trace_types}"
     assert "tool_call_end" in trace_types, f"未收到 tool_call_end: {trace_types}"
     assert "agent_end" in trace_types, f"未收到 agent_end: {trace_types}"
+    assert "system_reminder_injected" in trace_types, f"未收到 system_reminder_injected: {trace_types}"
+
+    reminder_event = next(event for event in events if event.get("type") == "system_reminder_injected")
+    assert reminder_event["payload"]["position"] == "after_tool_calls"
+    assert "test_tool" in reminder_event["payload"]["content"]
 
     tool_start = next(event for event in events if event.get("type") == "tool_call_start")
     tool_end = next(event for event in events if event.get("type") == "tool_call_end")
@@ -103,8 +176,11 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
     persisted_types = [trace.get("type") for trace in traces]
     print(f"\n=== 持久化轨迹类型: {persisted_types} ===")
 
+    _assert_event_order(traces)
+
     assert "tool_call_start" in persisted_types
     assert "tool_call_end" in persisted_types
     assert "agent_end" in persisted_types
+    assert "system_reminder_injected" in persisted_types
 
     print("\n test_tool 工具调用链路测试通过！")

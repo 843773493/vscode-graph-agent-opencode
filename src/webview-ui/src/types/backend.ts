@@ -110,7 +110,13 @@ export type TraceEventType =
   | 'agent_step'
   | 'agent_end'
   | 'error'
-  | 'llm_request';
+  | 'llm_request'
+  | 'tool_call_start'
+  | 'tool_call_end'
+  | 'text_start'
+  | 'text_delta'
+  | 'text_end'
+  | 'system_reminder_injected';
 
 interface BaseTraceEvent {
   event_id: string;
@@ -178,6 +184,22 @@ interface LLMRequestPayload {
   timestamp: number;
 }
 
+interface TextStartPayload {}
+
+interface TextDeltaPayload {
+  text: string;
+}
+
+interface TextEndPayload {
+  text: string;
+}
+
+interface SystemReminderInjectedPayload {
+  position: string;
+  content: string;
+  dedup_key: string | null;
+}
+
 export type TraceEvent =
   | (BaseTraceEvent & { type: 'message_created'; payload: MessageCreatedPayload })
   | (BaseTraceEvent & { type: 'job_created'; payload: JobCreatedPayload })
@@ -190,7 +212,13 @@ export type TraceEvent =
   | (BaseTraceEvent & { type: 'agent_step'; payload: AgentStepPayload })
   | (BaseTraceEvent & { type: 'agent_end'; payload: AgentEndPayload })
   | (BaseTraceEvent & { type: 'error'; payload: ErrorPayload })
-  | (BaseTraceEvent & { type: 'llm_request'; payload: LLMRequestPayload });
+  | (BaseTraceEvent & { type: 'llm_request'; payload: LLMRequestPayload })
+  | (BaseTraceEvent & { type: 'tool_call_start'; payload: Record<string, unknown> })
+  | (BaseTraceEvent & { type: 'tool_call_end'; payload: Record<string, unknown> })
+  | (BaseTraceEvent & { type: 'text_start'; payload: TextStartPayload })
+  | (BaseTraceEvent & { type: 'text_delta'; payload: TextDeltaPayload })
+  | (BaseTraceEvent & { type: 'text_end'; payload: TextEndPayload })
+  | (BaseTraceEvent & { type: 'system_reminder_injected'; payload: SystemReminderInjectedPayload });
 
 export type ObservationEventType =
   | 'message.updated'

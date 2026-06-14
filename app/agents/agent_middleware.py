@@ -16,12 +16,7 @@ from langgraph.types import Command
 from langchain.messages import ToolMessage
 from pydantic import BaseModel, Field
 
-from app.abstractions.job_event_bus import JobEventBusProtocol
-from app.core.job_context import get_current_agent_id, get_current_job_id
-from app.core.job_event_bus import EventType
-from app.schemas.event import (
-    LLMRequestPayload,
-)
+from app.core.job_context import get_current_job_id
 
 
 # ========== 类型定义 ==========
@@ -76,9 +71,8 @@ class LLMFullLog(BaseModel):
 class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     """唯一职责：存储每个LLM调用的完整原始请求/响应"""
 
-    def __init__(self, *, job_event_bus: JobEventBusProtocol) -> None:
+    def __init__(self) -> None:
         self._prepared_session_dirs: set[str] = set()
-        self._job_event_bus = job_event_bus
 
     def _get_session_id(self, runtime: Runtime[Any]) -> str:
         """优先读取显式注入的 session_id，其次回退到 thread_id。"""
@@ -241,32 +235,10 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         handler: Callable[[ModelRequest[Any]], ModelResponse],
     ) -> ModelResponse | AIMessage | ExtendedModelResponse:
         session_id = self._get_session_id(request.runtime)
-        job_id = self._get_job_id(request.runtime)
-        model_name = getattr(request.model, "model_name", str(request.model))
 
         response = handler(request)
 
         self._save_log(session_id, request, response)
-
-        try:
-            if self._job_event_bus is None:
-                raise RuntimeError("LLMLoggingMiddleware 未绑定 JobEventBus")
-            bus = self._job_event_bus
-            import asyncio
-            asyncio.create_task(bus.publish(
-                job_id=job_id,
-                event_type=EventType.LLM_REQUEST,
-                payload={"model": model_name, "timestamp": int(time.time() * 1000)},
-                agent_id=get_current_agent_id() or "deep_agent",
-            ))
-        except Exception as error:
-            import logging
-            logging.getLogger(__name__).exception(
-                "[execution_trace_middleware] 保存轨迹失败: session_id=%s event_type=%s error=%s",
-                session_id,
-                EventType.LLM_REQUEST,
-                error,
-            )
 
         return response
 
@@ -276,194 +248,9 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse]],
     ) -> ModelResponse | AIMessage | ExtendedModelResponse:
         session_id = self._get_session_id(request.runtime)
-        job_id = self._get_job_id(request.runtime)
-        model_name = getattr(request.model, "model_name", str(request.model))
 
         response = await handler(request)
 
         self._save_log(session_id, request, response)
 
-        try:
-            if self._job_event_bus is None:
-                raise RuntimeError("LLMLoggingMiddleware 未绑定 JobEventBus")
-            bus = self._job_event_bus
-            await bus.publish(
-                job_id=job_id,
-                event_type=EventType.LLM_REQUEST,
-                payload={"model": model_name, "timestamp": int(time.time() * 1000)},
-                agent_id=get_current_agent_id() or "deep_agent",
-            )
-        except Exception:
-            pass
-
         return response
-
-
-class ExecutionTraceMiddleware(AgentMiddleware[StateT, Any, Any]):
-    """唯一职责：把执行轨迹事件发布到事件总线，由 TraceEventRecorder 持久化。"""
-
-    def __init__(self, *, job_event_bus: JobEventBusProtocol) -> None:
-        self._session_start_times: dict[str, float] = {}
-        self._job_event_bus = job_event_bus
-
-    def _get_session_id(self, runtime: Runtime[Any]) -> str:
-        """优先读取显式注入的 session_id，其次回退到 thread_id。"""
-        configurable = getattr(runtime, 'configurable', None)
-        if isinstance(configurable, dict):
-            session_id = configurable.get('session_id')
-            if session_id:
-                return session_id
-
-        execution_info = runtime.execution_info
-        return execution_info.thread_id
-
-    def _get_job_id(self, runtime: Runtime[Any]) -> str:
-        """从 runtime 中提取 job_id，回退到 session_id。"""
-        job_id = get_current_job_id()
-        if job_id:
-            return job_id
-
-        configurable = getattr(runtime, 'configurable', None)
-        if isinstance(configurable, dict):
-            job_id = configurable.get('job_id')
-            if job_id:
-                return job_id
-
-        execution_info = getattr(runtime, 'execution_info', None)
-        if execution_info is not None:
-            configurable = getattr(execution_info, 'configurable', None)
-            if isinstance(configurable, dict):
-                job_id = configurable.get('job_id')
-                if job_id:
-                    return job_id
-            job_id = getattr(execution_info, 'job_id', None)
-            if job_id:
-                return job_id
-
-        return self._get_session_id(runtime)
-
-    def _get_agent_id(self, runtime: Runtime[Any]) -> str:
-        """从 job_context 或 runtime 中提取 agent_id。"""
-        agent_id = get_current_agent_id()
-        if agent_id:
-            return agent_id
-
-        execution_info = getattr(runtime, 'execution_info', None)
-        if execution_info is not None:
-            agent_id = getattr(execution_info, 'agent_id', None)
-            if agent_id:
-                return agent_id
-
-        return "unknown_agent"
-
-    def _publish_trace_event(self, session_id: str, job_id: str, event_type: str, data: dict[str, Any]) -> None:
-        try:
-            if self._job_event_bus is None:
-                raise RuntimeError("ExecutionTraceMiddleware 未绑定 JobEventBus")
-
-            agent_id = data.get("agent_id") or "unknown_agent"
-
-            async def _publish() -> None:
-                await self._job_event_bus.publish(
-                    job_id=job_id,
-                    event_type=event_type,
-                    payload=data,
-                    agent_id=agent_id,
-                )
-
-            try:
-                asyncio.get_running_loop()
-                asyncio.create_task(_publish())
-            except RuntimeError:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "[execution_trace_middleware] 无事件循环，跳过事件发布: job_id=%s event_type=%s",
-                    job_id,
-                    event_type,
-                )
-        except Exception as exc:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.exception(
-                "[execution_trace_middleware] 发布轨迹事件失败: session_id=%s event_type=%s error=%s",
-                session_id,
-                event_type,
-                exc,
-            )
-            raise
-
-    def before_agent(
-        self,
-        state: dict[str, Any],
-        runtime: Runtime[Any],
-    ) -> dict[str, Any] | None:
-        session_id = self._get_session_id(runtime)
-        job_id = self._get_job_id(runtime)
-        agent_id = self._get_agent_id(runtime)
-        self._publish_trace_event(session_id, job_id, "agent_start", {
-            "message": "agent 启动，准备处理用户请求",
-            "message_count": len(state.get("messages", [])),
-            "agent_id": agent_id,
-        })
-        return None
-
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequestType,
-        handler: Callable[[ToolCallRequestType], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
-        session_id = self._get_session_id(request.runtime)
-        job_id = self._get_job_id(request.runtime)
-        agent_id = self._get_agent_id(request.runtime)
-        tool_call = request.tool_call
-        tool_name = tool_call.get("name", "unknown_tool")
-
-        self._publish_trace_event(session_id, job_id, "tool_call_start", {
-            "tool_name": tool_name,
-            "args": tool_call.get("args", {}),
-            "agent_id": agent_id,
-        })
-
-        result = handler(request)
-
-        self._publish_trace_event(session_id, job_id, "tool_call_end", {
-            "tool_name": tool_name,
-            "result": str(result),
-            "agent_id": agent_id,
-        })
-
-        return result
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequestType,
-        handler: Callable[[ToolCallRequestType], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
-        session_id = self._get_session_id(request.runtime)
-        job_id = self._get_job_id(request.runtime)
-        agent_id = self._get_agent_id(request.runtime)
-        tool_call = request.tool_call
-        tool_name = tool_call.get("name", "unknown_tool")
-
-        self._publish_trace_event(session_id, job_id, "tool_call_start", {
-            "tool_name": tool_name,
-            "args": tool_call.get("args", {}),
-            "agent_id": agent_id,
-        })
-
-        result = await handler(request)
-
-        self._publish_trace_event(session_id, job_id, "tool_call_end", {
-            "tool_name": tool_name,
-            "result": str(result),
-            "agent_id": agent_id,
-        })
-
-        return result
-
-    def after_agent(
-        self,
-        state: dict[str, Any],
-        runtime: Runtime[Any],
-    ) -> dict[str, Any] | None:
-        return None

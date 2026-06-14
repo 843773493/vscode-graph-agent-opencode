@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import AsyncIterator, Generator, Sequence
 from hashlib import sha1
 from pathlib import Path
@@ -18,12 +19,20 @@ E2E_PORT_START = 18600
 E2E_PORT_END = 18799
 E2E_READY_TIMEOUT_SECONDS = 60
 
+
+@pytest.fixture(scope="session", autouse=True)
+def e2e_session_marker() -> str:
+    """用于区分不同 pytest 会话，确保每次运行都从零开始。"""
+    return uuid.uuid4().hex
+
+
 @pytest.fixture(scope="session", autouse=True)
 def is_debug() -> bool:
     return os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY") == "1"
 
+
 @pytest.fixture(scope="module")
-def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
+def e2e_workspace_root_path(request: pytest.FixtureRequest, e2e_session_marker: str) -> str:
     project_root = Path.cwd().resolve()
     tests_root = project_root / "tests" / "e2e"
     test_file_path = Path(request.node.fspath).resolve()
@@ -31,16 +40,44 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     workspace_root = Path() / "out" / "tests" / "e2e" / relative_test_path
 
     default_workspace_root = project_root / "asset" / "default_test_workspace"
+    lock_file = workspace_root / ".e2e_session_lock"
 
-    if workspace_root.exists():
-        shutil.rmtree(workspace_root)
+    same_session = False
+    if lock_file.exists():
+        try:
+            same_session = lock_file.read_text(encoding="utf-8").strip() == e2e_session_marker
+        except Exception:
+            same_session = False
 
-    shutil.copytree(default_workspace_root, workspace_root)
+    if workspace_root.exists() and same_session:
+        # 同一次 pytest 会话内，保留 .boxteam，只清理工作区其余内容
+        boxteam_dir = workspace_root / ".boxteam"
+        for item in workspace_root.iterdir():
+            if item.resolve() == boxteam_dir.resolve() or item.resolve() == lock_file.resolve():
+                continue
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+    else:
+        # 新的 pytest 会话，清理整个 workspace（包括旧的 .boxteam）
+        if workspace_root.exists():
+            shutil.rmtree(workspace_root)
+        workspace_root.mkdir(parents=True, exist_ok=True)
 
-    boxteam_dir = workspace_root / ".boxteam"
-    if boxteam_dir.exists():
-        shutil.rmtree(boxteam_dir)
+    for item in default_workspace_root.iterdir():
+        target = workspace_root / item.name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        if item.is_dir():
+            shutil.copytree(item, target)
+        else:
+            shutil.copy2(item, target)
 
+    lock_file.write_text(e2e_session_marker, encoding="utf-8")
     return str(workspace_root)
 
 

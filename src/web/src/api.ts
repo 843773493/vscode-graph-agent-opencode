@@ -1,4 +1,4 @@
-import type { ActiveJob, Message, Session, TraceEvent } from './types/backend';
+import type { ActiveJob, Message, Session, TraceEvent } from './types/gen';
 
 export interface WorkspaceInfo {
   root_path: string;
@@ -21,6 +21,11 @@ export interface PageResult<T> {
 export interface SessionAcceptResult {
   job_id: string | null;
   message_id: string | null;
+}
+
+export interface InterruptSessionResult {
+  job_id: string;
+  phase: string;
 }
 
 export interface MessageRunRequest {
@@ -46,6 +51,15 @@ export interface StreamEvent<TPayload = Record<string, unknown>> {
   payload: TPayload;
 }
 
+export interface SessionStreamEvent {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  type: string;
+  timestamp?: string | null;
+  payload: Record<string, unknown>;
+}
+
 export const DEFAULT_BACKEND_HOST = '127.0.0.1';
 export const DEFAULT_BACKEND_PORT = 8000;
 export const DEFAULT_BACKEND_TOKEN = 'local-dev-token';
@@ -66,6 +80,10 @@ function normalizePageResult<T>(value: unknown): PageResult<T> {
 }
 
 function getBaseUrl(port: number): string {
+  if (typeof window !== 'undefined' && window.location.port === '8001') {
+    return '';
+  }
+
   return `http://${DEFAULT_BACKEND_HOST}:${port}`;
 }
 
@@ -155,6 +173,12 @@ export async function sendUserMessage(
   return sendMessage(port, sessionId, payload);
 }
 
+export async function interruptSession(port: number, sessionId: string): Promise<InterruptSessionResult> {
+  return unwrapApiData(await requestJson<APIResponse<InterruptSessionResult>>(port, `/api/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`, {
+    method: 'POST',
+  }));
+}
+
 export async function getJob(port: number, jobId: string): Promise<ActiveJob | null> {
   return unwrapApiData(await requestJson<APIResponse<ActiveJob | null>>(port, `/api/v1/jobs/${encodeURIComponent(jobId)}`));
 }
@@ -215,6 +239,65 @@ export async function streamJobEvents(
 
         try {
           const parsed = JSON.parse(raw) as StreamEvent;
+          options?.onEvent?.(parsed);
+        } catch (error) {
+          options?.onError?.(error);
+        }
+      }
+    }
+  }
+}
+
+export async function streamSessionEvents(
+  port: number,
+  sessionId: string,
+  options?: {
+    onEvent?: (event: SessionStreamEvent) => void;
+    onError?: (error: unknown) => void;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const url = `${getBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/events/stream`;
+  const response = await fetch(url, {
+    signal: options?.signal,
+    headers: {
+      'X-Local-Token': DEFAULT_BACKEND_TOKEN,
+    },
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`无法连接会话事件流: ${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    let lineBreakIndex = buffer.indexOf('\n');
+    while (lineBreakIndex !== -1) {
+      const line = buffer.slice(0, lineBreakIndex).trim();
+      buffer = buffer.slice(lineBreakIndex + 1);
+      lineBreakIndex = buffer.indexOf('\n');
+
+      if (!line || line.startsWith(':')) {
+        continue;
+      }
+
+      if (line.startsWith('data:')) {
+        const raw = line.slice(5).trim();
+        if (!raw) {
+          continue;
+        }
+
+        try {
+          const parsed = JSON.parse(raw) as SessionStreamEvent;
           options?.onEvent?.(parsed);
         } catch (error) {
           options?.onError?.(error);

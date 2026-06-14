@@ -7,6 +7,10 @@ function displayTime(value: unknown): string {
   return formatTime(value) || 'now';
 }
 
+function getTraceTime(item: { timestamp?: string | null; time?: string | null }): string {
+  return item.timestamp || item.time || '';
+}
+
 function normalizeAssistantPayload(content: string): { thought: string; response: string } {
   const trimmed = String(content ?? '').trim();
   if (!trimmed) {
@@ -73,7 +77,12 @@ function EventCard({
   );
 }
 
-function TimelineCard({ item, index }: { item: { kind: 'message' | 'trace'; id: string; role?: Message['role']; content: string; createdAt?: string | null; metadata?: Record<string, unknown>; eventType?: string; payload?: Record<string, unknown>; timestamp?: string | null }; index: number }): React.ReactNode {
+type TimelineItem =
+  | { kind: 'message'; id: string; role?: Message['role']; content: string; createdAt?: string | null; metadata?: Record<string, unknown> }
+  | { kind: 'trace'; id: string; eventType?: string; payload?: Record<string, unknown>; timestamp?: string | null }
+  | { kind: 'streaming'; id: string; content: string };
+
+function TimelineCard({ item, index }: { item: TimelineItem; index: number }): React.ReactNode {
   if (item.kind === 'message') {
     const isUser = item.role === 'user';
     const assistantParsed = item.role === 'assistant' ? normalizeAssistantPayload(item.content) : null;
@@ -93,20 +102,68 @@ function TimelineCard({ item, index }: { item: { kind: 'message' | 'trace'; id: 
     );
   }
 
+  if (item.kind === 'streaming') {
+    return (
+      <EventCard
+        title="Assistant 生成中"
+        tone="running"
+        time={displayTime(null)}
+        summary={item.content}
+        content={item.content}
+        raw={{ kind: item.kind, id: item.id, content: item.content }}
+      />
+    );
+  }
+
   const payload = item.payload ?? {};
+  let title: string;
+  let summary: string;
+  let content: string;
+
+  if (item.eventType === 'system_reminder_injected') {
+    title = '系统提示';
+    summary = `注入位置: ${String(payload.position ?? '')}`;
+    content = String(payload.content ?? '');
+  } else if (item.eventType === 'text_start') {
+    title = '文本开始';
+    summary = '';
+    content = String(payload.text ?? '');
+  } else if (item.eventType === 'text_delta') {
+    title = '文本流';
+    summary = '';
+    content = String(payload.text ?? '');
+  } else if (item.eventType === 'text_end') {
+    title = '文本结束';
+    summary = '';
+    content = String(payload.text ?? '');
+  } else {
+    title = `事件 ${item.eventType ?? 'trace'}`;
+    summary = String(payload.message ?? payload.result ?? '');
+    content = summary;
+  }
+
   return (
     <EventCard
-      title={`事件 ${item.eventType ?? 'trace'}`}
+      title={title}
       tone="running"
-      time={displayTime(item.timestamp)}
-      summary={String(payload.message ?? payload.result ?? '')}
-      content={String(payload.message ?? payload.result ?? '')}
+      time={displayTime(getTraceTime(item))}
+      summary={summary}
+      content={content}
       raw={payload}
     />
   );
 }
 
-export default function ChatPanel({ conversations, expandDetails }: { conversations: Array<{ conversationId: string; userMessage: Message | null; assistantMessages: Message[]; events: TraceEvent[] }> ; expandDetails: boolean }) {
+type ConversationView = {
+  conversationId: string;
+  userMessage: Message | null;
+  assistantMessages: Message[];
+  events: TraceEvent[];
+  streamingText?: string;
+  streamingTextActive?: boolean;
+};
+
+export default function ChatPanel({ conversations, expandDetails }: { conversations: Array<ConversationView>; expandDetails: boolean }) {
   return (
     <div className="chat-stream">
       {conversations.length === 0 ? (
@@ -121,8 +178,11 @@ export default function ChatPanel({ conversations, expandDetails }: { conversati
             {conversation.assistantMessages.map(message => (
               <TimelineCard key={message.message_id} item={{ kind: 'message', id: message.message_id, role: message.role, content: message.content, createdAt: message.created_at, metadata: message.metadata }} index={index} />
             ))}
+            {conversation.streamingTextActive && conversation.streamingText && (
+              <TimelineCard item={{ kind: 'streaming', id: `${conversation.conversationId}-streaming`, content: conversation.streamingText }} index={index} />
+            )}
             {expandDetails && conversation.events.map((event, eventIndex) => (
-              <TimelineCard key={event.event_id} item={{ kind: 'trace', id: event.event_id, eventType: event.type, content: '', payload: event.payload as unknown as Record<string, unknown>, timestamp: event.timestamp }} index={eventIndex} />
+              <TimelineCard key={event.event_id} item={{ kind: 'trace', id: event.event_id, eventType: event.type, content: '', payload: event.payload as unknown as Record<string, unknown>, timestamp: getTraceTime(event), }} index={eventIndex} />
             ))}
           </section>
         ))

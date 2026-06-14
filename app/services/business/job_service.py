@@ -183,10 +183,24 @@ class JobService:
         def _task_done_callback(task):
             try:
                 task.result()
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
                 import logging
                 logging.error(f"Job task failed: job_id={job.job_id}, error={str(e)}", exc_info=True)
-                self._job_failed(job.job_id, e)
+                job.status = JobStatus.failed
+                job.error_message = str(e)
+                job.ended_at = datetime.now()
+                job.updated_at = datetime.now()
+                if self._bus is not None:
+                    asyncio.get_event_loop().create_task(
+                        self._bus.publish(
+                            job_id=job.job_id,
+                            event_type=EventType.JOB_FAILED,
+                            payload={"error": str(e)},
+                            agent_id="job_service",
+                        )
+                    )
 
         job.task = loop.create_task(self._run_job_background(job.job_id, job.session_id, job.message))
         job.task.add_done_callback(_task_done_callback)
@@ -277,6 +291,18 @@ class JobService:
             job.progress = 100
             job.ended_at = datetime.now()
             job.updated_at = datetime.now()
+        except asyncio.CancelledError as error:
+            job.status = JobStatus.cancelled
+            job.error_message = "任务被用户取消"
+            job.ended_at = datetime.now()
+            job.updated_at = datetime.now()
+            if self._bus is not None:
+                await self._bus.publish(
+                    job_id=job_id,
+                    event_type=EventType.JOB_CANCELLED,
+                    payload={},
+                    agent_id="job_service",
+                )
         except Exception as error:
             job.status = JobStatus.failed
             job.error_message = str(error)

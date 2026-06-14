@@ -59,7 +59,7 @@ def get_python_executable() -> Path:
     )
 
 
-def create_python_execution_tool(session_id: str, agent_id: str = "deep_agent") -> BaseTool:
+def create_python_execution_tool(session_id: str, agent_id: str = "default") -> BaseTool:
     """创建用于执行 Python 代码的工具。"""
     del session_id, agent_id
     python_executable = get_python_executable()
@@ -142,7 +142,7 @@ def create_python_execution_tool(session_id: str, agent_id: str = "deep_agent") 
 
 def create_system_time_emitter_tool(
     session_id: str,
-    agent_id: str = "deep_agent",
+    agent_id: str = "default",
     *,
     background_message_bus: BackgroundMessageBus,
 ) -> BaseTool:
@@ -196,7 +196,7 @@ def create_system_time_emitter_tool(
 
 def create_monitor_session_agent_end_tool(
     session_id: str,
-    agent_id: str = "deep_agent",
+    agent_id: str = "default",
     *,
     background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBus,
@@ -379,7 +379,7 @@ def create_monitor_session_agent_end_tool(
 
 def create_background_message_collection_tool(
     session_id: str,
-    agent_id: str = "deep_agent",
+    agent_id: str = "default",
     *,
     background_message_bus: BackgroundMessageBus,
 ) -> BaseTool:
@@ -408,7 +408,7 @@ def create_background_message_collection_tool(
 
 
 def create_send_message_to_session_tool(
-    sender_agent_id: str = "deep_agent",
+    sender_agent_id: str = "default",
     *,
     session_orchestrator: SessionOrchestrator,
 ) -> BaseTool:
@@ -442,8 +442,8 @@ def create_test_tool() -> BaseTool:
 
 def build_default_tools(
     session_id: str,
-    agent_id: str = "deep_agent",
-    sender_agent_id: str = "deep_agent",
+    agent_id: str = "default",
+    sender_agent_id: str = "default",
     *,
     background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBus,

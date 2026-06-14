@@ -58,3 +58,12 @@ class SessionControlResultDTO(BaseModel):
     session_id: str
     action: str
     status: str
+
+
+class SessionInterruptResultDTO(BaseModel):
+    session_id: str
+    job_id: str
+    status: str
+    phase: str
+    tool_name: Optional[str] = None
+    interrupted_at: datetime = Field(default_factory=lambda: datetime.now())

@@ -7,7 +7,7 @@ import {
     listMessages as sharedListMessages,
     listSessions as sharedListSessions,
     sendMessage as sharedSendMessage,
-    streamJobEvents as sharedStreamJobEvents,
+    streamSessionEvents as sharedStreamSessionEvents,
 } from '../../shared/api.js';
 import {
     DEFAULT_AGENT_ID,
@@ -80,16 +80,16 @@ export async function getSessionTraces(port: number, sessionId: string): Promise
   return (await sharedGetSessionTraces(port, sessionId)) as TraceEvent[];
 }
 
-export async function streamJobEvents(
+export async function streamSessionEvents(
   port: number,
-  jobId: string,
+  sessionId: string,
   options?: {
     onEvent?: (event: StreamEvent) => void;
     onError?: (error: unknown) => void;
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  return sharedStreamJobEvents(port, jobId, options);
+  return sharedStreamSessionEvents(port, sessionId, options);
 }
 
 export { DEFAULT_AGENT_ID, DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_PORT, DEFAULT_BACKEND_TOKEN, DEFAULT_SESSION_TITLE };

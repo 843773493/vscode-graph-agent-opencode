@@ -22,6 +22,11 @@ from app.schemas.event import (
     ToolCallEndEvent, ToolCallEndPayload,
     ErrorEvent, ErrorPayload,
     LLMRequestEvent, LLMRequestPayload,
+    TextStartEvent, TextStartPayload,
+    TextDeltaEvent, TextDeltaPayload,
+    TextEndEvent, TextEndPayload,
+    SystemReminderInjectedEvent, SystemReminderInjectedPayload,
+    SessionInterruptedEvent, SessionInterruptedPayload,
 )
 
 
@@ -42,6 +47,11 @@ class EventType:
     # LLM 调用
     LLM_REQUEST = "llm_request"
 
+    # 流式文本输出
+    TEXT_START = "text_start"
+    TEXT_DELTA = "text_delta"
+    TEXT_END = "text_end"
+
     # 工具调用
     TOOL_CALL_START = "tool_call_start"
     TOOL_CALL_END = "tool_call_end"
@@ -53,6 +63,11 @@ class EventType:
     ERROR = "error"
     STATUS_CHANGE = "status_change"
 
+    # System reminder 注入
+    SYSTEM_REMINDER_INJECTED = "system_reminder_injected"
+
+    # Session 打断
+    SESSION_INTERRUPTED = "session_interrupted"
 
 
 class JobEventBus:
@@ -187,6 +202,27 @@ class JobEventBus:
                 **common
             )
 
+        elif t == EventType.TEXT_START:
+            return TextStartEvent(
+                type="text_start",
+                payload=TextStartPayload(),
+                **common
+            )
+
+        elif t == EventType.TEXT_DELTA:
+            return TextDeltaEvent(
+                type="text_delta",
+                payload=TextDeltaPayload(**payload),
+                **common
+            )
+
+        elif t == EventType.TEXT_END:
+            return TextEndEvent(
+                type="text_end",
+                payload=TextEndPayload(**payload),
+                **common
+            )
+
         elif t == EventType.AGENT_START:
             return AgentStartEvent(
                 type="agent_start",
@@ -226,6 +262,20 @@ class JobEventBus:
             return ErrorEvent(
                 type="error",
                 payload=ErrorPayload(**payload),
+                **common
+            )
+
+        elif t == EventType.SYSTEM_REMINDER_INJECTED:
+            return SystemReminderInjectedEvent(
+                type="system_reminder_injected",
+                payload=SystemReminderInjectedPayload(**payload),
+                **common
+            )
+
+        elif t == EventType.SESSION_INTERRUPTED:
+            return SessionInterruptedEvent(
+                type="session_interrupted",
+                payload=SessionInterruptedPayload(**payload),
                 **common
             )
 

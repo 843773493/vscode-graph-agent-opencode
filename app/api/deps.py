@@ -16,6 +16,7 @@ from app.services.business.job_service import JobService
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
+from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.tool_service import ToolService
@@ -35,6 +36,7 @@ class _AppContainerProtocol:
     message_service: MessageService
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
+    session_interrupt_service: SessionInterruptService
     session_service: SessionService
     log_service: LogService
     tool_service: ToolService
@@ -136,6 +138,13 @@ def get_session_auto_continue_service(request: Request) -> SessionAutoContinueSe
     service = getattr(_get_container(request), "session_auto_continue_service", None)
     if not isinstance(service, SessionAutoContinueService):
         raise RuntimeError("SessionAutoContinueService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_session_interrupt_service(request: Request) -> SessionInterruptService:
+    service = getattr(_get_container(request), "session_interrupt_service", None)
+    if not isinstance(service, SessionInterruptService):
+        raise RuntimeError("SessionInterruptService 尚未在应用启动阶段初始化")
     return service
 
 

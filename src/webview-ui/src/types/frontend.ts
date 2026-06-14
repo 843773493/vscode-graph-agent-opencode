@@ -16,6 +16,8 @@ export interface ConversationView {
   observationState?: SessionObservationState | null;
   pendingQuestions?: QuestionRequest[];
   pendingPermissions?: PermissionRequest[];
+  streamingText?: string;
+  streamingTextActive?: boolean;
 }
 
 export interface AppState {

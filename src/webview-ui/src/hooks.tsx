@@ -1,6 +1,6 @@
 import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { createSession as apiCreateSession, sendMessage as apiSendMessage, DEFAULT_AGENT_ID, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions, streamJobEvents } from './api';
+import { createSession as apiCreateSession, sendMessage as apiSendMessage, DEFAULT_AGENT_ID, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions, streamSessionEvents } from './api';
 import type { ActiveJob, Message, Session, TraceEvent } from './types/backend';
 import type { AppState, ConversationView } from './types/frontend';
 import { clearRuntimeLog, getVsCodeState, interceptConsoleToMessageSink, setVsCodeState, writeRuntimeLog } from './vscode';
@@ -491,8 +491,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const currentSessionId = state.currentSession?.session_id ?? null;
     activeSessionIdRef.current = currentSessionId;
-    const jobId = state.activeJob?.jobId ?? null;
-    if (!state.apiPort || !currentSessionId || !jobId) {
+    if (!state.apiPort || !currentSessionId) {
       return;
     }
 
@@ -500,7 +499,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const controller = new AbortController();
     streamAbortRef.current = controller;
 
-    void streamJobEvents(state.apiPort, jobId, {
+    void streamSessionEvents(state.apiPort, currentSessionId, {
       signal: controller.signal,
       onEvent: ({ eventType, payload }: StreamEvent) => {
         if (!activeSessionIdRef.current) {
@@ -516,7 +515,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               ...pending.events,
               {
                 event_id: `pending_${eventType}_${Date.now()}`,
-                job_id: next.activeJob?.jobId ?? pending.jobId ?? 'unknown_job',
+                job_id: pending.jobId ?? 'unknown_job',
                 step_id: typeof payload.step_id === 'string' ? payload.step_id : null,
                 agent_id: typeof payload.agent_id === 'string' ? payload.agent_id : null,
                 type: eventType as TraceEvent['type'],
@@ -546,7 +545,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => {
       controller.abort();
     };
-  }, [refreshFromBackend, state.activeJob?.jobId, state.apiPort, state.currentSession?.session_id]);
+  }, [refreshFromBackend, state.apiPort, state.currentSession?.session_id]);
 
   const setStatus = useCallback((text: string) => {
     setState(prev => ({ ...prev, status: text }));

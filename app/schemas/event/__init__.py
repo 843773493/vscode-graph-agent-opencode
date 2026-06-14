@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import Any, Dict, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
-
 # ============= 1. 基础事件结构（所有事件的公共字段） =============
 
 class BaseEvent(BaseModel):
@@ -113,6 +112,36 @@ class LLMRequestPayload(BaseModel):
     timestamp: int
 
 
+class SystemReminderInjectedPayload(BaseModel):
+    """SYSTEM_REMINDER_INJECTED 事件的 payload"""
+    position: str
+    content: str
+    dedup_key: str | None = None
+
+
+class SessionInterruptedPayload(BaseModel):
+    """SESSION_INTERRUPTED 事件的 payload"""
+    session_id: str
+    phase: str
+    tool_name: Optional[str] = None
+    interrupted_at: datetime = Field(default_factory=datetime.now)
+
+
+class TextDeltaPayload(BaseModel):
+    """TEXT_DELTA 事件的 payload"""
+    text: str
+
+
+class TextStartPayload(BaseModel):
+    """TEXT_START 事件的 payload（标记 assistant 文本开始）"""
+    pass
+
+
+class TextEndPayload(BaseModel):
+    """TEXT_END 事件的 payload（标记 assistant 文本结束）"""
+    text: str = ""
+
+
 # ============= 3. 具体事件类型（带type字面量） =============
 
 class MessageCreatedEvent(BaseEvent):
@@ -199,6 +228,36 @@ class LLMRequestEvent(BaseEvent):
     payload: LLMRequestPayload
 
 
+class SystemReminderInjectedEvent(BaseEvent):
+    """system_reminder 已注入事件"""
+    type: Literal["system_reminder_injected"] = "system_reminder_injected"
+    payload: SystemReminderInjectedPayload
+
+
+class SessionInterruptedEvent(BaseEvent):
+    """session 被用户打断事件"""
+    type: Literal["session_interrupted"] = "session_interrupted"
+    payload: SessionInterruptedPayload
+
+
+class TextStartEvent(BaseEvent):
+    """Assistant 文本开始事件"""
+    type: Literal["text_start"] = "text_start"
+    payload: TextStartPayload = Field(default_factory=TextStartPayload)
+
+
+class TextDeltaEvent(BaseEvent):
+    """Assistant 文本增量事件"""
+    type: Literal["text_delta"] = "text_delta"
+    payload: TextDeltaPayload
+
+
+class TextEndEvent(BaseEvent):
+    """Assistant 文本结束事件"""
+    type: Literal["text_end"] = "text_end"
+    payload: TextEndPayload = Field(default_factory=TextEndPayload)
+
+
 # ============= 4. Discriminated Union 类型 =============
 
 """
@@ -226,4 +285,9 @@ Event = Union[
     ToolCallEndEvent,
     ErrorEvent,
     LLMRequestEvent,
+    SystemReminderInjectedEvent,
+    SessionInterruptedEvent,
+    TextStartEvent,
+    TextDeltaEvent,
+    TextEndEvent,
 ] 
