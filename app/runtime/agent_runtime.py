@@ -8,6 +8,9 @@ from app.services.infrastructure.config_service import ConfigService
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 
+from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.path_utils import get_checkpoints_dir
+
 
 class AgentRuntimeDependencyProvider(Protocol):
     def get_message_service(self) -> Any: ...
@@ -17,6 +20,8 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_session_orchestrator(self) -> Any: ...
 
     def get_system_reminder_trigger_registry(self) -> Any: ...
+
+    def get_checkpointer(self) -> Any: ...
 
 
 def build_session_agent_runtime(
@@ -32,6 +37,9 @@ def build_session_agent_runtime(
     name: str | None = None,
 ) -> Any:
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
+    checkpointer = getattr(dependency_provider, "get_checkpointer", lambda: None)()
+    if checkpointer is None:
+        checkpointer = FileSystemCheckpointSaver(base_dir=get_checkpoints_dir())
     return create_runtime_deep_agent_for_session(
         session_id=session_id,
         agent_id=resolved_agent_id,
@@ -43,5 +51,6 @@ def build_session_agent_runtime(
         session_service=dependency_provider.get_session_service(),
         session_orchestrator=dependency_provider.get_session_orchestrator(),
         system_reminder_trigger_registry=system_reminder_trigger_registry,
+        checkpointer=checkpointer,
         name=name or resolved_agent_id,
     )

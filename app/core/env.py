@@ -6,12 +6,18 @@ from dotenv import load_dotenv
 
 
 def get_project_root(start_path: Path | str | None = None) -> Path:
-    """从给定起点向上查找项目根目录。"""
+    """从给定起点向上查找项目根目录。优先使用 pyproject.toml，未找到时再回退到 AGENTS.md。"""
     current_path = Path(start_path or __file__).resolve()
     search_start = current_path.parent if current_path.is_file() else current_path
 
+    # 优先查找 pyproject.toml
     for candidate in (search_start, *search_start.parents):
-        if (candidate / "pyproject.toml").exists() or (candidate / "AGENTS.md").exists():
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+
+    # 回退：查找 AGENTS.md
+    for candidate in (search_start, *search_start.parents):
+        if (candidate / "AGENTS.md").exists():
             return candidate
 
     raise FileNotFoundError(f"无法定位项目根目录，请从项目内路径调用: {current_path}")

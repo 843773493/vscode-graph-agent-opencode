@@ -6,7 +6,7 @@ import './index.css';
 
 declare global {
   interface ImportMeta {
-    hot?: { accept: () => void };
+    hot?: { accept: () => void; dispose: (callback: () => void) => void };
   }
 
   interface Window {

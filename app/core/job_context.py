@@ -11,6 +11,12 @@ _current_last_turn_status: contextvars.ContextVar[str | None] = contextvars.Cont
 _current_recent_tool_results: contextvars.ContextVar[list[dict[str, Any]] | None] = contextvars.ContextVar(
     "current_recent_tool_results", default=None
 )
+_current_active_tool_name: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_active_tool_name", default=None
+)
+_current_interruptible_phase: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_interruptible_phase", default=None
+)
 
 
 def get_current_job_id() -> str | None:
@@ -71,3 +77,33 @@ def set_recent_tool_results(results: list[dict[str, Any]] | None) -> contextvars
 def reset_recent_tool_results(token: contextvars.Token[list[dict[str, Any]] | None]) -> None:
     """恢复之前的最近工具结果快照。"""
     _current_recent_tool_results.reset(token)
+
+
+def get_active_tool_name() -> str | None:
+    """获取当前正在执行的工具名，供打断服务判断阶段使用。"""
+    return _current_active_tool_name.get()
+
+
+def set_active_tool_name(tool_name: str | None) -> contextvars.Token[str | None]:
+    """设置当前正在执行的工具名。"""
+    return _current_active_tool_name.set(tool_name)
+
+
+def reset_active_tool_name(token: contextvars.Token[str | None]) -> None:
+    """恢复之前的工具名。"""
+    _current_active_tool_name.reset(token)
+
+
+def get_interruptible_phase() -> str | None:
+    """获取当前可中断阶段（text 或 tool）。"""
+    return _current_interruptible_phase.get()
+
+
+def set_interruptible_phase(phase: str | None) -> contextvars.Token[str | None]:
+    """设置当前可中断阶段。"""
+    return _current_interruptible_phase.set(phase)
+
+
+def reset_interruptible_phase(token: contextvars.Token[str | None]) -> None:
+    """恢复之前的可中断阶段。"""
+    _current_interruptible_phase.reset(token)

@@ -39,7 +39,7 @@ async def _read_sse_events_until(
             break
 
     return events
-y
+
 
 def _assert_event_order(events: list[dict]) -> None:
     """断言事件序列符合 DeepAgent 单次工具调用 + 可选文本生成的合理顺序。"""
@@ -127,7 +127,7 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
             f"/api/v1/sessions/{session_id}/messages",
             json={
                 "message": {
-                    "content": "只允许执行一次 test_tool 调用。先调用 test_tool，再立刻结束。不要写文件，不要读文件，不要执行命令，不要调用其它工具，不要解释，不要总结。",
+                    "content": "直接调用 test_tool 工具，然后只回答工具返回内容。不要执行多余操作，不要回答多余文本",
                 },
                 "run": {
                     "mode": "single_agent",

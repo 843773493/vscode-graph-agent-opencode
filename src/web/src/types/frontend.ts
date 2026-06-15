@@ -1,5 +1,5 @@
 // 前端内部类型
-import type { ActiveJob, Message, Session, TraceEvent } from './backend';
+import type { Message, Session, TraceEvent } from './backend';
 
 export interface ConversationView {
   conversationId: string;
@@ -23,7 +23,6 @@ export interface AppState {
   currentSession: Session | null;
   messages: Message[];
   traceEvents: TraceEvent[];
-  activeJob: ActiveJob | null;
   pendingConversations: Map<string, ConversationView>;
   status: string;
   error: string | null;

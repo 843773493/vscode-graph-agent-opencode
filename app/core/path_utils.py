@@ -47,10 +47,15 @@ def get_artifacts_dir() -> Path:
 def get_cache_dir() -> Path:
     return get_boxteam_root() / "cache"
 
+def get_checkpoints_dir() -> Path:
+    return get_boxteam_root() / "checkpoints"
+
+
 def initialize_directories() -> None:
     """初始化所有必需的目录，应该在应用启动时显式调用"""
     get_boxteam_root().mkdir(exist_ok=True, parents=True)
     get_sessions_dir().mkdir(exist_ok=True, parents=True)
+    get_checkpoints_dir().mkdir(exist_ok=True, parents=True)
     get_logs_dir().mkdir(exist_ok=True, parents=True)
     get_artifacts_dir().mkdir(exist_ok=True, parents=True)
     get_cache_dir().mkdir(exist_ok=True, parents=True)

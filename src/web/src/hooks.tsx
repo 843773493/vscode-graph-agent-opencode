@@ -1,31 +1,24 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { createSession as apiCreateSession, sendUserMessage as apiSendMessage, interruptSession as apiInterruptSession, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions } from './api';
-import type { Message, TraceEvent } from './types/gen';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createSession as apiCreateSession,
+  interruptSession as apiInterruptSession,
+  sendUserMessage as apiSendMessage,
+  DEFAULT_SESSION_TITLE,
+  getSessionTraces,
+  getWorkspace,
+  listMessages,
+  listSessions,
+  streamSessionEvents,
+  type SessionStreamEvent,
+} from './api';
+import type { Message, Session, TraceEvent } from './types/backend';
 import type { AppState, ConversationView } from './types/frontend';
-
-function getTraceEventTimestamp(event: TraceEvent): string {
-  const legacy = (event as TraceEvent & { time?: string | null }).time;
-  return event.timestamp || legacy || '';
-}
-
-function normalizeMessage(msg: Partial<Message> & { id?: string; createdAt?: string | null }): Message {
-  return {
-    message_id: msg.message_id ?? msg.id ?? '',
-    session_id: msg.session_id ?? '',
-    role: msg.role ?? 'assistant',
-    content: msg.content ?? '',
-    metadata: msg.metadata ?? {},
-    attachments: msg.attachments ?? [],
-    created_at: msg.created_at ?? msg.createdAt ?? null,
-  };
-}
 
 function groupMessagesIntoConversations(messages: Message[]): ConversationView[] {
   const conversations: ConversationView[] = [];
   let current: ConversationView | null = null;
 
-  for (const raw of messages) {
-    const message = normalizeMessage(raw);
+  for (const message of messages) {
     if (message.role === 'user') {
       current = {
         conversationId: message.message_id || `conversation_${conversations.length}`,
@@ -78,14 +71,60 @@ function attachTraceEventsToConversations(conversations: ConversationView[], tra
       ...conversation,
       events: traceEvents
         .filter(event => event.job_id === jobId)
-        .sort((a, b) => new Date(getTraceEventTimestamp(a)).getTime() - new Date(getTraceEventTimestamp(b)).getTime()),
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
     };
   });
 }
 
+function cloneMaps(state: AppState): AppState {
+  return { ...state, pendingConversations: new Map(state.pendingConversations) };
+}
+
+function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
+  return {
+    event_id: event.event_id,
+    job_id: event.job_id ?? 'unknown_job',
+    step_id: event.step_id ?? null,
+    agent_id: event.agent_id ?? null,
+    timestamp: event.timestamp,
+    type: event.type as TraceEvent['type'],
+    payload: event.payload,
+  };
+}
+
 export function getConversationsForSession(sessionId: string, state: AppState): ConversationView[] {
   const conversations = groupMessagesIntoConversations(state.messages.filter(message => message.session_id === sessionId));
-  return attachTraceEventsToConversations(conversations, state.traceEvents);
+  const withTraceEvents = attachTraceEventsToConversations(conversations, state.traceEvents);
+  const pending = state.pendingConversations.get(sessionId);
+
+  if (!pending) {
+    return withTraceEvents;
+  }
+
+  const matchedIndex = withTraceEvents.findIndex(conversation => {
+    const userMessageId = conversation.userMessage?.message_id ?? '';
+    const pendingUserMessageId = pending.userMessage?.message_id ?? '';
+    const conversationJobId = conversation.jobId ?? '';
+    const pendingJobId = pending.jobId ?? '';
+
+    if (pendingUserMessageId && userMessageId && pendingUserMessageId === userMessageId) {
+      return true;
+    }
+
+    if (pendingJobId && conversationJobId && pendingJobId === conversationJobId) {
+      return true;
+    }
+
+    return false;
+  });
+
+  if (matchedIndex === -1) {
+    return [...withTraceEvents, { ...pending, source: 'pending' }];
+  }
+
+  return withTraceEvents.map((conversation, index) =>
+    index === matchedIndex ? { ...conversation, ...pending, source: conversation.source } : conversation,
+  );
 }
 
 const INITIAL_STATE: AppState = {
@@ -96,7 +135,6 @@ const INITIAL_STATE: AppState = {
   currentSession: null,
   messages: [],
   traceEvents: [],
-  activeJob: null,
   pendingConversations: new Map(),
   status: '准备就绪',
   error: null,
@@ -128,6 +166,7 @@ export function useAppState() {
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
+  const streamAbortRef = useRef<AbortController | null>(null);
 
   const setStatus = useCallback((text: string) => {
     setState(prev => ({ ...prev, status: text }));
@@ -135,16 +174,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const refreshSessions = useCallback(async () => {
     try {
-      const [workspace, sessions] = await Promise.all([getWorkspace(state.apiPort ?? 8000), listSessions(state.apiPort ?? 8000)]);
+      const apiPort = state.apiPort ?? 8000;
+      const [workspace, sessions] = await Promise.all([
+        getWorkspace(apiPort),
+        listSessions(apiPort),
+      ]);
       const nextCurrentSession = state.currentSession ?? sessions.items[0] ?? null;
-      const traceEvents = nextCurrentSession ? await getSessionTraces(state.apiPort ?? 8000, nextCurrentSession.session_id) : [];
+      const traceEvents = nextCurrentSession ? await getSessionTraces(apiPort, nextCurrentSession.session_id) : [];
       setState(prev => ({
         ...prev,
         workspaceRoot: workspace.root_path,
         workspaceName: workspace.name,
         sessions: sessions.items,
         currentSession: nextCurrentSession,
-        traceEvents: [...traceEvents].sort((a, b) => new Date(getTraceEventTimestamp(a)).getTime() - new Date(getTraceEventTimestamp(b)).getTime()),
+        traceEvents: [...traceEvents].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
         error: null,
         isBootstrapping: false,
       }));
@@ -157,17 +200,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isBootstrapping: false,
       }));
     }
-  }, [state.apiPort]);
+  }, [state.apiPort, state.currentSession]);
 
   const selectSession = useCallback((sessionId: string) => {
     void (async () => {
-      stopSessionStream();
+      streamAbortRef.current?.abort();
       const nextSession = state.sessions.find(session => session.session_id === sessionId) ?? state.currentSession;
       const traceEvents = nextSession ? await getSessionTraces(state.apiPort ?? 8000, nextSession.session_id) : [];
       setState(prev => ({
         ...prev,
         currentSession: prev.sessions.find(session => session.session_id === sessionId) ?? prev.currentSession,
-        traceEvents: [...traceEvents].sort((a, b) => new Date(getTraceEventTimestamp(a)).getTime() - new Date(getTraceEventTimestamp(b)).getTime()),
+        traceEvents: [...traceEvents].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
       }));
     })();
   }, [state.apiPort, state.currentSession, state.sessions]);
@@ -188,15 +231,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error('当前没有可发送消息的会话');
     }
 
-    await apiSendMessage(state.apiPort ?? 8000, state.currentSession.session_id, content, state.currentSession.agent_id);
-    const messages = await listMessages(state.apiPort ?? 8000, state.currentSession.session_id);
-    const traceEvents = await getSessionTraces(state.apiPort ?? 8000, state.currentSession.session_id);
-    setState(prev => ({
-      ...prev,
-      messages: messages.items,
-      traceEvents: [...traceEvents].sort((a, b) => new Date(getTraceEventTimestamp(a)).getTime() - new Date(getTraceEventTimestamp(b)).getTime()),
-      status: '消息已发送',
-    }));
+    const session = state.currentSession;
+    const accepted = await apiSendMessage(state.apiPort ?? 8000, session.session_id, content, session.current_agent_id);
+    const messageId = accepted.message_id ?? `local_user_${Date.now()}`;
+    const jobId = accepted.job_id ?? null;
+
+    setState(prev => {
+      const next = cloneMaps(prev);
+      const now = new Date().toISOString();
+      const conversation: ConversationView = {
+        conversationId: messageId,
+        sessionId: session.session_id,
+        userMessage: {
+          message_id: messageId,
+          session_id: session.session_id,
+          role: 'user',
+          content,
+          metadata: { source: 'optimistic' },
+          attachments: [],
+          created_at: now,
+          updated_at: now,
+        },
+        assistantMessages: [],
+        events: [],
+        status: 'running',
+        jobId,
+        pending: true,
+        source: 'pending',
+        streamingText: '',
+        streamingTextActive: false,
+      };
+      next.pendingConversations.set(session.session_id, conversation);
+      next.status = '已发送，等待生成';
+      return next;
+    });
   }, [state.apiPort, state.currentSession]);
 
   const interruptSessionCallback = useCallback(async () => {
@@ -217,11 +285,115 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({ ...prev, expandDetails: expand }));
   }, []);
 
-  React.useEffect(() => {
+  useEffect(() => {
     void refreshSessions();
   }, [refreshSessions]);
 
-  const value = useMemo(() => ({ state, setStatus, sendMessage, interruptSession: interruptSessionCallback, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails }), [state, setStatus, sendMessage, interruptSessionCallback, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails]);
+  useEffect(() => {
+    const apiPort = state.apiPort;
+    const sessionId = state.currentSession?.session_id ?? null;
+
+    if (!apiPort || !sessionId) {
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+      return;
+    }
+
+    streamAbortRef.current?.abort();
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+
+    void streamSessionEvents(apiPort, sessionId, {
+      signal: controller.signal,
+      onEvent: (event: SessionStreamEvent) => {
+        const traceEvent = buildTraceEvent(event);
+
+        setState(prev => {
+          const next = cloneMaps(prev);
+          next.traceEvents = [...next.traceEvents, traceEvent];
+
+          const pending = next.pendingConversations.get(sessionId);
+          if (!pending) {
+            return next;
+          }
+
+          const updatedPending: ConversationView = {
+            ...pending,
+            events: [...pending.events, traceEvent],
+          };
+
+          if (event.type === 'text_start') {
+            updatedPending.streamingText = '';
+            updatedPending.streamingTextActive = true;
+          } else if (event.type === 'text_delta') {
+            const deltaText = typeof traceEvent.payload.text === 'string' ? traceEvent.payload.text : '';
+            updatedPending.streamingText = (updatedPending.streamingText ?? '') + deltaText;
+          } else if (event.type === 'text_end') {
+            updatedPending.streamingTextActive = false;
+          } else if (['job_completed', 'job_failed', 'job_cancelled', 'session_interrupted'].includes(event.type)) {
+            updatedPending.status = event.type === 'job_completed' ? 'done' : 'error';
+            updatedPending.pending = false;
+            updatedPending.streamingTextActive = false;
+
+            void (async () => {
+              try {
+                const [messages, traceEvents] = await Promise.all([
+                  listMessages(apiPort, sessionId),
+                  getSessionTraces(apiPort, sessionId),
+                ]);
+                setState(latest => {
+                  const latestNext = cloneMaps(latest);
+                  latestNext.pendingConversations.delete(sessionId);
+                  if (latest.currentSession?.session_id !== sessionId) {
+                    return latestNext;
+                  }
+                  latestNext.messages = messages.items;
+                  latestNext.traceEvents = [...traceEvents].sort(
+                    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+                  );
+                  latestNext.status = '消息已更新';
+                  return latestNext;
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setState(latest => ({ ...latest, status: `刷新失败: ${message}` }));
+              }
+            })();
+          }
+
+          next.pendingConversations.set(sessionId, updatedPending);
+          return next;
+        });
+      },
+      onError: (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setState(prev => ({ ...prev, status: `事件流错误: ${message}` }));
+      },
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState(prev => ({ ...prev, status: `事件流错误: ${message}` }));
+      }
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }, [state.apiPort, state.currentSession?.session_id]);
+
+  const value = useMemo(
+    () => ({
+      state,
+      setStatus,
+      sendMessage,
+      interruptSession: interruptSessionCallback,
+      selectSession,
+      createSession,
+      toggleHistoryPanel,
+      toggleExpandDetails,
+    }),
+    [state, setStatus, sendMessage, interruptSessionCallback, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails],
+  );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

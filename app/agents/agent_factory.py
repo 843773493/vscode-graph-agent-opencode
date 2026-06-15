@@ -17,26 +17,23 @@ from langchain.agents.middleware.types import (
 from langchain.messages import SystemMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Checkpointer
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_openai import ChatOpenAI
-
-from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.backends import LocalShellBackend
+from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.subagents import SubAgentMiddleware, SubAgent, CompiledSubAgent
 from deepagents.middleware.async_subagents import AsyncSubAgent
-from langchain.agents.middleware import InterruptOnConfig
 from deepagents.middleware.skills import SkillsMiddleware
-from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
+from langchain.agents.middleware import InterruptOnConfig
 
-from app.core.path_utils import get_workspace_root
+from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.path_utils import get_checkpoints_dir, get_workspace_root
+from app.agents.agent_tools import build_default_tools
 from app.agents.agent_middleware import LLMLoggingMiddleware
 from app.agents.system_reminder_middleware import SystemReminderMiddleware
-from app.agents.agent_tools import build_default_tools
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.services.infrastructure.config_service import ConfigService
@@ -149,7 +146,7 @@ def create_my_deep_agent(
     *,
     model: BaseChatModel,
     system_prompt: str | SystemMessage,
-    checkpointer: Checkpointer | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
     session_id: str,
     agent_id: str,
     fallback_middleware: ModelFallbackMiddleware | None = None,
@@ -175,11 +172,11 @@ def create_my_deep_agent(
     session_orchestrator: object | None = None,
     system_reminder_trigger_registry: SystemReminderTriggerRegistry,
     config_service: ConfigService | None = None,
-) -> CompiledStateGraph[
-    AgentState[ResponseT], ContextT, _InputAgentState, _OutputAgentState[ResponseT]
-]:
+) -> Any:
     if checkpointer is None:
-        checkpointer = MemorySaver()
+        checkpoint_base = get_checkpoints_dir()
+        checkpoint_base.mkdir(parents=True, exist_ok=True)
+        checkpointer = FileSystemCheckpointSaver(base_dir=checkpoint_base)
 
     resolved_sender_agent_id = sender_agent_id or agent_id
     resolved_tool_denylist = set(tool_denylist or set())
@@ -221,6 +218,7 @@ def create_my_deep_agent(
         SystemReminderMiddleware(
             trigger_registry=system_reminder_trigger_registry,
             job_event_bus=job_event_bus,
+            checkpointer=checkpointer,
         ),
     ]
     if fallback_middleware is not None:
@@ -371,6 +369,7 @@ def create_runtime_deep_agent_for_session(
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
     system_reminder_trigger_registry: SystemReminderTriggerRegistry,
+    checkpointer: BaseCheckpointSaver | None = None,
     name: str | None = None,
 ):
     if config_service is None:
@@ -382,7 +381,7 @@ def create_runtime_deep_agent_for_session(
     return create_my_deep_agent(
         model=runtime["model"],
         system_prompt=runtime["system_prompt"],
-        checkpointer=None,
+        checkpointer=checkpointer,
         session_id=session_id,
         agent_id=agent_id,
         fallback_middleware=runtime["fallback"],

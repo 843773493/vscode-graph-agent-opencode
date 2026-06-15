@@ -1,9 +1,84 @@
-// 该文件由程序生成，请勿手写。
+// 该文件是前端业务类型适配层，封装后端实际返回结构。
+// 由于 src/types/gen/ 中自动生成的类型存在重复导出且部分已过期，
+// 本目录业务代码统一从这里导入类型；不直接依赖 gen/index.ts 的通配导出。
 
-export type * from './gen';
+import type { AgentDTO } from './gen/agent';
 
-// 补充后端事件流中尚未被生成类型覆盖的事件类型。
-// TODO: 待 pydantic2ts 脚本更新后，优先从 OpenAPI 自动生成这些类型。
+export type { AgentDTO as Agent } from './gen/agent';
+
+export interface APIResponse<T> {
+  code: number;
+  message: string;
+  data: T | null;
+  request_id?: string | null;
+}
+
+export interface CursorPage<T> {
+  items: T[];
+  next_cursor?: string | null;
+  has_more?: boolean;
+}
+
+export interface WorkspaceInfo {
+  workspace_id: string;
+  root_path: string;
+  name: string;
+}
+
+export interface Session {
+  session_id: string;
+  workspace_id: string;
+  title: string;
+  current_agent_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Message {
+  message_id: string;
+  session_id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  attachments?: Array<Record<string, unknown>>;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunOptions {
+  mode?: 'single_agent' | 'multi_agent';
+  agent_id?: string | null;
+  response_mode?: string;
+  async?: boolean;
+  max_steps?: number;
+  timeout_seconds?: number;
+  context?: Record<string, unknown>;
+}
+
+export interface MessageRunRequest {
+  message: {
+    role?: Message['role'];
+    content: string;
+    attachments?: Array<Record<string, unknown>>;
+    metadata?: Record<string, unknown>;
+  };
+  run: RunOptions;
+}
+
+export interface MessageRunAccepted {
+  message_id: string;
+  job_id: string;
+  status: string;
+}
+
+export interface InterruptSessionResult {
+  session_id: string;
+  job_id: string;
+  status: string;
+  phase: string;
+  tool_name?: string | null;
+  interrupted_at: string;
+}
 
 export type TraceEventType =
   | 'message_created'
@@ -23,7 +98,8 @@ export type TraceEventType =
   | 'text_start'
   | 'text_delta'
   | 'text_end'
-  | 'system_reminder_injected';
+  | 'system_reminder_injected'
+  | 'session_interrupted';
 
 export interface BaseTraceEvent {
   event_id: string;

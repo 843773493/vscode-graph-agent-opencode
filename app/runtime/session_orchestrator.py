@@ -65,6 +65,6 @@ class SessionOrchestrator:
             agent_id=effective_agent_id,
         )
         logger.info("[session_orchestrator] message_created event published: session_id=%s message_id=%s", session_id, message.message_id)
-        job_id = await self._job_service.start_job(session_id, message.content, effective_agent_id)
+        job_id = await self._job_service.start_job(session_id, message.content, effective_agent_id, message_id=message.message_id)
         logger.info("[session_orchestrator] start_job returned: session_id=%s job_id=%s", session_id, job_id)
         return MessageRunAccepted(message_id=message.message_id, job_id=job_id, status="accepted")

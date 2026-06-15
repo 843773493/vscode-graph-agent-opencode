@@ -31,6 +31,7 @@ class SystemReminder(BaseModel):
     position: SystemReminderPosition
     priority: int = 0
     dedup_key: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReminderTriggerContext(BaseModel):

@@ -21,6 +21,7 @@ class JobState:
     session_id: str
     status: JobStatus
     message: str = ""
+    message_id: str | None = None
     agent_id: str = "default"
     progress: int = 0
     error_message: Optional[str] = None
@@ -118,7 +119,7 @@ class JobService:
             control_state=f"Action {control_request.action.value} applied successfully"
         )
 
-    async def start_job(self, session_id: str, message: str, agent_id: str = "default") -> str:
+    async def start_job(self, session_id: str, message: str, agent_id: str = "default", message_id: str | None = None) -> str:
         import logging
         logger = logging.getLogger(__name__)
         logger.info(
@@ -135,6 +136,7 @@ class JobService:
             job_id=job_id,
             session_id=session_id,
             message=message,
+            message_id=message_id,
             agent_id=agent_id,
             status=JobStatus.queued
         )
@@ -277,6 +279,7 @@ class JobService:
                 session_id=job.session_id,
                 message=job.message,
                 agent_id=job.agent_id,
+                message_id=job.message_id,
                 status=job.status,
                 progress=job.progress,
                 error_message=job.error_message,

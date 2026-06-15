@@ -17,7 +17,7 @@ function Icon({ children }: { children: React.ReactNode }) {
 
 export default function Toolbar({ workspaceName, workspaceRoot, status, agentId }: { workspaceName: string | null | undefined; workspaceRoot: string | null | undefined; status: string; agentId: string | null | undefined }) {
   const { createSession, toggleHistoryPanel } = useAppState();
-  const wsLabel = workspaceRoot || workspaceName;
+  const wsLabel = workspaceRoot || workspaceName || undefined;
   const wsShort = shortLabel(wsLabel);
   const agentLabel = agentId || 'default';
 

@@ -1,11 +1,6 @@
-export function escapeHtml(value: string): string {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+import { escapeHtml } from './format';
+
+export { escapeHtml };
 
 export function renderMarkdown(value: string): string {
   const escaped = escapeHtml(String(value ?? ''));

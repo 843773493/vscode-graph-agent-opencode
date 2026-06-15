@@ -19,6 +19,7 @@ class JobRuntimeState:
     session_id: str
     message: str
     agent_id: str
+    message_id: str | None = None
     status: JobStatus = JobStatus.queued
     progress: int = 0
     error_message: Optional[str] = None
@@ -50,14 +51,10 @@ class JobExecutionService:
             job.message,
             agent_id=job.agent_id,
             job_id=job.job_id,
+            message_id=job.message_id,
         )
 
         result_text = result if isinstance(result, str) else str(result)
-        await self._message_service.append_assistant_message(
-            job.session_id,
-            result_text,
-            metadata={"source": "agent_execution", "job_id": job.job_id},
-        )
 
         job.result = result_text
         job.status = JobStatus.completed

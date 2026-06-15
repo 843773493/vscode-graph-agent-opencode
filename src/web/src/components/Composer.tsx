@@ -19,9 +19,8 @@ export default function Composer() {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const isGenerating = state.activeJob?.status === 'running';
   const hasContent = input.trim().length > 0;
-  const currentAgent = state.currentSession?.agent_id || 'default';
+  const currentAgent = state.currentSession?.current_agent_id || 'default';
   const showInterrupt = state.currentSession
     ? state.pendingConversations.get(state.currentSession.session_id)?.pending ?? false
     : false;
@@ -29,11 +28,8 @@ export default function Composer() {
     if (showInterrupt) {
       return '正在生成中，点击中断按钮停止生成';
     }
-    if (isGenerating) {
-      return '当前任务正在运行，等待完成后再发送新消息';
-    }
     return 'Enter 发送 · Ctrl+Enter 换行';
-  }, [isGenerating, showInterrupt]);
+  }, [showInterrupt]);
 
   useEffect(() => {
     resizeTextarea(textareaRef.current);
@@ -41,7 +37,7 @@ export default function Composer() {
 
   const handleSend = () => {
     const content = input.trim();
-    if (!content || isGenerating) {
+    if (!content || showInterrupt) {
       return;
     }
 
@@ -94,7 +90,7 @@ export default function Composer() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={isGenerating}
+            disabled={showInterrupt}
             rows={1}
           />
           <div className="composer-hint">{composerHint}</div>
@@ -124,7 +120,7 @@ export default function Composer() {
                   <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/></svg>
                 </button>
               ) : (
-                <button id="sendButton" type="button" className="send-button" disabled={!hasContent || isGenerating} onClick={handleSend} title={hasContent ? '发送消息' : '输入消息以启用发送'}>
+                <button id="sendButton" type="button" className="send-button" disabled={!hasContent} onClick={handleSend} title={hasContent ? '发送消息' : '输入消息以启用发送'}>
                   <svg viewBox="0 0 16 16" width="12" height="12"><path d="M1.5 1.5L14.5 8L1.5 14.5V9L10 8L1.5 7V1.5Z" /></svg>
                 </button>
               )}

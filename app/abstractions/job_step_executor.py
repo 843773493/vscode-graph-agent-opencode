@@ -10,5 +10,6 @@ class JobStepExecutor(Protocol):
         message: str,
         agent_id: str | None = None,
         job_id: str | None = None,
+        message_id: str | None = None,
     ) -> str:
         ...

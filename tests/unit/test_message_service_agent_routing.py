@@ -57,7 +57,7 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
     captured: dict[str, str] = {}
 
     class _FakeJobService:
-        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
+        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs) -> str:
             captured["session_id"] = session_id
             captured["message"] = message
             captured["agent_id"] = agent_id
@@ -85,7 +85,7 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
     captured: dict[str, str] = {}
 
     class _FakeJobService:
-        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent") -> str:
+        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs) -> str:
             captured["agent_id"] = agent_id
             return "job_test_002"
 

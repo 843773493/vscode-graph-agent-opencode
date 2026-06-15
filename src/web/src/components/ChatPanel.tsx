@@ -1,5 +1,6 @@
 import React from 'react';
 import type { Message, TraceEvent } from '../types/backend';
+import type { ConversationView } from '../types/frontend';
 import { escapeHtml, formatTime } from '../utils/format';
 import { renderMarkdown } from '../utils/markdown';
 
@@ -7,27 +8,8 @@ function displayTime(value: unknown): string {
   return formatTime(value) || 'now';
 }
 
-function getTraceTime(item: { timestamp?: string | null; time?: string | null }): string {
-  return item.timestamp || item.time || '';
-}
-
-function normalizeAssistantPayload(content: string): { thought: string; response: string } {
-  const trimmed = String(content ?? '').trim();
-  if (!trimmed) {
-    return { thought: '', response: '' };
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as { thought?: unknown; response?: unknown };
-    const thought = String(parsed?.thought ?? '').trim();
-    const response = String(parsed?.response ?? '').trim();
-    if (!thought && !response) {
-      return { thought: '', response: trimmed };
-    }
-    return { thought, response };
-  } catch {
-    return { thought: '', response: trimmed };
-  }
+function getTraceTime(event: TraceEvent): string {
+  return event.timestamp;
 }
 
 function EventCard({
@@ -78,25 +60,22 @@ function EventCard({
 }
 
 type TimelineItem =
-  | { kind: 'message'; id: string; role?: Message['role']; content: string; createdAt?: string | null; metadata?: Record<string, unknown> }
-  | { kind: 'trace'; id: string; eventType?: string; payload?: Record<string, unknown>; timestamp?: string | null }
+  | { kind: 'message'; id: string; role?: Message['role']; content: string; createdAt?: string; metadata?: Record<string, unknown> }
+  | { kind: 'trace'; id: string; eventType?: string; payload?: Record<string, unknown>; timestamp?: string }
   | { kind: 'streaming'; id: string; content: string };
 
 function TimelineCard({ item, index }: { item: TimelineItem; index: number }): React.ReactNode {
   if (item.kind === 'message') {
     const isUser = item.role === 'user';
-    const assistantParsed = item.role === 'assistant' ? normalizeAssistantPayload(item.content) : null;
-    const thought = assistantParsed?.thought?.trim() || '';
-    const response = assistantParsed?.response?.trim() || item.content.trim() || '';
-    const assistantBody = thought && response ? `**思考**\n${thought}\n\n${response}` : (thought || response);
+    const content = item.content.trim();
 
     return (
       <EventCard
         title={isUser ? '用户消息' : 'Assistant 消息'}
         tone={isUser ? 'running' : 'done'}
         time={displayTime(item.createdAt)}
-        summary={isUser ? item.content : (response || thought || '（无可读内容）')}
-        content={isUser ? item.content : assistantBody}
+        summary={content || '（无可读内容）'}
+        content={content}
         raw={{ kind: item.kind, id: item.id, role: item.role, content: item.content, createdAt: item.createdAt, metadata: item.metadata }}
       />
     );
@@ -136,6 +115,18 @@ function TimelineCard({ item, index }: { item: TimelineItem; index: number }): R
     title = '文本结束';
     summary = '';
     content = String(payload.text ?? '');
+  } else if (item.eventType === 'tool_call_start') {
+    title = '工具调用开始';
+    summary = String(payload.tool_name ?? '');
+    content = summary;
+  } else if (item.eventType === 'tool_call_end') {
+    title = '工具调用结束';
+    summary = String(payload.tool_name ?? '');
+    content = String(payload.result ?? '');
+  } else if (item.eventType === 'session_interrupted') {
+    title = '会话已打断';
+    summary = `阶段: ${String(payload.phase ?? '')}`;
+    content = summary;
   } else {
     title = `事件 ${item.eventType ?? 'trace'}`;
     summary = String(payload.message ?? payload.result ?? '');
@@ -146,7 +137,7 @@ function TimelineCard({ item, index }: { item: TimelineItem; index: number }): R
     <EventCard
       title={title}
       tone="running"
-      time={displayTime(getTraceTime(item))}
+      time={displayTime(item.timestamp)}
       summary={summary}
       content={content}
       raw={payload}
@@ -154,16 +145,7 @@ function TimelineCard({ item, index }: { item: TimelineItem; index: number }): R
   );
 }
 
-type ConversationView = {
-  conversationId: string;
-  userMessage: Message | null;
-  assistantMessages: Message[];
-  events: TraceEvent[];
-  streamingText?: string;
-  streamingTextActive?: boolean;
-};
-
-export default function ChatPanel({ conversations, expandDetails }: { conversations: Array<ConversationView>; expandDetails: boolean }) {
+export default function ChatPanel({ conversations, expandDetails }: { conversations: ConversationView[]; expandDetails: boolean }) {
   return (
     <div className="chat-stream">
       {conversations.length === 0 ? (
@@ -182,7 +164,7 @@ export default function ChatPanel({ conversations, expandDetails }: { conversati
               <TimelineCard item={{ kind: 'streaming', id: `${conversation.conversationId}-streaming`, content: conversation.streamingText }} index={index} />
             )}
             {expandDetails && conversation.events.map((event, eventIndex) => (
-              <TimelineCard key={event.event_id} item={{ kind: 'trace', id: event.event_id, eventType: event.type, content: '', payload: event.payload as unknown as Record<string, unknown>, timestamp: getTraceTime(event), }} index={eventIndex} />
+              <TimelineCard key={event.event_id} item={{ kind: 'trace', id: event.event_id, eventType: event.type, payload: event.payload, timestamp: getTraceTime(event) }} index={eventIndex} />
             ))}
           </section>
         ))

@@ -161,6 +161,7 @@ body > #root {
 .composer-actions button { height: 30px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; padding: 0 10px; }
 .composer-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
 .send-button { background: var(--vscode-button-background) !important; }
+.interrupt-button { background: #dc2626 !important; color: #fff !important; border-color: #b91c1c !important; }
 .empty-state { padding: 24px; color: var(--vscode-descriptionForeground); }
 .error-state {
   margin: 16px;

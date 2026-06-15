@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import time
+import uuid
 from typing import Dict, Any, List
+
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.background_message_bus import BackgroundMessageBus
@@ -12,17 +16,31 @@ from app.core.job_context import (
     reset_current_job_id,
     reset_last_turn_status,
     reset_recent_tool_results,
+    reset_active_tool_name,
+    reset_interruptible_phase,
+    set_active_tool_name,
     set_current_agent_id,
     set_current_job_id,
+    set_interruptible_phase,
     set_last_turn_status,
     set_recent_tool_results,
 )
+from app.core.checkpoint_saver import next_channel_version
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
 from app.agents.agent_factory import resolve_agent_id
 from app.services.infrastructure.config_service import ConfigService
 from app.abstractions.job_step_executor import JobStepExecutor
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider, build_session_agent_runtime
+
+
+def _message_has_content(message: Any) -> bool:
+    content = getattr(message, "content", None)
+    if content is None:
+        return False
+    if isinstance(content, list):
+        return any(bool(part) for part in content)
+    return bool(str(content).strip())
 
 
 class AgentExecutionService(JobStepExecutor):
@@ -82,7 +100,96 @@ class AgentExecutionService(JobStepExecutor):
             " 这通常表示最终消息不是 assistant 文本，或者消息链路中出现了空响应。"
         )
 
-    async def run_step(self, session_id: str, message: str, agent_id: str | None = None, job_id: str | None = None) -> str:
+    def _persist_interrupt_checkpoint(
+        self,
+        session_id: str,
+        current_text: str,
+        active_tool_name: str | None,
+    ) -> None:
+        """在任务被取消时，把已生成的部分 assistant 消息和 <system_reminder> 写入 checkpoint。
+
+        提醒内容直接追加到部分 assistant 消息的 content 中，因此下一次运行模型时
+        LangGraph 会从 checkpoint 加载到该提醒，无需 middleware 再次注入。
+        """
+        checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
+        if checkpointer is None:
+            return
+
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "checkpoint_ns": "",
+            }
+        }
+        try:
+            tup = checkpointer.get_tuple(config)
+        except Exception:
+            return
+
+        if tup is None:
+            return
+
+        checkpoint = tup.checkpoint.copy()
+        channel_values = dict(checkpoint.get("channel_values", {}))
+        messages = list(channel_values.get("messages", []))
+
+        # 过滤掉可能存在的空 assistant 占位消息
+        messages = [
+            msg for msg in messages
+            if not (isinstance(msg, AIMessage) and not _message_has_content(msg))
+        ]
+
+        phase = "tool" if active_tool_name else "text"
+        interrupted_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        if phase == "tool" and active_tool_name:
+            reminder = (
+                f"用户在你调用工具（{active_tool_name}）的过程中于 {interrupted_at} 打断。"
+                f"当前工具调用已被取消，请停止当前操作，根据已有信息回应用户最新请求。"
+            )
+        else:
+            reminder = (
+                f"用户在文本生成过程中于 {interrupted_at} 打断。"
+                f"请停止当前输出，根据已有信息回应用户最新请求。"
+            )
+
+        # 追加部分 assistant 消息，并把 system_reminder 直接写入 content
+        content = current_text if phase == "text" else ""
+        wrapped_reminder = f"\n<system_reminder>\n{reminder}\n</system_reminder>"
+        partial_message = AIMessage(
+            content=content + wrapped_reminder,
+            tool_calls=[],
+            response_metadata={"phase": phase, "tool_name": active_tool_name, "source": "interrupt"},
+        )
+        messages.append(partial_message)
+
+        channel_values["messages"] = messages
+        # 不再保留 marker，因为提醒已经直接写入 assistant 消息
+        channel_values.pop("__boxteam_interrupt__", None)
+        checkpoint["channel_values"] = channel_values
+        checkpoint["id"] = str(uuid.uuid4())
+
+        channel_versions = dict(checkpoint.get("channel_versions", {}))
+        messages_version = next_channel_version(channel_versions.get("messages"))
+        channel_versions.pop("__boxteam_interrupt__", None)
+        channel_versions["messages"] = messages_version
+        checkpoint["channel_versions"] = channel_versions
+
+        updated_channels = list(checkpoint.get("updated_channels", []))
+        if "messages" not in updated_channels:
+            updated_channels.append("messages")
+        checkpoint["updated_channels"] = updated_channels
+
+        try:
+            checkpointer.put(
+                config=tup.config,
+                checkpoint=checkpoint,
+                metadata={"source": "interrupt", "step": -1, "writes": {}},
+                new_versions={"messages": messages_version},
+            )
+        except Exception:
+            pass
+
+    async def run_step(self, session_id: str, message: str, agent_id: str | None = None, job_id: str | None = None, message_id: str | None = None) -> str:
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
         if self._background_task_registry is None:
@@ -117,6 +224,8 @@ class AgentExecutionService(JobStepExecutor):
         agent_token = set_current_agent_id(resolved_agent_id)
         last_turn_token = set_last_turn_status("ok")
         tool_results_token = set_recent_tool_results([])
+        interruptible_phase_token = set_interruptible_phase("text")
+        active_tool_name_token = set_active_tool_name(None)
         SessionInterruptState.set(session_id, phase=None, tool_name=None)
 
         async def _publish(event_type: str, payload: dict[str, Any]) -> None:
@@ -142,7 +251,7 @@ class AgentExecutionService(JobStepExecutor):
             logger.info("[agent_execution_service] agent.astream_events begin: job_id=%s", effective_job_id)
 
             async for event in agent.astream_events(
-                {"messages": [{"role": "user", "content": message}]},
+                {"messages": [HumanMessage(content=message, response_metadata={"message_id": message_id} if message_id else {})]},
                 config=config,
                 version="v2",
             ):
@@ -171,6 +280,7 @@ class AgentExecutionService(JobStepExecutor):
 
                     if content.strip() and not collected_text_parts:
                         SessionInterruptState.set(session_id, phase="text", tool_name=None)
+                        set_interruptible_phase("text")
                         await _publish(EventType.TEXT_START, {})
 
                     if content:
@@ -200,6 +310,8 @@ class AgentExecutionService(JobStepExecutor):
                                 phase="tool",
                                 tool_name=active_tool_name or "unknown_tool",
                             )
+                            set_interruptible_phase("tool")
+                            set_active_tool_name(active_tool_name or "unknown_tool")
                             await _publish(EventType.TOOL_CALL_START, {
                                 "tool_name": active_tool_name or "unknown_tool",
                                 "args": active_tool_args,
@@ -223,6 +335,8 @@ class AgentExecutionService(JobStepExecutor):
                             "interrupted": False,
                         })
                     SessionInterruptState.set(session_id, phase=None, tool_name=None)
+                    set_interruptible_phase("text")
+                    set_active_tool_name(None)
                     await _publish(EventType.TOOL_CALL_END, {
                         "tool_name": tool_name,
                         "result": result_text,
@@ -233,6 +347,8 @@ class AgentExecutionService(JobStepExecutor):
 
             if collected_text_parts:
                 SessionInterruptState.set(session_id, phase=None, tool_name=None)
+                set_interruptible_phase("text")
+                set_active_tool_name(None)
                 await _publish(EventType.TEXT_END, {"text": final_text})
 
             await _publish(EventType.AGENT_END, {
@@ -243,6 +359,16 @@ class AgentExecutionService(JobStepExecutor):
             logger.info("[agent_execution_service] response ready: job_id=%s response_length=%s", effective_job_id, len(final_text))
             return final_text
 
+        except asyncio.CancelledError:
+            state = SessionInterruptState.get(session_id)
+            self._persist_interrupt_checkpoint(
+                session_id,
+                current_text=state.current_text,
+                active_tool_name=state.tool_name,
+            )
+            await _publish(EventType.ERROR, {"error": "任务被取消", "phase": "agent_execution"})
+            logger.info("[agent_execution_service] job cancelled and checkpoint persisted: job_id=%s", effective_job_id)
+            raise
         except Exception as e:
             await _publish(EventType.ERROR, {"error": str(e), "phase": "agent_execution"})
             logger.exception("[agent_execution_service] ERROR published: job_id=%s error=%s", effective_job_id, str(e))
@@ -252,6 +378,8 @@ class AgentExecutionService(JobStepExecutor):
             reset_current_agent_id(agent_token)
             reset_last_turn_status(last_turn_token)
             reset_recent_tool_results(tool_results_token)
+            reset_interruptible_phase(interruptible_phase_token)
+            reset_active_tool_name(active_tool_name_token)
             SessionInterruptState.clear(session_id)
 
     def get_for_session(self, session_id: str, agent_id: str | None = None):

@@ -1,141 +1,113 @@
-"""System reminder 注入逻辑的单元测试。"""
+"""SystemReminderMiddleware 单元测试。"""
 from __future__ import annotations
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.system_reminder_middleware import SystemReminderMiddleware
-from app.schemas.system_reminder import (
-    ReminderTriggerContext,
-    SystemReminder,
-    SystemReminderPosition,
-    SystemReminderTrigger,
-)
+from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from app.services.infrastructure.system_reminder_triggers import (
-    SystemReminderTriggerRegistry,
+    build_default_trigger_registry,
 )
 
 
-class _FixedTrigger(SystemReminderTrigger):
-    def __init__(self, reminders: list[SystemReminder]) -> None:
-        self._reminders = reminders
-
-    def produce(self, ctx: ReminderTriggerContext) -> list[SystemReminder]:
-        return list(self._reminders)
+class _FakeRuntime:
+    configurable = {"session_id": "sess_interrupt", "thread_id": "sess_interrupt"}
 
 
-@pytest.fixture
-def registry() -> SystemReminderTriggerRegistry:
-    return SystemReminderTriggerRegistry()
+class _FakeRequest:
+    runtime = _FakeRuntime()
+    messages: list = []
 
 
-@pytest.fixture
-def middleware(registry: SystemReminderTriggerRegistry) -> SystemReminderMiddleware:
-    return SystemReminderMiddleware(trigger_registry=registry)
+@pytest.mark.asyncio
+async def test_middleware_appends_interrupt_reminder_to_last_assistant(tmp_path):
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_interrupt", "checkpoint_ns": ""}}
+    checkpoint = {
+        "channel_values": {
+            "messages": [HumanMessage(content="hi"), AIMessage(content="hello")],
+            "__boxteam_interrupt__": {
+                "phase": "text",
+                "tool_name": None,
+                "interrupted_at": "2024-01-01T00:00:00",
+            },
+        },
+        "channel_versions": {"messages": 1, "__boxteam_interrupt__": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-1",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1, "__boxteam_interrupt__": 1},
+    )
+
+    registry = build_default_trigger_registry()
+    middleware = SystemReminderMiddleware(
+        trigger_registry=registry, checkpointer=saver
+    )
+
+    request = _FakeRequest()
+    request.messages = [HumanMessage(content="hi"), AIMessage(content="hello")]
+
+    captured: list = []
+
+    def handler(req):
+        captured.extend(req.messages)
+        return None
+
+    middleware.wrap_model_call(request, handler)
+
+    assert len(captured) == 2
+    ai_msg = captured[1]
+    assert isinstance(ai_msg, AIMessage)
+    assert "<system_reminder>" in ai_msg.content
+    assert "文本生成" in ai_msg.content
+    assert ai_msg.response_metadata.get("phase") == "text"
+
+    # 标记应被清除
+    tup = saver.get_tuple(config)
+    assert "__boxteam_interrupt__" not in tup.checkpoint.get("channel_values", {})
 
 
-def _wrap(content: str) -> str:
-    return f"\u003csystem_reminder\u003e\n{content}\n\u003c/system_reminder\u003e"
+@pytest.mark.asyncio
+async def test_middleware_noop_when_no_interrupt_marker(tmp_path):
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_no_interrupt", "checkpoint_ns": ""}}
+    checkpoint = {
+        "channel_values": {
+            "messages": [HumanMessage(content="hi"), AIMessage(content="hello")],
+        },
+        "channel_versions": {"messages": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-1",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
 
+    registry = build_default_trigger_registry()
+    middleware = SystemReminderMiddleware(
+        trigger_registry=registry, checkpointer=saver
+    )
 
-def test_inject_after_last_assistant(middleware: SystemReminderMiddleware, registry: SystemReminderTriggerRegistry):
-    registry.register(_FixedTrigger([
-        SystemReminder(content="resume", position=SystemReminderPosition.AFTER_LAST_ASSISTANT),
-    ]))
+    request = _FakeRequest()
+    request.messages = [HumanMessage(content="hi"), AIMessage(content="hello")]
 
-    messages = [
-        HumanMessage(content="hello"),
-        AIMessage(content="I will call tool"),
-    ]
-    result = middleware._inject_reminders(messages, [SystemReminder(content="resume", position=SystemReminderPosition.AFTER_LAST_ASSISTANT)])
+    captured: list = []
 
-    assert len(result) == 3
-    assert isinstance(result[0], HumanMessage)
-    assert isinstance(result[1], AIMessage)
-    assert isinstance(result[2], HumanMessage)
-    assert result[2].content == _wrap("resume")
+    def handler(req):
+        captured.extend(req.messages)
+        return None
 
+    middleware.wrap_model_call(request, handler)
 
-def test_inject_after_tool_calls(middleware: SystemReminderMiddleware, registry: SystemReminderTriggerRegistry):
-    registry.register(_FixedTrigger([
-        SystemReminder(content="tool done", position=SystemReminderPosition.AFTER_TOOL_CALLS),
-    ]))
-
-    messages = [
-        HumanMessage(content="hello"),
-        AIMessage(content="calling tool"),
-        ToolMessage(content="2333", tool_call_id="call_1"),
-    ]
-    result = middleware._inject_reminders(messages, [SystemReminder(content="tool done", position=SystemReminderPosition.AFTER_TOOL_CALLS)])
-
-    assert len(result) == 4
-    assert isinstance(result[3], HumanMessage)
-    assert result[3].content == _wrap("tool done")
-
-
-def test_inject_after_last_user(middleware: SystemReminderMiddleware, registry: SystemReminderTriggerRegistry):
-    registry.register(_FixedTrigger([
-        SystemReminder(content="user context", position=SystemReminderPosition.AFTER_LAST_USER),
-    ]))
-
-    messages = [
-        HumanMessage(content="hello"),
-        AIMessage(content="hi"),
-        HumanMessage(content="do it"),
-    ]
-    result = middleware._inject_reminders(messages, [SystemReminder(content="user context", position=SystemReminderPosition.AFTER_LAST_USER)])
-
-    assert len(result) == 4
-    assert isinstance(result[3], HumanMessage)
-    assert result[3].content == _wrap("user context")
-
-
-def test_multiple_positions_sorted(middleware: SystemReminderMiddleware, registry: SystemReminderTriggerRegistry):
-    registry.register(_FixedTrigger([
-        SystemReminder(content="z", position=SystemReminderPosition.AFTER_LAST_ASSISTANT, priority=2),
-        SystemReminder(content="a", position=SystemReminderPosition.AFTER_LAST_ASSISTANT, priority=1),
-    ]))
-
-    messages = [
-        HumanMessage(content="hello"),
-        AIMessage(content="assistant"),
-    ]
-    reminders = [
-        SystemReminder(content="z", position=SystemReminderPosition.AFTER_LAST_ASSISTANT, priority=2),
-        SystemReminder(content="a", position=SystemReminderPosition.AFTER_LAST_ASSISTANT, priority=1),
-    ]
-    result = middleware._inject_reminders(messages, reminders)
-
-    assert len(result) == 4
-    assert result[2].content == _wrap("a")
-    assert result[3].content == _wrap("z")
-
-
-def test_no_reminders_returns_original(middleware: SystemReminderMiddleware):
-    messages = [HumanMessage(content="hello")]
-    result = middleware._inject_reminders(messages, [])
-    assert result == messages
-
-
-def test_trigger_context_passed_to_registry(registry: SystemReminderTriggerRegistry):
-    calls: list[ReminderTriggerContext] = []
-
-    class _CaptureTrigger(SystemReminderTrigger):
-        def produce(self, ctx: ReminderTriggerContext) -> list[SystemReminder]:
-            calls.append(ctx)
-            return []
-
-    registry.register(_CaptureTrigger())
-    middleware = SystemReminderMiddleware(trigger_registry=registry)
-
-    # We cannot easily call awrap_model_call without a real ModelRequest,
-    # but we can exercise _build_trigger_context indirectly by constructing
-    # a minimal runtime-like object.
-    from unittest.mock import MagicMock
-    request = MagicMock()
-    request.messages = [HumanMessage(content="hi")]
-    request.runtime.configurable = {"session_id": "ses_1", "job_id": "job_1"}
-
-    ctx = middleware._build_trigger_context(request)
-    assert ctx.session_id == "ses_1"
-    assert ctx.job_id == "job_1"
+    assert len(captured) == 2
+    assert captured[0].content == "hi"
+    assert captured[1].content == "hello"
+    assert "<system_reminder>" not in captured[1].content

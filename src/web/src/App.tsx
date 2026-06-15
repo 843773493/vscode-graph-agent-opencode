@@ -13,7 +13,7 @@ export default function AppShell() {
 
   return (
     <div className={`app-shell ${historyVisible ? 'history-open' : 'history-closed'}`} data-history-open={String(historyVisible)}>
-      <Toolbar workspaceName={state.workspaceName} workspaceRoot={state.workspaceRoot} status={state.status} agentId={state.currentSession?.agent_id ?? 'default'} />
+      <Toolbar workspaceName={state.workspaceName} workspaceRoot={state.workspaceRoot} status={state.status} agentId={state.currentSession?.current_agent_id ?? 'default'} />
       <main className="content">
         {state.error ? (
           <div className="empty-state error-state">
@@ -30,8 +30,8 @@ export default function AppShell() {
             onSelectSession={selectSession}
             isOpen={historyVisible}
             onClose={toggleHistoryPanel}
-            workspaceName={state.workspaceName}
-            workspaceRoot={state.workspaceRoot}
+            workspaceName={state.workspaceName ?? ''}
+            workspaceRoot={state.workspaceRoot ?? ''}
             activeSession={activeSession}
           />
           <section className="chat-panel">

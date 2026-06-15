@@ -1,83 +1,20 @@
-import type { ActiveJob, Message, Session, TraceEvent } from './types/gen';
-
-export interface WorkspaceInfo {
-  root_path: string;
-  name: string;
-}
-
-export interface APIResponse<T> {
-  code: number;
-  message: string;
-  data: T | null;
-  request_id?: string | null;
-}
-
-export interface PageResult<T> {
-  items: T[];
-  next_cursor?: string | null;
-  has_more?: boolean;
-}
-
-export interface SessionAcceptResult {
-  job_id: string | null;
-  message_id: string | null;
-}
-
-export interface InterruptSessionResult {
-  job_id: string;
-  phase: string;
-}
-
-export interface MessageRunRequest {
-  message: {
-    role: 'user' | 'assistant' | 'system';
-    content: string;
-    attachments: Array<Record<string, unknown>>;
-    metadata: Record<string, unknown>;
-  };
-  run: {
-    mode: 'single_agent' | 'multi_agent';
-    agent_id: string | null;
-    response_mode: string;
-    async: boolean;
-    max_steps: number;
-    timeout_seconds: number;
-    context: Record<string, unknown>;
-  };
-}
-
-export interface StreamEvent<TPayload = Record<string, unknown>> {
-  eventType: string;
-  payload: TPayload;
-}
-
-export interface SessionStreamEvent {
-  event_id: string;
-  session_id: string;
-  job_id?: string | null;
-  type: string;
-  timestamp?: string | null;
-  payload: Record<string, unknown>;
-}
+import type {
+  APIResponse,
+  CursorPage,
+  InterruptSessionResult,
+  Message,
+  MessageRunAccepted,
+  MessageRunRequest,
+  Session,
+  TraceEvent,
+  WorkspaceInfo,
+} from './types/backend';
 
 export const DEFAULT_BACKEND_HOST = '127.0.0.1';
 export const DEFAULT_BACKEND_PORT = 8000;
 export const DEFAULT_BACKEND_TOKEN = 'local-dev-token';
 export const DEFAULT_AGENT_ID = 'default';
 export const DEFAULT_SESSION_TITLE = '新会话';
-
-function normalizePageResult<T>(value: unknown): PageResult<T> {
-  if (!value || typeof value !== 'object') {
-    return { items: [] };
-  }
-
-  const record = value as { items?: T[]; next_cursor?: string | null; has_more?: boolean };
-  return {
-    items: Array.isArray(record.items) ? record.items : [],
-    next_cursor: record.next_cursor ?? null,
-    has_more: typeof record.has_more === 'boolean' ? record.has_more : undefined,
-  };
-}
 
 function getBaseUrl(port: number): string {
   if (typeof window !== 'undefined' && window.location.port === '8001') {
@@ -112,18 +49,25 @@ function unwrapApiData<T>(response: APIResponse<T>): T {
   return response.data;
 }
 
+function normalizePageResult<T>(value: unknown): CursorPage<T> {
+  if (!value || typeof value !== 'object') {
+    return { items: [] };
+  }
+
+  const record = value as { items?: T[]; next_cursor?: string | null; has_more?: boolean };
+  return {
+    items: Array.isArray(record.items) ? record.items : [],
+    next_cursor: record.next_cursor ?? null,
+    has_more: typeof record.has_more === 'boolean' ? record.has_more : undefined,
+  };
+}
+
 export async function getWorkspace(port: number): Promise<WorkspaceInfo> {
   return unwrapApiData(await requestJson<APIResponse<WorkspaceInfo>>(port, '/api/v1/workspace'));
 }
 
-export async function listAgents(port: number): Promise<unknown[]> {
-  const data = await requestJson<APIResponse<unknown[] | { items?: unknown[] }>>(port, '/api/v1/agents');
-  const payload = unwrapApiData(data);
-  return Array.isArray(payload) ? payload : normalizePageResult<unknown>(payload).items;
-}
-
-export async function listSessions(port: number): Promise<PageResult<Session>> {
-  const data = await requestJson<APIResponse<{ items?: Session[]; next_cursor?: string | null; has_more?: boolean }>>(port, '/api/v1/sessions');
+export async function listSessions(port: number): Promise<CursorPage<Session>> {
+  const data = await requestJson<APIResponse<CursorPage<Session>>>(port, '/api/v1/sessions');
   return normalizePageResult<Session>(unwrapApiData(data));
 }
 
@@ -134,16 +78,29 @@ export async function createSession(port: number, title: string = DEFAULT_SESSIO
   }));
 }
 
-export async function listMessages(port: number, sessionId: string): Promise<PageResult<Message>> {
-  const data = await requestJson<APIResponse<{ items?: Message[]; next_cursor?: string | null; has_more?: boolean }>>(port, `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`);
+export async function listMessages(port: number, sessionId: string): Promise<CursorPage<Message>> {
+  const data = await requestJson<APIResponse<CursorPage<Message>>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+  );
   return normalizePageResult<Message>(unwrapApiData(data));
 }
 
-export async function sendMessage(port: number, sessionId: string, payload: unknown): Promise<SessionAcceptResult> {
-  return unwrapApiData(await requestJson<APIResponse<SessionAcceptResult>>(port, `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  }));
+export async function sendMessage(
+  port: number,
+  sessionId: string,
+  payload: MessageRunRequest,
+): Promise<MessageRunAccepted> {
+  return unwrapApiData(
+    await requestJson<APIResponse<MessageRunAccepted>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    ),
+  );
 }
 
 export async function sendUserMessage(
@@ -151,7 +108,7 @@ export async function sendUserMessage(
   sessionId: string,
   content: string,
   agentId: string = DEFAULT_AGENT_ID,
-): Promise<SessionAcceptResult> {
+): Promise<MessageRunAccepted> {
   const payload: MessageRunRequest = {
     message: {
       role: 'user',
@@ -164,9 +121,6 @@ export async function sendUserMessage(
       agent_id: agentId,
       response_mode: 'stream',
       async: true,
-      max_steps: 20,
-      timeout_seconds: 600,
-      context: {},
     },
   };
 
@@ -174,77 +128,73 @@ export async function sendUserMessage(
 }
 
 export async function interruptSession(port: number, sessionId: string): Promise<InterruptSessionResult> {
-  return unwrapApiData(await requestJson<APIResponse<InterruptSessionResult>>(port, `/api/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`, {
-    method: 'POST',
-  }));
-}
-
-export async function getJob(port: number, jobId: string): Promise<ActiveJob | null> {
-  return unwrapApiData(await requestJson<APIResponse<ActiveJob | null>>(port, `/api/v1/jobs/${encodeURIComponent(jobId)}`));
+  return unwrapApiData(
+    await requestJson<APIResponse<InterruptSessionResult>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+      { method: 'POST' },
+    ),
+  );
 }
 
 export async function getSessionTraces(port: number, sessionId: string): Promise<TraceEvent[]> {
-  const result = await requestJson<APIResponse<TraceEvent[] | { items?: TraceEvent[] }>>(port, `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces`);
-  const payload = unwrapApiData(result);
-  return Array.isArray(payload) ? payload as TraceEvent[] : normalizePageResult<TraceEvent>(payload).items;
+  const result = await requestJson<APIResponse<TraceEvent[]>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces`,
+  );
+  return unwrapApiData(result);
 }
 
-export async function streamJobEvents(
-  port: number,
-  jobId: string,
-  options?: {
-    onEvent?: (event: StreamEvent) => void;
-    onError?: (error: unknown) => void;
-    signal?: AbortSignal;
-  },
-): Promise<void> {
-  const url = `${getBaseUrl(port)}/api/v1/jobs/${encodeURIComponent(jobId)}/events`;
-  const response = await fetch(url, {
-    signal: options?.signal,
-    headers: {
-      'X-Local-Token': DEFAULT_BACKEND_TOKEN,
-    },
-  });
+export interface SessionStreamEvent {
+  event_id: string;
+  session_id: string;
+  job_id: string | null;
+  step_id: string | null;
+  agent_id: string | null;
+  timestamp: string;
+  type: string;
+  payload: Record<string, unknown>;
+}
 
-  if (!response.ok || !response.body) {
-    throw new Error(`无法连接事件流: ${response.status} ${response.statusText}`);
+function parseSseBlock(block: string): SessionStreamEvent | null {
+  let eventType = 'message';
+  const dataLines: string[] = [];
+
+  for (const line of block.split('\n')) {
+    if (!line || line.startsWith(':')) {
+      continue;
+    }
+
+    if (line.startsWith('event:')) {
+      eventType = line.slice(6).trim();
+      continue;
+    }
+
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  const data = dataLines.join('\n');
+  if (!data) {
+    return null;
+  }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    let lineBreakIndex = buffer.indexOf('\n');
-    while (lineBreakIndex !== -1) {
-      const line = buffer.slice(0, lineBreakIndex).trim();
-      buffer = buffer.slice(lineBreakIndex + 1);
-      lineBreakIndex = buffer.indexOf('\n');
-
-      if (!line || line.startsWith(':')) {
-        continue;
-      }
-
-      if (line.startsWith('data:')) {
-        const raw = line.slice(5).trim();
-        if (!raw) {
-          continue;
-        }
-
-        try {
-          const parsed = JSON.parse(raw) as StreamEvent;
-          options?.onEvent?.(parsed);
-        } catch (error) {
-          options?.onError?.(error);
-        }
-      }
-    }
+  try {
+    const payload = JSON.parse(data) as SessionStreamEvent;
+    payload.type = eventType;
+    return payload;
+  } catch {
+    return {
+      event_id: `raw_${Date.now()}`,
+      session_id: '',
+      job_id: null,
+      step_id: null,
+      agent_id: null,
+      timestamp: new Date().toISOString(),
+      type: eventType,
+      payload: { raw: data },
+    };
   }
 }
 
@@ -261,6 +211,7 @@ export async function streamSessionEvents(
   const response = await fetch(url, {
     signal: options?.signal,
     headers: {
+      accept: 'text/event-stream',
       'X-Local-Token': DEFAULT_BACKEND_TOKEN,
     },
   });
@@ -270,39 +221,42 @@ export async function streamSessionEvents(
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8');
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
 
-    buffer += decoder.decode(value, { stream: true });
-    let lineBreakIndex = buffer.indexOf('\n');
-    while (lineBreakIndex !== -1) {
-      const line = buffer.slice(0, lineBreakIndex).trim();
-      buffer = buffer.slice(lineBreakIndex + 1);
-      lineBreakIndex = buffer.indexOf('\n');
+      let boundaryIndex = buffer.indexOf('\n\n');
+      while (boundaryIndex !== -1) {
+        const block = buffer.slice(0, boundaryIndex).trim();
+        buffer = buffer.slice(boundaryIndex + 2);
+        boundaryIndex = buffer.indexOf('\n\n');
 
-      if (!line || line.startsWith(':')) {
-        continue;
-      }
-
-      if (line.startsWith('data:')) {
-        const raw = line.slice(5).trim();
-        if (!raw) {
+        if (!block) {
           continue;
         }
 
-        try {
-          const parsed = JSON.parse(raw) as SessionStreamEvent;
+        const parsed = parseSseBlock(block);
+        if (parsed) {
           options?.onEvent?.(parsed);
-        } catch (error) {
-          options?.onError?.(error);
         }
       }
+
+      if (done) {
+        break;
+      }
     }
+  } catch (error) {
+    if (options?.signal?.aborted) {
+      return;
+    }
+
+    options?.onError?.(error);
+    throw error;
+  } finally {
+    reader.releaseLock();
   }
 }

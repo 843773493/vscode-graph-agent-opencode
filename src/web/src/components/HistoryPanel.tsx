@@ -13,18 +13,9 @@ interface HistoryPanelProps {
   activeSession: Session | null;
 }
 
-function sessionTone(session: Session, isActive: boolean): 'active' | 'warning' | 'danger' | 'neutral' {
+function sessionTone(_session: Session, isActive: boolean): 'active' | 'warning' | 'danger' | 'neutral' {
   if (isActive) {
     return 'active';
-  }
-
-  const status = String(session.status ?? '').toLowerCase();
-  if (status.includes('fail') || status.includes('error')) {
-    return 'danger';
-  }
-
-  if (status.includes('progress') || status.includes('run')) {
-    return 'warning';
   }
 
   return 'neutral';
