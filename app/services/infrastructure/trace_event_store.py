@@ -17,6 +17,10 @@ class _AnyEvent(RootModel[Event]):
     pass
 
 
+# 关键对话消息 trace 中保留的事件类型：用户任务创建、模型文本结束、工具调用与响应。
+MESSAGE_TRACE_TYPES = frozenset({"job_created", "text_end", "tool_call_start", "tool_call_end"})
+
+
 class TraceEventStore:
     def __init__(self, logs_dir: Path) -> None:
         self._logs_dir = logs_dir
@@ -25,6 +29,9 @@ class TraceEventStore:
     def _trace_file(self, session_id: str) -> Path:
         return self._logs_dir / "traces" / f"trace_{session_id}.jsonl"
 
+    def _message_trace_file(self, session_id: str) -> Path:
+        return self._logs_dir / "traces" / f"trace_message_{session_id}.jsonl"
+
     async def _notify(self, session_id: str) -> None:
         condition = self._conditions.get(session_id)
         if condition is None:
@@ -32,16 +39,21 @@ class TraceEventStore:
         async with condition:
             condition.notify_all()
 
-    def append(self, session_id: str, event: Event) -> None:
-        file = self._trace_file(session_id)
+    def _append_to_file(self, session_id: str, file: Path, event: Event) -> None:
         file.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             with open(file, "a", encoding="utf-8") as f:
                 f.write(event.model_dump_json() + "\n")
-        except Exception as exc:
+        except Exception:
             logger.exception("写入 trace 文件失败: session_id=%s event_id=%s", session_id, event.event_id)
             raise
+
+    def append(self, session_id: str, event: Event) -> None:
+        self._append_to_file(session_id, self._trace_file(session_id), event)
+
+        if event.type in MESSAGE_TRACE_TYPES:
+            self._append_to_file(session_id, self._message_trace_file(session_id), event)
 
         try:
             loop = asyncio.get_running_loop()
@@ -50,7 +62,12 @@ class TraceEventStore:
             pass
 
     def read_events(self, session_id: str) -> list[Event]:
-        file = self._trace_file(session_id)
+        return self._read_file_events(session_id, self._trace_file(session_id))
+
+    def read_message_events(self, session_id: str) -> list[Event]:
+        return self._read_file_events(session_id, self._message_trace_file(session_id))
+
+    def _read_file_events(self, session_id: str, file: Path) -> list[Event]:
         if not file.exists():
             return []
 
@@ -68,11 +85,19 @@ class TraceEventStore:
         return events
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[Event, None]:
+        async for event in self._stream_file_events(session_id, self._trace_file(session_id)):
+            yield event
+
+    async def stream_message_events(self, session_id: str) -> AsyncGenerator[Event, None]:
+        async for event in self._stream_file_events(session_id, self._message_trace_file(session_id)):
+            yield event
+
+    async def _stream_file_events(self, session_id: str, file: Path) -> AsyncGenerator[Event, None]:
         seen = 0
         condition = self._conditions[session_id]
 
         while True:
-            events = self.read_events(session_id)
+            events = self._read_file_events(session_id, file)
             new_events = events[seen:]
             for event in new_events:
                 yield event
