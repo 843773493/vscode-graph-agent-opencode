@@ -94,7 +94,8 @@
           "type": "string",
           "enum": [
             "chat.completion",
-            "responses"
+            "responses",
+            "opencode_zen"
           ]
         },
         "auth_header": {

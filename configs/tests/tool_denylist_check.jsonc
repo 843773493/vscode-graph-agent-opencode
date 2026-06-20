@@ -7,7 +7,7 @@
         "endpoint": "https://opencode.ai/zen/v1",
         "model": "big-pickle",
         "api_key": "${OPENCODE_ZEN_API_KEY}",
-        "interface": "chat.completion"
+        "interface": "opencode_zen"
       }
     ]
   },

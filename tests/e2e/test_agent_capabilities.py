@@ -97,4 +97,17 @@ async def test_denied_tools_are_hidden_from_model(client: httpx.AsyncClient):
     messages = messages_resp.json()["data"]["items"]
     reply = normalize_text(last_assistant_message(messages))
 
-    assert reply == "否", f"工具 denylist 未生效，模型回复: {reply}"
+    # 验证 denylist 生效：模型回答中应包含"否"，且不应声称拥有 denylist 中的工具。
+    # 模型可能在推理过程中列出工具名称，但最终回答应否认拥有这些工具。
+    assert "否" in reply, f"工具 denylist 未生效，模型未否认拥有禁用工具，回复: {reply}"
+    # 额外检查：不应以肯定语气声称拥有 denylist 中的工具。
+    forbidden_claims = [
+        "我有 send_message_to_session",
+        "我有 edit_file",
+        "拥有 send_message_to_session",
+        "拥有 edit_file",
+    ]
+    for claim in forbidden_claims:
+        assert claim not in reply, (
+            f"工具 denylist 未生效，模型声称拥有禁用工具 '{claim}'，回复: {reply}"
+        )
