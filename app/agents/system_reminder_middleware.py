@@ -26,10 +26,6 @@ from app.services.infrastructure.system_reminder_triggers import (
 )
 
 
-def _checkpoint_config(session_id: str) -> dict[str, Any]:
-    return {"configurable": {"thread_id": session_id, "checkpoint_ns": ""}}
-
-
 class SystemReminderMiddleware(AgentMiddleware[StateT, Any, Any]):
     """在消息列表的断点处注入 <system_reminder> 上下文提醒。"""
 
@@ -119,7 +115,7 @@ class SystemReminderMiddleware(AgentMiddleware[StateT, Any, Any]):
         if self._checkpointer is None:
             return None, None
 
-        config = _checkpoint_config(session_id)
+        config = {"configurable": {"thread_id": session_id, "checkpoint_ns": ""}}
         try:
             tup = self._checkpointer.get_tuple(config)
         except Exception:

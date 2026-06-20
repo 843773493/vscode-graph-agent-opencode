@@ -260,24 +260,51 @@ class AgentExecutionService(JobStepExecutor):
                 data = event.get("data", {})
                 metadata = event.get("metadata", {})
 
-                if event_type == "on_chat_model_start" and name == "ChatOpenAI":
+                if event_type == "on_chat_model_start" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
                     model_name = metadata.get("ls_model_name") or "unknown_model"
                     await _publish(EventType.LLM_REQUEST, {
                         "model": model_name,
                         "timestamp": int(time.time() * 1000),
                     })
 
-                elif event_type == "on_chat_model_stream" and name == "ChatOpenAI":
+                elif event_type == "on_chat_model_stream" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
                     chunk = data.get("chunk")
                     if chunk is None:
                         continue
-                    content = getattr(chunk, "content", None) or ""
-                    tool_calls = getattr(chunk, "tool_calls", None) or []
+                    # ChatGenerationChunk 没有 .content 属性，需要从 .message 获取
+                    chunk_message = getattr(chunk, "message", None)
+                    if chunk_message is not None:
+                        content = getattr(chunk_message, "content", None) or ""
+                        tool_calls = getattr(chunk_message, "tool_calls", None) or []
+                        additional_kwargs = getattr(chunk_message, "additional_kwargs", {}) or {}
+                        chunk_id = getattr(chunk_message, "id", None)
+                    else:
+                        content = getattr(chunk, "content", None) or ""
+                        tool_calls = getattr(chunk, "tool_calls", None) or []
+                        additional_kwargs = getattr(chunk, "additional_kwargs", {}) or {}
+                        chunk_id = getattr(chunk, "id", None)
+                    kind = additional_kwargs.get("kind", "text")
 
                     if isinstance(content, list):
                         content = "".join(str(part) for part in content)
                     content = str(content)
 
+                    # 处理 reasoning 阶段
+                    if kind == "reasoning" and content.strip():
+                        if not collected_text_parts:
+                            # reasoning 开始前先发送 TEXT_START（标记 assistant 开始输出）
+                            SessionInterruptState.set(session_id, phase="text", tool_name=None)
+                            set_interruptible_phase("text")
+                            await _publish(EventType.TEXT_START, {})
+                        collected_text_parts.append(content)
+                        SessionInterruptState.set(
+                            session_id,
+                            current_text="".join(collected_text_parts),
+                        )
+                        await _publish(EventType.TEXT_DELTA, {"text": content, "kind": "reasoning"})
+                        continue
+
+                    # 处理普通 text 内容
                     if content.strip() and not collected_text_parts:
                         SessionInterruptState.set(session_id, phase="text", tool_name=None)
                         set_interruptible_phase("text")
@@ -289,7 +316,7 @@ class AgentExecutionService(JobStepExecutor):
                             session_id,
                             current_text="".join(collected_text_parts),
                         )
-                        await _publish(EventType.TEXT_DELTA, {"text": content})
+                        await _publish(EventType.TEXT_DELTA, {"text": content, "kind": "text"})
 
                     for tc in tool_calls:
                         tc_id = tc.get("id")
@@ -320,7 +347,7 @@ class AgentExecutionService(JobStepExecutor):
                         elif tc_id == active_tool_call_id and isinstance(tc_args, dict):
                             active_tool_args.update(tc_args)
 
-                elif event_type == "on_chat_model_end" and name == "ChatOpenAI":
+                elif event_type == "on_chat_model_end" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
                     pass
 
                 elif event_type == "on_tool_end":
