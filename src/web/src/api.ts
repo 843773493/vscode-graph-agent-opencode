@@ -181,8 +181,12 @@ function parseSseBlock(block: string): SessionStreamEvent | null {
   }
 
   try {
+    // 后端 SSE 的 event 行始终为 "trace"，真实事件类型在 JSON payload.type 中
     const payload = JSON.parse(data) as SessionStreamEvent;
-    payload.type = eventType;
+    // 如果 payload.type 不存在（旧格式），则回退到 eventType
+    if (!payload.type) {
+      payload.type = eventType;
+    }
     return payload;
   } catch {
     return {
@@ -207,7 +211,7 @@ export async function streamSessionEvents(
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const url = `${getBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/events/stream`;
+  const url = `${getBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/traces/stream`;
   const response = await fetch(url, {
     signal: options?.signal,
     headers: {

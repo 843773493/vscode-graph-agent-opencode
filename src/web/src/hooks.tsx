@@ -24,7 +24,6 @@ function groupMessagesIntoConversations(messages: Message[]): ConversationView[]
         conversationId: message.message_id || `conversation_${conversations.length}`,
         sessionId: message.session_id,
         userMessage: message,
-        assistantMessages: [],
         events: [],
         status: 'done',
         jobId: String(message.metadata?.job_id ?? '') || null,
@@ -36,11 +35,11 @@ function groupMessagesIntoConversations(messages: Message[]): ConversationView[]
     }
 
     if (!current) {
+      // 助手消息出现在用户消息之前（理论上不应该发生），用助手消息 ID 作为 conversationId
       current = {
         conversationId: message.message_id || `conversation_${conversations.length}`,
         sessionId: message.session_id,
         userMessage: null,
-        assistantMessages: [],
         events: [],
         status: 'done',
         jobId: String(message.metadata?.job_id ?? '') || null,
@@ -49,8 +48,7 @@ function groupMessagesIntoConversations(messages: Message[]): ConversationView[]
       };
       conversations.push(current);
     }
-
-    current.assistantMessages.push(message);
+    // 助手消息内容由 ChatPanel 从 traceEvents 聚合得到；不再维护 assistantMessages 数组。
   }
 
   return conversations;
@@ -61,18 +59,52 @@ function attachTraceEventsToConversations(conversations: ConversationView[], tra
     return conversations;
   }
 
-  return conversations.map((conversation) => {
-    const jobId = conversation.jobId;
-    if (!jobId) {
+  // 按 event_id 去重（SSE 流 + job_completed 后 API 重新获取可能产生重复）
+  const seenEventIds = new Set<string>();
+  const dedupedEvents = traceEvents.filter(event => {
+    const id = event.event_id;
+    if (!id || seenEventIds.has(id)) return false;
+    seenEventIds.add(id);
+    return true;
+  }).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  // 从 trace 事件中提取 message_created，建立 message_id → 时间戳映射
+  // 后端 DTO 格式：真实 payload 嵌套在 raw.payload 中
+  interface MessageBoundary { messageId: string; timestamp: number; }
+  const boundaries: MessageBoundary[] = [];
+  for (const event of dedupedEvents) {
+    if (event.type === 'message_created') {
+      const rawPayload = (event as Record<string, unknown>).raw as Record<string, unknown> | undefined;
+      const innerPayload = (rawPayload?.payload ?? event.payload ?? {}) as Record<string, unknown>;
+      const msgId = typeof innerPayload.message_id === 'string' ? innerPayload.message_id : '';
+      if (msgId) {
+        boundaries.push({ messageId: msgId, timestamp: new Date(event.timestamp).getTime() });
+      }
+    }
+  }
+
+  // 为每个 conversation 按时间戳范围分配事件：
+  // conversation[0] 得到 [boundary[0].ts, boundary[1].ts) 区间内的事件
+  // conversation[N] 得到 [boundary[N].ts, +∞) 区间内的事件
+  const boundaryTs = boundaries.map(b => b.timestamp);
+
+  return conversations.map((conversation, convIndex) => {
+    const userMsgId = conversation.userMessage?.message_id ?? '';
+    // 找到该 conversation 对应的 message_created 边界索引
+    const boundaryIndex = boundaries.findIndex(b => b.messageId === userMsgId);
+    if (boundaryIndex === -1) {
       return conversation;
     }
 
-    return {
-      ...conversation,
-      events: traceEvents
-        .filter(event => event.job_id === jobId)
-        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-    };
+    const startTs = boundaryTs[boundaryIndex];
+    const endTs = boundaryIndex + 1 < boundaryTs.length ? boundaryTs[boundaryIndex + 1] : Infinity;
+
+    const convEvents = dedupedEvents.filter(event => {
+      const eventTs = new Date(event.timestamp).getTime();
+      return eventTs >= startTs && eventTs < endTs;
+    });
+
+    return { ...conversation, events: convEvents };
   });
 }
 
@@ -119,6 +151,10 @@ export function getConversationsForSession(sessionId: string, state: AppState): 
   });
 
   if (matchedIndex === -1) {
+    // 防御：非 pending 状态的 pending 对话不应追加
+    if (!pending.pending) {
+      return withTraceEvents;
+    }
     return [...withTraceEvents, { ...pending, source: 'pending' }];
   }
 
@@ -179,18 +215,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         getWorkspace(apiPort),
         listSessions(apiPort),
       ]);
-      const nextCurrentSession = state.currentSession ?? sessions.items[0] ?? null;
-      const traceEvents = nextCurrentSession ? await getSessionTraces(apiPort, nextCurrentSession.session_id) : [];
-      setState(prev => ({
-        ...prev,
-        workspaceRoot: workspace.root_path,
-        workspaceName: workspace.name,
-        sessions: sessions.items,
-        currentSession: nextCurrentSession,
-        traceEvents: [...traceEvents].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-        error: null,
-        isBootstrapping: false,
-      }));
+      setState(prev => {
+        // 保留当前已选中的会话，只有初次加载（无选中）才取列表第一个
+        const nextCurrentSession = prev.currentSession ?? sessions.items[0] ?? null;
+        return {
+          ...prev,
+          workspaceRoot: workspace.root_path,
+          workspaceName: workspace.name,
+          sessions: sessions.items,
+          currentSession: nextCurrentSession,
+          error: null,
+          isBootstrapping: false,
+        };
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setState(prev => ({
@@ -200,20 +237,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isBootstrapping: false,
       }));
     }
-  }, [state.apiPort, state.currentSession]);
+  }, [state.apiPort]);
 
   const selectSession = useCallback((sessionId: string) => {
-    void (async () => {
-      streamAbortRef.current?.abort();
-      const nextSession = state.sessions.find(session => session.session_id === sessionId) ?? state.currentSession;
-      const traceEvents = nextSession ? await getSessionTraces(state.apiPort ?? 8000, nextSession.session_id) : [];
-      setState(prev => ({
-        ...prev,
-        currentSession: prev.sessions.find(session => session.session_id === sessionId) ?? prev.currentSession,
-        traceEvents: [...traceEvents].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-      }));
-    })();
-  }, [state.apiPort, state.currentSession, state.sessions]);
+    // 只需切换 currentSession 引用并中断旧 SSE；消息/trace 由 useEffect 统一加载
+    streamAbortRef.current?.abort();
+    setState(prev => ({
+      ...prev,
+      currentSession: prev.sessions.find(session => session.session_id === sessionId) ?? prev.currentSession,
+    }));
+  }, []);
 
   const createSession = useCallback(async (title: string = DEFAULT_SESSION_TITLE) => {
     const session = await apiCreateSession(state.apiPort ?? 8000, title);
@@ -252,7 +285,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           created_at: now,
           updated_at: now,
         },
-        assistantMessages: [],
         events: [],
         status: 'running',
         jobId,
@@ -289,6 +321,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void refreshSessions();
   }, [refreshSessions]);
 
+  // 切换会话时加载 messages 和 traces（也处理初始加载）
+  useEffect(() => {
+    const sessionId = state.currentSession?.session_id;
+    const apiPort = state.apiPort;
+
+    if (!apiPort || !sessionId) return;
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const [messages, traceEvents] = await Promise.all([
+          listMessages(apiPort, sessionId),
+          getSessionTraces(apiPort, sessionId),
+        ]);
+        if (cancelled) return;
+        setState(prev => {
+          // 如果在加载期间会话已切换，丢弃过期数据
+          if (prev.currentSession?.session_id !== sessionId) return prev;
+          return {
+            ...prev,
+            messages: messages.items ?? [],
+            traceEvents: [...traceEvents].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+          };
+        });
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setState(prev => ({ ...prev, status: `加载失败: ${message}` }));
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [state.currentSession?.session_id, state.apiPort]);
+
   useEffect(() => {
     const apiPort = state.apiPort;
     const sessionId = state.currentSession?.session_id ?? null;
@@ -309,6 +376,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const traceEvent = buildTraceEvent(event);
 
         setState(prev => {
+          // 忽略非当前会话的事件（切换会话时旧 SSE 可能还有残留事件）
+          if (prev.currentSession?.session_id !== sessionId) {
+            return prev;
+          }
           const next = cloneMaps(prev);
           next.traceEvents = [...next.traceEvents, traceEvent];
 
@@ -326,7 +397,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             updatedPending.streamingText = '';
             updatedPending.streamingTextActive = true;
           } else if (event.type === 'text_delta') {
-            const deltaText = typeof traceEvent.payload.text === 'string' ? traceEvent.payload.text : '';
+            const deltaText = typeof traceEvent.payload?.text === 'string' ? traceEvent.payload.text : '';
             updatedPending.streamingText = (updatedPending.streamingText ?? '') + deltaText;
           } else if (event.type === 'text_end') {
             updatedPending.streamingTextActive = false;

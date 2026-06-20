@@ -5,7 +5,7 @@ export interface ConversationView {
   conversationId: string;
   sessionId: string;
   userMessage: Message | null;
-  assistantMessages: Message[];
+  // 助手消息内容由 ChatPanel 从 traceEvents 聚合得到，不再在 hooks 中维护。
   events: TraceEvent[];
   status: 'running' | 'done' | 'error';
   jobId: string | null;

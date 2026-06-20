@@ -115,7 +115,7 @@ export async function getSessionTraces(port, sessionId) {
 }
 
 export async function streamSessionEvents(port, sessionId, { onEvent, onError, signal } = {}) {
-  const response = await fetch(buildUrl(port, `/sessions/${encodeURIComponent(sessionId)}/events/stream`), {
+  const response = await fetch(buildUrl(port, `/sessions/${encodeURIComponent(sessionId)}/traces/stream`), {
     headers: {
       accept: 'text/event-stream',
       'X-Local-Token': DEFAULT_BACKEND_TOKEN,

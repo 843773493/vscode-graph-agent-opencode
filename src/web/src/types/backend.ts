@@ -109,6 +109,17 @@ export interface BaseTraceEvent {
   timestamp: string;
   type: TraceEventType;
   payload: Record<string, unknown>;
+  /** 后端 DTO 格式可能将真实事件数据嵌套在 raw 中 */
+  raw?: {
+    event_id: string;
+    job_id: string;
+    type: string;
+    timestamp: string;
+    payload: Record<string, unknown>;
+    session_id?: string;
+    agent_id?: string | null;
+    step_id?: string | null;
+  };
 }
 
 export type TraceEvent = BaseTraceEvent;
