@@ -73,16 +73,41 @@ def build_runtime_for_agent(agent_id: str, config_service: ConfigService | None 
 
     models = []
     for provider in providers:
-        model = ChatOpenAI(
-            model=provider["model"],
-            api_key=provider["api_key"],
-            base_url=provider["endpoint"],
-            use_responses_api=(provider.get("interface") == "responses"),
-            temperature=runtime_config["temperature"],
-            top_p=runtime_config["top_p"],
-            max_tokens=runtime_config["max_output_tokens"],
-            max_retries=3,
-        )
+        interface = provider.get("interface")
+        if interface == "opencode_zen":
+            from app.agents.providers.opencode_zen import OpencodeZenChatOpenAI
+
+            model = OpencodeZenChatOpenAI(
+                model=provider["model"],
+                api_key=provider["api_key"],
+                base_url=provider["endpoint"],
+                temperature=runtime_config["temperature"],
+                top_p=runtime_config["top_p"],
+                max_tokens=runtime_config["max_output_tokens"],
+                max_retries=3,
+            )
+        elif interface == "responses":
+            model = ChatOpenAI(
+                model=provider["model"],
+                api_key=provider["api_key"],
+                base_url=provider["endpoint"],
+                use_responses_api=True,
+                temperature=runtime_config["temperature"],
+                top_p=runtime_config["top_p"],
+                max_tokens=runtime_config["max_output_tokens"],
+                max_retries=3,
+            )
+        else:
+            model = ChatOpenAI(
+                model=provider["model"],
+                api_key=provider["api_key"],
+                base_url=provider["endpoint"],
+                use_responses_api=False,
+                temperature=runtime_config["temperature"],
+                top_p=runtime_config["top_p"],
+                max_tokens=runtime_config["max_output_tokens"],
+                max_retries=3,
+            )
         models.append(model)
 
     if not models:

@@ -17,6 +17,7 @@ from langchain.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from app.core.job_context import get_current_job_id
+from app.core.path_utils import get_logs_dir
 
 
 # ========== 类型定义 ==========

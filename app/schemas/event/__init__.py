@@ -130,6 +130,7 @@ class SessionInterruptedPayload(BaseModel):
 class TextDeltaPayload(BaseModel):
     """TEXT_DELTA 事件的 payload"""
     text: str
+    kind: str = "text"  # "text" | "reasoning" | "tool"
 
 
 class TextStartPayload(BaseModel):

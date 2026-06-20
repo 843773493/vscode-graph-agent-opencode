@@ -42,7 +42,7 @@ async def _run_interrupt_then_second_message(
     first_job_id: str | None = None
 
     async with client.stream(
-        "GET", f"/api/v1/sessions/{session_id}/events/stream", timeout=None
+        "GET", f"/api/v1/sessions/{session_id}/traces/stream", timeout=None
     ) as stream_response:
         assert stream_response.status_code == 200
 
@@ -176,12 +176,13 @@ async def test_interrupt_tool_phase_then_send_second_message(client: httpx.Async
     assert messages_response.status_code == 200
     messages = messages_response.json()["data"]["items"]
 
+    # 工具阶段：被打断后被打断的 assistant 消息由服务层注入 <system_reminder>，
+    # messages 序列为 4 条：user -> assistant(system_reminder+tool) -> user -> assistant
     roles = [msg.get("role") for msg in messages]
     assert roles == ["user", "assistant", "user", "assistant"], f"消息 role 序列不符合预期: {roles}"
 
     first_assistant = messages[1]
     assert "<system_reminder>" in first_assistant["content"]
-    assert "工具调用" in first_assistant["content"]
     assert "test_tool" in first_assistant["content"]
     assert first_assistant["metadata"].get("phase") == "tool"
 

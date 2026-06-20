@@ -10,11 +10,10 @@ from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir
 from app.schemas.event import Event
 from app.schemas.public_v2.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest, SessionListResultDTO, SessionControlResultDTO
+from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
-
-
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.mapping.trace_event_mapper import TraceEventMapper
 
 
 class SessionService:
@@ -128,11 +127,16 @@ class SessionService:
         await self.get(session_id)
         return SessionControlResultDTO(session_id=session_id, action=action, status="executed")
 
-    async def list_trace_events(self, session_id: str) -> list[Event]:
+    async def list_trace_events(self, session_id: str) -> list[TraceEventDTO]:
         await self.get(session_id)
-        return self._trace_event_store.read_events(session_id)
+        events = self._trace_event_store.read_events(session_id)
+        mapper = TraceEventMapper()
+        return mapper.map_many([event.model_dump() for event in events], session_id=session_id)
 
     async def stream_trace_events(self, session_id: str):
         await self.get(session_id)
+        mapper = TraceEventMapper()
         async for event in self._trace_event_store.stream_events(session_id):
-            yield event
+            dto = mapper.map_one(event.model_dump(), session_id=session_id)
+            if dto is not None:
+                yield dto

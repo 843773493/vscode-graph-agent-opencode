@@ -26,18 +26,19 @@ class TraceEventMapper:
         "text_delta",
         "text_end",
         "system_reminder_injected",
+        "session_interrupted",
     }
 
-    def map_many(self, events: list[dict[str, Any]]) -> list[TraceEventDTO]:
+    def map_many(self, events: list[dict[str, Any]], session_id: str = "") -> list[TraceEventDTO]:
         mapped: list[TraceEventDTO] = []
         for event in events:
-            dto = self.map_one(event)
+            dto = self.map_one(event, session_id=session_id)
             if dto is not None:
                 mapped.append(dto)
         mapped.sort(key=lambda item: item.timestamp)
         return mapped
 
-    def map_one(self, event: dict[str, Any]) -> TraceEventDTO | None:
+    def map_one(self, event: dict[str, Any], session_id: str = "") -> TraceEventDTO | None:
         event_type = event.get("type")
         if event_type not in self._SUPPORTED_TYPES:
             return None
@@ -46,7 +47,14 @@ class TraceEventMapper:
         if not isinstance(payload, dict):
             payload = {}
 
-        session_id = payload.get("session_id") or event.get("session_id") or event.get("thread_id") or ""
+        # session_id 优先级：payload > event 顶层 > 传入参数 > 空字符串
+        resolved_session_id = (
+            payload.get("session_id")
+            or event.get("session_id")
+            or session_id
+            or event.get("thread_id")
+            or ""
+        )
         job_id = event.get("job_id") or payload.get("job_id")
         step_id = event.get("step_id")
         timestamp = self._parse_timestamp(event.get("timestamp"), payload.get("timestamp"))
@@ -109,6 +117,14 @@ class TraceEventMapper:
             return "text", "文本结束", payload.get("text") or "助手文本生成结束", "completed", None
         if event_type == "system_reminder_injected":
             return "system", "系统提醒", payload.get("content") or "系统提醒已注入", "running", None
+        if event_type == "session_interrupted":
+            phase = payload.get("phase") or "text"
+            tool_name = payload.get("tool_name")
+            if tool_name:
+                message = f"会话已打断（{phase} 阶段，工具：{tool_name}）"
+            else:
+                message = f"会话已打断（{phase} 阶段）"
+            return "session", "会话已打断", message, "completed", tool_name
         error_text = payload.get("error") or "执行失败"
         return "error", "执行失败", error_text, "failed", None
 

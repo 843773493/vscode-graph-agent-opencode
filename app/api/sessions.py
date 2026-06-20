@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import (
-    get_request_id,
-    get_session_auto_continue_service,
-    get_session_interrupt_service,
-    get_session_service,
-    verify_local_token,
-)
+from app.api.deps import get_request_id, get_session_auto_continue_service, get_session_interrupt_service, get_session_service, verify_local_token
 from app.schemas.public_v2.common import APIResponse, CursorPage
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
@@ -20,9 +14,9 @@ from app.schemas.public_v2.session import (
     SessionInterruptResultDTO,
     SessionUpdateRequest,
 )
-from app.schemas.event import Event
-from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
+from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -62,7 +56,7 @@ async def get_session(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{session_id}/traces", response_model=APIResponse[list[Event]], summary="获取会话执行轨迹")
+@router.get("/{session_id}/traces", response_model=APIResponse[list[TraceEventDTO]], summary="获取会话执行轨迹")
 async def list_session_traces(
     session_id: str,
     _: str = Depends(verify_local_token),
@@ -81,23 +75,14 @@ async def stream_session_traces(
 ):
     async def event_generator():
         async for event in session_service.stream_trace_events(session_id):
-            data = event.model_dump_json()
+            if hasattr(event, "model_dump_json"):
+                data = event.model_dump_json()
+            else:
+                import json
+
+                data = json.dumps(event, ensure_ascii=False, default=str)
+
             yield f"event: trace\n"
-            yield f"data: {data}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-@router.get("/{session_id}/events/stream", summary="订阅会话统一事件流")
-async def stream_session_events(
-    session_id: str,
-    _: str = Depends(verify_local_token),
-    session_service: SessionService = Depends(get_session_service),
-):
-    async def event_generator():
-        async for event in session_service.stream_trace_events(session_id):
-            data = event.model_dump_json()
-            yield f"event: {event.type}\n"
             yield f"data: {data}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -175,7 +160,7 @@ async def get_session_auto_continue_status(
 @router.post(
     "/{session_id}/interrupt",
     response_model=APIResponse[SessionInterruptResultDTO],
-    summary="打断当前会话正在运行的任务",
+    summary="打断会话正在执行的任务",
 )
 async def interrupt_session(
     session_id: str,
@@ -183,5 +168,8 @@ async def interrupt_session(
     request_id: str | None = Depends(get_request_id),
     session_interrupt_service: SessionInterruptService = Depends(get_session_interrupt_service),
 ):
-    result = await session_interrupt_service.interrupt(session_id)
+    try:
+        result = await session_interrupt_service.interrupt(session_id=session_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return APIResponse(data=result, request_id=request_id)
