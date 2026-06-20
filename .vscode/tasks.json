@@ -73,6 +73,16 @@
 				"$eslint- stylish"
 			],
 			"group": "build"
+		},
+		{
+			"label": "build:webview-ui",
+			"type": "shell",
+			"command": "${workspaceFolder}\\tools\\bun.exe",
+			"args": [
+				"run",
+				"build"
+			],
+			"isBackground": false
 		}
 	]
 }

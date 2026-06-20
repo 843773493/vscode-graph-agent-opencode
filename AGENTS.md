@@ -37,6 +37,7 @@
 2. 仓库中的 JavaScript 代码必须始终使用 ESM（ES 模块）通过 `import`/`export`，避免使用 CommonJS。
 3. 前端目录负责页面、交互、状态、API 调用以及少量展示逻辑。
 4. 前端后端目录负责业务规则、权限、数据库、订单流程、风险控制和核心计算。
+5. **UI 优先开发 `src/web`（浏览器前端 8001），稳定后同步到 `src/webview-ui`（VS Code Webview 5173）。用户说"UI"默认指 `src/web`。**
 
 ### 提交和目录规范
 
