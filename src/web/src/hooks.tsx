@@ -1,17 +1,17 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  createSession as apiCreateSession,
-  interruptSession as apiInterruptSession,
-  sendUserMessage as apiSendMessage,
-  DEFAULT_SESSION_TITLE,
-  getSessionTraces,
-  getWorkspace,
-  listMessages,
-  listSessions,
-  streamSessionEvents,
-  type SessionStreamEvent,
+    createSession as apiCreateSession,
+    interruptSession as apiInterruptSession,
+    sendUserMessage as apiSendMessage,
+    DEFAULT_SESSION_TITLE,
+    getSessionTraces,
+    getWorkspace,
+    listMessages,
+    listSessions,
+    streamSessionEvents,
+    type SessionStreamEvent,
 } from './api';
-import type { Message, Session, TraceEvent } from './types/backend';
+import type { Message, TraceEvent } from './types/backend';
 import type { AppState, ConversationView } from './types/frontend';
 
 function groupMessagesIntoConversations(messages: Message[]): ConversationView[] {
@@ -113,6 +113,9 @@ function cloneMaps(state: AppState): AppState {
 }
 
 function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
+  // 后端 TraceEventDTO 把原始 payload 嵌套在 raw.payload 中
+  const raw = (event.raw as Record<string, unknown> | undefined) || {};
+  const rawPayload = (raw.payload as Record<string, unknown> | undefined) || {};
   return {
     event_id: event.event_id,
     job_id: event.job_id ?? 'unknown_job',
@@ -120,7 +123,8 @@ function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
     agent_id: event.agent_id ?? null,
     timestamp: event.timestamp,
     type: event.type as TraceEvent['type'],
-    payload: event.payload,
+    payload: rawPayload,
+    raw: event.raw,
   };
 }
 

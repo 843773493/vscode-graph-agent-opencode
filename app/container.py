@@ -154,7 +154,6 @@ def build_app_container() -> AppContainer:
     session_interrupt_service = SessionInterruptService(
         job_service=job_service,
         job_event_bus=job_event_bus,
-        checkpointer=checkpointer,
     )
     log_service = LogService()
     tool_service = ToolService(tool_catalog=agent_execution_service)

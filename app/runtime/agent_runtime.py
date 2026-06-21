@@ -35,6 +35,7 @@ def build_session_agent_runtime(
     dependency_provider: AgentRuntimeDependencyProvider,
     system_reminder_trigger_registry: Any,
     name: str | None = None,
+    override_model: Any = None,
 ) -> Any:
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
     checkpointer = getattr(dependency_provider, "get_checkpointer", lambda: None)()
@@ -53,4 +54,5 @@ def build_session_agent_runtime(
         system_reminder_trigger_registry=system_reminder_trigger_registry,
         checkpointer=checkpointer,
         name=name or resolved_agent_id,
+        override_model=override_model,
     )

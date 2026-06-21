@@ -25,24 +25,6 @@ from langgraph.checkpoint.base import (
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 
-def next_channel_version(current_version: str | None) -> str:
-    """生成符合 LangGraph 格式的下一个 channel version 字符串。
-
-    LangGraph 版本格式为：32 位零填充十进制计数器 + '.' + 8 位十六进制哈希。
-    """
-    import secrets
-
-    if current_version is None:
-        return f"{1:032d}.{secrets.token_hex(4)}"
-
-    parts = str(current_version).split(".")
-    try:
-        counter = int(parts[0])
-    except ValueError:
-        counter = 0
-    return f"{counter + 1:032d}.{secrets.token_hex(4)}"
-
-
 class FileSystemCheckpointSaver(
     BaseCheckpointSaver[str],
     AbstractContextManager,

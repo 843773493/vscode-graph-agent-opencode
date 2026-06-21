@@ -2,7 +2,6 @@
 // 由于 src/types/gen/ 中自动生成的类型存在重复导出且部分已过期，
 // 本目录业务代码统一从这里导入类型；不直接依赖 gen/index.ts 的通配导出。
 
-import type { AgentDTO } from './gen/agent';
 
 export type { AgentDTO as Agent } from './gen/agent';
 

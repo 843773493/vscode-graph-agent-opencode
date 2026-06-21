@@ -14,21 +14,21 @@
         "endpoint": "https://api.kilo.ai/api/gateway",
         "model": "openrouter/free",
         "api_key": "${KILO_API_KEY}",
-        "interface": "chat.completion"
+        "interface": "opencode_zen"
       },
       {
         "id": "backup_2",
         "endpoint": "https://openrouter.ai/api/v1",
         "model": "openai/gpt-oss-120b:free",
         "api_key": "${OPENROUTER_API_KEY}",
-        "interface": "responses"
+        "interface": "opencode_zen"
       },
       {
         "id": "backup_3",
         "endpoint": "https://www.cctq.ai",
         "model": "gpt-5.4-mini",
         "api_key": "${CCTQ_API_KEY}",
-        "interface": "chat.completion"
+        "interface": "opencode_zen"
       }
     ]
   },

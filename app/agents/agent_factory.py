@@ -64,6 +64,45 @@ GENERAL_PURPOSE_SUBAGENT = {
 }
 
 
+def _build_model_from_provider(provider: dict[str, Any], runtime_config: dict[str, Any]) -> Any:
+    """从单个 provider 配置构建模型实例。"""
+    interface = provider.get("interface")
+    if interface == "opencode_zen":
+        from app.agents.providers.opencode_zen import OpencodeZenChatOpenAI
+
+        return OpencodeZenChatOpenAI(
+            model=provider["model"],
+            api_key=provider["api_key"],
+            base_url=provider["endpoint"],
+            temperature=runtime_config["temperature"],
+            top_p=runtime_config["top_p"],
+            max_tokens=runtime_config["max_output_tokens"],
+            max_retries=3,
+        )
+    elif interface == "responses":
+        return ChatOpenAI(
+            model=provider["model"],
+            api_key=provider["api_key"],
+            base_url=provider["endpoint"],
+            use_responses_api=True,
+            temperature=runtime_config["temperature"],
+            top_p=runtime_config["top_p"],
+            max_tokens=runtime_config["max_output_tokens"],
+            max_retries=3,
+        )
+    else:
+        return ChatOpenAI(
+            model=provider["model"],
+            api_key=provider["api_key"],
+            base_url=provider["endpoint"],
+            use_responses_api=False,
+            temperature=runtime_config["temperature"],
+            top_p=runtime_config["top_p"],
+            max_tokens=runtime_config["max_output_tokens"],
+            max_retries=3,
+        )
+
+
 def build_runtime_for_agent(agent_id: str, config_service: ConfigService | None = None) -> dict[str, Any]:
     if config_service is None:
         raise RuntimeError("build_runtime_for_agent 需要显式传入 ConfigService")
@@ -73,41 +112,7 @@ def build_runtime_for_agent(agent_id: str, config_service: ConfigService | None 
 
     models = []
     for provider in providers:
-        interface = provider.get("interface")
-        if interface == "opencode_zen":
-            from app.agents.providers.opencode_zen import OpencodeZenChatOpenAI
-
-            model = OpencodeZenChatOpenAI(
-                model=provider["model"],
-                api_key=provider["api_key"],
-                base_url=provider["endpoint"],
-                temperature=runtime_config["temperature"],
-                top_p=runtime_config["top_p"],
-                max_tokens=runtime_config["max_output_tokens"],
-                max_retries=3,
-            )
-        elif interface == "responses":
-            model = ChatOpenAI(
-                model=provider["model"],
-                api_key=provider["api_key"],
-                base_url=provider["endpoint"],
-                use_responses_api=True,
-                temperature=runtime_config["temperature"],
-                top_p=runtime_config["top_p"],
-                max_tokens=runtime_config["max_output_tokens"],
-                max_retries=3,
-            )
-        else:
-            model = ChatOpenAI(
-                model=provider["model"],
-                api_key=provider["api_key"],
-                base_url=provider["endpoint"],
-                use_responses_api=False,
-                temperature=runtime_config["temperature"],
-                top_p=runtime_config["top_p"],
-                max_tokens=runtime_config["max_output_tokens"],
-                max_retries=3,
-            )
+        model = _build_model_from_provider(provider, runtime_config)
         models.append(model)
 
     if not models:
@@ -243,7 +248,6 @@ def create_my_deep_agent(
         SystemReminderMiddleware(
             trigger_registry=system_reminder_trigger_registry,
             job_event_bus=job_event_bus,
-            checkpointer=checkpointer,
         ),
     ]
     if fallback_middleware is not None:
@@ -396,6 +400,7 @@ def create_runtime_deep_agent_for_session(
     system_reminder_trigger_registry: SystemReminderTriggerRegistry,
     checkpointer: BaseCheckpointSaver | None = None,
     name: str | None = None,
+    override_model: Any = None,
 ):
     if config_service is None:
         raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
@@ -403,8 +408,10 @@ def create_runtime_deep_agent_for_session(
     runtime = build_runtime_for_agent(agent_id=agent_id, config_service=service)
     tool_config = service.get_agent_tool_config(agent_id)
 
+    model = override_model if override_model is not None else runtime["model"]
+
     return create_my_deep_agent(
-        model=runtime["model"],
+        model=model,
         system_prompt=runtime["system_prompt"],
         checkpointer=checkpointer,
         session_id=session_id,

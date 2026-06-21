@@ -25,8 +25,8 @@ from app.core.job_context import (
     set_last_turn_status,
     set_recent_tool_results,
 )
-from app.core.checkpoint_saver import next_channel_version
 from app.core.job_event_bus import EventType
+from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_interrupt_state import SessionInterruptState
 from app.agents.agent_factory import resolve_agent_id
 from app.services.infrastructure.config_service import ConfigService
@@ -115,12 +115,7 @@ class AgentExecutionService(JobStepExecutor):
         if checkpointer is None:
             return
 
-        config = {
-            "configurable": {
-                "thread_id": session_id,
-                "checkpoint_ns": "",
-            }
-        }
+        config = build_checkpoint_config(session_id)
         try:
             tup = checkpointer.get_tuple(config)
         except Exception:
@@ -163,21 +158,19 @@ class AgentExecutionService(JobStepExecutor):
         messages.append(partial_message)
 
         channel_values["messages"] = messages
-        # 不再保留 marker，因为提醒已经直接写入 assistant 消息
-        channel_values.pop("__boxteam_interrupt__", None)
         checkpoint["channel_values"] = channel_values
         checkpoint["id"] = str(uuid.uuid4())
 
+        # 走 checkpointer.get_next_version（实例方法）获取 messages 通道的新版本号。
+        # 避免使用模块级 next_channel_version 重复实现 saver 内部的 version 算法。
         channel_versions = dict(checkpoint.get("channel_versions", {}))
-        messages_version = next_channel_version(channel_versions.get("messages"))
-        channel_versions.pop("__boxteam_interrupt__", None)
+        messages_version = checkpointer.get_next_version(
+            channel_versions.get("messages"), None
+        )
         channel_versions["messages"] = messages_version
         checkpoint["channel_versions"] = channel_versions
-
-        updated_channels = list(checkpoint.get("updated_channels", []))
-        if "messages" not in updated_channels:
-            updated_channels.append("messages")
-        checkpoint["updated_channels"] = updated_channels
+        # updated_channels 字段在业务代码中不读（仅 decode_checkpoint.py / 测试中用），
+        # 这里不再手工维护；如未来需要从 saver 推导可补在 FileSystemCheckpointSaver.put。
 
         try:
             checkpointer.put(
@@ -212,13 +205,11 @@ class AgentExecutionService(JobStepExecutor):
         logger = logging.getLogger(__name__)
         logger.info("[agent_execution_service] run_step begin: session_id=%s job_id=%s agent_id=%s message_length=%s", session_id, effective_job_id, resolved_agent_id, len(message or ""))
 
-        config = {
-            "configurable": {
-                "session_id": session_id,
-                "thread_id": session_id,
-                "job_id": effective_job_id,
-            }
-        }
+        # 注意：业务键（session_id / job_id）不放入 configurable —— session_id
+        # 与 thread_id 重复、job_id 已经通过 set_current_job_id 维护在 contextvars。
+        # 中间件通过 runtime.configurable 取不到这些键时，会回退到 contextvars
+        # （见 LLMLoggingMiddleware._get_job_id 的优先级链）。
+        config = build_checkpoint_config(session_id)
 
         job_token = set_current_job_id(effective_job_id)
         agent_token = set_current_agent_id(resolved_agent_id)
@@ -250,127 +241,179 @@ class AgentExecutionService(JobStepExecutor):
 
             logger.info("[agent_execution_service] agent.astream_events begin: job_id=%s", effective_job_id)
 
-            async for event in agent.astream_events(
-                {"messages": [HumanMessage(content=message, response_metadata={"message_id": message_id} if message_id else {})]},
-                config=config,
-                version="v2",
-            ):
-                event_type = event.get("event")
-                name = event.get("name", "")
-                data = event.get("data", {})
-                metadata = event.get("metadata", {})
+            # 为 fallback 收集需要的模型配置
+            runtime_config = self._config_service.get_agent_runtime_config(resolved_agent_id)
+            providers = runtime_config.get("providers", [])
+            fallback_models = []
+            for provider in providers[1:]:
+                from app.agents.agent_factory import _build_model_from_provider
+                fallback_models.append(_build_model_from_provider(provider, runtime_config))
 
-                if event_type == "on_chat_model_start" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
-                    model_name = metadata.get("ls_model_name") or "unknown_model"
-                    await _publish(EventType.LLM_REQUEST, {
-                        "model": model_name,
-                        "timestamp": int(time.time() * 1000),
-                    })
+            current_model_index = 0
+            final_text = ""
 
-                elif event_type == "on_chat_model_stream" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
-                    chunk = data.get("chunk")
-                    if chunk is None:
-                        continue
-                    # ChatGenerationChunk 没有 .content 属性，需要从 .message 获取
-                    chunk_message = getattr(chunk, "message", None)
-                    if chunk_message is not None:
-                        content = getattr(chunk_message, "content", None) or ""
-                        tool_calls = getattr(chunk_message, "tool_calls", None) or []
-                        additional_kwargs = getattr(chunk_message, "additional_kwargs", {}) or {}
-                        chunk_id = getattr(chunk_message, "id", None)
+            while True:
+                try:
+                    if current_model_index == 0:
+                        agent = self._get_or_create_agent(session_id, resolved_agent_id)
                     else:
-                        content = getattr(chunk, "content", None) or ""
-                        tool_calls = getattr(chunk, "tool_calls", None) or []
-                        additional_kwargs = getattr(chunk, "additional_kwargs", {}) or {}
-                        chunk_id = getattr(chunk, "id", None)
-                    kind = additional_kwargs.get("kind", "text")
-
-                    if isinstance(content, list):
-                        content = "".join(str(part) for part in content)
-                    content = str(content)
-
-                    # 处理 reasoning 阶段
-                    if kind == "reasoning" and content.strip():
-                        if not collected_text_parts:
-                            # reasoning 开始前先发送 TEXT_START（标记 assistant 开始输出）
-                            SessionInterruptState.set(session_id, phase="text", tool_name=None)
-                            set_interruptible_phase("text")
-                            await _publish(EventType.TEXT_START, {})
-                        collected_text_parts.append(content)
-                        SessionInterruptState.set(
-                            session_id,
-                            current_text="".join(collected_text_parts),
+                        await _publish(EventType.AGENT_START, {
+                            "message": f"回退到模型 #{current_model_index} ({fallback_models[current_model_index - 1].__class__.__name__}) 继续处理",
+                            "agent_id": resolved_agent_id,
+                        })
+                        logger.info("[agent_execution_service] fallback to model #%s: job_id=%s", current_model_index, effective_job_id)
+                        from app.runtime.agent_runtime import build_session_agent_runtime
+                        agent = build_session_agent_runtime(
+                            session_id=session_id,
+                            agent_id=resolved_agent_id,
+                            config_service=self._config_service,
+                            background_task_registry=self._background_task_registry,
+                            background_message_bus=self._background_message_bus,
+                            job_event_bus=self._bus,
+                            dependency_provider=self._dependency_provider,
+                            system_reminder_trigger_registry=self._dependency_provider.get_system_reminder_trigger_registry(),
+                            override_model=fallback_models[current_model_index - 1],
                         )
-                        await _publish(EventType.TEXT_DELTA, {"text": content, "kind": "reasoning"})
-                        continue
 
-                    # 处理普通 text 内容
-                    if content.strip() and not collected_text_parts:
-                        SessionInterruptState.set(session_id, phase="text", tool_name=None)
-                        set_interruptible_phase("text")
-                        await _publish(EventType.TEXT_START, {})
+                    collected_text_parts.clear()
+                    active_tool_call_id = None
+                    active_tool_name = None
+                    active_tool_args = {}
 
-                    if content:
-                        collected_text_parts.append(content)
-                        SessionInterruptState.set(
-                            session_id,
-                            current_text="".join(collected_text_parts),
-                        )
-                        await _publish(EventType.TEXT_DELTA, {"text": content, "kind": "text"})
+                    async for event in agent.astream_events(
+                        {"messages": [HumanMessage(content=message, response_metadata={"message_id": message_id} if message_id else {})]},
+                        config=config,
+                        version="v2",
+                    ):
+                        event_type = event.get("event")
+                        name = event.get("name", "")
+                        data = event.get("data", {})
+                        metadata = event.get("metadata", {})
 
-                    for tc in tool_calls:
-                        tc_id = tc.get("id")
-                        tc_name = tc.get("name")
-                        tc_args = tc.get("args") or {}
-                        if tc_id and tc_id != active_tool_call_id:
-                            if active_tool_call_id is not None:
-                                await _publish(EventType.TOOL_CALL_END, {
-                                    "tool_name": active_tool_name or "unknown_tool",
-                                    "result": "",
-                                    "agent_id": resolved_agent_id,
+                        if event_type == "on_chat_model_start" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
+                            model_name = metadata.get("ls_model_name") or "unknown_model"
+                            await _publish(EventType.LLM_REQUEST, {
+                                "model": model_name,
+                                "timestamp": int(time.time() * 1000),
+                            })
+
+                        elif event_type == "on_chat_model_stream" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
+                            chunk = data.get("chunk")
+                            if chunk is None:
+                                continue
+                            # ChatGenerationChunk 没有 .content 属性，需要从 .message 获取
+                            chunk_message = getattr(chunk, "message", None)
+                            if chunk_message is not None:
+                                content = getattr(chunk_message, "content", None) or ""
+                                tool_calls = getattr(chunk_message, "tool_calls", None) or []
+                                additional_kwargs = getattr(chunk_message, "additional_kwargs", {}) or {}
+                                chunk_id = getattr(chunk_message, "id", None)
+                            else:
+                                content = getattr(chunk, "content", None) or ""
+                                tool_calls = getattr(chunk, "tool_calls", None) or []
+                                additional_kwargs = getattr(chunk, "additional_kwargs", {}) or {}
+                                chunk_id = getattr(chunk, "id", None)
+                            kind = additional_kwargs.get("kind", "text")
+
+                            if isinstance(content, list):
+                                content = "".join(str(part) for part in content)
+                            content = str(content)
+
+                            # 处理 reasoning 阶段
+                            if kind == "reasoning" and content.strip():
+                                if not collected_text_parts:
+                                    # reasoning 开始前先发送 TEXT_START（标记 assistant 开始输出）
+                                    SessionInterruptState.set(session_id, phase="text", tool_name=None)
+                                    set_interruptible_phase("text")
+                                    await _publish(EventType.TEXT_START, {})
+                                collected_text_parts.append(content)
+                                SessionInterruptState.set(
+                                    session_id,
+                                    current_text="".join(collected_text_parts),
+                                )
+                                await _publish(EventType.TEXT_DELTA, {"text": content, "kind": "reasoning"})
+                                continue
+
+                            # 处理普通 text 内容
+                            if content.strip() and not collected_text_parts:
+                                SessionInterruptState.set(session_id, phase="text", tool_name=None)
+                                set_interruptible_phase("text")
+                                await _publish(EventType.TEXT_START, {})
+
+                            if content:
+                                collected_text_parts.append(content)
+                                SessionInterruptState.set(
+                                    session_id,
+                                    current_text="".join(collected_text_parts),
+                                )
+                                await _publish(EventType.TEXT_DELTA, {"text": content, "kind": "text"})
+
+                            for tc in tool_calls:
+                                tc_id = tc.get("id")
+                                tc_name = tc.get("name")
+                                tc_args = tc.get("args") or {}
+                                if tc_id and tc_id != active_tool_call_id:
+                                    if active_tool_call_id is not None:
+                                        await _publish(EventType.TOOL_CALL_END, {
+                                            "tool_name": active_tool_name or "unknown_tool",
+                                            "result": "",
+                                            "agent_id": resolved_agent_id,
+                                        })
+                                    active_tool_call_id = tc_id
+                                    active_tool_name = tc_name
+                                    active_tool_args = dict(tc_args) if isinstance(tc_args, dict) else {}
+                                    SessionInterruptState.set(
+                                        session_id,
+                                        phase="tool",
+                                        tool_name=active_tool_name or "unknown_tool",
+                                    )
+                                    set_interruptible_phase("tool")
+                                    set_active_tool_name(active_tool_name or "unknown_tool")
+                                    await _publish(EventType.TOOL_CALL_START, {
+                                        "tool_name": active_tool_name or "unknown_tool",
+                                        "args": active_tool_args,
+                                        "agent_id": resolved_agent_id,
+                                    })
+                                elif tc_id == active_tool_call_id and isinstance(tc_args, dict):
+                                    active_tool_args.update(tc_args)
+
+                        elif event_type == "on_chat_model_end" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
+                            pass
+
+                        elif event_type == "on_tool_end":
+                            tool_name = name
+                            output = data.get("output")
+                            result_text = str(output) if output is not None else ""
+                            recent_results = get_recent_tool_results()
+                            if recent_results is not None:
+                                recent_results.append({
+                                    "tool_name": tool_name,
+                                    "result": result_text,
+                                    "interrupted": False,
                                 })
-                            active_tool_call_id = tc_id
-                            active_tool_name = tc_name
-                            active_tool_args = dict(tc_args) if isinstance(tc_args, dict) else {}
-                            SessionInterruptState.set(
-                                session_id,
-                                phase="tool",
-                                tool_name=active_tool_name or "unknown_tool",
-                            )
-                            set_interruptible_phase("tool")
-                            set_active_tool_name(active_tool_name or "unknown_tool")
-                            await _publish(EventType.TOOL_CALL_START, {
-                                "tool_name": active_tool_name or "unknown_tool",
-                                "args": active_tool_args,
+                            SessionInterruptState.set(session_id, phase=None, tool_name=None)
+                            set_interruptible_phase("text")
+                            set_active_tool_name(None)
+                            await _publish(EventType.TOOL_CALL_END, {
+                                "tool_name": tool_name,
+                                "result": result_text,
                                 "agent_id": resolved_agent_id,
                             })
-                        elif tc_id == active_tool_call_id and isinstance(tc_args, dict):
-                            active_tool_args.update(tc_args)
 
-                elif event_type == "on_chat_model_end" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
-                    pass
+                    # 如果成功完成循环，跳出 while
+                    final_text = "".join(collected_text_parts).strip()
+                    break
 
-                elif event_type == "on_tool_end":
-                    tool_name = name
-                    output = data.get("output")
-                    result_text = str(output) if output is not None else ""
-                    recent_results = get_recent_tool_results()
-                    if recent_results is not None:
-                        recent_results.append({
-                            "tool_name": tool_name,
-                            "result": result_text,
-                            "interrupted": False,
-                        })
-                    SessionInterruptState.set(session_id, phase=None, tool_name=None)
-                    set_interruptible_phase("text")
-                    set_active_tool_name(None)
-                    await _publish(EventType.TOOL_CALL_END, {
-                        "tool_name": tool_name,
-                        "result": result_text,
-                        "agent_id": resolved_agent_id,
-                    })
-
-            final_text = "".join(collected_text_parts).strip()
+                except Exception as e:
+                    # 检查是否还有 fallback 模型可用
+                    if current_model_index < len(fallback_models):
+                        logger.warning("[agent_execution_service] model #%s failed, trying fallback #%s: job_id=%s error=%s", current_model_index, current_model_index + 1, effective_job_id, str(e))
+                        current_model_index += 1
+                        continue
+                    else:
+                        # 所有模型都失败了
+                        logger.error("[agent_execution_service] all models failed: job_id=%s last_error=%s", effective_job_id, str(e))
+                        raise
 
             if collected_text_parts:
                 SessionInterruptState.set(session_id, phase=None, tool_name=None)

@@ -14,7 +14,7 @@
         "endpoint": "https://api.kilo.ai/api/gateway",
         "model": "openrouter/free",
         "api_key": "${KILO_API_KEY}",
-        "interface": "responses"
+        "interface": "opencode_zen"
       }
     ]
   },

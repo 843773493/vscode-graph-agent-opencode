@@ -430,7 +430,7 @@ def create_send_message_to_session_tool(
     return send_message_to_session
 
 
-def create_test_tool() -> BaseTool:
+def create_test_tool() -> BaseTool: 
     """创建一个用于测试工具调用链路的工具。"""
     @tool("test_tool")
     def test_tool() -> str:

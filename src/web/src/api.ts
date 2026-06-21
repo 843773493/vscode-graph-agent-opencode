@@ -1,13 +1,13 @@
 import type {
-  APIResponse,
-  CursorPage,
-  InterruptSessionResult,
-  Message,
-  MessageRunAccepted,
-  MessageRunRequest,
-  Session,
-  TraceEvent,
-  WorkspaceInfo,
+    APIResponse,
+    CursorPage,
+    InterruptSessionResult,
+    Message,
+    MessageRunAccepted,
+    MessageRunRequest,
+    Session,
+    TraceEvent,
+    WorkspaceInfo,
 } from './types/backend';
 
 export const DEFAULT_BACKEND_HOST = '127.0.0.1';
@@ -154,6 +154,8 @@ export interface SessionStreamEvent {
   timestamp: string;
   type: string;
   payload: Record<string, unknown>;
+  /** 后端 DTO 格式可能将真实事件数据嵌套在 raw 中 */
+  raw?: Record<string, unknown>;
 }
 
 function parseSseBlock(block: string): SessionStreamEvent | null {

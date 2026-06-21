@@ -298,6 +298,15 @@ function TimelineCard({ item, index }: { item: TimelineItem; index: number }): R
 
   if (item.kind === 'message') {
     const isUser = item.role === 'user';
+    // Assistant 消息：如果 content 为空且 metadata 中有 tool_calls，说明是工具调用消息，跳过显示
+    // 这类消息的实际内容会由 trace 事件中的 tool_call_start/end 展示
+    if (!isUser) {
+      const trimmed = (item.content || '').trim();
+      const hasToolCalls = item.metadata?.tool_calls && Array.isArray(item.metadata.tool_calls) && item.metadata.tool_calls.length > 0;
+      if (!trimmed && hasToolCalls) {
+        return null;
+      }
+    }
     // Assistant 消息的 content 通常由后端将 reasoning + text 串联合并保存，
     // 单独显示会与上方 aggregated_text（推理过程/最终回复）重复。
     // 这里只展示 content 的长度与简短摘要，详细文本已在独立的思考/回复卡片中呈现。
@@ -369,7 +378,7 @@ function extractEventInfo(event: TraceEvent): {
 
 /** 按顺序处理事件，将 text_start/delta/end 合并为 aggregated_text，将 tool_call_start/end 合并为 aggregated_tool。
  *  当 LLM 没有输出内容时，回退显示关键基础设施事件而非空白。 */
-function aggregateConversationEvents(events: TraceEvent[], convId: string): TimelineItem[] {
+function aggregateConversationEvents(events: TraceEvent[], convId: string, isRunning: boolean): TimelineItem[] {
   const items: TimelineItem[] = [];
   const seenIds = new Set<string>();
   let hasOutputContent = false;
@@ -559,7 +568,8 @@ function aggregateConversationEvents(events: TraceEvent[], convId: string): Time
   }
 
   // --- 回退：当 LLM 没有输出任何内容时 ---
-  if (!hasOutputContent && items.length === 0) {
+  // 仅当任务已完成且无输出内容时才显示回退卡片，避免任务运行中误显示空响应
+  if (!isRunning && !hasOutputContent && items.length === 0) {
     const modelInfo = llmModel ? `模型: ${llmModel}` : '';
     items.push({
       kind: 'trace',
@@ -601,7 +611,7 @@ function buildTraceTimelineItems(conversations: ConversationView[]): TimelineIte
     }
 
     // --- 聚合后的 trace 事件（不再跳过 aggregated_text，让 reasoning 与最终回复分别独立显示） ---
-    const aggregated = aggregateConversationEvents(conv.events, conv.conversationId);
+    const aggregated = aggregateConversationEvents(conv.events, conv.conversationId, conv.status === 'running');
     for (const item of aggregated) {
       items.push(item);
     }
