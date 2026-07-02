@@ -1,7 +1,44 @@
 // 前端内部类型
 import type { Message, Session, TraceEvent } from "./backend";
 
-export type ConversationContentView = "default" | "agent";
+export type ConversationContentView = "default" | "events" | "agent";
+
+export type FrontendEventSource =
+  | "frontend"
+  | "initial_load"
+  | "pending_poll"
+  | "sse"
+  | "terminal_refresh";
+
+interface FrontendReceivedEventBase {
+  id: string;
+  sessionId: string;
+  receivedAt: string;
+  source: FrontendEventSource;
+}
+
+export interface FrontendReceivedTraceEvent extends FrontendReceivedEventBase {
+  kind: "trace";
+  event: TraceEvent;
+}
+
+export interface FrontendReceivedLifecycleEvent
+  extends FrontendReceivedEventBase {
+  kind: "frontend";
+  type:
+    | "session_selected"
+    | "session_created"
+    | "session_load_started"
+    | "session_load_completed"
+    | "session_load_failed";
+  title: string;
+  detail?: string;
+  payload?: Record<string, unknown>;
+}
+
+export type FrontendReceivedEvent =
+  | FrontendReceivedTraceEvent
+  | FrontendReceivedLifecycleEvent;
 
 export interface ConversationView {
   conversationId: string;
@@ -23,6 +60,7 @@ export interface AppState {
   currentSession: Session | null;
   messages: Message[];
   traceEvents: TraceEvent[];
+  eventQueuesBySession: Map<string, FrontendReceivedEvent[]>;
   pendingConversations: Map<string, ConversationView[]>;
   status: string;
   error: string | null;

@@ -84,7 +84,7 @@ export interface InterruptSessionResult {
   interrupted_at: string;
 }
 
-export type TraceEventType =
+export type KnownTraceEventType =
   | "message_created"
   | "job_created"
   | "job_started"
@@ -103,6 +103,8 @@ export type TraceEventType =
   | "text_delta"
   | "text_end"
   | "session_interrupted";
+
+export type TraceEventType = KnownTraceEventType | (string & {});
 
 export interface BaseTraceEvent {
   event_id: string;

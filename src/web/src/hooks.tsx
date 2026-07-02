@@ -26,7 +26,11 @@ import type {
   AppState,
   ConversationContentView,
   ConversationView,
+  FrontendEventSource,
+  FrontendReceivedEvent,
 } from "./types/frontend";
+
+export const FRONTEND_EVENT_QUEUE_LIMIT = 200;
 
 function groupMessagesIntoConversations(
   messages: Message[],
@@ -128,7 +132,12 @@ function attachTraceEventsToConversations(
       const convEvents = dedupedEvents.filter(
         (event) => traceJobId(event) === jobId,
       );
-      return { ...conversation, jobId, events: convEvents };
+      return {
+        ...conversation,
+        jobId,
+        events: convEvents,
+        status: statusForConversationEvents(convEvents, conversation.status),
+      };
     }
 
     const startTs = boundaryTs[boundaryIndex];
@@ -142,7 +151,11 @@ function attachTraceEventsToConversations(
       return eventTs >= startTs && eventTs < endTs;
     });
 
-    return { ...conversation, events: convEvents };
+    return {
+      ...conversation,
+      events: convEvents,
+      status: statusForConversationEvents(convEvents, conversation.status),
+    };
   });
 }
 
@@ -181,6 +194,103 @@ function dedupeTraceEvents(events: TraceEvent[]): TraceEvent[] {
       (a, b) =>
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
     );
+}
+
+function frontendEventQueueId(event: TraceEvent, source: FrontendEventSource) {
+  return `${source}:${event.event_id || `${event.type}:${event.timestamp}`}`;
+}
+
+function traceEventSessionId(event: TraceEvent): string {
+  return event.session_id ?? event.raw?.session_id ?? "";
+}
+
+function traceEventWithSession(
+  event: TraceEvent,
+  sessionId: string,
+): TraceEvent {
+  if (event.session_id === sessionId) {
+    return event;
+  }
+
+  return {
+    ...event,
+    session_id: sessionId,
+    raw: event.raw
+      ? {
+          ...event.raw,
+          session_id: event.raw.session_id ?? sessionId,
+        }
+      : event.raw,
+  };
+}
+
+function appendReceivedEvents(
+  map: Map<string, FrontendReceivedEvent[]>,
+  sessionId: string,
+  events: TraceEvent[],
+  source: FrontendEventSource,
+) {
+  if (events.length === 0) {
+    return;
+  }
+
+  const current = map.get(sessionId) ?? [];
+  const seen = new Set(current.map((item) => item.id));
+  const receivedAt = new Date().toISOString();
+  const appended: FrontendReceivedEvent[] = [];
+
+  for (const event of events) {
+    const eventSessionId = traceEventSessionId(event);
+    if (eventSessionId && eventSessionId !== sessionId) {
+      continue;
+    }
+    const id = frontendEventQueueId(event, source);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    appended.push({
+      id,
+      kind: "trace",
+      sessionId,
+      receivedAt,
+      source,
+      event: traceEventWithSession(event, sessionId),
+    });
+  }
+
+  if (appended.length === 0) {
+    return;
+  }
+
+  map.set(
+    sessionId,
+    [...current, ...appended].slice(-FRONTEND_EVENT_QUEUE_LIMIT),
+  );
+}
+
+function appendFrontendEvent(
+  map: Map<string, FrontendReceivedEvent[]>,
+  sessionId: string,
+  type: Extract<FrontendReceivedEvent, { kind: "frontend" }>["type"],
+  title: string,
+  payload: Record<string, unknown> = {},
+  detail = "",
+) {
+  const current = map.get(sessionId) ?? [];
+  const receivedAt = new Date().toISOString();
+  const event: FrontendReceivedEvent = {
+    id: `frontend:${type}:${receivedAt}`,
+    kind: "frontend",
+    sessionId,
+    receivedAt,
+    source: "frontend",
+    type,
+    title,
+    detail,
+    payload,
+  };
+  map.set(sessionId, [...current, event].slice(-FRONTEND_EVENT_QUEUE_LIMIT));
 }
 
 function isTerminalTraceType(eventType: string): boolean {
@@ -412,6 +522,7 @@ function buildTraceOnlyConversations(
 function cloneMaps(state: AppState): AppState {
   return {
     ...state,
+    eventQueuesBySession: new Map(state.eventQueuesBySession),
     pendingConversations: new Map(state.pendingConversations),
   };
 }
@@ -454,6 +565,10 @@ function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
     : undefined;
   return {
     event_id: event.event_id,
+    session_id:
+      typeof event.session_id === "string"
+        ? event.session_id
+        : normalizedRaw?.session_id,
     job_id: event.job_id ?? "unknown_job",
     step_id: event.step_id ?? null,
     agent_id: event.agent_id ?? null,
@@ -511,6 +626,7 @@ const INITIAL_STATE: AppState = {
   currentSession: null,
   messages: [],
   traceEvents: [],
+  eventQueuesBySession: new Map(),
   pendingConversations: new Map(),
   status: "准备就绪",
   error: null,
@@ -592,18 +708,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // 只需切换 currentSession 引用并中断旧 SSE；消息/trace 由 useEffect 统一加载
     streamAbortRef.current?.abort();
     agentStateRequestIdRef.current += 1;
-    setState((prev) => ({
-      ...prev,
-      currentSession:
+    setState((prev) => {
+      const next = cloneMaps(prev);
+      const selected =
         prev.sessions.find((session) => session.session_id === sessionId) ??
-        prev.currentSession,
-      contentView: "default",
-      agentStateJsonl: "",
-      agentStateMessageCount: 0,
-      agentStateLoadedAt: null,
-      agentStateLoading: false,
-      agentStateError: null,
-    }));
+        prev.currentSession;
+      next.currentSession = selected;
+      next.contentView = "default";
+      next.agentStateJsonl = "";
+      next.agentStateMessageCount = 0;
+      next.agentStateLoadedAt = null;
+      next.agentStateLoading = false;
+      next.agentStateError = null;
+      if (selected) {
+        appendFrontendEvent(
+          next.eventQueuesBySession,
+          selected.session_id,
+          "session_selected",
+          "切换会话",
+          {
+            session_id: selected.session_id,
+            title: selected.title,
+          },
+          selected.title,
+        );
+      }
+      return next;
+    });
   }, []);
 
   const createSession = useCallback(
@@ -613,19 +744,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         state.apiPort ?? DEFAULT_BACKEND_PORT,
         title,
       );
-      setState((prev) => ({
-        ...prev,
-        sessions: [session, ...prev.sessions],
-        currentSession: session,
-        traceEvents: [],
-        status: "已创建会话",
-        contentView: "default",
-        agentStateJsonl: "",
-        agentStateMessageCount: 0,
-        agentStateLoadedAt: null,
-        agentStateLoading: false,
-        agentStateError: null,
-      }));
+      setState((prev) => {
+        const next = cloneMaps(prev);
+        next.sessions = [session, ...prev.sessions];
+        next.currentSession = session;
+        next.traceEvents = [];
+        next.status = "已创建会话";
+        next.contentView = "default";
+        next.agentStateJsonl = "";
+        next.agentStateMessageCount = 0;
+        next.agentStateLoadedAt = null;
+        next.agentStateLoading = false;
+        next.agentStateError = null;
+        appendFrontendEvent(
+          next.eventQueuesBySession,
+          session.session_id,
+          "session_created",
+          "创建会话",
+          {
+            session_id: session.session_id,
+            title: session.title,
+          },
+          session.title,
+        );
+        return next;
+      });
     },
     [state.apiPort],
   );
@@ -722,6 +865,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           agentStateLoading: false,
           agentStateError: null,
           status: "默认视图",
+        }));
+        return;
+      }
+
+      if (view === "events") {
+        agentStateRequestIdRef.current += 1;
+        setState((prev) => ({
+          ...prev,
+          contentView: "events",
+          agentStateLoading: false,
+          agentStateError: null,
+          status: "事件视图",
         }));
         return;
       }
@@ -826,6 +981,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!apiPort || !sessionId) return;
 
     let cancelled = false;
+    setState((prev) => {
+      if (prev.currentSession?.session_id !== sessionId) return prev;
+      const next = cloneMaps(prev);
+      appendFrontendEvent(
+        next.eventQueuesBySession,
+        sessionId,
+        "session_load_started",
+        "开始加载会话历史",
+        { session_id: sessionId },
+      );
+      return next;
+    });
 
     void (async () => {
       try {
@@ -837,16 +1004,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setState((prev) => {
           // 如果在加载期间会话已切换，丢弃过期数据
           if (prev.currentSession?.session_id !== sessionId) return prev;
+          const next = cloneMaps(prev);
+          const fetchedTraceEvents = dedupeTraceEvents(traceEvents);
+          next.messages = messages.items ?? [];
+          next.traceEvents = fetchedTraceEvents;
+          appendReceivedEvents(
+            next.eventQueuesBySession,
+            sessionId,
+            fetchedTraceEvents,
+            "initial_load",
+          );
+          appendFrontendEvent(
+            next.eventQueuesBySession,
+            sessionId,
+            "session_load_completed",
+            "会话历史加载完成",
+            {
+              session_id: sessionId,
+              message_count: messages.items?.length ?? 0,
+              trace_event_count: fetchedTraceEvents.length,
+            },
+          );
           return {
-            ...prev,
-            messages: messages.items ?? [],
-            traceEvents: dedupeTraceEvents(traceEvents),
+            ...next,
           };
         });
       } catch (error) {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({ ...prev, status: `加载失败: ${message}` }));
+        setState((prev) => {
+          if (prev.currentSession?.session_id !== sessionId) {
+            return prev;
+          }
+          const next = cloneMaps(prev);
+          next.status = `加载失败: ${message}`;
+          appendFrontendEvent(
+            next.eventQueuesBySession,
+            sessionId,
+            "session_load_failed",
+            "会话历史加载失败",
+            { session_id: sessionId, error: message },
+            message,
+          );
+          return next;
+        });
       }
     })();
 
@@ -895,6 +1096,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             ...next.traceEvents,
             ...fetchedTraceEvents,
           ]);
+          appendReceivedEvents(
+            next.eventQueuesBySession,
+            sessionId,
+            fetchedTraceEvents,
+            "pending_poll",
+          );
 
           const pendingList = next.pendingConversations.get(sessionId) ?? [];
           const updatedPendingList = pendingList
@@ -985,6 +1192,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
           const next = cloneMaps(prev);
           next.traceEvents = dedupeTraceEvents([...next.traceEvents, traceEvent]);
+          appendReceivedEvents(
+            next.eventQueuesBySession,
+            sessionId,
+            [traceEvent],
+            "sse",
+          );
 
           const pendingList = next.pendingConversations.get(sessionId) ?? [];
           if (pendingList.length === 0) {
@@ -1050,7 +1263,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                     return latestNext;
                   }
                   latestNext.messages = messages.items;
-                  latestNext.traceEvents = dedupeTraceEvents(traceEvents);
+                  const refreshedTraceEvents = dedupeTraceEvents(traceEvents);
+                  latestNext.traceEvents = refreshedTraceEvents;
+                  appendReceivedEvents(
+                    latestNext.eventQueuesBySession,
+                    sessionId,
+                    refreshedTraceEvents,
+                    "terminal_refresh",
+                  );
                   latestNext.status = "消息已更新";
                   return latestNext;
                 });

@@ -15,6 +15,11 @@ const VIEW_OPTIONS: ViewOption[] = [
     description: "显示对话消息、推理过程和 trace 细节",
   },
   {
+    id: "events",
+    label: "事件视图",
+    description: "查看前端收到的当前会话事件队列",
+  },
+  {
     id: "agent",
     label: "Agent 视图",
     description: "查看 Agent State messages 快照",

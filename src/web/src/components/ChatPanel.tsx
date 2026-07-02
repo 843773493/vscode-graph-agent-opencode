@@ -592,6 +592,7 @@ function aggregateConversationEvents(
   // 回退信息
   let llmModel = "";
   let agentEndTs: string | null = null;
+  let sawSuccessfulTerminalEvent = false;
   let sawSessionInterrupted = false;
 
   function flushTextBuf(active: boolean) {
@@ -649,6 +650,10 @@ function aggregateConversationEvents(
     }
     if (type === "agent_end") {
       agentEndTs = timestamp;
+      sawSuccessfulTerminalEvent = true;
+    }
+    if (type === "job_completed") {
+      sawSuccessfulTerminalEvent = true;
     }
 
     // --- 聚合：文本流 ---
@@ -807,7 +812,12 @@ function aggregateConversationEvents(
 
   // --- 回退：当 LLM 没有输出任何内容时 ---
   // 仅当任务已完成且无输出内容时才显示回退卡片，避免任务运行中误显示空响应
-  if (!isRunning && !hasOutputContent && items.length === 0) {
+  if (
+    sawSuccessfulTerminalEvent &&
+    !isRunning &&
+    !hasOutputContent &&
+    items.length === 0
+  ) {
     const modelInfo = llmModel ? `模型: ${llmModel}` : "";
     items.push({
       kind: "trace",
@@ -824,7 +834,7 @@ function aggregateConversationEvents(
 function buildPendingStatusItem(
   conv: ConversationView,
 ): Extract<TimelineItem, { kind: "status" }> | null {
-  if (!conv.pending) {
+  if (conv.status !== "running" && conv.status !== "queued") {
     return null;
   }
 

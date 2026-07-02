@@ -1,15 +1,23 @@
 import AgentStatePanel from "./components/AgentStatePanel";
 import ChatPanel from "./components/ChatPanel";
 import Composer from "./components/Composer";
+import EventQueuePanel from "./components/EventQueuePanel";
 import HistoryPanel from "./components/HistoryPanel";
 import Toolbar from "./components/Toolbar";
-import { getConversationsForSession, useAppState } from "./hooks";
+import {
+  FRONTEND_EVENT_QUEUE_LIMIT,
+  getConversationsForSession,
+  useAppState,
+} from "./hooks";
 
 export default function AppShell() {
   const { state, selectSession, toggleHistoryPanel } = useAppState();
   const activeSession = state.currentSession;
   const conversations = activeSession
     ? getConversationsForSession(activeSession.session_id, state)
+    : [];
+  const receivedEvents = activeSession
+    ? (state.eventQueuesBySession.get(activeSession.session_id) ?? [])
     : [];
   const sortedSessions = [...state.sessions].sort(
     (a, b) =>
@@ -57,6 +65,12 @@ export default function AppShell() {
                 loadedAt={state.agentStateLoadedAt}
                 loading={state.agentStateLoading}
                 error={state.agentStateError}
+              />
+            ) : state.contentView === "events" ? (
+              <EventQueuePanel
+                items={receivedEvents}
+                limit={FRONTEND_EVENT_QUEUE_LIMIT}
+                sessionId={activeSession?.session_id ?? ""}
               />
             ) : (
               <ChatPanel

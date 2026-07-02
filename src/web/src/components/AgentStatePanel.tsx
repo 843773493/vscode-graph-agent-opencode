@@ -73,7 +73,7 @@ function mergeReasoningBlocks(blocks: JsonRecord[]): JsonRecord[] {
       continue;
     }
 
-    const previous = merged.at(-1);
+    const previous = merged[merged.length - 1];
     if (previous && asString(previous.type) === "reasoning") {
       merged[merged.length - 1] = {
         ...previous,
