@@ -1,9 +1,9 @@
-"""复现 ChatOpenAI.astream 截断 reasoning_content 的问题
+"""验证 LiteLLM 包装层不截断 reasoning_content。
 
 问题描述:
     当使用 opencode.ai (deepseek-v4-flash 后端) 时，模型会生成 reasoning tokens
-    (放在 reasoning_content 字段)，但 LangChain ChatOpenAI.astream 不会暴露这些
-    tokens，而是将其变成空 content 的 chunk 丢弃。
+    (放在 reasoning_content 字段)。LiteLLM 包装层必须把这些 tokens 转成
+    LangChain 标准 content blocks。
 
     这导致:
     1. 新会话出现 "LLM 空响应" — 当模型所有 token budget 用于 reasoning 时
@@ -46,13 +46,13 @@ def config_service():
 
 @pytest.fixture(scope="module")
 def test_runtime(config_service):
-    """通过 build_runtime_for_agent 获取运行时配置，包含 ChatOpenAI 实例"""
+    """通过 build_runtime_for_agent 获取运行时配置，包含 LiteLLM 模型实例。"""
     return build_runtime_for_agent(agent_id="default", config_service=config_service)
 
 
 @pytest.fixture(scope="module")
 def test_model(test_runtime):
-    """返回 ChatOpenAI 模型实例"""
+    """返回 LiteLLM 模型实例。"""
     return test_runtime["model"]
 
 
@@ -60,23 +60,18 @@ def test_model(test_runtime):
 def test_model_config(test_runtime):
     """返回模型配置信息"""
     model = test_runtime["model"]
-    # ChatOpenAI 内部属性通过 client._client.base_url 访问
-    client = getattr(model, "client", None)
-    raw_client = getattr(client, "_client", client) if client else None
-    base_url = str(raw_client.base_url) if raw_client else None
-    api_key = model.openai_api_key
-    # api_key 可能是 SecretStr，需要提取字符串
-    if hasattr(api_key, "get_secret_value"):
-        api_key = api_key.get_secret_value()
+    model_name = model.model
+    if isinstance(model_name, str) and model_name.startswith("openai/"):
+        model_name = model_name.removeprefix("openai/")
     return {
-        "model": model.model_name,
-        "base_url": base_url or "",
-        "api_key": api_key or "",
+        "model": model_name,
+        "base_url": model.api_base or "",
+        "api_key": model.api_key or "",
     }
 
 
 # ---------------------------------------------------------------------------
-# 测试：LangChain astream 不暴露 reasoning_content
+# 测试：LiteLLM 包装层 astream 暴露 reasoning_content
 # ---------------------------------------------------------------------------
 
 
@@ -87,6 +82,7 @@ async def _astream_chunks(model, messages):
         chunks.append(
             {
                 "content": chunk.content,
+                "content_blocks": chunk.content_blocks,
                 "additional_kwargs": dict(chunk.additional_kwargs),
                 "response_metadata": dict(chunk.response_metadata) if chunk.response_metadata else {},
             }
@@ -95,51 +91,49 @@ async def _astream_chunks(model, messages):
 
 
 @pytest.mark.asyncio
-async def test_astream_drops_reasoning_content(test_model):
-    """复现：标准 ChatOpenAI 的 astream 截断 reasoning_content
-
-    当 interface="opencode_zen" 时，使用 OpencodeZenChatOpenAI 应该可以正确获取
-    reasoning_content。这里先用 opencode_zen 配置验证新行为。
-    """
+async def test_astream_exposes_reasoning_content(test_model):
+    """interface=opencode_zen 时应通过 LiteLLM 包装层拿到 reasoning_content。"""
     messages = [{"role": "user", "content": "你好"}]
 
     chunks = await _astream_chunks(test_model, messages)
 
     total = len(chunks)
-    reasoning_chunks = [c for c in chunks if c["additional_kwargs"].get("kind") == "reasoning"]
-    text_chunks = [c for c in chunks if c["additional_kwargs"].get("kind") == "text"]
-    reasoning_start = [c for c in chunks if c["additional_kwargs"].get("phase") == "start"]
-    reasoning_end = [c for c in chunks if c["additional_kwargs"].get("phase") == "end"]
+    reasoning_chunks = [
+        c
+        for c in chunks
+        if any(block.get("type") == "reasoning" for block in c["content_blocks"])
+    ]
+    text_chunks = [
+        c
+        for c in chunks
+        if any(block.get("type") == "text" for block in c["content_blocks"])
+    ]
 
-    # 使用 opencode_zen 后，应该能拿到 reasoning 内容（统一格式，content 中有内容，kind="reasoning"）
+    # 使用 LiteLLM 包装层后，应该能拿到标准 reasoning content block。
     assert len(reasoning_chunks) > 0, (
-        f"OpencodeGoChatOpenAI 应该暴露 reasoning，"
-        f"但 0 个 chunk 的 kind='reasoning'。总计 {total} 个 chunk"
-    )
-
-    # 应该有 reasoning_start 标记
-    assert len(reasoning_start) > 0, (
-        f"应该发送 reasoning 开始标记（kind='reasoning', phase='start'），"
-        f"但一个都没有找到。总计 {total} 个 chunk"
-    )
-
-    # 应该有 reasoning_end 标记
-    assert len(reasoning_end) > 0, (
-        f"应该发送 reasoning 结束标记（kind='reasoning', phase='end'），"
-        f"但一个都没有找到。总计 {total} 个 chunk"
+        f"BoxteamLiteLLMChatModel 应该暴露 reasoning，"
+        f"但 0 个 chunk 含 type='reasoning'。总计 {total} 个 chunk"
     )
 
     # 有 reasoning 的 chunk 数量应该接近原始 API 的 reasoning chunk 数量
     print(f"\n[astream] 总 chunks: {total}")
-    print(f"[astream] reasoning chunks (kind='reasoning'): {len(reasoning_chunks)}")
-    print(f"[astream] text chunks (kind='text'): {len(text_chunks)}")
-    print(f"[astream] reasoning_start: {len(reasoning_start)}")
-    print(f"[astream] reasoning_end: {len(reasoning_end)}")
+    print(f"[astream] reasoning content blocks: {len(reasoning_chunks)}")
+    print(f"[astream] text content blocks: {len(text_chunks)}")
     if text_chunks:
-        combined = "".join(c["content"] for c in text_chunks)
+        combined = "".join(
+            block.get("text", "")
+            for c in text_chunks
+            for block in c["content_blocks"]
+            if block.get("type") == "text"
+        )
         print(f"[astream] 合并后的 text content: {combined[:100]}...")
     if reasoning_chunks:
-        reasoning_combined = "".join(c["content"] for c in reasoning_chunks)
+        reasoning_combined = "".join(
+            block.get("reasoning", "")
+            for c in reasoning_chunks
+            for block in c["content_blocks"]
+            if block.get("type") == "reasoning"
+        )
         print(f"[astream] 合并后的 reasoning: {reasoning_combined[:100]}...")
 
 

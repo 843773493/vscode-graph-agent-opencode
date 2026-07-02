@@ -23,10 +23,6 @@ from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.runtime_service import RuntimeService
-from app.services.infrastructure.system_reminder_triggers import (
-    SystemReminderTriggerRegistry,
-    build_default_trigger_registry,
-)
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_service import WorkspaceService
@@ -44,12 +40,10 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         *,
         message_service: MessageService,
         session_service: SessionService,
-        system_reminder_trigger_registry: SystemReminderTriggerRegistry,
         checkpointer: BaseCheckpointSaver,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
-        self._system_reminder_trigger_registry = system_reminder_trigger_registry
         self._checkpointer = checkpointer
         self._session_orchestrator: SessionOrchestrator | None = None
 
@@ -69,10 +63,6 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         if self._session_orchestrator is None:
             raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionOrchestrator")
         return self._session_orchestrator
-
-    def get_system_reminder_trigger_registry(self) -> SystemReminderTriggerRegistry:
-        return self._system_reminder_trigger_registry
-
 
 @dataclass(slots=True)
 class AppContainer:
@@ -108,13 +98,11 @@ def build_app_container() -> AppContainer:
     checkpointer = FileSystemCheckpointSaver(base_dir=get_checkpoints_dir())
 
     config_service = ConfigService()
-    system_reminder_trigger_registry = build_default_trigger_registry()
     message_service = MessageService(checkpointer=checkpointer)
     session_service = SessionService(config_service=config_service, trace_event_store=trace_event_store)
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
-        system_reminder_trigger_registry=system_reminder_trigger_registry,
         checkpointer=checkpointer,
     )
     agent_execution_service = AgentExecutionService(

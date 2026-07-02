@@ -1,7 +1,9 @@
 """MessageService：从 LangGraph checkpoint 读取会话历史。"""
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from langchain_core.messages import (
@@ -14,7 +16,12 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.schemas.public_v2.common import CursorPage, MessageRole
-from app.schemas.public_v2.message import MessageCreateRequest, MessageDTO
+from app.schemas.public_v2.message import (
+    AgentStateMessagesDTO,
+    MessageCreateRequest,
+    MessageDTO,
+)
+from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
 
 class MessageService:
@@ -37,8 +44,8 @@ class MessageService:
             "tool_calls": getattr(message, "tool_calls", None) or [],
             "tool_call_id": getattr(message, "tool_call_id", None),
         }
-        if extracted["reasoning_blocks"]:
-            metadata["reasoning_blocks"] = extracted["reasoning_blocks"]
+        if extracted["content_blocks"]:
+            metadata["content_blocks"] = extracted["content_blocks"]
         if extracted["reasoning_id"] is not None:
             metadata["reasoning_id"] = extracted["reasoning_id"]
         metadata.update(response_metadata)
@@ -64,87 +71,181 @@ class MessageService:
         return MessageRole.system
 
     @staticmethod
-    def _format_reasoning_summary(summary: object) -> str:
-        """把 reasoning.summary 块拼成可读字符串。"""
-        if not isinstance(summary, list):
-            return str(summary)
-        parts: list[str] = []
-        for entry in summary:
-            if isinstance(entry, dict):
-                text = entry.get("text", "")
-                if isinstance(text, str) and text:
-                    parts.append(text)
-            elif isinstance(entry, str):
-                parts.append(entry)
-            else:
-                parts.append(str(entry))
-        return "".join(parts)
+    def _json_safe(value: object) -> object:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Mapping):
+            return {
+                str(key): MessageService._json_safe(item) for key, item in value.items()
+            }
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            return [MessageService._json_safe(item) for item in value]
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            return MessageService._json_safe(model_dump(mode="json"))
+        return str(value)
+
+    @staticmethod
+    def _is_system_reminder_only_message(message: BaseMessage) -> bool:
+        content = getattr(message, "content", "")
+        if not isinstance(content, str):
+            return False
+        stripped = content.strip()
+        return (
+            stripped.startswith("<system_reminder>")
+            and stripped.endswith("</system_reminder>")
+        )
+
+    @staticmethod
+    def _message_to_agent_state_record(message: BaseMessage) -> dict[str, object]:
+        extracted = MessageService._extract_content(message)
+        content_blocks = extracted["content_blocks"]
+        raw_content = getattr(message, "content", "")
+        record: dict[str, object] = {
+            "role": MessageService._detect_role(message).value,
+            "type": message.type,
+            "content": MessageService._json_safe(
+                content_blocks if content_blocks else raw_content
+            ),
+        }
+
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if tool_calls:
+            record["tool_calls"] = MessageService._json_safe(tool_calls)
+
+        tool_call_id = getattr(message, "tool_call_id", None)
+        if isinstance(tool_call_id, str) and tool_call_id:
+            record["tool_call_id"] = tool_call_id
+
+        name = getattr(message, "name", None)
+        if isinstance(name, str) and name:
+            record["name"] = name
+
+        response_metadata = dict(message.response_metadata or {})
+        phase = response_metadata.get("phase")
+        if not isinstance(phase, str) and isinstance(message, AIMessage):
+            content = extracted["content"]
+            if tool_calls:
+                response_metadata["phase"] = "commentary"
+            elif isinstance(content, str) and content:
+                response_metadata["phase"] = "final_answer"
+        if response_metadata:
+            record["response_metadata"] = MessageService._json_safe(response_metadata)
+
+        usage_metadata = getattr(message, "usage_metadata", None)
+        if usage_metadata:
+            record["usage_metadata"] = MessageService._json_safe(usage_metadata)
+
+        additional_kwargs = getattr(message, "additional_kwargs", {}) or {}
+        if additional_kwargs:
+            record["additional_kwargs"] = MessageService._json_safe(additional_kwargs)
+
+        return record
+
+    @staticmethod
+    def _mapping_to_agent_state_record(
+        message: Mapping[object, object],
+    ) -> dict[str, object]:
+        allowed_keys = (
+            "role",
+            "type",
+            "content",
+            "tool_calls",
+            "tool_call_id",
+            "name",
+            "response_metadata",
+            "usage_metadata",
+            "additional_kwargs",
+        )
+        record: dict[str, object] = {}
+        for key in allowed_keys:
+            if key not in message:
+                continue
+            value = message[key]
+            if value is None or value == "" or value == []:
+                continue
+            record[key] = MessageService._json_safe(value)
+        if record:
+            return record
+
+        ignored_keys = {
+            "additional_kwargs",
+            "id",
+            "metadata",
+            "response_metadata",
+            "usage_metadata",
+        }
+        return {
+            str(key): MessageService._json_safe(value)
+            for key, value in message.items()
+            if str(key) not in ignored_keys
+        }
 
     @staticmethod
     def _extract_content(message: BaseMessage) -> dict[str, object]:
         """从 BaseMessage 提取可读 content，并把结构化 reasoning 块单独保存。
 
         返回:
-        - content: 拼装好的字符串（reasoning 摘要以 <think>...</think> 前缀放在最前）
-        - reasoning_blocks: 原始 reasoning 块列表（responses API / opencode_zen 都可能产生）
+        - content: 用户可见正文，不包含 reasoning
+        - content_blocks: LangChain 标准 content block 列表
         - reasoning_id: 首个 reasoning 块的 id（用于关联）
         """
         content = getattr(message, "content", "")
         if isinstance(content, str):
-            # 兼容 opencode_zen：字符串 content + additional_kwargs["kind"]="reasoning"
-            # 这里认为整个字符串就是 reasoning 内容，提取为 <think>...</think>
-            if content.strip() and not getattr(message, "tool_calls", None):
-                additional = getattr(message, "additional_kwargs", {}) or {}
-                kind = additional.get("kind")
-                if kind == "reasoning":
-                    return {
-                        "content": f"<think>\n{content}\n</think>",
-                        "reasoning_blocks": [
-                            {
-                                "type": "reasoning",
-                                "summary": [{"type": "summary_text", "text": content}],
-                            }
-                        ],
-                        "reasoning_id": None,
-                    }
             return {
                 "content": content,
-                "reasoning_blocks": [],
+                "content_blocks": [],
                 "reasoning_id": None,
             }
 
         if not isinstance(content, list):
             return {
                 "content": str(content),
-                "reasoning_blocks": [],
+                "content_blocks": [],
                 "reasoning_id": None,
             }
 
         text_parts: list[str] = []
-        reasoning_blocks: list[dict] = []
+        content_blocks: list[dict[str, object]] = []
         reasoning_id: str | None = None
 
         for part in content:
             if not isinstance(part, dict):
-                text_parts.append(str(part))
+                text = str(part)
+                text_parts.append(text)
+                content_blocks.append({"type": "text", "text": text})
                 continue
             part_type = part.get("type")
             if part_type in ("text", "output_text"):
                 text = part.get("text", "")
                 if isinstance(text, str):
                     text_parts.append(text)
+                    content_blocks.append({"type": "text", "text": text})
             elif part_type == "reasoning":
-                summary_text = MessageService._format_reasoning_summary(part.get("summary"))
-                if summary_text:
-                    text_parts.insert(0, f"<think>\n{summary_text}\n</think>")
-                reasoning_blocks.append(part)
+                reasoning_text = part.get("reasoning")
+                if not isinstance(reasoning_text, str):
+                    reasoning_text = extract_reasoning_summary(part.get("summary"))
+                reasoning_block: dict[str, object] = {
+                    "type": "reasoning",
+                    "reasoning": reasoning_text,
+                }
+                extras: dict[str, object] = {}
                 if reasoning_id is None:
                     rid = part.get("id")
                     if isinstance(rid, str):
                         reasoning_id = rid
+                        extras["id"] = rid
+                if "extras" in part and isinstance(part["extras"], dict):
+                    extras.update(part["extras"])
+                if extras:
+                    reasoning_block["extras"] = extras
+                content_blocks.append(reasoning_block)
             elif part_type == "refusal":
                 refusal_text = part.get("refusal", "")
                 text_parts.append(f"[拒绝]{refusal_text}")
+                content_blocks.append({"type": "text", "text": f"[拒绝]{refusal_text}"})
             elif part_type == "function_call":
                 name = part.get("name", "unknown_tool")
                 args = part.get("arguments", "")
@@ -154,10 +255,11 @@ class MessageService:
                 fallback = part.get("text")
                 if isinstance(fallback, str):
                     text_parts.append(fallback)
+                    content_blocks.append({"type": "text", "text": fallback})
 
         return {
             "content": "".join(text_parts),
-            "reasoning_blocks": reasoning_blocks,
+            "content_blocks": content_blocks,
             "reasoning_id": reasoning_id,
         }
 
@@ -199,8 +301,38 @@ class MessageService:
             updated_at=now,
         )
 
-    async def _load_messages(self, session_id: str) -> list[MessageDTO]:
+    async def get_agent_state_messages(self, session_id: str) -> AgentStateMessagesDTO:
+        raw_messages = await self._load_raw_messages(session_id, strict=True)
+        records: list[dict[str, object]] = []
+        for message in raw_messages:
+            if isinstance(message, BaseMessage):
+                records.append(self._message_to_agent_state_record(message))
+                continue
+            if isinstance(message, Mapping):
+                records.append(self._mapping_to_agent_state_record(message))
+                continue
+            raise TypeError(
+                f"Agent State messages 中出现不支持的消息类型: {type(message).__name__}"
+            )
+
+        return AgentStateMessagesDTO(
+            session_id=session_id,
+            message_count=len(records),
+            jsonl="\n".join(
+                json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+                for record in records
+            ),
+        )
+
+    async def _load_raw_messages(
+        self,
+        session_id: str,
+        *,
+        strict: bool = False,
+    ) -> list[object]:
         if self._checkpointer is None:
+            if strict:
+                raise RuntimeError("MessageService 未配置 checkpointer，无法读取 Agent State")
             return []
 
         config = build_checkpoint_config(session_id)
@@ -210,11 +342,22 @@ class MessageService:
 
         raw_messages = tup.checkpoint.get("channel_values", {}).get("messages", [])
         if not isinstance(raw_messages, list):
-            return []
+            if not strict:
+                return []
+            raise TypeError(
+                f"Agent State messages 应为 list，实际类型: {type(raw_messages).__name__}"
+            )
+
+        return raw_messages
+
+    async def _load_messages(self, session_id: str) -> list[MessageDTO]:
+        raw_messages = await self._load_raw_messages(session_id)
 
         result: list[MessageDTO] = []
         for index, message in enumerate(raw_messages):
             if not isinstance(message, BaseMessage):
+                continue
+            if self._is_system_reminder_only_message(message):
                 continue
             # 与旧的 messages.jsonl 保持一致：只返回用户可见的 user/assistant 消息
             if isinstance(message, ToolMessage):

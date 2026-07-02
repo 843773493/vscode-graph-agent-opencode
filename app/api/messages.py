@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_message_service, get_request_id, get_session_orchestrator, verify_local_token
 from app.schemas.public_v2.common import APIResponse, CursorPage
-from app.schemas.public_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
+from app.schemas.public_v2.message import (
+    AgentStateMessagesDTO,
+    MessageDTO,
+    MessageRunAccepted,
+    MessageRunRequest,
+)
 from app.services.business.message_service import MessageService
 from app.runtime.session_orchestrator import SessionOrchestrator
 
@@ -34,6 +39,21 @@ async def list_messages(
     message_service: MessageService = Depends(get_message_service),
 ):
     result = await message_service.list(session_id=session_id, limit=limit, cursor=cursor)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{session_id}/agent-state/messages",
+    response_model=APIResponse[AgentStateMessagesDTO],
+    summary="获取 Agent State messages 快照",
+)
+async def get_agent_state_messages(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    message_service: MessageService = Depends(get_message_service),
+):
+    result = await message_service.get_agent_state_messages(session_id=session_id)
     return APIResponse(data=result, request_id=request_id)
 
 

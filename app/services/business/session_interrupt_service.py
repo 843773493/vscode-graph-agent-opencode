@@ -3,8 +3,8 @@
 实现说明：
     取消信号由 asyncio task.cancel() 发出；任务内的 CancelledError 处理路径
     （`AgentExecutionService._persist_interrupt_checkpoint`）负责把已生成的部分
-    消息和 `<system_reminder>` 拼到 messages 末尾。LangGraph 下次 checkpoint 加载
-    时，模型直接看到 reminder，无需再写中间 marker channel。
+    assistant 消息和独立 `<system_reminder>` HumanMessage 写到 messages 末尾。
+    LangGraph 下次 checkpoint 加载时，模型直接看到 reminder，无需再写中间 marker channel。
 """
 from __future__ import annotations
 

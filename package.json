@@ -6,12 +6,12 @@
   "publisher": "local",
   "type": "module",
   "scripts": {
-    "dev:backend": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
+    "dev:backend": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload",
     "test:extension": "vscode-test",
-    "dev": "./tools/bun.exe run scripts/dev.mjs",
-    "dev:web": "./tools/bun.exe run scripts/dev.mjs",
-    "build:webview-ui": "./tools/bun.exe run build --cwd src/webview-ui",
-    "gen:public-types": "./tools/bun.exe run ./scripts/generate_public_types.mjs"
+    "dev": "bun run scripts/dev.mjs",
+    "dev:web": "bun run scripts/dev.mjs",
+    "build:webview-ui": "bun --cwd=src/webview-ui run build",
+    "gen:public-types": "bun run ./scripts/generate_public_types.mjs"
   },
   "engines": {
     "vscode": "^1.93.0"
@@ -256,7 +256,7 @@
         },
         "vscodeGraphAgent.port": {
           "type": "number",
-          "default": 8000,
+          "default": 8010,
           "description": "Local port for the backend service."
         },
         "vscodeGraphAgent.model": {

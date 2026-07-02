@@ -33,11 +33,9 @@ from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from app.core.path_utils import get_checkpoints_dir, get_workspace_root
 from app.agents.agent_tools import build_default_tools
 from app.agents.agent_middleware import LLMLoggingMiddleware
-from app.agents.system_reminder_middleware import SystemReminderMiddleware
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.system_reminder_triggers import SystemReminderTriggerRegistry
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import JobEventBus
@@ -47,7 +45,13 @@ if TYPE_CHECKING:
     from app.services.business.session_service import SessionService
 
 
-BASE_AGENT_PROMPT = """"""
+BASE_AGENT_PROMPT = """响应规范：
+- 不要在普通 assistant 正文中输出内部思考、推理过程、执行计划或自我叙述，例如 "The user asked..."、"Let me..."。
+- 如果需要调用工具，直接调用工具；最终回答只包含用户需要看到的结果。
+- 使用用户的语言回复，除非用户明确要求其它语言。"""
+
+PROVIDER_REQUEST_OPTION_KEYS = {"extra_body", "default_headers"}
+LITELLM_OPENAI_COMPATIBLE_INTERFACES = {"chat.completion", "opencode_zen"}
 
 
 GENERAL_PURPOSE_SUBAGENT = {
@@ -67,17 +71,15 @@ GENERAL_PURPOSE_SUBAGENT = {
 def _build_model_from_provider(provider: dict[str, Any], runtime_config: dict[str, Any]) -> Any:
     """从单个 provider 配置构建模型实例。"""
     interface = provider.get("interface")
-    if interface == "opencode_zen":
-        from app.agents.providers.opencode_zen import OpencodeZenChatOpenAI
+    request_options = _get_provider_request_options(provider)
+    if interface in LITELLM_OPENAI_COMPATIBLE_INTERFACES:
+        from app.agents.providers.litellm_chat import build_litellm_chat_model
 
-        return OpencodeZenChatOpenAI(
-            model=provider["model"],
-            api_key=provider["api_key"],
-            base_url=provider["endpoint"],
-            temperature=runtime_config["temperature"],
-            top_p=runtime_config["top_p"],
-            max_tokens=runtime_config["max_output_tokens"],
-            max_retries=3,
+        return build_litellm_chat_model(
+            provider=provider,
+            runtime_config=runtime_config,
+            openai_compatible=True,
+            request_options=request_options,
         )
     elif interface == "responses":
         return ChatOpenAI(
@@ -89,18 +91,35 @@ def _build_model_from_provider(provider: dict[str, Any], runtime_config: dict[st
             top_p=runtime_config["top_p"],
             max_tokens=runtime_config["max_output_tokens"],
             max_retries=3,
+            **request_options,
+        )
+    elif interface == "litellm":
+        from app.agents.providers.litellm_chat import build_litellm_chat_model
+
+        return build_litellm_chat_model(
+            provider=provider,
+            runtime_config=runtime_config,
+            openai_compatible=False,
+            request_options=request_options,
         )
     else:
-        return ChatOpenAI(
-            model=provider["model"],
-            api_key=provider["api_key"],
-            base_url=provider["endpoint"],
-            use_responses_api=False,
-            temperature=runtime_config["temperature"],
-            top_p=runtime_config["top_p"],
-            max_tokens=runtime_config["max_output_tokens"],
-            max_retries=3,
+        raise ValueError(
+            f"不支持的 provider.interface: {interface!r}。"
+            "请使用 chat.completion、opencode_zen、responses 或 litellm。"
         )
+
+
+def _get_provider_request_options(provider: dict[str, Any]) -> dict[str, Any]:
+    """读取 provider 级请求选项，并在拼错字段时直接报错。"""
+    request_options = provider.get("request_options") or {}
+    if not isinstance(request_options, dict):
+        raise TypeError("provider.request_options 必须是对象")
+
+    unknown_keys = sorted(set(request_options) - PROVIDER_REQUEST_OPTION_KEYS)
+    if unknown_keys:
+        raise ValueError(f"provider.request_options 包含不支持的字段: {', '.join(unknown_keys)}")
+
+    return {key: value for key, value in request_options.items() if value is not None}
 
 
 def build_runtime_for_agent(agent_id: str, config_service: ConfigService | None = None) -> dict[str, Any]:
@@ -200,7 +219,6 @@ def create_my_deep_agent(
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
-    system_reminder_trigger_registry: SystemReminderTriggerRegistry,
     config_service: ConfigService | None = None,
 ) -> Any:
     if checkpointer is None:
@@ -243,13 +261,7 @@ def create_my_deep_agent(
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
 
-    runtime_middleware = list(middleware) if middleware is not None else [
-        LLMLoggingMiddleware(),
-        SystemReminderMiddleware(
-            trigger_registry=system_reminder_trigger_registry,
-            job_event_bus=job_event_bus,
-        ),
-    ]
+    runtime_middleware = list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
     if fallback_middleware is not None:
         runtime_middleware.append(fallback_middleware)
     if enabled_runtime_middleware_names is not None:
@@ -397,7 +409,6 @@ def create_runtime_deep_agent_for_session(
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
-    system_reminder_trigger_registry: SystemReminderTriggerRegistry,
     checkpointer: BaseCheckpointSaver | None = None,
     name: str | None = None,
     override_model: Any = None,
@@ -429,6 +440,5 @@ def create_runtime_deep_agent_for_session(
         message_service=message_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
-        system_reminder_trigger_registry=system_reminder_trigger_registry,
         config_service=service,
     )

@@ -1,24 +1,23 @@
-"""OpencodeZenChatOpenAI 单元测试。
+"""BoxteamLiteLLMChatModel 单元测试。
 
 重点验证：
 - `_convert_messages_to_dicts` 把 AIMessage.content 中的结构化 reasoning 块
-  展平为 `<think>...</think>` 文本，让 opencode.ai/DeepSeek 后端的 Chat
-  Completions 接口可以接收多轮 reasoning 上下文。
+  从 Chat Completions 历史消息中剥离，避免把 reasoning 混入普通 assistant 正文。
 - 不带 reasoning 块的 AIMessage 行为不变。
 """
 from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.agents.providers.opencode_zen import OpencodeZenChatOpenAI
+from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 
 
-def _make_model() -> OpencodeZenChatOpenAI:
-    """构造一个不发起任何网络调用的 OpencodeZenChatOpenAI 实例。"""
-    return OpencodeZenChatOpenAI(
-        model="big-pickle",
+def _make_model() -> BoxteamLiteLLMChatModel:
+    """构造一个不发起任何网络调用的 LiteLLM 包装实例。"""
+    return BoxteamLiteLLMChatModel(
+        model="openai/big-pickle",
         api_key="test-key",
-        base_url="https://example.com/v1",
+        api_base="https://example.com/v1",
     )
 
 
@@ -37,8 +36,8 @@ def test_convert_messages_to_dicts_passthrough_when_no_reasoning_blocks():
     assert dicts[2] == {"role": "assistant", "content": "hello"}
 
 
-def test_convert_messages_to_dicts_flattens_responses_api_reasoning_block():
-    """来自 Responses API 历史消息的 reasoning 块应被展平为 <think>...</think>。"""
+def test_convert_messages_to_dicts_strips_responses_api_reasoning_block():
+    """来自 Responses API 历史消息的 reasoning 块不应混入可见正文。"""
     model = _make_model()
     ai = AIMessage(
         content=[
@@ -56,14 +55,12 @@ def test_convert_messages_to_dicts_flattens_responses_api_reasoning_block():
     # content 仍然是 list 形式（用于下游其它组件识别），但 reasoning 块被移除
     assert isinstance(content, list)
     assert not any(b.get("type") == "reasoning" for b in content)
-    # 第一个 text 块开头注入了 <think>...</think>
     text_block = next(b for b in content if b.get("type") == "text")
-    assert text_block["text"].startswith("<think>\n思考片段1\n</think>\n\n")
-    assert text_block["text"].endswith("最终回答")
+    assert text_block["text"] == "最终回答"
 
 
-def test_convert_messages_to_dicts_flattens_multiple_reasoning_summaries():
-    """reasoning 块有多个 summary 项时，应按顺序拼接。"""
+def test_convert_messages_to_dicts_strips_multiple_reasoning_summaries():
+    """reasoning 块有多个 summary 项时也不应注入正文。"""
     model = _make_model()
     ai = AIMessage(
         content=[
@@ -80,11 +77,11 @@ def test_convert_messages_to_dicts_flattens_multiple_reasoning_summaries():
     dicts = model._convert_messages_to_dicts([ai])
     content = dicts[0]["content"]
     text_block = next(b for b in content if b.get("type") == "text")
-    assert "<think>\n片段A\n片段B\n</think>" in text_block["text"]
+    assert text_block["text"] == "回答"
 
 
-def test_convert_messages_to_dicts_creates_text_block_when_only_reasoning():
-    """只有 reasoning 块没有 text 块时，应自动创建一个 text 块承载 <think> 文本。"""
+def test_convert_messages_to_dicts_returns_empty_content_when_only_reasoning():
+    """只有 reasoning 块没有 text 块时，发送给 Chat Completions 的正文应为空。"""
     model = _make_model()
     ai = AIMessage(
         content=[
@@ -96,80 +93,86 @@ def test_convert_messages_to_dicts_creates_text_block_when_only_reasoning():
     )
     dicts = model._convert_messages_to_dicts([ai])
     content = dicts[0]["content"]
-    assert len(content) == 1
-    assert content[0]["type"] == "text"
-    assert content[0]["text"] == "<think>\n只有思考\n</think>"
+    assert content == ""
 
 
-def test_flatten_reasoning_blocks_returns_original_when_not_list():
+def test_normalize_history_content_returns_original_when_not_list():
     """非 list 类型的 content 应原样返回。"""
     model = _make_model()
-    assert model._flatten_reasoning_blocks("plain string") == "plain string"
-    assert model._flatten_reasoning_blocks(None) is None
-    assert model._flatten_reasoning_blocks(42) == 42
+    assert model._normalize_history_content("plain string") == "plain string"
+    assert model._normalize_history_content(None) is None
+    assert model._normalize_history_content(42) == 42
 
 
-def test_flatten_reasoning_blocks_returns_original_when_no_reasoning_type():
-    """list 类型的 content 中若无 reasoning 块，应原样返回（保持原引用）。"""
+def test_normalize_history_content_returns_original_for_standard_text_blocks():
+    """标准 text 块不需要转换时应原样返回（保持原引用）。"""
+    model = _make_model()
+    original = [
+        {"type": "text", "text": "a"},
+    ]
+    result = model._normalize_history_content(original)
+    assert result is original
+
+
+def test_normalize_history_content_normalizes_output_text_without_reasoning():
+    """output_text 不应透传给 Chat Completions 历史消息。"""
     model = _make_model()
     original = [
         {"type": "text", "text": "a"},
         {"type": "output_text", "text": "b"},
     ]
-    result = model._flatten_reasoning_blocks(original)
-    # 没有 reasoning 块时应原样返回（函数应避免无谓的深拷贝）
-    assert result is original
+    result = model._normalize_history_content(original)
+    assert result == [
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "b"},
+    ]
 
 
-def test_stream_parses_reasoning_content_from_direct_attribute():
-    """流式响应中 delta.reasoning_content 可直接访问时，应正确解析 reasoning。"""
-    from unittest.mock import MagicMock
-
+def test_stream_parses_reasoning_content_from_delta():
+    """流式响应中 delta.reasoning_content 应正确解析成标准 reasoning。"""
     model = _make_model()
 
-    # 构造模拟 chunk：delta 有 reasoning_content 属性
-    chunk = MagicMock()
-    chunk.choices = [MagicMock()]
-    chunk.choices[0].delta = MagicMock()
-    chunk.choices[0].delta.content = None
-    chunk.choices[0].delta.reasoning_content = "这是思考过程"
-    chunk.choices[0].delta.tool_calls = None
+    chunks = model._convert_stream_response_chunk(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning_content": "这是思考过程",
+                    }
+                }
+            ]
+        },
+        first_chunk_yielded=False,
+    )
 
-    state = {"reasoning_started": False, "reasoning_finished": False}
-    chunks = model._process_chunk(chunk, state)
-    
-    # 应该生成 reasoning_start 和 reasoning_delta 两个 chunk
-    assert len(chunks) == 2
-    assert chunks[0].message.additional_kwargs == {"kind": "reasoning", "phase": "start"}
-    assert chunks[1].message.content == "这是思考过程"
-    assert chunks[1].message.additional_kwargs == {"kind": "reasoning", "phase": "delta"}
+    assert len(chunks) == 1
+    assert chunks[0].message.additional_kwargs == {}
+    assert chunks[0].message.content == [
+        {"type": "reasoning", "reasoning": "这是思考过程"}
+    ]
 
 
 def test_stream_parses_reasoning_content_from_model_extra():
-    """流式响应中 delta 通过 model_extra 获取 reasoning_content 时，应正确解析 reasoning。
-    
-    模拟 OpenAI SDK pydantic 模型丢弃未定义字段的情况。
-    """
-    from unittest.mock import MagicMock
-
+    """流式响应中 delta.model_extra.reasoning_content 应正确解析 reasoning。"""
     model = _make_model()
 
-    # 构造模拟 chunk：delta 没有 reasoning_content 属性，但 model_extra 有
-    chunk = MagicMock()
-    chunk.choices = [MagicMock()]
-    chunk.choices[0].delta = MagicMock()
-    chunk.choices[0].delta.content = None
-    # 没有 reasoning_content 属性
-    delattr(chunk.choices[0].delta, "reasoning_content")
-    # 通过 model_extra 提供
-    chunk.choices[0].delta.model_extra = {"reasoning_content": "通过 model_extra 的思考"}
-    chunk.choices[0].delta.tool_calls = None
+    chunks = model._convert_stream_response_chunk(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "model_extra": {
+                            "reasoning_content": "通过 model_extra 的思考",
+                        },
+                    }
+                }
+            ]
+        },
+        first_chunk_yielded=False,
+    )
 
-    state = {"reasoning_started": False, "reasoning_finished": False}
-    chunks = model._process_chunk(chunk, state)
-    
-    # 应该生成 reasoning_start 和 reasoning_delta 两个 chunk
-    assert len(chunks) == 2
-    assert chunks[0].message.additional_kwargs == {"kind": "reasoning", "phase": "start"}
-    assert chunks[1].message.content == "通过 model_extra 的思考"
-    assert chunks[1].message.additional_kwargs == {"kind": "reasoning", "phase": "delta"}
+    assert len(chunks) == 1
+    assert chunks[0].message.additional_kwargs == {}
+    assert chunks[0].message.content == [
+        {"type": "reasoning", "reasoning": "通过 model_extra 的思考"}
+    ]

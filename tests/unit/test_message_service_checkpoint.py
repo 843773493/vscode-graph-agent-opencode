@@ -1,6 +1,8 @@
 """MessageService 与 checkpoint 集成单元测试。"""
 from __future__ import annotations
 
+import json
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -83,29 +85,39 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(tmp_path)
 
     assert len(messages.items) == 2
     assistant = messages.items[1]
-    # 顺序：先 reasoning 摘要（<think>...</think>），再 text
-    assert assistant.content == "<think>\n先思考一下\n</think>最终回答"
+    assert assistant.content == "最终回答"
     assert assistant.metadata.get("reasoning_id") == "rs_abc123"
-    reasoning_blocks = assistant.metadata.get("reasoning_blocks")
-    assert isinstance(reasoning_blocks, list) and len(reasoning_blocks) == 1
-    assert reasoning_blocks[0]["type"] == "reasoning"
-    assert reasoning_blocks[0]["summary"][0]["text"] == "先思考一下"
+    content_blocks = assistant.metadata.get("content_blocks")
+    assert isinstance(content_blocks, list)
+    assert content_blocks == [
+        {"type": "reasoning", "reasoning": "先思考一下", "extras": {"id": "rs_abc123"}},
+        {"type": "text", "text": "最终回答"},
+    ]
 
 
 @pytest.mark.asyncio
-async def test_message_service_extracts_opencode_zen_string_reasoning(tmp_path):
-    """验证 opencode_zen 路径下的字符串 content + kind=reasoning 被识别。"""
+async def test_agent_state_renders_standard_reasoning_tool_call_message(tmp_path):
+    """工具调用前的 reasoning 应来自标准 content block。"""
     saver = FileSystemCheckpointSaver(base_dir=tmp_path)
-    config = {"configurable": {"thread_id": "sess_zen", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": "sess_tool_reasoning", "checkpoint_ns": ""}}
+    reasoning_text = "用户想查看当前系统时间。"
+    tool_call = {
+        "name": "python_exec",
+        "args": {"code": "print('ok')"},
+        "id": "call_001",
+        "type": "tool_call",
+    }
     reasoning_msg = AIMessage(
-        content="我在思考",
-        additional_kwargs={"kind": "reasoning"},
+        content=[{"type": "reasoning", "reasoning": reasoning_text}],
+        tool_calls=[tool_call],
+        response_metadata={"phase": "commentary"},
+        name="default",
     )
     checkpoint = {
-        "channel_values": {"messages": [HumanMessage(content="hi"), reasoning_msg]},
+        "channel_values": {"messages": [HumanMessage(content="现在几点"), reasoning_msg]},
         "channel_versions": {"messages": 1},
         "updated_channels": ["messages"],
-        "id": "ckpt-zen",
+        "id": "ckpt-tool-reasoning",
     }
     await saver.aput(
         config,
@@ -115,13 +127,22 @@ async def test_message_service_extracts_opencode_zen_string_reasoning(tmp_path):
     )
 
     service = MessageService(checkpointer=saver)
-    messages = await service.list(session_id="sess_zen", limit=10)
-
+    messages = await service.list(session_id="sess_tool_reasoning", limit=10)
     assistant = messages.items[1]
-    assert assistant.content == "<think>\n我在思考\n</think>"
-    reasoning_blocks = assistant.metadata.get("reasoning_blocks")
-    assert isinstance(reasoning_blocks, list) and len(reasoning_blocks) == 1
-    assert reasoning_blocks[0]["type"] == "reasoning"
+    assert assistant.content == ""
+    assert assistant.metadata["content_blocks"] == [
+        {"type": "reasoning", "reasoning": reasoning_text}
+    ]
+
+    state_snapshot = await service.get_agent_state_messages("sess_tool_reasoning")
+    records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
+    state_assistant = records[1]
+    assert state_assistant["content"] == [
+        {"type": "reasoning", "reasoning": reasoning_text}
+    ]
+    assert state_assistant["tool_calls"] == [tool_call]
+    assert state_assistant["response_metadata"]["phase"] == "commentary"
+    assert "additional_kwargs" not in state_assistant
 
 
 @pytest.mark.asyncio

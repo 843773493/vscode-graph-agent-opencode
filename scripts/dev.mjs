@@ -3,12 +3,18 @@ import path from "node:path";
 const scriptsDir = import.meta.dir;
 const workspaceRoot = path.resolve(scriptsDir, "..");
 const webRoot = path.resolve(workspaceRoot, "src", "web");
-const bunBin = path.resolve(workspaceRoot, "tools", "bun.exe");
-const pythonBin = path.resolve(workspaceRoot, ".venv", "Scripts", "python.exe");
-const port = "8000";
-const frontendPort = "8001";
-const host = "127.0.0.1";
 const isWindows = process.platform === "win32";
+// TODO: 当前仓库保留 Windows 版 tools/bun.exe，Linux/macOS 先复用启动脚本的 Bun。
+const bunBin = isWindows
+  ? path.resolve(workspaceRoot, "tools", "bun.exe")
+  : (process.env.BUN_BIN ?? process.execPath);
+// TODO: 兼容 uv 在 Windows 与 Linux/macOS 下创建的虚拟环境脚本目录。
+const pythonBin = isWindows
+  ? path.resolve(workspaceRoot, ".venv", "Scripts", "python.exe")
+  : path.resolve(workspaceRoot, ".venv", "bin", "python");
+const port = "8010";
+const frontendPort = "8011";
+const host = "127.0.0.1";
 const backendDebugPort = "8002";
 const frontendHealthUrl = `http://${host}:${frontendPort}/health`;
 const backendHealthUrl = `http://${host}:${port}/api/v1/health`;
@@ -35,7 +41,9 @@ async function waitForHttpOk(url, label) {
         console.log(`[dev:web] ${label} ready: ${url}`);
         return;
       }
-      lastError = new Error(`${label} returned ${response.status} ${response.statusText}`);
+      lastError = new Error(
+        `${label} returned ${response.status} ${response.statusText}`,
+      );
     } catch (error) {
       lastError = error;
     }
@@ -43,7 +51,9 @@ async function waitForHttpOk(url, label) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  throw new Error(`[dev:web] ${label} health check failed: ${url}${lastError ? `\n原因: ${lastError instanceof Error ? lastError.stack ?? lastError.message : String(lastError)}` : ""}`);
+  throw new Error(
+    `[dev:web] ${label} health check failed: ${url}${lastError ? `\n原因: ${lastError instanceof Error ? (lastError.stack ?? lastError.message) : String(lastError)}` : ""}`,
+  );
 }
 
 async function killWindowsPort() {
@@ -66,41 +76,72 @@ async function killWindowsPort() {
     const trimmed = line.trim();
     if (!trimmed) continue;
     if (!/LISTENING/i.test(trimmed)) continue;
-    if (!trimmed.includes(`:${port}`) && !trimmed.includes(`:${frontendPort}`) && !trimmed.includes(`:${backendDebugPort}`)) continue;
+    if (
+      !trimmed.includes(`:${port}`) &&
+      !trimmed.includes(`:${frontendPort}`) &&
+      !trimmed.includes(`:${backendDebugPort}`)
+    )
+      continue;
     const cols = trimmed.split(/\s+/);
     const pid = cols.at(-1);
     if (pid && /^\d+$/.test(pid)) pids.add(pid);
   }
 
   for (const pid of pids) {
-    Bun.spawnSync(["taskkill", "/F", "/PID", pid], { cwd: workspaceRoot, stdout: "ignore", stderr: "ignore" });
+    Bun.spawnSync(["taskkill", "/F", "/PID", pid], {
+      cwd: workspaceRoot,
+      stdout: "ignore",
+      stderr: "ignore",
+    });
   }
 }
 
 async function killUnixPort() {
-  // 直接调用系统工具探测并清理占用 8000 到 8002 端口的进程。
-  const ss = Bun.spawnSync(["ss", "-ltnp"], { cwd: workspaceRoot, stdout: "pipe", stderr: "ignore" });
+  // 直接调用系统工具探测并清理占用后端、前端和调试端口的进程。
+  const ss = Bun.spawnSync(["ss", "-ltnp"], {
+    cwd: workspaceRoot,
+    stdout: "pipe",
+    stderr: "ignore",
+  });
   if (ss.exitCode === 0) {
     const out = new TextDecoder().decode(ss.stdout).trim();
     const pids = new Set();
     for (const line of out.split(/\r?\n/)) {
-      if (!line.includes(`:${port}`) && !line.includes(`:${frontendPort}`) && !line.includes(`:${backendDebugPort}`)) continue;
+      if (
+        !line.includes(`:${port}`) &&
+        !line.includes(`:${frontendPort}`) &&
+        !line.includes(`:${backendDebugPort}`)
+      )
+        continue;
       const match = line.match(/pid=(\d+)/);
       if (match) pids.add(match[1]);
     }
     for (const pid of pids) {
-      Bun.spawnSync(["kill", "-9", pid], { cwd: workspaceRoot, stdout: "ignore", stderr: "ignore" });
+      Bun.spawnSync(["kill", "-9", pid], {
+        cwd: workspaceRoot,
+        stdout: "ignore",
+        stderr: "ignore",
+      });
     }
     return;
   }
 
   for (const targetPort of [port, frontendPort, backendDebugPort]) {
-    const lsof = Bun.spawnSync(["lsof", "-ti", `tcp:${targetPort}`], { cwd: workspaceRoot, stdout: "pipe", stderr: "ignore" });
+    const lsof = Bun.spawnSync(["lsof", "-ti", `tcp:${targetPort}`], {
+      cwd: workspaceRoot,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
     if (lsof.exitCode === 0) {
       const out = new TextDecoder().decode(lsof.stdout).trim();
       if (out) {
         for (const pid of out.split(/\r?\n/)) {
-          if (/^\d+$/.test(pid)) Bun.spawnSync(["kill", "-9", pid], { cwd: workspaceRoot, stdout: "ignore", stderr: "ignore" });
+          if (/^\d+$/.test(pid))
+            Bun.spawnSync(["kill", "-9", pid], {
+              cwd: workspaceRoot,
+              stdout: "ignore",
+              stderr: "ignore",
+            });
         }
       }
     }
@@ -110,14 +151,22 @@ async function killUnixPort() {
 async function main() {
   await (isWindows ? killWindowsPort() : killUnixPort());
 
-  const frontend = spawnDetached(
-    bunBin,
-    ["run", "dev"],
-    webRoot,
-  );
+  const frontend = spawnDetached(bunBin, ["run", "dev"], webRoot);
   const backend = spawnDetached(
     pythonBin,
-    ["-m", "debugpy", "--listen", `${host}:${backendDebugPort}`, "-m", "uvicorn", "app.main:app", "--host", host, "--port", port],
+    [
+      "-m",
+      "debugpy",
+      "--listen",
+      `${host}:${backendDebugPort}`,
+      "-m",
+      "uvicorn",
+      "app.main:app",
+      "--host",
+      host,
+      "--port",
+      port,
+    ],
     workspaceRoot,
   );
 

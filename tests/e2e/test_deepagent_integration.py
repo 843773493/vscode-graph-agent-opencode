@@ -49,11 +49,6 @@ def _assert_event_order(events: list[dict]) -> None:
         # text_end 必须在 agent_end 之前
         assert text_end_idx < agent_end_idx, f"text_end 必须在 agent_end 之前：{types}"
 
-    # system_reminder_injected（如果出现）必须在 agent_end 之前
-    if "system_reminder_injected" in types:
-        sr = types.index("system_reminder_injected")
-        assert sr < agent_end_idx, f"system_reminder_injected 必须在 agent_end 之前：{types}"
-
 
 @pytest.mark.asyncio
 async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool):
@@ -115,13 +110,6 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
         assert tool_end_payload.get("tool_name") == tool_start_payload.get("tool_name"), (
             f"tool_call_end tool_name 与 start 不一致: {tool_end_payload} vs {tool_start_payload}"
         )
-
-    # 如果后端注入了 system_reminder（位置在 tool_call 之后），验证 position 字段
-    if "system_reminder_injected" in trace_types:
-        reminder_event = next(event for event in events if event.get("type") == "system_reminder_injected")
-        reminder_payload = get_trace_payload(reminder_event)
-        # position 字段由 SystemReminderTriggerRegistry 注入，应当存在
-        assert reminder_payload.get("position"), f"system_reminder_injected 缺少 position: {reminder_payload}"
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
     assert traces_response.status_code == 200

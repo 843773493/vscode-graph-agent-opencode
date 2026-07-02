@@ -112,13 +112,6 @@ class LLMRequestPayload(BaseModel):
     timestamp: int
 
 
-class SystemReminderInjectedPayload(BaseModel):
-    """SYSTEM_REMINDER_INJECTED 事件的 payload"""
-    position: str
-    content: str
-    dedup_key: str | None = None
-
-
 class SessionInterruptedPayload(BaseModel):
     """SESSION_INTERRUPTED 事件的 payload"""
     session_id: str
@@ -229,12 +222,6 @@ class LLMRequestEvent(BaseEvent):
     payload: LLMRequestPayload
 
 
-class SystemReminderInjectedEvent(BaseEvent):
-    """system_reminder 已注入事件"""
-    type: Literal["system_reminder_injected"] = "system_reminder_injected"
-    payload: SystemReminderInjectedPayload
-
-
 class SessionInterruptedEvent(BaseEvent):
     """session 被用户打断事件"""
     type: Literal["session_interrupted"] = "session_interrupted"
@@ -286,7 +273,6 @@ Event = Union[
     ToolCallEndEvent,
     ErrorEvent,
     LLMRequestEvent,
-    SystemReminderInjectedEvent,
     SessionInterruptedEvent,
     TextStartEvent,
     TextDeltaEvent,

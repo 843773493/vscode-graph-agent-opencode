@@ -19,8 +19,6 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_session_orchestrator(self) -> Any: ...
 
-    def get_system_reminder_trigger_registry(self) -> Any: ...
-
     def get_checkpointer(self) -> Any: ...
 
 
@@ -33,7 +31,6 @@ def build_session_agent_runtime(
     background_message_bus: BackgroundMessageBus,
     job_event_bus: JobEventBusProtocol,
     dependency_provider: AgentRuntimeDependencyProvider,
-    system_reminder_trigger_registry: Any,
     name: str | None = None,
     override_model: Any = None,
 ) -> Any:
@@ -51,7 +48,6 @@ def build_session_agent_runtime(
         message_service=dependency_provider.get_message_service(),
         session_service=dependency_provider.get_session_service(),
         session_orchestrator=dependency_provider.get_session_orchestrator(),
-        system_reminder_trigger_registry=system_reminder_trigger_registry,
         checkpointer=checkpointer,
         name=name or resolved_agent_id,
         override_model=override_model,

@@ -25,7 +25,6 @@ from app.schemas.event import (
     TextStartEvent, TextStartPayload,
     TextDeltaEvent, TextDeltaPayload,
     TextEndEvent, TextEndPayload,
-    SystemReminderInjectedEvent, SystemReminderInjectedPayload,
     SessionInterruptedEvent, SessionInterruptedPayload,
 )
 
@@ -62,9 +61,6 @@ class EventType:
     # 错误与状态
     ERROR = "error"
     STATUS_CHANGE = "status_change"
-
-    # System reminder 注入
-    SYSTEM_REMINDER_INJECTED = "system_reminder_injected"
 
     # Session 打断
     SESSION_INTERRUPTED = "session_interrupted"
@@ -262,13 +258,6 @@ class JobEventBus:
             return ErrorEvent(
                 type="error",
                 payload=ErrorPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.SYSTEM_REMINDER_INJECTED:
-            return SystemReminderInjectedEvent(
-                type="system_reminder_injected",
-                payload=SystemReminderInjectedPayload(**payload),
                 **common
             )
 

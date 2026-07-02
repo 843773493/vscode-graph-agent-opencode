@@ -131,17 +131,6 @@ function normalizeTraceData(eventType: string, payload: Record<string, unknown>)
     };
   }
 
-  if (type === 'system_reminder_injected') {
-    const content = getOptionalString(payload, 'content');
-    const position = getOptionalString(payload, 'position');
-    return {
-      kind: 'system',
-      title: '系统提示',
-      summary: position ? `注入位置: ${position}` : '',
-      content: content || message || resultText,
-    };
-  }
-
   // aggregated_text: 合并后的文本流（text_start + text_delta* + text_end）
   if (type === 'aggregated_text') {
     const text = getOptionalString(payload, 'text');
@@ -619,14 +608,6 @@ function aggregateConversationEvents(events: TraceEvent[], convId: string): Time
       } else {
         addTraceItem(eventType, payload, timestamp, eventId);
       }
-      continue;
-    }
-
-    // --- 系统提醒：有实际内容，保留 ---
-    if (type === 'system_reminder_injected') {
-      flushTextBuf();
-      hasOutputContent = true;
-      addTraceItem(eventType, payload, timestamp, eventId);
       continue;
     }
 

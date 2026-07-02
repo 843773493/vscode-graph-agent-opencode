@@ -27,7 +27,6 @@ class TraceEventDTO(BaseModel):
         "text_start",
         "text_delta",
         "text_end",
-        "system_reminder_injected",
         "message_created",
         "session_interrupted",
     ]

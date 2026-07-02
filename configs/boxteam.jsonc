@@ -25,10 +25,15 @@
       },
       {
         "id": "backup_3",
-        "endpoint": "https://www.cctq.ai",
+        "endpoint": "https://www.cctq.ai/v1",
         "model": "gpt-5.4-mini",
         "api_key": "${CCTQ_API_KEY}",
-        "interface": "opencode_zen"
+        "interface": "opencode_zen",
+        "request_options": {
+          "extra_body": {
+            "reasoning_effort": "low"
+          }
+        }
       }
     ]
   },

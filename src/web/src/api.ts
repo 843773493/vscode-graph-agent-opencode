@@ -1,89 +1,164 @@
 import type {
-    APIResponse,
-    CursorPage,
-    InterruptSessionResult,
-    Message,
-    MessageRunAccepted,
-    MessageRunRequest,
-    Session,
-    TraceEvent,
-    WorkspaceInfo,
-} from './types/backend';
+  AgentStateMessages,
+  APIResponse,
+  CursorPage,
+  InterruptSessionResult,
+  Message,
+  MessageRunAccepted,
+  MessageRunRequest,
+  Session,
+  TraceEvent,
+  WorkspaceInfo,
+} from "./types/backend";
 
-export const DEFAULT_BACKEND_HOST = '127.0.0.1';
-export const DEFAULT_BACKEND_PORT = 8000;
-export const DEFAULT_BACKEND_TOKEN = 'local-dev-token';
-export const DEFAULT_AGENT_ID = 'default';
-export const DEFAULT_SESSION_TITLE = '新会话';
+export const DEFAULT_BACKEND_HOST = "127.0.0.1";
+export const DEFAULT_BACKEND_PORT = 8010;
+export const DEFAULT_BACKEND_TOKEN = "local-dev-token";
+export const DEFAULT_AGENT_ID = "default";
+export const DEFAULT_SESSION_TITLE = "新会话";
+const AGENT_STATE_TIMEOUT_MS = 10000;
+
+type RequestJsonInit = RequestInit & {
+  timeoutMs?: number;
+};
 
 function getBaseUrl(port: number): string {
-  if (typeof window !== 'undefined' && window.location.port === '8001') {
-    return '';
+  if (typeof window !== "undefined" && window.location.port !== String(port)) {
+    return "";
   }
 
   return `http://${DEFAULT_BACKEND_HOST}:${port}`;
 }
 
-async function requestJson<T>(port: number, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${getBaseUrl(port)}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Local-Token': DEFAULT_BACKEND_TOKEN,
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+async function requestJson<T>(
+  port: number,
+  path: string,
+  init?: RequestJsonInit,
+): Promise<T> {
+  const { timeoutMs, signal, ...fetchInit } = init ?? {};
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeoutErrorMessage = `请求超时: ${path}`;
+  let timeoutId: number | null = null;
+  const timeoutPromise = timeoutMs
+    ? new Promise<Response>((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          controller?.abort();
+          reject(new Error(timeoutErrorMessage));
+        }, timeoutMs);
+      })
+    : null;
 
-  if (!response.ok) {
-    throw new Error(`请求失败 ${response.status} ${response.statusText}: ${path}`);
+  try {
+    const fetchPromise = fetch(`${getBaseUrl(port)}${path}`, {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Local-Token": DEFAULT_BACKEND_TOKEN,
+        ...(fetchInit.headers ?? {}),
+      },
+      ...fetchInit,
+      signal: signal ?? controller?.signal,
+    });
+    const response = timeoutPromise
+      ? await Promise.race([fetchPromise, timeoutPromise])
+      : await fetchPromise;
+
+    if (!response.ok) {
+      throw new Error(
+        `请求失败 ${response.status} ${response.statusText}: ${path}`,
+      );
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof Error && error.message === timeoutErrorMessage) {
+      throw error;
+    }
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(timeoutErrorMessage);
+    }
+    throw error;
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
   }
-
-  return await response.json() as T;
 }
 
 function unwrapApiData<T>(response: APIResponse<T>): T {
   if (response.data == null) {
-    throw new Error(`后端响应缺少 data 字段: ${response.message || 'unknown message'}`);
+    throw new Error(
+      `后端响应缺少 data 字段: ${response.message || "unknown message"}`,
+    );
   }
 
   return response.data;
 }
 
 function normalizePageResult<T>(value: unknown): CursorPage<T> {
-  if (!value || typeof value !== 'object') {
+  if (!value || typeof value !== "object") {
     return { items: [] };
   }
 
-  const record = value as { items?: T[]; next_cursor?: string | null; has_more?: boolean };
+  const record = value as {
+    items?: T[];
+    next_cursor?: string | null;
+    has_more?: boolean;
+  };
   return {
     items: Array.isArray(record.items) ? record.items : [],
     next_cursor: record.next_cursor ?? null,
-    has_more: typeof record.has_more === 'boolean' ? record.has_more : undefined,
+    has_more:
+      typeof record.has_more === "boolean" ? record.has_more : undefined,
   };
 }
 
 export async function getWorkspace(port: number): Promise<WorkspaceInfo> {
-  return unwrapApiData(await requestJson<APIResponse<WorkspaceInfo>>(port, '/api/v1/workspace'));
+  return unwrapApiData(
+    await requestJson<APIResponse<WorkspaceInfo>>(port, "/api/v1/workspace"),
+  );
 }
 
 export async function listSessions(port: number): Promise<CursorPage<Session>> {
-  const data = await requestJson<APIResponse<CursorPage<Session>>>(port, '/api/v1/sessions');
+  const data = await requestJson<APIResponse<CursorPage<Session>>>(
+    port,
+    "/api/v1/sessions",
+  );
   return normalizePageResult<Session>(unwrapApiData(data));
 }
 
-export async function createSession(port: number, title: string = DEFAULT_SESSION_TITLE): Promise<Session> {
-  return unwrapApiData(await requestJson<APIResponse<Session>>(port, '/api/v1/sessions', {
-    method: 'POST',
-    body: JSON.stringify({ title }),
-  }));
+export async function createSession(
+  port: number,
+  title: string = DEFAULT_SESSION_TITLE,
+): Promise<Session> {
+  return unwrapApiData(
+    await requestJson<APIResponse<Session>>(port, "/api/v1/sessions", {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    }),
+  );
 }
 
-export async function listMessages(port: number, sessionId: string): Promise<CursorPage<Message>> {
+export async function listMessages(
+  port: number,
+  sessionId: string,
+): Promise<CursorPage<Message>> {
   const data = await requestJson<APIResponse<CursorPage<Message>>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
   );
   return normalizePageResult<Message>(unwrapApiData(data));
+}
+
+export async function getAgentStateMessages(
+  port: number,
+  sessionId: string,
+): Promise<AgentStateMessages> {
+  const data = await requestJson<APIResponse<AgentStateMessages>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/agent-state/messages`,
+    { timeoutMs: AGENT_STATE_TIMEOUT_MS },
+  );
+  return unwrapApiData(data);
 }
 
 export async function sendMessage(
@@ -96,7 +171,7 @@ export async function sendMessage(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
       {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify(payload),
       },
     ),
@@ -111,15 +186,15 @@ export async function sendUserMessage(
 ): Promise<MessageRunAccepted> {
   const payload: MessageRunRequest = {
     message: {
-      role: 'user',
+      role: "user",
       content,
       attachments: [],
       metadata: {},
     },
     run: {
-      mode: 'single_agent',
+      mode: "single_agent",
       agent_id: agentId,
-      response_mode: 'stream',
+      response_mode: "stream",
       async: true,
     },
   };
@@ -127,17 +202,23 @@ export async function sendUserMessage(
   return sendMessage(port, sessionId, payload);
 }
 
-export async function interruptSession(port: number, sessionId: string): Promise<InterruptSessionResult> {
+export async function interruptSession(
+  port: number,
+  sessionId: string,
+): Promise<InterruptSessionResult> {
   return unwrapApiData(
     await requestJson<APIResponse<InterruptSessionResult>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
-      { method: 'POST' },
+      { method: "POST" },
     ),
   );
 }
 
-export async function getSessionTraces(port: number, sessionId: string): Promise<TraceEvent[]> {
+export async function getSessionTraces(
+  port: number,
+  sessionId: string,
+): Promise<TraceEvent[]> {
   const result = await requestJson<APIResponse<TraceEvent[]>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces`,
@@ -159,25 +240,25 @@ export interface SessionStreamEvent {
 }
 
 function parseSseBlock(block: string): SessionStreamEvent | null {
-  let eventType = 'message';
+  let eventType = "message";
   const dataLines: string[] = [];
 
-  for (const line of block.split('\n')) {
-    if (!line || line.startsWith(':')) {
+  for (const line of block.split("\n")) {
+    if (!line || line.startsWith(":")) {
       continue;
     }
 
-    if (line.startsWith('event:')) {
+    if (line.startsWith("event:")) {
       eventType = line.slice(6).trim();
       continue;
     }
 
-    if (line.startsWith('data:')) {
+    if (line.startsWith("data:")) {
       dataLines.push(line.slice(5).trimStart());
     }
   }
 
-  const data = dataLines.join('\n');
+  const data = dataLines.join("\n");
   if (!data) {
     return null;
   }
@@ -193,7 +274,7 @@ function parseSseBlock(block: string): SessionStreamEvent | null {
   } catch {
     return {
       event_id: `raw_${Date.now()}`,
-      session_id: '',
+      session_id: "",
       job_id: null,
       step_id: null,
       agent_id: null,
@@ -217,29 +298,31 @@ export async function streamSessionEvents(
   const response = await fetch(url, {
     signal: options?.signal,
     headers: {
-      accept: 'text/event-stream',
-      'X-Local-Token': DEFAULT_BACKEND_TOKEN,
+      accept: "text/event-stream",
+      "X-Local-Token": DEFAULT_BACKEND_TOKEN,
     },
   });
 
   if (!response.ok || !response.body) {
-    throw new Error(`无法连接会话事件流: ${response.status} ${response.statusText}`);
+    throw new Error(
+      `无法连接会话事件流: ${response.status} ${response.statusText}`,
+    );
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
 
-      let boundaryIndex = buffer.indexOf('\n\n');
+      let boundaryIndex = buffer.indexOf("\n\n");
       while (boundaryIndex !== -1) {
         const block = buffer.slice(0, boundaryIndex).trim();
         buffer = buffer.slice(boundaryIndex + 2);
-        boundaryIndex = buffer.indexOf('\n\n');
+        boundaryIndex = buffer.indexOf("\n\n");
 
         if (!block) {
           continue;

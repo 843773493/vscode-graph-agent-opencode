@@ -1,13 +1,9 @@
-"""复现 ChatOpenAI.astream 截断 reasoning_content 的问题
+"""验证 LiteLLM 包装层暴露 reasoning_content 的路径
 
 问题描述:
     当使用 opencode.ai (deepseek-v4-flash 后端) 时，模型会生成 reasoning tokens
-    (放在 reasoning_content 字段)，但 LangChain ChatOpenAI.astream 不会暴露这些
-    tokens，而是将其变成空 content 的 chunk 丢弃。
-
-    这导致:
-    1. 新会话出现 "LLM 空响应" — 当模型所有 token budget 用于 reasoning 时
-    2. 前端无法显示推理过程 — 即使 reasoning 内容丰富
+    (放在 reasoning_content 字段)。LiteLLM 包装层需要把这些 tokens 转成
+    LangChain 标准 content blocks，而不是写入 additional_kwargs。
 
 测试环境要求:
     - 环境变量 OPENCODE_ZEN_API_KEY 必须设置
@@ -51,28 +47,31 @@ def config_service():
 
 @pytest.fixture(scope="module")
 def test_runtime(config_service):
-    """通过 build_runtime_for_agent 获取运行时配置，包含 ChatOpenAI 实例"""
+    """通过 build_runtime_for_agent 获取运行时配置，包含 LiteLLM 模型实例。"""
     return build_runtime_for_agent(agent_id="default", config_service=config_service)
 
 
 @pytest.fixture(scope="module")
 def test_model(test_runtime):
-    """返回 ChatOpenAI 模型实例"""
+    """返回 LiteLLM 模型实例。"""
     return test_runtime["model"]
 
 
 @pytest.fixture(scope="module")
 def test_model_config(test_runtime):
     """返回模型配置信息"""
+    model_name = test_runtime["model"].model
+    if isinstance(model_name, str) and model_name.startswith("openai/"):
+        model_name = model_name.removeprefix("openai/")
     return {
-        "model": test_runtime["model"].model,
-        "base_url": test_runtime["model"].base_url,
+        "model": model_name,
+        "base_url": test_runtime["model"].api_base,
         "api_key": test_runtime["model"].api_key,
     }
 
 
 # ---------------------------------------------------------------------------
-# 测试：LangChain astream 不暴露 reasoning_content
+# 测试：LiteLLM 包装层 astream 暴露标准 reasoning content blocks
 # ---------------------------------------------------------------------------
 
 
@@ -83,6 +82,7 @@ async def _astream_chunks(model, messages):
         chunks.append(
             {
                 "content": chunk.content,
+                "content_blocks": chunk.content_blocks,
                 "additional_kwargs": dict(chunk.additional_kwargs),
                 "response_metadata": dict(chunk.response_metadata) if chunk.response_metadata else {},
             }
@@ -91,47 +91,38 @@ async def _astream_chunks(model, messages):
 
 
 @pytest.mark.asyncio
-async def test_astream_drops_reasoning_content(test_model):
-    """复现：LangChain astream 的 chunk 中 content 为空，且不包含 reasoning_content
-
-    期望行为：chunk 应该包含 reasoning_content 字段或将其作为内容的一部分
-    实际行为：reasoning_content 被丢弃，变成空 content 的 chunk
-    """
+async def test_astream_exposes_reasoning_content_blocks(test_model):
+    """LiteLLM 包装层应把 reasoning_content 转成标准 content blocks。"""
     messages = [{"role": "user", "content": "你好"}]
 
     chunks = await _astream_chunks(test_model, messages)
 
     total = len(chunks)
-    empty_content = [c for c in chunks if not c["content"]]
-    has_content = [c for c in chunks if c["content"]]
-    has_reasoning = [c for c in chunks if "reasoning_content" in c["additional_kwargs"]]
+    reasoning_chunks = [
+        c
+        for c in chunks
+        if any(block.get("type") == "reasoning" for block in c["content_blocks"])
+    ]
+    text_chunks = [
+        c
+        for c in chunks
+        if any(block.get("type") == "text" for block in c["content_blocks"])
+    ]
 
-    # 断言：存在大量空 content 的 chunk（被丢弃的 reasoning）
-    assert len(empty_content) > 10, (
-        f"预期存在大量空 content chunk（被丢弃的 reasoning），"
-        f"但只找到 {len(empty_content)} 个空 chunk，总计 {total} 个 chunk"
-    )
+    assert reasoning_chunks, f"总计 {total} 个 chunk，但没有 reasoning content block"
+    assert all("kind" not in c["additional_kwargs"] for c in chunks)
+    assert all("phase" not in c["additional_kwargs"] for c in chunks)
 
-    # 断言：没有 chunk 包含 reasoning_content（这就是问题所在）
-    assert len(has_reasoning) == 0, (
-        f"LangChain astream 不应该暴露 reasoning_content，"
-        f"但发现了 {len(has_reasoning)} 个包含 reasoning 的 chunk"
-    )
-
-    # 断言：空 content 的 chunk 数量明显多于有 content 的 chunk
-    # 这证明了 reasoning tokens 被截断且丢弃了
-    assert len(empty_content) > len(has_content), (
-        f"空 content chunk ({len(empty_content)}) 应该远多于有 content 的 chunk ({len(has_content)})，"
-        f"这表明 reasoning 被丢弃了。总计 {total} 个 chunk。"
-    )
-
-    # 记录详细数据，便于调试
     print(f"\n[astream] 总 chunks: {total}")
-    print(f"[astream] 空 content chunks: {len(empty_content)}")
-    print(f"[astream] 有 content chunks: {len(has_content)}")
-    print(f"[astream] 包含 reasoning_content 的 chunks: {len(has_reasoning)}")
-    if has_content:
-        combined = "".join(c["content"] for c in chunks)
+    print(f"[astream] reasoning content blocks: {len(reasoning_chunks)}")
+    print(f"[astream] text content blocks: {len(text_chunks)}")
+    if text_chunks:
+        combined = "".join(
+            block.get("text", "")
+            for c in text_chunks
+            for block in c["content_blocks"]
+            if block.get("type") == "text"
+        )
         print(f"[astream] 合并后的 content: {combined[:100]}...")
 
 

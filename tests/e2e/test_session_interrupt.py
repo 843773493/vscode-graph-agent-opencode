@@ -109,6 +109,16 @@ async def _run_interrupt_then_second_message(
     return first_job_id, events
 
 
+async def _load_agent_state_records(
+    client: httpx.AsyncClient,
+    session_id: str,
+) -> list[dict]:
+    response = await client.get(f"/api/v1/sessions/{session_id}/agent-state/messages")
+    assert response.status_code == 200
+    jsonl = response.json()["data"]["jsonl"]
+    return [json.loads(line) for line in jsonl.splitlines() if line.strip()]
+
+
 @pytest.mark.asyncio
 async def test_interrupt_text_phase_then_send_second_message(client: httpx.AsyncClient):
     """在 text 生成阶段打断，然后发送第二条简单消息，验证 history 与 trace 符合预期。"""
@@ -136,17 +146,39 @@ async def test_interrupt_text_phase_then_send_second_message(client: httpx.Async
     assert messages_response.status_code == 200
     messages = messages_response.json()["data"]["items"]
 
+    assert all("<system_reminder>" not in msg.get("content", "") for msg in messages)
+
     roles = [msg.get("role") for msg in messages]
-    assert roles == ["user", "assistant", "user", "assistant"], f"消息 role 序列不符合预期: {roles}"
+    assert roles[0] == "user", f"首条消息 role 不符合预期: {roles}"
+    assert roles[-2:] == ["user", "assistant"], f"第二轮消息 role 序列不符合预期: {roles}"
 
-    first_assistant = messages[1]
-    assert "<system_reminder>" in first_assistant["content"]
-    assert "文本生成" in first_assistant["content"]
-    assert first_assistant["metadata"].get("phase") == "text"
+    interrupted_assistants = [
+        msg for msg in messages[1:-2] if msg.get("role") == "assistant"
+    ]
+    for assistant in interrupted_assistants:
+        if assistant["metadata"].get("source") == "interrupt":
+            assert assistant["metadata"].get("phase") == "text"
 
-    second_assistant = messages[3]
+    second_assistant = messages[-1]
     assert "<system_reminder>" not in second_assistant["content"]
     assert "继续测试" in second_assistant["content"]
+
+    records = await _load_agent_state_records(client, session_id)
+    reminder_records = [
+        record
+        for record in records
+        if record.get("role") == "user"
+        and record.get("type") == "human"
+        and "<system_reminder>" in str(record.get("content", ""))
+    ]
+    assert reminder_records, f"Agent State 未持久化独立 system_reminder: {records}"
+    assert "文本生成" in str(reminder_records[-1].get("content", ""))
+
+    assistant_records = [record for record in records if record.get("role") == "assistant"]
+    assert all(
+        "<system_reminder>" not in json.dumps(record, ensure_ascii=False)
+        for record in assistant_records
+    )
 
 
 @pytest.mark.asyncio
@@ -176,16 +208,36 @@ async def test_interrupt_tool_phase_then_send_second_message(client: httpx.Async
     assert messages_response.status_code == 200
     messages = messages_response.json()["data"]["items"]
 
-    # 工具阶段：被打断后被打断的 assistant 消息由服务层注入 <system_reminder>，
-    # messages 序列为 4 条：user -> assistant(system_reminder+tool) -> user -> assistant
+    assert all("<system_reminder>" not in msg.get("content", "") for msg in messages)
+
     roles = [msg.get("role") for msg in messages]
-    assert roles == ["user", "assistant", "user", "assistant"], f"消息 role 序列不符合预期: {roles}"
+    assert roles[0] == "user", f"首条消息 role 不符合预期: {roles}"
+    assert roles[-2:] == ["user", "assistant"], f"第二轮消息 role 序列不符合预期: {roles}"
 
-    first_assistant = messages[1]
-    assert "<system_reminder>" in first_assistant["content"]
-    assert "test_tool" in first_assistant["content"]
-    assert first_assistant["metadata"].get("phase") == "tool"
+    interrupted_assistants = [
+        msg for msg in messages[1:-2] if msg.get("role") == "assistant"
+    ]
+    for assistant in interrupted_assistants:
+        if assistant["metadata"].get("source") == "interrupt":
+            assert assistant["metadata"].get("phase") == "tool"
 
-    second_assistant = messages[3]
+    second_assistant = messages[-1]
     assert "<system_reminder>" not in second_assistant["content"]
     assert "工具已取消" in second_assistant["content"]
+
+    records = await _load_agent_state_records(client, session_id)
+    reminder_records = [
+        record
+        for record in records
+        if record.get("role") == "user"
+        and record.get("type") == "human"
+        and "<system_reminder>" in str(record.get("content", ""))
+    ]
+    assert reminder_records, f"Agent State 未持久化独立 system_reminder: {records}"
+    assert "test_tool" in str(reminder_records[-1].get("content", ""))
+
+    assistant_records = [record for record in records if record.get("role") == "assistant"]
+    assert all(
+        "<system_reminder>" not in json.dumps(record, ensure_ascii=False)
+        for record in assistant_records
+    )

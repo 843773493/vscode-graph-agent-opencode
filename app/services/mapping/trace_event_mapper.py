@@ -25,7 +25,6 @@ class TraceEventMapper:
         "text_start",
         "text_delta",
         "text_end",
-        "system_reminder_injected",
         "session_interrupted",
     }
 
@@ -115,8 +114,6 @@ class TraceEventMapper:
             return "text", "文本流", payload.get("text") or "助手正在流式输出", "running", None
         if event_type == "text_end":
             return "text", "文本结束", payload.get("text") or "助手文本生成结束", "completed", None
-        if event_type == "system_reminder_injected":
-            return "system", "系统提醒", payload.get("content") or "系统提醒已注入", "running", None
         if event_type == "session_interrupted":
             phase = payload.get("phase") or "text"
             tool_name = payload.get("tool_name")

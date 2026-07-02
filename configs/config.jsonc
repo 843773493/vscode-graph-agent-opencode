@@ -95,12 +95,32 @@
           "enum": [
             "chat.completion",
             "responses",
-            "opencode_zen"
+            "opencode_zen",
+            "litellm"
           ]
         },
         "auth_header": {
           "type": "string",
           "minLength": 1
+        },
+        "request_options": {
+          "type": "object",
+          "description": "Provider-specific request options passed to the chat model client.",
+          "additionalProperties": false,
+          "properties": {
+            "extra_body": {
+              "type": "object",
+              "description": "Additional JSON body fields sent with each chat completion request.",
+              "additionalProperties": true
+            },
+            "default_headers": {
+              "type": "object",
+              "description": "Additional default HTTP headers for this provider.",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },

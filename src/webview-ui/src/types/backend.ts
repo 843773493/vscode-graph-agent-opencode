@@ -115,8 +115,7 @@ export type TraceEventType =
   | 'tool_call_end'
   | 'text_start'
   | 'text_delta'
-  | 'text_end'
-  | 'system_reminder_injected';
+  | 'text_end';
 
 interface BaseTraceEvent {
   event_id: string;
@@ -194,12 +193,6 @@ interface TextEndPayload {
   text: string;
 }
 
-interface SystemReminderInjectedPayload {
-  position: string;
-  content: string;
-  dedup_key: string | null;
-}
-
 export type TraceEvent =
   | (BaseTraceEvent & { type: 'message_created'; payload: MessageCreatedPayload })
   | (BaseTraceEvent & { type: 'job_created'; payload: JobCreatedPayload })
@@ -217,8 +210,7 @@ export type TraceEvent =
   | (BaseTraceEvent & { type: 'tool_call_end'; payload: Record<string, unknown> })
   | (BaseTraceEvent & { type: 'text_start'; payload: TextStartPayload })
   | (BaseTraceEvent & { type: 'text_delta'; payload: TextDeltaPayload })
-  | (BaseTraceEvent & { type: 'text_end'; payload: TextEndPayload })
-  | (BaseTraceEvent & { type: 'system_reminder_injected'; payload: SystemReminderInjectedPayload });
+  | (BaseTraceEvent & { type: 'text_end'; payload: TextEndPayload });
 
 export type ObservationEventType =
   | 'message.updated'

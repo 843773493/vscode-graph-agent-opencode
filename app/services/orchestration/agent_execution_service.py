@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from typing import Dict, Any, List
@@ -11,19 +12,14 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_context import (
-    get_recent_tool_results,
     reset_current_agent_id,
     reset_current_job_id,
-    reset_last_turn_status,
-    reset_recent_tool_results,
     reset_active_tool_name,
     reset_interruptible_phase,
     set_active_tool_name,
     set_current_agent_id,
     set_current_job_id,
     set_interruptible_phase,
-    set_last_turn_status,
-    set_recent_tool_results,
 )
 from app.core.job_event_bus import EventType
 from app.core.checkpoint_config import build_checkpoint_config
@@ -32,6 +28,17 @@ from app.agents.agent_factory import resolve_agent_id
 from app.services.infrastructure.config_service import ConfigService
 from app.abstractions.job_step_executor import JobStepExecutor
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider, build_session_agent_runtime
+from app.services.business.reasoning_checkpoint_service import (
+    persist_standard_assistant_checkpoint,
+)
+from app.services.mapping.agent_content_mapper import split_agent_content
+
+CHAT_MODEL_EVENT_NAMES = {
+    "ChatOpenAI",
+    "BoxteamLiteLLMChatModel",
+    "ChatLiteLLM",
+    "ChatLiteLLMRouter",
+}
 
 
 def _message_has_content(message: Any) -> bool:
@@ -41,6 +48,33 @@ def _message_has_content(message: Any) -> bool:
     if isinstance(content, list):
         return any(bool(part) for part in content)
     return bool(str(content).strip())
+
+
+def _normalize_tool_args(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    return {"input": value}
+
+
+def _serialize_tool_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _extract_tool_result_text(output: Any) -> str:
+    content = getattr(output, "content", None)
+    if content is not None:
+        return _serialize_tool_value(content)
+    return _serialize_tool_value(output)
+
+
+def _is_tracked_chat_model_event(name: str) -> bool:
+    return name in CHAT_MODEL_EVENT_NAMES
 
 
 class AgentExecutionService(JobStepExecutor):
@@ -77,7 +111,6 @@ class AgentExecutionService(JobStepExecutor):
             background_message_bus=self._background_message_bus,
             job_event_bus=self._bus,
             dependency_provider=self._dependency_provider,
-            system_reminder_trigger_registry=self._dependency_provider.get_system_reminder_trigger_registry(),
         )
 
         self._agent_cache[cache_key] = agent
@@ -86,12 +119,13 @@ class AgentExecutionService(JobStepExecutor):
     def _extract_final_text(self, result: Dict[str, Any]) -> str:
         messages = result.get("messages", []) if isinstance(result, dict) else []
         for message in reversed(messages):
+            if not isinstance(message, AIMessage):
+                continue
             content = getattr(message, "content", None)
             if content is None:
                 continue
-            if isinstance(content, list):
-                content = "".join(str(part) for part in content)
-            text = str(content).strip()
+            _, text = split_agent_content(content)
+            text = text.strip()
             if text:
                 return text
         raise RuntimeError(
@@ -106,10 +140,10 @@ class AgentExecutionService(JobStepExecutor):
         current_text: str,
         active_tool_name: str | None,
     ) -> None:
-        """在任务被取消时，把已生成的部分 assistant 消息和 <system_reminder> 写入 checkpoint。
+        """在任务被取消时，把已生成的部分 assistant 消息和独立 <system_reminder> 写入 checkpoint。
 
-        提醒内容直接追加到部分 assistant 消息的 content 中，因此下一次运行模型时
-        LangGraph 会从 checkpoint 加载到该提醒，无需 middleware 再次注入。
+        提醒作为独立 HumanMessage 持久化，避免把内部提醒混入 assistant 正文。
+        下一次运行模型时 LangGraph 会从 checkpoint 加载到该提醒。
         """
         checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
         if checkpointer is None:
@@ -147,15 +181,30 @@ class AgentExecutionService(JobStepExecutor):
                 f"请停止当前输出，根据已有信息回应用户最新请求。"
             )
 
-        # 追加部分 assistant 消息，并把 system_reminder 直接写入 content
+        # 追加部分 assistant 文本；如果没有正文，不制造空 assistant 占位。
         content = current_text if phase == "text" else ""
-        wrapped_reminder = f"\n<system_reminder>\n{reminder}\n</system_reminder>"
-        partial_message = AIMessage(
-            content=content + wrapped_reminder,
-            tool_calls=[],
-            response_metadata={"phase": phase, "tool_name": active_tool_name, "source": "interrupt"},
+        if content.strip():
+            messages.append(
+                AIMessage(
+                    content=content,
+                    tool_calls=[],
+                    response_metadata={
+                        "phase": phase,
+                        "tool_name": active_tool_name,
+                        "source": "interrupt",
+                    },
+                )
+            )
+
+        reminder_message = HumanMessage(
+            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
+            response_metadata={
+                "phase": phase,
+                "tool_name": active_tool_name,
+                "source": "interrupt",
+            },
         )
-        messages.append(partial_message)
+        messages.append(reminder_message)
 
         channel_values["messages"] = messages
         checkpoint["channel_values"] = channel_values
@@ -213,8 +262,6 @@ class AgentExecutionService(JobStepExecutor):
 
         job_token = set_current_job_id(effective_job_id)
         agent_token = set_current_agent_id(resolved_agent_id)
-        last_turn_token = set_last_turn_status("ok")
-        tool_results_token = set_recent_tool_results([])
         interruptible_phase_token = set_interruptible_phase("text")
         active_tool_name_token = set_active_tool_name(None)
         SessionInterruptState.set(session_id, phase=None, tool_name=None)
@@ -228,6 +275,8 @@ class AgentExecutionService(JobStepExecutor):
             )
 
         collected_text_parts: list[str] = []
+        collected_reasoning_parts: list[str] = []
+        latest_model_reasoning_parts: list[str] = []
         final_text = ""
         active_tool_call_id: str | None = None
         active_tool_name: str | None = None
@@ -271,11 +320,12 @@ class AgentExecutionService(JobStepExecutor):
                             background_message_bus=self._background_message_bus,
                             job_event_bus=self._bus,
                             dependency_provider=self._dependency_provider,
-                            system_reminder_trigger_registry=self._dependency_provider.get_system_reminder_trigger_registry(),
                             override_model=fallback_models[current_model_index - 1],
                         )
 
                     collected_text_parts.clear()
+                    collected_reasoning_parts.clear()
+                    latest_model_reasoning_parts.clear()
                     active_tool_call_id = None
                     active_tool_name = None
                     active_tool_args = {}
@@ -290,14 +340,15 @@ class AgentExecutionService(JobStepExecutor):
                         data = event.get("data", {})
                         metadata = event.get("metadata", {})
 
-                        if event_type == "on_chat_model_start" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
+                        if event_type == "on_chat_model_start" and _is_tracked_chat_model_event(name):
+                            latest_model_reasoning_parts.clear()
                             model_name = metadata.get("ls_model_name") or "unknown_model"
                             await _publish(EventType.LLM_REQUEST, {
                                 "model": model_name,
                                 "timestamp": int(time.time() * 1000),
                             })
 
-                        elif event_type == "on_chat_model_stream" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
+                        elif event_type == "on_chat_model_stream" and _is_tracked_chat_model_event(name):
                             chunk = data.get("chunk")
                             if chunk is None:
                                 continue
@@ -306,91 +357,83 @@ class AgentExecutionService(JobStepExecutor):
                             if chunk_message is not None:
                                 content = getattr(chunk_message, "content", None) or ""
                                 tool_calls = getattr(chunk_message, "tool_calls", None) or []
-                                additional_kwargs = getattr(chunk_message, "additional_kwargs", {}) or {}
-                                chunk_id = getattr(chunk_message, "id", None)
                             else:
                                 content = getattr(chunk, "content", None) or ""
                                 tool_calls = getattr(chunk, "tool_calls", None) or []
-                                additional_kwargs = getattr(chunk, "additional_kwargs", {}) or {}
-                                chunk_id = getattr(chunk, "id", None)
-                            kind = additional_kwargs.get("kind", "text")
-
-                            if isinstance(content, list):
-                                content = "".join(str(part) for part in content)
-                            content = str(content)
+                            reasoning_content, text_content = split_agent_content(content)
 
                             # 处理 reasoning 阶段
-                            if kind == "reasoning" and content.strip():
-                                if not collected_text_parts:
+                            if reasoning_content.strip():
+                                if not collected_text_parts and not collected_reasoning_parts:
                                     # reasoning 开始前先发送 TEXT_START（标记 assistant 开始输出）
                                     SessionInterruptState.set(session_id, phase="text", tool_name=None)
                                     set_interruptible_phase("text")
                                     await _publish(EventType.TEXT_START, {})
-                                collected_text_parts.append(content)
+                                collected_reasoning_parts.append(reasoning_content)
+                                latest_model_reasoning_parts.append(reasoning_content)
                                 SessionInterruptState.set(
                                     session_id,
                                     current_text="".join(collected_text_parts),
                                 )
-                                await _publish(EventType.TEXT_DELTA, {"text": content, "kind": "reasoning"})
-                                continue
+                                await _publish(
+                                    EventType.TEXT_DELTA,
+                                    {"text": reasoning_content, "kind": "reasoning"},
+                                )
 
                             # 处理普通 text 内容
-                            if content.strip() and not collected_text_parts:
+                            if (
+                                text_content.strip()
+                                and not collected_text_parts
+                                and not collected_reasoning_parts
+                            ):
                                 SessionInterruptState.set(session_id, phase="text", tool_name=None)
                                 set_interruptible_phase("text")
                                 await _publish(EventType.TEXT_START, {})
 
-                            if content:
-                                collected_text_parts.append(content)
+                            if text_content and (text_content.strip() or collected_text_parts):
+                                collected_text_parts.append(text_content)
                                 SessionInterruptState.set(
                                     session_id,
                                     current_text="".join(collected_text_parts),
                                 )
-                                await _publish(EventType.TEXT_DELTA, {"text": content, "kind": "text"})
+                                await _publish(EventType.TEXT_DELTA, {"text": text_content, "kind": "text"})
 
                             for tc in tool_calls:
                                 tc_id = tc.get("id")
                                 tc_name = tc.get("name")
                                 tc_args = tc.get("args") or {}
                                 if tc_id and tc_id != active_tool_call_id:
-                                    if active_tool_call_id is not None:
-                                        await _publish(EventType.TOOL_CALL_END, {
-                                            "tool_name": active_tool_name or "unknown_tool",
-                                            "result": "",
-                                            "agent_id": resolved_agent_id,
-                                        })
                                     active_tool_call_id = tc_id
                                     active_tool_name = tc_name
-                                    active_tool_args = dict(tc_args) if isinstance(tc_args, dict) else {}
-                                    SessionInterruptState.set(
-                                        session_id,
-                                        phase="tool",
-                                        tool_name=active_tool_name or "unknown_tool",
-                                    )
-                                    set_interruptible_phase("tool")
-                                    set_active_tool_name(active_tool_name or "unknown_tool")
-                                    await _publish(EventType.TOOL_CALL_START, {
-                                        "tool_name": active_tool_name or "unknown_tool",
-                                        "args": active_tool_args,
-                                        "agent_id": resolved_agent_id,
-                                    })
+                                    active_tool_args = _normalize_tool_args(tc_args)
                                 elif tc_id == active_tool_call_id and isinstance(tc_args, dict):
                                     active_tool_args.update(tc_args)
 
-                        elif event_type == "on_chat_model_end" and name in ("ChatOpenAI", "OpencodeZenChatOpenAI"):
+                        elif event_type == "on_chat_model_end" and _is_tracked_chat_model_event(name):
                             pass
+
+                        elif event_type == "on_tool_start":
+                            tool_name = name or active_tool_name or "unknown_tool"
+                            tool_args = _normalize_tool_args(data.get("input"))
+                            active_tool_name = tool_name
+                            active_tool_args = tool_args
+                            SessionInterruptState.set(
+                                session_id,
+                                phase="tool",
+                                tool_name=tool_name,
+                            )
+                            set_interruptible_phase("tool")
+                            set_active_tool_name(tool_name)
+                            await _publish(EventType.TOOL_CALL_START, {
+                                "tool_name": tool_name,
+                                "args": active_tool_args,
+                                "agent_id": resolved_agent_id,
+                            })
 
                         elif event_type == "on_tool_end":
                             tool_name = name
                             output = data.get("output")
-                            result_text = str(output) if output is not None else ""
-                            recent_results = get_recent_tool_results()
-                            if recent_results is not None:
-                                recent_results.append({
-                                    "tool_name": tool_name,
-                                    "result": result_text,
-                                    "interrupted": False,
-                                })
+                            result_text = _extract_tool_result_text(output)
                             SessionInterruptState.set(session_id, phase=None, tool_name=None)
                             set_interruptible_phase("text")
                             set_active_tool_name(None)
@@ -421,6 +464,15 @@ class AgentExecutionService(JobStepExecutor):
                 set_active_tool_name(None)
                 await _publish(EventType.TEXT_END, {"text": final_text})
 
+            checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
+            if checkpointer is not None:
+                persist_standard_assistant_checkpoint(
+                    checkpointer=checkpointer,
+                    session_id=session_id,
+                    reasoning_text="".join(latest_model_reasoning_parts),
+                    final_text=final_text,
+                )
+
             await _publish(EventType.AGENT_END, {
                 "final_text": final_text,
                 "agent_id": resolved_agent_id,
@@ -436,7 +488,6 @@ class AgentExecutionService(JobStepExecutor):
                 current_text=state.current_text,
                 active_tool_name=state.tool_name,
             )
-            await _publish(EventType.ERROR, {"error": "任务被取消", "phase": "agent_execution"})
             logger.info("[agent_execution_service] job cancelled and checkpoint persisted: job_id=%s", effective_job_id)
             raise
         except Exception as e:
@@ -446,8 +497,6 @@ class AgentExecutionService(JobStepExecutor):
         finally:
             reset_current_job_id(job_token)
             reset_current_agent_id(agent_token)
-            reset_last_turn_status(last_turn_token)
-            reset_recent_tool_results(tool_results_token)
             reset_interruptible_phase(interruptible_phase_token)
             reset_active_tool_name(active_tool_name_token)
             SessionInterruptState.clear(session_id)

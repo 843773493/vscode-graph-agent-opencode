@@ -1,2 +1,3 @@
-# app/agents/providers/__init__.py
-# 自定义 Provider 包
+from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+
+__all__ = ["BoxteamLiteLLMChatModel"]

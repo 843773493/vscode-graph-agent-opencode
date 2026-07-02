@@ -49,3 +49,9 @@ class MessageDTO(TimestampedDTO):
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class AgentStateMessagesDTO(BaseModel):
+    session_id: str
+    message_count: int
+    jsonl: str
