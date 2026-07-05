@@ -15,7 +15,7 @@ function normalizeAttachments(value: unknown): AttachmentRef[] {
   return value.filter(isAttachmentRef);
 }
 
-function imageDataUrlsFromMetadata(metadata: Record<string, unknown>): string[] {
+function previewDataUrlsFromMetadata(metadata: Record<string, unknown>): string[] {
   const blocks = metadata.content_blocks;
   if (!Array.isArray(blocks)) {
     return [];
@@ -48,7 +48,7 @@ function hydrateAttachmentPreviews(
   attachments: AttachmentRef[],
   metadata: Record<string, unknown>,
 ): AttachmentRef[] {
-  const previewUrls = imageDataUrlsFromMetadata(metadata);
+  const previewUrls = previewDataUrlsFromMetadata(metadata);
   if (previewUrls.length === 0) {
     return attachments;
   }

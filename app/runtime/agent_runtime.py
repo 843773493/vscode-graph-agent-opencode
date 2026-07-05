@@ -33,6 +33,7 @@ def build_session_agent_runtime(
     dependency_provider: AgentRuntimeDependencyProvider,
     name: str | None = None,
     override_model: Any = None,
+    fallback_middleware_enabled: bool = True,
 ) -> Any:
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
     checkpointer = getattr(dependency_provider, "get_checkpointer", lambda: None)()
@@ -51,4 +52,5 @@ def build_session_agent_runtime(
         checkpointer=checkpointer,
         name=name or resolved_agent_id,
         override_model=override_model,
+        fallback_middleware_enabled=fallback_middleware_enabled,
     )

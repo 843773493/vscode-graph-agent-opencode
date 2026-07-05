@@ -19,11 +19,11 @@ src/
 ├── shared/         共享模块：API 客户端、常量、Webview-Host 通信协议
 ├── webview/        VS Code Webview 侧边栏宿主端（非 UI 渲染代码）
 ├── webview-ui/     VS Code Webview 前端 UI（React，端口 5173）
-├── web/            浏览器前端 UI ★优先开发★（React，端口 8001）
+├── web/            浏览器前端 UI ★优先开发★（React，端口 8011）
 └── test/           扩展集成测试
 ```
 
-**UI 开发优先级**：`src/web` > `src/webview-ui`。先在浏览器端（8001）开发调试，稳定后同步到 VS Code Webview（5173）。用户说"UI"时默认指 `src/web`。
+**UI 开发优先级**：`src/web` > `src/webview-ui`。先在浏览器端（8011，端口以根目录 `scripts/dev.mjs` 的 `frontendPort` 为准）开发调试，稳定后同步到 VS Code Webview（5173）。用户说"UI"时默认指 `src/web`。
 
 ## 可以修改
 

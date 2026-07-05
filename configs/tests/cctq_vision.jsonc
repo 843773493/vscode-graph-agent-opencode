@@ -8,6 +8,9 @@
         "model": "gpt-5.4-mini",
         "api_key": "${CCTQ_API_KEY}",
         "interface": "opencode_zen",
+        "capabilities": [
+          "image_input"
+        ],
         "request_options": {
           "extra_body": {
             "reasoning_effort": "low"

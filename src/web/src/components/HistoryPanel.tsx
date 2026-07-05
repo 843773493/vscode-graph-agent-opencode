@@ -81,7 +81,9 @@ function SessionButton({
         <span className="session-id">{session.session_id}</span>
       </div>
       {attachmentNames ? (
-        <div className="session-attachment-names">{attachmentNames}</div>
+        <div className="session-attachment-names" title={attachmentNames}>
+          {attachmentNames}
+        </div>
       ) : null}
     </button>
   );
@@ -101,6 +103,9 @@ export default function HistoryPanel({
   if (!isOpen) {
     return null;
   }
+  const listedSessions = sessions.filter(
+    (session) => session.session_id !== currentSessionId,
+  );
 
   return (
     <aside className="history-panel">
@@ -143,11 +148,11 @@ export default function HistoryPanel({
 
           <section className="history-section history-list-section">
             <div className="history-section-title">列表</div>
-            {sessions.length === 0 ? (
-              <div className="empty-state small">暂无会话</div>
+            {listedSessions.length === 0 ? (
+              <div className="empty-state small">暂无其他会话</div>
             ) : (
               <ul className="session-list">
-                {sessions.map(session => {
+                {listedSessions.map(session => {
                   const isActive = session.session_id === currentSessionId;
                   return (
                     <li key={session.session_id}>

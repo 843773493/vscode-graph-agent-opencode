@@ -1,5 +1,5 @@
 {
-  "$schema": "./config.json",
+  "$schema": "../config.jsonc",
   "llm": {
     "providers": [
       {
@@ -22,6 +22,21 @@
         "model": "openai/gpt-oss-120b:free",
         "api_key": "${OPENROUTER_API_KEY}",
         "interface": "opencode_zen"
+      },
+      {
+        "id": "backup_3",
+        "endpoint": "https://www.cctq.ai/v1",
+        "model": "gpt-5.4-mini",
+        "api_key": "${CCTQ_API_KEY}",
+        "interface": "opencode_zen",
+        "capabilities": [
+          "image_input"
+        ],
+        "request_options": {
+          "extra_body": {
+            "reasoning_effort": "low"
+          }
+        }
       }
     ]
   },
@@ -49,7 +64,8 @@
         "primary_provider": "primary",
         "fallback_providers": [
           "backup_1",
-          "backup_2"
+          "backup_2",
+          "backup_3"
         ],
         "temperature": 0.2,
         "top_p": 1,
@@ -134,7 +150,8 @@
         "primary_provider": "primary",
         "fallback_providers": [
           "backup_1",
-          "backup_2"
+          "backup_2",
+          "backup_3"
         ],
         "temperature": 0.15,
         "top_p": 1,
@@ -216,7 +233,8 @@
         "primary_provider": "primary",
         "fallback_providers": [
           "backup_1",
-          "backup_2"
+          "backup_2",
+          "backup_3"
         ],
         "temperature": 0.1,
         "top_p": 1,
@@ -301,7 +319,8 @@
         "primary_provider": "primary",
         "fallback_providers": [
           "backup_1",
-          "backup_2"
+          "backup_2",
+          "backup_3"
         ],
         "temperature": 0.2,
         "top_p": 1,

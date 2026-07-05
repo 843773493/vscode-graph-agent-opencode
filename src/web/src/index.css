@@ -436,6 +436,7 @@ body > #root {
   width: 100%;
   min-width: 0;
   min-height: 0;
+  position: relative;
 }
 .composer textarea {
   width: 100%;
@@ -482,6 +483,9 @@ body > #root {
   border-radius: 6px;
   border: 1px solid var(--vscode-panel-border);
 }
+.composer-attachment-video {
+  background: #000;
+}
 .composer-attachment-name {
   min-width: 0;
   overflow: hidden;
@@ -503,6 +507,109 @@ body > #root {
   color: #dc2626;
   font-size: 11px;
   line-height: 1.35;
+}
+.composer-attachment-notice {
+  padding: 4px 4px 0;
+  color: #15803d;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.composer-slash-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  width: min(520px, calc(100vw - 40px));
+  max-height: min(320px, 48vh);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 6px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 8px;
+  background: var(--vscode-input-background);
+  box-shadow: var(--surface-shadow);
+}
+.composer-slash-menu-item {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--vscode-input-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+.composer-slash-empty {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: var(--vscode-disabledForeground);
+}
+.composer-slash-menu-item:hover,
+.composer-slash-menu-item.active {
+  background: var(--vscode-list-hoverBackground);
+}
+.composer-slash-menu-item.disabled {
+  color: var(--vscode-disabledForeground);
+  cursor: default;
+}
+.composer-slash-menu-item.disabled:hover {
+  background: transparent;
+}
+.composer-slash-menu-item.disabled .composer-slash-command,
+.composer-slash-menu-item.disabled .composer-slash-description {
+  color: var(--vscode-disabledForeground);
+}
+.composer-slash-command {
+  font-family: var(
+    --vscode-editor-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    "Liberation Mono",
+    monospace
+  );
+  font-size: 13px;
+  color: var(--vscode-textLink-foreground);
+}
+.composer-slash-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.composer-slash-title {
+  font-size: 12px;
+  line-height: 1.25;
+}
+.composer-slash-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+.composer-slash-more {
+  position: sticky;
+  bottom: -6px;
+  margin: 4px -6px -6px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--vscode-panel-border);
+  background: color-mix(in srgb, var(--vscode-input-background), #fff 8%);
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
 }
 .composer-hint {
   min-width: 0;
@@ -806,6 +913,10 @@ body > #root {
 
 .message-attachment-thumb {
   object-fit: cover;
+}
+
+.message-attachment-video {
+  background: #000;
 }
 
 .message-attachment-icon {

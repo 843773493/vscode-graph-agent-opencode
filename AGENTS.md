@@ -37,7 +37,7 @@
 2. 仓库中的 JavaScript 代码必须始终使用 ESM（ES 模块）通过 `import`/`export`，避免使用 CommonJS。
 3. 前端目录负责页面、交互、状态、API 调用以及少量展示逻辑。
 4. 前端后端目录负责业务规则、权限、数据库、订单流程、风险控制和核心计算。
-5. **UI 优先开发 `src/web`（浏览器前端 8001），稳定后同步到 `src/webview-ui`（VS Code Webview 5173）。用户说"UI"默认指 `src/web`。**
+5. **UI 优先开发 `src/web`（浏览器前端 8011，端口以 `scripts/dev.mjs` 的 `frontendPort` 为准），稳定后同步到 `src/webview-ui`（VS Code Webview 5173）。用户说"UI"默认指 `src/web`。**
 
 ### 提交和目录规范
 
@@ -100,9 +100,10 @@
 
 ### 运行时说明
 
-1. 在 JS/TS 环境中使用 `bun`；使用 `bun install` 安装依赖，使用 `bun start` 启动前端开发。
-2. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖，并使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000` 启动后端服务器。
-3. API 文档可访问 http://127.0.0.1:8000/api/v1/docs
+1. 在 JS/TS 环境中使用 `bun`；使用 `bun install` 安装依赖，使用 `bun run dev` 启动本地开发环境。
+2. `bun run dev` 会执行 `scripts/dev.mjs`：后端监听 `127.0.0.1:8010`，`src/web` 浏览器前端监听 `127.0.0.1:8011`。
+3. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖。单独启动后端时使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8010`。
+4. API 文档可访问 http://127.0.0.1:8010/api/v1/docs
 
 ### 配置
 

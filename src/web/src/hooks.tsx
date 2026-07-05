@@ -237,7 +237,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       const session = state.currentSession;
-      setState((prev) => ({ ...prev, status: "正在发送消息" }));
+      const pendingSubmissionId = `pending_submission_${Date.now()}`;
+      const submittedAt = new Date().toISOString();
+      setState((prev) => {
+        const next = cloneMaps(prev);
+        const conversation: ConversationView = {
+          conversationId: pendingSubmissionId,
+          sessionId: session.session_id,
+          userMessage: {
+            message_id: pendingSubmissionId,
+            session_id: session.session_id,
+            role: "user",
+            content,
+            metadata: {
+              source: "optimistic",
+              pending_submission_id: pendingSubmissionId,
+            },
+            attachments,
+            created_at: submittedAt,
+            updated_at: submittedAt,
+          },
+          events: [],
+          status: "running",
+          jobId: null,
+          pending: true,
+          pendingSubmissionId,
+          source: "pending",
+        };
+        updateSessionAttachmentSummary(
+          next.sessionAttachmentSummaries,
+          session.session_id,
+          attachments,
+          submittedAt,
+        );
+        const pendingList =
+          next.pendingConversations.get(session.session_id) ?? [];
+        next.pendingConversations.set(session.session_id, [
+          ...pendingList,
+          conversation,
+        ]);
+        next.status = "正在发送消息";
+        next.contentView = "default";
+        return next;
+      });
 
       let accepted: MessageRunAccepted;
       try {
@@ -250,7 +292,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({ ...prev, status: `发送失败: ${message}` }));
+        setState((prev) => {
+          const next = cloneMaps(prev);
+          const pendingList =
+            next.pendingConversations.get(session.session_id) ?? [];
+          writePendingList(
+            next.pendingConversations,
+            session.session_id,
+            pendingList.filter(
+              (conversation) =>
+                conversation.pendingSubmissionId !== pendingSubmissionId,
+            ),
+          );
+          next.status = `发送失败: ${message}`;
+          return next;
+        });
         throw error;
       }
       const messageId = accepted.message_id ?? `local_user_${Date.now()}`;
@@ -258,7 +314,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       setState((prev) => {
         const next = cloneMaps(prev);
-        const now = new Date().toISOString();
         const conversation: ConversationView = {
           conversationId: messageId,
           sessionId: session.session_id,
@@ -267,26 +322,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             session_id: session.session_id,
             role: "user",
             content,
-            metadata: { source: "optimistic" },
+            metadata: {
+              source: "optimistic",
+              job_id: jobId,
+              pending_submission_id: pendingSubmissionId,
+            },
             attachments,
-            created_at: now,
-            updated_at: now,
+            created_at: submittedAt,
+            updated_at: submittedAt,
           },
           events: [],
           status: accepted.status === "queued" ? "queued" : "running",
           jobId,
           pending: true,
+          pendingSubmissionId,
           source: "pending",
         };
-        updateSessionAttachmentSummary(
-          next.sessionAttachmentSummaries,
-          session.session_id,
-          attachments,
-          now,
-        );
         const pendingList = next.pendingConversations.get(session.session_id) ?? [];
         next.pendingConversations.set(session.session_id, [
-          ...pendingList,
+          ...pendingList.filter(
+            (item) => item.pendingSubmissionId !== pendingSubmissionId,
+          ),
           conversation,
         ]);
         next.status =

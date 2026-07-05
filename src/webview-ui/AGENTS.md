@@ -30,4 +30,4 @@
 - 工具函数放在 `src/utils/` 下
 - Vite build 输出到 `dist/`，gitignore 中不跟踪 `node_modules/` 和 `dist/`
 - Webview 里尽量不要引入 Node.js built-in 模块，因为它跑在浏览器沙箱里
-- **此目录为 VS Code Webview UI，开发优先级次于 `src/web`（浏览器前端 8001）**
+- **此目录为 VS Code Webview UI，开发优先级次于 `src/web`（浏览器前端 8011，端口以根目录 `scripts/dev.mjs` 的 `frontendPort` 为准）**

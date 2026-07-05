@@ -430,6 +430,7 @@ def create_runtime_deep_agent_for_session(
     checkpointer: BaseCheckpointSaver | None = None,
     name: str | None = None,
     override_model: Any = None,
+    fallback_middleware_enabled: bool = True,
 ):
     if config_service is None:
         raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
@@ -445,7 +446,9 @@ def create_runtime_deep_agent_for_session(
         checkpointer=checkpointer,
         session_id=session_id,
         agent_id=agent_id,
-        fallback_middleware=runtime["fallback"],
+        fallback_middleware=runtime["fallback"]
+        if fallback_middleware_enabled and override_model is None
+        else None,
         sender_agent_id=sender_agent_id,
         enabled_tool_names=enabled_tool_names,
         enabled_runtime_middleware_names=enabled_runtime_middleware_names,

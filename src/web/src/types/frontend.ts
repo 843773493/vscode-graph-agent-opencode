@@ -51,6 +51,7 @@ export interface ConversationView {
   status: "queued" | "running" | "done" | "error";
   jobId: string | null;
   pending: boolean;
+  pendingSubmissionId?: string;
   source: "messages" | "pending";
 }
 

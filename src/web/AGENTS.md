@@ -4,6 +4,8 @@
 
 `src/web/` 是一个可直接在浏览器中运行的独立前端工程。它参考 `src/webview-ui/` 的 React + Vite + TypeScript 技术栈，但不依赖 VS Code webview 环境，也不依赖扩展宿主通信。
 
+通过根目录 `bun run dev` 启动时，本工程由 `scripts/dev.mjs` 拉起，浏览器前端端口为 `8011`。
+
 如果你主要写后端，可以把这里理解成：
 
 - 这是一个纯浏览器的前端应用入口

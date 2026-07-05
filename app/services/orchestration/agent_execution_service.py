@@ -26,6 +26,10 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_interrupt_state import SessionInterruptState
 from app.schemas.public_v2.message import AttachmentRef
 from app.agents.agent_factory import resolve_agent_id
+from app.agents.provider_capabilities import (
+    detect_required_capabilities,
+    select_providers_for_capabilities,
+)
 from app.services.infrastructure.attachment_content_service import build_human_content
 from app.services.infrastructure.config_service import ConfigService
 from app.abstractions.job_step_executor import JobStepExecutor
@@ -82,10 +86,11 @@ def _is_tracked_chat_model_event(name: str) -> bool:
 def _build_human_response_metadata(
     *,
     message_id: str | None,
+    display_content: str,
     attachments: list[AttachmentRef],
     message_created_at: str | None = None,
 ) -> dict[str, object]:
-    metadata: dict[str, object] = {}
+    metadata: dict[str, object] = {"display_content": display_content}
     if message_id:
         metadata["message_id"] = message_id
     if message_created_at:
@@ -270,7 +275,6 @@ class AgentExecutionService(JobStepExecutor):
         if self._background_message_bus is None:
             raise RuntimeError("AgentExecutionService 未绑定 BackgroundMessageBus")
         resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
-        agent = self._get_or_create_agent(session_id, resolved_agent_id)
         if self._bus is None:
             raise RuntimeError("AgentExecutionService 未绑定 JobEventBus")
         bus = self._bus
@@ -316,6 +320,7 @@ class AgentExecutionService(JobStepExecutor):
         human_content = build_human_content(message, resolved_attachments)
         human_response_metadata = _build_human_response_metadata(
             message_id=message_id,
+            display_content=message,
             attachments=resolved_attachments,
             message_created_at=message_created_at,
         )
@@ -328,38 +333,47 @@ class AgentExecutionService(JobStepExecutor):
 
             logger.info("[agent_execution_service] agent.astream_events begin: job_id=%s", effective_job_id)
 
-            # 为 fallback 收集需要的模型配置
+            # 为 fallback 收集需要的模型配置；多模态请求只使用声明了对应输入能力的 provider。
             runtime_config = self._config_service.get_agent_runtime_config(resolved_agent_id)
             providers = runtime_config.get("providers", [])
-            fallback_models = []
-            for provider in providers[1:]:
-                from app.agents.agent_factory import _build_model_from_provider
-                fallback_models.append(_build_model_from_provider(provider, runtime_config))
+            if not isinstance(providers, list):
+                raise TypeError("agent runtime providers 应为 list")
+            selected_providers = select_providers_for_capabilities(
+                providers,
+                detect_required_capabilities(human_content),
+            )
+            from app.agents.agent_factory import _build_model_from_provider
+
+            candidate_models = [
+                _build_model_from_provider(provider, runtime_config)
+                for provider in selected_providers
+            ]
+            if not candidate_models:
+                raise RuntimeError("当前 agent 没有可用的模型 provider")
 
             current_model_index = 0
             final_text = ""
 
             while True:
                 try:
-                    if current_model_index == 0:
-                        agent = self._get_or_create_agent(session_id, resolved_agent_id)
-                    else:
+                    if current_model_index > 0:
                         await _publish(EventType.AGENT_START, {
-                            "message": f"回退到模型 #{current_model_index} ({fallback_models[current_model_index - 1].__class__.__name__}) 继续处理",
+                            "message": f"回退到模型 #{current_model_index} ({candidate_models[current_model_index].__class__.__name__}) 继续处理",
                             "agent_id": resolved_agent_id,
                         })
                         logger.info("[agent_execution_service] fallback to model #%s: job_id=%s", current_model_index, effective_job_id)
-                        from app.runtime.agent_runtime import build_session_agent_runtime
-                        agent = build_session_agent_runtime(
-                            session_id=session_id,
-                            agent_id=resolved_agent_id,
-                            config_service=self._config_service,
-                            background_task_registry=self._background_task_registry,
-                            background_message_bus=self._background_message_bus,
-                            job_event_bus=self._bus,
-                            dependency_provider=self._dependency_provider,
-                            override_model=fallback_models[current_model_index - 1],
-                        )
+
+                    agent = build_session_agent_runtime(
+                        session_id=session_id,
+                        agent_id=resolved_agent_id,
+                        config_service=self._config_service,
+                        background_task_registry=self._background_task_registry,
+                        background_message_bus=self._background_message_bus,
+                        job_event_bus=self._bus,
+                        dependency_provider=self._dependency_provider,
+                        override_model=candidate_models[current_model_index],
+                        fallback_middleware_enabled=False,
+                    )
 
                     collected_text_parts.clear()
                     collected_reasoning_parts.clear()
@@ -494,7 +508,7 @@ class AgentExecutionService(JobStepExecutor):
 
                 except Exception as e:
                     # 检查是否还有 fallback 模型可用
-                    if current_model_index < len(fallback_models):
+                    if current_model_index + 1 < len(candidate_models):
                         logger.warning("[agent_execution_service] model #%s failed, trying fallback #%s: job_id=%s error=%s", current_model_index, current_model_index + 1, effective_job_id, str(e))
                         current_model_index += 1
                         continue

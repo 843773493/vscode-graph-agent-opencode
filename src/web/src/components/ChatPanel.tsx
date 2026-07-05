@@ -27,6 +27,7 @@ function EventCard({
   raw,
   index,
   attachments = [],
+  defaultOpen = false,
 }: {
   title: string;
   kind:
@@ -46,8 +47,14 @@ function EventCard({
   raw: Record<string, unknown>;
   index: number;
   attachments?: AttachmentRef[];
+  defaultOpen?: boolean;
 }): React.ReactNode {
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(defaultOpen);
+  React.useEffect(() => {
+    if (defaultOpen) {
+      setOpen(true);
+    }
+  }, [defaultOpen]);
   const collapsedText =
     collapsedContent ?? (content || summary || "（无可读内容）");
 
@@ -156,6 +163,7 @@ function AggregatedTextCard({
       time={displayTime(item.timestamp)}
       summary={`${item.eventCount} 个${phaseLabel}事件已合并`}
       content={text || "（空）"}
+      collapsedContent={isReasoning ? "推理过程已折叠" : undefined}
       raw={{
         aggregated: true,
         eventCount: item.eventCount,
@@ -165,6 +173,7 @@ function AggregatedTextCard({
         rawEvents: item.rawEvents,
       }}
       index={index}
+      defaultOpen={!item.active && !isReasoning}
     />
   );
 }

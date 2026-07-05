@@ -39,6 +39,9 @@ class MessageService:
         extracted = MessageService._extract_content(message)
         content = extracted["content"]
         response_metadata = message.response_metadata or {}
+        display_content = response_metadata.get("display_content")
+        if role == MessageRole.user and isinstance(display_content, str):
+            content = display_content
         message_id = response_metadata.get("message_id") or f"msg_{index:06d}"
         created_at = MessageService._metadata_datetime(response_metadata, "created_at")
         updated_at = MessageService._metadata_datetime(response_metadata, "updated_at")
@@ -162,6 +165,7 @@ class MessageService:
             record["name"] = name
 
         response_metadata = dict(message.response_metadata or {})
+        response_metadata.pop("display_content", None)
         phase = response_metadata.get("phase")
         if not isinstance(phase, str) and isinstance(message, AIMessage):
             content = extracted["content"]

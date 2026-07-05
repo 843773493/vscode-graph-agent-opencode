@@ -99,6 +99,21 @@
             "litellm"
           ]
         },
+        "capabilities": {
+          "type": "array",
+          "description": "Provider capabilities used by request routing. Use image_input, video_input or audio_input. vision is accepted as a legacy alias for image_input.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "text_input",
+              "image_input",
+              "video_input",
+              "audio_input",
+              "vision"
+            ]
+          },
+          "uniqueItems": true
+        },
         "auth_header": {
           "type": "string",
           "minLength": 1

@@ -199,6 +199,55 @@ async def test_message_service_preserves_image_blocks_in_agent_state(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_message_service_uses_display_content_for_user_message_text(tmp_path):
+    """用户消息列表应显示原始输入，不把内部附件处理提示混成用户正文。"""
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_video_display", "checkpoint_ns": ""}}
+    user_message = HumanMessage(
+        content=[
+            {"type": "text", "text": "请按时间顺序说明这个视频。"},
+            {
+                "type": "text",
+                "text": "视频附件 demo.mp4 已抽取为 3 个按时间顺序排列的关键帧。",
+            },
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,abc123"}},
+        ],
+        response_metadata={
+            "message_id": "msg_video",
+            "display_content": "请按时间顺序说明这个视频。",
+            "attachments": [
+                AttachmentRef(
+                    file_id="assets/demo.mp4",
+                    name="demo.mp4",
+                    content_type="video/mp4",
+                ).model_dump(mode="json")
+            ],
+        },
+    )
+    checkpoint = {
+        "channel_values": {"messages": [user_message]},
+        "channel_versions": {"messages": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-video-display",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
+
+    service = MessageService(checkpointer=saver)
+    messages = await service.list(session_id="sess_video_display", limit=10)
+    assert messages.items[0].content == "请按时间顺序说明这个视频。"
+    assert "已抽取为" not in messages.items[0].content
+
+    state_snapshot = await service.get_agent_state_messages("sess_video_display")
+    records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
+    assert "display_content" not in records[0].get("response_metadata", {})
+
+
+@pytest.mark.asyncio
 async def test_message_service_refusal_block(tmp_path):
     """验证 refusal 块被识别并标记。"""
     saver = FileSystemCheckpointSaver(base_dir=tmp_path)
