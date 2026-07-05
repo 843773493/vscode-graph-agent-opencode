@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目架构维护审查者"
+  short_description: "审查目录结构、AST 形状和 AGENTS.md"
+  default_prompt: "使用 $project-architecture-reviewer 审查最近代码变更的架构、目录结构、AST 组织和 AGENTS.md 合规性。"

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Playwright Remote Screen</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <main class="remote-app">
+      <header class="topbar">
+        <div class="identity">
+          <h1>Playwright Remote Screen</h1>
+          <span id="browser-id">uuid:12</span>
+        </div>
+        <div class="attach-controls">
+          <input id="browser-id-input" value="uuid:12" aria-label="browser id">
+          <button id="attach-toggle" type="button">Attach</button>
+        </div>
+      </header>
+
+      <section class="toolbar" aria-label="browser controls">
+        <button id="back-button" type="button" disabled>Back</button>
+        <button id="forward-button" type="button" disabled>Forward</button>
+        <button id="reload-button" type="button" disabled>Reload</button>
+        <button id="stop-button" type="button" disabled>Stop</button>
+        <button id="devtools-button" type="button">DevTools</button>
+        <form id="url-form" class="url-form">
+          <input id="address-input" type="url" value="https://www.bilibili.com/" aria-label="address" disabled>
+          <button id="go-button" type="submit" disabled>Go</button>
+        </form>
+      </section>
+
+      <section id="screen-stage" class="screen-stage" aria-label="remote screen">
+        <div id="screen-scroll" class="screen-scroll">
+          <canvas id="screen-canvas" class="screen-canvas" tabindex="0"></canvas>
+        </div>
+        <div id="screen-overlay" class="screen-overlay">Detached</div>
+      </section>
+
+      <footer class="status-row">
+        <span id="status-dot" class="status-dot detached"></span>
+        <span id="status-text">未连接</span>
+        <span id="page-title" class="page-title"></span>
+      </footer>
+    </main>
+    <script src="./main.js" type="module"></script>
+  </body>
+</html>

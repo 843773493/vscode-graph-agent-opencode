@@ -8,6 +8,7 @@ from typing import Optional
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.job_event_bus import EventType
 from app.schemas.public_v2.common import JobStatus
+from app.schemas.public_v2.message import AttachmentRef
 
 from app.services.business.message_service import MessageService
 from app.abstractions.job_step_executor import JobStepExecutor
@@ -20,6 +21,8 @@ class JobRuntimeState:
     message: str
     agent_id: str
     message_id: str | None = None
+    attachments: list[AttachmentRef] = field(default_factory=list)
+    message_created_at: str | None = None
     status: JobStatus = JobStatus.queued
     progress: int = 0
     error_message: Optional[str] = None
@@ -52,6 +55,8 @@ class JobExecutionService:
             agent_id=job.agent_id,
             job_id=job.job_id,
             message_id=job.message_id,
+            attachments=job.attachments,
+            message_created_at=job.message_created_at,
         )
 
         result_text = result if isinstance(result, str) else str(result)
@@ -81,5 +86,5 @@ class JobExecutionService:
             payload={"error": str(error)},
             agent_id="job_service",
         )
-        
+
         

@@ -1,8 +1,35 @@
-import { formatTime } from "../utils/format";
+import { formatDateTime } from "../utils/format";
 import type { FrontendReceivedEvent } from "../types/frontend";
 
+const DATA_IMAGE_PREFIX = "data:image/";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function redactLargeData(value: unknown): unknown {
+  if (typeof value === "string") {
+    if (value.startsWith(DATA_IMAGE_PREFIX)) {
+      const commaIndex = value.indexOf(",");
+      const header = commaIndex >= 0 ? value.slice(0, commaIndex) : DATA_IMAGE_PREFIX;
+      const payloadLength = commaIndex >= 0 ? value.length - commaIndex - 1 : value.length;
+      return `${header},<base64 ${payloadLength} chars redacted>`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(redactLargeData);
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactLargeData(item)]),
+    );
+  }
+  return value;
+}
+
 function prettyJson(value: unknown): string {
-  return JSON.stringify(value, null, 2) ?? "";
+  return JSON.stringify(redactLargeData(value), null, 2) ?? "";
 }
 
 function sourceLabel(source: FrontendReceivedEvent["source"]): string {
@@ -105,11 +132,49 @@ function textDeltaKind(item: FrontendReceivedEvent): string {
   return typeof kind === "string" ? kind : "";
 }
 
+function attachmentNames(payload: Record<string, unknown>): string[] {
+  const attachments = payload.attachments;
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+  return attachments.flatMap((attachment) => {
+    if (!isRecord(attachment)) {
+      return [];
+    }
+    const name = attachment.name ?? attachment.file_id;
+    return typeof name === "string" && name ? [name] : [];
+  });
+}
+
+function MessageCreatedSummary({
+  payload,
+}: {
+  payload: Record<string, unknown>;
+}) {
+  const content = typeof payload.content === "string" ? payload.content : "";
+  const names = attachmentNames(payload);
+  if (!content && names.length === 0) {
+    return null;
+  }
+  return (
+    <div className="event-queue-input-summary">
+      {content ? <div className="event-queue-input-text">{content}</div> : null}
+      {names.length > 0 ? (
+        <div className="event-queue-attachments">
+          {names.map((name) => (
+            <span key={name}>附件: {name}</span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function EventQueueCard({ item, index }: { item: FrontendReceivedEvent; index: number }) {
   const payload = eventPayload(item);
   const type = eventType(item);
-  const eventTime = formatTime(eventTimestamp(item));
-  const receivedTime = formatTime(item.receivedAt);
+  const eventTime = formatDateTime(eventTimestamp(item));
+  const receivedTime = formatDateTime(item.receivedAt);
   const event = item.kind === "trace" ? item.event : null;
   const jobId =
     event?.job_id && event.job_id !== "unknown_job" ? event.job_id : "";
@@ -141,6 +206,10 @@ function EventQueueCard({ item, index }: { item: FrontendReceivedEvent; index: n
         ) : null}
       </div>
 
+      {type === "message_created" ? (
+        <MessageCreatedSummary payload={payload} />
+      ) : null}
+
       <details className="event-queue-detail" open={index >= 0 && index < 3}>
         <summary>payload</summary>
         <pre>{prettyJson(payload)}</pre>
@@ -166,8 +235,8 @@ function TextDeltaGroupCard({
   const event = first?.kind === "trace" ? first.event : null;
   const jobId =
     event?.job_id && event.job_id !== "unknown_job" ? event.job_id : "";
-  const eventTime = first ? formatTime(eventTimestamp(first)) : "";
-  const receivedTime = last ? formatTime(last.receivedAt) : "";
+  const eventTime = first ? formatDateTime(eventTimestamp(first)) : "";
+  const receivedTime = last ? formatDateTime(last.receivedAt) : "";
   const mergedText = items.map(textDeltaText).join("");
   const deltaKinds = Array.from(
     new Set(items.map(textDeltaKind).filter((kind) => kind.length > 0)),

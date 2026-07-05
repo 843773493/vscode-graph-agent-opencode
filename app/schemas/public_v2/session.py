@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -67,3 +67,17 @@ class SessionInterruptResultDTO(BaseModel):
     phase: str
     tool_name: Optional[str] = None
     interrupted_at: datetime = Field(default_factory=lambda: datetime.now())
+
+
+class SessionCompactResultDTO(BaseModel):
+    session_id: str
+    status: Literal["compacted", "skipped"]
+    message: str
+    before_message_count: int
+    effective_message_count_before: int
+    effective_message_count_after: int
+    summarized_message_count: int
+    retained_message_count: int
+    summary: Optional[str] = None
+    history_file_path: Optional[str] = None
+    compacted_at: datetime = Field(default_factory=lambda: datetime.now())

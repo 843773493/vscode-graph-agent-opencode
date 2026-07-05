@@ -11,6 +11,7 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.job_event_bus import EventType
 from app.schemas.public_v2.common import JobStatus, RunMode, ControlAction
 from app.schemas.public_v2.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
+from app.schemas.public_v2.message import AttachmentRef
 
 from app.services.orchestration.job_execution_service import JobExecutionService, JobRuntimeState
 
@@ -22,6 +23,8 @@ class JobState:
     status: JobStatus
     message: str = ""
     message_id: str | None = None
+    attachments: list[AttachmentRef] = field(default_factory=list)
+    message_created_at: str | None = None
     agent_id: str = "default"
     progress: int = 0
     error_message: Optional[str] = None
@@ -119,7 +122,15 @@ class JobService:
             control_state=f"Action {control_request.action.value} applied successfully"
         )
 
-    async def start_job(self, session_id: str, message: str, agent_id: str = "default", message_id: str | None = None) -> str:
+    async def start_job(
+        self,
+        session_id: str,
+        message: str,
+        agent_id: str = "default",
+        message_id: str | None = None,
+        attachments: list[AttachmentRef] | None = None,
+        message_created_at: str | None = None,
+    ) -> str:
         import logging
         logger = logging.getLogger(__name__)
         logger.info(
@@ -137,6 +148,8 @@ class JobService:
             session_id=session_id,
             message=message,
             message_id=message_id,
+            attachments=list(attachments or []),
+            message_created_at=message_created_at,
             agent_id=agent_id,
             status=JobStatus.queued
         )
@@ -149,7 +162,15 @@ class JobService:
         await self._bus.publish(
             job_id=job_id,
             event_type=EventType.JOB_CREATED,
-            payload={"session_id": session_id, "message": message, "agent_id": agent_id},
+            payload={
+                "session_id": session_id,
+                "message": message,
+                "agent_id": agent_id,
+                "attachments": [
+                    attachment.model_dump(mode="json", exclude={"data_url"})
+                    for attachment in job.attachments
+                ],
+            },
             agent_id="job_service"
         )
         logger.info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", job_id, session_id)
@@ -270,7 +291,15 @@ class JobService:
                 await self._bus.publish(
                     job_id=job_id,
                     event_type=EventType.JOB_STARTED,
-                    payload={"session_id": session_id, "agent_id": job.agent_id, "message": message},
+                    payload={
+                        "session_id": session_id,
+                        "agent_id": job.agent_id,
+                        "message": message,
+                        "attachments": [
+                            attachment.model_dump(mode="json")
+                            for attachment in job.attachments
+                        ],
+                    },
                     agent_id="job_service",
                 )
 
@@ -280,6 +309,8 @@ class JobService:
                 message=job.message,
                 agent_id=job.agent_id,
                 message_id=job.message_id,
+                attachments=list(job.attachments),
+                message_created_at=job.message_created_at,
                 status=job.status,
                 progress=job.progress,
                 error_message=job.error_message,

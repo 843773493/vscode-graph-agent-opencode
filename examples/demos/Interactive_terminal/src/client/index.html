@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Interactive Terminal Prototype</title>
+    <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="terminal-app">
+      <header class="topbar">
+        <div>
+          <h1>Interactive Terminal</h1>
+          <p>terminalId: <code>uuid:12</code></p>
+        </div>
+        <div class="actions">
+          <button id="attach-toggle" type="button">Attach</button>
+          <input id="agent-command" type="text" value="echo agent-input-ok" aria-label="Agent 输入命令" />
+          <button id="agent-send" type="button" disabled>Agent 输入</button>
+        </div>
+      </header>
+
+      <section class="status-row" aria-live="polite">
+        <span id="status-dot" class="status-dot detached"></span>
+        <span id="status-text">未连接</span>
+      </section>
+
+      <section id="terminal-host" class="terminal-host"></section>
+    </main>
+
+    <script src="/vendor/xterm/xterm.js"></script>
+    <script src="/vendor/xterm/addon-fit.js"></script>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

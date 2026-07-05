@@ -24,7 +24,11 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.subagents import SubAgentMiddleware, SubAgent, CompiledSubAgent
 from deepagents.middleware.async_subagents import AsyncSubAgent
 from deepagents.middleware.skills import SkillsMiddleware
-from deepagents.middleware.summarization import create_summarization_middleware
+from deepagents.middleware.summarization import (
+    CompactConversationSchema,
+    SummarizationToolMiddleware,
+    create_summarization_middleware,
+)
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import InterruptOnConfig
@@ -33,6 +37,7 @@ from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from app.core.path_utils import get_checkpoints_dir, get_workspace_root
 from app.agents.agent_tools import build_default_tools
 from app.agents.agent_middleware import LLMLoggingMiddleware
+from app.agents.summarization_paths import apply_boxteam_summarization_paths
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.services.infrastructure.config_service import ConfigService
@@ -191,6 +196,19 @@ def _filter_subagent_specs(
     return filtered_specs
 
 
+def _build_summarization_middleware(model: BaseChatModel, backend: LocalShellBackend) -> list[AgentMiddleware]:
+    summarization = create_summarization_middleware(model, backend)
+    apply_boxteam_summarization_paths(summarization)
+    tool_middleware = SummarizationToolMiddleware(summarization)
+    for tool in tool_middleware.tools:
+        if getattr(tool, "name", "") == "compact_conversation":
+            tool.args_schema = CompactConversationSchema
+    return [
+        summarization,
+        tool_middleware,
+    ]
+
+
 def create_my_deep_agent(
     *,
     model: BaseChatModel,
@@ -278,7 +296,7 @@ def create_my_deep_agent(
     gp_middleware = [
         TodoListMiddleware(),
         FilesystemMiddleware(backend=backend, _permissions=permissions),
-        create_summarization_middleware(model, backend),
+        *_build_summarization_middleware(model, backend),
         PatchToolCallsMiddleware(),
     ]
     if skills:
@@ -301,7 +319,7 @@ def create_my_deep_agent(
             subagent_middleware = [
                 TodoListMiddleware(),
                 FilesystemMiddleware(backend=backend, _permissions=spec.get("permissions")),
-                create_summarization_middleware(model, backend),
+                *_build_summarization_middleware(model, backend),
                 PatchToolCallsMiddleware(),
             ]
             if spec.get("skills"):
@@ -337,7 +355,7 @@ def create_my_deep_agent(
                 backend=backend,
                 subagents=inline_subagents,
             ),
-            create_summarization_middleware(model, backend),
+            *_build_summarization_middleware(model, backend),
             PatchToolCallsMiddleware(),
         ]
     )

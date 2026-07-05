@@ -1,4 +1,5 @@
 import AgentStatePanel from "./components/AgentStatePanel";
+import BootstrapState from "./components/BootstrapState";
 import ChatPanel from "./components/ChatPanel";
 import Composer from "./components/Composer";
 import EventQueuePanel from "./components/EventQueuePanel";
@@ -44,7 +45,7 @@ export default function AppShell() {
             <div className="error-message">{state.error}</div>
           </div>
         ) : state.isBootstrapping ? (
-          <div className="empty-state">正在加载工作区与会话…</div>
+          <BootstrapState />
         ) : null}
         <div className="content-layout">
           <HistoryPanel
@@ -56,6 +57,7 @@ export default function AppShell() {
             workspaceName={state.workspaceName ?? ""}
             workspaceRoot={state.workspaceRoot ?? ""}
             activeSession={activeSession}
+            sessionAttachmentSummaries={state.sessionAttachmentSummaries}
           />
           <section className="chat-panel">
             {state.contentView === "agent" ? (

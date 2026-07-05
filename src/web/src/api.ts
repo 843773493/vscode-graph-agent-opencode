@@ -1,12 +1,16 @@
 import type {
+  Agent,
   AgentStateMessages,
   APIResponse,
+  AttachmentRef,
   CursorPage,
   InterruptSessionResult,
   Message,
   MessageRunAccepted,
   MessageRunRequest,
   Session,
+  SessionCompactResult,
+  SessionUpdateRequest,
   TraceEvent,
   WorkspaceInfo,
 } from "./types/backend";
@@ -126,6 +130,12 @@ export async function listSessions(port: number): Promise<CursorPage<Session>> {
   return normalizePageResult<Session>(unwrapApiData(data));
 }
 
+export async function listAgents(port: number): Promise<Agent[]> {
+  return unwrapApiData(
+    await requestJson<APIResponse<Agent[]>>(port, "/api/v1/agents"),
+  );
+}
+
 export async function createSession(
   port: number,
   title: string = DEFAULT_SESSION_TITLE,
@@ -135,6 +145,44 @@ export async function createSession(
       method: "POST",
       body: JSON.stringify({ title }),
     }),
+  );
+}
+
+export async function updateSession(
+  port: number,
+  sessionId: string,
+  payload: SessionUpdateRequest,
+): Promise<Session> {
+  return unwrapApiData(
+    await requestJson<APIResponse<Session>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ),
+  );
+}
+
+export function updateSessionAgent(
+  port: number,
+  sessionId: string,
+  agentId: string,
+): Promise<Session> {
+  return updateSession(port, sessionId, { agent_id: agentId });
+}
+
+export async function compactSessionContext(
+  port: number,
+  sessionId: string,
+): Promise<SessionCompactResult> {
+  return unwrapApiData(
+    await requestJson<APIResponse<SessionCompactResult>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`,
+      { method: "POST" },
+    ),
   );
 }
 
@@ -183,12 +231,13 @@ export async function sendUserMessage(
   sessionId: string,
   content: string,
   agentId: string = DEFAULT_AGENT_ID,
+  attachments: AttachmentRef[] = [],
 ): Promise<MessageRunAccepted> {
   const payload: MessageRunRequest = {
     message: {
       role: "user",
       content,
-      attachments: [],
+      attachments,
       metadata: {},
     },
     run: {

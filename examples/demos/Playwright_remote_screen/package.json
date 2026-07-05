@@ -1,0 +1,17 @@
+{
+  "name": "playwright-remote-screen-prototype",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server/server.js",
+    "dev": "node src/server/server.js",
+    "command": "node src/server/commandClient.js",
+    "test": "bun test",
+    "check": "node scripts/check.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.61.1",
+    "ws": "^8.21.0"
+  }
+}

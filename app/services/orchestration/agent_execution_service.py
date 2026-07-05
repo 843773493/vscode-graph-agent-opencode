@@ -24,7 +24,9 @@ from app.core.job_context import (
 from app.core.job_event_bus import EventType
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_interrupt_state import SessionInterruptState
+from app.schemas.public_v2.message import AttachmentRef
 from app.agents.agent_factory import resolve_agent_id
+from app.services.infrastructure.attachment_content_service import build_human_content
 from app.services.infrastructure.config_service import ConfigService
 from app.abstractions.job_step_executor import JobStepExecutor
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider, build_session_agent_runtime
@@ -75,6 +77,26 @@ def _extract_tool_result_text(output: Any) -> str:
 
 def _is_tracked_chat_model_event(name: str) -> bool:
     return name in CHAT_MODEL_EVENT_NAMES
+
+
+def _build_human_response_metadata(
+    *,
+    message_id: str | None,
+    attachments: list[AttachmentRef],
+    message_created_at: str | None = None,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    if message_id:
+        metadata["message_id"] = message_id
+    if message_created_at:
+        metadata["created_at"] = message_created_at
+        metadata["updated_at"] = message_created_at
+    if attachments:
+        metadata["attachments"] = [
+            attachment.model_dump(mode="json", exclude={"data_url"})
+            for attachment in attachments
+        ]
+    return metadata
 
 
 class AgentExecutionService(JobStepExecutor):
@@ -231,7 +253,16 @@ class AgentExecutionService(JobStepExecutor):
         except Exception:
             pass
 
-    async def run_step(self, session_id: str, message: str, agent_id: str | None = None, job_id: str | None = None, message_id: str | None = None) -> str:
+    async def run_step(
+        self,
+        session_id: str,
+        message: str,
+        agent_id: str | None = None,
+        job_id: str | None = None,
+        message_id: str | None = None,
+        attachments: list[AttachmentRef] | None = None,
+        message_created_at: str | None = None,
+    ) -> str:
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
         if self._background_task_registry is None:
@@ -281,6 +312,13 @@ class AgentExecutionService(JobStepExecutor):
         active_tool_call_id: str | None = None
         active_tool_name: str | None = None
         active_tool_args: dict[str, Any] = {}
+        resolved_attachments = list(attachments or [])
+        human_content = build_human_content(message, resolved_attachments)
+        human_response_metadata = _build_human_response_metadata(
+            message_id=message_id,
+            attachments=resolved_attachments,
+            message_created_at=message_created_at,
+        )
 
         try:
             await _publish(EventType.AGENT_START, {
@@ -331,7 +369,14 @@ class AgentExecutionService(JobStepExecutor):
                     active_tool_args = {}
 
                     async for event in agent.astream_events(
-                        {"messages": [HumanMessage(content=message, response_metadata={"message_id": message_id} if message_id else {})]},
+                        {
+                            "messages": [
+                                HumanMessage(
+                                    content=human_content,
+                                    response_metadata=human_response_metadata,
+                                )
+                            ]
+                        },
                         config=config,
                         version="v2",
                     ):

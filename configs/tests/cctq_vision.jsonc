@@ -1,0 +1,45 @@
+{
+  "$schema": "../config.jsonc",
+  "llm": {
+    "providers": [
+      {
+        "id": "backup_3",
+        "endpoint": "https://www.cctq.ai/v1",
+        "model": "gpt-5.4-mini",
+        "api_key": "${CCTQ_API_KEY}",
+        "interface": "opencode_zen",
+        "request_options": {
+          "extra_body": {
+            "reasoning_effort": "low"
+          }
+        }
+      }
+    ]
+  },
+  "logger": {
+    "level": "info",
+    "pretty": true
+  },
+  "default_agent": "default",
+  "agents": {
+    "default": {
+      "name": "Vision Test Assistant",
+      "description": "只用于 e2e 图片输入识别测试的助手。",
+      "language": "zh-CN",
+      "instructions": {
+        "system_prompt": "你是一个图片识别测试助手。回答必须简短、直接，并准确描述用户提供图片中的可见几何图形和颜色。"
+      },
+      "model": {
+        "primary_provider": "backup_3",
+        "fallback_providers": [],
+        "temperature": 0,
+        "top_p": 1,
+        "max_output_tokens": 1000
+      },
+      "tools": {
+        "denylist": [],
+        "confirmation_required": []
+      }
+    }
+  }
+}

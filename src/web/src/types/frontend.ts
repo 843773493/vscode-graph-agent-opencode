@@ -1,5 +1,5 @@
 // 前端内部类型
-import type { Message, Session, TraceEvent } from "./backend";
+import type { Agent, Message, Session, SessionCompactResult, TraceEvent } from "./backend";
 
 export type ConversationContentView = "default" | "events" | "agent";
 
@@ -28,6 +28,8 @@ export interface FrontendReceivedLifecycleEvent
   type:
     | "session_selected"
     | "session_created"
+    | "agent_switched"
+    | "context_compacted"
     | "session_load_started"
     | "session_load_completed"
     | "session_load_failed";
@@ -52,11 +54,19 @@ export interface ConversationView {
   source: "messages" | "pending";
 }
 
+export interface SessionAttachmentSummary {
+  count: number;
+  names: string[];
+  latestAt: string | null;
+}
+
 export interface AppState {
   apiPort: number | null;
   workspaceRoot: string | null;
   workspaceName: string | null;
+  agents: Agent[];
   sessions: Session[];
+  sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
   currentSession: Session | null;
   messages: Message[];
   traceEvents: TraceEvent[];
@@ -73,4 +83,6 @@ export interface AppState {
   agentStateLoadedAt: string | null;
   agentStateLoading: boolean;
   agentStateError: string | null;
+  compactLoading: boolean;
+  lastCompactResult: SessionCompactResult | null;
 }

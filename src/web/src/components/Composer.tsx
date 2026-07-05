@@ -1,31 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAppState } from "../hooks";
+import { VIEW_OPTIONS } from "../state/contentViews";
 import type { ConversationContentView } from "../types/frontend";
-
-type ViewOption = {
-  id: ConversationContentView;
-  label: string;
-  description: string;
-};
-
-const VIEW_OPTIONS: ViewOption[] = [
-  {
-    id: "default",
-    label: "默认视图",
-    description: "显示对话消息、推理过程和 trace 细节",
-  },
-  {
-    id: "events",
-    label: "事件视图",
-    description: "查看前端收到的当前会话事件队列",
-  },
-  {
-    id: "agent",
-    label: "Agent 视图",
-    description: "查看 Agent State messages 快照",
-  },
-  // TODO: 后续添加更多视图时，在这里扩展菜单项并接入对应面板。
-];
+import {
+  fileToSelectedAttachment,
+  IMAGE_ONLY_PROMPT,
+  imageFilesFromClipboard,
+  type SelectedAttachment,
+} from "../utils/imageAttachments";
+import ComposerActionButtons from "./ComposerActionButtons";
+import ComposerAgentControl from "./ComposerAgentControl";
+import ComposerAttachmentTray from "./ComposerAttachmentTray";
+import ComposerViewControl from "./ComposerViewControl";
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) {
@@ -41,14 +27,26 @@ function insertLineBreak(value: string, start: number, end: number): string {
 }
 
 export default function Composer() {
-  const { state, sendMessage, interruptSession, switchContentView } =
+  const {
+    state,
+    sendMessage,
+    compactSession,
+    interruptSession,
+    switchAgent,
+    switchContentView,
+  } =
     useAppState();
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState("");
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
+  const agentMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const hasContent = input.trim().length > 0;
+  const hasContent = input.trim().length > 0 || attachments.length > 0;
   const currentAgent = state.currentSession?.current_agent_id || "default";
   const currentView =
     VIEW_OPTIONS.find((option) => option.id === state.contentView) ??
@@ -97,16 +95,95 @@ export default function Composer() {
     };
   }, [viewMenuOpen]);
 
-  const handleSend = () => {
-    const content = input.trim();
-    if (!content) {
+  useEffect(() => {
+    if (!agentMenuOpen) {
       return;
     }
 
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        agentMenuRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setAgentMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [agentMenuOpen]);
+
+  const handleSend = () => {
+    const typedContent = input.trim();
+    if (!typedContent && attachments.length === 0) {
+      return;
+    }
+
+    const content = typedContent || IMAGE_ONLY_PROMPT;
+    const sentAttachments = attachments;
     setInput("");
-    void sendMessage(content).catch(() => {
+    setAttachments([]);
+    setAttachmentError("");
+    void sendMessage(
+      content,
+      sentAttachments.map(({ previewUrl, ...attachment }) => attachment),
+    ).catch(() => {
       setInput(content);
+      setAttachments(sentAttachments);
     });
+  };
+
+  const handleAttachClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    try {
+      const attachment = await fileToSelectedAttachment(file);
+      setAttachments([attachment]);
+      setAttachmentError("");
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handlePaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = imageFilesFromClipboard(event.clipboardData);
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    try {
+      const pastedAttachments = await Promise.all(
+        imageFiles.map((file, index) => fileToSelectedAttachment(file, index)),
+      );
+      setAttachments(pastedAttachments);
+      setAttachmentError("");
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleRemoveAttachment = () => {
+    setAttachments([]);
+    setAttachmentError("");
+  };
+
+  const handleClear = () => {
+    setInput("");
+    setAttachments([]);
+    setAttachmentError("");
   };
 
   const handleInterrupt = () => {
@@ -117,9 +194,24 @@ export default function Composer() {
     void interruptSession();
   };
 
+  const handleCompact = () => {
+    if (!state.currentSession || state.compactLoading) {
+      return;
+    }
+
+    void compactSession();
+  };
+
   const handleViewSelect = (view: ConversationContentView) => {
     setViewMenuOpen(false);
     void switchContentView(view);
+  };
+
+  const handleAgentSelect = (agentId: string) => {
+    setAgentMenuOpen(false);
+    void switchAgent(agentId).catch(() => {
+      // 错误状态由 AppProvider 写入，菜单这里不吞掉后端错误表现。
+    });
   };
 
   const handleViewMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -128,6 +220,14 @@ export default function Composer() {
     }
     e.preventDefault();
     setViewMenuOpen(false);
+  };
+
+  const handleAgentMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape") {
+      return;
+    }
+    e.preventDefault();
+    setAgentMenuOpen(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -162,16 +262,31 @@ export default function Composer() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             rows={1}
+          />
+          <ComposerAttachmentTray
+            attachments={attachments}
+            error={attachmentError}
+            onRemove={handleRemoveAttachment}
           />
         </div>
         <div className="composer-actions">
           <div className="composer-actions-left">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="composer-file-input"
+              onChange={handleFileChange}
+            />
             <button
               id="attachButton"
               type="button"
               className="composer-icon-button"
+              onClick={handleAttachClick}
               title="添加附件"
+              aria-label="添加图片附件"
             >
               <svg
                 viewBox="0 0 16 16"
@@ -193,135 +308,34 @@ export default function Composer() {
           </div>
           <div className="composer-actions-right">
             <div className="composer-actions-row">
-              <div
-                ref={viewMenuRef}
-                className="composer-view-control"
+              <ComposerViewControl
+                controlRef={viewMenuRef}
+                currentView={currentView}
+                selectedView={state.contentView}
+                open={viewMenuOpen}
+                onToggle={() => setViewMenuOpen((open) => !open)}
+                onSelect={handleViewSelect}
                 onKeyDown={handleViewMenuKeyDown}
-              >
-                <button
-                  id="viewModeButton"
-                  type="button"
-                  className="composer-icon-button composer-view-button"
-                  onClick={() => setViewMenuOpen((open) => !open)}
-                  title={`打开视图菜单，当前：${currentView.label}。${currentView.description}`}
-                  aria-label={`打开视图菜单，当前：${currentView.label}`}
-                  aria-haspopup="menu"
-                  aria-expanded={viewMenuOpen}
-                >
-                  <svg
-                    viewBox="0 0 16 16"
-                    width="12"
-                    height="12"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M2.5 4.5A1.5 1.5 0 0 1 4 3h8a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 12 13H4a1.5 1.5 0 0 1-1.5-1.5v-7Zm3 0v7M7.5 6h4M7.5 8.5h4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </button>
-                {viewMenuOpen && (
-                  <div className="composer-view-menu" role="menu">
-                    {VIEW_OPTIONS.map((option) => (
-                      <button
-                        key={option.id}
-                        type="button"
-                        className={`composer-view-menu-item${
-                          option.id === state.contentView ? " active" : ""
-                        }`}
-                        role="menuitemradio"
-                        aria-checked={option.id === state.contentView}
-                        title={option.description}
-                        onClick={() => handleViewSelect(option.id)}
-                      >
-                        <span className="composer-view-menu-label">
-                          {option.label}
-                        </span>
-                        <span className="composer-view-menu-description">
-                          {option.description}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <button
-                id="agentSelectButton"
-                type="button"
-                className="composer-agent-button"
-                title={`选择Agent: ${currentAgent}`}
-              >
-                <span className="composer-agent-label">{currentAgent}</span>
-                <svg viewBox="0 0 16 16" width="12" height="12">
-                  <path d="M8 1L9 4H12L9.5 6L10.5 9L8 7L5.5 9L6.5 6L4 4H7L8 1ZM4 10L5 13H8L6.5 15L7.5 12H10.5L9.5 15H12.5L11.5 12H14.5L13 10H4z" />
-                </svg>
-              </button>
-              {hasContent && (
-                <button
-                  id="clearInputButton"
-                  type="button"
-                  title="清空输入"
-                  className="composer-icon-button hover-only"
-                  onClick={() => setInput("")}
-                >
-                  <svg
-                    viewBox="0 0 16 16"
-                    width="12"
-                    height="12"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M3 3l10 10M13 3L3 13"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      fill="none"
-                    />
-                  </svg>
-                </button>
-              )}
-              {showInterrupt && (
-                <button
-                  id="interruptButton"
-                  type="button"
-                  className="composer-icon-button interrupt-button"
-                  onClick={handleInterrupt}
-                  title="中断生成"
-                >
-                  <svg
-                    viewBox="0 0 16 16"
-                    width="12"
-                    height="12"
-                    aria-hidden="true"
-                  >
-                    <rect
-                      x="3"
-                      y="3"
-                      width="10"
-                      height="10"
-                      rx="2"
-                      fill="currentColor"
-                    />
-                  </svg>
-                </button>
-              )}
-              <button
-                id="sendButton"
-                type="button"
-                className="send-button"
-                disabled={!hasContent}
-                onClick={handleSend}
-                title={hasContent ? "发送消息" : "输入消息以启用发送"}
-              >
-                <svg viewBox="0 0 16 16" width="12" height="12">
-                  <path d="M1.5 1.5L14.5 8L1.5 14.5V9L10 8L1.5 7V1.5Z" />
-                </svg>
-              </button>
+              />
+              <ComposerAgentControl
+                controlRef={agentMenuRef}
+                agents={state.agents}
+                currentAgent={currentAgent}
+                open={agentMenuOpen}
+                onToggle={() => setAgentMenuOpen((open) => !open)}
+                onSelect={handleAgentSelect}
+                onKeyDown={handleAgentMenuKeyDown}
+              />
+              <ComposerActionButtons
+                hasContent={hasContent}
+                hasSession={Boolean(state.currentSession)}
+                compactLoading={state.compactLoading}
+                showInterrupt={showInterrupt}
+                onCompact={handleCompact}
+                onClear={handleClear}
+                onInterrupt={handleInterrupt}
+                onSend={handleSend}
+              />
             </div>
           </div>
         </div>

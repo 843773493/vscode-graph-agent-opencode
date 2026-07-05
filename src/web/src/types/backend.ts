@@ -32,15 +32,27 @@ export interface Session {
   updated_at: string;
 }
 
+export interface SessionUpdateRequest {
+  title?: string | null;
+  agent_id?: string | null;
+}
+
 export interface Message {
   message_id: string;
   session_id: string;
   role: "user" | "assistant" | "system" | "tool";
   content: string;
-  attachments?: Array<Record<string, unknown>>;
+  attachments?: AttachmentRef[];
   metadata?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+}
+
+export interface AttachmentRef {
+  file_id: string;
+  name?: string | null;
+  content_type?: string | null;
+  data_url?: string | null;
 }
 
 export interface AgentStateMessages {
@@ -63,7 +75,7 @@ export interface MessageRunRequest {
   message: {
     role?: Message["role"];
     content: string;
-    attachments?: Array<Record<string, unknown>>;
+    attachments?: AttachmentRef[];
     metadata?: Record<string, unknown>;
   };
   run: RunOptions;
@@ -82,6 +94,20 @@ export interface InterruptSessionResult {
   phase: string;
   tool_name?: string | null;
   interrupted_at: string;
+}
+
+export interface SessionCompactResult {
+  session_id: string;
+  status: "compacted" | "skipped";
+  message: string;
+  before_message_count: number;
+  effective_message_count_before: number;
+  effective_message_count_after: number;
+  summarized_message_count: number;
+  retained_message_count: number;
+  summary?: string | null;
+  history_file_path?: string | null;
+  compacted_at: string;
 }
 
 export type KnownTraceEventType =

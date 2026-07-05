@@ -18,6 +18,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.schemas.public_v2.common import CursorPage, MessageRole
 from app.schemas.public_v2.message import (
     AgentStateMessagesDTO,
+    AttachmentRef,
     MessageCreateRequest,
     MessageDTO,
 )
@@ -39,6 +40,8 @@ class MessageService:
         content = extracted["content"]
         response_metadata = message.response_metadata or {}
         message_id = response_metadata.get("message_id") or f"msg_{index:06d}"
+        created_at = MessageService._metadata_datetime(response_metadata, "created_at")
+        updated_at = MessageService._metadata_datetime(response_metadata, "updated_at")
         metadata: dict[str, object] = {
             "langchain_type": message.type,
             "tool_calls": getattr(message, "tool_calls", None) or [],
@@ -54,11 +57,21 @@ class MessageService:
             session_id=session_id,
             role=role,
             content=content,
-            attachments=[],
+            attachments=MessageService._attachments_from_metadata(response_metadata),
             metadata=metadata,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=created_at,
+            updated_at=updated_at,
         )
+
+    @staticmethod
+    def _metadata_datetime(metadata: Mapping[object, object], key: str) -> datetime:
+        value = metadata.get(key)
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str) and value:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        # TODO: 旧 checkpoint 没有消息时间戳；清理完旧数据后改为严格要求该字段。
+        return datetime.now()
 
     @staticmethod
     def _detect_role(message: BaseMessage) -> MessageRole:
@@ -86,6 +99,31 @@ class MessageService:
         if callable(model_dump):
             return MessageService._json_safe(model_dump(mode="json"))
         return str(value)
+
+    @staticmethod
+    def _attachments_from_metadata(metadata: Mapping[object, object]) -> list[AttachmentRef]:
+        raw_attachments = metadata.get("attachments")
+        if not isinstance(raw_attachments, Sequence) or isinstance(
+            raw_attachments, (str, bytes, bytearray)
+        ):
+            return []
+
+        attachments: list[AttachmentRef] = []
+        for item in raw_attachments:
+            if isinstance(item, AttachmentRef):
+                attachments.append(item)
+                continue
+            if isinstance(item, Mapping):
+                attachments.append(
+                    AttachmentRef.model_validate(
+                        {str(key): value for key, value in item.items()}
+                    )
+                )
+                continue
+            raise TypeError(
+                f"message.response_metadata.attachments 中出现不支持的元素类型: {type(item).__name__}"
+            )
+        return attachments
 
     @staticmethod
     def _is_system_reminder_only_message(message: BaseMessage) -> bool:
@@ -246,6 +284,29 @@ class MessageService:
                 refusal_text = part.get("refusal", "")
                 text_parts.append(f"[拒绝]{refusal_text}")
                 content_blocks.append({"type": "text", "text": f"[拒绝]{refusal_text}"})
+            elif part_type == "image_url":
+                image_url = part.get("image_url")
+                if isinstance(image_url, Mapping):
+                    content_blocks.append(
+                        {
+                            "type": "image_url",
+                            "image_url": MessageService._json_safe(image_url),
+                        }
+                    )
+                elif isinstance(image_url, str):
+                    content_blocks.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image_url},
+                        }
+                    )
+            elif part_type == "image":
+                content_blocks.append(
+                    {
+                        str(key): MessageService._json_safe(value)
+                        for key, value in part.items()
+                    }
+                )
             elif part_type == "function_call":
                 name = part.get("name", "unknown_tool")
                 args = part.get("arguments", "")

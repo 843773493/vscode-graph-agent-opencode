@@ -4,625 +4,64 @@ import React, {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import {
+  compactSessionContext as apiCompactSessionContext,
   createSession as apiCreateSession,
   DEFAULT_BACKEND_PORT,
-  getAgentStateMessages as apiGetAgentStateMessages,
   interruptSession as apiInterruptSession,
+  listAgents as apiListAgents,
   sendUserMessage as apiSendMessage,
   DEFAULT_SESSION_TITLE,
   getSessionTraces,
   getWorkspace,
   listMessages,
   listSessions,
-  streamSessionEvents,
-  type SessionStreamEvent,
+  updateSessionAgent as apiUpdateSessionAgent,
 } from "./api";
-import type { Message, MessageRunAccepted, TraceEvent } from "./types/backend";
+import type {
+  AttachmentRef,
+  MessageRunAccepted,
+} from "./types/backend";
 import type {
   AppState,
   ConversationContentView,
   ConversationView,
-  FrontendEventSource,
-  FrontendReceivedEvent,
 } from "./types/frontend";
+import { cloneMaps } from "./state/appStateMaps";
+import {
+  updateAttachmentSummariesFromMessages,
+  updateAttachmentSummariesFromTraces,
+  updateSessionAttachmentSummary,
+} from "./state/attachments";
+import {
+  getConversationsForSession,
+  writePendingList,
+} from "./state/conversations";
+import { readLastSessionId, writeLastSessionId } from "./state/storage";
+import {
+  appendFrontendEvent,
+  appendReceivedEvents,
+  dedupeTraceEvents,
+} from "./state/traceEvents";
+import {
+  resetAgentStateFields,
+  useAgentStateLoader,
+} from "./hooks/useAgentStateLoader";
+import { usePendingConversationPoller } from "./hooks/usePendingConversationPoller";
+import { useSessionEventStream } from "./hooks/useSessionEventStream";
 
-export const FRONTEND_EVENT_QUEUE_LIMIT = 200;
-
-function groupMessagesIntoConversations(
-  messages: Message[],
-): ConversationView[] {
-  const conversations: ConversationView[] = [];
-  let current: ConversationView | null = null;
-
-  for (const message of messages) {
-    if (message.role === "user") {
-      current = {
-        conversationId:
-          message.message_id || `conversation_${conversations.length}`,
-        sessionId: message.session_id,
-        userMessage: message,
-        events: [],
-        status: "done",
-        jobId: String(message.metadata?.job_id ?? "") || null,
-        pending: false,
-        source: "messages",
-      };
-      conversations.push(current);
-      continue;
-    }
-
-    if (!current) {
-      // 助手消息出现在用户消息之前（理论上不应该发生），用助手消息 ID 作为 conversationId
-      current = {
-        conversationId:
-          message.message_id || `conversation_${conversations.length}`,
-        sessionId: message.session_id,
-        userMessage: null,
-        events: [],
-        status: "done",
-        jobId: String(message.metadata?.job_id ?? "") || null,
-        pending: false,
-        source: "messages",
-      };
-      conversations.push(current);
-    }
-    // 助手消息内容由 ChatPanel 从 traceEvents 聚合得到；不再维护 assistantMessages 数组。
-  }
-
-  return conversations;
-}
-
-function attachTraceEventsToConversations(
-  conversations: ConversationView[],
-  traceEvents: TraceEvent[],
-): ConversationView[] {
-  if (conversations.length === 0 || traceEvents.length === 0) {
-    return conversations;
-  }
-
-  // 按 event_id 去重（SSE 流 + job_completed 后 API 重新获取可能产生重复）
-  const dedupedEvents = dedupeTraceEvents(traceEvents);
-
-  // 从 trace 事件中提取 message_created，建立 message_id → job_id/时间戳映射
-  // 后端 DTO 格式：真实 payload 嵌套在 raw.payload 中
-  interface MessageBoundary {
-    messageId: string;
-    jobId: string;
-    timestamp: number;
-  }
-  const boundaries: MessageBoundary[] = [];
-  for (const event of dedupedEvents) {
-    if (event.type === "message_created") {
-      const innerPayload = event.raw?.payload ?? event.payload ?? {};
-      const msgId =
-        typeof innerPayload.message_id === "string"
-          ? innerPayload.message_id
-          : "";
-      if (msgId) {
-        boundaries.push({
-          messageId: msgId,
-          jobId: traceJobId(event),
-          timestamp: new Date(event.timestamp).getTime(),
-        });
-      }
-    }
-  }
-
-  // 为每个 conversation 按时间戳范围分配事件：
-  // conversation[0] 得到 [boundary[0].ts, boundary[1].ts) 区间内的事件
-  // conversation[N] 得到 [boundary[N].ts, +∞) 区间内的事件
-  const boundaryTs = boundaries.map((b) => b.timestamp);
-
-  return conversations.map((conversation) => {
-    const userMsgId = conversation.userMessage?.message_id ?? "";
-    // 找到该 conversation 对应的 message_created 边界索引
-    const boundaryIndex = boundaries.findIndex(
-      (b) => b.messageId === userMsgId,
-    );
-    if (boundaryIndex === -1) {
-      return conversation;
-    }
-
-    const jobId = conversation.jobId ?? boundaries[boundaryIndex]?.jobId ?? "";
-    if (jobId) {
-      const convEvents = dedupedEvents.filter(
-        (event) => traceJobId(event) === jobId,
-      );
-      return {
-        ...conversation,
-        jobId,
-        events: convEvents,
-        status: statusForConversationEvents(convEvents, conversation.status),
-      };
-    }
-
-    const startTs = boundaryTs[boundaryIndex];
-    const endTs =
-      boundaryIndex + 1 < boundaryTs.length
-        ? boundaryTs[boundaryIndex + 1]
-        : Infinity;
-
-    const convEvents = dedupedEvents.filter((event) => {
-      const eventTs = new Date(event.timestamp).getTime();
-      return eventTs >= startTs && eventTs < endTs;
-    });
-
-    return {
-      ...conversation,
-      events: convEvents,
-      status: statusForConversationEvents(convEvents, conversation.status),
-    };
-  });
-}
-
-function rawTracePayload(event: TraceEvent): Record<string, unknown> {
-  return event.raw?.payload ?? event.payload ?? {};
-}
-
-function traceJobId(event: TraceEvent): string {
-  if (event.job_id && event.job_id !== "unknown_job") {
-    return event.job_id;
-  }
-  return typeof event.raw?.job_id === "string" ? event.raw.job_id : "";
-}
-
-function tracePayloadString(event: TraceEvent, key: string): string {
-  const payload = rawTracePayload(event);
-  const value = payload[key];
-  return typeof value === "string" ? value : "";
-}
-
-function dedupeTraceEvents(events: TraceEvent[]): TraceEvent[] {
-  const seenEventIds = new Set<string>();
-  return events
-    .filter((event) => {
-      const id = event.event_id;
-      if (!id) {
-        return true;
-      }
-      if (seenEventIds.has(id)) {
-        return false;
-      }
-      seenEventIds.add(id);
-      return true;
-    })
-    .sort(
-      (a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-    );
-}
-
-function frontendEventQueueId(event: TraceEvent, source: FrontendEventSource) {
-  return `${source}:${event.event_id || `${event.type}:${event.timestamp}`}`;
-}
-
-function traceEventSessionId(event: TraceEvent): string {
-  return event.session_id ?? event.raw?.session_id ?? "";
-}
-
-function traceEventWithSession(
-  event: TraceEvent,
-  sessionId: string,
-): TraceEvent {
-  if (event.session_id === sessionId) {
-    return event;
-  }
-
-  return {
-    ...event,
-    session_id: sessionId,
-    raw: event.raw
-      ? {
-          ...event.raw,
-          session_id: event.raw.session_id ?? sessionId,
-        }
-      : event.raw,
-  };
-}
-
-function appendReceivedEvents(
-  map: Map<string, FrontendReceivedEvent[]>,
-  sessionId: string,
-  events: TraceEvent[],
-  source: FrontendEventSource,
-) {
-  if (events.length === 0) {
-    return;
-  }
-
-  const current = map.get(sessionId) ?? [];
-  const seen = new Set(current.map((item) => item.id));
-  const receivedAt = new Date().toISOString();
-  const appended: FrontendReceivedEvent[] = [];
-
-  for (const event of events) {
-    const eventSessionId = traceEventSessionId(event);
-    if (eventSessionId && eventSessionId !== sessionId) {
-      continue;
-    }
-    const id = frontendEventQueueId(event, source);
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    appended.push({
-      id,
-      kind: "trace",
-      sessionId,
-      receivedAt,
-      source,
-      event: traceEventWithSession(event, sessionId),
-    });
-  }
-
-  if (appended.length === 0) {
-    return;
-  }
-
-  map.set(
-    sessionId,
-    [...current, ...appended].slice(-FRONTEND_EVENT_QUEUE_LIMIT),
-  );
-}
-
-function appendFrontendEvent(
-  map: Map<string, FrontendReceivedEvent[]>,
-  sessionId: string,
-  type: Extract<FrontendReceivedEvent, { kind: "frontend" }>["type"],
-  title: string,
-  payload: Record<string, unknown> = {},
-  detail = "",
-) {
-  const current = map.get(sessionId) ?? [];
-  const receivedAt = new Date().toISOString();
-  const event: FrontendReceivedEvent = {
-    id: `frontend:${type}:${receivedAt}`,
-    kind: "frontend",
-    sessionId,
-    receivedAt,
-    source: "frontend",
-    type,
-    title,
-    detail,
-    payload,
-  };
-  map.set(sessionId, [...current, event].slice(-FRONTEND_EVENT_QUEUE_LIMIT));
-}
-
-function isTerminalTraceType(eventType: string): boolean {
-  return [
-    "agent_end",
-    "job_completed",
-    "job_failed",
-    "job_cancelled",
-    "session_interrupted",
-  ].includes(eventType);
-}
-
-function isJobTerminalTraceType(eventType: string): boolean {
-  return [
-    "job_completed",
-    "job_failed",
-    "job_cancelled",
-    "session_interrupted",
-  ].includes(eventType);
-}
-
-function terminalStatusForEvent(eventType: string): ConversationView["status"] {
-  return eventType === "job_failed" ||
-    eventType === "job_cancelled" ||
-    eventType === "session_interrupted"
-    ? "error"
-    : "done";
-}
-
-function conversationStartTime(conversation: ConversationView): number {
-  const messageTime = conversation.userMessage?.created_at;
-  if (messageTime) {
-    return new Date(messageTime).getTime();
-  }
-  const firstEvent = conversation.events[0];
-  return firstEvent ? new Date(firstEvent.timestamp).getTime() : 0;
-}
-
-function conversationsMatch(
-  left: ConversationView,
-  right: ConversationView,
-): boolean {
-  const leftMessageId = left.userMessage?.message_id ?? "";
-  const rightMessageId = right.userMessage?.message_id ?? "";
-  if (leftMessageId && rightMessageId && leftMessageId === rightMessageId) {
-    return true;
-  }
-
-  const leftJobId = left.jobId ?? "";
-  const rightJobId = right.jobId ?? "";
-  return Boolean(leftJobId && rightJobId && leftJobId === rightJobId);
-}
-
-function mergeConversation(
-  persisted: ConversationView,
-  pending: ConversationView,
-): ConversationView {
-  return {
-    ...persisted,
-    ...pending,
-    userMessage: persisted.userMessage ?? pending.userMessage,
-    events: dedupeTraceEvents([...persisted.events, ...pending.events]),
-    source: persisted.source,
-  };
-}
-
-function conversationMatchesTraceEvent(
-  conversation: ConversationView,
-  event: TraceEvent,
-): boolean {
-  const eventJobId = traceJobId(event);
-  if (eventJobId && conversation.jobId === eventJobId) {
-    return true;
-  }
-
-  const eventMessageId = tracePayloadString(event, "message_id");
-  const conversationMessageId = conversation.userMessage?.message_id ?? "";
-  return Boolean(eventMessageId && conversationMessageId === eventMessageId);
-}
-
-function traceEventsForConversation(
-  traceEvents: TraceEvent[],
-  conversation: ConversationView,
-): TraceEvent[] {
-  return traceEvents.filter((event) =>
-    conversationMatchesTraceEvent(conversation, event),
-  );
-}
-
-function statusForConversationEvents(
-  events: TraceEvent[],
-  fallback: ConversationView["status"],
-): ConversationView["status"] {
-  let status = fallback;
-  for (const event of dedupeTraceEvents(events)) {
-    if (event.type === "status_change") {
-      status =
-        tracePayloadString(event, "status") === "queued"
-          ? "queued"
-          : "running";
-      continue;
-    }
-
-    if (
-      [
-        "job_created",
-        "message_created",
-        "job_started",
-        "agent_start",
-        "llm_request",
-        "text_start",
-        "text_delta",
-        "text_end",
-        "tool_call_start",
-        "tool_call_end",
-      ].includes(event.type)
-    ) {
-      status = "running";
-      continue;
-    }
-
-    if (isTerminalTraceType(event.type)) {
-      status = terminalStatusForEvent(event.type);
-    }
-  }
-  return status;
-}
-
-function hasJobTerminalTraceEvent(events: TraceEvent[]): boolean {
-  return events.some((event) => isJobTerminalTraceType(event.type));
-}
-
-function writePendingList(
-  map: Map<string, ConversationView[]>,
-  sessionId: string,
-  list: ConversationView[],
-) {
-  if (list.length === 0) {
-    map.delete(sessionId);
-    return;
-  }
-  map.set(sessionId, list);
-}
-
-function removePendingForTraceEvent(
-  map: Map<string, ConversationView[]>,
-  sessionId: string,
-  event: TraceEvent,
-) {
-  const pendingList = map.get(sessionId) ?? [];
-  if (pendingList.length === 0) {
-    return;
-  }
-
-  writePendingList(
-    map,
-    sessionId,
-    pendingList.filter(
-      (conversation) => !conversationMatchesTraceEvent(conversation, event),
-    ),
-  );
-}
-
-function buildTraceOnlyConversations(
-  sessionId: string,
-  traceEvents: TraceEvent[],
-): ConversationView[] {
-  const conversations: ConversationView[] = [];
-
-  for (const event of traceEvents) {
-    if (event.type !== "message_created") {
-      continue;
-    }
-
-    const payload = rawTracePayload(event);
-    const payloadSessionId =
-      typeof payload.session_id === "string" ? payload.session_id : sessionId;
-    const role = payload.role === "user" ? "user" : null;
-    if (payloadSessionId !== sessionId || role !== "user") {
-      continue;
-    }
-
-    const messageId =
-      typeof payload.message_id === "string"
-        ? payload.message_id
-        : event.event_id;
-    const content = typeof payload.content === "string" ? payload.content : "";
-    const timestamp =
-      typeof payload.created_at === "string"
-        ? payload.created_at
-        : event.timestamp;
-    const hasFailure = traceEvents.some(
-      (trace) =>
-        trace.job_id === event.job_id &&
-        ["job_failed", "job_cancelled", "session_interrupted"].includes(
-          trace.type,
-        ),
-    );
-    const hasCompletion = traceEvents.some(
-      (trace) =>
-        trace.job_id === event.job_id &&
-        ["agent_end", "job_completed"].includes(trace.type),
-    );
-
-    conversations.push({
-      conversationId: messageId,
-      sessionId,
-      userMessage: {
-        message_id: messageId,
-        session_id: sessionId,
-        role,
-        content,
-        attachments: [],
-        metadata: { source: "trace", job_id: event.job_id },
-        created_at: timestamp,
-        updated_at: timestamp,
-      },
-      events: [],
-      status: hasFailure ? "error" : hasCompletion ? "done" : "running",
-      jobId: event.job_id ?? null,
-      pending: false,
-      source: "messages",
-    });
-  }
-
-  return conversations;
-}
-
-function cloneMaps(state: AppState): AppState {
-  return {
-    ...state,
-    eventQueuesBySession: new Map(state.eventQueuesBySession),
-    pendingConversations: new Map(state.pendingConversations),
-  };
-}
-
-function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
-  // 后端 TraceEventDTO 把原始 payload 嵌套在 raw.payload 中
-  const raw = event.raw;
-  const rawPayload =
-    raw &&
-    typeof raw.payload === "object" &&
-    raw.payload !== null &&
-    !Array.isArray(raw.payload)
-      ? (raw.payload as Record<string, unknown>)
-      : {};
-  const payload =
-    Object.keys(rawPayload).length > 0 ? rawPayload : event.payload || {};
-  const normalizedRaw: TraceEvent["raw"] | undefined = raw
-    ? {
-        event_id:
-          typeof raw.event_id === "string" ? raw.event_id : event.event_id,
-        job_id:
-          typeof raw.job_id === "string"
-            ? raw.job_id
-            : (event.job_id ?? "unknown_job"),
-        type: typeof raw.type === "string" ? raw.type : event.type,
-        timestamp:
-          typeof raw.timestamp === "string" ? raw.timestamp : event.timestamp,
-        payload,
-        session_id:
-          typeof raw.session_id === "string" ? raw.session_id : undefined,
-        agent_id:
-          typeof raw.agent_id === "string" || raw.agent_id === null
-            ? raw.agent_id
-            : event.agent_id,
-        step_id:
-          typeof raw.step_id === "string" || raw.step_id === null
-            ? raw.step_id
-            : event.step_id,
-      }
-    : undefined;
-  return {
-    event_id: event.event_id,
-    session_id:
-      typeof event.session_id === "string"
-        ? event.session_id
-        : normalizedRaw?.session_id,
-    job_id: event.job_id ?? "unknown_job",
-    step_id: event.step_id ?? null,
-    agent_id: event.agent_id ?? null,
-    timestamp: event.timestamp,
-    type: event.type as TraceEvent["type"],
-    payload,
-    raw: normalizedRaw,
-  };
-}
-
-export function getConversationsForSession(
-  sessionId: string,
-  state: AppState,
-): ConversationView[] {
-  const messageConversations = groupMessagesIntoConversations(
-    state.messages.filter((message) => message.session_id === sessionId),
-  );
-  const conversations =
-    messageConversations.length > 0
-      ? messageConversations
-      : buildTraceOnlyConversations(sessionId, state.traceEvents);
-  const withTraceEvents = attachTraceEventsToConversations(
-    conversations,
-    state.traceEvents,
-  );
-  const pendingList = state.pendingConversations.get(sessionId) ?? [];
-
-  if (pendingList.length === 0) {
-    return withTraceEvents;
-  }
-
-  const merged = [...withTraceEvents];
-  for (const pending of pendingList) {
-    const matchedIndex = merged.findIndex((conversation) =>
-      conversationsMatch(conversation, pending),
-    );
-    if (matchedIndex === -1) {
-      merged.push({ ...pending, source: "pending" });
-      continue;
-    }
-
-    merged[matchedIndex] = mergeConversation(merged[matchedIndex], pending);
-  }
-
-  return merged.sort(
-    (a, b) => conversationStartTime(a) - conversationStartTime(b),
-  );
-}
+export { getConversationsForSession } from "./state/conversations";
+export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
 
 const INITIAL_STATE: AppState = {
   apiPort: DEFAULT_BACKEND_PORT,
   workspaceRoot: null,
   workspaceName: null,
+  agents: [],
   sessions: [],
+  sessionAttachmentSummaries: new Map(),
   currentSession: null,
   messages: [],
   traceEvents: [],
@@ -639,12 +78,16 @@ const INITIAL_STATE: AppState = {
   agentStateLoadedAt: null,
   agentStateLoading: false,
   agentStateError: null,
+  compactLoading: false,
+  lastCompactResult: null,
 };
 
 interface AppContextType {
   state: AppState;
   setStatus: (text: string) => void;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, attachments?: AttachmentRef[]) => Promise<void>;
+  compactSession: () => Promise<void>;
+  switchAgent: (agentId: string) => Promise<void>;
   interruptSession: () => void;
   selectSession: (sessionId: string) => void;
   createSession: (title?: string) => void;
@@ -665,8 +108,21 @@ export function useAppState() {
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
-  const streamAbortRef = useRef<AbortController | null>(null);
-  const agentStateRequestIdRef = useRef(0);
+  const {
+    invalidateAgentState,
+    refreshAgentStateSnapshot,
+    switchContentView,
+  } = useAgentStateLoader({
+    apiPort: state.apiPort ?? DEFAULT_BACKEND_PORT,
+    currentSession: state.currentSession,
+    setState,
+  });
+  const currentSessionId = state.currentSession?.session_id ?? null;
+  const { abortCurrentStream } = useSessionEventStream({
+    apiPort: state.apiPort,
+    sessionId: currentSessionId,
+    setState,
+  });
 
   const setStatus = useCallback((text: string) => {
     setState((prev) => ({ ...prev, status: text }));
@@ -675,18 +131,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const refreshSessions = useCallback(async () => {
     try {
       const apiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
-      const [workspace, sessions] = await Promise.all([
+      const [workspace, sessions, agents] = await Promise.all([
         getWorkspace(apiPort),
         listSessions(apiPort),
+        apiListAgents(apiPort),
       ]);
       setState((prev) => {
-        // 保留当前已选中的会话，只有初次加载（无选中）才取列表第一个
+        const preferredSessionId =
+          prev.currentSession?.session_id ?? readLastSessionId();
         const nextCurrentSession =
-          prev.currentSession ?? sessions.items[0] ?? null;
+          sessions.items.find(
+            (session) => session.session_id === preferredSessionId,
+          ) ??
+          sessions.items[0] ??
+          null;
         return {
           ...prev,
           workspaceRoot: workspace.root_path,
           workspaceName: workspace.name,
+          agents,
           sessions: sessions.items,
           currentSession: nextCurrentSession,
           error: null,
@@ -706,8 +169,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const selectSession = useCallback((sessionId: string) => {
     // 只需切换 currentSession 引用并中断旧 SSE；消息/trace 由 useEffect 统一加载
-    streamAbortRef.current?.abort();
-    agentStateRequestIdRef.current += 1;
+    abortCurrentStream();
+    invalidateAgentState();
     setState((prev) => {
       const next = cloneMaps(prev);
       const selected =
@@ -715,12 +178,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         prev.currentSession;
       next.currentSession = selected;
       next.contentView = "default";
-      next.agentStateJsonl = "";
-      next.agentStateMessageCount = 0;
-      next.agentStateLoadedAt = null;
-      next.agentStateLoading = false;
-      next.agentStateError = null;
+      Object.assign(next, resetAgentStateFields(next));
       if (selected) {
+        writeLastSessionId(selected.session_id);
         appendFrontendEvent(
           next.eventQueuesBySession,
           selected.session_id,
@@ -735,11 +195,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       return next;
     });
-  }, []);
+  }, [abortCurrentStream, invalidateAgentState]);
 
   const createSession = useCallback(
     async (title: string = DEFAULT_SESSION_TITLE) => {
-      agentStateRequestIdRef.current += 1;
+      invalidateAgentState();
       const session = await apiCreateSession(
         state.apiPort ?? DEFAULT_BACKEND_PORT,
         title,
@@ -748,14 +208,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const next = cloneMaps(prev);
         next.sessions = [session, ...prev.sessions];
         next.currentSession = session;
+        writeLastSessionId(session.session_id);
         next.traceEvents = [];
         next.status = "已创建会话";
         next.contentView = "default";
-        next.agentStateJsonl = "";
-        next.agentStateMessageCount = 0;
-        next.agentStateLoadedAt = null;
-        next.agentStateLoading = false;
-        next.agentStateError = null;
+        Object.assign(next, resetAgentStateFields(next));
         appendFrontendEvent(
           next.eventQueuesBySession,
           session.session_id,
@@ -770,11 +227,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return next;
       });
     },
-    [state.apiPort],
+    [invalidateAgentState, state.apiPort],
   );
 
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, attachments: AttachmentRef[] = []) => {
       if (!state.currentSession) {
         throw new Error("当前没有可发送消息的会话");
       }
@@ -789,6 +246,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           session.session_id,
           content,
           session.current_agent_id,
+          attachments,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -810,7 +268,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             role: "user",
             content,
             metadata: { source: "optimistic" },
-            attachments: [],
+            attachments,
             created_at: now,
             updated_at: now,
           },
@@ -820,6 +278,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           pending: true,
           source: "pending",
         };
+        updateSessionAttachmentSummary(
+          next.sessionAttachmentSummaries,
+          session.session_id,
+          attachments,
+          now,
+        );
         const pendingList = next.pendingConversations.get(session.session_id) ?? [];
         next.pendingConversations.set(session.session_id, [
           ...pendingList,
@@ -830,6 +294,126 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         next.contentView = "default";
         return next;
       });
+    },
+    [state.apiPort, state.currentSession],
+  );
+
+  const compactSession = useCallback(async () => {
+    const session = state.currentSession;
+    if (!session) {
+      throw new Error("当前没有可压缩上下文的会话");
+    }
+
+    const apiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+    setState((prev) => ({
+      ...prev,
+      compactLoading: true,
+      status: "正在压缩上下文",
+    }));
+
+    try {
+      const result = await apiCompactSessionContext(apiPort, session.session_id);
+      setState((prev) => {
+        const next = cloneMaps(prev);
+        next.compactLoading = false;
+        next.lastCompactResult = result;
+        next.status =
+          result.status === "compacted"
+            ? `已压缩上下文: ${result.summarized_message_count} 条`
+            : `上下文未压缩: ${result.message}`;
+        appendFrontendEvent(
+          next.eventQueuesBySession,
+          result.session_id,
+          "context_compacted",
+          result.status === "compacted" ? "上下文已压缩" : "上下文未压缩",
+          {
+            session_id: result.session_id,
+            status: result.status,
+            before_message_count: result.before_message_count,
+            effective_message_count_before: result.effective_message_count_before,
+            effective_message_count_after: result.effective_message_count_after,
+            summarized_message_count: result.summarized_message_count,
+            retained_message_count: result.retained_message_count,
+            history_file_path: result.history_file_path,
+          },
+          result.message,
+        );
+        return next;
+      });
+
+      if (state.contentView === "agent") {
+        await refreshAgentStateSnapshot(session.session_id);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setState((prev) => ({
+        ...prev,
+        compactLoading: false,
+        status: `上下文压缩失败: ${message}`,
+      }));
+      throw error;
+    }
+  }, [
+    refreshAgentStateSnapshot,
+    state.apiPort,
+    state.contentView,
+    state.currentSession,
+  ]);
+
+  const switchAgent = useCallback(
+    async (agentId: string) => {
+      const session = state.currentSession;
+      if (!session) {
+        throw new Error("当前没有可切换 Agent 的会话");
+      }
+
+      if (agentId === session.current_agent_id) {
+        setState((prev) => ({ ...prev, status: `当前已是 Agent: ${agentId}` }));
+        return;
+      }
+
+      setState((prev) => ({ ...prev, status: `正在切换 Agent: ${agentId}` }));
+
+      try {
+        const updatedSession = await apiUpdateSessionAgent(
+          state.apiPort ?? DEFAULT_BACKEND_PORT,
+          session.session_id,
+          agentId,
+        );
+        setState((prev) => {
+          const next = cloneMaps(prev);
+          next.currentSession = updatedSession;
+          next.sessions = prev.sessions.map((item) =>
+            item.session_id === updatedSession.session_id
+              ? updatedSession
+              : item,
+          );
+          if (
+            !next.sessions.some(
+              (item) => item.session_id === updatedSession.session_id,
+            )
+          ) {
+            next.sessions = [updatedSession, ...next.sessions];
+          }
+          next.status = `已切换 Agent: ${updatedSession.current_agent_id}`;
+          appendFrontendEvent(
+            next.eventQueuesBySession,
+            updatedSession.session_id,
+            "agent_switched",
+            "切换 Agent",
+            {
+              session_id: updatedSession.session_id,
+              agent_id: updatedSession.current_agent_id,
+            },
+            updatedSession.current_agent_id,
+          );
+          return next;
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({ ...prev, status: `Agent 切换失败: ${message}` }));
+        throw error;
+      }
     },
     [state.apiPort, state.currentSession],
   );
@@ -855,105 +439,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({ ...prev, expandDetails: expand }));
   }, []);
 
-  const switchContentView = useCallback(
-    async (view: ConversationContentView) => {
-      if (view === "default") {
-        agentStateRequestIdRef.current += 1;
-        setState((prev) => ({
-          ...prev,
-          contentView: "default",
-          agentStateLoading: false,
-          agentStateError: null,
-          status: "默认视图",
-        }));
-        return;
-      }
-
-      if (view === "events") {
-        agentStateRequestIdRef.current += 1;
-        setState((prev) => ({
-          ...prev,
-          contentView: "events",
-          agentStateLoading: false,
-          agentStateError: null,
-          status: "事件视图",
-        }));
-        return;
-      }
-
-      const session = state.currentSession;
-      if (!session) {
-        agentStateRequestIdRef.current += 1;
-        setState((prev) => ({
-          ...prev,
-          contentView: "agent",
-          agentStateJsonl: "",
-          agentStateMessageCount: 0,
-          agentStateLoadedAt: new Date().toISOString(),
-          agentStateLoading: false,
-          agentStateError: "当前没有会话可读取 Agent State",
-          status: "没有会话可读取 Agent State",
-        }));
-        return;
-      }
-
-      const apiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
-      const sessionId = session.session_id;
-      const requestId = agentStateRequestIdRef.current + 1;
-      agentStateRequestIdRef.current = requestId;
-      setState((prev) => ({
-        ...prev,
-        contentView: "agent",
-        agentStateLoading: true,
-        agentStateError: null,
-        status: "正在读取 Agent State 快照",
-      }));
-
-      try {
-        const snapshot = await apiGetAgentStateMessages(apiPort, sessionId);
-        setState((prev) => {
-          if (
-            requestId !== agentStateRequestIdRef.current ||
-            prev.currentSession?.session_id !== sessionId ||
-            prev.contentView !== "agent"
-          ) {
-            return prev;
-          }
-          return {
-            ...prev,
-            contentView: "agent",
-            agentStateJsonl: snapshot.jsonl,
-            agentStateMessageCount: snapshot.message_count,
-            agentStateLoadedAt: new Date().toISOString(),
-            agentStateLoading: false,
-            agentStateError: null,
-            status: `Agent State 快照已加载 (${snapshot.message_count} 条消息)`,
-          };
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => {
-          if (
-            requestId !== agentStateRequestIdRef.current ||
-            prev.currentSession?.session_id !== sessionId ||
-            prev.contentView !== "agent"
-          ) {
-            return prev;
-          }
-          return {
-            ...prev,
-            contentView: "agent",
-            agentStateLoading: false,
-            agentStateError: message,
-            status: `Agent State 加载失败: ${message}`,
-          };
-        });
-      }
-    },
-    [state.apiPort, state.currentSession],
-  );
-
-  const currentSessionId = state.currentSession?.session_id ?? null;
   const pendingPollKey = useMemo(() => {
     if (!currentSessionId) {
       return "";
@@ -968,6 +453,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       )
       .join("|");
   }, [currentSessionId, state.pendingConversations]);
+
+  usePendingConversationPoller({
+    apiPort: state.apiPort,
+    sessionId: currentSessionId,
+    pendingPollKey,
+    setState,
+  });
 
   useEffect(() => {
     void refreshSessions();
@@ -1008,6 +500,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const fetchedTraceEvents = dedupeTraceEvents(traceEvents);
           next.messages = messages.items ?? [];
           next.traceEvents = fetchedTraceEvents;
+          updateAttachmentSummariesFromMessages(
+            next.sessionAttachmentSummaries,
+            next.messages,
+          );
+          updateAttachmentSummariesFromTraces(
+            next.sessionAttachmentSummaries,
+            sessionId,
+            fetchedTraceEvents,
+          );
           appendReceivedEvents(
             next.eventQueuesBySession,
             sessionId,
@@ -1056,259 +557,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [state.currentSession?.session_id, state.apiPort]);
 
-  // SSE 是实时路径；这个轮询是后端权威状态兜底，避免浏览器 fetch stream 卡住后 UI 停在 pending。
-  useEffect(() => {
-    const apiPort = state.apiPort;
-    const sessionId = currentSessionId;
-    if (!apiPort || !sessionId || !pendingPollKey) {
-      return;
-    }
-
-    let cancelled = false;
-    let timerId: number | null = null;
-
-    const scheduleNext = () => {
-      if (cancelled) {
-        return;
-      }
-      timerId = window.setTimeout(refreshPendingFromBackend, 1000);
-    };
-
-    const refreshPendingFromBackend = async () => {
-      try {
-        const [messages, traceEvents] = await Promise.all([
-          listMessages(apiPort, sessionId),
-          getSessionTraces(apiPort, sessionId),
-        ]);
-        if (cancelled) {
-          return;
-        }
-
-        const fetchedTraceEvents = dedupeTraceEvents(traceEvents);
-        setState((prev) => {
-          if (prev.currentSession?.session_id !== sessionId) {
-            return prev;
-          }
-
-          const next = cloneMaps(prev);
-          next.messages = messages.items ?? [];
-          next.traceEvents = dedupeTraceEvents([
-            ...next.traceEvents,
-            ...fetchedTraceEvents,
-          ]);
-          appendReceivedEvents(
-            next.eventQueuesBySession,
-            sessionId,
-            fetchedTraceEvents,
-            "pending_poll",
-          );
-
-          const pendingList = next.pendingConversations.get(sessionId) ?? [];
-          const updatedPendingList = pendingList
-            .map((conversation) => {
-              const conversationEvents = traceEventsForConversation(
-                fetchedTraceEvents,
-                conversation,
-              );
-              if (conversationEvents.length === 0) {
-                return conversation;
-              }
-
-              const events = dedupeTraceEvents([
-                ...conversation.events,
-                ...conversationEvents,
-              ]);
-              return {
-                ...conversation,
-                events,
-                status: statusForConversationEvents(
-                  events,
-                  conversation.status,
-                ),
-                pending: !hasJobTerminalTraceEvent(events),
-              };
-            })
-            .filter((conversation) => conversation.pending);
-
-          writePendingList(
-            next.pendingConversations,
-            sessionId,
-            updatedPendingList,
-          );
-
-          if (updatedPendingList.length < pendingList.length) {
-            next.status = "消息已更新";
-          }
-
-          return next;
-        });
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({
-          ...prev,
-          status: `刷新运行中消息失败: ${message}`,
-        }));
-      } finally {
-        scheduleNext();
-      }
-    };
-
-    timerId = window.setTimeout(refreshPendingFromBackend, 500);
-
-    return () => {
-      cancelled = true;
-      if (timerId !== null) {
-        window.clearTimeout(timerId);
-      }
-    };
-  }, [state.apiPort, currentSessionId, pendingPollKey]);
-
-  useEffect(() => {
-    const apiPort = state.apiPort;
-    const sessionId = state.currentSession?.session_id ?? null;
-
-    if (!apiPort || !sessionId) {
-      streamAbortRef.current?.abort();
-      streamAbortRef.current = null;
-      return;
-    }
-
-    streamAbortRef.current?.abort();
-    const controller = new AbortController();
-    streamAbortRef.current = controller;
-
-    void streamSessionEvents(apiPort, sessionId, {
-      signal: controller.signal,
-      onEvent: (event: SessionStreamEvent) => {
-        const traceEvent = buildTraceEvent(event);
-
-        setState((prev) => {
-          // 忽略非当前会话的事件（切换会话时旧 SSE 可能还有残留事件）
-          if (prev.currentSession?.session_id !== sessionId) {
-            return prev;
-          }
-          const next = cloneMaps(prev);
-          next.traceEvents = dedupeTraceEvents([...next.traceEvents, traceEvent]);
-          appendReceivedEvents(
-            next.eventQueuesBySession,
-            sessionId,
-            [traceEvent],
-            "sse",
-          );
-
-          const pendingList = next.pendingConversations.get(sessionId) ?? [];
-          if (pendingList.length === 0) {
-            return next;
-          }
-
-          let pendingIndex = pendingList.findIndex((conversation) =>
-            conversationMatchesTraceEvent(conversation, traceEvent),
-          );
-          if (pendingIndex === -1 && pendingList.length === 1) {
-            pendingIndex = 0;
-          }
-          if (pendingIndex === -1) {
-            return next;
-          }
-
-          const pending = pendingList[pendingIndex];
-          const updatedPending: ConversationView = {
-            ...pending,
-            events: dedupeTraceEvents([...pending.events, traceEvent]),
-          };
-
-          if (event.type === "status_change") {
-            const status = tracePayloadString(traceEvent, "status");
-            updatedPending.status = status === "queued" ? "queued" : "running";
-          } else if (
-            [
-              "job_started",
-              "text_start",
-              "text_delta",
-              "text_end",
-              "tool_call_start",
-              "tool_call_end",
-            ].includes(event.type)
-          ) {
-            updatedPending.status = "running";
-          } else if (isTerminalTraceType(event.type)) {
-            updatedPending.status = terminalStatusForEvent(event.type);
-            updatedPending.pending = false;
-          }
-
-          const updatedPendingList = [...pendingList];
-          updatedPendingList[pendingIndex] = updatedPending;
-          writePendingList(next.pendingConversations, sessionId, updatedPendingList);
-
-          if (isJobTerminalTraceType(event.type)) {
-            const terminalTraceEvent = traceEvent;
-
-            void (async () => {
-              try {
-                const [messages, traceEvents] = await Promise.all([
-                  listMessages(apiPort, sessionId),
-                  getSessionTraces(apiPort, sessionId),
-                ]);
-                setState((latest) => {
-                  const latestNext = cloneMaps(latest);
-                  removePendingForTraceEvent(
-                    latestNext.pendingConversations,
-                    sessionId,
-                    terminalTraceEvent,
-                  );
-                  if (latest.currentSession?.session_id !== sessionId) {
-                    return latestNext;
-                  }
-                  latestNext.messages = messages.items;
-                  const refreshedTraceEvents = dedupeTraceEvents(traceEvents);
-                  latestNext.traceEvents = refreshedTraceEvents;
-                  appendReceivedEvents(
-                    latestNext.eventQueuesBySession,
-                    sessionId,
-                    refreshedTraceEvents,
-                    "terminal_refresh",
-                  );
-                  latestNext.status = "消息已更新";
-                  return latestNext;
-                });
-              } catch (error) {
-                const message =
-                  error instanceof Error ? error.message : String(error);
-                setState((latest) => ({
-                  ...latest,
-                  status: `刷新失败: ${message}`,
-                }));
-              }
-            })();
-          }
-
-          return next;
-        });
-      },
-      onError: (error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({ ...prev, status: `事件流错误: ${message}` }));
-      },
-    }).catch((error: unknown) => {
-      if (!controller.signal.aborted) {
-        const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({ ...prev, status: `事件流错误: ${message}` }));
-      }
-    });
-
-    return () => {
-      controller.abort();
-    };
-  }, [state.apiPort, state.currentSession?.session_id]);
-
   const value = useMemo(
     () => ({
       state,
       setStatus,
       sendMessage,
+      compactSession,
+      switchAgent,
       interruptSession: interruptSessionCallback,
       selectSession,
       createSession,
@@ -1320,6 +575,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       state,
       setStatus,
       sendMessage,
+      compactSession,
+      switchAgent,
       interruptSessionCallback,
       selectSession,
       createSession,

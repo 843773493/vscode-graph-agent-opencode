@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_request_id, get_session_auto_continue_service, get_session_interrupt_service, get_session_service, verify_local_token
+from app.api.deps import get_context_compaction_service, get_request_id, get_session_auto_continue_service, get_session_interrupt_service, get_session_service, verify_local_token
 from app.schemas.public_v2.common import APIResponse, CursorPage
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
@@ -11,11 +11,13 @@ from app.schemas.public_v2.session import (
     SessionAutoContinueStatusDTO,
     SessionCreateRequest,
     SessionDTO,
+    SessionCompactResultDTO,
     SessionInterruptResultDTO,
     SessionUpdateRequest,
 )
 from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_service import SessionService
 
@@ -154,6 +156,21 @@ async def get_session_auto_continue_status(
     auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
 ):
     result = await auto_continue_service.get_status(session_id=session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/compact",
+    response_model=APIResponse[SessionCompactResultDTO],
+    summary="压缩会话上下文",
+)
+async def compact_session_context(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    context_compaction_service: ContextCompactionService = Depends(get_context_compaction_service),
+):
+    result = await context_compaction_service.compact(session_id=session_id)
     return APIResponse(data=result, request_id=request_id)
 
 

@@ -12,6 +12,7 @@ class AttachmentRef(BaseModel):
     file_id: str
     name: Optional[str] = None
     content_type: Optional[str] = None
+    data_url: Optional[str] = None
 
 
 class MessageCreateRequest(BaseModel):

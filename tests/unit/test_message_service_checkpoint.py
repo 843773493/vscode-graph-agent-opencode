@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.schemas.public_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
 
 
@@ -143,6 +144,58 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(tmp_path
     assert state_assistant["tool_calls"] == [tool_call]
     assert state_assistant["response_metadata"]["phase"] == "commentary"
     assert "additional_kwargs" not in state_assistant
+
+
+@pytest.mark.asyncio
+async def test_message_service_preserves_image_blocks_in_agent_state(tmp_path):
+    """多模态用户消息应在 Agent State 中保留 image_url 块。"""
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_image", "checkpoint_ns": ""}}
+    image_block = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/jpeg;base64,abc123"},
+    }
+    user_message = HumanMessage(
+        content=[
+            {"type": "text", "text": "请描述图片"},
+            image_block,
+        ],
+        response_metadata={
+            "message_id": "msg_image",
+            "attachments": [
+                AttachmentRef(
+                    file_id="assets/test.jpg",
+                    name="test.jpg",
+                    content_type="image/jpeg",
+                ).model_dump(mode="json")
+            ],
+        },
+    )
+    checkpoint = {
+        "channel_values": {"messages": [user_message]},
+        "channel_versions": {"messages": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-image",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
+
+    service = MessageService(checkpointer=saver)
+    messages = await service.list(session_id="sess_image", limit=10)
+    assert messages.items[0].content == "请描述图片"
+    assert messages.items[0].attachments[0].file_id == "assets/test.jpg"
+
+    state_snapshot = await service.get_agent_state_messages("sess_image")
+    records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
+    assert records[0]["content"] == [
+        {"type": "text", "text": "请描述图片"},
+        image_block,
+    ]
+    assert records[0]["response_metadata"]["attachments"][0]["file_id"] == "assets/test.jpg"
 
 
 @pytest.mark.asyncio

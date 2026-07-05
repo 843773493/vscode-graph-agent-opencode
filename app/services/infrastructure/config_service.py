@@ -146,6 +146,13 @@ class ConfigService:
 
         return resolved_agent_id
 
+    def list_agents(self) -> dict[str, dict[str, Any]]:
+        config = self._load_boxteam_config()
+        agents = config.get("agents", {})
+        if not isinstance(agents, dict):
+            raise ValueError("agents 配置必须是对象")
+        return agents
+
     def get_agent_runtime_config(self, agent_id: str | None = None) -> dict[str, Any]:
         config = self._load_boxteam_config()
         providers = self.get_llm_providers()

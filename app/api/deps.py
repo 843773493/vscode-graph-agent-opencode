@@ -9,6 +9,7 @@ from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import JobEventBus
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.business.agent_service import AgentService
+from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.event_service import EventService
@@ -37,6 +38,7 @@ class _AppContainerProtocol:
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
+    context_compaction_service: ContextCompactionService
     session_service: SessionService
     log_service: LogService
     tool_service: ToolService
@@ -145,6 +147,13 @@ def get_session_interrupt_service(request: Request) -> SessionInterruptService:
     service = getattr(_get_container(request), "session_interrupt_service", None)
     if not isinstance(service, SessionInterruptService):
         raise RuntimeError("SessionInterruptService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_context_compaction_service(request: Request) -> ContextCompactionService:
+    service = getattr(_get_container(request), "context_compaction_service", None)
+    if not isinstance(service, ContextCompactionService):
+        raise RuntimeError("ContextCompactionService 尚未在应用启动阶段初始化")
     return service
 
 

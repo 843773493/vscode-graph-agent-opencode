@@ -50,7 +50,14 @@ class SessionOrchestrator:
 
         message = await self._message_service.create(session_id, payload.message)
         logger.info("[session_orchestrator] message created: session_id=%s message_id=%s", session_id, message.message_id)
-        job_id = await self._job_service.start_job(session_id, message.content, effective_agent_id, message_id=message.message_id)
+        job_id = await self._job_service.start_job(
+            session_id,
+            message.content,
+            effective_agent_id,
+            message_id=message.message_id,
+            attachments=message.attachments,
+            message_created_at=message.created_at.isoformat(),
+        )
         logger.info("[session_orchestrator] start_job returned: session_id=%s job_id=%s", session_id, job_id)
         await self._job_event_bus.publish(
             job_id=job_id,
@@ -60,7 +67,10 @@ class SessionOrchestrator:
                 "session_id": message.session_id,
                 "role": message.role,
                 "content": message.content,
-                "attachments": [a.model_dump() for a in message.attachments],
+                "attachments": [
+                    a.model_dump(mode="json", exclude={"data_url"})
+                    for a in message.attachments
+                ],
                 "metadata": message.metadata,
                 "created_at": message.created_at,
             },

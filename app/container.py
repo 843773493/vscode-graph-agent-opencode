@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
+from app.agents.context_compaction_adapter import AgentSummarizationCompactor
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_message_bus import BackgroundMessageBus
@@ -14,6 +16,7 @@ from app.core.path_utils import get_checkpoints_dir, get_logs_dir
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
+from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.job_service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_interrupt_service import SessionInterruptService
@@ -21,6 +24,7 @@ from app.services.business.session_service import SessionService
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.context_history_store import ContextHistoryStore
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.tool_service import ToolService
@@ -75,6 +79,7 @@ class AppContainer:
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
+    context_compaction_service: ContextCompactionService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
     log_service: LogService
@@ -143,6 +148,19 @@ def build_app_container() -> AppContainer:
         job_service=job_service,
         job_event_bus=job_event_bus,
     )
+    context_history_store = ContextHistoryStore()
+    context_checkpoint_store = ContextCompactionCheckpointStore(
+        checkpointer=checkpointer,
+    )
+    summarization_compactor = AgentSummarizationCompactor(
+        config_service=config_service,
+        history_store=context_history_store,
+    )
+    context_compaction_service = ContextCompactionService(
+        checkpoint_store=context_checkpoint_store,
+        session_service=session_service,
+        summarization_compactor=summarization_compactor,
+    )
     log_service = LogService()
     tool_service = ToolService(tool_catalog=agent_execution_service)
     workspace_service = WorkspaceService(config_service=config_service)
@@ -157,6 +175,7 @@ def build_app_container() -> AppContainer:
         runtime_service=runtime_service,
         session_auto_continue_service=session_auto_continue_service,
         session_interrupt_service=session_interrupt_service,
+        context_compaction_service=context_compaction_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
         log_service=log_service,
