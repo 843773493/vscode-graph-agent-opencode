@@ -12,6 +12,7 @@ from app.schemas.public_v2.message import AttachmentRef
 
 from app.services.business.message_service import MessageService
 from app.abstractions.job_step_executor import JobStepExecutor
+from app.services.orchestration.session_title_service import SessionTitleService
 
 
 @dataclass
@@ -40,10 +41,12 @@ class JobExecutionService:
         agent_execution_service: JobStepExecutor,
         message_service: "MessageService",
         job_event_bus: JobEventBusProtocol,
+        session_title_service: SessionTitleService,
     ) -> None:
         self._agent_execution_service = agent_execution_service
         self._message_service = message_service
         self._bus = job_event_bus
+        self._session_title_service = session_title_service
 
     async def run(self, job: JobRuntimeState) -> str:
         job.status = JobStatus.running
@@ -66,6 +69,25 @@ class JobExecutionService:
         job.progress = 100
         job.ended_at = datetime.now()
         job.updated_at = datetime.now()
+
+        try:
+            await self._session_title_service.maybe_auto_title_after_first_response(
+                session_id=job.session_id,
+                job_id=job.job_id,
+                agent_id=job.agent_id,
+                user_message=job.message,
+                assistant_response=result_text,
+            )
+        except Exception as error:
+            await self._bus.publish(
+                job_id=job.job_id,
+                event_type=EventType.ERROR,
+                payload={
+                    "error": f"会话自动命名失败: {error}",
+                    "phase": "session_auto_title",
+                },
+                agent_id="session_title_service",
+            )
 
         await self._bus.publish(
             job_id=job.job_id,

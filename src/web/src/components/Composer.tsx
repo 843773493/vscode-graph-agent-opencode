@@ -15,6 +15,7 @@ import ComposerSlashCommandMenu, {
   type SlashCommandOption,
 } from "./ComposerSlashCommandMenu";
 import ComposerViewControl from "./ComposerViewControl";
+import SessionNameDialog from "./SessionNameDialog";
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) {
@@ -79,6 +80,20 @@ function firstEnabledSlashCommandIndex(commands: SlashCommandOption[]): number {
   return index === -1 ? 0 : index;
 }
 
+function getSlashCommandArgs(inputValue: string, command: string): string {
+  const trimmedInput = inputValue.trim();
+  if (!trimmedInput.startsWith(command)) {
+    return "";
+  }
+
+  const nextChar = trimmedInput.charAt(command.length);
+  if (nextChar && !/\s/.test(nextChar)) {
+    return "";
+  }
+
+  return trimmedInput.slice(command.length).trim();
+}
+
 export default function Composer() {
   const {
     state,
@@ -89,6 +104,7 @@ export default function Composer() {
     switchAgent,
     switchContentView,
     createSession,
+    renameSession,
   } =
     useAppState();
   const [input, setInput] = useState("");
@@ -98,6 +114,9 @@ export default function Composer() {
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [slashCommandIndex, setSlashCommandIndex] = useState(0);
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameDialogSubmitting, setRenameDialogSubmitting] = useState(false);
+  const [renameDialogError, setRenameDialogError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
@@ -139,7 +158,13 @@ export default function Composer() {
         id: "new",
         command: "/new",
         title: "新建会话",
-        description: "Start a new chat.",
+        description: "Start a new chat. 可输入名称。",
+      },
+      {
+        id: "rename",
+        command: "/rename",
+        title: "命名会话",
+        description: "Rename the current chat.",
       },
       {
         id: "init",
@@ -251,6 +276,9 @@ export default function Composer() {
     setAgentMenuOpen(false);
     setViewMenuOpen(false);
     setSlashCommandIndex(0);
+    setRenameDialogOpen(false);
+    setRenameDialogError(null);
+    setRenameDialogSubmitting(false);
   }, [currentSessionId]);
 
   useEffect(() => {
@@ -301,7 +329,64 @@ export default function Composer() {
     };
   }, [agentMenuOpen]);
 
-  const runSlashCommand = (command: SlashCommandOption) => {
+  const renameCurrentSession = (inlineTitle: string) => {
+    const session = state.currentSession;
+    if (!session) {
+      setAttachmentError("当前没有可命名的会话");
+      return;
+    }
+
+    const title = inlineTitle.trim();
+    if (!title) {
+      setRenameDialogError(null);
+      setRenameDialogOpen(true);
+      return;
+    }
+
+    void renameSession(session.session_id, title)
+      .then(() => {
+        setComposerNotice(`已命名为 ${title}`);
+      })
+      .catch((error: unknown) => {
+        setAttachmentError(
+          `命名失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+  };
+
+  const submitRenameDialog = (title: string) => {
+    const session = state.currentSession;
+    if (!session) {
+      setRenameDialogError("当前没有可命名的会话");
+      return;
+    }
+
+    setRenameDialogSubmitting(true);
+    setRenameDialogError(null);
+    void renameSession(session.session_id, title)
+      .then(() => {
+        setRenameDialogOpen(false);
+        setComposerNotice(`已命名为 ${title}`);
+      })
+      .catch((error: unknown) => {
+        setRenameDialogError(
+          error instanceof Error ? error.message : String(error),
+        );
+      })
+      .finally(() => {
+        setRenameDialogSubmitting(false);
+      });
+  };
+
+  const closeRenameDialog = () => {
+    if (renameDialogSubmitting) {
+      return;
+    }
+    setRenameDialogOpen(false);
+    setRenameDialogError(null);
+  };
+
+  const runSlashCommand = (command: SlashCommandOption, args = "") => {
     setInput("");
     setAttachmentError("");
     setComposerNotice("");
@@ -312,7 +397,10 @@ export default function Composer() {
         break;
       case "new":
         setAttachments([]);
-        void createSession("新会话");
+        void createSession(args.trim() || "新会话");
+        break;
+      case "rename":
+        renameCurrentSession(args);
         break;
       case "init":
         setAttachmentError("/init 暂未接入 Web 前端");
@@ -399,10 +487,13 @@ export default function Composer() {
     const command =
       matchingSlashCommands[slashCommandIndex] ??
       matchingSlashCommands[0];
+    const commandArgs = command
+      ? getSlashCommandArgs(input, command.command)
+      : "";
     setInput("");
     setComposerNotice("");
     if (command && !command.disabled) {
-      runSlashCommand(command);
+      runSlashCommand(command, commandArgs);
     } else if (command?.disabled) {
       setAttachmentError(`${command.command} 暂未接入 Web 前端`);
     } else {
@@ -601,14 +692,17 @@ export default function Composer() {
   };
 
   return (
-    <footer className="composer">
+    <>
+      <footer className="composer">
       <div className="composer-surface">
         <div className="composer-copy">
           <ComposerSlashCommandMenu
             query={slashQuery}
             commands={matchingSlashCommands}
             activeIndex={slashCommandIndex}
-            onSelect={runSlashCommand}
+            onSelect={(command) =>
+              runSlashCommand(command, getSlashCommandArgs(input, command.command))
+            }
           />
           <textarea
             ref={textareaRef}
@@ -701,6 +795,18 @@ export default function Composer() {
           </div>
         </div>
       </div>
-    </footer>
+      </footer>
+      <SessionNameDialog
+        open={renameDialogOpen}
+        title="命名当前会话"
+        label="会话名称"
+        initialValue={state.currentSession?.title || "新会话"}
+        confirmText="保存名称"
+        submitting={renameDialogSubmitting}
+        error={renameDialogError}
+        onCancel={closeRenameDialog}
+        onSubmit={submitRenameDialog}
+      />
+    </>
   );
 }

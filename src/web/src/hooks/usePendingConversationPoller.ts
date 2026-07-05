@@ -1,5 +1,5 @@
 import { useEffect, type Dispatch, type SetStateAction } from "react";
-import { getSessionTraces, listMessages } from "../api";
+import { getSession, getSessionTraces, listMessages } from "../api";
 import { cloneMaps } from "../state/appStateMaps";
 import {
   updateAttachmentSummariesFromMessages,
@@ -11,6 +11,7 @@ import {
   traceEventsForConversation,
   writePendingList,
 } from "../state/conversations";
+import { replaceSessionMetadata } from "../state/sessions";
 import { appendReceivedEvents, dedupeTraceEvents } from "../state/traceEvents";
 import type { AppState } from "../types/frontend";
 
@@ -44,9 +45,10 @@ export function usePendingConversationPoller({
 
     const refreshPendingFromBackend = async () => {
       try {
-        const [messages, traceEvents] = await Promise.all([
+        const [messages, traceEvents, updatedSession] = await Promise.all([
           listMessages(apiPort, sessionId),
           getSessionTraces(apiPort, sessionId),
+          getSession(apiPort, sessionId),
         ]);
         if (cancelled) {
           return;
@@ -114,7 +116,9 @@ export function usePendingConversationPoller({
           );
 
           if (updatedPendingList.length < pendingList.length) {
-            next.status = "消息已更新";
+            const metadataNext = replaceSessionMetadata(next, updatedSession);
+            metadataNext.status = "消息已更新";
+            return metadataNext;
           }
 
           return next;

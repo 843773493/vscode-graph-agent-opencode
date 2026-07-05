@@ -35,6 +35,7 @@ from app.services.orchestration.job_execution_service import JobExecutionService
 from app.services.orchestration.session_auto_continue_service import (
     SessionAutoContinueService,
 )
+from app.services.orchestration.session_title_service import SessionTitleService
 from app.services.orchestration.trace_event_recorder import TraceEventRecorder
 
 
@@ -117,10 +118,16 @@ def build_app_container() -> AppContainer:
         job_event_bus=job_event_bus,
         dependency_provider=dependency_provider,
     )
+    session_title_service = SessionTitleService(
+        config_service=config_service,
+        session_service=session_service,
+        job_event_bus=job_event_bus,
+    )
     job_executor = JobExecutionService(
         agent_execution_service=agent_execution_service,
         message_service=message_service,
         job_event_bus=job_event_bus,
+        session_title_service=session_title_service,
     )
     job_service = JobService(job_event_bus=job_event_bus, job_executor=job_executor)
     session_orchestrator = SessionOrchestrator(

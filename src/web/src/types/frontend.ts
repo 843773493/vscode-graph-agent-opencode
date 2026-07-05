@@ -28,6 +28,7 @@ export interface FrontendReceivedLifecycleEvent
   type:
     | "session_selected"
     | "session_created"
+    | "session_renamed"
     | "agent_switched"
     | "context_compacted"
     | "session_load_started"

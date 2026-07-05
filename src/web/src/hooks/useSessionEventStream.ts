@@ -6,6 +6,7 @@ import {
   type SetStateAction,
 } from "react";
 import {
+  getSession,
   getSessionTraces,
   listMessages,
   streamSessionEvents,
@@ -30,9 +31,69 @@ import {
   terminalStatusForEvent,
   tracePayloadString,
 } from "../state/traceEvents";
+import { replaceSessionMetadata } from "../state/sessions";
 import type { AppState, ConversationView } from "../types/frontend";
 
 type SetAppState = Dispatch<SetStateAction<AppState>>;
+
+async function refreshSessionMetadata(
+  apiPort: number,
+  sessionId: string,
+  setState: SetAppState,
+) {
+  const updatedSession = await getSession(apiPort, sessionId);
+  setState((prev) => {
+    const next = replaceSessionMetadata(prev, updatedSession);
+    if (prev.currentSession?.session_id === updatedSession.session_id) {
+      next.status = `已自动命名会话: ${updatedSession.title}`;
+    }
+    return next;
+  });
+}
+
+async function refreshTerminalSession(
+  apiPort: number,
+  sessionId: string,
+  terminalTraceEvent: ReturnType<typeof buildTraceEvent>,
+  setState: SetAppState,
+) {
+  const [messages, traceEvents, updatedSession] = await Promise.all([
+    listMessages(apiPort, sessionId),
+    getSessionTraces(apiPort, sessionId),
+    getSession(apiPort, sessionId),
+  ]);
+  setState((latest) => {
+    const latestNext = replaceSessionMetadata(latest, updatedSession);
+    removePendingForTraceEvent(
+      latestNext.pendingConversations,
+      sessionId,
+      terminalTraceEvent,
+    );
+    if (latest.currentSession?.session_id !== sessionId) {
+      return latestNext;
+    }
+    latestNext.messages = messages.items;
+    const refreshedTraceEvents = dedupeTraceEvents(traceEvents);
+    latestNext.traceEvents = refreshedTraceEvents;
+    updateAttachmentSummariesFromMessages(
+      latestNext.sessionAttachmentSummaries,
+      latestNext.messages,
+    );
+    updateAttachmentSummariesFromTraces(
+      latestNext.sessionAttachmentSummaries,
+      sessionId,
+      refreshedTraceEvents,
+    );
+    appendReceivedEvents(
+      latestNext.eventQueuesBySession,
+      sessionId,
+      refreshedTraceEvents,
+      "terminal_refresh",
+    );
+    latestNext.status = "消息已更新";
+    return latestNext;
+  });
+}
 
 export function useSessionEventStream({
   apiPort,
@@ -64,6 +125,11 @@ export function useSessionEventStream({
       signal: controller.signal,
       onEvent: (event: SessionStreamEvent) => {
         const traceEvent = buildTraceEvent(event);
+        const shouldRefreshSessionMetadata =
+          event.type === "status_change" &&
+          tracePayloadString(traceEvent, "reason") ===
+            "session_auto_title_updated";
+        const shouldRefreshTerminalSession = isJobTerminalTraceType(event.type);
 
         setState((prev) => {
           if (prev.currentSession?.session_id !== sessionId) {
@@ -127,59 +193,35 @@ export function useSessionEventStream({
           updatedPendingList[pendingIndex] = updatedPending;
           writePendingList(next.pendingConversations, sessionId, updatedPendingList);
 
-          if (isJobTerminalTraceType(event.type)) {
-            const terminalTraceEvent = traceEvent;
-
-            void (async () => {
-              try {
-                const [messages, traceEvents] = await Promise.all([
-                  listMessages(apiPort, sessionId),
-                  getSessionTraces(apiPort, sessionId),
-                ]);
-                setState((latest) => {
-                  const latestNext = cloneMaps(latest);
-                  removePendingForTraceEvent(
-                    latestNext.pendingConversations,
-                    sessionId,
-                    terminalTraceEvent,
-                  );
-                  if (latest.currentSession?.session_id !== sessionId) {
-                    return latestNext;
-                  }
-                  latestNext.messages = messages.items;
-                  const refreshedTraceEvents = dedupeTraceEvents(traceEvents);
-                  latestNext.traceEvents = refreshedTraceEvents;
-                  updateAttachmentSummariesFromMessages(
-                    latestNext.sessionAttachmentSummaries,
-                    latestNext.messages,
-                  );
-                  updateAttachmentSummariesFromTraces(
-                    latestNext.sessionAttachmentSummaries,
-                    sessionId,
-                    refreshedTraceEvents,
-                  );
-                  appendReceivedEvents(
-                    latestNext.eventQueuesBySession,
-                    sessionId,
-                    refreshedTraceEvents,
-                    "terminal_refresh",
-                  );
-                  latestNext.status = "消息已更新";
-                  return latestNext;
-                });
-              } catch (error) {
-                const message =
-                  error instanceof Error ? error.message : String(error);
-                setState((latest) => ({
-                  ...latest,
-                  status: `刷新失败: ${message}`,
-                }));
-              }
-            })();
-          }
-
           return next;
         });
+        if (shouldRefreshSessionMetadata) {
+          void refreshSessionMetadata(apiPort, sessionId, setState).catch(
+            (error: unknown) => {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              setState((latest) => ({
+                ...latest,
+                status: `刷新会话标题失败: ${message}`,
+              }));
+            },
+          );
+        }
+        if (shouldRefreshTerminalSession) {
+          void refreshTerminalSession(
+            apiPort,
+            sessionId,
+            traceEvent,
+            setState,
+          ).catch((error: unknown) => {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            setState((latest) => ({
+              ...latest,
+              status: `刷新失败: ${message}`,
+            }));
+          });
+        }
       },
       onError: (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);

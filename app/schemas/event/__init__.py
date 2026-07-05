@@ -66,6 +66,8 @@ class StatusChangePayload(BaseModel):
     """STATUS_CHANGE 事件的 payload"""
     status: str
     reason: str
+    session_id: Optional[str] = None
+    title: Optional[str] = None
     blocked_by_job_id: Optional[str] = None
 
 

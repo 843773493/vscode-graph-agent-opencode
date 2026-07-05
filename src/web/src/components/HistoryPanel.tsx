@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import type { Session } from '../types/backend';
 import type { SessionAttachmentSummary } from '../types/frontend';
 import { formatDateTime } from '../utils/format';
@@ -7,12 +7,20 @@ interface HistoryPanelProps {
   sessions: Session[];
   currentSessionId: string;
   onSelectSession: (sessionId: string) => void;
+  onRenameSession: (sessionId: string, currentTitle: string) => void;
   isOpen: boolean;
   onClose: () => void;
   workspaceName: string;
   workspaceRoot: string;
   activeSession: Session | null;
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
+}
+
+interface SessionContextMenu {
+  sessionId: string;
+  title: string;
+  x: number;
+  y: number;
 }
 
 function sessionTone(_session: Session, isActive: boolean): 'active' | 'warning' | 'danger' | 'neutral' {
@@ -52,12 +60,14 @@ function SessionButton({
   isActive,
   summary,
   onSelectSession,
+  onOpenMenu,
   focus,
 }: {
   session: Session;
   isActive: boolean;
   summary: SessionAttachmentSummary | undefined;
   onSelectSession: (sessionId: string) => void;
+  onOpenMenu: (session: Session, x: number, y: number) => void;
   focus?: boolean;
 }): React.ReactNode {
   const attachmentNames = summary?.names.join(', ') ?? '';
@@ -66,6 +76,11 @@ function SessionButton({
       type="button"
       className={`session-item${isActive ? ' active' : ''}${focus ? ' session-item-focus' : ''}`}
       onClick={() => onSelectSession(session.session_id)}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenMenu(session, event.clientX, event.clientY);
+      }}
     >
       <div className="session-title-row">
         <span className="session-title">{session.title || '未命名'}</span>
@@ -93,6 +108,7 @@ export default function HistoryPanel({
   sessions,
   currentSessionId,
   onSelectSession,
+  onRenameSession,
   isOpen,
   onClose,
   workspaceName,
@@ -100,12 +116,58 @@ export default function HistoryPanel({
   activeSession,
   sessionAttachmentSummaries,
 }: HistoryPanelProps) {
+  const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const closeMenu = () => setContextMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeMenu();
+      }
+    };
+
+    window.addEventListener('pointerdown', closeMenu);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', closeMenu);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setContextMenu(null);
+    }
+  }, [isOpen]);
+
   if (!isOpen) {
     return null;
   }
   const listedSessions = sessions.filter(
     (session) => session.session_id !== currentSessionId,
   );
+  const openSessionMenu = (session: Session, x: number, y: number) => {
+    const menuWidth = 140;
+    const menuHeight = 44;
+    setContextMenu({
+      sessionId: session.session_id,
+      title: session.title || '',
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8)),
+    });
+  };
+  const handleRenameFromMenu = () => {
+    if (!contextMenu) {
+      return;
+    }
+    const target = contextMenu;
+    setContextMenu(null);
+    onRenameSession(target.sessionId, target.title);
+  };
 
   return (
     <aside className="history-panel">
@@ -139,6 +201,7 @@ export default function HistoryPanel({
                 isActive
                 summary={sessionAttachmentSummaries.get(activeSession.session_id)}
                 onSelectSession={onSelectSession}
+                onOpenMenu={openSessionMenu}
                 focus
               />
             ) : (
@@ -161,6 +224,7 @@ export default function HistoryPanel({
                         isActive={isActive}
                         summary={sessionAttachmentSummaries.get(session.session_id)}
                         onSelectSession={onSelectSession}
+                        onOpenMenu={openSessionMenu}
                       />
                     </li>
                   );
@@ -169,6 +233,18 @@ export default function HistoryPanel({
             )}
           </section>
         </div>
+        {contextMenu ? (
+          <div
+            className="history-session-menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            role="menu"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <button type="button" role="menuitem" onClick={handleRenameFromMenu}>
+              重命名
+            </button>
+          </div>
+        ) : null}
       </div>
     </aside>
   );

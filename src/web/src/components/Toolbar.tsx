@@ -15,8 +15,8 @@ function Icon({ children }: { children: React.ReactNode }) {
   return <span className="toolbar-button-icon" aria-hidden="true">{children}</span>;
 }
 
-export default function Toolbar({ workspaceName, workspaceRoot, status, agentId }: { workspaceName: string | null | undefined; workspaceRoot: string | null | undefined; status: string; agentId: string | null | undefined }) {
-  const { createSession, toggleHistoryPanel } = useAppState();
+export default function Toolbar({ workspaceName, workspaceRoot, status, agentId, onCreateSession }: { workspaceName: string | null | undefined; workspaceRoot: string | null | undefined; status: string; agentId: string | null | undefined; onCreateSession: () => void }) {
+  const { toggleHistoryPanel } = useAppState();
   const wsLabel = workspaceRoot || workspaceName || undefined;
   const wsShort = shortLabel(wsLabel);
   const agentLabel = agentId || 'default';
@@ -24,7 +24,7 @@ export default function Toolbar({ workspaceName, workspaceRoot, status, agentId 
   return (
     <header className="toolbar">
       <div className="toolbar-group toolbar-group-left">
-        <button type="button" className="toolbar-icon-button toolbar-icon-primary" title="新建会话" onClick={() => void createSession('新会话')}>
+        <button type="button" className="toolbar-icon-button toolbar-icon-primary" title="新建会话" onClick={onCreateSession}>
           <Icon>
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
           </Icon>

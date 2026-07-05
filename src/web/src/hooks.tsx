@@ -18,6 +18,7 @@ import {
   getWorkspace,
   listMessages,
   listSessions,
+  updateSession as apiUpdateSession,
   updateSessionAgent as apiUpdateSessionAgent,
 } from "./api";
 import type {
@@ -40,6 +41,7 @@ import {
   writePendingList,
 } from "./state/conversations";
 import { readLastSessionId, writeLastSessionId } from "./state/storage";
+import { replaceSessionMetadata } from "./state/sessions";
 import {
   appendFrontendEvent,
   appendReceivedEvents,
@@ -90,13 +92,22 @@ interface AppContextType {
   switchAgent: (agentId: string) => Promise<void>;
   interruptSession: () => void;
   selectSession: (sessionId: string) => void;
-  createSession: (title?: string) => void;
+  createSession: (title?: string) => Promise<void>;
+  renameSession: (sessionId: string, title: string) => Promise<void>;
   toggleHistoryPanel: () => void;
   toggleExpandDetails: (expand: boolean) => void;
   switchContentView: (view: ConversationContentView) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
+
+function normalizeSessionTitle(title: string): string {
+  const trimmed = title.trim();
+  if (!trimmed) {
+    throw new Error("会话名称不能为空");
+  }
+  return trimmed;
+}
 
 export function useAppState() {
   const ctx = useContext(AppContext);
@@ -200,9 +211,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const createSession = useCallback(
     async (title: string = DEFAULT_SESSION_TITLE) => {
       invalidateAgentState();
+      const normalizedTitle = normalizeSessionTitle(title);
       const session = await apiCreateSession(
         state.apiPort ?? DEFAULT_BACKEND_PORT,
-        title,
+        normalizedTitle,
       );
       setState((prev) => {
         const next = cloneMaps(prev);
@@ -228,6 +240,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
     },
     [invalidateAgentState, state.apiPort],
+  );
+
+  const renameSession = useCallback(
+    async (sessionId: string, title: string) => {
+      const normalizedTitle = normalizeSessionTitle(title);
+      setState((prev) => ({ ...prev, status: "正在命名会话" }));
+
+      try {
+        const updatedSession = await apiUpdateSession(
+          state.apiPort ?? DEFAULT_BACKEND_PORT,
+          sessionId,
+          { title: normalizedTitle },
+        );
+        setState((prev) => {
+          const next = replaceSessionMetadata(prev, updatedSession);
+          next.status = `已命名会话: ${updatedSession.title}`;
+          appendFrontendEvent(
+            next.eventQueuesBySession,
+            updatedSession.session_id,
+            "session_renamed",
+            "命名会话",
+            {
+              session_id: updatedSession.session_id,
+              title: updatedSession.title,
+            },
+            updatedSession.title,
+          );
+          return next;
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({ ...prev, status: `会话命名失败: ${message}` }));
+        throw error;
+      }
+    },
+    [state.apiPort],
   );
 
   const sendMessage = useCallback(
@@ -623,6 +671,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       interruptSession: interruptSessionCallback,
       selectSession,
       createSession,
+      renameSession,
       toggleHistoryPanel,
       toggleExpandDetails,
       switchContentView,
@@ -636,6 +685,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       interruptSessionCallback,
       selectSession,
       createSession,
+      renameSession,
       toggleHistoryPanel,
       toggleExpandDetails,
       switchContentView,

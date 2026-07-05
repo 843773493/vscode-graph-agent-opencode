@@ -130,6 +130,18 @@ export async function listSessions(port: number): Promise<CursorPage<Session>> {
   return normalizePageResult<Session>(unwrapApiData(data));
 }
 
+export async function getSession(
+  port: number,
+  sessionId: string,
+): Promise<Session> {
+  return unwrapApiData(
+    await requestJson<APIResponse<Session>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+    ),
+  );
+}
+
 export async function listAgents(port: number): Promise<Agent[]> {
   return unwrapApiData(
     await requestJson<APIResponse<Agent[]>>(port, "/api/v1/agents"),
