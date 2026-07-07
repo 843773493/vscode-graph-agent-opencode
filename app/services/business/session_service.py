@@ -9,7 +9,15 @@ from typing import Any, Optional
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir
 from app.schemas.event import Event
-from app.schemas.public_v2.session import SessionDTO, SessionCreateRequest, SessionUpdateRequest, SessionListResultDTO, SessionControlResultDTO
+from app.schemas.public_v2.session import (
+    DeleteSessionResultDTO,
+    SessionControlResultDTO,
+    SessionCreateRequest,
+    SessionDTO,
+    SessionListResultDTO,
+    SessionUpdateRequest,
+    TitleSource,
+)
 from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -17,9 +25,23 @@ from app.services.mapping.trace_event_mapper import TraceEventMapper
 
 
 class SessionService:
+    DEFAULT_SESSION_TITLES = {"", "新会话", "未命名"}
+
     def __init__(self, *, config_service: ConfigService, trace_event_store: TraceEventStore):
         self._config_service = config_service
         self._trace_event_store = trace_event_store
+
+    @classmethod
+    def _infer_created_title_source(
+        cls,
+        title: str | None,
+        explicit_source: TitleSource | None,
+    ) -> TitleSource:
+        if explicit_source is not None:
+            return explicit_source
+        if (title or "").strip() in cls.DEFAULT_SESSION_TITLES:
+            return "default"
+        return "user"
 
     async def get(self, session_id: str) -> SessionDTO:
         session_file = get_session_file(session_id)
@@ -65,6 +87,10 @@ class SessionService:
             session_id=session_id,
             workspace_id="ws_local",
             title=session.title,
+            title_source=self._infer_created_title_source(
+                session.title,
+                session.title_source,
+            ),
             current_agent_id=resolved_agent_id,
             created_at=now,
             updated_at=now
@@ -95,8 +121,13 @@ class SessionService:
         for key, value in update_data.items():
             if key == "agent_id":
                 existing.current_agent_id = value
+            elif key == "title_source":
+                existing.title_source = value
             else:
                 setattr(existing, key, value)
+
+        if "title" in update_data and "title_source" not in update_data:
+            existing.title_source = "user"
 
         if agent_id_changed:
             try:
@@ -114,7 +145,7 @@ class SessionService:
 
         return existing
 
-    async def delete(self, session_id: str) -> None:
+    async def delete(self, session_id: str) -> DeleteSessionResultDTO:
         session_dir = get_session_path(session_id)
 
         if not session_dir.exists():
@@ -122,6 +153,7 @@ class SessionService:
 
         import shutil
         shutil.rmtree(session_dir)
+        return DeleteSessionResultDTO(session_id=session_id, status="deleted")
 
     async def control(self, session_id: str, action: str, payload: dict = None) -> SessionControlResultDTO:
         await self.get(session_id)

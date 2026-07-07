@@ -27,11 +27,7 @@ class EventService:
         """根据event_id获取单个事件"""
         if self.bus is None:
             raise RuntimeError("EventService 未绑定 JobEventBus")
-        for job_events in self.bus._job_events.values():
-            for event in job_events:
-                if event.event_id == event_id:
-                    return event
-        return None
+        return await self.bus.get_event(event_id)
 
     async def stream_sse(self, job_id: str) -> AsyncGenerator[str, None]:
         """

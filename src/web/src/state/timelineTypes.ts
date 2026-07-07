@@ -44,4 +44,21 @@ export type TimelineItem =
       rawStart: Record<string, unknown>;
       rawEnd: Record<string, unknown>;
     }
-  | { kind: "conversation_marker"; id: string; label: string };
+  | {
+      kind: "skill_summary";
+      id: string;
+      readSkills: string[];
+      toolResults: Array<{
+        toolName: string;
+        skillNames: string[];
+        resultText: string;
+      }>;
+      finalText: string;
+      timestamp: string | null;
+    }
+  | {
+      kind: "conversation_marker";
+      id: string;
+      label: string;
+      jobId: string | null;
+    };

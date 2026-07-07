@@ -182,6 +182,10 @@ class _FakeSessionOrchestrator:
         return _FakeResult()
 
 
+class _FakeTerminalManagerClient:
+    pass
+
+
 class _FakeResult:
     message_id = "msg_test"
     job_id = "job_test"
@@ -217,6 +221,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
         session_service=session_service,
         session_orchestrator=_FakeSessionOrchestrator(),
         config_service=config_service,
+        terminal_manager_client=_FakeTerminalManagerClient(),
     )
 
     tool_names = [tool.name for tool in tools]
@@ -225,8 +230,9 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     assert "emit_system_time_messages" in tool_names
     assert "monitor_session_agent_end" in tool_names
     assert "collect_background_messages" in tool_names
+    assert "persistent_terminal" in tool_names
     assert "send_message_to_session" in tool_names
-    assert len(tools) == 6
+    assert len(tools) == 7
 
 
 
@@ -255,6 +261,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         session_service=_FakeSessionService(),
         session_orchestrator=_FakeSessionOrchestrator(),
         config_service=config_service,
+        terminal_manager_client=_FakeTerminalManagerClient(),
     )
 
     direct_tool_names = [tool.name for tool in tools]
@@ -264,6 +271,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         "emit_system_time_messages",
         "monitor_session_agent_end",
         "collect_background_messages",
+        "persistent_terminal",
         "send_message_to_session",
     ]
 
@@ -276,7 +284,7 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(monkeypatc
     async def fake_sleep(_seconds):
         return None
 
-    monkeypatch.setattr("app.agents.agent_tools.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("app.agents.tools.background.asyncio.sleep", fake_sleep)
 
     tool = create_system_time_emitter_tool("session_test", background_message_bus=background_message_bus)
 

@@ -8,7 +8,6 @@ import pytest
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, get_session_path
 from app.core.path_utils import get_logs_dir
-from app.schemas.event import AgentStartEvent, ToolCallStartEvent
 from app.schemas.public_v2.session import SessionCreateRequest, SessionUpdateRequest
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -55,6 +54,7 @@ class TestSessionService:
         assert session.session_id.startswith("ses_")
         assert len(session.session_id) == 16
         assert session.title == "Test Session"
+        assert session.title_source == "user"
         assert isinstance(session.current_agent_id, str)
         assert session.current_agent_id
         assert session.created_at is not None
@@ -67,7 +67,15 @@ class TestSessionService:
             data = json.load(f)
             assert data["session_id"] == session.session_id
             assert data["title"] == "Test Session"
+            assert data["title_source"] == "user"
             assert data["current_agent_id"] == session.current_agent_id
+
+    @pytest.mark.asyncio
+    async def test_create_default_session_title_source(self):
+        session = await self.service.create(SessionCreateRequest(title="新会话"))
+
+        assert session.title == "新会话"
+        assert session.title_source == "default"
 
     @pytest.mark.asyncio
     async def test_create_session_with_specified_agent(self):
@@ -106,6 +114,7 @@ class TestSessionService:
         updated = await self.service.update(created.session_id, SessionUpdateRequest(title="Updated Title"))
 
         assert updated.title == "Updated Title"
+        assert updated.title_source == "user"
         assert updated.session_id == created.session_id
         assert updated.updated_at > original_updated_at
 
@@ -113,6 +122,19 @@ class TestSessionService:
         with open(session_file, "r", encoding="utf-8") as f:
             data = json.load(f)
             assert data["title"] == "Updated Title"
+            assert data["title_source"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_update_session_can_mark_auto_title_source(self):
+        created = await self.service.create(SessionCreateRequest(title="新会话"))
+
+        updated = await self.service.update(
+            created.session_id,
+            SessionUpdateRequest(title="hello world", title_source="auto"),
+        )
+
+        assert updated.title == "hello world"
+        assert updated.title_source == "auto"
 
     @pytest.mark.asyncio
     async def test_delete_session(self):
@@ -121,8 +143,11 @@ class TestSessionService:
         session_dir = get_session_path(created.session_id)
         assert session_dir.exists()
 
-        await self.service.delete(created.session_id)
+        result = await self.service.delete(created.session_id)
 
+        assert result.session_id == created.session_id
+        assert result.status == "deleted"
+        assert result.cleaned_jobs == 0
         assert not session_dir.exists()
 
         with pytest.raises(NotFoundError):
@@ -219,12 +244,13 @@ class TestSessionService:
 
         assert len(events) == 1
         event = events[0]
-        assert isinstance(event, AgentStartEvent)
         assert event.type == "agent_start"
         assert event.event_id == "evt_1"
         assert event.job_id == "job_1"
-        assert event.payload.message == "hello"
-        assert event.payload.agent_id == "deep_agent"
+        assert event.phase == "agent"
+        assert event.title == "开始执行"
+        assert event.content == "hello"
+        assert event.raw["payload"]["agent_id"] == "deep_agent"
 
     @pytest.mark.asyncio
     async def test_list_trace_events_ignores_legacy_format(self):
@@ -287,8 +313,12 @@ class TestSessionService:
 
         second = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
         assert second.event_id == "evt_2"
-        assert isinstance(second, ToolCallStartEvent)
-        assert second.payload.tool_name == "search_files"
+        assert second.type == "tool_call_start"
+        assert second.phase == "tool"
+        assert second.title == "调用工具"
+        assert second.tool_name == "search_files"
+        assert second.content == "正在调用 search_files"
+        assert second.skill_names == []
 
     @pytest.mark.asyncio
     async def test_trace_event_mapper_maps_tool_events(self):
@@ -314,6 +344,32 @@ class TestSessionService:
         assert event.content == "工具 search_files 已返回结果"
         assert event.tool_name == "search_files"
         assert event.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_trace_event_mapper_maps_tool_skill_names(self):
+        from app.services.mapping.trace_event_mapper import TraceEventMapper
+
+        mapper = TraceEventMapper()
+
+        event = mapper.map_one(
+            {
+                "event_id": "evt_tool_skill",
+                "job_id": "job_1",
+                "step_id": "step_1",
+                "timestamp": "2024-03-09T12:00:00+00:00",
+                "type": "tool_call_start",
+                "payload": {
+                    "tool_name": "test_tool_2",
+                    "args": {},
+                    "skill_names": ["test-tool-skill"],
+                },
+            }
+        )
+
+        assert event is not None
+        assert event.type == "tool_call_start"
+        assert event.tool_name == "test_tool_2"
+        assert event.skill_names == ["test-tool-skill"]
 
     @pytest.mark.asyncio
     async def test_delete_cleans_all_files(self):

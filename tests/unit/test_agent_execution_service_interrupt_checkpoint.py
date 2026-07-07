@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.services.orchestration.agent_execution_service import AgentExecutionService
+from app.services.business.system_reminder_checkpoint_service import persist_interrupt_checkpoint
 
 
 class FakeCheckpointer:
@@ -35,18 +34,6 @@ class FakeCheckpointer:
         self.saved_new_versions = new_versions
 
 
-def _build_service(checkpointer: FakeCheckpointer) -> AgentExecutionService:
-    dependency_provider = MagicMock()
-    dependency_provider.get_checkpointer.return_value = checkpointer
-    return AgentExecutionService(
-        config_service=MagicMock(),
-        background_task_registry=MagicMock(),
-        background_message_bus=MagicMock(),
-        job_event_bus=MagicMock(),
-        dependency_provider=dependency_provider,
-    )
-
-
 def test_persist_interrupt_checkpoint_uses_independent_human_reminder() -> None:
     checkpoint = {
         "channel_values": {
@@ -58,9 +45,9 @@ def test_persist_interrupt_checkpoint_uses_independent_human_reminder() -> None:
         "channel_versions": {"messages": "v1"},
     }
     checkpointer = FakeCheckpointer(checkpoint)
-    service = _build_service(checkpointer)
 
-    service._persist_interrupt_checkpoint(
+    persist_interrupt_checkpoint(
+        checkpointer=checkpointer,
         session_id="sess_interrupt",
         current_text="已经生成的部分回复",
         active_tool_name=None,
@@ -91,9 +78,9 @@ def test_persist_interrupt_checkpoint_does_not_append_empty_tool_assistant() -> 
         "channel_versions": {"messages": "v1"},
     }
     checkpointer = FakeCheckpointer(checkpoint)
-    service = _build_service(checkpointer)
 
-    service._persist_interrupt_checkpoint(
+    persist_interrupt_checkpoint(
+        checkpointer=checkpointer,
         session_id="sess_interrupt",
         current_text="",
         active_tool_name="python_exec",

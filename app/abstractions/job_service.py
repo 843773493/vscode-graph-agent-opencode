@@ -20,6 +20,8 @@ class JobServiceProtocol(Protocol):
         control_request: JobControlRequest,
     ) -> JobControlResponseDTO: ...
 
+    async def delete_session_jobs(self, session_id: str) -> int: ...
+
     async def start_job(
         self,
         session_id: str,

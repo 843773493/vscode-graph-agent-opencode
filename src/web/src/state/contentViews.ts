@@ -18,9 +18,19 @@ export const VIEW_OPTIONS: ViewOption[] = [
     description: "查看前端收到的当前会话事件队列",
   },
   {
+    id: "requests",
+    label: "请求视图",
+    description: "查看当前会话历史 LLM 请求记录",
+  },
+  {
+    id: "resources",
+    label: "资源视图",
+    description: "查看当前会话后台任务和快捷操作",
+  },
+  {
     id: "agent",
-    label: "Agent 视图",
-    description: "查看 Agent State messages 快照",
+    label: "Agent 调试",
+    description: "查看原始 Agent State JSONL 快照",
   },
   // TODO: 后续添加更多视图时，在这里扩展菜单项并接入对应面板。
 ];

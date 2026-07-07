@@ -1,9 +1,7 @@
-import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useRef } from "react";
 import { getAgentStateMessages } from "../api";
-import type { Session } from "../types/backend";
-import type { AppState, ConversationContentView } from "../types/frontend";
-
-type SetAppState = Dispatch<SetStateAction<AppState>>;
+import type { AppState } from "../types/frontend";
+import type { SetAppState } from "./contentViewLoaderTypes";
 
 export function resetAgentStateFields(
   state: AppState,
@@ -23,13 +21,11 @@ export function resetAgentStateFields(
   };
 }
 
-export function useAgentStateLoader({
+export function useAgentStateSnapshotLoader({
   apiPort,
-  currentSession,
   setState,
 }: {
   apiPort: number;
-  currentSession: Session | null;
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
@@ -94,58 +90,8 @@ export function useAgentStateLoader({
     [apiPort, setState],
   );
 
-  const switchContentView = useCallback(
-    async (view: ConversationContentView) => {
-      if (view === "default") {
-        invalidateAgentState();
-        setState((prev) => ({
-          ...prev,
-          contentView: "default",
-          agentStateLoading: false,
-          agentStateError: null,
-          status: "默认视图",
-        }));
-        return;
-      }
-
-      if (view === "events") {
-        invalidateAgentState();
-        setState((prev) => ({
-          ...prev,
-          contentView: "events",
-          agentStateLoading: false,
-          agentStateError: null,
-          status: "事件视图",
-        }));
-        return;
-      }
-
-      if (!currentSession) {
-        invalidateAgentState();
-        setState((prev) => ({
-          ...resetAgentStateFields(prev, {
-            loadedAt: new Date().toISOString(),
-            error: "当前没有会话可读取 Agent State",
-          }),
-          contentView: "agent",
-          status: "没有会话可读取 Agent State",
-        }));
-        return;
-      }
-
-      await refreshAgentStateSnapshot(currentSession.session_id);
-    },
-    [
-      currentSession,
-      invalidateAgentState,
-      refreshAgentStateSnapshot,
-      setState,
-    ],
-  );
-
   return {
     invalidateAgentState,
     refreshAgentStateSnapshot,
-    switchContentView,
   };
 }

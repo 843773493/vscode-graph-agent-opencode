@@ -1,3 +1,4 @@
+// 该文件由程序生成，请勿手写。
 /* tslint:disable */
 /* eslint-disable */
 /**
@@ -8,6 +9,9 @@
 export interface DeleteSessionResultDTO {
   session_id: string;
   status: string;
+  cleaned_jobs?: number;
+  cleaned_background_tasks?: number;
+  cleaned_terminals?: number;
 }
 export interface SessionAutoContinueStartRequest {
   poll_interval_seconds?: number;
@@ -25,6 +29,19 @@ export interface SessionAutoContinueStatusDTO {
   last_trigger_job_id: string | null;
   last_enqueued_job_id: string | null;
 }
+export interface SessionCompactResultDTO {
+  session_id: string;
+  status: "compacted" | "skipped";
+  message: string;
+  before_message_count: number;
+  effective_message_count_before: number;
+  effective_message_count_after: number;
+  summarized_message_count: number;
+  retained_message_count: number;
+  summary?: string | null;
+  history_file_path?: string | null;
+  compacted_at?: string;
+}
 export interface SessionControlResultDTO {
   session_id: string;
   action: string;
@@ -33,6 +50,7 @@ export interface SessionControlResultDTO {
 export interface SessionCreateRequest {
   title?: string | null;
   agent_id?: string | null;
+  title_source?: ("default" | "user" | "auto") | null;
 }
 export interface SessionDTO {
   created_at: string;
@@ -40,7 +58,16 @@ export interface SessionDTO {
   session_id: string;
   workspace_id: string;
   title: string;
+  title_source?: "default" | "user" | "auto";
   current_agent_id: string;
+}
+export interface SessionInterruptResultDTO {
+  session_id: string;
+  job_id: string;
+  status: string;
+  phase: string;
+  tool_name?: string | null;
+  interrupted_at?: string;
 }
 export interface SessionListResultDTO {
   items: SessionDTO[];
@@ -50,6 +77,7 @@ export interface SessionListResultDTO {
 export interface SessionUpdateRequest {
   title?: string | null;
   agent_id?: string | null;
+  title_source?: ("default" | "user" | "auto") | null;
 }
 export interface TimestampedDTO {
   created_at: string;

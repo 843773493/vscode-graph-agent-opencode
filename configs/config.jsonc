@@ -363,6 +363,27 @@
           },
           "uniqueItems": true,
           "maxItems": 100
+        },
+        "skill_only": {
+          "type": "array",
+          "description": "Tool factories registered in the runtime but exposed to the model only after a matching skill is loaded",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "factory"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+              },
+              "factory": {
+                "type": "string",
+                "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*:[a-zA-Z_][a-zA-Z0-9_.]*$"
+              }
+            }
+          },
+          "uniqueItems": true,
+          "maxItems": 100
         }
       },
       "allOf": [

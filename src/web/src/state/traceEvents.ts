@@ -211,6 +211,16 @@ export function terminalStatusForEvent(
     : "done";
 }
 
+export function terminalStatusTextForEvent(eventType: string): string {
+  if (eventType === "job_failed") {
+    return "生成失败";
+  }
+  if (eventType === "job_cancelled" || eventType === "session_interrupted") {
+    return "生成已中断";
+  }
+  return "回复已完成";
+}
+
 export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
   const raw = event.raw;
   const rawPayload =
@@ -251,7 +261,7 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
     session_id:
       typeof event.session_id === "string"
         ? event.session_id
-        : normalizedRaw?.session_id,
+        : (normalizedRaw?.session_id ?? ""),
     job_id: event.job_id ?? "unknown_job",
     step_id: event.step_id ?? null,
     agent_id: event.agent_id ?? null,

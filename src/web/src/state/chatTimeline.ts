@@ -13,18 +13,26 @@ export function buildTraceTimelineItems(
   conversations: ConversationView[],
 ): TimelineItem[] {
   const items: TimelineItem[] = [];
+  const idCounts = new Map<string, number>();
+
+  const pushItem = (item: TimelineItem) => {
+    const count = idCounts.get(item.id) ?? 0;
+    idCounts.set(item.id, count + 1);
+    items.push(count === 0 ? item : { ...item, id: `${item.id}-dup-${count}` });
+  };
 
   for (let ci = 0; ci < conversations.length; ci++) {
     const conv = conversations[ci];
 
-    items.push({
+    pushItem({
       kind: "conversation_marker",
       id: `${conv.conversationId}-marker`,
       label: `第 ${ci + 1} 轮对话`,
+      jobId: conv.jobId,
     });
 
     if (conv.userMessage) {
-      items.push(normalizeTimelineMessage(conv.userMessage));
+      pushItem(normalizeTimelineMessage(conv.userMessage));
     }
 
     const aggregated = aggregateConversationEvents(
@@ -35,11 +43,11 @@ export function buildTraceTimelineItems(
     if (aggregated.length === 0) {
       const statusItem = buildPendingStatusItem(conv);
       if (statusItem) {
-        items.push(statusItem);
+        pushItem(statusItem);
       }
     }
     for (const item of aggregated) {
-      items.push(item);
+      pushItem(item);
     }
   }
 

@@ -13,3 +13,10 @@ export function writeLastSessionId(sessionId: string): void {
   }
   window.localStorage.setItem(LAST_SESSION_STORAGE_KEY, sessionId);
 }
+
+export function clearLastSessionId(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(LAST_SESSION_STORAGE_KEY);
+}

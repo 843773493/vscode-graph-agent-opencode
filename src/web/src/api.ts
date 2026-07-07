@@ -4,12 +4,18 @@ import type {
   APIResponse,
   AttachmentRef,
   CursorPage,
+  DeleteSessionResult,
   InterruptSessionResult,
+  LLMRequestLogRecord,
   Message,
   MessageRunAccepted,
   MessageRunRequest,
   Session,
   SessionCompactResult,
+  SessionResourceAction,
+  SessionResourceControlResult,
+  SessionResourceKind,
+  SessionResourceList,
   SessionUpdateRequest,
   TraceEvent,
   WorkspaceInfo,
@@ -177,6 +183,19 @@ export async function updateSession(
   );
 }
 
+export async function deleteSession(
+  port: number,
+  sessionId: string,
+): Promise<DeleteSessionResult> {
+  return unwrapApiData(
+    await requestJson<APIResponse<DeleteSessionResult>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    ),
+  );
+}
+
 export function updateSessionAgent(
   port: number,
   sessionId: string,
@@ -217,6 +236,46 @@ export async function getAgentStateMessages(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/agent-state/messages`,
     { timeoutMs: AGENT_STATE_TIMEOUT_MS },
+  );
+  return unwrapApiData(data);
+}
+
+export async function getLLMRequestLogs(
+  port: number,
+  sessionId: string,
+): Promise<LLMRequestLogRecord[]> {
+  const data = await requestJson<APIResponse<LLMRequestLogRecord[]>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/llm-request-logs`,
+  );
+  return unwrapApiData(data);
+}
+
+export async function getSessionResources(
+  port: number,
+  sessionId: string,
+): Promise<SessionResourceList> {
+  const data = await requestJson<APIResponse<SessionResourceList>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/resources`,
+  );
+  return unwrapApiData(data);
+}
+
+export async function controlSessionResource(
+  port: number,
+  sessionId: string,
+  kind: SessionResourceKind,
+  resourceId: string,
+  action: SessionResourceAction,
+): Promise<SessionResourceControlResult> {
+  const data = await requestJson<APIResponse<SessionResourceControlResult>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(resourceId)}/control`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    },
   );
   return unwrapApiData(data);
 }

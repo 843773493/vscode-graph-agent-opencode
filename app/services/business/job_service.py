@@ -8,12 +8,12 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_executor import JobExecutorProtocol
 from app.core.job_event_bus import EventType
 from app.schemas.public_v2.common import JobStatus, RunMode, ControlAction
 from app.schemas.public_v2.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
 from app.schemas.public_v2.message import AttachmentRef
-
-from app.services.orchestration.job_execution_service import JobExecutionService, JobRuntimeState
+from app.services.business.job_runtime_state import JobRuntimeState
 
 
 @dataclass
@@ -39,7 +39,7 @@ class JobState:
 class JobService:
     _jobs: Dict[str, JobState] = {}
 
-    def __init__(self, *, job_event_bus: JobEventBusProtocol, job_executor: JobExecutionService):
+    def __init__(self, *, job_event_bus: JobEventBusProtocol, job_executor: JobExecutorProtocol):
         self._bus: JobEventBusProtocol | None = job_event_bus
         self._session_current_job: dict[str, str] = {}
         self._session_waiting_jobs: dict[str, deque[str]] = {}
@@ -121,6 +121,40 @@ class JobService:
             status=job.status,
             control_state=f"Action {control_request.action.value} applied successfully"
         )
+
+    async def delete_session_jobs(self, session_id: str) -> int:
+        async with self._dispatch_lock:
+            jobs = [
+                job
+                for job in self._jobs.values()
+                if job.session_id == session_id
+            ]
+            self._session_current_job.pop(session_id, None)
+            self._session_waiting_jobs.pop(session_id, None)
+
+            now = datetime.now()
+            for job in jobs:
+                if not self._is_terminal_status(job.status):
+                    job.status = JobStatus.cancelled
+                    job.error_message = "会话删除时清理任务"
+                    job.ended_at = job.ended_at or now
+                    job.updated_at = now
+
+        for job in jobs:
+            if job.task and not job.task.done():
+                job.task.cancel()
+                try:
+                    await job.task
+                except asyncio.CancelledError:
+                    pass
+
+        async with self._dispatch_lock:
+            for job in jobs:
+                self._jobs.pop(job.job_id, None)
+            self._session_current_job.pop(session_id, None)
+            self._session_waiting_jobs.pop(session_id, None)
+
+        return len(jobs)
 
     async def start_job(
         self,
@@ -326,17 +360,21 @@ class JobService:
             job.ended_at = datetime.now()
             job.updated_at = datetime.now()
         except asyncio.CancelledError as error:
-            job.status = JobStatus.cancelled
-            job.error_message = "任务被用户取消"
-            job.ended_at = datetime.now()
-            job.updated_at = datetime.now()
-            if self._bus is not None:
-                await self._bus.publish(
-                    job_id=job_id,
-                    event_type=EventType.JOB_CANCELLED,
-                    payload={},
-                    agent_id="job_service",
-                )
+            if job.status == JobStatus.paused:
+                job.error_message = "任务已暂停"
+                job.updated_at = datetime.now()
+            else:
+                job.status = JobStatus.cancelled
+                job.error_message = "任务被用户取消"
+                job.ended_at = datetime.now()
+                job.updated_at = datetime.now()
+                if self._bus is not None:
+                    await self._bus.publish(
+                        job_id=job_id,
+                        event_type=EventType.JOB_CANCELLED,
+                        payload={},
+                        agent_id="job_service",
+                    )
         except Exception as error:
             job.status = JobStatus.failed
             job.error_message = str(error)

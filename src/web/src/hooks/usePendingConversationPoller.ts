@@ -12,7 +12,12 @@ import {
   writePendingList,
 } from "../state/conversations";
 import { replaceSessionMetadata } from "../state/sessions";
-import { appendReceivedEvents, dedupeTraceEvents } from "../state/traceEvents";
+import {
+  appendReceivedEvents,
+  dedupeTraceEvents,
+  isJobTerminalTraceType,
+  terminalStatusTextForEvent,
+} from "../state/traceEvents";
 import type { AppState } from "../types/frontend";
 
 type SetAppState = Dispatch<SetStateAction<AppState>>;
@@ -117,7 +122,12 @@ export function usePendingConversationPoller({
 
           if (updatedPendingList.length < pendingList.length) {
             const metadataNext = replaceSessionMetadata(next, updatedSession);
-            metadataNext.status = "消息已更新";
+            const terminalEvent = [...fetchedTraceEvents]
+              .reverse()
+              .find((event) => isJobTerminalTraceType(event.type));
+            metadataNext.status = terminalEvent
+              ? terminalStatusTextForEvent(terminalEvent.type)
+              : "回复已完成";
             return metadataNext;
           }
 

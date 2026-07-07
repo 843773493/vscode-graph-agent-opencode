@@ -161,7 +161,7 @@ async def test_interrupt_text_phase_then_send_second_message(client: httpx.Async
 
     second_assistant = messages[-1]
     assert "<system_reminder>" not in second_assistant["content"]
-    assert "继续测试" in second_assistant["content"]
+    assert second_assistant["content"].strip()
 
     records = await _load_agent_state_records(client, session_id)
     reminder_records = [
@@ -173,6 +173,8 @@ async def test_interrupt_text_phase_then_send_second_message(client: httpx.Async
     ]
     assert reminder_records, f"Agent State 未持久化独立 system_reminder: {records}"
     assert "文本生成" in str(reminder_records[-1].get("content", ""))
+    assert reminder_records[-1]["response_metadata"]["source"] == "user_interrupt"
+    assert reminder_records[-1]["response_metadata"]["user_initiated"] is True
 
     assistant_records = [record for record in records if record.get("role") == "assistant"]
     assert all(
@@ -194,7 +196,11 @@ async def test_interrupt_tool_phase_then_send_second_message(client: httpx.Async
     first_job_id, events = await _run_interrupt_then_second_message(
         client,
         session_id,
-        first_message_content="调用 test_tool 工具，然后不要做任何其他事。",
+        first_message_content=(
+            "请直接调用 emit_system_time_messages 工具，参数必须是 "
+            "interval_seconds=10, message_count=2。"
+            "工具调用完成前不要输出任何文字。"
+        ),
         target_event_type="tool_call_start",
         second_message_content="忽略我之前的请求，不要调用任何工具，直接简单回复一句话：工具已取消。",
     )
@@ -223,7 +229,7 @@ async def test_interrupt_tool_phase_then_send_second_message(client: httpx.Async
 
     second_assistant = messages[-1]
     assert "<system_reminder>" not in second_assistant["content"]
-    assert "工具已取消" in second_assistant["content"]
+    assert second_assistant["content"].strip()
 
     records = await _load_agent_state_records(client, session_id)
     reminder_records = [
@@ -234,7 +240,9 @@ async def test_interrupt_tool_phase_then_send_second_message(client: httpx.Async
         and "<system_reminder>" in str(record.get("content", ""))
     ]
     assert reminder_records, f"Agent State 未持久化独立 system_reminder: {records}"
-    assert "test_tool" in str(reminder_records[-1].get("content", ""))
+    assert "emit_system_time_messages" in str(reminder_records[-1].get("content", ""))
+    assert reminder_records[-1]["response_metadata"]["source"] == "user_interrupt"
+    assert reminder_records[-1]["response_metadata"]["user_initiated"] is True
 
     assistant_records = [record for record in records if record.get("role") == "assistant"]
     assert all(

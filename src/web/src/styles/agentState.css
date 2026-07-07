@@ -1,0 +1,371 @@
+.agent-state-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.agent-state-header {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  border-bottom: var(--surface-border);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.agent-state-title {
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-state-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.agent-state-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-state-debug-note {
+  margin: 8px 12px;
+  padding: 8px 10px;
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: var(--vscode-editor-inactiveSelectionBackground);
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.5;
+  flex: 0 0 auto;
+}
+
+.agent-state-summary {
+  margin: 0 12px 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.agent-state-summary div {
+  min-width: 0;
+  border: var(--surface-border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--vscode-input-background);
+}
+
+.agent-state-summary span,
+.agent-state-summary strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-state-summary span {
+  margin-bottom: 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.agent-state-summary strong {
+  color: var(--vscode-editor-foreground);
+  font-size: 12px;
+}
+
+.agent-state-key-flow {
+  margin: 0 12px 8px;
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: var(--vscode-input-background);
+  padding: 8px 10px;
+  flex: 0 0 auto;
+}
+
+.agent-state-key-flow-title {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.agent-state-key-flow ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--vscode-editor-foreground);
+}
+
+@media (max-width: 760px) {
+  .agent-state-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.agent-state-raw {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 12px 12px;
+  border: var(--surface-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+}
+
+.agent-state-raw summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-input-background);
+  font-size: 12px;
+}
+
+.agent-state-jsonl {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-family: var(
+    --vscode-editor-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    "Liberation Mono",
+    monospace
+  );
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.agent-state-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--vscode-editor-background);
+}
+
+.agent-state-card {
+  border: var(--surface-border);
+  border-radius: 8px;
+  background: var(--vscode-input-background);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-state-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-state-card-title,
+.agent-state-card-meta,
+.agent-state-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-state-role {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--vscode-editor-foreground);
+}
+
+.agent-state-type,
+.agent-state-card-meta span,
+.agent-state-tool-id {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-foreground) 7%, transparent);
+}
+
+.agent-state-blocks,
+.agent-state-tools,
+.agent-state-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-state-block,
+.agent-state-tool,
+.agent-state-attachment {
+  border-radius: 6px;
+  border: var(--surface-border);
+  background: color-mix(in srgb, var(--vscode-editor-background) 78%, transparent);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.agent-state-attachment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px 8px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.agent-state-attachment span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-state-attachment-name {
+  color: var(--vscode-editor-foreground);
+  font-weight: 700;
+}
+
+.agent-state-image-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.agent-state-image-block img {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: var(--surface-border);
+}
+
+.agent-state-image-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.agent-state-image-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-state-block.block-image {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 45%, var(--vscode-panel-border));
+}
+
+.agent-state-block-label {
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--vscode-descriptionForeground);
+  border-bottom: var(--surface-border);
+}
+
+.agent-state-block pre,
+.agent-state-tool pre,
+.agent-state-raw pre {
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(
+    --vscode-editor-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    "Liberation Mono",
+    monospace
+  );
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-state-block.block-reasoning {
+  border-color: color-mix(in srgb, #b45309 45%, transparent);
+}
+
+.agent-state-block.block-reasoning .agent-state-block-label {
+  color: #b45309;
+}
+
+.agent-state-tool-head {
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-bottom: var(--surface-border);
+}
+
+.agent-state-tool-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--vscode-button-background);
+}
+
+.agent-state-tool-result-id {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  word-break: break-all;
+}
+
+.agent-state-raw {
+  border-top: var(--surface-border);
+  padding-top: 6px;
+}
+
+.agent-state-raw summary {
+  cursor: pointer;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.agent-state-fallback {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

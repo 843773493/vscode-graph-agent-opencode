@@ -1,3 +1,4 @@
+// 该文件由程序生成，请勿手写。
 /* tslint:disable */
 /* eslint-disable */
 /**
@@ -9,10 +10,16 @@ export type MessageRole = "user" | "assistant" | "system" | "tool";
 export type MessageRole1 = "user" | "assistant" | "system" | "tool";
 export type RunMode = "single_agent" | "multi_agent";
 
+export interface AgentStateMessagesDTO {
+  session_id: string;
+  message_count: number;
+  jsonl: string;
+}
 export interface AttachmentRef {
   file_id: string;
   name?: string | null;
   content_type?: string | null;
+  data_url?: string | null;
 }
 export interface MessageCreateRequest {
   role?: MessageRole;

@@ -96,3 +96,47 @@ class BackgroundTaskRegistry:
 
     def list_handles(self, session_id: str) -> list[BackgroundTaskHandle]:
         return [record.handle for record in self._tasks.get(session_id, {}).values()]
+
+    async def cancel(self, session_id: str, task_id: str) -> BackgroundTaskHandle:
+        record = self._tasks.get(session_id, {}).get(task_id)
+        if record is None:
+            raise ValueError(f"后台任务不存在: session_id={session_id}, task_id={task_id}")
+
+        if record.task.done():
+            return record.handle
+
+        record.task.cancel()
+        try:
+            await record.task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            raise RuntimeError(f"取消后台任务失败: task_id={task_id}, error={exc}") from exc
+        if record.handle.status in {"pending", "running"}:
+            record.handle.status = "cancelled"
+            if record.handle.ended_at is None:
+                record.handle.ended_at = datetime.now()
+        return record.handle
+
+    async def delete(self, session_id: str, task_id: str) -> BackgroundTaskHandle:
+        record = self._tasks.get(session_id, {}).get(task_id)
+        if record is None:
+            raise ValueError(f"后台任务不存在: session_id={session_id}, task_id={task_id}")
+
+        if not record.task.done():
+            await self.cancel(session_id, task_id)
+
+        record.handle.status = "deleted"
+        if record.handle.ended_at is None:
+            record.handle.ended_at = datetime.now()
+
+        del self._tasks[session_id][task_id]
+        if not self._tasks[session_id]:
+            del self._tasks[session_id]
+        return record.handle
+
+    async def delete_session(self, session_id: str) -> int:
+        task_ids = list(self._tasks.get(session_id, {}).keys())
+        for task_id in task_ids:
+            await self.delete(session_id, task_id)
+        return len(task_ids)

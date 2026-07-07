@@ -23,6 +23,9 @@ from app.schemas.public_v2.message import (
     MessageDTO,
 )
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+from app.services.business.system_reminder_checkpoint_service import (
+    append_system_reminder_checkpoint,
+)
 
 
 class MessageService:
@@ -138,6 +141,21 @@ class MessageService:
             stripped.startswith("<system_reminder>")
             and stripped.endswith("</system_reminder>")
         )
+
+    @staticmethod
+    def _is_user_visible_message(message: BaseMessage) -> bool:
+        if MessageService._is_system_reminder_only_message(message):
+            return False
+        if isinstance(message, ToolMessage):
+            return False
+        if isinstance(message, AIMessage):
+            tool_calls = getattr(message, "tool_calls", None) or []
+            if tool_calls:
+                return False
+            extracted = MessageService._extract_content(message)
+            content = extracted["content"]
+            return isinstance(content, str) and bool(content.strip())
+        return True
 
     @staticmethod
     def _message_to_agent_state_record(message: BaseMessage) -> dict[str, object]:
@@ -366,8 +384,13 @@ class MessageService:
             updated_at=now,
         )
 
-    async def get_agent_state_messages(self, session_id: str) -> AgentStateMessagesDTO:
-        raw_messages = await self._load_raw_messages(session_id, strict=True)
+    async def list_agent_state_records(
+        self,
+        session_id: str,
+        *,
+        strict: bool = False,
+    ) -> list[dict[str, object]]:
+        raw_messages = await self._load_raw_messages(session_id, strict=strict)
         records: list[dict[str, object]] = []
         for message in raw_messages:
             if isinstance(message, BaseMessage):
@@ -379,7 +402,10 @@ class MessageService:
             raise TypeError(
                 f"Agent State messages 中出现不支持的消息类型: {type(message).__name__}"
             )
+        return records
 
+    async def get_agent_state_messages(self, session_id: str) -> AgentStateMessagesDTO:
+        records = await self.list_agent_state_records(session_id, strict=True)
         return AgentStateMessagesDTO(
             session_id=session_id,
             message_count=len(records),
@@ -387,6 +413,28 @@ class MessageService:
                 json.dumps(record, ensure_ascii=False, separators=(",", ":"))
                 for record in records
             ),
+        )
+
+    def append_system_reminder(
+        self,
+        *,
+        session_id: str,
+        reminder: str,
+        response_metadata: dict[str, object],
+        checkpoint_source: str,
+        assistant_text: str = "",
+        assistant_response_metadata: dict[str, object] | None = None,
+    ) -> bool:
+        if self._checkpointer is None:
+            raise RuntimeError("MessageService 未配置 checkpointer，无法写入 system_reminder")
+        return append_system_reminder_checkpoint(
+            checkpointer=self._checkpointer,
+            session_id=session_id,
+            reminder=reminder,
+            response_metadata=response_metadata,
+            assistant_text=assistant_text,
+            assistant_response_metadata=assistant_response_metadata,
+            checkpoint_source=checkpoint_source,
         )
 
     async def _load_raw_messages(
@@ -422,10 +470,9 @@ class MessageService:
         for index, message in enumerate(raw_messages):
             if not isinstance(message, BaseMessage):
                 continue
-            if self._is_system_reminder_only_message(message):
-                continue
-            # 与旧的 messages.jsonl 保持一致：只返回用户可见的 user/assistant 消息
-            if isinstance(message, ToolMessage):
+            # 普通消息列表只暴露用户可见的输入和最终回复；工具调用、
+            # system_reminder 与空 assistant 仍可通过 Agent State 调试视图查看。
+            if not self._is_user_visible_message(message):
                 continue
             result.append(self._message_to_dto(session_id, index, message))
         return result

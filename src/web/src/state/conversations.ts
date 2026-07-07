@@ -15,12 +15,18 @@ function groupMessagesIntoConversations(
 ): ConversationView[] {
   const conversations: ConversationView[] = [];
   let current: ConversationView | null = null;
+  const seenUserMessageIds = new Set<string>();
 
   for (const message of messages) {
     if (message.role === "user") {
+      const messageId =
+        message.message_id || `conversation_${conversations.length}`;
+      if (seenUserMessageIds.has(messageId)) {
+        continue;
+      }
+      seenUserMessageIds.add(messageId);
       current = {
-        conversationId:
-          message.message_id || `conversation_${conversations.length}`,
+        conversationId: messageId,
         sessionId: message.session_id,
         userMessage: message,
         events: [],
@@ -136,6 +142,20 @@ function conversationStartTime(conversation: ConversationView): number {
   return firstEvent ? new Date(firstEvent.timestamp).getTime() : 0;
 }
 
+function conversationIdentityKey(conversation: ConversationView): string | null {
+  const messageId = conversation.userMessage?.message_id ?? "";
+  if (messageId) {
+    return `message:${messageId}`;
+  }
+
+  const jobId = conversation.jobId ?? "";
+  if (jobId) {
+    return `job:${jobId}`;
+  }
+
+  return null;
+}
+
 function conversationsMatch(
   left: ConversationView,
   right: ConversationView,
@@ -162,6 +182,35 @@ function mergeConversation(
     events: dedupeTraceEvents([...persisted.events, ...pending.events]),
     source: persisted.source,
   };
+}
+
+function dedupeConversationViews(
+  conversations: ConversationView[],
+): ConversationView[] {
+  const merged: ConversationView[] = [];
+  const seen = new Map<string, number>();
+
+  for (const conversation of conversations) {
+    const identityKey = conversationIdentityKey(conversation);
+    if (!identityKey) {
+      merged.push(conversation);
+      continue;
+    }
+
+    const existingIndex = seen.get(identityKey);
+    if (existingIndex === undefined) {
+      seen.set(identityKey, merged.length);
+      merged.push(conversation);
+      continue;
+    }
+
+    merged[existingIndex] = mergeConversation(
+      merged[existingIndex],
+      conversation,
+    );
+  }
+
+  return merged;
 }
 
 export function conversationMatchesTraceEvent(
@@ -201,6 +250,14 @@ export function statusForConversationEvents(
       continue;
     }
 
+    if (event.type === "job_completed") {
+      status = "done";
+      continue;
+    }
+    if (event.type === "job_failed" || event.type === "job_cancelled") {
+      status = "error";
+      continue;
+    }
     if (
       [
         "job_created",
@@ -210,9 +267,7 @@ export function statusForConversationEvents(
         "llm_request",
         "text_start",
         "text_delta",
-        "text_end",
         "tool_call_start",
-        "tool_call_end",
       ].includes(event.type)
     ) {
       status = "running";
@@ -266,8 +321,9 @@ function buildTraceOnlyConversations(
   traceEvents: TraceEvent[],
 ): ConversationView[] {
   const conversations: ConversationView[] = [];
+  const seenMessageIds = new Set<string>();
 
-  for (const event of traceEvents) {
+  for (const event of dedupeTraceEvents(traceEvents)) {
     if (event.type !== "message_created") {
       continue;
     }
@@ -284,6 +340,10 @@ function buildTraceOnlyConversations(
       typeof payload.message_id === "string"
         ? payload.message_id
         : event.event_id;
+    if (seenMessageIds.has(messageId)) {
+      continue;
+    }
+    seenMessageIds.add(messageId);
     const content = typeof payload.content === "string" ? payload.content : "";
     const timestamp =
       typeof payload.created_at === "string"
@@ -348,7 +408,7 @@ export function getConversationsForSession(
   const pendingList = state.pendingConversations.get(sessionId) ?? [];
 
   if (pendingList.length === 0) {
-    return withTraceEvents;
+    return dedupeConversationViews(withTraceEvents);
   }
 
   const merged = [...withTraceEvents];
@@ -364,7 +424,7 @@ export function getConversationsForSession(
     merged[matchedIndex] = mergeConversation(merged[matchedIndex], pending);
   }
 
-  return merged.sort(
+  return dedupeConversationViews(merged).sort(
     (a, b) => conversationStartTime(a) - conversationStartTime(b),
   );
 }

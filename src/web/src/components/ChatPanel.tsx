@@ -1,5 +1,4 @@
 import React from "react";
-import type { AttachmentRef } from "../types/backend";
 import {
   buildTraceTimelineItems,
   normalizeTraceData,
@@ -7,116 +6,17 @@ import {
 } from "../state/chatTimeline";
 import type { ConversationView } from "../types/frontend";
 import { escapeHtml, formatDateTime } from "../utils/format";
-import { renderMarkdown } from "../utils/markdown";
-import AttachmentList from "./AttachmentList";
+import { normalizeDisplayText } from "../utils/displayText";
+import {
+  formatToolCardContent,
+  isSkillInternalToolItem,
+  toolCollapsedText,
+} from "../state/toolDisplay";
+import EventCard from "./EventCard";
+import SkillSummaryCard from "./SkillSummaryCard";
 
 function displayTime(value: unknown): string {
   return formatDateTime(value) || "now";
-}
-
-// === 事件卡片组件 ===
-
-function EventCard({
-  title,
-  kind,
-  tone,
-  time,
-  summary,
-  content,
-  collapsedContent,
-  raw,
-  index,
-  attachments = [],
-  defaultOpen = false,
-}: {
-  title: string;
-  kind:
-    | "message"
-    | "trace"
-    | "system"
-    | "response"
-    | "thought"
-    | "tool_call"
-    | "tool_result"
-    | "error";
-  tone: "running" | "done" | "danger";
-  time: string;
-  summary: string;
-  content: string;
-  collapsedContent?: string;
-  raw: Record<string, unknown>;
-  index: number;
-  attachments?: AttachmentRef[];
-  defaultOpen?: boolean;
-}): React.ReactNode {
-  const [open, setOpen] = React.useState(defaultOpen);
-  React.useEffect(() => {
-    if (defaultOpen) {
-      setOpen(true);
-    }
-  }, [defaultOpen]);
-  const collapsedText =
-    collapsedContent ?? (content || summary || "（无可读内容）");
-
-  return (
-    <article
-      className={`event-card event-card-${kind} tone-${tone} ${open ? "is-open" : "is-collapsed"}`}
-    >
-      <div className="event-card-head">
-        <div className="event-card-title-row">
-          <span
-            className={`event-card-indicator event-card-indicator-${tone}`}
-          />
-          <span className="event-card-title">{escapeHtml(title)}</span>
-        </div>
-        <div className="event-card-head-right">
-          <span className="badge neutral event-card-time">
-            {escapeHtml(time || `#${index + 1}`)}
-          </span>
-          <button
-            type="button"
-            className="event-card-toggle"
-            aria-expanded={open}
-            aria-label={open ? "折叠" : "展开"}
-            onClick={() => setOpen((prev) => !prev)}
-          >
-            {open ? "−" : "+"}
-          </button>
-        </div>
-      </div>
-      {!open ? (
-        <>
-          <div className="event-card-summary event-card-summary-collapsed">
-            {escapeHtml(collapsedText)}
-          </div>
-          {attachments.length > 0 && (
-            <AttachmentList attachments={attachments} />
-          )}
-        </>
-      ) : (
-        <div className="event-card-body">
-          {summary && (
-            <div className="event-card-summary">{escapeHtml(summary)}</div>
-          )}
-          {content ? (
-            <div
-              className="event-card-content"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
-            />
-          ) : attachments.length === 0 ? (
-            <div className="event-card-empty">（无可读内容）</div>
-          ) : null}
-          {attachments.length > 0 && (
-            <AttachmentList attachments={attachments} />
-          )}
-          <details className="event-card-details">
-            <summary>原始数据</summary>
-            <pre>{escapeHtml(JSON.stringify(raw, null, 2))}</pre>
-          </details>
-        </div>
-      )}
-    </article>
-  );
 }
 
 // === 子卡片组件 ===
@@ -149,21 +49,30 @@ function AggregatedTextCard({
   item: Extract<TimelineItem, { kind: "aggregated_text" }>;
   index: number;
 }): React.ReactNode {
-  const text = item.text.trim();
+  const text = normalizeDisplayText(item.text.trim());
   const isReasoning = item.phase === "reasoning";
   const title = isReasoning ? "推理过程" : item.active ? "回复生成中" : "最终回复";
   const kind = isReasoning ? "thought" : "response";
   const tone = item.active || isReasoning ? "running" : "done";
   const phaseLabel = isReasoning ? "推理" : "回复";
+  const summary =
+    isReasoning || item.active || item.eventCount > 1
+      ? `${item.eventCount} 个${phaseLabel}事件已合并`
+      : "";
+  const collapsedContent = isReasoning
+    ? "推理过程已折叠"
+    : item.active
+      ? "回复生成中"
+      : "最终回复已折叠";
   return (
     <EventCard
       title={title}
       kind={kind}
       tone={tone}
       time={displayTime(item.timestamp)}
-      summary={`${item.eventCount} 个${phaseLabel}事件已合并`}
+      summary={summary}
       content={text || "（空）"}
-      collapsedContent={isReasoning ? "推理过程已折叠" : undefined}
+      collapsedContent={collapsedContent}
       raw={{
         aggregated: true,
         eventCount: item.eventCount,
@@ -186,13 +95,15 @@ function AggregatedToolCard({
   index: number;
 }): React.ReactNode {
   const { toolName, inputText, resultText, timestamp } = item;
-  const content =
+  const structuredContent = formatToolCardContent(item);
+  const fallbackContent =
     [
       inputText ? `**输入参数**\n\`\`\`\n${inputText}\n\`\`\`` : "",
       resultText ? `**执行结果**\n\`\`\`\n${resultText}\n\`\`\`` : "",
     ]
       .filter(Boolean)
       .join("\n\n") || "（无详情）";
+  const content = structuredContent ?? fallbackContent;
 
   return (
     <EventCard
@@ -202,7 +113,7 @@ function AggregatedToolCard({
       time={displayTime(timestamp)}
       summary={toolName}
       content={content}
-      collapsedContent={`${toolName} 执行完成`}
+      collapsedContent={toolCollapsedText(item)}
       raw={{
         toolName,
         inputText,
@@ -221,7 +132,10 @@ function ConversationMarker({
   item: Extract<TimelineItem, { kind: "conversation_marker" }>;
 }): React.ReactNode {
   return (
-    <div className="conversation-marker">
+    <div
+      className="conversation-marker"
+      data-job-id={item.jobId ?? undefined}
+    >
       <span className="conversation-marker-line" />
       <span className="conversation-marker-label">
         {escapeHtml(item.label)}
@@ -253,7 +167,21 @@ function TimelineCard({
   }
 
   if (item.kind === "aggregated_tool") {
+    if (isSkillInternalToolItem(item)) {
+      return null;
+    }
     return <AggregatedToolCard item={item} index={index} />;
+  }
+
+  if (item.kind === "skill_summary") {
+    return (
+      <SkillSummaryCard
+        item={item}
+        index={index}
+        displayTime={displayTime}
+        renderCard={(options) => <EventCard {...options} />}
+      />
+    );
   }
 
   if (item.kind === "message") {
@@ -299,6 +227,7 @@ function TimelineCard({
           metadata: item.metadata,
         }}
         index={index}
+        defaultOpen={false}
       />
     );
   }
@@ -335,13 +264,39 @@ export default function ChatPanel({
   conversations: ConversationView[];
   expandDetails: boolean;
 }) {
+  const streamRef = React.useRef<HTMLElement | null>(null);
   const timelineItems = React.useMemo<TimelineItem[]>(
     () => buildTraceTimelineItems(conversations),
     [conversations],
   );
+  const scrollKey = React.useMemo(() => {
+    const last = timelineItems[timelineItems.length - 1];
+    if (!last) {
+      return "empty";
+    }
+    if (last.kind === "aggregated_text") {
+      return `${last.id}:${last.text.length}:${last.active}`;
+    }
+    if (last.kind === "aggregated_tool") {
+      return `${last.id}:${last.inputText.length}:${last.resultText.length}`;
+    }
+    return `${last.id}:${timelineItems.length}`;
+  }, [timelineItems]);
+
+  React.useEffect(() => {
+    const stream = streamRef.current;
+    if (!stream) {
+      return;
+    }
+    stream.scrollTo({
+      top: stream.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [scrollKey]);
 
   return (
     <section
+      ref={streamRef}
       className="chat-stream"
       data-expand-details={String(expandDetails)}
     >
@@ -351,9 +306,11 @@ export default function ChatPanel({
           <div>输入消息后，这里会显示完整的会话卡片、回复和 trace 细节。</div>
         </div>
       ) : (
-        timelineItems.map((item, index) => (
-          <TimelineCard key={item.id} item={item} index={index} />
-        ))
+        <>
+          {timelineItems.map((item, index) => (
+            <TimelineCard key={item.id} item={item} index={index} />
+          ))}
+        </>
       )}
       <div className="event-stream-bottom-spacer" />
     </section>

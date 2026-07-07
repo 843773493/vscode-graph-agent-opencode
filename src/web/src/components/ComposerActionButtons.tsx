@@ -87,9 +87,22 @@ export default function ComposerActionButtons({
         id="sendButton"
         type="button"
         className="send-button"
-        disabled={!hasContent}
+        disabled={!hasContent || !hasSession}
         onClick={onSend}
-        title={hasContent ? "发送消息" : "输入消息以启用发送"}
+        title={
+          !hasSession
+            ? "先新建或选择会话"
+            : hasContent
+              ? "发送消息"
+              : "输入消息以启用发送"
+        }
+        aria-label={
+          !hasSession
+            ? "先新建或选择会话"
+            : hasContent
+              ? "发送消息"
+              : "输入消息以启用发送"
+        }
       >
         <svg viewBox="0 0 16 16" width="12" height="12">
           <path d="M1.5 1.5L14.5 8L1.5 14.5V9L10 8L1.5 7V1.5Z" />

@@ -1,0 +1,173 @@
+.resource-status-note {
+  margin: 8px 12px;
+  padding: 8px 10px;
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: var(--vscode-editor-inactiveSelectionBackground);
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.5;
+  flex: 0 0 auto;
+}
+
+.resource-card {
+  gap: 9px;
+}
+
+.resource-kind,
+.resource-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.resource-kind-job {
+  color: #1d4ed8;
+  background: color-mix(in srgb, #60a5fa 20%, transparent);
+}
+
+.resource-kind-background_task {
+  color: #047857;
+  background: color-mix(in srgb, #34d399 18%, transparent);
+}
+
+.resource-kind-terminal {
+  color: #166534;
+  background: color-mix(in srgb, #22c55e 18%, transparent);
+}
+
+.resource-status {
+  color: var(--vscode-editor-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-foreground) 8%, transparent);
+}
+
+.resource-status-running,
+.resource-status-pending,
+.resource-status-queued,
+.resource-status-streaming {
+  color: #0369a1;
+  background: color-mix(in srgb, #38bdf8 18%, transparent);
+}
+
+.resource-status-paused {
+  color: #92400e;
+  background: color-mix(in srgb, #f59e0b 20%, transparent);
+}
+
+.resource-status-cancelled,
+.resource-status-failed {
+  color: #b91c1c;
+  background: color-mix(in srgb, #f87171 18%, transparent);
+}
+
+.resource-status-completed,
+.resource-status-succeeded {
+  color: #047857;
+  background: color-mix(in srgb, #34d399 18%, transparent);
+}
+
+.resource-meta span {
+  max-width: 260px;
+}
+
+.resource-state-summary {
+  padding: 7px 9px;
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, #22c55e 8%, transparent);
+  color: var(--vscode-editor-foreground);
+  font-size: 12px;
+}
+
+.resource-details {
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 70%, transparent);
+}
+
+.resource-details summary {
+  cursor: pointer;
+  padding: 6px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.resource-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(92px, max-content) minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  padding: 8px;
+  max-height: 168px;
+  overflow: auto;
+  border-top: var(--surface-border);
+  font-size: 12px;
+}
+
+.resource-detail-row {
+  display: contents;
+}
+
+.resource-detail-row dt {
+  color: var(--vscode-descriptionForeground);
+}
+
+.resource-detail-row dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--vscode-editor-foreground);
+}
+
+.resource-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.resource-action-button,
+.resource-refresh-button {
+  border: var(--surface-border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.resource-action-button:hover:not(:disabled),
+.resource-refresh-button:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.resource-action-button:disabled,
+.resource-refresh-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.resource-action-delete,
+.resource-action-cancel {
+  color: #b91c1c;
+  border-color: color-mix(in srgb, #f87171 50%, var(--vscode-panel-border));
+}
+
+.resource-action-open {
+  color: #166534;
+  border-color: color-mix(in srgb, #22c55e 50%, var(--vscode-panel-border));
+}
+
+.resource-notice {
+  margin: 0 10px;
+  padding: 7px 9px;
+  border: var(--surface-border);
+  border-radius: 6px;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-foreground) 6%, transparent);
+  font-size: 12px;
+}

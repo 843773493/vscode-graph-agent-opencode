@@ -59,6 +59,7 @@ class TraceEventMapper:
         timestamp = self._parse_timestamp(event.get("timestamp"), payload.get("timestamp"))
 
         phase, title, content, status, tool_name = self._build_view_model(event_type, payload)
+        skill_names = self._skill_names(payload)
 
         return TraceEventDTO(
             event_id=event.get("event_id") or "",
@@ -70,10 +71,17 @@ class TraceEventMapper:
             content=content,
             status=status,
             tool_name=tool_name,
+            skill_names=skill_names,
             step_id=step_id,
             timestamp=timestamp,
             raw=event,
         )
+
+    def _skill_names(self, payload: dict[str, Any]) -> list[str]:
+        value = payload.get("skill_names")
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str)]
 
     def _build_view_model(self, event_type: str, payload: dict[str, Any]) -> tuple[str, str, str, str | None, str | None]:
         if event_type == "message_created":

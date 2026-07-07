@@ -3,21 +3,17 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
-import time
 import uuid
 from collections.abc import AsyncIterator, Generator, Sequence
 from hashlib import sha1
 from pathlib import Path
-from urllib.request import urlopen
 
 import httpx
 import pytest
 import debugpy
 
-E2E_PORT_START = 18600
-E2E_PORT_END = 18799
-E2E_READY_TIMEOUT_SECONDS = 60
+from tests.e2e.ports import e2e_port_block_for_file
+from tests.e2e.processes import close_backend_process, start_backend_process
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -37,7 +33,7 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest, e2e_session_marker: 
     tests_root = project_root / "tests" / "e2e"
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
-    workspace_root = Path() / "out" / "tests" / "e2e" / relative_test_path
+    workspace_root = project_root / "out" / "tests" / "e2e" / relative_test_path
 
     default_workspace_root = project_root / "asset" / "default_test_workspace"
     lock_file = workspace_root / ".e2e_session_lock"
@@ -83,7 +79,7 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest, e2e_session_marker: 
 
 @pytest.fixture(scope="module")
 def e2e_config_path() -> str:
-    return str(Path(__file__).resolve().parents[2] / "configs" / "tests" / "default.jsonc")
+    return str(Path.cwd().resolve() / "configs" / "tests" / "default.jsonc")
 
 
 @pytest.fixture(autouse=True)
@@ -96,11 +92,8 @@ def setup_e2e_test_config(e2e_config_path: str):
 
 
 @pytest.fixture(scope="module")
-def e2e_backend_port(e2e_workspace_root_path: str) -> int:
-    path_key = e2e_workspace_root_path.replace(os.sep, "/")
-    group_suffix = int(sha1(path_key.encode("utf-8")).hexdigest()[:4], 16)
-    port = E2E_PORT_START + (group_suffix % (E2E_PORT_END - E2E_PORT_START + 1))
-    return port
+def e2e_backend_port(request: pytest.FixtureRequest) -> int:
+    return e2e_port_block_for_file(Path(request.node.fspath)).backend_port
 
 
 @pytest.fixture(scope="module")
@@ -109,67 +102,28 @@ def e2e_backend_process(
     e2e_backend_port: int,
     is_debug: bool,
 ) -> Generator[subprocess.Popen[str], None, None]:
-    _kill_process_on_port(e2e_backend_port)
-
-    env = os.environ.copy()
-    env["WORKSPACE_ROOT"] = e2e_workspace_root_path
-    env["PYTHONUNBUFFERED"] = "1"
-
-    python_executable = _resolve_workspace_python_executable(Path.cwd())
-    enable_backend_debugpy = is_debug
-    
-    cmd = [str(python_executable)]
-    if enable_backend_debugpy:
-        backend_debugpy_port = int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT"))
-        _kill_process_on_port(backend_debugpy_port)
-        cmd.extend([
-            "-m",
-            "debugpy",
-            "--listen",
-            f"127.0.0.1:{backend_debugpy_port}",
-            "--wait-for-client",
-        ])
-    cmd.extend([
-        "-m",
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(e2e_backend_port),
-        "--log-level",
-        "warning",
-    ])
-
-    log_dir = Path(e2e_workspace_root_path) / ".boxteam" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    stdout_path = log_dir / "e2e-backend.stdout.log"
-    stderr_path = log_dir / "e2e-backend.stderr.log"
-    stdout_file = open(stdout_path, "a", encoding="utf-8")
-    stderr_file = open(stderr_path, "a", encoding="utf-8")
-
-    process = subprocess.Popen(
-        cmd,
-        cwd=Path(__file__).resolve().parents[2],
-        env=env,
-        stdout=stdout_file,
-        stderr=stderr_file,
+    debugpy_port = int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT")) if is_debug else None
+    handle = start_backend_process(
+        workspace_root=e2e_workspace_root_path,
+        port=e2e_backend_port,
+        log_name="e2e-backend",
+        debugpy_port=debugpy_port,
     )
-    if enable_backend_debugpy:
+    if debugpy_port is not None:
         print(
-            f"启动 e2e 后端进程: port={e2e_backend_port}, debugpy_port={backend_debugpy_port}, workspace={e2e_workspace_root_path}, pid={process.pid}"
+            f"启动 e2e 后端进程: port={e2e_backend_port}, debugpy_port={debugpy_port}, "
+            f"workspace={e2e_workspace_root_path}, pid={handle.process.pid}"
         )
     else:
-        print(f"启动 e2e 后端进程: port={e2e_backend_port}, workspace={e2e_workspace_root_path}, pid={process.pid}")
+        print(
+            f"启动 e2e 后端进程: port={e2e_backend_port}, "
+            f"workspace={e2e_workspace_root_path}, pid={handle.process.pid}"
+        )
 
     try:
-        _wait_for_backend_ready(e2e_backend_port, process)
-        yield process
+        yield handle.process
     finally:
-        _terminate_process(process)
-        _kill_process_on_port(e2e_backend_port)
-        stdout_file.close()
-        stderr_file.close()
+        close_backend_process(handle)
 
 
 @pytest.fixture(scope="module")
@@ -199,88 +153,3 @@ def pytest_collection_modifyitems(items: Sequence[pytest.Item]) -> None:
         group_suffix = sha1(path_key.encode("utf-8")).hexdigest()[:8]
         group_name = f"e2e_file_{group_suffix}"
         item.add_marker(pytest.mark.xdist_group(name=group_name))
-
-
-def _wait_for_backend_ready(port: int, process: subprocess.Popen[str]) -> None:
-    deadline = time.monotonic() + E2E_READY_TIMEOUT_SECONDS
-    url = f"http://127.0.0.1:{port}/api/v1/health"
-
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(
-                f"后端进程提前退出，返回码: {process.returncode}\n"
-            )
-        try:
-            with urlopen(url, timeout=1) as response:
-                if response.status == 200:
-                    return
-        except Exception:
-            time.sleep(1)
-
-    raise TimeoutError(
-        f"后端在 {E2E_READY_TIMEOUT_SECONDS} 秒内未就绪，端口: {port}\n"
-    )
-
-
-def _terminate_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-
-    try:
-        process.terminate()
-        process.wait(timeout=10)
-        return
-    except Exception:
-        pass
-
-    try:
-        process.kill()
-        process.wait(timeout=10)
-    except Exception:
-        pass
-
-
-def _kill_process_on_port(port: int) -> None:
-    if os.name != "nt":
-        return
-
-    result = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            (
-                f"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | "
-                "Select-Object -ExpandProperty OwningProcess"
-            ),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if result.returncode != 0 or not result.stdout:
-        return
-
-    target_pids: set[int] = set()
-    for line in result.stdout.decode("utf-8", errors="ignore").splitlines():
-        try:
-            target_pids.add(int(line.strip()))
-        except ValueError:
-            continue
-
-    for pid in target_pids:
-        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, check=False)
-
-
-def _resolve_workspace_python_executable(project_root: Path) -> Path:
-    windows_python = project_root / ".venv" / "Scripts" / "python.exe"
-    if windows_python.exists():
-        return windows_python
-
-    posix_python = project_root / ".venv" / "bin" / "python"
-    if posix_python.exists():
-        return posix_python
-
-    raise FileNotFoundError(
-        f"未找到工作区虚拟环境 Python，可尝试路径: {windows_python} 或 {posix_python}"
-    )

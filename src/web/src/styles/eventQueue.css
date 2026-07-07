@@ -1,0 +1,115 @@
+.event-queue-group-card {
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-focusBorder) 45%,
+    var(--vscode-panel-border)
+  );
+}
+
+.event-queue-key-trace {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 6px;
+  margin: 10px 10px 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 66%, transparent);
+}
+
+.event-queue-key-trace-title {
+  color: var(--vscode-editor-foreground);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.event-queue-key-trace-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.event-queue-key-trace-items span {
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.event-queue-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.event-queue-stats span {
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--vscode-editor-inactiveSelectionBackground);
+  color: var(--vscode-editor-foreground);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.event-queue-tool-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 32%, var(--vscode-panel-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 58%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.event-queue-tool-summary span {
+  color: var(--vscode-descriptionForeground);
+}
+
+.event-queue-tool-summary code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace);
+}
+
+.event-queue-input-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 35%, var(--vscode-panel-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 65%, transparent);
+}
+
+.event-queue-input-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vscode-editor-foreground);
+  overflow-wrap: anywhere;
+}
+
+.event-queue-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.event-queue-attachments span {
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-size: 11px;
+}

@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Deque, Dict, Set
 
 from app.schemas.event import (
     Event,
+    BaseEvent,
     MessageCreatedEvent, MessageCreatedPayload,
     JobCreatedEvent, JobCreatedPayload,
     JobStartedEvent, JobStartedPayload,
@@ -64,6 +66,53 @@ class EventType:
 
     # Session 打断
     SESSION_INTERRUPTED = "session_interrupted"
+
+
+@dataclass(frozen=True)
+class EventFactorySpec:
+    event_type: str
+    event_class: type[BaseEvent]
+    payload_class: type[Any]
+
+    def build(
+        self,
+        *,
+        job_id: str,
+        payload: Dict[str, Any],
+        step_id: str | None,
+        agent_id: str | None,
+    ) -> Event:
+        return self.event_class(
+            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            job_id=job_id,
+            step_id=step_id,
+            agent_id=agent_id,
+            timestamp=datetime.now(),
+            type=self.event_type,
+            payload=self.payload_class(**payload),
+        )
+
+
+EVENT_FACTORY_REGISTRY: dict[str, EventFactorySpec] = {
+    EventType.MESSAGE_CREATED: EventFactorySpec(EventType.MESSAGE_CREATED, MessageCreatedEvent, MessageCreatedPayload),
+    EventType.JOB_CREATED: EventFactorySpec(EventType.JOB_CREATED, JobCreatedEvent, JobCreatedPayload),
+    EventType.JOB_STARTED: EventFactorySpec(EventType.JOB_STARTED, JobStartedEvent, JobStartedPayload),
+    EventType.JOB_COMPLETED: EventFactorySpec(EventType.JOB_COMPLETED, JobCompletedEvent, JobCompletedPayload),
+    EventType.JOB_CANCELLED: EventFactorySpec(EventType.JOB_CANCELLED, JobCancelledEvent, JobCancelledPayload),
+    EventType.JOB_FAILED: EventFactorySpec(EventType.JOB_FAILED, JobFailedEvent, JobFailedPayload),
+    EventType.STATUS_CHANGE: EventFactorySpec(EventType.STATUS_CHANGE, StatusChangeEvent, StatusChangePayload),
+    EventType.LLM_REQUEST: EventFactorySpec(EventType.LLM_REQUEST, LLMRequestEvent, LLMRequestPayload),
+    EventType.TEXT_START: EventFactorySpec(EventType.TEXT_START, TextStartEvent, TextStartPayload),
+    EventType.TEXT_DELTA: EventFactorySpec(EventType.TEXT_DELTA, TextDeltaEvent, TextDeltaPayload),
+    EventType.TEXT_END: EventFactorySpec(EventType.TEXT_END, TextEndEvent, TextEndPayload),
+    EventType.AGENT_START: EventFactorySpec(EventType.AGENT_START, AgentStartEvent, AgentStartPayload),
+    EventType.AGENT_STEP: EventFactorySpec(EventType.AGENT_STEP, AgentStepEvent, AgentStepPayload),
+    EventType.AGENT_END: EventFactorySpec(EventType.AGENT_END, AgentEndEvent, AgentEndPayload),
+    EventType.TOOL_CALL_START: EventFactorySpec(EventType.TOOL_CALL_START, ToolCallStartEvent, ToolCallStartPayload),
+    EventType.TOOL_CALL_END: EventFactorySpec(EventType.TOOL_CALL_END, ToolCallEndEvent, ToolCallEndPayload),
+    EventType.ERROR: EventFactorySpec(EventType.ERROR, ErrorEvent, ErrorPayload),
+    EventType.SESSION_INTERRUPTED: EventFactorySpec(EventType.SESSION_INTERRUPTED, SessionInterruptedEvent, SessionInterruptedPayload),
+}
 
 
 class JobEventBus:
@@ -128,148 +177,16 @@ class JobEventBus:
         step_id: str | None,
         agent_id: str | None,
     ) -> Event:
-        """根据 event_type 构建对应的新事件对象"""
-
-        # 通用字段
-        common = {
-            "event_id": f"evt_{uuid.uuid4().hex[:12]}",
-            "job_id": job_id,
-            "step_id": step_id,
-            "agent_id": agent_id,
-            "timestamp": datetime.now(),
-        }
-
-        # 根据类型构建具体事件
-        t = event_type
-
-        if t == EventType.MESSAGE_CREATED:
-            return MessageCreatedEvent(
-                type="message_created",
-                payload=MessageCreatedPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.JOB_CREATED:
-            return JobCreatedEvent(
-                type="job_created",
-                payload=JobCreatedPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.JOB_STARTED:
-            return JobStartedEvent(
-                type="job_started",
-                payload=JobStartedPayload(),
-                **common
-            )
-
-        elif t == EventType.JOB_COMPLETED:
-            return JobCompletedEvent(
-                type="job_completed",
-                payload=JobCompletedPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.JOB_CANCELLED:
-            return JobCancelledEvent(
-                type="job_cancelled",
-                payload=JobCancelledPayload(),
-                **common
-            )
-
-        elif t == EventType.JOB_FAILED:
-            return JobFailedEvent(
-                type="job_failed",
-                payload=JobFailedPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.STATUS_CHANGE:
-            return StatusChangeEvent(
-                type="status_change",
-                payload=StatusChangePayload(**payload),
-                **common
-            )
-
-        elif t == EventType.LLM_REQUEST:
-            return LLMRequestEvent(
-                type="llm_request",
-                payload=LLMRequestPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.TEXT_START:
-            return TextStartEvent(
-                type="text_start",
-                payload=TextStartPayload(),
-                **common
-            )
-
-        elif t == EventType.TEXT_DELTA:
-            return TextDeltaEvent(
-                type="text_delta",
-                payload=TextDeltaPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.TEXT_END:
-            return TextEndEvent(
-                type="text_end",
-                payload=TextEndPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.AGENT_START:
-            return AgentStartEvent(
-                type="agent_start",
-                payload=AgentStartPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.AGENT_STEP:
-            return AgentStepEvent(
-                type="agent_step",
-                payload=AgentStepPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.AGENT_END:
-            return AgentEndEvent(
-                type="agent_end",
-                payload=AgentEndPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.TOOL_CALL_START:
-            return ToolCallStartEvent(
-                type="tool_call_start",
-                payload=ToolCallStartPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.TOOL_CALL_END:
-            return ToolCallEndEvent(
-                type="tool_call_end",
-                payload=ToolCallEndPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.ERROR:
-            return ErrorEvent(
-                type="error",
-                payload=ErrorPayload(**payload),
-                **common
-            )
-
-        elif t == EventType.SESSION_INTERRUPTED:
-            return SessionInterruptedEvent(
-                type="session_interrupted",
-                payload=SessionInterruptedPayload(**payload),
-                **common
-            )
-
-        else:
-            raise ValueError(f"Unknown event type: {event_type}. Please add a new Event subclass.")
+        """根据事件注册表构建对应的新事件对象。"""
+        factory_spec = EVENT_FACTORY_REGISTRY.get(event_type)
+        if factory_spec is None:
+            raise ValueError(f"Unknown event type: {event_type}. Please add a new EventFactorySpec.")
+        return factory_spec.build(
+            job_id=job_id,
+            payload=payload,
+            step_id=step_id,
+            agent_id=agent_id,
+        )
 
     async def subscribe(self, job_id: str) -> asyncio.Queue[Event]:
         queue = asyncio.Queue(maxsize=100)
@@ -312,3 +229,14 @@ class JobEventBus:
                     break
 
         return events[-limit:]
+
+    async def get_event(self, event_id: str) -> Event | None:
+        """按事件 ID 查询单个事件。"""
+        async with self._lock:
+            event_groups = [list(events) for events in self._job_events.values()]
+
+        for events in event_groups:
+            for event in events:
+                if event.event_id == event_id:
+                    return event
+        return None

@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAppState } from "../hooks";
+import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { VIEW_OPTIONS } from "../state/contentViews";
+import {
+  firstEnabledSlashCommandIndex,
+  getSlashCommandArgs,
+  nextEnabledSlashCommandIndex,
+} from "../state/slashCommands";
 import type { ConversationContentView } from "../types/frontend";
 import {
   fileToSelectedAttachment,
@@ -11,9 +17,7 @@ import {
 import ComposerActionButtons from "./ComposerActionButtons";
 import ComposerAgentControl from "./ComposerAgentControl";
 import ComposerAttachmentTray from "./ComposerAttachmentTray";
-import ComposerSlashCommandMenu, {
-  type SlashCommandOption,
-} from "./ComposerSlashCommandMenu";
+import ComposerSlashCommandMenu from "./ComposerSlashCommandMenu";
 import ComposerViewControl from "./ComposerViewControl";
 import SessionNameDialog from "./SessionNameDialog";
 
@@ -28,70 +32,6 @@ function resizeTextarea(textarea: HTMLTextAreaElement | null) {
 
 function insertLineBreak(value: string, start: number, end: number): string {
   return value.slice(0, start) + "\n" + value.slice(end);
-}
-
-function copyTextWithSelection(text: string): boolean {
-  // TODO: 兼容本地浏览器禁用 Clipboard API 权限的场景；后续统一权限策略后可收敛。
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.top = "-9999px";
-  textarea.style.left = "-9999px";
-  textarea.style.opacity = "0";
-  const previousFocus =
-    document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-  let copied = false;
-  try {
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    copied = document.execCommand("copy");
-  } catch {
-    copied = false;
-  } finally {
-    textarea.remove();
-    previousFocus?.focus();
-  }
-  return copied;
-}
-
-function nextEnabledSlashCommandIndex(
-  commands: SlashCommandOption[],
-  currentIndex: number,
-  direction: 1 | -1,
-): number {
-  if (commands.length === 0) {
-    return 0;
-  }
-  for (let offset = 1; offset <= commands.length; offset += 1) {
-    const nextIndex =
-      (currentIndex + direction * offset + commands.length) % commands.length;
-    if (!commands[nextIndex]?.disabled) {
-      return nextIndex;
-    }
-  }
-  return 0;
-}
-
-function firstEnabledSlashCommandIndex(commands: SlashCommandOption[]): number {
-  const index = commands.findIndex((command) => !command.disabled);
-  return index === -1 ? 0 : index;
-}
-
-function getSlashCommandArgs(inputValue: string, command: string): string {
-  const trimmedInput = inputValue.trim();
-  if (!trimmedInput.startsWith(command)) {
-    return "";
-  }
-
-  const nextChar = trimmedInput.charAt(command.length);
-  if (nextChar && !/\s/.test(nextChar)) {
-    return "";
-  }
-
-  return trimmedInput.slice(command.length).trim();
 }
 
 export default function Composer() {
@@ -146,120 +86,6 @@ export default function Composer() {
     }
     return "Enter 发送 · Ctrl+Enter 换行";
   }, [queuedCount, showInterrupt]);
-  const slashCommands = useMemo<SlashCommandOption[]>(
-    () => [
-      {
-        id: "quit",
-        command: "/quit",
-        title: "退出提示",
-        description: "Show how to exit the web UI.",
-      },
-      {
-        id: "new",
-        command: "/new",
-        title: "新建会话",
-        description: "Start a new chat. 可输入名称。",
-      },
-      {
-        id: "rename",
-        command: "/rename",
-        title: "命名会话",
-        description: "Rename the current chat.",
-      },
-      {
-        id: "init",
-        command: "/init",
-        title: "初始化 AGENTS.md",
-        description: "暂未接入 Web 前端。",
-        disabled: true,
-      },
-      {
-        id: "clear",
-        command: "/clear",
-        title: "清空输入",
-        description: "Clear the composer.",
-      },
-      {
-        id: "copy",
-        command: "/copy",
-        title: "复制回复",
-        description: "Copy the last assistant response.",
-      },
-      {
-        id: "raw",
-        command: "/raw",
-        title: "事件视图",
-        description: "Toggle raw trace event view.",
-      },
-      {
-        id: "model",
-        command: "/model",
-        title: "打开 Agent 配置",
-        description: "当前没有独立模型选择，模型由 Agent 配置决定。",
-      },
-      {
-        id: "theme",
-        command: "/theme",
-        title: "切换主题",
-        description: "暂未接入 Web 前端。",
-        disabled: true,
-      },
-      {
-        id: "default",
-        command: "/default",
-        title: "默认视图",
-        description: "Show conversation timeline.",
-      },
-      {
-        id: "events",
-        command: "/events",
-        title: "事件视图",
-        description: "Show trace events.",
-      },
-      {
-        id: "state",
-        command: "/state",
-        title: "Agent 视图",
-        description: "Show Agent State messages.",
-      },
-      {
-        id: "view",
-        command: "/view",
-        title: "选择视图",
-        description: "Open the view picker.",
-      },
-      {
-        id: "compact",
-        command: "/compact",
-        title: "压缩上下文",
-        description: "Compact the current session.",
-      },
-      {
-        id: "agent",
-        command: "/agent",
-        title: "选择 Agent",
-        description: "Open the agent picker.",
-      },
-    ],
-    [],
-  );
-  const slashQuery = useMemo(() => {
-    if (!input.startsWith("/")) {
-      return null;
-    }
-    const commandToken = input.slice(1).match(/^\S*/)?.[0] ?? "";
-    return commandToken.toLowerCase();
-  }, [input]);
-  const matchingSlashCommands = useMemo(() => {
-    if (slashQuery === null) {
-      return [];
-    }
-    return slashCommands.filter((command) =>
-      command.command.slice(1).startsWith(slashQuery),
-    );
-  }, [slashCommands, slashQuery]);
-  const slashCommandMode = slashQuery !== null;
-
   useEffect(() => {
     resizeTextarea(textareaRef.current);
   }, [input]);
@@ -280,10 +106,6 @@ export default function Composer() {
     setRenameDialogError(null);
     setRenameDialogSubmitting(false);
   }, [currentSessionId]);
-
-  useEffect(() => {
-    setSlashCommandIndex(firstEnabledSlashCommandIndex(matchingSlashCommands));
-  }, [matchingSlashCommands]);
 
   useEffect(() => {
     if (!viewMenuOpen) {
@@ -386,124 +208,34 @@ export default function Composer() {
     setRenameDialogError(null);
   };
 
-  const runSlashCommand = (command: SlashCommandOption, args = "") => {
-    setInput("");
-    setAttachmentError("");
-    setComposerNotice("");
-    switch (command.id) {
-      case "quit":
-        setStatus("Web 页面仍在运行，可关闭当前浏览器标签页");
-        setAttachmentError("Web 端不退出本地服务，请直接关闭当前页面");
-        break;
-      case "new":
-        setAttachments([]);
-        void createSession(args.trim() || "新会话");
-        break;
-      case "rename":
-        renameCurrentSession(args);
-        break;
-      case "init":
-        setAttachmentError("/init 暂未接入 Web 前端");
-        break;
-      case "clear":
-        setAttachments([]);
-        setStatus("已清空输入");
-        setComposerNotice("已清空输入和未发送附件");
-        break;
-      case "copy": {
-        const latestAssistantMessage = [...state.messages]
-          .reverse()
-          .find(
-            (message) =>
-              message.role === "assistant" && message.content.trim().length > 0,
-          );
-        if (!latestAssistantMessage) {
-          setAttachmentError("没有可复制的助手回复");
-          break;
-        }
-        if (copyTextWithSelection(latestAssistantMessage.content)) {
-          setStatus("已复制最近助手回复");
-          setComposerNotice("已复制最近助手回复");
-          break;
-        }
-        if (!navigator.clipboard) {
-          setAttachmentError("当前浏览器不支持剪贴板写入");
-          break;
-        }
-        void navigator.clipboard
-          .writeText(latestAssistantMessage.content)
-          .then(() => {
-            setStatus("已复制最近助手回复");
-            setComposerNotice("已复制最近助手回复");
-          })
-          .catch((error: unknown) => {
-            setAttachmentError(
-              `复制失败：${error instanceof Error ? error.message : String(error)}`,
-            );
-          });
-        break;
-      }
-      case "raw":
-        void switchContentView("events");
-        break;
-      case "model":
-        setAgentMenuOpen(true);
-        setStatus("已打开 Agent 配置选择");
-        setComposerNotice("当前没有独立模型选择，模型由 Agent 配置决定");
-        break;
-      case "agent":
-        setAgentMenuOpen(true);
-        break;
-      case "theme":
-        setAttachmentError("/theme 暂未接入 Web 前端");
-        break;
-      case "view":
-        setViewMenuOpen(true);
-        break;
-      case "default":
-        void switchContentView("default");
-        break;
-      case "events":
-        void switchContentView("events");
-        break;
-      case "state":
-        void switchContentView("agent");
-        break;
-      case "compact":
-        if (state.currentSession && !state.compactLoading) {
-          void compactSession();
-        }
-        break;
-      default:
-        break;
-    }
-  };
+  const {
+    slashQuery,
+    matchingSlashCommands,
+    slashCommandMode,
+    runSlashCommand,
+    submitSlashInput,
+  } = useComposerSlashCommands({
+    input,
+    state,
+    setInput,
+    setAttachments,
+    setAttachmentError,
+    setComposerNotice,
+    setAgentMenuOpen,
+    setViewMenuOpen,
+    setStatus,
+    createSession,
+    renameCurrentSession,
+    switchContentView,
+    compactSession,
+  });
 
-  const submitSlashInput = () => {
-    if (!slashCommandMode) {
-      return false;
-    }
-
-    const command =
-      matchingSlashCommands[slashCommandIndex] ??
-      matchingSlashCommands[0];
-    const commandArgs = command
-      ? getSlashCommandArgs(input, command.command)
-      : "";
-    setInput("");
-    setComposerNotice("");
-    if (command && !command.disabled) {
-      runSlashCommand(command, commandArgs);
-    } else if (command?.disabled) {
-      setAttachmentError(`${command.command} 暂未接入 Web 前端`);
-    } else {
-      setAttachmentError(`未知指令：/${slashQuery}`);
-    }
-    return true;
-  };
+  useEffect(() => {
+    setSlashCommandIndex(firstEnabledSlashCommandIndex(matchingSlashCommands));
+  }, [matchingSlashCommands]);
 
   const handleSend = () => {
-    if (submitSlashInput()) {
+    if (submitSlashInput(slashCommandIndex)) {
       return;
     }
 
@@ -659,7 +391,7 @@ export default function Composer() {
       }
       if (e.key === "Tab" || e.key === "Enter") {
         e.preventDefault();
-        submitSlashInput();
+        submitSlashInput(slashCommandIndex);
         return;
       }
       if (e.key === "Escape") {

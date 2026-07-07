@@ -35,6 +35,7 @@ class TraceEventDTO(BaseModel):
     content: str
     status: Optional[str] = None
     tool_name: Optional[str] = None
+    skill_names: list[str] = Field(default_factory=list)
     step_id: Optional[str] = None
     timestamp: datetime
     raw: dict[str, Any] = Field(default_factory=dict)

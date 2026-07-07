@@ -10,7 +10,6 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType
-from app.core.background_message_bus import BackgroundMessageBus
 from app.schemas.public_v2.session import SessionAutoContinueStatusDTO
 from app.services.business.session_service import SessionService
 
@@ -33,7 +32,6 @@ class SessionAutoContinueService:
         self,
         *,
         background_task_registry: BackgroundTaskRegistry,
-        background_message_bus: BackgroundMessageBus,
         job_event_bus: JobEventBusProtocol,
         session_service: SessionService,
         job_service: JobServiceProtocol,
@@ -42,7 +40,6 @@ class SessionAutoContinueService:
         self._states: dict[str, _AutoContinueState] = {}
         self._lock = asyncio.Lock()
         self._background_task_registry = background_task_registry
-        self._background_message_bus = background_message_bus
         self._job_event_bus = job_event_bus
         self._session_service = session_service
         self._job_service = job_service

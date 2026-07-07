@@ -129,11 +129,8 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(tmp_path
 
     service = MessageService(checkpointer=saver)
     messages = await service.list(session_id="sess_tool_reasoning", limit=10)
-    assistant = messages.items[1]
-    assert assistant.content == ""
-    assert assistant.metadata["content_blocks"] == [
-        {"type": "reasoning", "reasoning": reasoning_text}
-    ]
+    assert len(messages.items) == 1
+    assert messages.items[0].role.value == "user"
 
     state_snapshot = await service.get_agent_state_messages("sess_tool_reasoning")
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
@@ -144,6 +141,55 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(tmp_path
     assert state_assistant["tool_calls"] == [tool_call]
     assert state_assistant["response_metadata"]["phase"] == "commentary"
     assert "additional_kwargs" not in state_assistant
+
+
+@pytest.mark.asyncio
+async def test_message_service_hides_empty_assistant_tool_call_messages(tmp_path):
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_tool_hidden", "checkpoint_ns": ""}}
+    tool_call_message = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "test_tool_2",
+                "args": {},
+                "id": "call_001",
+                "type": "tool_call",
+            }
+        ],
+        response_metadata={"phase": "commentary"},
+    )
+    final_message = AIMessage(
+        content=[
+            {"type": "reasoning", "reasoning": "工具返回 4568。"},
+            {"type": "text", "text": "4568"},
+        ],
+        response_metadata={"phase": "final_answer"},
+    )
+    checkpoint = {
+        "channel_values": {
+            "messages": [
+                HumanMessage(content="请调用 test_tool_2"),
+                tool_call_message,
+                final_message,
+            ]
+        },
+        "channel_versions": {"messages": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-tool-hidden",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
+
+    service = MessageService(checkpointer=saver)
+    messages = await service.list(session_id="sess_tool_hidden", limit=10)
+
+    assert [message.role.value for message in messages.items] == ["user", "assistant"]
+    assert messages.items[-1].content == "4568"
 
 
 @pytest.mark.asyncio

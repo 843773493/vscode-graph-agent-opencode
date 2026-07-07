@@ -8,6 +8,8 @@ interface HistoryPanelProps {
   currentSessionId: string;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, currentTitle: string) => void;
+  onDeleteSession: (sessionId: string, currentTitle: string) => void;
+  onStatusChange: (message: string) => void;
   isOpen: boolean;
   onClose: () => void;
   workspaceName: string;
@@ -53,6 +55,47 @@ function AttachmentSummaryBadge({
       附件 {summary.count}
     </span>
   );
+}
+
+function fallbackCopyText(text: string): void {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  // TODO: 兼容非安全上下文下 Clipboard API 不可用的浏览器，后续全站 HTTPS 后移除。
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) {
+    throw new Error('浏览器拒绝复制会话 ID');
+  }
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  let clipboardError: unknown = null;
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (error) {
+      clipboardError = error;
+    }
+  }
+
+  try {
+    fallbackCopyText(text);
+  } catch (fallbackError) {
+    if (clipboardError) {
+      const clipboardMessage = clipboardError instanceof Error ? clipboardError.message : String(clipboardError);
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      throw new Error(`Clipboard API 失败：${clipboardMessage}；兼容复制失败：${fallbackMessage}`);
+    }
+    throw fallbackError;
+  }
 }
 
 function SessionButton({
@@ -109,6 +152,8 @@ export default function HistoryPanel({
   currentSessionId,
   onSelectSession,
   onRenameSession,
+  onDeleteSession,
+  onStatusChange,
   isOpen,
   onClose,
   workspaceName,
@@ -151,8 +196,8 @@ export default function HistoryPanel({
     (session) => session.session_id !== currentSessionId,
   );
   const openSessionMenu = (session: Session, x: number, y: number) => {
-    const menuWidth = 140;
-    const menuHeight = 44;
+    const menuWidth = 156;
+    const menuHeight = 108;
     setContextMenu({
       sessionId: session.session_id,
       title: session.title || '',
@@ -167,6 +212,29 @@ export default function HistoryPanel({
     const target = contextMenu;
     setContextMenu(null);
     onRenameSession(target.sessionId, target.title);
+  };
+  const handleDeleteFromMenu = () => {
+    if (!contextMenu) {
+      return;
+    }
+    const target = contextMenu;
+    setContextMenu(null);
+    onDeleteSession(target.sessionId, target.title);
+  };
+  const handleCopySessionIdFromMenu = () => {
+    if (!contextMenu) {
+      return;
+    }
+    const target = contextMenu;
+    setContextMenu(null);
+    void copyTextToClipboard(target.sessionId)
+      .then(() => {
+        onStatusChange(`已复制会话 ID: ${target.sessionId}`);
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        onStatusChange(`复制会话 ID 失败: ${message}`);
+      });
   };
 
   return (
@@ -240,8 +308,14 @@ export default function HistoryPanel({
             role="menu"
             onPointerDown={(event) => event.stopPropagation()}
           >
+            <button type="button" role="menuitem" onClick={handleCopySessionIdFromMenu}>
+              复制会话 ID
+            </button>
             <button type="button" role="menuitem" onClick={handleRenameFromMenu}>
               重命名
+            </button>
+            <button type="button" role="menuitem" className="danger" onClick={handleDeleteFromMenu}>
+              删除
             </button>
           </div>
         ) : null}

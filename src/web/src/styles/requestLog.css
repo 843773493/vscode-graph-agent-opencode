@@ -1,0 +1,151 @@
+.request-log-card {
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-button-background) 38%,
+    var(--vscode-panel-border)
+  );
+}
+
+.request-log-key-flow {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 8px;
+  margin: 10px 10px 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 64%, transparent);
+}
+
+.request-log-key-flow-title {
+  color: var(--vscode-editor-foreground);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.request-log-key-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.request-log-key-flow-grid div {
+  min-width: 0;
+  border: var(--surface-border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--vscode-editor-background);
+}
+
+.request-log-key-flow-grid span,
+.request-log-key-flow-grid strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.request-log-key-flow-grid span {
+  margin-bottom: 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.request-log-key-flow-grid strong {
+  color: var(--vscode-editor-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.request-log-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.request-log-summary {
+  min-width: 0;
+  border: var(--surface-border);
+  border-radius: 6px;
+  padding: 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.request-log-summary-label {
+  margin-bottom: 4px;
+  color: var(--vscode-foreground);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.request-log-tools {
+  display: grid;
+  gap: 6px;
+  border: var(--surface-border);
+  border-radius: 6px;
+  padding: 8px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background) 80%,
+    var(--vscode-button-background)
+  );
+}
+
+.request-log-called-tools {
+  display: grid;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
+  border-radius: 6px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 62%, transparent);
+}
+
+.request-log-tools-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.request-log-tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.request-log-tool-chip {
+  max-width: 100%;
+  border: var(--surface-border);
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.request-log-tool-chip.called {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 48%, var(--vscode-panel-border));
+  background: color-mix(in srgb, var(--vscode-button-background) 18%, var(--vscode-editor-background));
+}
+
+.request-log-tool-empty {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .request-log-key-flow-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .request-log-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}

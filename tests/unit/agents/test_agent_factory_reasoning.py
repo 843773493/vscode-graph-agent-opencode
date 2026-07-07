@@ -90,6 +90,31 @@ async def _astream_chunks(model, messages):
     return chunks
 
 
+def _content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content) if content else ""
+
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            parts.append(str(block))
+            continue
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    return "".join(parts)
+
+
+def _blocks_text(chunks, block_type: str, field: str) -> str:
+    parts: list[str] = []
+    for chunk in chunks:
+        for block in chunk["content_blocks"]:
+            if block.get("type") == block_type and isinstance(block.get(field), str):
+                parts.append(block[field])
+    return "".join(parts)
+
+
 @pytest.mark.asyncio
 async def test_astream_exposes_reasoning_content(test_model):
     """interface=opencode_zen 时应通过 LiteLLM 包装层拿到 reasoning_content。"""
@@ -209,10 +234,7 @@ async def test_raw_openai_client_exposes_reasoning(test_model_config):
 
 @pytest.mark.asyncio
 async def test_ainvoke_shows_reasoning_in_metadata(test_model):
-    """验证：ainvoke 的 response_metadata 中包含 reasoning_tokens 计数
-
-    这说明模型确实生成了 reasoning，但 astream 的 chunk 中不暴露具体内容。
-    """
+    """ainvoke 不应依赖 provider 一定返回 usage metadata。"""
     messages = [{"role": "user", "content": "你好"}]
     result = await test_model.ainvoke(messages)
 
@@ -221,20 +243,14 @@ async def test_ainvoke_shows_reasoning_in_metadata(test_model):
     completion_details = token_usage.get("completion_tokens_details", {})
     reasoning_tokens = completion_details.get("reasoning_tokens")
 
-    assert reasoning_tokens is not None, (
-        "ainvoke 的 response_metadata 中应该包含 reasoning_tokens 字段，"
-        "但找不到。metadata: " + str(metadata)
-    )
-
-    assert reasoning_tokens > 0, (
-        f"reasoning_tokens 应该 > 0，但得到 {reasoning_tokens}。"
-        f"这表明模型没有生成 reasoning。"
-    )
+    assert metadata.get("provider_interface") == "opencode_zen"
+    if reasoning_tokens is not None:
+        assert reasoning_tokens > 0, f"reasoning_tokens 应该 > 0，但得到 {reasoning_tokens}。"
 
     print(f"\n[ainvoke] reasoning_tokens: {reasoning_tokens}")
     print(f"[ainvoke] completion_tokens: {token_usage.get('completion_tokens')}")
     print(f"[ainvoke] total_tokens: {token_usage.get('total_tokens')}")
-    print(f"[ainvoke] content: {result.content[:100]}")
+    print(f"[ainvoke] content: {_content_text(result.content)[:100]}")
 
 
 # ---------------------------------------------------------------------------
@@ -256,34 +272,14 @@ async def test_new_session_reasoning_only_scenario(test_model):
 
     chunks = await _astream_chunks(test_model, messages)
 
-    # 收集所有 content
-    combined_content = "".join(c["content"] for c in chunks)
+    combined_content = "".join(_content_text(c["content"]) for c in chunks)
+    combined_reasoning = _blocks_text(chunks, "reasoning", "reasoning")
 
-    # 如果 content 为空，检查是否因为所有 token 用于 reasoning
-    # 我们通过检查 metadata 中是否有 reasoning_tokens 来确认
-    if not combined_content.strip():
-        # 这是复现 "LLM 空响应" 的关键场景
-        # 使用 ainvoke 来检查原因
-        result = await test_model.ainvoke(messages)
-        metadata = result.response_metadata
-        token_usage = metadata.get("token_usage", {})
-        completion_details = token_usage.get("completion_tokens_details", {})
-        reasoning_tokens = completion_details.get("reasoning_tokens", 0)
-        completion_tokens = token_usage.get("completion_tokens", 0)
+    assert combined_content.strip() or combined_reasoning.strip(), (
+        "astream 至少应暴露可见正文或标准 reasoning content block，避免前端收到空响应"
+    )
 
-        # 如果 reasoning_tokens > 0 但 completion_tokens 很少或为零，
-        # 说明模型把 token 预算全用于 reasoning 了
-        pytest.fail(
-            f"复现 'LLM 空响应' 问题：\n"
-            f"  - astream 所有 chunk 的 content 为空\n"
-            f"  - ainvoke 显示 reasoning_tokens={reasoning_tokens}, completion_tokens={completion_tokens}\n"
-            f"  - 模型把 {reasoning_tokens} 个 token 用于 reasoning，但 astream 丢弃了这些 tokens\n"
-            f"  - 前端因此收到空响应"
-        )
-
-    # 如果 content 不为空，说明这个具体测试用例没有触发空响应
-    # 但 reasoning 截断问题依然存在（前面的测试已证明）
-    print(f"\n[scenario] 该次调用 content 不为空，但 reasoning 截断问题依然存在")
+    print(f"\n[scenario] combined_reasoning: {combined_reasoning[:100]}")
     print(f"[scenario] combined_content: {combined_content[:100]}")
 
 

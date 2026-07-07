@@ -1,5 +1,14 @@
 import type { TraceEvent } from "../types/backend";
 import type { ConversationView } from "../types/frontend";
+import {
+  createSkillKeyFlowState,
+  keyFlowSkillNames,
+  recordFinalText,
+  recordReadSkill,
+  recordSkillToolCall,
+  recordSkillToolResult,
+  skillKeyFlowSnapshot,
+} from "./skillKeyFlow";
 import type { TimelineItem } from "./timelineTypes";
 import {
   extractEventInfo,
@@ -16,6 +25,7 @@ export function aggregateConversationEvents(
   const items: TimelineItem[] = [];
   const seenIds = new Set<string>();
   let hasOutputContent = false;
+  const skillFlow = createSkillKeyFlowState();
 
   let textBuf: string[] = [];
   let textPhase = "";
@@ -39,7 +49,7 @@ export function aggregateConversationEvents(
   let sawSuccessfulTerminalEvent = false;
   let sawSessionInterrupted = false;
 
-  function flushTextBuf(active: boolean) {
+  function flushTextBuf(active: boolean, phaseOverride?: string) {
     if (textBuf.length === 0) return;
     const allText = textBuf.join("");
     if (!allText.trim()) {
@@ -56,7 +66,7 @@ export function aggregateConversationEvents(
       kind: "aggregated_text",
       id: `agg-text-${convId}-${textFirstId || textTs || items.length}`,
       text: allText,
-      phase: textPhase,
+      phase: phaseOverride ?? textPhase,
       active,
       timestamp: textTs,
       eventCount: textEventCount,
@@ -133,6 +143,7 @@ export function aggregateConversationEvents(
     }
     if (type === "text_end") {
       const finalText = getOptionalString(payload, "text");
+      recordFinalText(skillFlow, finalText);
       if (finalText) {
         textBuf = [finalText];
         textPhase = "text";
@@ -146,8 +157,19 @@ export function aggregateConversationEvents(
     }
 
     if (type === "tool_call_start") {
-      flushTextBuf(false);
+      flushTextBuf(false, textPhase === "text" ? "reasoning" : undefined);
       const toolName = getOptionalString(payload, "tool_name");
+      const args =
+        typeof payload.args === "object" &&
+        payload.args !== null &&
+        !Array.isArray(payload.args)
+          ? payload.args as Record<string, unknown>
+          : {};
+      recordReadSkill(skillFlow, { toolName, args });
+      recordSkillToolCall(skillFlow, {
+        toolName,
+        skillNames: keyFlowSkillNames(payload.skill_names),
+      });
       pendingToolCalls.set(toolName, { payload, timestamp, eventId });
       continue;
     }
@@ -160,6 +182,15 @@ export function aggregateConversationEvents(
         hasOutputContent = true;
         const startPayload = pending.payload;
         const resultText = formatToolDetail(getOptionalString(payload, "result"));
+        const skillNames = [
+          ...keyFlowSkillNames(startPayload.skill_names),
+          ...keyFlowSkillNames(payload.skill_names),
+        ];
+        recordSkillToolResult(skillFlow, {
+          toolName,
+          skillNames,
+          resultText,
+        });
         const inputMsg =
           formatToolDetail(getOptionalString(startPayload, "message")) ||
           formatToolDetail(getOptionalString(startPayload, "content")) ||
@@ -254,6 +285,33 @@ export function aggregateConversationEvents(
       payload: { message: modelInfo || "LLM 返回了空响应", model: llmModel },
       timestamp: agentEndTs,
     });
+  }
+
+  const skillSnapshot = skillKeyFlowSnapshot(skillFlow);
+  if (skillSnapshot.skillToolResults.length > 0 && skillSnapshot.finalText) {
+    const summaryItem: TimelineItem = {
+      kind: "skill_summary",
+      id: `skill-summary-${convId}`,
+      readSkills: skillSnapshot.readSkills,
+      toolResults: skillSnapshot.skillToolResults.map((item) => ({
+        toolName: item.toolName,
+        skillNames: item.skillNames,
+        resultText: item.resultText,
+      })),
+      finalText: skillSnapshot.finalText,
+      timestamp: agentEndTs,
+    };
+    const finalTextIndex = items.findIndex(
+      (item) =>
+        item.kind === "aggregated_text" &&
+        item.phase !== "reasoning" &&
+        !item.active,
+    );
+    if (finalTextIndex === -1) {
+      items.push(summaryItem);
+    } else {
+      items.splice(finalTextIndex, 0, summaryItem);
+    }
   }
 
   return items;

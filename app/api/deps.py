@@ -15,10 +15,12 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.event_service import EventService
 from app.services.business.job_service import JobService
 from app.services.business.message_service import MessageService
+from app.services.business.session_resource_service import SessionResourceService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_service import WorkspaceService
@@ -39,7 +41,9 @@ class _AppContainerProtocol:
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
     context_compaction_service: ContextCompactionService
+    session_resource_service: SessionResourceService
     session_service: SessionService
+    llm_request_log_service: LLMRequestLogService
     log_service: LogService
     tool_service: ToolService
     workspace_service: WorkspaceService
@@ -157,10 +161,24 @@ def get_context_compaction_service(request: Request) -> ContextCompactionService
     return service
 
 
+def get_session_resource_service(request: Request) -> SessionResourceService:
+    service = getattr(_get_container(request), "session_resource_service", None)
+    if not isinstance(service, SessionResourceService):
+        raise RuntimeError("SessionResourceService 尚未在应用启动阶段初始化")
+    return service
+
+
 def get_session_service(request: Request) -> SessionService:
     service = getattr(_get_container(request), "session_service", None)
     if not isinstance(service, SessionService):
         raise RuntimeError("SessionService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_llm_request_log_service(request: Request) -> LLMRequestLogService:
+    service = getattr(_get_container(request), "llm_request_log_service", None)
+    if not isinstance(service, LLMRequestLogService):
+        raise RuntimeError("LLMRequestLogService 尚未在应用启动阶段初始化")
     return service
 
 

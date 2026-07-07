@@ -1,0 +1,146 @@
+.panel-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panel-view .panel-header {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  border-bottom: var(--surface-border);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.panel-view .panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-view .panel-header-meta,
+.panel-view .panel-time,
+.panel-view .panel-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.panel-view .panel-header-meta,
+.panel-view .panel-time {
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+
+.panel-view .panel-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 10px 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--vscode-editor-background);
+}
+
+.panel-view .panel-card {
+  border: var(--surface-border);
+  border-radius: 8px;
+  background: var(--vscode-input-background);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panel-view .panel-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panel-view .panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.panel-view .panel-index,
+.panel-view .panel-pill {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.panel-view .panel-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-view .panel-meta {
+  flex-wrap: wrap;
+  line-height: 1.4;
+}
+
+.panel-view .panel-meta span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.panel-view .panel-detail {
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: var(--vscode-editor-background);
+  overflow: hidden;
+}
+
+.panel-view .panel-detail summary {
+  cursor: pointer;
+  padding: 6px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  user-select: none;
+}
+
+.panel-view .panel-detail pre {
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--vscode-editor-foreground);
+  font-family: var(
+    --vscode-editor-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    "Liberation Mono",
+    monospace
+  );
+  font-size: 11px;
+  line-height: 1.5;
+}

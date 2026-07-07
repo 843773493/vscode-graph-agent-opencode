@@ -1,7 +1,20 @@
 // 前端内部类型
-import type { Agent, Message, Session, SessionCompactResult, TraceEvent } from "./backend";
+import type {
+  Agent,
+  LLMRequestLogRecord,
+  Message,
+  Session,
+  SessionCompactResult,
+  SessionResource,
+  TraceEvent,
+} from "./backend";
 
-export type ConversationContentView = "default" | "events" | "agent";
+export type ConversationContentView =
+  | "default"
+  | "events"
+  | "requests"
+  | "resources"
+  | "agent";
 
 export type FrontendEventSource =
   | "frontend"
@@ -72,6 +85,14 @@ export interface AppState {
   currentSession: Session | null;
   messages: Message[];
   traceEvents: TraceEvent[];
+  llmRequestLogs: LLMRequestLogRecord[];
+  llmRequestLogsLoadedAt: string | null;
+  llmRequestLogsLoading: boolean;
+  llmRequestLogsError: string | null;
+  sessionResources: SessionResource[];
+  sessionResourcesLoadedAt: string | null;
+  sessionResourcesLoading: boolean;
+  sessionResourcesError: string | null;
   eventQueuesBySession: Map<string, FrontendReceivedEvent[]>;
   pendingConversations: Map<string, ConversationView[]>;
   status: string;

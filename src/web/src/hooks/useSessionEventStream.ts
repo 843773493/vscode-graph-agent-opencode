@@ -28,6 +28,7 @@ import {
   dedupeTraceEvents,
   isJobTerminalTraceType,
   isTerminalTraceType,
+  terminalStatusTextForEvent,
   terminalStatusForEvent,
   tracePayloadString,
 } from "../state/traceEvents";
@@ -90,7 +91,7 @@ async function refreshTerminalSession(
       refreshedTraceEvents,
       "terminal_refresh",
     );
-    latestNext.status = "消息已更新";
+    latestNext.status = terminalStatusTextForEvent(terminalTraceEvent.type);
     return latestNext;
   });
 }

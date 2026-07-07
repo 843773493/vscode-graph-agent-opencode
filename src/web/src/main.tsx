@@ -3,6 +3,11 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AppProvider } from './hooks';
 import './index.css';
+import './styles/panelShared.css';
+import './styles/agentState.css';
+import './styles/eventQueue.css';
+import './styles/requestLog.css';
+import './styles/resourcePanel.css';
 
 declare global {
   interface ImportMeta {

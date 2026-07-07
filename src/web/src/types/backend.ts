@@ -1,8 +1,75 @@
 // 该文件是前端业务类型适配层，封装后端实际返回结构。
-// 由于 src/types/gen/ 中自动生成的类型存在重复导出且部分已过期，
-// 本目录业务代码统一从这里导入类型；不直接依赖 gen/index.ts 的通配导出。
+// 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
 
 export type { AgentDTO as Agent } from "./gen/agent";
+import type { LLMRequestLogRecordDTO } from "./gen/llm_request_log";
+export type {
+  AgentStateMessagesDTO as AgentStateMessages,
+  AttachmentRef,
+  MessageDTO as Message,
+  MessageRunAccepted,
+  MessageRunRequest,
+  RunOptions,
+} from "./gen/message";
+export type {
+  DeleteSessionResultDTO as DeleteSessionResult,
+  SessionCompactResultDTO as SessionCompactResult,
+  SessionDTO as Session,
+  SessionInterruptResultDTO as InterruptSessionResult,
+  SessionUpdateRequest,
+} from "./gen/session";
+import type {
+  SessionResourceControlResultDTO,
+  SessionResourceDTO,
+  SessionResourceListDTO,
+} from "./gen/session_resource";
+import type { TraceEventDTO } from "./gen/trace";
+export type { WorkspaceDTO as WorkspaceInfo } from "./gen/workspace";
+
+export type LLMRequestLogRecord = Omit<
+  LLMRequestLogRecordDTO,
+  "request" | "response"
+> & {
+  request: Record<string, unknown>;
+  response: Record<string, unknown>;
+};
+
+export type SessionResource = Omit<
+  SessionResourceDTO,
+  "available_actions" | "metadata"
+> & {
+  available_actions: NonNullable<SessionResourceDTO["available_actions"]>;
+  metadata: Record<string, unknown>;
+};
+
+export type SessionResourceList = Omit<SessionResourceListDTO, "items"> & {
+  items: SessionResource[];
+};
+
+export type SessionResourceControlResult = Omit<
+  SessionResourceControlResultDTO,
+  "resource"
+> & {
+  resource?: SessionResource | null;
+};
+
+type TraceRaw = NonNullable<TraceEventDTO["raw"]> & {
+  payload?: Record<string, unknown>;
+  session_id?: string;
+  agent_id?: string | null;
+  step_id?: string | null;
+};
+
+export interface TraceEvent
+  extends Omit<TraceEventDTO, "session_id" | "phase" | "title" | "content" | "raw"> {
+  session_id: string;
+  phase?: TraceEventDTO["phase"];
+  title?: string;
+  content?: string;
+  agent_id?: string | null;
+  payload?: Record<string, unknown>;
+  raw?: TraceRaw;
+}
 
 export interface APIResponse<T> {
   code: number;
@@ -17,146 +84,5 @@ export interface CursorPage<T> {
   has_more?: boolean;
 }
 
-export interface WorkspaceInfo {
-  workspace_id: string;
-  root_path: string;
-  name: string;
-}
-
-export interface Session {
-  session_id: string;
-  workspace_id: string;
-  title: string;
-  current_agent_id: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface SessionUpdateRequest {
-  title?: string | null;
-  agent_id?: string | null;
-}
-
-export interface Message {
-  message_id: string;
-  session_id: string;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  attachments?: AttachmentRef[];
-  metadata?: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AttachmentRef {
-  file_id: string;
-  name?: string | null;
-  content_type?: string | null;
-  data_url?: string | null;
-}
-
-export interface AgentStateMessages {
-  session_id: string;
-  message_count: number;
-  jsonl: string;
-}
-
-export interface RunOptions {
-  mode?: "single_agent" | "multi_agent";
-  agent_id?: string | null;
-  response_mode?: string;
-  async?: boolean;
-  max_steps?: number;
-  timeout_seconds?: number;
-  context?: Record<string, unknown>;
-}
-
-export interface MessageRunRequest {
-  message: {
-    role?: Message["role"];
-    content: string;
-    attachments?: AttachmentRef[];
-    metadata?: Record<string, unknown>;
-  };
-  run: RunOptions;
-}
-
-export interface MessageRunAccepted {
-  message_id: string;
-  job_id: string;
-  status: string;
-}
-
-export interface InterruptSessionResult {
-  session_id: string;
-  job_id: string;
-  status: string;
-  phase: string;
-  tool_name?: string | null;
-  interrupted_at: string;
-}
-
-export interface SessionCompactResult {
-  session_id: string;
-  status: "compacted" | "skipped";
-  message: string;
-  before_message_count: number;
-  effective_message_count_before: number;
-  effective_message_count_after: number;
-  summarized_message_count: number;
-  retained_message_count: number;
-  summary?: string | null;
-  history_file_path?: string | null;
-  compacted_at: string;
-}
-
-export type KnownTraceEventType =
-  | "message_created"
-  | "job_created"
-  | "job_started"
-  | "job_completed"
-  | "job_cancelled"
-  | "job_failed"
-  | "status_change"
-  | "agent_start"
-  | "agent_step"
-  | "agent_end"
-  | "error"
-  | "llm_request"
-  | "tool_call_start"
-  | "tool_call_end"
-  | "text_start"
-  | "text_delta"
-  | "text_end"
-  | "session_interrupted";
-
-export type TraceEventType = KnownTraceEventType | (string & {});
-
-export interface BaseTraceEvent {
-  event_id: string;
-  session_id?: string;
-  job_id: string;
-  step_id: string | null;
-  agent_id: string | null;
-  timestamp: string;
-  type: TraceEventType;
-  payload?: Record<string, unknown>;
-  phase?: string;
-  title?: string;
-  content?: string;
-  status?: string | null;
-  tool_name?: string | null;
-  /** 后端 DTO 格式可能将真实事件数据嵌套在 raw 中 */
-  raw?: {
-    event_id: string;
-    job_id: string;
-    type: string;
-    timestamp: string;
-    payload: Record<string, unknown>;
-    session_id?: string;
-    agent_id?: string | null;
-    step_id?: string | null;
-  };
-}
-
-export type TraceEvent = BaseTraceEvent;
+export type SessionResourceKind = SessionResourceDTO["kind"];
+export type SessionResourceAction = NonNullable<SessionResourceDTO["available_actions"]>[number];

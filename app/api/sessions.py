@@ -3,8 +3,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_context_compaction_service, get_request_id, get_session_auto_continue_service, get_session_interrupt_service, get_session_service, verify_local_token
+from app.api.deps import (
+    get_context_compaction_service,
+    get_llm_request_log_service,
+    get_request_id,
+    get_session_auto_continue_service,
+    get_session_interrupt_service,
+    get_session_resource_service,
+    get_session_service,
+    verify_local_token,
+)
 from app.schemas.public_v2.common import APIResponse, CursorPage
+from app.schemas.public_v2.llm_request_log import LLMRequestLogRecordDTO
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
     SessionAutoContinueStartRequest,
@@ -15,11 +25,19 @@ from app.schemas.public_v2.session import (
     SessionInterruptResultDTO,
     SessionUpdateRequest,
 )
+from app.schemas.public_v2.session_resource import (
+    SessionResourceControlRequest,
+    SessionResourceControlResultDTO,
+    SessionResourceKind,
+    SessionResourceListDTO,
+)
 from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.context_compaction_service import ContextCompactionService
+from app.services.business.session_resource_service import SessionResourceService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -69,6 +87,65 @@ async def list_session_traces(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.get(
+    "/{session_id}/llm-request-logs",
+    response_model=APIResponse[list[LLMRequestLogRecordDTO]],
+    summary="获取会话完整 LLM 请求响应日志",
+)
+async def list_session_llm_request_logs(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    llm_request_log_service: LLMRequestLogService = Depends(get_llm_request_log_service),
+):
+    result = llm_request_log_service.list_session_logs(session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{session_id}/resources",
+    response_model=APIResponse[SessionResourceListDTO],
+    summary="获取会话资源列表",
+)
+async def list_session_resources(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    session_resource_service: SessionResourceService = Depends(get_session_resource_service),
+):
+    try:
+        result = await session_resource_service.list(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/resources/{kind}/{resource_id}/control",
+    response_model=APIResponse[SessionResourceControlResultDTO],
+    summary="控制会话资源",
+)
+async def control_session_resource(
+    session_id: str,
+    kind: SessionResourceKind,
+    resource_id: str,
+    payload: SessionResourceControlRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    session_resource_service: SessionResourceService = Depends(get_session_resource_service),
+):
+    try:
+        result = await session_resource_service.control(
+            session_id=session_id,
+            kind=kind,
+            resource_id=resource_id,
+            action=payload.action,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.get("/{session_id}/traces/stream", summary="订阅会话执行轨迹流")
 async def stream_session_traces(
     session_id: str,
@@ -108,8 +185,16 @@ async def delete_session(
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
+    session_resource_service: SessionResourceService = Depends(get_session_resource_service),
 ):
-    result = await session_service.delete(session_id)
+    cleanup_result = await session_resource_service.cleanup_session(session_id)
+    result = (await session_service.delete(session_id)).model_copy(
+        update={
+            "cleaned_jobs": cleanup_result.cleaned_jobs,
+            "cleaned_background_tasks": cleanup_result.cleaned_background_tasks,
+            "cleaned_terminals": cleanup_result.cleaned_terminals,
+        }
+    )
     return APIResponse(data=result, request_id=request_id)
 
 

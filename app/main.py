@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,7 +19,7 @@ from app.api.tools import router as tools_router
 from app.api.workspace import router as workspace_router
 from app.core.env import load_project_env
 
-load_project_env(__file__)
+load_project_env()
 
 
 @asynccontextmanager
@@ -26,22 +27,14 @@ async def lifespan(_: FastAPI):
     from app.core import path_utils
 
     path_utils.initialize_directories()
-    container = build_app_container()
+    workspace_root = os.environ.get("WORKSPACE_ROOT", "") or None
+    container = build_app_container(
+        project_root=Path.cwd(),
+        workspace_root=workspace_root,
+    )
     _.state.container = container
 
-    workspace_root = os.environ.get("WORKSPACE_ROOT", "") or None
-    config_service = container.config_service
-
-    if workspace_root:
-        config_service._workspace_root = workspace_root
-        config_service._apply_workspace_override(workspace_root)
-
-    try:
-        config_service.validate_boxteam_config()
-    except Exception as e:
-        import logging
-
-        logging.warning(f"boxteam.json 配置验证失败: {e}")
+    container.config_service.validate_boxteam_config()
 
     await container.trace_event_recorder.start()
 

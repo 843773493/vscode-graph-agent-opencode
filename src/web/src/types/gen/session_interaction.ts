@@ -1,3 +1,4 @@
+// 该文件由程序生成，请勿手写。
 /* tslint:disable */
 /* eslint-disable */
 /**
@@ -76,6 +77,7 @@ export interface AttachmentRef {
   file_id: string;
   name?: string | null;
   content_type?: string | null;
+  data_url?: string | null;
   [k: string]: unknown;
 }
 export interface MessageDeltaDTO {
@@ -132,6 +134,7 @@ export interface SessionDTO {
   session_id: string;
   workspace_id: string;
   title: string;
+  title_source?: "default" | "user" | "auto";
   current_agent_id: string;
 }
 export interface SessionExecutionEventDTO {

@@ -1,37 +1,38 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 
-def get_project_root(start_path: Path | str | None = None) -> Path:
-    """从给定起点向上查找项目根目录。优先使用 pyproject.toml，未找到时再回退到 AGENTS.md。"""
-    current_path = Path(start_path or __file__).resolve()
-    search_start = current_path.parent if current_path.is_file() else current_path
+def get_project_root(project_root: Path | str | None = None) -> Path:
+    """解析项目根目录。
 
-    # 优先查找 pyproject.toml
-    for candidate in (search_start, *search_start.parents):
-        if (candidate / "pyproject.toml").exists():
-            return candidate
-
-    # 回退：查找 AGENTS.md
-    for candidate in (search_start, *search_start.parents):
-        if (candidate / "AGENTS.md").exists():
-            return candidate
-
-    raise FileNotFoundError(f"无法定位项目根目录，请从项目内路径调用: {current_path}")
+    默认使用当前运行目录，也可以通过显式路径或 BOXTEAM_PROJECT_ROOT 指定。
+    这里不再根据当前文件位置向上推导仓库根目录，避免框架层隐式依赖源码布局。
+    """
+    configured_root = project_root or os.environ.get("BOXTEAM_PROJECT_ROOT") or Path.cwd()
+    resolved_root = Path(configured_root).expanduser().resolve()
+    if not resolved_root.is_dir():
+        raise NotADirectoryError(f"项目根目录必须是目录: {resolved_root}")
+    if not (resolved_root / "pyproject.toml").exists():
+        raise FileNotFoundError(
+            "无法定位项目根目录，请从项目根目录启动后端，"
+            f"或通过 BOXTEAM_PROJECT_ROOT 显式指定。当前路径: {resolved_root}"
+        )
+    return resolved_root
 
 
 def load_project_env(
-    start_path: Path | str | None = None,
+    project_root: Path | str | None = None,
     *,
     override: bool = False,
     required: bool = False,
 ) -> Path | None:
     """加载项目根目录下的 .env 文件。"""
-    project_root = get_project_root(start_path)
-    env_file = project_root / ".env"
+    resolved_project_root = get_project_root(project_root)
+    env_file = resolved_project_root / ".env"
 
     print(f"[Env] 加载 .env 文件: {env_file.resolve()}")
 

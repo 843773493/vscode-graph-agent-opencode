@@ -5,7 +5,6 @@ from collections.abc import Sequence
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware
-from langchain.agents.middleware import TodoListMiddleware, HumanInTheLoopMiddleware
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
@@ -20,27 +19,34 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_openai import ChatOpenAI
 from deepagents.backends import LocalShellBackend
-from deepagents.middleware.filesystem import FilesystemMiddleware
-from deepagents.middleware.subagents import SubAgentMiddleware, SubAgent, CompiledSubAgent
+from deepagents.middleware.subagents import SubAgent, CompiledSubAgent
 from deepagents.middleware.async_subagents import AsyncSubAgent
-from deepagents.middleware.skills import SkillsMiddleware
-from deepagents.middleware.summarization import (
-    CompactConversationSchema,
-    SummarizationToolMiddleware,
-    create_summarization_middleware,
-)
-from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import InterruptOnConfig
 
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
-from app.core.path_utils import get_checkpoints_dir, get_workspace_root
+from app.core.path_utils import get_workspace_root
 from app.agents.agent_tools import build_default_tools
 from app.agents.agent_middleware import LLMLoggingMiddleware
-from app.agents.summarization_paths import apply_boxteam_summarization_paths
+from app.agents.deep_agent_stack import (
+    build_deep_agent_middleware,
+    filter_tools_by_name,
+)
+from app.agents.skill_tools import (
+    build_skill_tool_bundle,
+    skill_tool_spec_names,
+)
+from app.agents.skill_runtime import (
+    append_skill_middlewares,
+    discover_workspace_skill_sources,
+)
+from app.agents.provider_capabilities import (
+    detect_required_capabilities,
+    select_providers_for_capabilities,
+)
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import JobEventBus
@@ -57,20 +63,6 @@ BASE_AGENT_PROMPT = """响应规范：
 
 PROVIDER_REQUEST_OPTION_KEYS = {"extra_body", "default_headers"}
 LITELLM_OPENAI_COMPATIBLE_INTERFACES = {"chat.completion", "opencode_zen"}
-
-
-GENERAL_PURPOSE_SUBAGENT = {
-    "name": "general-purpose",
-    "description": "一个通用用途的子代理，可以处理各种任务。",
-    "system_prompt": """你是一个通用用途的子代理。
-
-你的能力：
-- 使用提供的工具完成各种任务
-- 文件读取、编辑和执行命令
-- 根据任务需求选择合适的工具
-
-请根据用户指令完成相应任务。""",
-}
 
 
 def _build_model_from_provider(provider: dict[str, Any], runtime_config: dict[str, Any]) -> Any:
@@ -149,64 +141,32 @@ def build_runtime_for_agent(agent_id: str, config_service: ConfigService | None 
     }
 
 
+def build_candidate_models_for_agent_content(
+    *,
+    agent_id: str,
+    config_service: ConfigService,
+    content: object,
+) -> list[Any]:
+    """根据输入能力需求构建本次请求可用的模型候选列表。"""
+    runtime_config = config_service.get_agent_runtime_config(agent_id)
+    providers = runtime_config.get("providers", [])
+    if not isinstance(providers, list):
+        raise TypeError("agent runtime providers 应为 list")
+    selected_providers = select_providers_for_capabilities(
+        providers,
+        detect_required_capabilities(content),
+    )
+    return [
+        _build_model_from_provider(provider, runtime_config)
+        for provider in selected_providers
+    ]
+
+
 def resolve_agent_id(agent_id: str | None, config_service: ConfigService | None = None) -> str:
     if config_service is None:
         raise RuntimeError("resolve_agent_id 需要显式传入 ConfigService")
     service = config_service
     return service.resolve_agent_id(agent_id)
-
-
-def _filter_tools_by_name(tools: list[BaseTool | Callable[..., Any] | dict[str, Any]], denylist: set[str]) -> list[BaseTool | Callable[..., Any] | dict[str, Any]]:
-    if not denylist:
-        return tools
-    return [tool for tool in tools if getattr(tool, "name", None) not in denylist]
-
-
-def _filter_middleware_tools(middleware: Any, denylist: set[str]) -> None:
-    if not denylist:
-        return
-
-    middleware_tools = getattr(middleware, "tools", None)
-    if not isinstance(middleware_tools, list):
-        return
-
-    filtered_tools = _filter_tools_by_name(list(middleware_tools), denylist)
-    setattr(middleware, "tools", filtered_tools)
-
-
-def _filter_subagent_specs(
-    subagent_specs: list[Any],
-    denylist: set[str]
-) -> list[Any]:
-    if not denylist:
-        return subagent_specs
-
-    filtered_specs: list[Any] = []
-    for spec in subagent_specs:
-        processed_spec = dict(spec)
-        if processed_spec.get("tools") is not None:
-            processed_spec["tools"] = _filter_tools_by_name(list(processed_spec["tools"]), denylist)
-
-        nested_subagents = processed_spec.get("subagents")
-        if isinstance(nested_subagents, list):
-            processed_spec["subagents"] = _filter_subagent_specs(nested_subagents, denylist)
-
-        filtered_specs.append(processed_spec)
-
-    return filtered_specs
-
-
-def _build_summarization_middleware(model: BaseChatModel, backend: LocalShellBackend) -> list[AgentMiddleware]:
-    summarization = create_summarization_middleware(model, backend)
-    apply_boxteam_summarization_paths(summarization)
-    tool_middleware = SummarizationToolMiddleware(summarization)
-    for tool in tool_middleware.tools:
-        if getattr(tool, "name", "") == "compact_conversation":
-            tool.args_schema = CompactConversationSchema
-    return [
-        summarization,
-        tool_middleware,
-    ]
 
 
 def create_my_deep_agent(
@@ -221,10 +181,11 @@ def create_my_deep_agent(
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
+    skill_tool_specs: Sequence[object] | None = None,
     tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
     subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
-    skills: list[str] | None = None,
+    skills: list[Any] | None = None,
     memory: list[str] | None = None,
     permissions: list[FilesystemPermission] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
@@ -238,11 +199,10 @@ def create_my_deep_agent(
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
     config_service: ConfigService | None = None,
+    terminal_manager_client: TerminalManagerClient | None = None,
 ) -> Any:
     if checkpointer is None:
-        checkpoint_base = get_checkpoints_dir()
-        checkpoint_base.mkdir(parents=True, exist_ok=True)
-        checkpointer = FileSystemCheckpointSaver(base_dir=checkpoint_base)
+        raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
 
     resolved_sender_agent_id = sender_agent_id or agent_id
     resolved_tool_denylist = set(tool_denylist or set())
@@ -262,24 +222,58 @@ def create_my_deep_agent(
     if config_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 ConfigService")
 
-    resolved_tools = list(tools) if tools is not None else build_default_tools(
-        session_id=session_id,
-        agent_id=agent_id,
-        sender_agent_id=resolved_sender_agent_id,
-        background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
-        job_event_bus=job_event_bus,
-        job_service=job_service,
-        message_service=message_service,
-        session_service=session_service,
-        session_orchestrator=session_orchestrator,
-        config_service=config_service,
-    )
-    resolved_tools = _filter_tools_by_name(resolved_tools, resolved_tool_denylist)
+    workspace_root = get_workspace_root()
+
+    if tools is not None:
+        resolved_tools = list(tools)
+        hidden_tool_names = skill_tool_spec_names(skill_tool_specs or [])
+    else:
+        visible_tools = build_default_tools(
+            session_id=session_id,
+            agent_id=agent_id,
+            sender_agent_id=resolved_sender_agent_id,
+            background_task_registry=background_task_registry,
+            background_message_bus=background_message_bus,
+            job_event_bus=job_event_bus,
+            job_service=job_service,
+            message_service=message_service,
+            session_service=session_service,
+            session_orchestrator=session_orchestrator,
+            config_service=config_service,
+            terminal_manager_client=terminal_manager_client,
+        )
+        skill_bundle = build_skill_tool_bundle(
+            skill_tool_specs or [],
+            session_id=session_id,
+            agent_id=agent_id,
+            sender_agent_id=resolved_sender_agent_id,
+            workspace_root=workspace_root,
+            background_task_registry=background_task_registry,
+            background_message_bus=background_message_bus,
+            job_event_bus=job_event_bus,
+            job_service=job_service,
+            message_service=message_service,
+            session_service=session_service,
+            session_orchestrator=session_orchestrator,
+            config_service=config_service,
+            terminal_manager_client=terminal_manager_client,
+        )
+        hidden_tool_names = skill_bundle.hidden_tool_names
+        resolved_tools = [*visible_tools, *skill_bundle.tools]
+    resolved_tools = filter_tools_by_name(resolved_tools, resolved_tool_denylist)
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
+    resolved_tool_names = {getattr(tool, "name", "") for tool in resolved_tools}
+    hidden_tool_names &= resolved_tool_names
 
-    runtime_middleware = list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
+    runtime_middleware: list[AgentMiddleware] = []
+    append_skill_middlewares(
+        runtime_middleware,
+        backend=None,
+        skills=None,
+        hidden_tool_names=hidden_tool_names,
+    )
+    runtime_middleware.extend(list(middleware) if middleware is not None else [LLMLoggingMiddleware()])
     if fallback_middleware is not None:
         runtime_middleware.append(fallback_middleware)
     if enabled_runtime_middleware_names is not None:
@@ -287,90 +281,25 @@ def create_my_deep_agent(
             item for item in runtime_middleware if item.__class__.__name__ in enabled_runtime_middleware_names
         ]
 
-    workspace_root = get_workspace_root()
+    resolved_skills = discover_workspace_skill_sources(workspace_root) if skills is None else list(skills)
     backend = LocalShellBackend(
         root_dir=str(workspace_root),
         virtual_mode=True,
     )
 
-    gp_middleware = [
-        TodoListMiddleware(),
-        FilesystemMiddleware(backend=backend, _permissions=permissions),
-        *_build_summarization_middleware(model, backend),
-        PatchToolCallsMiddleware(),
-    ]
-    if skills:
-        gp_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
-
-    general_purpose_spec = {
-        **GENERAL_PURPOSE_SUBAGENT,
-        "model": model,
-        "tools": list(resolved_tools) if resolved_tools else [],
-        "middleware": gp_middleware,
-    }
-    if interrupt_on:
-        general_purpose_spec["interrupt_on"] = interrupt_on
-
-    inline_subagents: list[dict] = []
-    if subagents:
-        for spec in _filter_subagent_specs(list(subagents), resolved_tool_denylist):
-            subagent_interrupt_on = spec.get("interrupt_on", interrupt_on)
-
-            subagent_middleware = [
-                TodoListMiddleware(),
-                FilesystemMiddleware(backend=backend, _permissions=spec.get("permissions")),
-                *_build_summarization_middleware(model, backend),
-                PatchToolCallsMiddleware(),
-            ]
-            if spec.get("skills"):
-                subagent_middleware.append(
-                    SkillsMiddleware(backend=backend, sources=spec["skills"])
-                )
-            subagent_middleware.extend(spec.get("middleware", []))
-
-            processed_spec = {
-                **spec,
-                "model": spec.get("model", model),
-                "tools": spec.get("tools", list(resolved_tools) if resolved_tools else []),
-                "middleware": subagent_middleware,
-            }
-            if subagent_interrupt_on:
-                processed_spec["interrupt_on"] = subagent_interrupt_on
-            inline_subagents.append(processed_spec)
-
-    if not any(spec.get("name") == GENERAL_PURPOSE_SUBAGENT["name"] for spec in inline_subagents):
-        inline_subagents.insert(0, general_purpose_spec)
-
-    deepagent_middleware = [
-        TodoListMiddleware(),
-    ]
-
-    if skills:
-        deepagent_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
-
-    deepagent_middleware.extend(
-        [
-            FilesystemMiddleware(backend=backend),
-            SubAgentMiddleware(
-                backend=backend,
-                subagents=inline_subagents,
-            ),
-            *_build_summarization_middleware(model, backend),
-            PatchToolCallsMiddleware(),
-        ]
+    deepagent_middleware = build_deep_agent_middleware(
+        model=model,
+        backend=backend,
+        permissions=permissions,
+        resolved_skills=resolved_skills,
+        hidden_tool_names=hidden_tool_names,
+        resolved_tools=resolved_tools,
+        subagents=subagents,
+        resolved_tool_denylist=resolved_tool_denylist,
+        interrupt_on=interrupt_on,
+        runtime_middleware=runtime_middleware,
+        memory=memory,
     )
-
-    if runtime_middleware:
-        deepagent_middleware.extend(runtime_middleware)
-
-    for middleware_item in deepagent_middleware:
-        _filter_middleware_tools(middleware_item, resolved_tool_denylist)
-
-    if memory:
-        deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
-
-    if interrupt_on:
-        deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
 
     if isinstance(system_prompt, SystemMessage):
         final_system_prompt = SystemMessage(
@@ -428,6 +357,7 @@ def create_runtime_deep_agent_for_session(
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    terminal_manager_client: TerminalManagerClient | None = None,
     name: str | None = None,
     override_model: Any = None,
     fallback_middleware_enabled: bool = True,
@@ -437,6 +367,7 @@ def create_runtime_deep_agent_for_session(
     service = config_service
     runtime = build_runtime_for_agent(agent_id=agent_id, config_service=service)
     tool_config = service.get_agent_tool_config(agent_id)
+    skill_tool_specs = list(tool_config.get("skill_only", []))
 
     model = override_model if override_model is not None else runtime["model"]
 
@@ -453,6 +384,7 @@ def create_runtime_deep_agent_for_session(
         enabled_tool_names=enabled_tool_names,
         enabled_runtime_middleware_names=enabled_runtime_middleware_names,
         tool_denylist=set(tool_config.get("denylist", [])) if tool_denylist is None else tool_denylist,
+        skill_tool_specs=skill_tool_specs,
         name=name or agent_id,
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
@@ -461,5 +393,6 @@ def create_runtime_deep_agent_for_session(
         message_service=message_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
+        terminal_manager_client=terminal_manager_client,
         config_service=service,
     )

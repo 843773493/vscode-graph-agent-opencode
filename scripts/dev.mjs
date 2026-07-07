@@ -1,29 +1,46 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 
-const scriptsDir = import.meta.dir;
-const workspaceRoot = path.resolve(scriptsDir, "..");
+const workspaceRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
+const runtimeWorkspaceRoot = process.env.WORKSPACE_ROOT
+  ? path.resolve(process.env.WORKSPACE_ROOT)
+  : workspaceRoot;
 const webRoot = path.resolve(workspaceRoot, "src", "web");
+const terminalBackendRoot = path.resolve(workspaceRoot, "src", "terminal", "server");
+const terminalFrontendRoot = path.resolve(workspaceRoot, "src", "terminal", "client");
 const isWindows = process.platform === "win32";
 // TODO: 当前仓库保留 Windows 版 tools/bun.exe，Linux/macOS 先复用启动脚本的 Bun。
 const bunBin = isWindows
   ? path.resolve(workspaceRoot, "tools", "bun.exe")
   : (process.env.BUN_BIN ?? process.execPath);
+const nodeBin = process.env.NODE_BIN ?? (isWindows ? "node.exe" : "node");
 // TODO: 兼容 uv 在 Windows 与 Linux/macOS 下创建的虚拟环境脚本目录。
 const pythonBin = isWindows
   ? path.resolve(workspaceRoot, ".venv", "Scripts", "python.exe")
   : path.resolve(workspaceRoot, ".venv", "bin", "python");
 const port = "8010";
 const frontendPort = "8011";
+const terminalBackendPort = "8012";
+const terminalFrontendPort = "8013";
 const host = "127.0.0.1";
+const terminalHost = process.env.BOXTEAM_TERMINAL_LISTEN_HOST ?? "0.0.0.0";
 const backendDebugPort = "8002";
 const frontendHealthUrl = `http://${host}:${frontendPort}/health`;
 const backendHealthUrl = `http://${host}:${port}/api/v1/health`;
+const terminalBackendHealthUrl = `http://${host}:${terminalBackendPort}/health`;
+const terminalFrontendHealthUrl = `http://${host}:${terminalFrontendPort}/health`;
 const onlyLaunch = process.argv.slice(2).some((arg) => arg === "--only-launch");
 
-function spawnDetached(command, args, cwd) {
+function requirePath(targetPath, label) {
+  if (!existsSync(targetPath)) {
+    throw new Error(`${label} 不存在: ${targetPath}`);
+  }
+}
+
+function spawnDetached(command, args, cwd, envOverrides = {}) {
   return Bun.spawn([command, ...args], {
     cwd,
-    env: { ...process.env },
+    env: { ...process.env, ...envOverrides },
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
@@ -79,6 +96,8 @@ async function killWindowsPort() {
     if (
       !trimmed.includes(`:${port}`) &&
       !trimmed.includes(`:${frontendPort}`) &&
+      !trimmed.includes(`:${terminalBackendPort}`) &&
+      !trimmed.includes(`:${terminalFrontendPort}`) &&
       !trimmed.includes(`:${backendDebugPort}`)
     )
       continue;
@@ -110,6 +129,8 @@ async function killUnixPort() {
       if (
         !line.includes(`:${port}`) &&
         !line.includes(`:${frontendPort}`) &&
+        !line.includes(`:${terminalBackendPort}`) &&
+        !line.includes(`:${terminalFrontendPort}`) &&
         !line.includes(`:${backendDebugPort}`)
       )
         continue;
@@ -126,7 +147,7 @@ async function killUnixPort() {
     return;
   }
 
-  for (const targetPort of [port, frontendPort, backendDebugPort]) {
+  for (const targetPort of [port, frontendPort, terminalBackendPort, terminalFrontendPort, backendDebugPort]) {
     const lsof = Bun.spawnSync(["lsof", "-ti", `tcp:${targetPort}`], {
       cwd: workspaceRoot,
       stdout: "pipe",
@@ -148,41 +169,132 @@ async function killUnixPort() {
   }
 }
 
+function isPortListening(targetPort) {
+  if (isWindows) {
+    const netstat = Bun.spawnSync(["netstat", "-ano", "-p", "tcp"], {
+      cwd: workspaceRoot,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    if (netstat.exitCode !== 0) {
+      return false;
+    }
+    const out = new TextDecoder().decode(netstat.stdout);
+    return out.split(/\r?\n/).some((line) => {
+      const trimmed = line.trim();
+      return /LISTENING/i.test(trimmed) && trimmed.includes(`:${targetPort}`);
+    });
+  }
+
+  const ss = Bun.spawnSync(["ss", "-ltn"], {
+    cwd: workspaceRoot,
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  if (ss.exitCode !== 0) {
+    return false;
+  }
+  const out = new TextDecoder().decode(ss.stdout);
+  return out.split(/\r?\n/).some((line) => line.includes(`:${targetPort}`));
+}
+
 async function main() {
+  requirePath(path.join(workspaceRoot, "package.json"), "项目 package.json");
+  requirePath(path.join(workspaceRoot, "pyproject.toml"), "项目 pyproject.toml");
+  requirePath(webRoot, "浏览器前端目录");
+  requirePath(terminalBackendRoot, "终端后端目录");
+  requirePath(terminalFrontendRoot, "终端前端目录");
+  requirePath(runtimeWorkspaceRoot, "运行工作区目录");
+
   await (isWindows ? killWindowsPort() : killUnixPort());
 
-  const frontend = spawnDetached(bunBin, ["run", "dev"], webRoot);
-  const backend = spawnDetached(
-    pythonBin,
+  const runtimeEnv = {
+    WORKSPACE_ROOT: runtimeWorkspaceRoot,
+    BOXTEAM_PROJECT_ROOT: workspaceRoot,
+    BOXTEAM_TERMINAL_WORKSPACE_ROOT: runtimeWorkspaceRoot,
+  };
+
+  const frontend = spawnDetached(bunBin, ["run", "dev"], webRoot, runtimeEnv);
+  const terminalBackend = spawnDetached(
+    nodeBin,
     [
+      "backend.js",
+      "--host",
+      terminalHost,
+      "--port",
+      terminalBackendPort,
+      "--workspace-root",
+      runtimeWorkspaceRoot,
+      "--frontend-url",
+      `http://${host}:${terminalFrontendPort}`,
+    ],
+    terminalBackendRoot,
+    runtimeEnv,
+  );
+  const terminalFrontend = spawnDetached(
+    nodeBin,
+    [
+      "server.js",
+      "--host",
+      terminalHost,
+      "--port",
+      terminalFrontendPort,
+      "--backend-url",
+      "auto",
+      "--workspace-root",
+      runtimeWorkspaceRoot,
+      "--asset-root",
+      workspaceRoot,
+    ],
+    terminalFrontendRoot,
+    runtimeEnv,
+  );
+  const backendArgs = [];
+  if (isPortListening(backendDebugPort)) {
+    console.warn(
+      `[dev:web] backend debug port ${backendDebugPort} is occupied; starting backend without debugpy.`,
+    );
+  } else {
+    backendArgs.push(
       "-m",
       "debugpy",
       "--listen",
       `${host}:${backendDebugPort}`,
-      "-m",
-      "uvicorn",
-      "app.main:app",
-      "--host",
-      host,
-      "--port",
-      port,
-    ],
+    );
+  }
+  backendArgs.push(
+    "-m",
+    "uvicorn",
+    "app.main:app",
+    "--host",
+    host,
+    "--port",
+    port,
+  );
+  const backend = spawnDetached(
+    pythonBin,
+    backendArgs,
     workspaceRoot,
+    runtimeEnv,
   );
 
   await Promise.all([
     waitForHttpOk(frontendHealthUrl, "frontend"),
     waitForHttpOk(backendHealthUrl, "backend"),
+    waitForHttpOk(terminalBackendHealthUrl, "terminal backend"),
+    waitForHttpOk(terminalFrontendHealthUrl, "terminal frontend"),
   ]);
 
   if (onlyLaunch) {
     frontend.unref();
     backend.unref();
+    terminalBackend.unref();
+    terminalFrontend.unref();
     return;
   }
 
   const stopBoth = async (exitCode) => {
-    for (const proc of [frontend, backend]) {
+    for (const proc of [frontend, backend, terminalBackend, terminalFrontend]) {
       try {
         proc.kill();
       } catch {
@@ -200,6 +312,20 @@ async function main() {
     });
 
   backend.exited
+    .then((code) => stopBoth(code))
+    .catch((error) => {
+      console.error(error);
+      void stopBoth(1);
+    });
+
+  terminalBackend.exited
+    .then((code) => stopBoth(code))
+    .catch((error) => {
+      console.error(error);
+      void stopBoth(1);
+    });
+
+  terminalFrontend.exited
     .then((code) => stopBoth(code))
     .catch((error) => {
       console.error(error);

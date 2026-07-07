@@ -7,21 +7,26 @@ from pydantic import BaseModel, Field
 
 from .common import CursorPage, RunMode, TimestampedDTO
 
+TitleSource = Literal["default", "user", "auto"]
+
 
 class SessionCreateRequest(BaseModel):
     title: Optional[str] = "新会话"
     agent_id: Optional[str] = None
+    title_source: Optional[TitleSource] = None
 
 
 class SessionUpdateRequest(BaseModel):
     title: Optional[str] = None
     agent_id: Optional[str] = None
+    title_source: Optional[TitleSource] = None
 
 
 class SessionDTO(TimestampedDTO):
     session_id: str
     workspace_id: str
     title: str
+    title_source: TitleSource = "default"
     current_agent_id: str
 
 
@@ -52,6 +57,9 @@ class SessionAutoContinueStatusDTO(BaseModel):
 class DeleteSessionResultDTO(BaseModel):
     session_id: str
     status: str
+    cleaned_jobs: int = 0
+    cleaned_background_tasks: int = 0
+    cleaned_terminals: int = 0
 
 
 class SessionControlResultDTO(BaseModel):

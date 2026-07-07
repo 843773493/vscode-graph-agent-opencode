@@ -1,77 +1,98 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Any
+from pathlib import Path
+from typing import Any
 
 import commentjson
 import jsonschema
 
+from app.core.env import get_project_root
 from app.schemas.public_v2.config import ConfigDTO, ConfigUpdateRequest
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-CONFIGS_DIR = os.path.join(REPO_ROOT, "configs")
-
-_config_path_override: Optional[str] = None
+_config_path_override: Path | None = None
 
 
-def set_config_path(config_path: str) -> None:
+def set_config_path(config_path: str | Path | None) -> None:
     global _config_path_override
-    _config_path_override = config_path
+    _config_path_override = Path(config_path).expanduser().resolve() if config_path else None
 
 
-def get_config_path() -> Optional[str]:
-    return _config_path_override
+def get_config_path() -> str | None:
+    return str(_config_path_override) if _config_path_override is not None else None
 
 
 class ConfigService:
-    def __init__(self, workspace_root: Optional[str] = None):
-        self._boxteam_config: Optional[dict] = None
-        self._schema: Optional[dict] = None
-        self._workspace_root = workspace_root
+    def __init__(
+        self,
+        *,
+        config_dir: str | Path | None = None,
+        config_path: str | Path | None = None,
+        workspace_root: str | Path | None = None,
+    ) -> None:
+        resolved_config_dir = Path(config_dir).expanduser().resolve() if config_dir else get_project_root() / "configs"
+        self._config_dir = resolved_config_dir
+        self._config_path = Path(config_path).expanduser().resolve() if config_path else None
+        self._boxteam_config: dict[str, Any] | None = None
+        self._schema: dict[str, Any] | None = None
+        self._workspace_root = Path(workspace_root).expanduser().resolve() if workspace_root else None
+        self._runtime_config_overrides: dict[str, Any] = {}
+
+    def _first_existing_file(self, *paths: Path) -> Path:
+        for path in paths:
+            if path.exists():
+                return path
+        checked_paths = "\n".join(str(path) for path in paths)
+        raise FileNotFoundError(f"未找到配置文件，已检查:\n{checked_paths}")
 
     def _load_schema(self) -> dict:
         if self._schema is None:
-            schema_path = os.path.join(CONFIGS_DIR, "config.jsonc")
-            if not os.path.exists(schema_path):
-                schema_path = os.path.join(CONFIGS_DIR, "config.json")
-            with open(schema_path, "r", encoding="utf-8") as f:
+            schema_path = self._first_existing_file(
+                self._config_dir / "config.jsonc",
+                self._config_dir / "config.json",
+            )
+            with schema_path.open("r", encoding="utf-8") as f:
                 self._schema = commentjson.load(f)
         return self._schema
 
-    def _get_boxteam_config_path(self) -> Optional[str]:
-        if _config_path_override:
+    def _get_boxteam_config_path(self) -> Path:
+        if self._config_path is not None:
+            return self._config_path
+        if _config_path_override is not None:
             return _config_path_override
-        jsonc_path = os.path.join(CONFIGS_DIR, "boxteam.jsonc")
-        if os.path.exists(jsonc_path):
+        jsonc_path = self._config_dir / "boxteam.jsonc"
+        if jsonc_path.exists():
             return jsonc_path
-        return os.path.join(CONFIGS_DIR, "boxteam.json")
+        return self._config_dir / "boxteam.json"
 
     def _load_boxteam_config(self) -> dict:
         if self._boxteam_config is None:
             config_path = self._get_boxteam_config_path()
-            if config_path and os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8") as f:
-                    self._boxteam_config = commentjson.load(f)
+            if config_path.exists():
+                with config_path.open("r", encoding="utf-8") as f:
+                    config = commentjson.load(f)
             else:
-                self._boxteam_config = {}
+                config = {}
+            if self._workspace_root is not None:
+                config = self._apply_workspace_override(config, self._workspace_root)
+            self._boxteam_config = config
         return self._boxteam_config
 
-    def _apply_workspace_override(self, workspace_root: str) -> None:
-        if self._boxteam_config is None:
-            return
-        override_dir = os.path.join(workspace_root, ".boxteam")
-        override_path_jsonc = os.path.join(override_dir, "boxteam.jsonc")
-        override_path_json = os.path.join(override_dir, "boxteam.json")
-        override_path = None
-        if os.path.exists(override_path_jsonc):
+    def _apply_workspace_override(self, base_config: dict[str, Any], workspace_root: Path) -> dict[str, Any]:
+        override_dir = workspace_root / ".boxteam"
+        override_path_jsonc = override_dir / "boxteam.jsonc"
+        override_path_json = override_dir / "boxteam.json"
+        override_path: Path | None = None
+        if override_path_jsonc.exists():
             override_path = override_path_jsonc
-        elif os.path.exists(override_path_json):
+        elif override_path_json.exists():
             override_path = override_path_json
 
         if override_path:
-            with open(override_path, "r", encoding="utf-8") as f:
+            with override_path.open("r", encoding="utf-8") as f:
                 override_config = commentjson.load(f)
-            self._boxteam_config = self._merge_config(self._boxteam_config, override_config)
+            return self._merge_config(base_config, override_config)
+        return base_config
 
     def _merge_config(self, base: dict, override: dict) -> dict:
         result = base.copy()
@@ -86,6 +107,104 @@ class ConfigService:
         schema = self._load_schema()
         config = self._load_boxteam_config()
         jsonschema.validate(config, schema)
+
+    async def get(self) -> ConfigDTO:
+        return self._build_public_config()
+
+    async def update(self, payload: ConfigUpdateRequest) -> ConfigDTO:
+        update_data = payload.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            if value is None:
+                self._runtime_config_overrides.pop(key, None)
+            else:
+                self._runtime_config_overrides[key] = value
+        return self._build_public_config()
+
+    def _build_public_config(self) -> ConfigDTO:
+        config = self._load_boxteam_config()
+        public_config = self._load_public_runtime_config(config)
+
+        default_model = public_config.get("default_model")
+        if default_model is None:
+            default_model = self._resolve_default_model(config)
+
+        default_orchestration = public_config.get("default_orchestration", "single_agent")
+        max_concurrent_agents = public_config.get("max_concurrent_agents", 4)
+        allow_shell_tools = public_config.get("allow_shell_tools", False)
+        ignored_paths = public_config.get("ignored_paths", [])
+        auto_summarize = public_config.get("auto_summarize", True)
+
+        return ConfigDTO(
+            default_model=default_model,
+            default_orchestration=default_orchestration,
+            max_concurrent_agents=max_concurrent_agents,
+            allow_shell_tools=allow_shell_tools,
+            ignored_paths=ignored_paths,
+            auto_summarize=auto_summarize,
+            metadata={
+                "default_agent_id": self.get_default_agent_id(),
+                "config_path": str(self._get_boxteam_config_path()),
+                "source": "boxteam",
+                "runtime_overrides": sorted(self._runtime_config_overrides.keys()),
+            },
+        )
+
+    def _load_public_runtime_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        raw_public_config = config.get("ui", {})
+        if raw_public_config is None:
+            raw_public_config = {}
+        if not isinstance(raw_public_config, dict):
+            raise ValueError("ui 配置必须是对象")
+        return {**raw_public_config, **self._runtime_config_overrides}
+
+    def _resolve_default_model(self, config: dict[str, Any]) -> str:
+        default_agent_id = self.get_default_agent_id()
+        agents = config.get("agents", {})
+        if not isinstance(agents, dict):
+            raise ValueError("agents 配置必须是对象")
+
+        agent_config = agents.get(default_agent_id)
+        if not isinstance(agent_config, dict):
+            return self._resolve_first_provider_model(config)
+
+        model_config = agent_config.get("model", {})
+        if not isinstance(model_config, dict):
+            raise ValueError(f"agent {default_agent_id} 的 model 配置必须是对象")
+
+        primary_provider_id = model_config.get("primary_provider")
+        if not isinstance(primary_provider_id, str) or not primary_provider_id:
+            raise ValueError(f"agent {default_agent_id} 缺少 model.primary_provider 配置")
+
+        return self._resolve_provider_model(config, primary_provider_id)
+
+    def _resolve_first_provider_model(self, config: dict[str, Any]) -> str:
+        providers = config.get("llm", {}).get("providers", [])
+        if not providers:
+            raise ValueError("未配置任何 LLM provider")
+        first_provider = providers[0]
+        if not isinstance(first_provider, dict):
+            raise ValueError("llm.providers 配置项必须是对象")
+        model = first_provider.get("model")
+        if not isinstance(model, str) or not model:
+            raise ValueError("llm.providers[0].model 必须是非空字符串")
+        return model
+
+    def _resolve_provider_model(self, config: dict[str, Any], provider_id: str) -> str:
+        providers = config.get("llm", {}).get("providers", [])
+        if not isinstance(providers, list):
+            raise ValueError("llm.providers 配置必须是数组")
+
+        for provider in providers:
+            if not isinstance(provider, dict):
+                raise ValueError("llm.providers 配置项必须是对象")
+            if provider.get("id") != provider_id:
+                continue
+            model = provider.get("model")
+            if not isinstance(model, str) or not model:
+                raise ValueError(f"provider {provider_id} 缺少有效 model 配置")
+            return model
+
+        raise ValueError(f"default agent 引用了不存在的 provider: {provider_id}")
 
     def get_llm_providers(self) -> list[dict]:
         config = self._load_boxteam_config()
@@ -219,6 +338,7 @@ class ConfigService:
         default_tool_config = {
             "denylist": [],
             "confirmation_required": [],
+            "skill_only": [],
         }
 
         if not agents or resolved_agent_id not in agents:
@@ -233,4 +353,5 @@ class ConfigService:
         return {
             "denylist": list(tools_config.get("denylist", default_tool_config["denylist"])),
             "confirmation_required": list(tools_config.get("confirmation_required", default_tool_config["confirmation_required"])),
+            "skill_only": list(tools_config.get("skill_only", default_tool_config["skill_only"])),
         }

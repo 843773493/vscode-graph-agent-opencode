@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import time
-import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
-from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_context import (
     reset_current_agent_id,
@@ -26,82 +23,33 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_interrupt_state import SessionInterruptState
 from app.schemas.public_v2.message import AttachmentRef
 from app.agents.agent_factory import resolve_agent_id
-from app.agents.provider_capabilities import (
-    detect_required_capabilities,
-    select_providers_for_capabilities,
-)
 from app.services.infrastructure.attachment_content_service import build_human_content
 from app.services.infrastructure.config_service import ConfigService
 from app.abstractions.job_step_executor import JobStepExecutor
-from app.runtime.agent_runtime import AgentRuntimeDependencyProvider, build_session_agent_runtime
+from app.runtime.agent_runtime import (
+    AgentRuntimeDependencyProvider,
+    build_agent_tool_definitions,
+    build_candidate_models_for_session_request,
+    build_session_agent_runtime,
+    get_workspace_skill_tool_sources,
+)
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
 )
 from app.services.mapping.agent_content_mapper import split_agent_content
-
-CHAT_MODEL_EVENT_NAMES = {
-    "ChatOpenAI",
-    "BoxteamLiteLLMChatModel",
-    "ChatLiteLLM",
-    "ChatLiteLLMRouter",
-}
-
-
-def _message_has_content(message: Any) -> bool:
-    content = getattr(message, "content", None)
-    if content is None:
-        return False
-    if isinstance(content, list):
-        return any(bool(part) for part in content)
-    return bool(str(content).strip())
-
-
-def _normalize_tool_args(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return dict(value)
-    return {"input": value}
-
-
-def _serialize_tool_value(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def _extract_tool_result_text(output: Any) -> str:
-    content = getattr(output, "content", None)
-    if content is not None:
-        return _serialize_tool_value(content)
-    return _serialize_tool_value(output)
-
-
-def _is_tracked_chat_model_event(name: str) -> bool:
-    return name in CHAT_MODEL_EVENT_NAMES
-
-
-def _build_human_response_metadata(
-    *,
-    message_id: str | None,
-    display_content: str,
-    attachments: list[AttachmentRef],
-    message_created_at: str | None = None,
-) -> dict[str, object]:
-    metadata: dict[str, object] = {"display_content": display_content}
-    if message_id:
-        metadata["message_id"] = message_id
-    if message_created_at:
-        metadata["created_at"] = message_created_at
-        metadata["updated_at"] = message_created_at
-    if attachments:
-        metadata["attachments"] = [
-            attachment.model_dump(mode="json", exclude={"data_url"})
-            for attachment in attachments
-        ]
-    return metadata
+from app.services.business.system_reminder_checkpoint_service import (
+    persist_interrupt_checkpoint,
+)
+from app.services.orchestration.agent_pseudo_tool_recovery import (
+    recover_or_sanitize_final_text,
+)
+from app.services.orchestration.agent_event_stream_processor import (
+    process_agent_event_stream,
+)
+from app.services.orchestration.agent_stream_helpers import (
+    build_human_response_metadata,
+    unwrap_json_string_tool_result,
+)
 
 
 class AgentExecutionService(JobStepExecutor):
@@ -110,7 +58,7 @@ class AgentExecutionService(JobStepExecutor):
         *,
         config_service: ConfigService,
         background_task_registry: BackgroundTaskRegistry,
-        background_message_bus: BackgroundMessageBus,
+        background_message_bus: BackgroundMessageBusProtocol,
         job_event_bus: JobEventBusProtocol,
         dependency_provider: AgentRuntimeDependencyProvider,
     ):
@@ -160,103 +108,6 @@ class AgentExecutionService(JobStepExecutor):
             f" session_id={result.get('session_id') if isinstance(result, dict) else 'unknown'}"
             " 这通常表示最终消息不是 assistant 文本，或者消息链路中出现了空响应。"
         )
-
-    def _persist_interrupt_checkpoint(
-        self,
-        session_id: str,
-        current_text: str,
-        active_tool_name: str | None,
-    ) -> None:
-        """在任务被取消时，把已生成的部分 assistant 消息和独立 <system_reminder> 写入 checkpoint。
-
-        提醒作为独立 HumanMessage 持久化，避免把内部提醒混入 assistant 正文。
-        下一次运行模型时 LangGraph 会从 checkpoint 加载到该提醒。
-        """
-        checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
-        if checkpointer is None:
-            return
-
-        config = build_checkpoint_config(session_id)
-        try:
-            tup = checkpointer.get_tuple(config)
-        except Exception:
-            return
-
-        if tup is None:
-            return
-
-        checkpoint = tup.checkpoint.copy()
-        channel_values = dict(checkpoint.get("channel_values", {}))
-        messages = list(channel_values.get("messages", []))
-
-        # 过滤掉可能存在的空 assistant 占位消息
-        messages = [
-            msg for msg in messages
-            if not (isinstance(msg, AIMessage) and not _message_has_content(msg))
-        ]
-
-        phase = "tool" if active_tool_name else "text"
-        interrupted_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-        if phase == "tool" and active_tool_name:
-            reminder = (
-                f"用户在你调用工具（{active_tool_name}）的过程中于 {interrupted_at} 打断。"
-                f"当前工具调用已被取消，请停止当前操作，根据已有信息回应用户最新请求。"
-            )
-        else:
-            reminder = (
-                f"用户在文本生成过程中于 {interrupted_at} 打断。"
-                f"请停止当前输出，根据已有信息回应用户最新请求。"
-            )
-
-        # 追加部分 assistant 文本；如果没有正文，不制造空 assistant 占位。
-        content = current_text if phase == "text" else ""
-        if content.strip():
-            messages.append(
-                AIMessage(
-                    content=content,
-                    tool_calls=[],
-                    response_metadata={
-                        "phase": phase,
-                        "tool_name": active_tool_name,
-                        "source": "interrupt",
-                    },
-                )
-            )
-
-        reminder_message = HumanMessage(
-            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
-            response_metadata={
-                "phase": phase,
-                "tool_name": active_tool_name,
-                "source": "interrupt",
-            },
-        )
-        messages.append(reminder_message)
-
-        channel_values["messages"] = messages
-        checkpoint["channel_values"] = channel_values
-        checkpoint["id"] = str(uuid.uuid4())
-
-        # 走 checkpointer.get_next_version（实例方法）获取 messages 通道的新版本号。
-        # 避免使用模块级 next_channel_version 重复实现 saver 内部的 version 算法。
-        channel_versions = dict(checkpoint.get("channel_versions", {}))
-        messages_version = checkpointer.get_next_version(
-            channel_versions.get("messages"), None
-        )
-        channel_versions["messages"] = messages_version
-        checkpoint["channel_versions"] = channel_versions
-        # updated_channels 字段在业务代码中不读（仅 decode_checkpoint.py / 测试中用），
-        # 这里不再手工维护；如未来需要从 saver 推导可补在 FileSystemCheckpointSaver.put。
-
-        try:
-            checkpointer.put(
-                config=tup.config,
-                checkpoint=checkpoint,
-                metadata={"source": "interrupt", "step": -1, "writes": {}},
-                new_versions={"messages": messages_version},
-            )
-        except Exception:
-            pass
 
     async def run_step(
         self,
@@ -309,16 +160,15 @@ class AgentExecutionService(JobStepExecutor):
                 agent_id=resolved_agent_id,
             )
 
-        collected_text_parts: list[str] = []
-        collected_reasoning_parts: list[str] = []
-        latest_model_reasoning_parts: list[str] = []
         final_text = ""
-        active_tool_call_id: str | None = None
-        active_tool_name: str | None = None
-        active_tool_args: dict[str, Any] = {}
+        latest_model_reasoning_text = ""
+        skill_tool_sources = get_workspace_skill_tool_sources(
+            agent_id=resolved_agent_id,
+            config_service=self._config_service,
+        )
         resolved_attachments = list(attachments or [])
         human_content = build_human_content(message, resolved_attachments)
-        human_response_metadata = _build_human_response_metadata(
+        human_response_metadata = build_human_response_metadata(
             message_id=message_id,
             display_content=message,
             attachments=resolved_attachments,
@@ -334,20 +184,11 @@ class AgentExecutionService(JobStepExecutor):
             logger.info("[agent_execution_service] agent.astream_events begin: job_id=%s", effective_job_id)
 
             # 为 fallback 收集需要的模型配置；多模态请求只使用声明了对应输入能力的 provider。
-            runtime_config = self._config_service.get_agent_runtime_config(resolved_agent_id)
-            providers = runtime_config.get("providers", [])
-            if not isinstance(providers, list):
-                raise TypeError("agent runtime providers 应为 list")
-            selected_providers = select_providers_for_capabilities(
-                providers,
-                detect_required_capabilities(human_content),
+            candidate_models = build_candidate_models_for_session_request(
+                agent_id=resolved_agent_id,
+                config_service=self._config_service,
+                content=human_content,
             )
-            from app.agents.agent_factory import _build_model_from_provider
-
-            candidate_models = [
-                _build_model_from_provider(provider, runtime_config)
-                for provider in selected_providers
-            ]
             if not candidate_models:
                 raise RuntimeError("当前 agent 没有可用的模型 provider")
 
@@ -375,15 +216,9 @@ class AgentExecutionService(JobStepExecutor):
                         fallback_middleware_enabled=False,
                     )
 
-                    collected_text_parts.clear()
-                    collected_reasoning_parts.clear()
-                    latest_model_reasoning_parts.clear()
-                    active_tool_call_id = None
-                    active_tool_name = None
-                    active_tool_args = {}
-
-                    async for event in agent.astream_events(
-                        {
+                    stream_result = await process_agent_event_stream(
+                        agent=agent,
+                        input_payload={
                             "messages": [
                                 HumanMessage(
                                     content=human_content,
@@ -392,118 +227,26 @@ class AgentExecutionService(JobStepExecutor):
                             ]
                         },
                         config=config,
-                        version="v2",
-                    ):
-                        event_type = event.get("event")
-                        name = event.get("name", "")
-                        data = event.get("data", {})
-                        metadata = event.get("metadata", {})
-
-                        if event_type == "on_chat_model_start" and _is_tracked_chat_model_event(name):
-                            latest_model_reasoning_parts.clear()
-                            model_name = metadata.get("ls_model_name") or "unknown_model"
-                            await _publish(EventType.LLM_REQUEST, {
-                                "model": model_name,
-                                "timestamp": int(time.time() * 1000),
-                            })
-
-                        elif event_type == "on_chat_model_stream" and _is_tracked_chat_model_event(name):
-                            chunk = data.get("chunk")
-                            if chunk is None:
-                                continue
-                            # ChatGenerationChunk 没有 .content 属性，需要从 .message 获取
-                            chunk_message = getattr(chunk, "message", None)
-                            if chunk_message is not None:
-                                content = getattr(chunk_message, "content", None) or ""
-                                tool_calls = getattr(chunk_message, "tool_calls", None) or []
-                            else:
-                                content = getattr(chunk, "content", None) or ""
-                                tool_calls = getattr(chunk, "tool_calls", None) or []
-                            reasoning_content, text_content = split_agent_content(content)
-
-                            # 处理 reasoning 阶段
-                            if reasoning_content.strip():
-                                if not collected_text_parts and not collected_reasoning_parts:
-                                    # reasoning 开始前先发送 TEXT_START（标记 assistant 开始输出）
-                                    SessionInterruptState.set(session_id, phase="text", tool_name=None)
-                                    set_interruptible_phase("text")
-                                    await _publish(EventType.TEXT_START, {})
-                                collected_reasoning_parts.append(reasoning_content)
-                                latest_model_reasoning_parts.append(reasoning_content)
-                                SessionInterruptState.set(
-                                    session_id,
-                                    current_text="".join(collected_text_parts),
-                                )
-                                await _publish(
-                                    EventType.TEXT_DELTA,
-                                    {"text": reasoning_content, "kind": "reasoning"},
-                                )
-
-                            # 处理普通 text 内容
-                            if (
-                                text_content.strip()
-                                and not collected_text_parts
-                                and not collected_reasoning_parts
-                            ):
-                                SessionInterruptState.set(session_id, phase="text", tool_name=None)
-                                set_interruptible_phase("text")
-                                await _publish(EventType.TEXT_START, {})
-
-                            if text_content and (text_content.strip() or collected_text_parts):
-                                collected_text_parts.append(text_content)
-                                SessionInterruptState.set(
-                                    session_id,
-                                    current_text="".join(collected_text_parts),
-                                )
-                                await _publish(EventType.TEXT_DELTA, {"text": text_content, "kind": "text"})
-
-                            for tc in tool_calls:
-                                tc_id = tc.get("id")
-                                tc_name = tc.get("name")
-                                tc_args = tc.get("args") or {}
-                                if tc_id and tc_id != active_tool_call_id:
-                                    active_tool_call_id = tc_id
-                                    active_tool_name = tc_name
-                                    active_tool_args = _normalize_tool_args(tc_args)
-                                elif tc_id == active_tool_call_id and isinstance(tc_args, dict):
-                                    active_tool_args.update(tc_args)
-
-                        elif event_type == "on_chat_model_end" and _is_tracked_chat_model_event(name):
-                            pass
-
-                        elif event_type == "on_tool_start":
-                            tool_name = name or active_tool_name or "unknown_tool"
-                            tool_args = _normalize_tool_args(data.get("input"))
-                            active_tool_name = tool_name
-                            active_tool_args = tool_args
-                            SessionInterruptState.set(
-                                session_id,
-                                phase="tool",
-                                tool_name=tool_name,
-                            )
-                            set_interruptible_phase("tool")
-                            set_active_tool_name(tool_name)
-                            await _publish(EventType.TOOL_CALL_START, {
-                                "tool_name": tool_name,
-                                "args": active_tool_args,
-                                "agent_id": resolved_agent_id,
-                            })
-
-                        elif event_type == "on_tool_end":
-                            tool_name = name
-                            output = data.get("output")
-                            result_text = _extract_tool_result_text(output)
-                            SessionInterruptState.set(session_id, phase=None, tool_name=None)
-                            set_interruptible_phase("text")
-                            set_active_tool_name(None)
-                            await _publish(EventType.TOOL_CALL_END, {
-                                "tool_name": tool_name,
-                                "result": result_text,
-                                "agent_id": resolved_agent_id,
-                            })
-
-                    # 如果成功完成循环，跳出 while
-                    final_text = "".join(collected_text_parts).strip()
+                        session_id=session_id,
+                        agent_id=resolved_agent_id,
+                        skill_tool_sources=skill_tool_sources,
+                        publish=_publish,
+                    )
+                    final_text = stream_result.final_text
+                    final_text = unwrap_json_string_tool_result(
+                        final_text,
+                        stream_result.last_tool_result_text,
+                    )
+                    final_text = await recover_or_sanitize_final_text(
+                        agent=agent,
+                        final_text=final_text,
+                        session_id=session_id,
+                        agent_id=resolved_agent_id,
+                        job_id=effective_job_id,
+                        publish=_publish,
+                        logger=logger,
+                    )
+                    latest_model_reasoning_text = stream_result.latest_model_reasoning_text
                     break
 
                 except Exception as e:
@@ -517,7 +260,7 @@ class AgentExecutionService(JobStepExecutor):
                         logger.error("[agent_execution_service] all models failed: job_id=%s last_error=%s", effective_job_id, str(e))
                         raise
 
-            if collected_text_parts:
+            if final_text:
                 SessionInterruptState.set(session_id, phase=None, tool_name=None)
                 set_interruptible_phase("text")
                 set_active_tool_name(None)
@@ -528,7 +271,7 @@ class AgentExecutionService(JobStepExecutor):
                 persist_standard_assistant_checkpoint(
                     checkpointer=checkpointer,
                     session_id=session_id,
-                    reasoning_text="".join(latest_model_reasoning_parts),
+                    reasoning_text=latest_model_reasoning_text,
                     final_text=final_text,
                 )
 
@@ -542,12 +285,19 @@ class AgentExecutionService(JobStepExecutor):
 
         except asyncio.CancelledError:
             state = SessionInterruptState.get(session_id)
-            self._persist_interrupt_checkpoint(
-                session_id,
-                current_text=state.current_text,
-                active_tool_name=state.tool_name,
-            )
-            logger.info("[agent_execution_service] job cancelled and checkpoint persisted: job_id=%s", effective_job_id)
+            if state.user_interrupt_reminder_injected:
+                logger.info(
+                    "[agent_execution_service] job cancelled after user interrupt reminder persisted: job_id=%s",
+                    effective_job_id,
+                )
+            else:
+                persist_interrupt_checkpoint(
+                    checkpointer=getattr(self._dependency_provider, "get_checkpointer", lambda: None)(),
+                    session_id=session_id,
+                    current_text=state.current_text,
+                    active_tool_name=state.tool_name,
+                )
+                logger.info("[agent_execution_service] job cancelled and checkpoint persisted: job_id=%s", effective_job_id)
             raise
         except Exception as e:
             await _publish(EventType.ERROR, {"error": str(e), "phase": "agent_execution"})
@@ -563,35 +313,7 @@ class AgentExecutionService(JobStepExecutor):
     def get_for_session(self, session_id: str, agent_id: str | None = None):
         return self._get_or_create_agent(session_id, agent_id)
 
-    def get_available_tools(self) -> List[Dict[str, Any]]:
+    def get_available_tools(self) -> list[dict[str, Any]]:
         session_id = "tools_inspection_session"
         agent = self._get_or_create_agent(session_id)
-
-        tool_map = {}
-        graph_view = agent.get_graph()
-        nodes = getattr(graph_view, "nodes", {}) or {}
-
-        for _, node in nodes.items():
-            candidate = getattr(node, "data", node)
-            if hasattr(candidate, "tools_by_name"):
-                tool_map.update(candidate.tools_by_name)
-
-        if not tool_map:
-            raise RuntimeError(
-                "无法从Agent实例中提取工具列表！\n"
-                "Agent图中未找到包含tools_by_name属性的节点。\n"
-                "这是严重错误，需要立即修复，不能静默降级。"
-            )
-
-        tools = []
-        for tool_name, tool in tool_map.items():
-            tool_def = {
-                "id": tool_name,
-                "name": tool_name,
-                "description": getattr(tool, "description", ""),
-                "parameters": tool.args_schema.schema() if hasattr(tool, 'args_schema') else {"type": "object", "properties": {}},
-                "category": "general"
-            }
-            tools.append(tool_def)
-
-        return tools
+        return build_agent_tool_definitions(agent)

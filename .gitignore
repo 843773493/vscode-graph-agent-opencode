@@ -65,4 +65,12 @@ yarn-error.log*
 *.temp
 playground/
 out/
+/.boxteam/
 
+# Test workspace runtime state
+/asset/skill_test_workspace/.boxteam/artifacts/
+/asset/skill_test_workspace/.boxteam/cache/
+/asset/skill_test_workspace/.boxteam/checkpoints/
+/asset/skill_test_workspace/.boxteam/logs/
+/asset/skill_test_workspace/.boxteam/sessions/
+/asset/skill_test_workspace/.boxteam/terminal-manager/

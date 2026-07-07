@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -11,6 +12,7 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import get_checkpoints_dir, get_logs_dir
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
@@ -20,16 +22,23 @@ from app.services.business.context_compaction_service import ContextCompactionSe
 from app.services.business.job_service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.context_history_store import ContextHistoryStore
+from app.services.infrastructure.historical_terminal_record_reader import (
+    HistoricalTerminalRecordReader,
+)
+from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.tool_service import ToolService
+from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_service import WorkspaceService
+from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.job_execution_service import JobExecutionService
 from app.services.orchestration.session_auto_continue_service import (
@@ -46,10 +55,12 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         message_service: MessageService,
         session_service: SessionService,
         checkpointer: BaseCheckpointSaver,
+        terminal_manager_client: TerminalManagerClient,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
         self._checkpointer = checkpointer
+        self._terminal_manager_client = terminal_manager_client
         self._session_orchestrator: SessionOrchestrator | None = None
 
     def get_message_service(self) -> MessageService:
@@ -60,6 +71,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 
     def get_checkpointer(self) -> BaseCheckpointSaver:
         return self._checkpointer
+
+    def get_terminal_manager_client(self) -> TerminalManagerClient:
+        return self._terminal_manager_client
 
     def set_session_orchestrator(self, session_orchestrator: SessionOrchestrator) -> None:
         self._session_orchestrator = session_orchestrator
@@ -80,9 +94,11 @@ class AppContainer:
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
+    session_resource_service: SessionResourceService
     context_compaction_service: ContextCompactionService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
+    llm_request_log_service: LLMRequestLogService
     log_service: LogService
     tool_service: ToolService
     workspace_service: WorkspaceService
@@ -94,22 +110,32 @@ class AppContainer:
     trace_event_recorder: TraceEventRecorder
 
 
-def build_app_container() -> AppContainer:
+def build_app_container(
+    *,
+    project_root: str | Path | None = None,
+    workspace_root: str | Path | None = None,
+) -> AppContainer:
+    resolved_project_root = get_project_root(project_root)
     job_event_bus = JobEventBus()
     background_task_registry = BackgroundTaskRegistry()
     background_message_bus = BackgroundMessageBus()
     trace_event_store = TraceEventStore(logs_dir=get_logs_dir())
     trace_event_recorder = TraceEventRecorder(bus=job_event_bus, store=trace_event_store)
+    terminal_manager_client = TerminalManagerClient()
 
     checkpointer = FileSystemCheckpointSaver(base_dir=get_checkpoints_dir())
 
-    config_service = ConfigService()
+    config_service = ConfigService(
+        config_dir=resolved_project_root / "configs",
+        workspace_root=workspace_root,
+    )
     message_service = MessageService(checkpointer=checkpointer)
     session_service = SessionService(config_service=config_service, trace_event_store=trace_event_store)
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
         checkpointer=checkpointer,
+        terminal_manager_client=terminal_manager_client,
     )
     agent_execution_service = AgentExecutionService(
         config_service=config_service,
@@ -119,7 +145,6 @@ def build_app_container() -> AppContainer:
         dependency_provider=dependency_provider,
     )
     session_title_service = SessionTitleService(
-        config_service=config_service,
         session_service=session_service,
         job_event_bus=job_event_bus,
     )
@@ -145,7 +170,6 @@ def build_app_container() -> AppContainer:
     runtime_service = RuntimeService(job_service=job_service)
     session_auto_continue_service = SessionAutoContinueService(
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
         session_service=session_service,
         job_service=job_service,
@@ -154,6 +178,23 @@ def build_app_container() -> AppContainer:
     session_interrupt_service = SessionInterruptService(
         job_service=job_service,
         job_event_bus=job_event_bus,
+        message_service=message_service,
+    )
+    historical_terminal_reader = HistoricalTerminalRecordReader(
+        logs_dir=get_logs_dir(),
+        attach_url=terminal_manager_client.attach_url,
+    )
+    session_resource_mapper = SessionResourceMapper(
+        terminal_attach_url=terminal_manager_client.attach_url,
+    )
+    session_resource_service = SessionResourceService(
+        session_service=session_service,
+        job_service=job_service,
+        background_task_registry=background_task_registry,
+        terminal_manager_client=terminal_manager_client,
+        historical_terminal_reader=historical_terminal_reader,
+        message_service=message_service,
+        resource_mapper=session_resource_mapper,
     )
     context_history_store = ContextHistoryStore()
     context_checkpoint_store = ContextCompactionCheckpointStore(
@@ -168,6 +209,7 @@ def build_app_container() -> AppContainer:
         session_service=session_service,
         summarization_compactor=summarization_compactor,
     )
+    llm_request_log_service = LLMRequestLogService()
     log_service = LogService()
     tool_service = ToolService(tool_catalog=agent_execution_service)
     workspace_service = WorkspaceService(config_service=config_service)
@@ -182,9 +224,11 @@ def build_app_container() -> AppContainer:
         runtime_service=runtime_service,
         session_auto_continue_service=session_auto_continue_service,
         session_interrupt_service=session_interrupt_service,
+        session_resource_service=session_resource_service,
         context_compaction_service=context_compaction_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
+        llm_request_log_service=llm_request_log_service,
         log_service=log_service,
         tool_service=tool_service,
         workspace_service=workspace_service,

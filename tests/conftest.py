@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import pytest
 
 from app.core.env import load_project_env
 
 # 加载项目.env配置文件
-load_project_env(__file__)
+load_project_env(Path.cwd())
 
 # 为测试填充缺失的API密钥（如果为空）
 if not os.environ.get("OPENROUTER_API_KEY"):
     os.environ["OPENROUTER_API_KEY"] = "test-key-placeholder"
 
 
-CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs")
+CONFIGS_DIR = os.path.join(Path.cwd(), "configs")
 TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "default.jsonc")
 
 

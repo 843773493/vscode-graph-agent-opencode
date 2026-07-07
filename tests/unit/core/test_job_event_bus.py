@@ -39,3 +39,20 @@ async def test_unsubscribe_all_stops_receiving():
 
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(queue.get(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_get_event_finds_published_event():
+    bus = JobEventBus()
+    event = await bus.publish(
+        job_id="job_1",
+        event_type=EventType.JOB_COMPLETED,
+        payload={"result": "ok"},
+        agent_id="test",
+    )
+
+    found = await bus.get_event(event.event_id)
+
+    assert found is not None
+    assert found.event_id == event.event_id
+    assert found.type == "job_completed"

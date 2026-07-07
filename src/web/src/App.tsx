@@ -4,6 +4,8 @@ import ChatPanel from "./components/ChatPanel";
 import Composer from "./components/Composer";
 import EventQueuePanel from "./components/EventQueuePanel";
 import HistoryPanel from "./components/HistoryPanel";
+import RequestLogPanel from "./components/RequestLogPanel";
+import ResourcePanel from "./components/ResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
 import Toolbar from "./components/Toolbar";
 import { useState } from "react";
@@ -13,9 +15,7 @@ import {
   useAppState,
 } from "./hooks";
 
-type SessionNameDialogState =
-  | { mode: "create"; initialTitle: string }
-  | { mode: "rename"; sessionId: string; initialTitle: string };
+type SessionNameDialogState = { sessionId: string; initialTitle: string };
 
 export default function AppShell() {
   const {
@@ -24,6 +24,11 @@ export default function AppShell() {
     toggleHistoryPanel,
     createSession,
     renameSession,
+    deleteSession,
+    refreshSessionResources,
+    controlSessionResource,
+    switchContentView,
+    setStatus,
   } = useAppState();
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
@@ -41,17 +46,31 @@ export default function AppShell() {
       new Date(a.updated_at || a.created_at || "").getTime(),
   );
   const historyVisible = state.historyPanelOpen;
-  const openCreateSessionDialog = () => {
-    setNameDialog({ mode: "create", initialTitle: "新会话" });
+  const handleCreateSession = () => {
+    setNameDialog(null);
     setNameDialogError(null);
+    void createSession().catch(() => {
+      // 创建失败时由 createSession 写入全局状态，这里只避免未处理 Promise。
+    });
   };
   const handleRenameSession = (sessionId: string, currentTitle: string) => {
     setNameDialog({
-      mode: "rename",
       sessionId,
       initialTitle: currentTitle || "新会话",
     });
     setNameDialogError(null);
+  };
+  const handleDeleteSession = (sessionId: string, title: string) => {
+    const label = title || sessionId;
+    const confirmed = window.confirm(
+      `删除会话「${label}」？相关后台任务会一并清理。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    void deleteSession(sessionId).catch(() => {
+      // 删除失败时由 deleteSession 写入全局状态，这里只避免未处理 Promise。
+    });
   };
   const closeNameDialog = () => {
     if (nameDialogSubmitting) {
@@ -67,10 +86,7 @@ export default function AppShell() {
 
     setNameDialogSubmitting(true);
     setNameDialogError(null);
-    const action =
-      nameDialog.mode === "create"
-        ? createSession(title)
-        : renameSession(nameDialog.sessionId, title);
+    const action = renameSession(nameDialog.sessionId, title);
 
     void action
       .then(() => {
@@ -83,6 +99,42 @@ export default function AppShell() {
         setNameDialogSubmitting(false);
       });
   };
+  const findLatestResponseInConversation = (marker: Element | null) => {
+    let target: Element | null = marker;
+    let cursor = marker?.nextElementSibling ?? null;
+    while (cursor && !cursor.classList.contains("conversation-marker")) {
+      if (cursor.classList.contains("event-card-response")) {
+        target = cursor;
+      }
+      cursor = cursor.nextElementSibling;
+    }
+    return target;
+  };
+  const showConversation = (jobId?: string) => {
+    switchContentView("default");
+    if (!jobId) {
+      window.setTimeout(() => {
+        const markers = document.querySelectorAll(".conversation-marker");
+        const marker = markers.length > 0 ? markers[markers.length - 1] : null;
+        const target = findLatestResponseInConversation(marker);
+        if (target instanceof HTMLElement) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+        const stream = document.querySelector<HTMLElement>(".chat-stream");
+        stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
+      }, 80);
+      return;
+    }
+
+    window.setTimeout(() => {
+      const escapedJobId = jobId.replace(/["\\]/g, "\\$&");
+      const marker = document.querySelector(`[data-job-id="${escapedJobId}"]`);
+      const target = findLatestResponseInConversation(marker);
+      const targetElement = target instanceof HTMLElement ? target : null;
+      targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  };
 
   return (
     <div
@@ -94,7 +146,7 @@ export default function AppShell() {
         workspaceRoot={state.workspaceRoot}
         status={state.status}
         agentId={state.currentSession?.current_agent_id ?? "default"}
-        onCreateSession={openCreateSessionDialog}
+        onCreateSession={handleCreateSession}
       />
       <main className="content">
         {state.error ? (
@@ -111,6 +163,8 @@ export default function AppShell() {
             currentSessionId={activeSession?.session_id ?? ""}
             onSelectSession={selectSession}
             onRenameSession={handleRenameSession}
+            onDeleteSession={handleDeleteSession}
+            onStatusChange={setStatus}
             isOpen={historyVisible}
             onClose={toggleHistoryPanel}
             workspaceName={state.workspaceName ?? ""}
@@ -133,6 +187,29 @@ export default function AppShell() {
                 limit={FRONTEND_EVENT_QUEUE_LIMIT}
                 sessionId={activeSession?.session_id ?? ""}
               />
+            ) : state.contentView === "requests" ? (
+              <RequestLogPanel
+                logs={state.llmRequestLogs}
+                loading={state.llmRequestLogsLoading}
+                error={state.llmRequestLogsError}
+                loadedAt={state.llmRequestLogsLoadedAt}
+                sessionId={activeSession?.session_id ?? ""}
+              />
+            ) : state.contentView === "resources" ? (
+              <ResourcePanel
+                resources={state.sessionResources}
+                loading={state.sessionResourcesLoading}
+                error={state.sessionResourcesError}
+                loadedAt={state.sessionResourcesLoadedAt}
+                sessionId={activeSession?.session_id ?? ""}
+                onRefresh={() => {
+                  if (activeSession) {
+                    void refreshSessionResources(activeSession.session_id);
+                  }
+                }}
+                onControl={controlSessionResource}
+                onShowConversation={showConversation}
+              />
             ) : (
               <ChatPanel
                 conversations={conversations}
@@ -145,10 +222,10 @@ export default function AppShell() {
       <Composer />
       <SessionNameDialog
         open={nameDialog !== null}
-        title={nameDialog?.mode === "rename" ? "重命名会话" : "新建会话"}
+        title="重命名会话"
         label="会话名称"
         initialValue={nameDialog?.initialTitle ?? "新会话"}
-        confirmText={nameDialog?.mode === "rename" ? "保存名称" : "创建会话"}
+        confirmText="保存名称"
         submitting={nameDialogSubmitting}
         error={nameDialogError}
         onCancel={closeNameDialog}

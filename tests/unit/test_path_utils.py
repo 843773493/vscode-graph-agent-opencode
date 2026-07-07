@@ -35,16 +35,22 @@ class TestPathUtils:
         with pytest.raises(ForbiddenError, match="Path traversal detected"):
             safe_join(self.base_path, "test/../../etc/passwd")
 
-        with pytest.raises(ForbiddenError, match="Path traversal detected"):
-            safe_join(self.base_path, "..\\windows\\system32")
+        if os.name == "nt":
+            with pytest.raises(ForbiddenError, match="Path traversal detected"):
+                safe_join(self.base_path, "..\\windows\\system32")
+        else:
+            assert safe_join(self.base_path, "..\\windows\\system32").parent == self.base_path
 
     def test_safe_join_absolute_path_attack(self):
         """测试绝对路径攻击防护"""
         with pytest.raises(ForbiddenError, match="Path traversal detected"):
             safe_join(self.base_path, "/etc/passwd")
 
-        with pytest.raises(ForbiddenError, match="Path traversal detected"):
-            safe_join(self.base_path, "C:\\windows\\system32")
+        if os.name == "nt":
+            with pytest.raises(ForbiddenError, match="Path traversal detected"):
+                safe_join(self.base_path, "C:\\windows\\system32")
+        else:
+            assert safe_join(self.base_path, "C:\\windows\\system32").parent == self.base_path
 
     def test_safe_join_symlink_attack(self):
         """测试符号链接攻击防护"""

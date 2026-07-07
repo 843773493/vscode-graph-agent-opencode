@@ -1,12 +1,5 @@
 import React from "react";
-
-export interface SlashCommandOption {
-  id: string;
-  command: string;
-  title: string;
-  description: string;
-  disabled?: boolean;
-}
+import type { SlashCommandOption } from "../state/slashCommands";
 
 export default function ComposerSlashCommandMenu({
   query,
