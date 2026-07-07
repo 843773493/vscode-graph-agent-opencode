@@ -244,6 +244,29 @@ class MessageService:
         }
 
     @staticmethod
+    def _agent_state_record_key(record: Mapping[str, object]) -> str:
+        return json.dumps(
+            record,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _dedupe_consecutive_agent_state_records(
+        records: Sequence[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        deduped: list[dict[str, object]] = []
+        previous_key: str | None = None
+        for record in records:
+            current_key = MessageService._agent_state_record_key(record)
+            if current_key == previous_key:
+                continue
+            deduped.append(record)
+            previous_key = current_key
+        return deduped
+
+    @staticmethod
     def _extract_content(message: BaseMessage) -> dict[str, object]:
         """从 BaseMessage 提取可读 content，并把结构化 reasoning 块单独保存。
 
@@ -402,7 +425,7 @@ class MessageService:
             raise TypeError(
                 f"Agent State messages 中出现不支持的消息类型: {type(message).__name__}"
             )
-        return records
+        return self._dedupe_consecutive_agent_state_records(records)
 
     async def get_agent_state_messages(self, session_id: str) -> AgentStateMessagesDTO:
         records = await self.list_agent_state_records(session_id, strict=True)
@@ -467,6 +490,7 @@ class MessageService:
         raw_messages = await self._load_raw_messages(session_id)
 
         result: list[MessageDTO] = []
+        seen_visible_messages: set[tuple[str, str]] = set()
         for index, message in enumerate(raw_messages):
             if not isinstance(message, BaseMessage):
                 continue
@@ -474,5 +498,10 @@ class MessageService:
             # system_reminder 与空 assistant 仍可通过 Agent State 调试视图查看。
             if not self._is_user_visible_message(message):
                 continue
-            result.append(self._message_to_dto(session_id, index, message))
+            dto = self._message_to_dto(session_id, index, message)
+            visible_key = (dto.role.value, dto.message_id)
+            if visible_key in seen_visible_messages:
+                continue
+            seen_visible_messages.add(visible_key)
+            result.append(dto)
         return result

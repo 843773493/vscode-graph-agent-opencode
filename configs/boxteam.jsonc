@@ -73,7 +73,13 @@
       "tools": {
         "denylist": [
         ],
-        "confirmation_required": [] //TODO
+        "confirmation_required": [], //TODO
+        "custom": [
+          {
+            "name": "test_tool_2",
+            "factory": "app.agents.tools.testing:create_test_tool_2"
+          }
+        ]
       },
       "knowledge": { //TODO
         "enabled": true,

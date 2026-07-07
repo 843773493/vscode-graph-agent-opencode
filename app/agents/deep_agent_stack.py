@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 from deepagents.backends import LocalShellBackend
@@ -21,7 +22,10 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from app.agents.skill_runtime import append_skill_middlewares
+from app.agents.skill_runtime import (
+    append_skill_middlewares,
+    append_workspace_agents_middleware,
+)
 from app.agents.summarization_paths import apply_boxteam_summarization_paths
 from app.agents.tool_identity import tool_definition_name
 
@@ -112,9 +116,9 @@ def _base_subagent_middleware(
     *,
     model: BaseChatModel,
     backend: LocalShellBackend,
+    workspace_root: Path,
     permissions: list[FilesystemPermission] | None,
     skills: list[Any] | None,
-    hidden_tool_names: set[str],
 ) -> list[AgentMiddleware]:
     middleware = [
         TodoListMiddleware(),
@@ -122,11 +126,14 @@ def _base_subagent_middleware(
         *_build_summarization_middleware(model, backend),
         PatchToolCallsMiddleware(),
     ]
+    append_workspace_agents_middleware(
+        middleware,
+        workspace_root=workspace_root,
+    )
     append_skill_middlewares(
         middleware,
         backend=backend,
         skills=skills,
-        hidden_tool_names=hidden_tool_names,
     )
     return middleware
 
@@ -135,9 +142,9 @@ def build_deep_agent_middleware(
     *,
     model: BaseChatModel,
     backend: LocalShellBackend,
+    workspace_root: Path,
     permissions: list[FilesystemPermission] | None,
     resolved_skills: list[Any] | None,
-    hidden_tool_names: set[str],
     resolved_tools: list[ToolDefinition],
     subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None,
     resolved_tool_denylist: set[str],
@@ -148,9 +155,9 @@ def build_deep_agent_middleware(
     gp_middleware = _base_subagent_middleware(
         model=model,
         backend=backend,
+        workspace_root=workspace_root,
         permissions=permissions,
         skills=resolved_skills,
-        hidden_tool_names=hidden_tool_names,
     )
     general_purpose_spec = {
         **GENERAL_PURPOSE_SUBAGENT,
@@ -168,9 +175,9 @@ def build_deep_agent_middleware(
             subagent_middleware = _base_subagent_middleware(
                 model=model,
                 backend=backend,
+                workspace_root=workspace_root,
                 permissions=spec.get("permissions"),
                 skills=spec.get("skills"),
-                hidden_tool_names=hidden_tool_names,
             )
             subagent_middleware.extend(spec.get("middleware", []))
 
@@ -193,11 +200,14 @@ def build_deep_agent_middleware(
     deepagent_middleware = [
         TodoListMiddleware(),
     ]
+    append_workspace_agents_middleware(
+        deepagent_middleware,
+        workspace_root=workspace_root,
+    )
     append_skill_middlewares(
         deepagent_middleware,
         backend=backend,
         skills=resolved_skills,
-        hidden_tool_names=set(),
     )
     deepagent_middleware.extend(
         [

@@ -8,11 +8,20 @@ import {
   recordReadSkill,
   skillKeyFlowSnapshot,
 } from "./skillKeyFlow";
+import {
+  CUSTOM_TOOL_INVOKER_NAME,
+  INVALID_CUSTOM_TOOL_CALL_NAME,
+  UNKNOWN_CUSTOM_TOOL_NAME,
+  customToolCallArgs,
+  customToolCallId,
+  customToolCallName,
+  customToolTargetNameFromCall,
+} from "./customTools/protocol";
 
 export interface AgentStateSummary {
   skills: string[];
-  hiddenTools: string[];
-  hiddenToolResults: Array<{ toolName: string; resultText: string }>;
+  customTools: string[];
+  customToolResults: Array<{ toolName: string; invocationToolName: string; resultText: string }>;
   finalText: string;
 }
 
@@ -69,42 +78,73 @@ function toolCalls(record: Record<string, unknown>): Record<string, unknown>[] {
   return calls.filter(isRecord);
 }
 
+function isCustomInvokerValidationError(resultText: string): boolean {
+  return (
+    resultText.includes("Error invoking tool 'invoke_custom_tool'") &&
+    resultText.includes("tool_name: Field required")
+  );
+}
+
 export function buildAgentStateSummary(
   records: Record<string, unknown>[],
 ): AgentStateSummary {
   const state = createSkillKeyFlowState();
-  const hiddenTools = new Set<string>();
-  const hiddenToolResults = new Map<string, { toolName: string; resultText: string }>();
+  const customTools = new Set<string>();
+  const customToolResults: Array<{
+    toolName: string;
+    invocationToolName: string;
+    resultText: string;
+  }> = [];
+  const customToolTargetsByCallId = new Map<string, string>();
+  const seenCustomToolResults = new Set<string>();
 
   for (const record of records) {
     for (const call of toolCalls(record)) {
-      const name = typeof call.name === "string" ? call.name : "";
-      if (name === "read_file" && isRecord(call.args)) {
-        recordReadSkill(state, { toolName: name, args: call.args });
+      const name = customToolCallName(call);
+      if (name === "read_file") {
+        recordReadSkill(state, { toolName: name, args: customToolCallArgs(call) });
+      }
+      const customToolName = customToolTargetNameFromCall(call);
+      if (customToolName) {
+        customTools.add(customToolName);
+        const callId = customToolCallId(call);
+        if (callId) {
+          customToolTargetsByCallId.set(callId, customToolName);
+        }
       }
     }
 
     if (record.role === "tool" && record.name === "read_file") {
       for (const toolName of allowedToolsFromSkillMarkdownText(textContent(record.content))) {
-        hiddenTools.add(toolName);
+        customTools.add(toolName);
       }
     }
   }
 
   for (const record of records) {
-    for (const call of toolCalls(record)) {
-      const name = typeof call.name === "string" ? call.name : "";
-      if (name && hiddenTools.has(name)) {
-        hiddenTools.add(name);
-      }
-    }
-
     if (record.role === "tool") {
       const toolName = typeof record.name === "string" ? record.name : "";
-      if (toolName && hiddenTools.has(toolName)) {
+      if (toolName === CUSTOM_TOOL_INVOKER_NAME) {
+        const callId = customToolCallId(record);
+        const customToolName = callId
+          ? customToolTargetsByCallId.get(callId)
+          : "";
         const resultText = compactKeyFlowText(textContent(record.content));
+        const displayToolName = customToolName ||
+          (isCustomInvokerValidationError(resultText)
+            ? INVALID_CUSTOM_TOOL_CALL_NAME
+            : UNKNOWN_CUSTOM_TOOL_NAME);
         if (resultText) {
-          hiddenToolResults.set(toolName, { toolName, resultText });
+          const resultKey = `${callId || "missing-id"}\u0000${displayToolName}\u0000${resultText}`;
+          if (seenCustomToolResults.has(resultKey)) {
+            continue;
+          }
+          seenCustomToolResults.add(resultKey);
+          customToolResults.push({
+            toolName: displayToolName,
+            invocationToolName: CUSTOM_TOOL_INVOKER_NAME,
+            resultText,
+          });
         }
       }
     }
@@ -125,8 +165,8 @@ export function buildAgentStateSummary(
 
   return {
     skills: snapshot.readSkills,
-    hiddenTools: Array.from(hiddenTools),
-    hiddenToolResults: Array.from(hiddenToolResults.values()),
+    customTools: Array.from(customTools),
+    customToolResults,
     finalText: snapshot.finalText,
   };
 }

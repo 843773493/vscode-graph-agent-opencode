@@ -31,7 +31,8 @@ from app.runtime.agent_runtime import (
     build_agent_tool_definitions,
     build_candidate_models_for_session_request,
     build_session_agent_runtime,
-    get_workspace_skill_tool_sources,
+    get_configured_custom_tool_names,
+    get_workspace_custom_tool_skill_sources,
 )
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
@@ -50,6 +51,53 @@ from app.services.orchestration.agent_stream_helpers import (
     build_human_response_metadata,
     unwrap_json_string_tool_result,
 )
+
+
+EMPTY_RESPONSE_RETRY_LIMIT = 2
+CUSTOM_TOOL_RESPONSE_RETRY_LIMIT = 2
+
+
+def _build_empty_response_retry_reminder(attempt: int) -> str:
+    return (
+        "上一轮模型响应没有产生任何用户可见的最终回复，也没有完成可继续展示的结果。"
+        "这通常表示你只输出了内部推理。"
+        f"请继续处理当前用户请求，这是第 {attempt} 次空响应恢复。"
+        "如果需要调用工具，必须通过工具调用通道真实调用工具；"
+        "如果已经有足够信息，请输出用户可见的最终回复。"
+        "不要只复述计划、步骤或内部思考。"
+    )
+
+
+def _custom_tools_requested_by_message(
+    message: str,
+    configured_custom_tool_names: set[str],
+) -> set[str]:
+    return {
+        tool_name
+        for tool_name in configured_custom_tool_names
+        if tool_name and tool_name in message
+    }
+
+
+def _build_missing_custom_tool_retry_reminder(
+    *,
+    missing_tool_names: set[str],
+    attempt: int,
+) -> str:
+    tools_text = "、".join(sorted(missing_tool_names))
+    return (
+        "上一轮模型输出了最终正文，但本轮用户请求明确要求执行以下工作区扩展工具，"
+        f"而这些工具还没有完成真实工具调用：{tools_text}。"
+        f"这是第 {attempt} 次扩展工具调用恢复。"
+        "必须通过工具调用通道调用 invoke_custom_tool，"
+        '参数格式为 {"tool_name": "<目标扩展工具名>", "arguments": {}}。'
+        "不要只描述调用计划，不要把工具名称或 JSON 参数写成普通正文。"
+        "工具返回后，最终回复只能包含用户需要看到的结果。"
+    )
+
+
+def _message_identity(*, fallback_prefix: str, message_id: str | None) -> str:
+    return message_id or fallback_prefix
 
 
 class AgentExecutionService(JobStepExecutor):
@@ -162,7 +210,15 @@ class AgentExecutionService(JobStepExecutor):
 
         final_text = ""
         latest_model_reasoning_text = ""
-        skill_tool_sources = get_workspace_skill_tool_sources(
+        configured_custom_tool_names = get_configured_custom_tool_names(
+            agent_id=resolved_agent_id,
+            config_service=self._config_service,
+        )
+        requested_custom_tool_names = _custom_tools_requested_by_message(
+            message,
+            configured_custom_tool_names,
+        )
+        custom_tool_skill_sources = get_workspace_custom_tool_skill_sources(
             agent_id=resolved_agent_id,
             config_service=self._config_service,
         )
@@ -216,37 +272,127 @@ class AgentExecutionService(JobStepExecutor):
                         fallback_middleware_enabled=False,
                     )
 
-                    stream_result = await process_agent_event_stream(
-                        agent=agent,
-                        input_payload={
-                            "messages": [
+                    next_input_messages = [
+                        HumanMessage(
+                            id=_message_identity(
+                                fallback_prefix=f"{effective_job_id}:user_input",
+                                message_id=message_id,
+                            ),
+                            content=human_content,
+                            response_metadata=human_response_metadata,
+                        )
+                    ]
+                    empty_response_retries = 0
+                    custom_tool_response_retries = 0
+                    completed_custom_tool_names: set[str] = set()
+                    while True:
+                        stream_result = await process_agent_event_stream(
+                            agent=agent,
+                            input_payload={"messages": next_input_messages},
+                            config=config,
+                            session_id=session_id,
+                            agent_id=resolved_agent_id,
+                            custom_tool_skill_sources=custom_tool_skill_sources,
+                            publish=_publish,
+                        )
+                        final_text = stream_result.final_text
+                        completed_custom_tool_names.update(
+                            stream_result.completed_custom_tool_names
+                        )
+                        final_text = unwrap_json_string_tool_result(
+                            final_text,
+                            stream_result.last_tool_result_text,
+                        )
+                        final_text = await recover_or_sanitize_final_text(
+                            agent=agent,
+                            final_text=final_text,
+                            session_id=session_id,
+                            agent_id=resolved_agent_id,
+                            job_id=effective_job_id,
+                            publish=_publish,
+                            logger=logger,
+                        )
+                        latest_model_reasoning_text = stream_result.latest_model_reasoning_text
+                        missing_custom_tool_names = (
+                            requested_custom_tool_names - completed_custom_tool_names
+                        )
+                        if final_text and not missing_custom_tool_names:
+                            break
+                        if final_text and missing_custom_tool_names:
+                            custom_tool_response_retries += 1
+                            if custom_tool_response_retries > CUSTOM_TOOL_RESPONSE_RETRY_LIMIT:
+                                raise RuntimeError(
+                                    "Agent 返回了最终文本，但没有执行用户请求中的自定义扩展工具。"
+                                    f" session_id={session_id} job_id={effective_job_id} "
+                                    f"missing_tools={sorted(missing_custom_tool_names)} "
+                                    f"retry_limit={CUSTOM_TOOL_RESPONSE_RETRY_LIMIT}"
+                                )
+
+                            reminder = _build_missing_custom_tool_retry_reminder(
+                                missing_tool_names=missing_custom_tool_names,
+                                attempt=custom_tool_response_retries,
+                            )
+                            logger.warning(
+                                "[agent_execution_service] custom tool requested but not executed, retrying: "
+                                "job_id=%s missing_tools=%s attempt=%s",
+                                effective_job_id,
+                                sorted(missing_custom_tool_names),
+                                custom_tool_response_retries,
+                            )
+                            await _publish(
+                                EventType.AGENT_START,
+                                {
+                                    "message": "模型没有执行用户请求中的扩展工具，继续请求真实工具调用",
+                                    "agent_id": resolved_agent_id,
+                                },
+                            )
+                            next_input_messages = [
                                 HumanMessage(
-                                    content=human_content,
-                                    response_metadata=human_response_metadata,
+                                    id=f"{effective_job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
+                                    content=f"<system_reminder>\n{reminder}\n</system_reminder>",
+                                    response_metadata={
+                                        "source": "missing_custom_tool_retry",
+                                        "attempt": custom_tool_response_retries,
+                                        "missing_tools": sorted(missing_custom_tool_names),
+                                    },
                                 )
                             ]
-                        },
-                        config=config,
-                        session_id=session_id,
-                        agent_id=resolved_agent_id,
-                        skill_tool_sources=skill_tool_sources,
-                        publish=_publish,
-                    )
-                    final_text = stream_result.final_text
-                    final_text = unwrap_json_string_tool_result(
-                        final_text,
-                        stream_result.last_tool_result_text,
-                    )
-                    final_text = await recover_or_sanitize_final_text(
-                        agent=agent,
-                        final_text=final_text,
-                        session_id=session_id,
-                        agent_id=resolved_agent_id,
-                        job_id=effective_job_id,
-                        publish=_publish,
-                        logger=logger,
-                    )
-                    latest_model_reasoning_text = stream_result.latest_model_reasoning_text
+                            continue
+
+                        empty_response_retries += 1
+                        if empty_response_retries > EMPTY_RESPONSE_RETRY_LIMIT:
+                            raise RuntimeError(
+                                "Agent 连续返回空的用户可见回复。"
+                                f" session_id={session_id} job_id={effective_job_id} "
+                                f"retry_limit={EMPTY_RESPONSE_RETRY_LIMIT}"
+                            )
+
+                        reminder = _build_empty_response_retry_reminder(
+                            empty_response_retries
+                        )
+                        logger.warning(
+                            "[agent_execution_service] empty visible response, retrying: "
+                            "job_id=%s attempt=%s",
+                            effective_job_id,
+                            empty_response_retries,
+                        )
+                        await _publish(
+                            EventType.AGENT_START,
+                            {
+                                "message": "模型只返回了内部推理，继续请求工具调用或最终回复",
+                                "agent_id": resolved_agent_id,
+                            },
+                        )
+                        next_input_messages = [
+                            HumanMessage(
+                                id=f"{effective_job_id}:empty_response_retry:{empty_response_retries}",
+                                content=f"<system_reminder>\n{reminder}\n</system_reminder>",
+                                response_metadata={
+                                    "source": "empty_response_retry",
+                                    "attempt": empty_response_retries,
+                                },
+                            )
+                        ]
                     break
 
                 except Exception as e:

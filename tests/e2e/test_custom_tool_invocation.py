@@ -7,13 +7,14 @@ from typing import Any
 import httpx
 import pytest
 
+from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
 from tests.e2e.utils import (
     get_trace_payload,
     last_assistant_message,
     wait_for_job_done,
 )
 
-SKILL_WORKSPACE_TEMPLATE_ITEMS = (
+CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
     "AGENTS.md",
     ".boxteam/boxteam.json",
     ".boxteam/skills",
@@ -27,7 +28,7 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest, e2e_session_marker: 
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
     workspace_root = project_root / "out" / "tests" / "e2e" / relative_test_path
-    template_root = project_root / "asset" / "skill_test_workspace"
+    template_root = project_root / "asset" / "custom_tool_test_workspace"
     lock_file = workspace_root / ".e2e_session_lock"
 
     same_session = lock_file.exists() and lock_file.read_text(encoding="utf-8").strip() == e2e_session_marker
@@ -43,10 +44,10 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest, e2e_session_marker: 
         else:
             item.unlink()
 
-    for relative_item in SKILL_WORKSPACE_TEMPLATE_ITEMS:
+    for relative_item in CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS:
         item = template_root / relative_item
         if not item.exists():
-            raise FileNotFoundError(f"skill e2e 模板缺少必要文件: {item}")
+            raise FileNotFoundError(f"custom tool e2e 模板缺少必要文件: {item}")
         target = workspace_root / item.name
         if relative_item.startswith(".boxteam/"):
             target = workspace_root / relative_item
@@ -73,30 +74,74 @@ def _tool_names_from_llm_log(log_record: dict[str, Any]) -> set[str]:
             function_def = tool_def.get("function")
             if isinstance(function_def, dict) and isinstance(function_def.get("name"), str):
                 names.add(str(function_def["name"]))
-        elif isinstance(tool_def, str) and "test_tool_2" in tool_def:
-            names.add("test_tool_2")
+        elif isinstance(tool_def, str) and CUSTOM_TOOL_INVOKER_NAME in tool_def:
+            names.add(CUSTOM_TOOL_INVOKER_NAME)
     return names
 
 
-def _request_json_text(log_record: dict[str, Any]) -> str:
-    return str(log_record.get("request", {}))
+def _custom_tool_targets_from_llm_log(log_record: dict[str, Any]) -> set[str]:
+    response_items = log_record.get("response", {}).get("result") or []
+    targets: set[str] = set()
+    if not isinstance(response_items, list):
+        return targets
+    for item in response_items:
+        if not isinstance(item, dict):
+            continue
+        for tool_call in item.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            if tool_call.get("name") != CUSTOM_TOOL_INVOKER_NAME:
+                continue
+            args = tool_call.get("args")
+            if isinstance(args, dict) and isinstance(args.get("tool_name"), str):
+                targets.add(args["tool_name"])
+    return targets
+
+
+def _system_message_text_from_llm_log(log_record: dict[str, Any]) -> str:
+    system_message = log_record.get("request", {}).get("system_message")
+    if isinstance(system_message, str):
+        return system_message
+    if not isinstance(system_message, dict):
+        return ""
+    content = system_message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return ""
+
+
+def _read_file_path_from_trace(trace: dict[str, Any]) -> str:
+    args = get_trace_payload(trace).get("args", {})
+    if not isinstance(args, dict):
+        return ""
+    value = args.get("file_path") or args.get("path")
+    return str(value or "")
 
 
 @pytest.mark.asyncio
-async def test_workspace_skill_loads_hidden_tool_and_frontend_consumed_views(
+async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend_views(
     client: httpx.AsyncClient,
 ):
     create_session_response = await client.post(
         "/api/v1/sessions",
-        json={"title": "Skill Hidden Tool E2E"},
+        json={"title": "Skill Custom Tool E2E"},
     )
     assert create_session_response.status_code == 200
     session_id = create_session_response.json()["data"]["session_id"]
 
     prompt = (
-        "请使用 test_tool_skill 技能完成任务。"
-        "先按技能系统要求读取对应 SKILL.md，再严格按技能说明执行。"
-        "最终回复只能是技能验证工具返回文本本身。"
+        "请先读取当前工作区 AGENTS.md 里的扩展工具说明。"
+        "当你看到用户要求执行 test_tool_2 时，必须根据 AGENTS.md 找到并读取正确的 skill。"
+        "然后必须按该 skill 发起真实工具调用来执行 test_tool_2，不要只描述调用计划。"
+        "最终回复只能是该扩展工具返回文本本身。"
     )
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
@@ -114,7 +159,11 @@ async def test_workspace_skill_loads_hidden_tool_and_frontend_consumed_views(
     messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")
     assert messages_response.status_code == 200
     messages = messages_response.json()["data"]["items"]
-    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[0]["role"] == "user"
+    assert messages[-1]["role"] == "assistant"
+    for message in messages[1:-1]:
+        if message["role"] == "user":
+            assert "<system_reminder>" in message["content"]
     assert last_assistant_message(messages).strip() == "4568"
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
@@ -127,30 +176,50 @@ async def test_workspace_skill_loads_hidden_tool_and_frontend_consumed_views(
     ]
     assert "read_file" in tool_starts
     assert "test_tool_2" in tool_starts
-    skill_tool_start_payloads = [
+    read_file_paths = [
+        _read_file_path_from_trace(trace)
+        for trace in traces
+        if trace.get("type") == "tool_call_start"
+        and get_trace_payload(trace).get("tool_name") == "read_file"
+    ]
+    assert any(path.endswith("/.boxteam/skills/test-tool-2/SKILL.md") for path in read_file_paths)
+    custom_tool_start_payloads = [
         get_trace_payload(trace)
         for trace in traces
         if trace.get("type") == "tool_call_start"
         and get_trace_payload(trace).get("tool_name") == "test_tool_2"
     ]
-    assert skill_tool_start_payloads
-    assert "test-tool-skill" in skill_tool_start_payloads[-1].get("skill_names", [])
-    skill_tool_start_dtos = [
+    assert custom_tool_start_payloads
+    assert custom_tool_start_payloads[-1].get("invocation_tool_name") == CUSTOM_TOOL_INVOKER_NAME
+    custom_tool_start_dtos = [
         trace
         for trace in traces
         if trace.get("type") == "tool_call_start"
         and get_trace_payload(trace).get("tool_name") == "test_tool_2"
     ]
-    assert "test-tool-skill" in skill_tool_start_dtos[-1].get("skill_names", [])
+    assert custom_tool_start_dtos[-1].get("skill_names", []) == ["test-tool-2"]
 
     logs_response = await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
     assert logs_response.status_code == 200
     logs = logs_response.json()["data"]
     assert len(logs) >= 2
-    assert "test_tool_2" not in _request_json_text(logs[0])
-    assert "test_tool_2" not in _tool_names_from_llm_log(logs[0])
-    assert any("test_tool_2" in _request_json_text(log) for log in logs[1:])
-    assert any("test_tool_2" in _tool_names_from_llm_log(log) for log in logs[1:])
+    assert any(
+        "asset/custom_tool_test_workspace/` 是扩展工具 e2e 测试使用的工作区模板"
+        in _system_message_text_from_llm_log(log)
+        for log in logs
+    )
+    assert any(
+        "<workspace_agents_md path=\"/AGENTS.md\">" in _system_message_text_from_llm_log(log)
+        for log in logs
+    )
+    for log in logs:
+        tool_names = _tool_names_from_llm_log(log)
+        assert CUSTOM_TOOL_INVOKER_NAME in tool_names
+        assert "test_tool_2" not in tool_names
+    assert any(
+        "test_tool_2" in _custom_tool_targets_from_llm_log(log)
+        for log in logs
+    )
 
     agent_state_response = await client.get(f"/api/v1/sessions/{session_id}/agent-state/messages")
     assert agent_state_response.status_code == 200

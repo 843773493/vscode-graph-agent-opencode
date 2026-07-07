@@ -40,6 +40,9 @@ export function useSessionLifecycleActions({
 }) {
   const selectSession = useCallback(
     (sessionId: string) => {
+      if (currentSession?.session_id === sessionId) {
+        return;
+      }
       abortCurrentStream();
       invalidateAgentState();
       setState((prev) => {
@@ -77,7 +80,7 @@ export function useSessionLifecycleActions({
         return next;
       });
     },
-    [abortCurrentStream, invalidateAgentState, setState],
+    [abortCurrentStream, currentSession?.session_id, invalidateAgentState, setState],
   );
 
   const createSession = useCallback(

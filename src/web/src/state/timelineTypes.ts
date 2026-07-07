@@ -43,6 +43,7 @@ export type TimelineItem =
       timestamp: string | null;
       rawStart: Record<string, unknown>;
       rawEnd: Record<string, unknown>;
+      failed?: boolean;
     }
   | {
       kind: "skill_summary";
@@ -51,6 +52,7 @@ export type TimelineItem =
       toolResults: Array<{
         toolName: string;
         skillNames: string[];
+        invocationToolName?: string;
         resultText: string;
       }>;
       finalText: string;

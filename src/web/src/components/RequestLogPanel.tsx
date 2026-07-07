@@ -9,16 +9,16 @@ import type { LLMRequestLogRecord } from "../types/backend";
 
 function RequestLogKeyFlowSummary({
   readSkills,
-  hiddenToolNames,
-  hiddenToolResults,
+  customInvokerNames,
+  customToolNames,
+  customToolResults,
   finalText,
-  laterAddedToolNames,
 }: RequestLogKeyFlow) {
   if (
     readSkills.length === 0 &&
-    hiddenToolNames.length === 0 &&
-    hiddenToolResults.length === 0 &&
-    laterAddedToolNames.length === 0 &&
+    customInvokerNames.length === 0 &&
+    customToolNames.length === 0 &&
+    customToolResults.length === 0 &&
     !finalText
   ) {
     return null;
@@ -33,25 +33,24 @@ function RequestLogKeyFlowSummary({
           <strong>{readSkills.join("、") || "未检测到"}</strong>
         </div>
         <div>
-          <span>调用隐藏工具</span>
-          <strong>{hiddenToolNames.join("、") || "未检测到"}</strong>
+          <span>固定扩展入口</span>
+          <strong>{customInvokerNames.join("、") || "未检测到"}</strong>
         </div>
         <div>
-          <span>隐藏工具结果</span>
+          <span>目标扩展工具</span>
+          <strong>{customToolNames.join("、") || "未检测到"}</strong>
+        </div>
+        <div>
+          <span>扩展工具结果</span>
           <strong>
-            {hiddenToolResults.length > 0
-              ? hiddenToolResults
-                  .map((result) => `${result.toolName} -> ${result.resultText}`)
+            {customToolResults.length > 0
+              ? customToolResults
+                  .map(
+                    (result) =>
+                      `${result.invocationToolName} -> ${result.toolName} -> ${result.resultText}`,
+                  )
                   .join("；")
               : "未检测到"}
-          </strong>
-        </div>
-        <div>
-          <span>首轮工具状态</span>
-          <strong>
-            {laterAddedToolNames.length > 0
-              ? `首轮未暴露：${laterAddedToolNames.join("、")}`
-              : "无后续新增工具"}
           </strong>
         </div>
         <div>

@@ -12,10 +12,10 @@ from app.abstractions.session_resources import (
     TerminalManagerClientProtocol,
 )
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.abstractions.skill_tool_context import (
-    SkillToolConfigProtocol,
-    SkillToolMessageProtocol,
-    SkillToolSessionProtocol,
+from app.abstractions.custom_tool_context import (
+    CustomToolConfigProtocol,
+    CustomToolMessageProtocol,
+    CustomToolSessionProtocol,
 )
 
 __all__ = [
@@ -29,8 +29,8 @@ __all__ = [
     "JobStepExecutor",
     "SessionOrchestratorProtocol",
     "SessionResourceMessageProtocol",
-    "SkillToolConfigProtocol",
-    "SkillToolMessageProtocol",
-    "SkillToolSessionProtocol",
+    "CustomToolConfigProtocol",
+    "CustomToolMessageProtocol",
+    "CustomToolSessionProtocol",
     "TerminalManagerClientProtocol",
 ]

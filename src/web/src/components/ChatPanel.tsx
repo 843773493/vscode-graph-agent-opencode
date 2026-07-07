@@ -9,7 +9,6 @@ import { escapeHtml, formatDateTime } from "../utils/format";
 import { normalizeDisplayText } from "../utils/displayText";
 import {
   formatToolCardContent,
-  isSkillInternalToolItem,
   toolCollapsedText,
 } from "../state/toolDisplay";
 import EventCard from "./EventCard";
@@ -109,7 +108,7 @@ function AggregatedToolCard({
     <EventCard
       title={`🔧 ${toolName}`}
       kind="tool_call"
-      tone="done"
+      tone={item.failed ? "danger" : "done"}
       time={displayTime(timestamp)}
       summary={toolName}
       content={content}
@@ -120,6 +119,7 @@ function AggregatedToolCard({
         resultText,
         rawStart: item.rawStart,
         rawEnd: item.rawEnd,
+        failed: item.failed,
       }}
       index={index}
     />
@@ -167,9 +167,6 @@ function TimelineCard({
   }
 
   if (item.kind === "aggregated_tool") {
-    if (isSkillInternalToolItem(item)) {
-      return null;
-    }
     return <AggregatedToolCard item={item} index={index} />;
   }
 

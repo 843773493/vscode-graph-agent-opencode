@@ -2,10 +2,10 @@
   "agents": {
     "default": {
       "tools": {
-        "skill_only": [
+        "custom": [
           {
             "name": "test_tool_2",
-            "factory": "app.agents.agent_tools:create_test_tool_2"
+            "factory": "app.agents.tools.testing:create_test_tool_2"
           }
         ]
       }

@@ -93,7 +93,9 @@ class ToolCallStartPayload(BaseModel):
     tool_name: str
     args: dict[str, Any] = Field(default_factory=dict)
     agent_id: str | None = None
+    tool_call_run_id: str | None = None
     skill_names: list[str] = Field(default_factory=list)
+    invocation_tool_name: str | None = None
 
 
 class ToolCallEndPayload(BaseModel):
@@ -101,6 +103,9 @@ class ToolCallEndPayload(BaseModel):
     tool_name: str
     result: str = ""
     agent_id: str | None = None
+    tool_call_run_id: str | None = None
+    invocation_tool_name: str | None = None
+    skill_names: list[str] = Field(default_factory=list)
 
 
 class ErrorPayload(BaseModel):

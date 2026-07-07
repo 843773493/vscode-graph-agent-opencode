@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.agents.skill_tools import SkillToolFactoryContext
 from app.agents.tools.background import (
     create_background_message_collection_tool,
     create_monitor_session_agent_end_tool,
@@ -23,18 +22,6 @@ from app.agents.tools.terminal import create_persistent_terminal_tool
 from app.agents.tools.testing import create_test_tool
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
-
-
-def create_test_tool_2(context: SkillToolFactoryContext) -> BaseTool:
-    """创建一个只能由 skill 激活后暴露的测试工具。"""
-    del context
-
-    @tool("test_tool_2")
-    def test_tool_2() -> str:
-        """用于验证 skill 激活后的隐藏工具调用流程是否正确。"""
-        return "4568"
-
-    return test_tool_2
 
 
 def build_default_tools(
@@ -105,6 +92,5 @@ __all__ = [
     "create_send_message_to_session_tool",
     "create_system_time_emitter_tool",
     "create_test_tool",
-    "create_test_tool_2",
     "get_python_executable",
 ]

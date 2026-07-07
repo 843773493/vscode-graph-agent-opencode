@@ -121,7 +121,7 @@
 }
 
 .agent-state-raw {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
   margin: 0 12px 12px;
   border: var(--surface-border);
@@ -139,8 +139,8 @@
 }
 
 .agent-state-jsonl {
-  flex: 1 1 auto;
-  min-height: 0;
+  max-height: min(42vh, 520px);
+  box-sizing: border-box;
   margin: 0;
   padding: 12px;
   overflow: auto;

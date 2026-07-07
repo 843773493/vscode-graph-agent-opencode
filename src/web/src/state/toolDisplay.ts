@@ -16,7 +16,12 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
   if (!trimmed.startsWith("{")) {
     return null;
   }
-  const parsed: unknown = JSON.parse(trimmed);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
   return isRecord(parsed) ? parsed : null;
 }
 
@@ -151,6 +156,16 @@ function skillNames(item: AggregatedToolItem): string[] {
   return fieldTextList(item.rawStart, "skill_names");
 }
 
+function invocationToolName(item: AggregatedToolItem): string {
+  return fieldText(item.rawStart, "invocation_tool_name") ||
+    fieldText(item.rawEnd, "invocation_tool_name");
+}
+
+function invocationLabel(item: AggregatedToolItem): string {
+  const invocation = invocationToolName(item);
+  return invocation ? `${invocation} -> ${item.toolName}` : item.toolName;
+}
+
 export function isSkillInternalToolItem(item: AggregatedToolItem): boolean {
   if (skillNames(item).length > 0) {
     return true;
@@ -166,22 +181,42 @@ export function isSkillInternalToolItem(item: AggregatedToolItem): boolean {
   );
 }
 
-function formatSkillToolContent(item: AggregatedToolItem): string | null {
+function formatCustomToolSkillContent(item: AggregatedToolItem): string | null {
   const names = skillNames(item);
   if (names.length === 0) {
     return null;
   }
   const result = item.resultText.trim();
   const input = item.inputText.trim();
+  const invocation = invocationToolName(item);
   return [
-    `**Skill**\n由 ${names.map(markdownCode).join("、")} 暴露，当前会话已加载或复用该 skill。`,
+    `**Skill**\n由 ${names.map(markdownCode).join("、")} 记录的扩展工具调用。`,
+    invocation
+      ? `**调用入口**\n${markdownCode(invocation)} -> ${markdownCode(item.toolName)}`
+      : "",
+    input ? `**输入参数**\n\`\`\`\n${input}\n\`\`\`` : "",
+    result ? `**执行结果**\n\`\`\`\n${result}\n\`\`\`` : "",
+  ].filter((part) => part.trim().length > 0).join("\n\n");
+}
+
+function formatCustomInvocationToolContent(item: AggregatedToolItem): string | null {
+  const invocation = invocationToolName(item);
+  if (!invocation) {
+    return null;
+  }
+  const result = item.resultText.trim();
+  const input = item.inputText.trim();
+  return [
+    `**调用入口**\n${markdownCode(invocation)} -> ${markdownCode(item.toolName)}`,
     input ? `**输入参数**\n\`\`\`\n${input}\n\`\`\`` : "",
     result ? `**执行结果**\n\`\`\`\n${result}\n\`\`\`` : "",
   ].filter((part) => part.trim().length > 0).join("\n\n");
 }
 
 export function formatToolCardContent(item: AggregatedToolItem): string | null {
-  return formatPersistentTerminalToolContent(item) ?? formatSkillToolContent(item);
+  return formatPersistentTerminalToolContent(item) ??
+    formatCustomToolSkillContent(item) ??
+    formatCustomInvocationToolContent(item);
 }
 
 export function toolCollapsedText(item: AggregatedToolItem): string {
@@ -200,8 +235,8 @@ export function toolCollapsedText(item: AggregatedToolItem): string {
 
   const names = skillNames(item);
   const prefix = names.length > 0
-    ? `由 ${names.join("、")} 暴露的 ${item.toolName}`
-    : item.toolName;
+    ? `${names.join("、")} 记录的 ${invocationLabel(item)}`
+    : invocationLabel(item);
   const result =
     fieldText(resultRecord ?? {}, "stdout") ||
     fieldText(resultRecord ?? {}, "result") ||

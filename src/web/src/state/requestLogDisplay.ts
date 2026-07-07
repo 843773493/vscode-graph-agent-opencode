@@ -3,11 +3,20 @@ import { isRecord } from "../utils/jsonDisplay";
 import {
   compactKeyFlowText,
   createSkillKeyFlowState,
-  hiddenToolNameFromInitialTools,
   recordFinalText,
   recordReadSkill,
   skillKeyFlowSnapshot,
 } from "./skillKeyFlow";
+import {
+  CUSTOM_TOOL_INVOKER_NAME,
+  INVALID_CUSTOM_TOOL_CALL_NAME,
+  UNKNOWN_CUSTOM_TOOL_NAME,
+  customToolCallArgs,
+  customToolCallId,
+  customToolCallName,
+  customToolDisplayCallName,
+  customToolTargetNameFromArgs,
+} from "./customTools/protocol";
 
 export interface RequestLogDisplayModel {
   model: string;
@@ -20,10 +29,10 @@ export interface RequestLogDisplayModel {
 
 export interface RequestLogKeyFlow {
   readSkills: string[];
-  hiddenToolNames: string[];
-  hiddenToolResults: Array<{ toolName: string; resultText: string }>;
+  customInvokerNames: string[];
+  customToolNames: string[];
+  customToolResults: Array<{ toolName: string; invocationToolName: string; resultText: string }>;
   finalText: string;
-  laterAddedToolNames: string[];
 }
 
 function recordString(value: unknown, key: string): string {
@@ -93,6 +102,13 @@ function messagePreview(messages: unknown, options: { includeReasoning: boolean 
       if (!isRecord(message)) {
         return "";
       }
+      const content = stringifyContent(message.content, options).trim();
+      if (
+        content.startsWith("<system_reminder>") &&
+        content.endsWith("</system_reminder>")
+      ) {
+        return "";
+      }
       return stringifyContent(message.content, options);
     })
     .filter(Boolean)
@@ -147,53 +163,6 @@ function requestToolNames(log: LLMRequestLogRecord): string[] {
   return names;
 }
 
-function toolCallName(value: unknown): string {
-  if (!isRecord(value)) {
-    return "";
-  }
-  if (typeof value.name === "string") {
-    return value.name;
-  }
-  if (isRecord(value.function) && typeof value.function.name === "string") {
-    return value.function.name;
-  }
-  return "";
-}
-
-function parseJsonRecord(value: string): Record<string, unknown> | null {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{")) {
-    return null;
-  }
-  const parsed: unknown = JSON.parse(trimmed);
-  return isRecord(parsed) ? parsed : null;
-}
-
-function toolCallArgs(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  if (isRecord(value.args)) {
-    return value.args;
-  }
-  if (isRecord(value.arguments)) {
-    return value.arguments;
-  }
-  if (typeof value.arguments === "string") {
-    return parseJsonRecord(value.arguments) ?? {};
-  }
-  if (isRecord(value.function)) {
-    const functionDef = value.function;
-    if (isRecord(functionDef.arguments)) {
-      return functionDef.arguments;
-    }
-    if (typeof functionDef.arguments === "string") {
-      return parseJsonRecord(functionDef.arguments) ?? {};
-    }
-  }
-  return {};
-}
-
 function toolCallsFromMessageLike(value: unknown): Record<string, unknown>[] {
   if (!isRecord(value)) {
     return [];
@@ -228,7 +197,7 @@ function responseCalledToolNames(log: LLMRequestLogRecord): string[] {
         : [];
 
     for (const call of [...directToolCalls, ...additionalToolCalls]) {
-      const name = toolCallName(call);
+      const name = customToolDisplayCallName(call);
       if (!name || seen.has(name)) {
         continue;
       }
@@ -252,9 +221,11 @@ function uniquePush(items: string[], seen: Set<string>, value: string): void {
   items.push(value);
 }
 
-function collectToolResultMessages(log: LLMRequestLogRecord): Array<{ toolName: string; resultText: string }> {
+function collectToolResultMessages(
+  log: LLMRequestLogRecord,
+): Array<{ toolName: string; toolCallId: string; resultText: string }> {
   const messages = Array.isArray(log.request.messages) ? log.request.messages : [];
-  const results: Array<{ toolName: string; resultText: string }> = [];
+  const results: Array<{ toolName: string; toolCallId: string; resultText: string }> = [];
   for (const message of messages) {
     if (!isRecord(message)) {
       continue;
@@ -270,10 +241,21 @@ function collectToolResultMessages(log: LLMRequestLogRecord): Array<{ toolName: 
       120,
     );
     if (resultText) {
-      results.push({ toolName, resultText });
+      results.push({
+        toolName,
+        toolCallId: customToolCallId(message),
+        resultText,
+      });
     }
   }
   return results;
+}
+
+function isCustomInvokerValidationError(resultText: string): boolean {
+  return (
+    resultText.includes("Error invoking tool 'invoke_custom_tool'") &&
+    resultText.includes("tool_name: Field required")
+  );
 }
 
 export function buildRequestLogDisplay(log: LLMRequestLogRecord): RequestLogDisplayModel {
@@ -290,47 +272,36 @@ export function buildRequestLogDisplay(log: LLMRequestLogRecord): RequestLogDisp
 
 export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogKeyFlow {
   const orderedLogs = [...logs].sort((left, right) => left.timestamp - right.timestamp);
-  const initialToolNames = new Set(
-    orderedLogs.length > 0 ? requestToolNames(orderedLogs[0]) : [],
-  );
-  const laterAddedToolNames: string[] = [];
-  const seenLaterAddedToolNames = new Set<string>();
   const state = createSkillKeyFlowState();
-  const hiddenToolNames: string[] = [];
-  const hiddenToolResults: Array<{ toolName: string; resultText: string }> = [];
-  const seenHiddenCalls = new Set<string>();
+  const customInvokerNames: string[] = [];
+  const customToolNames: string[] = [];
+  const customToolResults: Array<{ toolName: string; invocationToolName: string; resultText: string }> = [];
+  const seenCustomInvokers = new Set<string>();
+  const seenCustomTools = new Set<string>();
   const seenResults = new Set<string>();
+  const customToolTargetsByCallId = new Map<string, string>();
 
   for (const log of orderedLogs) {
-    if (log !== orderedLogs[0]) {
-      for (const toolName of requestToolNames(log)) {
-        uniquePush(
-          laterAddedToolNames,
-          seenLaterAddedToolNames,
-          initialToolNames.has(toolName) ? "" : toolName,
-        );
+    for (const toolName of requestToolNames(log)) {
+      if (toolName === CUSTOM_TOOL_INVOKER_NAME) {
+        uniquePush(customInvokerNames, seenCustomInvokers, toolName);
       }
     }
 
     for (const call of collectToolCallsFromLog(log)) {
-      const name = toolCallName(call);
-      uniquePush(hiddenToolNames, seenHiddenCalls, hiddenToolNameFromInitialTools(name, initialToolNames));
+      const name = customToolCallName(call);
+      if (name === CUSTOM_TOOL_INVOKER_NAME) {
+        const customToolName = customToolTargetNameFromArgs(customToolCallArgs(call));
+        uniquePush(customToolNames, seenCustomTools, customToolName);
+        const callId = customToolCallId(call);
+        if (customToolName && callId) {
+          customToolTargetsByCallId.set(callId, customToolName);
+        }
+      }
 
       if (name === "read_file") {
-        recordReadSkill(state, { toolName: name, args: toolCallArgs(call) });
+        recordReadSkill(state, { toolName: name, args: customToolCallArgs(call) });
       }
-    }
-
-    for (const result of collectToolResultMessages(log)) {
-      if (result.toolName === "read_file" || initialToolNames.has(result.toolName)) {
-        continue;
-      }
-      const key = `${result.toolName}\u0000${result.resultText}`;
-      if (seenResults.has(key)) {
-        continue;
-      }
-      seenResults.add(key);
-      hiddenToolResults.push(result);
     }
 
     const responseText = responsePreview(log);
@@ -338,13 +309,38 @@ export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogK
       recordFinalText(state, responseText);
     }
   }
+
+  for (const log of orderedLogs) {
+    for (const result of collectToolResultMessages(log)) {
+      if (result.toolName !== CUSTOM_TOOL_INVOKER_NAME) {
+        continue;
+      }
+      const customToolName = result.toolCallId
+        ? customToolTargetsByCallId.get(result.toolCallId)
+        : "";
+      const displayToolName = customToolName ||
+        (isCustomInvokerValidationError(result.resultText)
+          ? INVALID_CUSTOM_TOOL_CALL_NAME
+          : UNKNOWN_CUSTOM_TOOL_NAME);
+      const key = `${result.toolCallId || "missing-id"}\u0000${displayToolName}\u0000${CUSTOM_TOOL_INVOKER_NAME}\u0000${result.resultText}`;
+      if (seenResults.has(key)) {
+        continue;
+      }
+      seenResults.add(key);
+      customToolResults.push({
+        toolName: displayToolName,
+        invocationToolName: CUSTOM_TOOL_INVOKER_NAME,
+        resultText: result.resultText,
+      });
+    }
+  }
   const snapshot = skillKeyFlowSnapshot(state);
 
   return {
     readSkills: snapshot.readSkills,
-    hiddenToolNames,
-    hiddenToolResults,
+    customInvokerNames,
+    customToolNames,
+    customToolResults,
     finalText: snapshot.finalText,
-    laterAddedToolNames,
   };
 }

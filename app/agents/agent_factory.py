@@ -31,14 +31,12 @@ from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
     filter_tools_by_name,
 )
-from app.agents.skill_tools import (
-    build_skill_tool_bundle,
-    skill_tool_spec_names,
-)
+from app.agents.custom_tools import build_custom_tool_bundle
 from app.agents.skill_runtime import (
     append_skill_middlewares,
     discover_workspace_skill_sources,
 )
+from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
 from app.agents.provider_capabilities import (
     detect_required_capabilities,
     select_providers_for_capabilities,
@@ -59,6 +57,8 @@ if TYPE_CHECKING:
 BASE_AGENT_PROMPT = """响应规范：
 - 不要在普通 assistant 正文中输出内部思考、推理过程、执行计划或自我叙述，例如 "The user asked..."、"Let me..."。
 - 如果需要调用工具，直接调用工具；最终回答只包含用户需要看到的结果。
+- 当下一步是工具调用时，不要输出“正在调用”“我将调用”等过渡正文；描述工具名不等于完成工具调用。
+- 当用户或工作区文档要求通过某个工具入口执行动作时，必须发起真实工具调用。
 - 使用用户的语言回复，除非用户明确要求其它语言。"""
 
 PROVIDER_REQUEST_OPTION_KEYS = {"extra_body", "default_headers"}
@@ -181,7 +181,7 @@ def create_my_deep_agent(
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
-    skill_tool_specs: Sequence[object] | None = None,
+    custom_tool_specs: Sequence[object] | None = None,
     tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
     subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
@@ -226,7 +226,6 @@ def create_my_deep_agent(
 
     if tools is not None:
         resolved_tools = list(tools)
-        hidden_tool_names = skill_tool_spec_names(skill_tool_specs or [])
     else:
         visible_tools = build_default_tools(
             session_id=session_id,
@@ -242,8 +241,8 @@ def create_my_deep_agent(
             config_service=config_service,
             terminal_manager_client=terminal_manager_client,
         )
-        skill_bundle = build_skill_tool_bundle(
-            skill_tool_specs or [],
+        custom_tool_bundle = build_custom_tool_bundle(
+            custom_tool_specs or [],
             session_id=session_id,
             agent_id=agent_id,
             sender_agent_id=resolved_sender_agent_id,
@@ -258,20 +257,23 @@ def create_my_deep_agent(
             config_service=config_service,
             terminal_manager_client=terminal_manager_client,
         )
-        hidden_tool_names = skill_bundle.hidden_tool_names
-        resolved_tools = [*visible_tools, *skill_bundle.tools]
+        custom_tools = filter_tools_by_name(
+            custom_tool_bundle.tools,
+            resolved_tool_denylist,
+        )
+        resolved_tools = [
+            *visible_tools,
+            create_custom_tool_invoker_tool(custom_tools),
+        ]
     resolved_tools = filter_tools_by_name(resolved_tools, resolved_tool_denylist)
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
-    resolved_tool_names = {getattr(tool, "name", "") for tool in resolved_tools}
-    hidden_tool_names &= resolved_tool_names
 
     runtime_middleware: list[AgentMiddleware] = []
     append_skill_middlewares(
         runtime_middleware,
         backend=None,
         skills=None,
-        hidden_tool_names=hidden_tool_names,
     )
     runtime_middleware.extend(list(middleware) if middleware is not None else [LLMLoggingMiddleware()])
     if fallback_middleware is not None:
@@ -290,9 +292,9 @@ def create_my_deep_agent(
     deepagent_middleware = build_deep_agent_middleware(
         model=model,
         backend=backend,
+        workspace_root=workspace_root,
         permissions=permissions,
         resolved_skills=resolved_skills,
-        hidden_tool_names=hidden_tool_names,
         resolved_tools=resolved_tools,
         subagents=subagents,
         resolved_tool_denylist=resolved_tool_denylist,
@@ -367,7 +369,7 @@ def create_runtime_deep_agent_for_session(
     service = config_service
     runtime = build_runtime_for_agent(agent_id=agent_id, config_service=service)
     tool_config = service.get_agent_tool_config(agent_id)
-    skill_tool_specs = list(tool_config.get("skill_only", []))
+    custom_tool_specs = list(tool_config.get("custom", []))
 
     model = override_model if override_model is not None else runtime["model"]
 
@@ -384,7 +386,7 @@ def create_runtime_deep_agent_for_session(
         enabled_tool_names=enabled_tool_names,
         enabled_runtime_middleware_names=enabled_runtime_middleware_names,
         tool_denylist=set(tool_config.get("denylist", [])) if tool_denylist is None else tool_denylist,
-        skill_tool_specs=skill_tool_specs,
+        custom_tool_specs=custom_tool_specs,
         name=name or agent_id,
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,

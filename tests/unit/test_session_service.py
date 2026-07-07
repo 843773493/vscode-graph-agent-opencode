@@ -361,7 +361,7 @@ class TestSessionService:
                 "payload": {
                     "tool_name": "test_tool_2",
                     "args": {},
-                    "skill_names": ["test-tool-skill"],
+                    "skill_names": ["test-tool-2"],
                 },
             }
         )
@@ -369,7 +369,7 @@ class TestSessionService:
         assert event is not None
         assert event.type == "tool_call_start"
         assert event.tool_name == "test_tool_2"
-        assert event.skill_names == ["test-tool-skill"]
+        assert event.skill_names == ["test-tool-2"]
 
     @pytest.mark.asyncio
     async def test_delete_cleans_all_files(self):

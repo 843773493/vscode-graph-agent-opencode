@@ -53,6 +53,84 @@ async def test_message_service_returns_empty_when_no_checkpoint(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_message_service_dedupes_visible_messages_by_message_id(tmp_path):
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_dedupe", "checkpoint_ns": ""}}
+    user_message = HumanMessage(
+        content="请调用 test_tool_2",
+        response_metadata={"message_id": "msg_user_001"},
+    )
+    checkpoint = {
+        "channel_values": {
+            "messages": [
+                user_message,
+                user_message.model_copy(update={"id": "langchain-copy-id"}),
+                AIMessage(
+                    content="4568",
+                    response_metadata={"message_id": "msg_assistant_001"},
+                ),
+            ],
+        },
+        "channel_versions": {"messages": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-dedupe",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
+
+    service = MessageService(checkpointer=saver)
+    messages = await service.list(session_id="sess_dedupe", limit=10)
+
+    assert [(item.role.value, item.message_id) for item in messages.items] == [
+        ("user", "msg_user_001"),
+        ("assistant", "msg_assistant_001"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_state_dedupes_consecutive_duplicate_records(tmp_path):
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_state_dedupe", "checkpoint_ns": ""}}
+    user_message = HumanMessage(
+        content="请调用 test_tool_2",
+        response_metadata={"message_id": "msg_user_001"},
+    )
+    checkpoint = {
+        "channel_values": {
+            "messages": [
+                user_message,
+                user_message.model_copy(update={"id": "langchain-copy-id"}),
+                AIMessage(
+                    content="4568",
+                    response_metadata={"message_id": "msg_assistant_001"},
+                ),
+            ],
+        },
+        "channel_versions": {"messages": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-state-dedupe",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
+
+    service = MessageService(checkpointer=saver)
+    state_snapshot = await service.get_agent_state_messages("sess_state_dedupe")
+    records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
+
+    assert state_snapshot.message_count == 2
+    assert [record["role"] for record in records] == ["user", "assistant"]
+    assert records[0]["response_metadata"]["message_id"] == "msg_user_001"
+
+
+@pytest.mark.asyncio
 async def test_message_service_extracts_responses_api_reasoning_blocks(tmp_path):
     """验证 Responses API 路径下产生的 reasoning 块被正确提取到 metadata。"""
     saver = FileSystemCheckpointSaver(base_dir=tmp_path)

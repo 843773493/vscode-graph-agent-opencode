@@ -4,12 +4,12 @@ from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
-class SkillToolConfigProtocol(Protocol):
+class CustomToolConfigProtocol(Protocol):
     def get_agent_tool_config(self, agent_id: str) -> dict[str, object]: ...
 
 
 @runtime_checkable
-class SkillToolMessageProtocol(Protocol):
+class CustomToolMessageProtocol(Protocol):
     async def list_agent_state_records(
         self,
         session_id: str,
@@ -30,5 +30,5 @@ class SkillToolMessageProtocol(Protocol):
 
 
 @runtime_checkable
-class SkillToolSessionProtocol(Protocol):
+class CustomToolSessionProtocol(Protocol):
     async def get(self, session_id: str) -> object: ...

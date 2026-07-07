@@ -80,7 +80,7 @@ function EventQueueCard({ item, index }: { item: FrontendReceivedEvent; index: n
         {event?.agent_id ? <span>agent: {event.agent_id}</span> : null}
         {event?.phase ? <span>phase: {event.phase}</span> : null}
         {event?.status ? <span>status: {event.status}</span> : null}
-        {toolSummary ? <span>tool: {toolSummary.toolName}</span> : null}
+        {toolSummary ? <span>tool: {toolSummary.displayToolName}</span> : null}
         {toolSummary?.skillNames.length ? (
           <span>skill: {toolSummary.skillNames.join(", ")}</span>
         ) : null}
@@ -194,14 +194,14 @@ function TextDeltaGroupCard({
 
 function KeyTraceSummary({
   readSkills,
-  skillToolCalls,
-  skillToolResults,
+  keyFlowToolCalls,
+  keyFlowToolResults,
   finalText,
 }: ReturnType<typeof buildKeyTraceSummary>) {
   if (
     readSkills.length === 0 &&
-    skillToolCalls.length === 0 &&
-    skillToolResults.length === 0 &&
+    keyFlowToolCalls.length === 0 &&
+    keyFlowToolResults.length === 0 &&
     !finalText
   ) {
     return null;
@@ -214,17 +214,19 @@ function KeyTraceSummary({
         {readSkills.length > 0 ? (
           <span>已读取 skill：{readSkills.join("、")}</span>
         ) : null}
-        {skillToolCalls.map((call) => (
-          <span key={call.toolName}>
-            调用隐藏工具：{call.toolName}
+        {keyFlowToolCalls.map((call) => (
+          <span key={`${call.invocationToolName ?? ""}:${call.toolName}`}>
+            调用扩展工具：{call.invocationToolName ? `${call.invocationToolName} -> ` : ""}
+            {call.toolName}
             {call.skillNames.length > 0
-              ? `（${call.skillNames.join("、")} 暴露）`
+              ? `（${call.skillNames.join("、")} 记录）`
               : ""}
           </span>
         ))}
-        {skillToolResults.map((result) => (
-          <span key={`${result.toolName}:result`}>
-            隐藏工具结果：{result.toolName} -&gt; {result.resultText}
+        {keyFlowToolResults.map((result) => (
+          <span key={`${result.invocationToolName ?? ""}:${result.toolName}:result`}>
+            扩展工具结果：{result.invocationToolName ? `${result.invocationToolName} -> ` : ""}
+            {result.toolName} -&gt; {result.resultText}
           </span>
         ))}
         {finalText ? <span>最终文本：{finalText}</span> : null}

@@ -1,34 +1,35 @@
 import { normalizeDisplayText } from "../utils/displayText";
 import { skillNameFromPath } from "../utils/skillPaths";
 
-export interface SkillToolCallSummary {
+export interface KeyFlowToolCallSummary {
   toolName: string;
   skillNames: string[];
+  invocationToolName?: string;
 }
 
-export interface SkillToolResultSummary extends SkillToolCallSummary {
+export interface KeyFlowToolResultSummary extends KeyFlowToolCallSummary {
   resultText: string;
 }
 
 export interface SkillKeyFlowState {
   readSkills: Set<string>;
-  skillToolCalls: Map<string, SkillToolCallSummary>;
-  skillToolResults: Map<string, SkillToolResultSummary>;
+  keyFlowToolCalls: Map<string, KeyFlowToolCallSummary>;
+  keyFlowToolResults: Map<string, KeyFlowToolResultSummary>;
   finalText: string;
 }
 
 export interface SkillKeyFlowSnapshot {
   readSkills: string[];
-  skillToolCalls: SkillToolCallSummary[];
-  skillToolResults: SkillToolResultSummary[];
+  keyFlowToolCalls: KeyFlowToolCallSummary[];
+  keyFlowToolResults: KeyFlowToolResultSummary[];
   finalText: string;
 }
 
 export function createSkillKeyFlowState(): SkillKeyFlowState {
   return {
     readSkills: new Set<string>(),
-    skillToolCalls: new Map<string, SkillToolCallSummary>(),
-    skillToolResults: new Map<string, SkillToolResultSummary>(),
+    keyFlowToolCalls: new Map<string, KeyFlowToolCallSummary>(),
+    keyFlowToolResults: new Map<string, KeyFlowToolResultSummary>(),
     finalText: "",
   };
 }
@@ -49,7 +50,9 @@ export function keyFlowSkillNames(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return Array.from(new Set(value.filter(
+    (item): item is string => typeof item === "string" && item.trim().length > 0,
+  )));
 }
 
 export function recordReadSkill(
@@ -66,30 +69,38 @@ export function recordReadSkill(
   }
 }
 
-export function recordSkillToolCall(
+export function recordKeyFlowToolCall(
   state: SkillKeyFlowState,
-  options: { toolName: string; skillNames: string[] },
+  options: { toolName: string; skillNames: string[]; invocationToolName?: string },
 ): void {
-  const { toolName, skillNames } = options;
+  const { toolName, skillNames, invocationToolName } = options;
   if (!toolName || skillNames.length === 0) {
     return;
   }
-  state.skillToolCalls.set(toolName, { toolName, skillNames });
+  state.keyFlowToolCalls.set(toolName, { toolName, skillNames, invocationToolName });
 }
 
-export function recordSkillToolResult(
+export function recordKeyFlowToolResult(
   state: SkillKeyFlowState,
-  options: { toolName: string; skillNames: string[]; resultText: string },
+  options: {
+    toolName: string;
+    skillNames: string[];
+    resultText: string;
+    invocationToolName?: string;
+  },
 ): void {
-  const { toolName, skillNames, resultText } = options;
-  const startCall = toolName ? state.skillToolCalls.get(toolName) : undefined;
-  const effectiveSkillNames = skillNames.length > 0 ? skillNames : (startCall?.skillNames ?? []);
+  const { toolName, skillNames, resultText, invocationToolName } = options;
+  const startCall = toolName ? state.keyFlowToolCalls.get(toolName) : undefined;
+  const effectiveSkillNames = Array.from(new Set(
+    skillNames.length > 0 ? skillNames : (startCall?.skillNames ?? []),
+  ));
   if (!toolName || effectiveSkillNames.length === 0 || !resultText) {
     return;
   }
-  state.skillToolResults.set(toolName, {
+  state.keyFlowToolResults.set(toolName, {
     toolName,
     skillNames: effectiveSkillNames,
+    invocationToolName: invocationToolName || startCall?.invocationToolName,
     resultText,
   });
 }
@@ -108,15 +119,8 @@ export function recordFinalText(
 export function skillKeyFlowSnapshot(state: SkillKeyFlowState): SkillKeyFlowSnapshot {
   return {
     readSkills: Array.from(state.readSkills),
-    skillToolCalls: Array.from(state.skillToolCalls.values()),
-    skillToolResults: Array.from(state.skillToolResults.values()),
+    keyFlowToolCalls: Array.from(state.keyFlowToolCalls.values()),
+    keyFlowToolResults: Array.from(state.keyFlowToolResults.values()),
     finalText: state.finalText,
   };
-}
-
-export function hiddenToolNameFromInitialTools(
-  toolName: string,
-  initialToolNames: Set<string>,
-): string {
-  return toolName && toolName !== "read_file" && !initialToolNames.has(toolName) ? toolName : "";
 }

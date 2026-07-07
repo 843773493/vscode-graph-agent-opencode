@@ -12,8 +12,8 @@ from app.agents.agent_factory import (
     resolve_agent_id,
 )
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
-from app.agents.skill_runtime import discover_workspace_skill_tool_map
-from app.agents.skill_tools import skill_tool_spec_names
+from app.agents.skill_runtime import discover_workspace_custom_tool_skill_map
+from app.agents.custom_tools import custom_tool_spec_names
 from app.services.infrastructure.config_service import ConfigService
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
@@ -84,15 +84,27 @@ def build_candidate_models_for_session_request(
     )
 
 
-def get_workspace_skill_tool_sources(
+def get_workspace_custom_tool_skill_sources(
     *,
     agent_id: str,
     config_service: ConfigService,
 ) -> dict[str, list[str]]:
-    """返回当前 workspace 中 skill-only 工具到 skill 名称的映射。"""
+    """返回当前 workspace 中自定义扩展工具到 skill 名称的映射。"""
+    custom_tool_names = get_configured_custom_tool_names(
+        agent_id=agent_id,
+        config_service=config_service,
+    )
+    return discover_workspace_custom_tool_skill_map(custom_tool_names=custom_tool_names)
+
+
+def get_configured_custom_tool_names(
+    *,
+    agent_id: str,
+    config_service: ConfigService,
+) -> set[str]:
+    """返回当前 agent 配置的自定义扩展工具名。"""
     tool_config = config_service.get_agent_tool_config(agent_id)
-    hidden_tool_names = skill_tool_spec_names(tool_config.get("skill_only", []))
-    return discover_workspace_skill_tool_map(hidden_tool_names=hidden_tool_names)
+    return custom_tool_spec_names(tool_config.get("custom", []))
 
 
 def build_agent_tool_definitions(agent: Any) -> list[dict[str, Any]]:

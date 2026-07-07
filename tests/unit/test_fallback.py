@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.services.orchestration.agent_execution_service import AgentExecutionService
+from app.services.orchestration.agent_event_stream_processor import AgentEventStreamResult
 
 
 @pytest.fixture
@@ -162,6 +163,155 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
         {"text": "先判断用户只要 OK。", "kind": "reasoning"},
         {"text": "OK", "kind": "text"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_response_retries_with_system_reminder(mock_dependencies):
+    """reasoning-only 空响应应继续请求模型产生工具调用或最终正文。"""
+    deps = mock_dependencies
+    deps["config_service"].get_agent_runtime_config.return_value = {
+        "providers": [
+            {
+                "interface": "chat.completion",
+                "model": "primary",
+                "api_key": "k",
+                "endpoint": "e",
+            },
+        ],
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_output_tokens": 1024,
+        "system_prompt": "test",
+    }
+    service = AgentExecutionService(
+        config_service=deps["config_service"],
+        background_task_registry=deps["registry"],
+        background_message_bus=deps["msg_bus"],
+        job_event_bus=deps["job_event_bus"],
+        dependency_provider=deps["dependency_provider"],
+    )
+
+    input_messages: list[object] = []
+
+    with patch(
+        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+    ) as mock_build:
+        async def mock_events(input_payload, *args, **kwargs):
+            input_messages.append(input_payload["messages"][0])
+            if len(input_messages) == 1:
+                yield {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "data": {
+                        "chunk": create_chunk(
+                            [{"type": "reasoning", "reasoning": "我应该继续。"}],
+                        )
+                    },
+                    "metadata": {},
+                }
+                return
+            assert "<system_reminder>" in input_payload["messages"][0].content
+            yield {
+                "event": "on_chat_model_stream",
+                "name": "ChatOpenAI",
+                "data": {"chunk": create_chunk([{"type": "text", "text": "OK"}])},
+                "metadata": {},
+            }
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = mock_events
+        mock_build.return_value = mock_agent
+
+        result = await service.run_step(
+            session_id="test",
+            message="test",
+            agent_id="test_agent",
+            job_id="job_test",
+        )
+
+    assert result == "OK"
+    assert len(input_messages) == 2
+    assert input_messages[1].response_metadata["source"] == "empty_response_retry"
+
+
+@pytest.mark.asyncio
+async def test_requested_custom_tool_missing_result_retries_with_system_reminder(mock_dependencies):
+    """用户点名配置 custom tool 但模型只输出正文时，应继续要求真实工具调用。"""
+    deps = mock_dependencies
+    deps["config_service"].get_agent_runtime_config.return_value = {
+        "providers": [
+            {
+                "interface": "chat.completion",
+                "model": "primary",
+                "api_key": "k",
+                "endpoint": "e",
+            },
+        ],
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_output_tokens": 1024,
+        "system_prompt": "test",
+    }
+    deps["config_service"].get_agent_tool_config.return_value = {
+        "denylist": [],
+        "custom": [
+            {
+                "name": "test_tool_2",
+                "factory": "app.agents.tools.testing:create_test_tool_2",
+            }
+        ],
+    }
+    service = AgentExecutionService(
+        config_service=deps["config_service"],
+        background_task_registry=deps["registry"],
+        background_message_bus=deps["msg_bus"],
+        job_event_bus=deps["job_event_bus"],
+        dependency_provider=deps["dependency_provider"],
+    )
+
+    input_messages: list[object] = []
+    stream_results = [
+        AgentEventStreamResult(
+            final_text="根据 AG",
+            latest_model_reasoning_text="",
+            last_tool_result_text="",
+            completed_custom_tool_names=(),
+        ),
+        AgentEventStreamResult(
+            final_text="4568",
+            latest_model_reasoning_text="",
+            last_tool_result_text="4568",
+            completed_custom_tool_names=("test_tool_2",),
+        ),
+    ]
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        ) as mock_build,
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream"
+        ) as mock_process,
+    ):
+        mock_build.return_value = MagicMock()
+
+        async def process_side_effect(*, input_payload, **kwargs):
+            input_messages.append(input_payload["messages"][0])
+            return stream_results.pop(0)
+
+        mock_process.side_effect = process_side_effect
+
+        result = await service.run_step(
+            session_id="test",
+            message="请调用 test_tool_2",
+            agent_id="test_agent",
+            job_id="job_test",
+        )
+
+    assert result == "4568"
+    assert len(input_messages) == 2
+    assert input_messages[1].response_metadata["source"] == "missing_custom_tool_retry"
+    assert "test_tool_2" in input_messages[1].response_metadata["missing_tools"]
 
 
 @pytest.mark.asyncio

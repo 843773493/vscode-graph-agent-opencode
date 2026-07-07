@@ -338,7 +338,7 @@ class ConfigService:
         default_tool_config = {
             "denylist": [],
             "confirmation_required": [],
-            "skill_only": [],
+            "custom": [],
         }
 
         if not agents or resolved_agent_id not in agents:
@@ -353,5 +353,5 @@ class ConfigService:
         return {
             "denylist": list(tools_config.get("denylist", default_tool_config["denylist"])),
             "confirmation_required": list(tools_config.get("confirmation_required", default_tool_config["confirmation_required"])),
-            "skill_only": list(tools_config.get("skill_only", default_tool_config["skill_only"])),
+            "custom": list(tools_config.get("custom", default_tool_config["custom"])),
         }

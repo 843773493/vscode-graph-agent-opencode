@@ -8,14 +8,14 @@ import {
 
 function AgentStateKeyFlow({
   skills,
-  hiddenTools,
-  hiddenToolResults,
+  customTools,
+  customToolResults,
   finalText,
 }: AgentStateSummary) {
   if (
     skills.length === 0 &&
-    hiddenTools.length === 0 &&
-    hiddenToolResults.length === 0 &&
+    customTools.length === 0 &&
+    customToolResults.length === 0 &&
     !finalText
   ) {
     return null;
@@ -26,10 +26,10 @@ function AgentStateKeyFlow({
       <div className="agent-state-key-flow-title">关键链路</div>
       <ol>
         {skills.length > 0 ? <li>读取 skill：{skills.join("、")}</li> : null}
-        {hiddenTools.length > 0 ? <li>调用隐藏工具：{hiddenTools.join("、")}</li> : null}
-        {hiddenToolResults.map((result) => (
+        {customTools.length > 0 ? <li>目标扩展工具：{customTools.join("、")}</li> : null}
+        {customToolResults.map((result) => (
           <li key={`${result.toolName}:result`}>
-            隐藏工具返回：{result.toolName} -&gt; {result.resultText}
+            扩展工具返回：{result.invocationToolName} -&gt; {result.toolName} -&gt; {result.resultText}
           </li>
         ))}
         {finalText ? <li>最终回复正文：{finalText}</li> : null}
@@ -78,8 +78,8 @@ export default function AgentStatePanel({
             <strong>{summary.skills.join("、") || "未检测到 skill 文件读取"}</strong>
           </div>
           <div>
-            <span>隐藏工具</span>
-            <strong>{summary.hiddenTools.join("、") || "未检测到隐藏工具调用"}</strong>
+            <span>扩展工具</span>
+            <strong>{summary.customTools.join("、") || "未检测到扩展工具调用"}</strong>
           </div>
           <div>
             <span>最终文本</span>

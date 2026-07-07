@@ -364,9 +364,9 @@
           "uniqueItems": true,
           "maxItems": 100
         },
-        "skill_only": {
+        "custom": {
           "type": "array",
-          "description": "Tool factories registered in the runtime but exposed to the model only after a matching skill is loaded",
+          "description": "Custom extension tool factories callable through the stable invoke_custom_tool entry",
           "items": {
             "type": "object",
             "additionalProperties": false,

@@ -5,8 +5,6 @@ import {
   keyFlowSkillNames,
   recordFinalText,
   recordReadSkill,
-  recordSkillToolCall,
-  recordSkillToolResult,
   skillKeyFlowSnapshot,
 } from "./skillKeyFlow";
 
@@ -168,38 +166,65 @@ export function attachmentNames(payload: Record<string, unknown>): string[] {
 
 export interface EventQueueKeyTraceSummary {
   readSkills: string[];
-  skillToolCalls: Array<{ toolName: string; skillNames: string[] }>;
-  skillToolResults: Array<{ toolName: string; skillNames: string[]; resultText: string }>;
+  keyFlowToolCalls: Array<{ toolName: string; skillNames: string[]; invocationToolName?: string }>;
+  keyFlowToolResults: Array<{
+    toolName: string;
+    skillNames: string[];
+    resultText: string;
+    invocationToolName?: string;
+  }>;
   finalText: string;
+}
+
+function payloadString(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function traceToolLabel(item: { toolName: string; invocationToolName?: string }): string {
+  return item.invocationToolName
+    ? `${item.invocationToolName} -> ${item.toolName}`
+    : item.toolName;
 }
 
 export function buildKeyTraceSummary(
   items: FrontendReceivedEvent[],
 ): EventQueueKeyTraceSummary {
   const state = createSkillKeyFlowState();
+  const toolCalls: EventQueueKeyTraceSummary["keyFlowToolCalls"] = [];
+  const toolResults: EventQueueKeyTraceSummary["keyFlowToolResults"] = [];
+  const seenCalls = new Set<string>();
+  const seenResults = new Set<string>();
 
   for (const item of items) {
     const type = eventType(item);
     const payload = eventPayload(item);
     if (type === "tool_call_start") {
-      const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "";
+      const toolName = payloadString(payload, "tool_name");
       if (toolName === "read_file" && isRecord(payload.args)) {
         recordReadSkill(state, { toolName, args: payload.args });
       }
-
-      recordSkillToolCall(state, {
-        toolName,
-        skillNames: keyFlowSkillNames(payload.skill_names),
-      });
+      const skillNames = keyFlowSkillNames(payload.skill_names);
+      const invocationToolName = payloadString(payload, "invocation_tool_name");
+      const shouldSummarizeTool = skillNames.length > 0 || invocationToolName;
+      const key = `${invocationToolName}\u0000${toolName}\u0000${skillNames.join("\u0000")}`;
+      if (toolName && shouldSummarizeTool && !seenCalls.has(key)) {
+        seenCalls.add(key);
+        toolCalls.push({ toolName, skillNames, invocationToolName });
+      }
     }
 
     if (type === "tool_call_end") {
-      const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "";
-      recordSkillToolResult(state, {
-        toolName,
-        skillNames: keyFlowSkillNames(payload.skill_names),
-        resultText: compactKeyFlowText(payload.result, 120),
-      });
+      const toolName = payloadString(payload, "tool_name");
+      const skillNames = keyFlowSkillNames(payload.skill_names);
+      const invocationToolName = payloadString(payload, "invocation_tool_name");
+      const resultText = compactKeyFlowText(payload.result, 120);
+      const shouldSummarizeTool = skillNames.length > 0 || invocationToolName;
+      const key = `${invocationToolName}\u0000${toolName}\u0000${skillNames.join("\u0000")}\u0000${resultText}`;
+      if (toolName && resultText && shouldSummarizeTool && !seenResults.has(key)) {
+        seenResults.add(key);
+        toolResults.push({ toolName, skillNames, resultText, invocationToolName });
+      }
     }
 
     if (type === "text_end" && typeof payload.text === "string" && payload.text.trim()) {
@@ -210,8 +235,8 @@ export function buildKeyTraceSummary(
 
   return {
     readSkills: snapshot.readSkills,
-    skillToolCalls: snapshot.skillToolCalls,
-    skillToolResults: snapshot.skillToolResults,
+    keyFlowToolCalls: toolCalls.length > 0 ? toolCalls : snapshot.keyFlowToolCalls,
+    keyFlowToolResults: toolResults.length > 0 ? toolResults : snapshot.keyFlowToolResults,
     finalText: snapshot.finalText,
   };
 }
@@ -219,7 +244,7 @@ export function buildKeyTraceSummary(
 export function toolEventSummary(
   type: string,
   payload: Record<string, unknown>,
-): { toolName: string; summary: string; skillNames: string[] } | null {
+): { toolName: string; displayToolName: string; summary: string; skillNames: string[] } | null {
   if (type !== "tool_call_start" && type !== "tool_call_end") {
     return null;
   }
@@ -228,15 +253,19 @@ export function toolEventSummary(
     return null;
   }
   const skillNames = keyFlowSkillNames(payload.skill_names);
+  const invocationToolName = payloadString(payload, "invocation_tool_name");
+  const displayToolName = traceToolLabel({ toolName, invocationToolName });
   if (type === "tool_call_start") {
     return {
       toolName,
+      displayToolName,
       skillNames,
       summary: compactKeyFlowText(payload.args, 180) || "无参数",
     };
   }
   return {
     toolName,
+    displayToolName,
     skillNames,
     summary: compactKeyFlowText(payload.result, 180) || "无返回内容",
   };

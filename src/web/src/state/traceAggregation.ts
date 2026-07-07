@@ -4,17 +4,24 @@ import {
   createSkillKeyFlowState,
   keyFlowSkillNames,
   recordFinalText,
+  recordKeyFlowToolCall,
+  recordKeyFlowToolResult,
   recordReadSkill,
-  recordSkillToolCall,
-  recordSkillToolResult,
   skillKeyFlowSnapshot,
 } from "./skillKeyFlow";
 import type { TimelineItem } from "./timelineTypes";
 import {
   extractEventInfo,
-  formatToolDetail,
   getOptionalString,
 } from "./tracePayload";
+import {
+  buildCompletedToolItem,
+  buildFailedToolItems,
+  traceErrorSignature,
+  traceToolArgs,
+  traceToolEventKey,
+  type PendingToolCall,
+} from "./trace/toolAggregation";
 
 /** 按顺序处理事件，将 text_start/delta/end 合并为 aggregated_text，将 tool_call_start/end 合并为 aggregated_tool。 */
 export function aggregateConversationEvents(
@@ -35,19 +42,27 @@ export function aggregateConversationEvents(
     [];
   let textFirstId: string | null = null;
 
-  const pendingToolCalls = new Map<
-    string,
-    {
-      payload: Record<string, unknown>;
-      timestamp: string | null;
-      eventId: string | null;
-    }
-  >();
+  const pendingToolCalls = new Map<string, PendingToolCall>();
 
   let llmModel = "";
   let agentEndTs: string | null = null;
   let sawSuccessfulTerminalEvent = false;
   let sawSessionInterrupted = false;
+  let lastErrorSignature = "";
+
+  function flushPendingToolsAsFailed(
+    payload: Record<string, unknown>,
+    eventType: string,
+  ) {
+    items.push(...buildFailedToolItems({
+      convId,
+      pendingToolCalls,
+      failurePayload: payload,
+      eventType,
+      fallbackIndex: items.length,
+    }));
+    pendingToolCalls.clear();
+  }
 
   function flushTextBuf(active: boolean, phaseOverride?: string) {
     if (textBuf.length === 0) return;
@@ -159,52 +174,46 @@ export function aggregateConversationEvents(
     if (type === "tool_call_start") {
       flushTextBuf(false, textPhase === "text" ? "reasoning" : undefined);
       const toolName = getOptionalString(payload, "tool_name");
-      const args =
-        typeof payload.args === "object" &&
-        payload.args !== null &&
-        !Array.isArray(payload.args)
-          ? payload.args as Record<string, unknown>
-          : {};
+      const args = traceToolArgs(payload);
       recordReadSkill(skillFlow, { toolName, args });
-      recordSkillToolCall(skillFlow, {
+      recordKeyFlowToolCall(skillFlow, {
         toolName,
         skillNames: keyFlowSkillNames(payload.skill_names),
+        invocationToolName: getOptionalString(payload, "invocation_tool_name"),
       });
-      pendingToolCalls.set(toolName, { payload, timestamp, eventId });
+      pendingToolCalls.set(traceToolEventKey(payload, toolName), { payload, timestamp, eventId });
       continue;
     }
     if (type === "tool_call_end") {
       flushTextBuf(false);
       const toolName = getOptionalString(payload, "tool_name");
-      const pending = pendingToolCalls.get(toolName);
+      const key = traceToolEventKey(payload, toolName);
+      const pending = pendingToolCalls.get(key) ?? pendingToolCalls.get(toolName);
       if (pending) {
+        pendingToolCalls.delete(key);
         pendingToolCalls.delete(toolName);
         hasOutputContent = true;
         const startPayload = pending.payload;
-        const resultText = formatToolDetail(getOptionalString(payload, "result"));
-        const skillNames = [
+        const completedToolItem = buildCompletedToolItem({
+          convId,
+          pending,
+          toolName,
+          resultPayload: payload,
+          fallbackIndex: items.length,
+        });
+        const skillNames = Array.from(new Set([
           ...keyFlowSkillNames(startPayload.skill_names),
           ...keyFlowSkillNames(payload.skill_names),
-        ];
-        recordSkillToolResult(skillFlow, {
+        ]));
+        recordKeyFlowToolResult(skillFlow, {
           toolName,
           skillNames,
-          resultText,
+          resultText: completedToolItem.resultText,
+          invocationToolName:
+            getOptionalString(startPayload, "invocation_tool_name") ||
+            getOptionalString(payload, "invocation_tool_name"),
         });
-        const inputMsg =
-          formatToolDetail(getOptionalString(startPayload, "message")) ||
-          formatToolDetail(getOptionalString(startPayload, "content")) ||
-          formatToolDetail(startPayload.args);
-        items.push({
-          kind: "aggregated_tool",
-          id: `agg-tool-${convId}-${pending.eventId || pending.timestamp || items.length}`,
-          toolName,
-          inputText: inputMsg,
-          resultText,
-          timestamp: pending.timestamp,
-          rawStart: startPayload,
-          rawEnd: payload,
-        });
+        items.push(completedToolItem);
       } else {
         addTraceItem(eventType, payload, timestamp, eventId);
       }
@@ -234,8 +243,15 @@ export function aggregateConversationEvents(
       type === "job_cancelled"
     ) {
       flushTextBuf(false);
+      if (pendingToolCalls.size > 0) {
+        flushPendingToolsAsFailed(payload, eventType);
+      }
       hasOutputContent = true;
-      addTraceItem(eventType, payload, timestamp, eventId);
+      const signature = traceErrorSignature(payload) || type;
+      if (signature !== lastErrorSignature) {
+        addTraceItem(eventType, payload, timestamp, eventId);
+        lastErrorSignature = signature;
+      }
       continue;
     }
 
@@ -288,14 +304,15 @@ export function aggregateConversationEvents(
   }
 
   const skillSnapshot = skillKeyFlowSnapshot(skillFlow);
-  if (skillSnapshot.skillToolResults.length > 0 && skillSnapshot.finalText) {
+  if (skillSnapshot.keyFlowToolResults.length > 0 && skillSnapshot.finalText) {
     const summaryItem: TimelineItem = {
       kind: "skill_summary",
       id: `skill-summary-${convId}`,
       readSkills: skillSnapshot.readSkills,
-      toolResults: skillSnapshot.skillToolResults.map((item) => ({
+      toolResults: skillSnapshot.keyFlowToolResults.map((item) => ({
         toolName: item.toolName,
         skillNames: item.skillNames,
+        invocationToolName: item.invocationToolName,
         resultText: item.resultText,
       })),
       finalText: skillSnapshot.finalText,

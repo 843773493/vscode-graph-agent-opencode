@@ -111,15 +111,15 @@ async def test_get_public_config_fails_when_default_agent_provider_is_missing(tm
         await service.get()
 
 
-def test_get_agent_tool_config_reads_skill_only_tools(tmp_path: Path):
+def test_get_agent_tool_config_reads_custom_tools(tmp_path: Path):
     config = _base_config()
     config["agents"]["default"]["tools"] = {
         "denylist": [],
         "confirmation_required": [],
-        "skill_only": [
+        "custom": [
             {
                 "name": "test_tool_2",
-                "factory": "app.agents.agent_tools:create_test_tool_2",
+                "factory": "app.agents.tools.testing:create_test_tool_2",
             }
         ],
     }
@@ -128,9 +128,9 @@ def test_get_agent_tool_config_reads_skill_only_tools(tmp_path: Path):
 
     result = service.get_agent_tool_config("default")
 
-    assert result["skill_only"] == [
+    assert result["custom"] == [
         {
             "name": "test_tool_2",
-            "factory": "app.agents.agent_tools:create_test_tool_2",
+            "factory": "app.agents.tools.testing:create_test_tool_2",
         }
     ]
