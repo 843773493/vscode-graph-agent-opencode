@@ -23,9 +23,11 @@ function displayTime(value: unknown): string {
 function StatusCard({
   item,
   index,
+  showRawDetails,
 }: {
   item: Extract<TimelineItem, { kind: "status" }>;
   index: number;
+  showRawDetails: boolean;
 }): React.ReactNode {
   return (
     <EventCard
@@ -37,6 +39,7 @@ function StatusCard({
       content={item.detail}
       raw={{ status: true, title: item.title, detail: item.detail }}
       index={index}
+      showRawDetails={showRawDetails}
     />
   );
 }
@@ -44,9 +47,11 @@ function StatusCard({
 function AggregatedTextCard({
   item,
   index,
+  showRawDetails,
 }: {
   item: Extract<TimelineItem, { kind: "aggregated_text" }>;
   index: number;
+  showRawDetails: boolean;
 }): React.ReactNode {
   const text = normalizeDisplayText(item.text.trim());
   const isReasoning = item.phase === "reasoning";
@@ -82,6 +87,7 @@ function AggregatedTextCard({
       }}
       index={index}
       defaultOpen={!item.active && !isReasoning}
+      showRawDetails={showRawDetails}
     />
   );
 }
@@ -89,9 +95,11 @@ function AggregatedTextCard({
 function AggregatedToolCard({
   item,
   index,
+  showRawDetails,
 }: {
   item: Extract<TimelineItem, { kind: "aggregated_tool" }>;
   index: number;
+  showRawDetails: boolean;
 }): React.ReactNode {
   const { toolName, inputText, resultText, timestamp } = item;
   const structuredContent = formatToolCardContent(item);
@@ -122,6 +130,7 @@ function AggregatedToolCard({
         failed: item.failed,
       }}
       index={index}
+      showRawDetails={showRawDetails}
     />
   );
 }
@@ -150,12 +159,20 @@ function ConversationMarker({
 function TimelineCard({
   item,
   index,
+  showRawDetails,
 }: {
   item: TimelineItem;
   index: number;
+  showRawDetails: boolean;
 }): React.ReactNode {
   if (item.kind === "status") {
-    return <StatusCard item={item} index={index} />;
+    return (
+      <StatusCard
+        item={item}
+        index={index}
+        showRawDetails={showRawDetails}
+      />
+    );
   }
 
   if (item.kind === "conversation_marker") {
@@ -163,11 +180,11 @@ function TimelineCard({
   }
 
   if (item.kind === "aggregated_text") {
-    return <AggregatedTextCard item={item} index={index} />;
+    return <AggregatedTextCard item={item} index={index} showRawDetails={showRawDetails} />;
   }
 
   if (item.kind === "aggregated_tool") {
-    return <AggregatedToolCard item={item} index={index} />;
+    return <AggregatedToolCard item={item} index={index} showRawDetails={showRawDetails} />;
   }
 
   if (item.kind === "skill_summary") {
@@ -176,7 +193,7 @@ function TimelineCard({
         item={item}
         index={index}
         displayTime={displayTime}
-        renderCard={(options) => <EventCard {...options} />}
+        renderCard={(options) => <EventCard {...options} showRawDetails={showRawDetails} />}
       />
     );
   }
@@ -212,7 +229,7 @@ function TimelineCard({
         tone={isUser ? "running" : "done"}
         time={displayTime(item.createdAt)}
         summary={isUser ? userSummary : summaryPreview || "（无内容）"}
-        content={isUser ? item.content : trimmed}
+        content={isUser ? "" : trimmed}
         attachments={item.attachments}
         raw={{
           kind: item.kind,
@@ -225,6 +242,7 @@ function TimelineCard({
         }}
         index={index}
         defaultOpen={false}
+        showRawDetails={showRawDetails}
       />
     );
   }
@@ -248,6 +266,7 @@ function TimelineCard({
       content={normalized.content}
       raw={payload}
       index={index}
+      showRawDetails={showRawDetails}
     />
   );
 }
@@ -298,14 +317,16 @@ export default function ChatPanel({
       data-expand-details={String(expandDetails)}
     >
       {timelineItems.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-state-title">对话区</div>
-          <div>输入消息后，这里会显示完整的会话卡片、回复和 trace 细节。</div>
-        </div>
+        <div className="chat-stream-blank" aria-hidden="true" />
       ) : (
         <>
           {timelineItems.map((item, index) => (
-            <TimelineCard key={item.id} item={item} index={index} />
+            <TimelineCard
+              key={item.id}
+              item={item}
+              index={index}
+              showRawDetails={expandDetails}
+            />
           ))}
         </>
       )}

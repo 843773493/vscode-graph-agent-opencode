@@ -40,7 +40,19 @@
 
 .panel-view .panel-header-meta,
 .panel-view .panel-time {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  max-width: 100%;
+  line-height: 1.35;
+}
+
+.panel-view .panel-header-meta span,
+.panel-view .panel-time span {
+  min-width: 0;
+  max-width: min(180px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

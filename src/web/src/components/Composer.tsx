@@ -34,6 +34,16 @@ function insertLineBreak(value: string, start: number, end: number): string {
   return value.slice(0, start) + "\n" + value.slice(end);
 }
 
+function shortWorkspaceLabel(value: string | null | undefined): string {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return "workspace";
+  }
+
+  const parts = trimmed.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || trimmed;
+}
+
 export default function Composer() {
   const {
     state,
@@ -66,6 +76,13 @@ export default function Composer() {
 
   const hasContent = input.trim().length > 0 || attachments.length > 0;
   const currentAgent = state.currentSession?.current_agent_id || "default";
+  const currentAgentConfig = state.agents.find(
+    (agent) => agent.agent_id === currentAgent,
+  );
+  const currentModel = currentAgentConfig?.model || "model";
+  const workspaceLabel = shortWorkspaceLabel(
+    state.workspaceRoot || state.workspaceName,
+  );
   const currentView =
     VIEW_OPTIONS.find((option) => option.id === state.contentView) ??
     VIEW_OPTIONS[0];
@@ -425,108 +442,131 @@ export default function Composer() {
 
   return (
     <>
-      <footer className="composer">
-      <div className="composer-surface">
-        <div className="composer-copy">
-          <ComposerSlashCommandMenu
-            query={slashQuery}
-            commands={matchingSlashCommands}
-            activeIndex={slashCommandIndex}
-            onSelect={(command) =>
-              runSlashCommand(command, getSlashCommandArgs(input, command.command))
-            }
-          />
-          <textarea
-            ref={textareaRef}
-            id="input"
-            placeholder="输入消息后回车发送，输入 / 查看指令"
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              setComposerNotice("");
-              setAttachmentError("");
-            }}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            rows={1}
-          />
-          <ComposerAttachmentTray
-            attachments={attachments}
-            error={attachmentError}
-            notice={composerNotice}
-            onRemove={handleRemoveAttachment}
-          />
-        </div>
-        <div className="composer-actions">
-          <div className="composer-actions-left">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*,video/mp4,video/webm,video/quicktime,video/x-matroska"
-              className="composer-file-input"
-              onChange={handleFileChange}
-            />
+      <footer className="composer new-chat-widget-content">
+        <div className="new-session-workspace-picker-container">
+          <div className="session-workspace-picker">
+            <span className="session-workspace-picker-label">新会话位于</span>
             <button
-              id="attachButton"
               type="button"
-              className="composer-icon-button"
-              onClick={handleAttachClick}
-              title="添加附件"
-              aria-label="添加图片或视频附件"
+              className="sessions-chat-picker-slot sessions-chat-workspace-picker"
+              title={state.workspaceRoot || state.workspaceName || "workspace"}
+              onClick={() => setStatus("工作区选择由 VS Code Sessions 服务提供，Web 端当前使用已加载工作区")}
             >
-              <svg
-                viewBox="0 0 16 16"
-                width="12"
-                height="12"
-                aria-hidden="true"
-              >
-                <path
-                  d="M6.5 1.5a3.5 3.5 0 0 1 4.95 0l2.05 2.05a4.5 4.5 0 0 1-6.364 6.364l-3.18-3.18a2.5 2.5 0 0 1 3.535-3.535l2.121 2.121"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              <span className="picker-icon" aria-hidden="true">▣</span>
+              <span className="sessions-chat-dropdown-label">{workspaceLabel}</span>
+              <span className="sessions-chat-dropdown-chevron" aria-hidden="true">⌄</span>
             </button>
-            <div className="composer-hint">{composerHint}</div>
+            <span className="session-workspace-picker-label session-workspace-picker-with-label">
+              使用
+            </span>
+            <button
+              type="button"
+              className="sessions-chat-picker-slot sessions-chat-session-type-picker"
+              onClick={() => setStatus("会话类型由本地运行时固定为本地")}
+            >
+              <span className="picker-icon" aria-hidden="true">▱</span>
+              <span className="sessions-chat-dropdown-label">本地</span>
+              <span className="sessions-chat-dropdown-chevron" aria-hidden="true">⌄</span>
+            </button>
           </div>
-          <div className="composer-actions-right">
-            <div className="composer-actions-row">
-              <ComposerViewControl
-                controlRef={viewMenuRef}
-                currentView={currentView}
-                selectedView={state.contentView}
-                open={viewMenuOpen}
-                onToggle={() => setViewMenuOpen((open) => !open)}
-                onSelect={handleViewSelect}
-                onKeyDown={handleViewMenuKeyDown}
+        </div>
+        <div className="composer-surface new-chat-input-container">
+          <div className="new-chat-input-area">
+            <div className="composer-copy sessions-chat-editor">
+              <ComposerSlashCommandMenu
+                query={slashQuery}
+                commands={matchingSlashCommands}
+                activeIndex={slashCommandIndex}
+                onSelect={(command) =>
+                  runSlashCommand(command, getSlashCommandArgs(input, command.command))
+                }
               />
-              <ComposerAgentControl
-                controlRef={agentMenuRef}
-                agents={state.agents}
-                currentAgent={currentAgent}
-                open={agentMenuOpen}
-                onToggle={() => setAgentMenuOpen((open) => !open)}
-                onSelect={handleAgentSelect}
-                onKeyDown={handleAgentMenuKeyDown}
+              <textarea
+                ref={textareaRef}
+                id="input"
+                placeholder="你的路线图下一步是什么？"
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  setComposerNotice("");
+                  setAttachmentError("");
+                }}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                rows={1}
               />
-              <ComposerActionButtons
-                hasContent={hasContent}
-                hasSession={Boolean(state.currentSession)}
-                compactLoading={state.compactLoading}
-                showInterrupt={showInterrupt}
-                onCompact={handleCompact}
-                onClear={handleClear}
-                onInterrupt={handleInterrupt}
-                onSend={handleSend}
+              <ComposerAttachmentTray
+                attachments={attachments}
+                error={attachmentError}
+                notice={composerNotice}
+                onRemove={handleRemoveAttachment}
               />
+            </div>
+            <div className="composer-actions sessions-chat-toolbar">
+              <div className="composer-actions-left">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,video/mp4,video/webm,video/quicktime,video/x-matroska"
+                  className="composer-file-input"
+                  onChange={handleFileChange}
+                />
+                <button
+                  id="attachButton"
+                  type="button"
+                  className="composer-icon-button sessions-chat-attach-button"
+                  onClick={handleAttachClick}
+                  title="添加附件"
+                  aria-label="添加图片或视频附件"
+                >
+                  +
+                </button>
+                <ComposerViewControl
+                  controlRef={viewMenuRef}
+                  currentView={currentView}
+                  selectedView={state.contentView}
+                  open={viewMenuOpen}
+                  onToggle={() => setViewMenuOpen((open) => !open)}
+                  onSelect={handleViewSelect}
+                  onKeyDown={handleViewMenuKeyDown}
+                />
+                <div className="composer-hint">{composerHint}</div>
+              </div>
+              <div className="composer-actions-right">
+                <div className="composer-actions-row sessions-chat-config-toolbar">
+                  <ComposerAgentControl
+                    controlRef={agentMenuRef}
+                    agents={state.agents}
+                    currentAgent={currentAgent}
+                    open={agentMenuOpen}
+                    onToggle={() => setAgentMenuOpen((open) => !open)}
+                    onSelect={handleAgentSelect}
+                    onKeyDown={handleAgentMenuKeyDown}
+                  />
+                  <button
+                    type="button"
+                    className="composer-model-pill"
+                    title={`当前模型：${currentModel}`}
+                    onClick={() => setStatus("模型由当前 Agent 配置决定，可通过 Agent 菜单切换")}
+                  >
+                    {currentModel}
+                  </button>
+                  <ComposerActionButtons
+                    hasContent={hasContent}
+                    hasSession={Boolean(state.currentSession)}
+                    compactLoading={state.compactLoading}
+                    showInterrupt={showInterrupt}
+                    onCompact={handleCompact}
+                    onClear={handleClear}
+                    onInterrupt={handleInterrupt}
+                    onSend={handleSend}
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
       </footer>
       <SessionNameDialog
         open={renameDialogOpen}

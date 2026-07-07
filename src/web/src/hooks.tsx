@@ -31,6 +31,13 @@ import { useWorkspaceBootstrap } from "./hooks/useWorkspaceBootstrap";
 export { getConversationsForSession } from "./state/conversations";
 export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
 
+function defaultHistoryPanelOpen(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  return window.innerWidth > 640;
+}
+
 const INITIAL_STATE: AppState = {
   apiPort: DEFAULT_BACKEND_PORT,
   workspaceRoot: null,
@@ -54,8 +61,8 @@ const INITIAL_STATE: AppState = {
   status: "准备就绪",
   error: null,
   isBootstrapping: true,
-  expandDetails: true,
-  historyPanelOpen: true,
+  expandDetails: false,
+  historyPanelOpen: defaultHistoryPanelOpen(),
   contentView: "default",
   agentStateJsonl: "",
   agentStateMessageCount: 0,

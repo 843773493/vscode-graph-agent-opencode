@@ -16,7 +16,7 @@ function Icon({ children }: { children: React.ReactNode }) {
 }
 
 export default function Toolbar({ workspaceName, workspaceRoot, status, agentId, onCreateSession }: { workspaceName: string | null | undefined; workspaceRoot: string | null | undefined; status: string; agentId: string | null | undefined; onCreateSession: () => void }) {
-  const { toggleHistoryPanel } = useAppState();
+  const { toggleHistoryPanel, setStatus } = useAppState();
   const wsLabel = workspaceRoot || workspaceName || undefined;
   const wsShort = shortLabel(wsLabel);
   const agentLabel = agentId || 'default';
@@ -24,29 +24,44 @@ export default function Toolbar({ workspaceName, workspaceRoot, status, agentId,
   return (
     <header className="toolbar">
       <div className="toolbar-group toolbar-group-left">
+        <button type="button" className="toolbar-icon-button titlebar-layout-button" title="切换会话侧栏" onClick={toggleHistoryPanel}>
+          <Icon>▌</Icon>
+        </button>
+        <button type="button" className="toolbar-icon-button" title="Web 端暂无导航历史" aria-label="后退" disabled>
+          ‹
+        </button>
+        <button type="button" className="toolbar-icon-button" title="Web 端暂无导航历史" aria-label="前进" disabled>
+          ›
+        </button>
         <button type="button" className="toolbar-icon-button toolbar-icon-primary" title="新建会话" onClick={onCreateSession}>
           <Icon>
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
           </Icon>
         </button>
-        <button type="button" className="toolbar-icon-button" title="历史记录" onClick={toggleHistoryPanel}>
-          <Icon>
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2a6 6 0 1 0 6 6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 4v5l3 2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </Icon>
-        </button>
       </div>
-      <div className="toolbar-center" title={agentLabel}>
-        <div className="toolbar-center-stack">
-          <span className="toolbar-agent">
+      <div className="toolbar-center" title={wsLabel}>
+        <div className="command-center">
+          <span className="command-center-icon" aria-hidden="true">▱</span>
+          <span className="command-center-title">
+            新会话 · {workspaceName || wsShort}
+          </span>
+        </div>
+      </div>
+      <div className="toolbar-group toolbar-group-right">
+        <span className="toolbar-agent" title={agentLabel}>
             <Icon>
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2.5a2 2 0 0 1 2 2V5h1.5A2.5 2.5 0 0 1 14 7.5v4A2.5 2.5 0 0 1 11.5 14h-7A2.5 2.5 0 0 1 2 11.5v-4A2.5 2.5 0 0 1 4.5 5H6v-.5a2 2 0 0 1 2-2Zm-1 4.5h2v1h-2v-1Zm0 2.5h2v1h-2v-1Z" fill="currentColor"/></svg>
             </Icon>
             <span>{agentLabel}</span>
-          </span>
-          <span className="toolbar-subtitle">{workspaceName || 'workspace'}</span>
-        </div>
-      </div>
-      <div className="toolbar-group toolbar-group-right">
+        </span>
+        <button
+          type="button"
+          className="toolbar-update-button"
+          title="检查更新"
+          onClick={() => setStatus("Web UI 已是当前本地构建")}
+        >
+          更新
+        </button>
         <span className="badge neutral toolbar-path" title={wsLabel} aria-label={wsLabel}>
           <Icon>
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 5A1.5 1.5 0 0 1 4 3.5h2.8l1.4 1.5H12A1.5 1.5 0 0 1 13.5 6.5v5A1.5 1.5 0 0 1 12 13H4A1.5 1.5 0 0 1 2.5 11.5z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/></svg>

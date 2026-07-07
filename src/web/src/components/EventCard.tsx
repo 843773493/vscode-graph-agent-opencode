@@ -24,6 +24,7 @@ export interface EventCardProps {
   index: number;
   attachments?: AttachmentRef[];
   defaultOpen?: boolean;
+  showRawDetails?: boolean;
 }
 
 export default function EventCard({
@@ -38,6 +39,7 @@ export default function EventCard({
   index,
   attachments = [],
   defaultOpen = false,
+  showRawDetails = true,
 }: EventCardProps): React.ReactNode {
   const [open, setOpen] = React.useState(defaultOpen);
   React.useEffect(() => {
@@ -95,16 +97,18 @@ export default function EventCard({
               aria-label={kind === "response" ? `${title}正文：${content}` : undefined}
               dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
             />
-          ) : attachments.length === 0 ? (
+          ) : !summary && attachments.length === 0 ? (
             <div className="event-card-empty">（无可读内容）</div>
           ) : null}
           {attachments.length > 0 && (
             <AttachmentList attachments={attachments} />
           )}
-          <details className="event-card-details">
-            <summary>原始数据</summary>
-            <pre>{escapeHtml(JSON.stringify(raw, null, 2))}</pre>
-          </details>
+          {showRawDetails ? (
+            <details className="event-card-details">
+              <summary>原始数据</summary>
+              <pre>{escapeHtml(JSON.stringify(raw, null, 2))}</pre>
+            </details>
+          ) : null}
         </div>
       )}
     </article>

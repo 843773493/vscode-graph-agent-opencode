@@ -10,7 +10,7 @@ export const VIEW_OPTIONS: ViewOption[] = [
   {
     id: "default",
     label: "默认视图",
-    description: "显示对话消息、推理过程和 trace 细节",
+    description: "显示用户消息和最终回复，调试细节请切换事件、请求或 Agent 视图",
   },
   {
     id: "events",
