@@ -18,6 +18,8 @@ import type {
   SessionResourceList,
   SessionUpdateRequest,
   TraceEvent,
+  WorkspaceFileContent,
+  WorkspaceFileList,
   WorkspaceInfo,
 } from "./types/backend";
 
@@ -125,6 +127,37 @@ function normalizePageResult<T>(value: unknown): CursorPage<T> {
 export async function getWorkspace(port: number): Promise<WorkspaceInfo> {
   return unwrapApiData(
     await requestJson<APIResponse<WorkspaceInfo>>(port, "/api/v1/workspace"),
+  );
+}
+
+export async function getWorkspaceFiles(
+  port: number,
+  path: string = "",
+): Promise<WorkspaceFileList> {
+  const query = new URLSearchParams();
+  if (path) {
+    query.set("path", path);
+  }
+
+  const suffix = query.toString();
+  return unwrapApiData(
+    await requestJson<APIResponse<WorkspaceFileList>>(
+      port,
+      `/api/v1/workspace/files${suffix ? `?${suffix}` : ""}`,
+    ),
+  );
+}
+
+export async function getWorkspaceFileContent(
+  port: number,
+  path: string,
+): Promise<WorkspaceFileContent> {
+  const query = new URLSearchParams({ path });
+  return unwrapApiData(
+    await requestJson<APIResponse<WorkspaceFileContent>>(
+      port,
+      `/api/v1/workspace/files/content?${query.toString()}`,
+    ),
   );
 }
 

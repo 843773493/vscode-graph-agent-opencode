@@ -17,6 +17,7 @@ interface HistoryPanelProps {
   activeSession: Session | null;
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
   onCreateSession: () => void;
+  width: number;
 }
 
 interface SessionContextMenu {
@@ -27,6 +28,108 @@ interface SessionContextMenu {
 }
 
 type SessionFilterMode = 'all' | 'current' | 'attachments' | 'agent' | 'named';
+type SessionSortMode = 'created' | 'updated';
+type SessionGroupingMode = 'workspace' | 'time';
+
+interface SessionSection {
+  id: string;
+  label: string;
+  sessions: Session[];
+  totalCount: number;
+  showMoreCount: number;
+}
+
+const CUSTOMIZATIONS_DEFAULT_HEIGHT = 286;
+const CUSTOMIZATIONS_MIN_HEIGHT = 129;
+const CUSTOMIZATIONS_MAX_HEIGHT = 420;
+const CUSTOMIZATIONS_COLLAPSED_HEIGHT = 36;
+const CUSTOMIZATIONS_RESIZING_CLASS = 'is-customizations-resizing';
+const WORKSPACE_SECTION_RECENT_LIMIT = 10;
+const RECENT_SECTION_DAYS = 7;
+
+function clampCustomizationsHeight(value: number): number {
+  return Math.min(CUSTOMIZATIONS_MAX_HEIGHT, Math.max(CUSTOMIZATIONS_MIN_HEIGHT, value));
+}
+
+function sessionSortTime(session: Session, sortMode: SessionSortMode): number {
+  const value = sortMode === 'updated' ? session.updated_at : session.created_at;
+  const time = new Date(value || '').getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function sortSessions(sessions: Session[], sortMode: SessionSortMode): Session[] {
+  return [...sessions].sort((a, b) => sessionSortTime(b, sortMode) - sessionSortTime(a, sortMode));
+}
+
+function workspaceSectionLabel(workspaceId: string, workspaceName: string): string {
+  if (workspaceName) {
+    return workspaceName;
+  }
+  return workspaceId || 'workspace';
+}
+
+function buildWorkspaceSections(
+  sessions: Session[],
+  workspaceName: string,
+  capped: boolean,
+): SessionSection[] {
+  const groups = new Map<string, Session[]>();
+  for (const session of sessions) {
+    const workspaceId = session.workspace_id || 'workspace';
+    groups.set(workspaceId, [...(groups.get(workspaceId) ?? []), session]);
+  }
+
+  return [...groups.entries()].map(([workspaceId, groupSessions]) => {
+    const visibleSessions =
+      capped && groupSessions.length > WORKSPACE_SECTION_RECENT_LIMIT
+        ? groupSessions.slice(0, WORKSPACE_SECTION_RECENT_LIMIT)
+        : groupSessions;
+    return {
+      id: `workspace:${workspaceId}`,
+      label: workspaceSectionLabel(workspaceId, workspaceName),
+      sessions: visibleSessions,
+      totalCount: groupSessions.length,
+      showMoreCount: groupSessions.length - visibleSessions.length,
+    };
+  });
+}
+
+function buildTimeSections(sessions: Session[], sortMode: SessionSortMode): SessionSection[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfRecent = startOfToday - RECENT_SECTION_DAYS * 86_400_000;
+  const recent: Session[] = [];
+  const older: Session[] = [];
+
+  for (const session of sessions) {
+    if (sessionSortTime(session, sortMode) >= startOfRecent && recent.length < WORKSPACE_SECTION_RECENT_LIMIT) {
+      recent.push(session);
+    } else {
+      older.push(session);
+    }
+  }
+
+  const sections: SessionSection[] = [];
+  if (recent.length > 0) {
+    sections.push({
+      id: 'time:recent',
+      label: '最近',
+      sessions: recent,
+      totalCount: recent.length,
+      showMoreCount: 0,
+    });
+  }
+  if (older.length > 0) {
+    sections.push({
+      id: 'time:older',
+      label: '更早',
+      sessions: older,
+      totalCount: older.length,
+      showMoreCount: 0,
+    });
+  }
+  return sections;
+}
 
 function sessionTone(_session: Session, isActive: boolean): 'active' | 'warning' | 'danger' | 'neutral' {
   if (isActive) {
@@ -165,15 +268,23 @@ export default function HistoryPanel({
   activeSession,
   sessionAttachmentSummaries,
   onCreateSession,
+  width,
 }: HistoryPanelProps) {
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filterMode, setFilterMode] = useState<SessionFilterMode>('all');
+  const [sortMode, setSortMode] = useState<SessionSortMode>('updated');
+  const [groupingMode, setGroupingMode] = useState<SessionGroupingMode>('workspace');
+  const [workspaceGroupCapped, setWorkspaceGroupCapped] = useState(true);
+  const [collapsedSectionIds, setCollapsedSectionIds] = useState<Set<string>>(() => new Set());
   const [customizationNotice, setCustomizationNotice] = useState('');
+  const [customizationsCollapsed, setCustomizationsCollapsed] = useState(false);
+  const [customizationsHeight, setCustomizationsHeight] = useState(CUSTOMIZATIONS_DEFAULT_HEIGHT);
   const filterControlRef = useRef<HTMLElement | null>(null);
-  const listedSessions = useMemo(() => {
+  const cleanupCustomizationsResizeRef = useRef<(() => void) | null>(null);
+  const filteredSessions = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
     const matchingSessions = sessions.filter((session) => {
       if (filterMode === 'current' && session.session_id !== currentSessionId) {
@@ -220,6 +331,22 @@ export default function HistoryPanel({
     sessionAttachmentSummaries,
     sessions,
   ]);
+  const sortedFilteredSessions = useMemo(
+    () => sortSessions(filteredSessions, sortMode),
+    [filteredSessions, sortMode],
+  );
+  const sessionSections = useMemo(
+    () =>
+      groupingMode === 'workspace'
+        ? buildWorkspaceSections(sortedFilteredSessions, workspaceName, workspaceGroupCapped)
+        : buildTimeSections(sortedFilteredSessions, sortMode),
+    [groupingMode, sortMode, sortedFilteredSessions, workspaceGroupCapped, workspaceName],
+  );
+  const visibleSessionCount = sessionSections.reduce(
+    (total, section) => total + section.sessions.length,
+    0,
+  );
+  const matchingSessionCount = filteredSessions.length;
 
   useEffect(() => {
     if (!contextMenu) {
@@ -247,6 +374,12 @@ export default function HistoryPanel({
       setFilterMenuOpen(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      cleanupCustomizationsResizeRef.current?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!filterMenuOpen) {
@@ -317,14 +450,74 @@ export default function HistoryPanel({
     setFilterMenuOpen(false);
     onStatusChange(`已筛选会话: ${label}`);
   };
+  const applySortMode = (mode: SessionSortMode, label: string) => {
+    setSortMode(mode);
+    setFilterMenuOpen(false);
+    onStatusChange(`已排序会话: ${label}`);
+  };
+  const applyGroupingMode = (mode: SessionGroupingMode, label: string) => {
+    setGroupingMode(mode);
+    setFilterMenuOpen(false);
+    onStatusChange(`已分组会话: ${label}`);
+  };
+  const toggleWorkspaceGroupCapping = (capped: boolean) => {
+    setWorkspaceGroupCapped(capped);
+    setFilterMenuOpen(false);
+    onStatusChange(capped ? '仅显示最近工作区会话' : '显示全部工作区会话');
+  };
+  const toggleSessionSection = (sectionId: string) => {
+    setCollapsedSectionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sectionId)) {
+        next.delete(sectionId);
+      } else {
+        next.add(sectionId);
+      }
+      return next;
+    });
+  };
+  const collapseAllSessionSections = () => {
+    setCollapsedSectionIds(new Set(sessionSections.map((section) => section.id)));
+    setFilterMenuOpen(false);
+    onStatusChange('已折叠全部会话分组');
+  };
   const showCustomizationNotice = (label: string) => {
     const message = `${label} 由 VS Code Sessions 服务提供，Web 端暂未接入`;
     setCustomizationNotice(message);
     onStatusChange(message);
   };
+  const startCustomizationsResize = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    cleanupCustomizationsResizeRef.current?.();
+
+    const startY = event.clientY;
+    const startHeight = customizationsHeight;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const deltaY = moveEvent.clientY - startY;
+      setCustomizationsHeight(clampCustomizationsHeight(startHeight - deltaY));
+    };
+
+    const finishResize = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishResize);
+      window.removeEventListener('pointercancel', finishResize);
+      document.body.classList.remove(CUSTOMIZATIONS_RESIZING_CLASS);
+      cleanupCustomizationsResizeRef.current = null;
+    };
+
+    document.body.classList.add(CUSTOMIZATIONS_RESIZING_CLASS);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', finishResize);
+    window.addEventListener('pointercancel', finishResize);
+    cleanupCustomizationsResizeRef.current = finishResize;
+  };
+  const displayedCustomizationsHeight = customizationsCollapsed
+    ? CUSTOMIZATIONS_COLLAPSED_HEIGHT
+    : customizationsHeight;
 
   return (
-    <aside className="history-panel">
+    <aside className="history-panel" style={{ flexBasis: width, width }}>
       <div className="history-panel-shell">
         <header className="panel-header history-panel-header">
           <span className="panel-title">会话</span>
@@ -372,6 +565,78 @@ export default function HistoryPanel({
             </button>
             {filterMenuOpen ? (
               <div className="sessions-filter-menu" role="menu">
+                <div className="sessions-menu-group-title">排序</div>
+                <button
+                  type="button"
+                  className={sortMode === 'created' ? 'active' : ''}
+                  role="menuitemradio"
+                  aria-checked={sortMode === 'created'}
+                  onClick={() => applySortMode('created', '按创建时间')}
+                >
+                  按创建时间
+                </button>
+                <button
+                  type="button"
+                  className={sortMode === 'updated' ? 'active' : ''}
+                  role="menuitemradio"
+                  aria-checked={sortMode === 'updated'}
+                  onClick={() => applySortMode('updated', '按更新时间')}
+                >
+                  按更新时间
+                </button>
+                <div className="sessions-menu-separator" />
+                <div className="sessions-menu-group-title">分组</div>
+                <button
+                  type="button"
+                  className={groupingMode === 'workspace' ? 'active' : ''}
+                  role="menuitemradio"
+                  aria-checked={groupingMode === 'workspace'}
+                  onClick={() => applyGroupingMode('workspace', '按工作区')}
+                >
+                  按工作区
+                </button>
+                <button
+                  type="button"
+                  className={groupingMode === 'time' ? 'active' : ''}
+                  role="menuitemradio"
+                  aria-checked={groupingMode === 'time'}
+                  onClick={() => applyGroupingMode('time', '按时间')}
+                >
+                  按时间
+                </button>
+                {groupingMode === 'workspace' ? (
+                  <>
+                    <div className="sessions-menu-separator" />
+                    <button
+                      type="button"
+                      className={workspaceGroupCapped ? 'active' : ''}
+                      role="menuitemradio"
+                      aria-checked={workspaceGroupCapped}
+                      onClick={() => toggleWorkspaceGroupCapping(true)}
+                    >
+                      显示最近会话
+                    </button>
+                    <button
+                      type="button"
+                      className={!workspaceGroupCapped ? 'active' : ''}
+                      role="menuitemradio"
+                      aria-checked={!workspaceGroupCapped}
+                      onClick={() => toggleWorkspaceGroupCapping(false)}
+                    >
+                      显示全部会话
+                    </button>
+                  </>
+                ) : null}
+                <div className="sessions-menu-separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={collapseAllSessionSections}
+                >
+                  全部折叠
+                </button>
+                <div className="sessions-menu-separator" />
+                <div className="sessions-menu-group-title">筛选</div>
                 <button
                   type="button"
                   className={filterMode === 'all' ? 'active' : ''}
@@ -443,46 +708,118 @@ export default function HistoryPanel({
           </section>
 
           <section className="history-section history-list-section">
-            <div className="history-section-title">
-              <span>{workspaceName || 'workspace'}</span>
-              <span className="history-section-count">
-                {listedSessions.length}/{sessions.length}
-              </span>
-            </div>
-            {listedSessions.length === 0 ? (
+            {matchingSessionCount === 0 ? (
               <div className="empty-state small">暂无会话</div>
             ) : (
-              <ul className="session-list">
-                {listedSessions.map(session => {
-                  const isActive = session.session_id === currentSessionId;
+              <>
+                <div className="history-list-summary">
+                  {visibleSessionCount}/{matchingSessionCount}
+                </div>
+                {sessionSections.map((section) => {
+                  const collapsed = collapsedSectionIds.has(section.id);
                   return (
-                    <li key={session.session_id}>
-                      <SessionButton
-                        session={session}
-                        isActive={isActive}
-                        summary={sessionAttachmentSummaries.get(session.session_id)}
-                        onSelectSession={onSelectSession}
-                        onOpenMenu={openSessionMenu}
-                      />
-                    </li>
+                    <section className="history-session-section" key={section.id}>
+                      <button
+                        type="button"
+                        className={`history-section-title${collapsed ? ' collapsed' : ''}`}
+                        aria-expanded={!collapsed}
+                        onClick={() => toggleSessionSection(section.id)}
+                      >
+                        <span className="history-section-chevron" aria-hidden="true">
+                          {collapsed ? '›' : '⌄'}
+                        </span>
+                        <span className="history-section-label">{section.label}</span>
+                        <span className="history-section-count">
+                          {section.sessions.length}/{section.totalCount}
+                        </span>
+                      </button>
+                      {!collapsed ? (
+                        <>
+                          <ul className="session-list">
+                            {section.sessions.map(session => {
+                              const isActive = session.session_id === currentSessionId;
+                              return (
+                                <li key={session.session_id}>
+                                  <SessionButton
+                                    session={session}
+                                    isActive={isActive}
+                                    summary={sessionAttachmentSummaries.get(session.session_id)}
+                                    onSelectSession={onSelectSession}
+                                    onOpenMenu={openSessionMenu}
+                                  />
+                                </li>
+                              );
+                            })}
+                          </ul>
+                          {groupingMode === 'workspace' && section.showMoreCount > 0 ? (
+                            <button
+                              type="button"
+                              className="session-show-more-button"
+                              onClick={() => toggleWorkspaceGroupCapping(false)}
+                            >
+                              显示全部 {section.showMoreCount} 个更多会话
+                            </button>
+                          ) : null}
+                          {groupingMode === 'workspace' &&
+                          !workspaceGroupCapped &&
+                          section.totalCount > WORKSPACE_SECTION_RECENT_LIMIT ? (
+                            <button
+                              type="button"
+                              className="session-show-more-button"
+                              onClick={() => toggleWorkspaceGroupCapping(true)}
+                            >
+                              仅显示最近会话
+                            </button>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </section>
                   );
                 })}
-              </ul>
+              </>
             )}
           </section>
         </div>
-        <footer className="sessions-customizations">
-          <div className="customizations-title">自定义</div>
-          <button type="button" className="customization-link" onClick={() => showCustomizationNotice('概述')}>⌂ <span>概述</span></button>
-          <button type="button" className="customization-link" onClick={() => showCustomizationNotice('智能体')}>◇ <span>智能体</span><span className="customization-count">{String(Math.max(0, sessions.length ? 1 : 0))}</span></button>
-          <button type="button" className="customization-link" onClick={() => showCustomizationNotice('技能')}>♢ <span>技能</span><span className="customization-count">24</span></button>
-          <button type="button" className="customization-link" onClick={() => showCustomizationNotice('指令')}>☰ <span>指令</span><span className="customization-count">1</span></button>
-          <button type="button" className="customization-link" onClick={() => showCustomizationNotice('挂钩')}>⚡ <span>挂钩</span></button>
-          <button type="button" className="customization-link" onClick={() => showCustomizationNotice('MCP 服务器')}>▤ <span>MCP 服务器</span><span className="customization-count">1</span></button>
-          <button type="button" className="customization-link" onClick={() => showCustomizationNotice('插件')}>⌘ <span>插件</span></button>
-          {customizationNotice ? (
-            <div className="customization-notice" role="status">
-              {customizationNotice}
+        {!customizationsCollapsed ? (
+          <button
+            type="button"
+            className="history-customizations-resize-sash"
+            title="拖拽调整会话列表和自定义区域大小，双击还原"
+            aria-label="调整会话列表和自定义区域大小"
+            onPointerDown={startCustomizationsResize}
+            onDoubleClick={() => setCustomizationsHeight(CUSTOMIZATIONS_DEFAULT_HEIGHT)}
+          />
+        ) : null}
+        <footer
+          className={`sessions-customizations${customizationsCollapsed ? ' collapsed' : ''}`}
+          style={{ flexBasis: displayedCustomizationsHeight, height: displayedCustomizationsHeight }}
+        >
+          <button
+            type="button"
+            className={`customizations-header${customizationsCollapsed ? ' collapsed' : ''}`}
+            aria-expanded={!customizationsCollapsed}
+            onClick={() => setCustomizationsCollapsed((collapsed) => !collapsed)}
+          >
+            <span className="customizations-title">自定义</span>
+            <span className="customizations-chevron" aria-hidden="true">
+              {customizationsCollapsed ? '›' : '⌄'}
+            </span>
+          </button>
+          {!customizationsCollapsed ? (
+            <div className="customizations-body">
+              <button type="button" className="customization-link" onClick={() => showCustomizationNotice('概述')}>⌂ <span>概述</span></button>
+              <button type="button" className="customization-link" onClick={() => showCustomizationNotice('智能体')}>◇ <span>智能体</span><span className="customization-count">{String(Math.max(0, sessions.length ? 1 : 0))}</span></button>
+              <button type="button" className="customization-link" onClick={() => showCustomizationNotice('技能')}>♢ <span>技能</span><span className="customization-count">24</span></button>
+              <button type="button" className="customization-link" onClick={() => showCustomizationNotice('指令')}>☰ <span>指令</span><span className="customization-count">1</span></button>
+              <button type="button" className="customization-link" onClick={() => showCustomizationNotice('挂钩')}>⚡ <span>挂钩</span></button>
+              <button type="button" className="customization-link" onClick={() => showCustomizationNotice('MCP 服务器')}>▤ <span>MCP 服务器</span><span className="customization-count">1</span></button>
+              <button type="button" className="customization-link" onClick={() => showCustomizationNotice('插件')}>⌘ <span>插件</span></button>
+              <button type="button" className="customization-link" onClick={() => showCustomizationNotice('工具')}>⚒ <span>工具</span></button>
+              {customizationNotice ? (
+                <div className="customization-notice" role="status">
+                  {customizationNotice}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </footer>

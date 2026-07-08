@@ -33,6 +33,30 @@ export interface WorkspaceDTO {
     [k: string]: unknown;
   };
 }
+export interface WorkspaceFileContentDTO {
+  root_path: string;
+  path: string;
+  name: string;
+  content: string;
+  language: string;
+  size: number;
+  modified_at?: string | null;
+}
+export interface WorkspaceFileListDTO {
+  root_path: string;
+  path: string;
+  items?: WorkspaceFileNodeDTO[];
+  truncated?: boolean;
+  limit?: number;
+}
+export interface WorkspaceFileNodeDTO {
+  name: string;
+  path: string;
+  kind: "file" | "directory" | "symlink" | "other";
+  has_children?: boolean;
+  size?: number | null;
+  modified_at?: string | null;
+}
 export interface WorkspaceIndexRebuildDTO {
   status: string;
   job_id: string;

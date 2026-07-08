@@ -24,7 +24,12 @@ import type {
   SessionResourceListDTO,
 } from "./gen/session_resource";
 import type { TraceEventDTO } from "./gen/trace";
-export type { WorkspaceDTO as WorkspaceInfo } from "./gen/workspace";
+export type {
+  WorkspaceDTO as WorkspaceInfo,
+  WorkspaceFileContentDTO as WorkspaceFileContent,
+  WorkspaceFileListDTO as WorkspaceFileList,
+  WorkspaceFileNodeDTO as WorkspaceFileNode,
+} from "./gen/workspace";
 
 export type LLMRequestLogRecord = Omit<
   LLMRequestLogRecordDTO,

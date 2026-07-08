@@ -135,7 +135,7 @@ async function main() {
 		"export type { SessionNetworkWaitDTO, SessionObservationStateDTO, SessionStatusDTO } from './session_status';",
 		"export type { ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO } from './tool';",
 		"export type { TraceEventDTO } from './trace';",
-		"export type { WorkspaceContextDTO, WorkspaceDTO } from './workspace';",
+		"export type { WorkspaceContextDTO, WorkspaceDTO, WorkspaceFileContentDTO, WorkspaceFileListDTO, WorkspaceFileNodeDTO } from './workspace';",
 	];
 	await writeFile(path.join(outputDir, 'index.ts'), `${indexLines.join('\n')}\n`, 'utf8');
 }

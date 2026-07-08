@@ -8,21 +8,48 @@ import RequestLogPanel from "./components/RequestLogPanel";
 import ResourcePanel from "./components/ResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
 import Toolbar from "./components/Toolbar";
-import { useEffect, useState } from "react";
+import WorkspaceFilePreviewArea from "./components/WorkspaceFilePreviewArea";
+import WorkspaceFileTree from "./components/WorkspaceFileTree";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { DEFAULT_BACKEND_PORT, getWorkspaceFileContent } from "./api";
 import {
   FRONTEND_EVENT_QUEUE_LIMIT,
   getConversationsForSession,
   useAppState,
 } from "./hooks";
+import type { WorkspaceFileContent, WorkspaceFileNode } from "./types/backend";
 
 type SessionNameDialogState = { sessionId: string; initialTitle: string };
 type AuxiliaryTab = "changes" | "files";
+type LayoutResizeTarget = "history-right" | "preview-left" | "auxiliary-left";
+
+const DEFAULT_HISTORY_PANEL_WIDTH = 300;
+const MIN_HISTORY_PANEL_WIDTH = 220;
+const MAX_HISTORY_PANEL_WIDTH = 420;
+const DEFAULT_PREVIEW_WIDTH = 520;
+const MIN_PREVIEW_WIDTH = 280;
+const MAX_PREVIEW_WIDTH = 920;
+const DEFAULT_AUXILIARY_WIDTH = 335;
+const MIN_AUXILIARY_WIDTH = 280;
+const MAX_AUXILIARY_WIDTH = 520;
+const LAYOUT_RESIZING_CLASS = "is-layout-resizing";
+
+function clampLayoutWidth(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
 
 function defaultAuxiliaryVisible(): boolean {
   if (typeof window === "undefined") {
     return true;
   }
   return window.innerWidth > 900;
+}
+
+function defaultPreviewWidth(): number {
+  if (typeof window === "undefined") {
+    return DEFAULT_PREVIEW_WIDTH;
+  }
+  return window.innerWidth <= 1180 ? 340 : DEFAULT_PREVIEW_WIDTH;
 }
 
 export default function AppShell() {
@@ -43,6 +70,17 @@ export default function AppShell() {
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
   const [auxiliaryTab, setAuxiliaryTab] = useState<AuxiliaryTab>("changes");
   const [auxiliaryVisible, setAuxiliaryVisible] = useState(defaultAuxiliaryVisible);
+  const [fileTreeSearchOpen, setFileTreeSearchOpen] = useState(false);
+  const [fileTreeCollapseVersion, setFileTreeCollapseVersion] = useState(0);
+  const [historyPanelWidth, setHistoryPanelWidth] = useState(DEFAULT_HISTORY_PANEL_WIDTH);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewWidth, setPreviewWidth] = useState(defaultPreviewWidth);
+  const [auxiliaryWidth, setAuxiliaryWidth] = useState(DEFAULT_AUXILIARY_WIDTH);
+  const [previewTabs, setPreviewTabs] = useState<WorkspaceFileContent[]>([]);
+  const [activePreviewPath, setActivePreviewPath] = useState<string | null>(null);
+  const [previewLoadingPath, setPreviewLoadingPath] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const cleanupLayoutResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
 
   useEffect(() => {
@@ -63,6 +101,20 @@ export default function AppShell() {
       mediaQuery.removeEventListener("change", syncAuxiliaryVisibility);
     };
   }, []);
+
+  useEffect(() => {
+    setPreviewTabs([]);
+    setActivePreviewPath(null);
+    setPreviewLoadingPath(null);
+    setPreviewError(null);
+  }, [state.workspaceRoot]);
+
+  useEffect(() => {
+    return () => {
+      cleanupLayoutResizeRef.current?.();
+    };
+  }, []);
+
   const conversations = activeSession
     ? getConversationsForSession(activeSession.session_id, state)
     : [];
@@ -75,6 +127,65 @@ export default function AppShell() {
       new Date(a.updated_at || a.created_at || "").getTime(),
   );
   const historyVisible = state.historyPanelOpen;
+  const startLayoutResize = (
+    target: LayoutResizeTarget,
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    event.preventDefault();
+    cleanupLayoutResizeRef.current?.();
+
+    const startX = event.clientX;
+    const startHistoryPanelWidth = historyPanelWidth;
+    const startPreviewWidth = previewWidth;
+    const startAuxiliaryWidth = auxiliaryWidth;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      if (target === "history-right") {
+        setHistoryPanelWidth(
+          clampLayoutWidth(
+            startHistoryPanelWidth + deltaX,
+            MIN_HISTORY_PANEL_WIDTH,
+            MAX_HISTORY_PANEL_WIDTH,
+          ),
+        );
+        return;
+      }
+
+      if (target === "preview-left") {
+        setPreviewWidth(
+          clampLayoutWidth(
+            startPreviewWidth - deltaX,
+            MIN_PREVIEW_WIDTH,
+            MAX_PREVIEW_WIDTH,
+          ),
+        );
+        return;
+      }
+
+      setAuxiliaryWidth(
+        clampLayoutWidth(
+          startAuxiliaryWidth - deltaX,
+          MIN_AUXILIARY_WIDTH,
+          MAX_AUXILIARY_WIDTH,
+        ),
+      );
+    };
+
+    const finishResize = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", finishResize);
+      document.body.classList.remove(LAYOUT_RESIZING_CLASS);
+      cleanupLayoutResizeRef.current = null;
+    };
+
+    document.body.classList.add(LAYOUT_RESIZING_CLASS);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", finishResize);
+    cleanupLayoutResizeRef.current = finishResize;
+  };
   const handleCreateSession = () => {
     setNameDialog(null);
     setNameDialogError(null);
@@ -163,6 +274,57 @@ export default function AppShell() {
       const targetElement = target instanceof HTMLElement ? target : null;
       targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
+  };
+
+  const openWorkspaceFilePreview = (node: WorkspaceFileNode) => {
+    if (node.kind !== "file" && node.kind !== "symlink" && node.kind !== "other") {
+      return;
+    }
+
+    const existingTab = previewTabs.find((tab) => tab.path === node.path);
+    if (existingTab) {
+      setPreviewVisible(true);
+      setActivePreviewPath(existingTab.path);
+      setPreviewError(null);
+      setStatus(`已切换预览: ${existingTab.path}`);
+      return;
+    }
+
+    setPreviewVisible(true);
+    setActivePreviewPath(node.path);
+    setPreviewLoadingPath(node.path);
+    setPreviewError(null);
+    setStatus(`正在读取文件: ${node.path}`);
+
+    void getWorkspaceFileContent(state.apiPort ?? DEFAULT_BACKEND_PORT, node.path)
+      .then((content) => {
+        setPreviewTabs((prev) => {
+          const withoutDuplicate = prev.filter((tab) => tab.path !== content.path);
+          return [...withoutDuplicate, content];
+        });
+        setActivePreviewPath(content.path);
+        setStatus(`已打开预览: ${content.path}`);
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setPreviewError(message);
+        setStatus(`文件预览失败: ${message}`);
+      })
+      .finally(() => {
+        setPreviewLoadingPath(null);
+      });
+  };
+
+  const closeWorkspaceFilePreview = (path: string) => {
+    setPreviewTabs((prev) => {
+      const closedIndex = prev.findIndex((tab) => tab.path === path);
+      const nextTabs = prev.filter((tab) => tab.path !== path);
+      if (activePreviewPath === path) {
+        const fallbackTab = nextTabs[Math.max(0, closedIndex - 1)] ?? nextTabs[0] ?? null;
+        setActivePreviewPath(fallbackTab?.path ?? null);
+      }
+      return nextTabs;
+    });
   };
 
   const renderContentView = () => {
@@ -270,29 +432,16 @@ export default function AppShell() {
 
     return (
       <div className="auxiliary-view-body auxiliary-files-body">
-        <div className="files-tree-root">
-          <button
-            type="button"
-            className="files-tree-item root"
-            onClick={() => setStatus(`当前工作区: ${state.workspaceRoot || state.workspaceName || "workspace"}`)}
-          >
-            <span className="codicon-lite">▾</span>
-            <span className="file-icon">▣</span>
-            <span className="file-label">{state.workspaceName || "workspace"}</span>
-          </button>
-          <div className="files-tree-item muted">
-            <span className="codicon-lite" />
-            <span className="file-icon">◇</span>
-            <span className="file-label">VS Code Explorer 文件树服务尚未暴露给 Web</span>
-          </div>
-        </div>
-        <button
-          type="button"
-          className="auxiliary-inline-action"
-          onClick={() => setStatus("文件视图已同步，当前 Web 端仅显示工作区根")}
-        >
-          同步更改
-        </button>
+        <WorkspaceFileTree
+          apiPort={state.apiPort}
+          workspaceName={state.workspaceName}
+          workspaceRoot={state.workspaceRoot}
+          activeFilePath={activePreviewPath}
+          searchOpen={fileTreeSearchOpen}
+          collapseVersion={fileTreeCollapseVersion}
+          onOpenFile={openWorkspaceFilePreview}
+          onStatusChange={setStatus}
+        />
       </div>
     );
   };
@@ -318,7 +467,9 @@ export default function AppShell() {
         ) : state.isBootstrapping ? (
           <BootstrapState />
         ) : null}
-        <div className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}`}>
+        <div
+          className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${previewVisible ? "" : " preview-collapsed"}`}
+        >
           {historyVisible ? (
             <button
               type="button"
@@ -341,15 +492,63 @@ export default function AppShell() {
             activeSession={activeSession}
             sessionAttachmentSummaries={state.sessionAttachmentSummaries}
             onCreateSession={handleCreateSession}
+            width={historyPanelWidth}
           />
+          {historyVisible ? (
+            <button
+              type="button"
+              className="layout-sash layout-sash-history-right"
+              title="拖拽调整会话侧栏宽度，双击还原"
+              aria-label="调整会话侧栏宽度"
+              onPointerDown={(event) => startLayoutResize("history-right", event)}
+              onDoubleClick={() => setHistoryPanelWidth(DEFAULT_HISTORY_PANEL_WIDTH)}
+            />
+          ) : null}
           <section className="chat-panel sessions-part-card">
             <div className="session-view-surface">
               <div className="session-view-content">{renderContentView()}</div>
               <Composer />
             </div>
           </section>
+          {previewVisible ? (
+            <>
+              <button
+                type="button"
+                className="layout-sash layout-sash-preview-left"
+                title="拖拽调整文件预览区宽度，双击还原"
+                aria-label="调整文件预览区宽度"
+                onPointerDown={(event) => startLayoutResize("preview-left", event)}
+                onDoubleClick={() => setPreviewWidth(defaultPreviewWidth())}
+              />
+              <WorkspaceFilePreviewArea
+                width={previewWidth}
+                tabs={previewTabs}
+                activePath={activePreviewPath}
+                loadingPath={previewLoadingPath}
+                error={previewError}
+                onSelectTab={(path) => {
+                  setActivePreviewPath(path);
+                  setPreviewError(null);
+                }}
+                onCloseTab={closeWorkspaceFilePreview}
+                onClosePanel={() => setPreviewVisible(false)}
+              />
+            </>
+          ) : null}
           {auxiliaryVisible ? (
-            <aside className="auxiliary-panel">
+            <>
+              <button
+                type="button"
+                className="layout-sash layout-sash-auxiliary-left"
+                title="拖拽调整右侧栏宽度，双击还原"
+                aria-label="调整右侧栏宽度"
+                onPointerDown={(event) => startLayoutResize("auxiliary-left", event)}
+                onDoubleClick={() => setAuxiliaryWidth(DEFAULT_AUXILIARY_WIDTH)}
+              />
+              <aside
+                className="auxiliary-panel"
+                style={{ flexBasis: auxiliaryWidth, width: auxiliaryWidth }}
+              >
               <header className="auxiliary-titlebar">
                 <nav className="auxiliary-tabs" aria-label="会话详情">
                   <button
@@ -367,17 +566,36 @@ export default function AppShell() {
                     文件
                   </button>
                 </nav>
-                <button
-                  type="button"
-                  className="auxiliary-icon-button"
-                  title="折叠详情"
-                  onClick={() => setAuxiliaryVisible(false)}
-                >
-                  ◱
-                </button>
+                <div className="auxiliary-title-actions" aria-label="文件视图操作">
+                  <button
+                    type="button"
+                    className={`auxiliary-icon-button${fileTreeSearchOpen ? " active" : ""}`}
+                    title="搜索"
+                    aria-label="搜索文件"
+                    onClick={() => {
+                      setAuxiliaryTab("files");
+                      setFileTreeSearchOpen((open) => !open);
+                    }}
+                  >
+                    <span className="auxiliary-action-icon search" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="auxiliary-icon-button"
+                    title="全部折叠"
+                    aria-label="全部折叠"
+                    onClick={() => {
+                      setAuxiliaryTab("files");
+                      setFileTreeCollapseVersion((version) => version + 1);
+                    }}
+                  >
+                    <span className="auxiliary-action-icon collapse-all" aria-hidden="true" />
+                  </button>
+                </div>
               </header>
               {renderAuxiliaryPanel()}
-            </aside>
+              </aside>
+            </>
           ) : (
             <button
               type="button"
