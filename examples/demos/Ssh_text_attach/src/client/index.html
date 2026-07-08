@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SSH Text Attach Demo</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="target-panel">
+        <div class="brand">
+          <div class="brand-mark">TXT</div>
+          <div>
+            <h1>Text Attach</h1>
+            <p id="api-origin">7910</p>
+          </div>
+        </div>
+        <div id="target-list" class="target-list"></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div>
+            <div class="eyebrow" id="active-kind">未 attach</div>
+            <h2 id="active-title">选择目标</h2>
+          </div>
+          <div class="toolbar">
+            <button id="attach-button" type="button">Attach</button>
+            <button id="refresh-button" type="button" disabled>刷新</button>
+            <button id="save-button" type="button" disabled>保存</button>
+          </div>
+        </header>
+
+        <section class="meta-strip">
+          <div>
+            <span>状态</span>
+            <strong id="status-text">未连接</strong>
+          </div>
+          <div>
+            <span>路径</span>
+            <strong id="file-path">-</strong>
+          </div>
+          <div>
+            <span>更新时间</span>
+            <strong id="updated-at">-</strong>
+          </div>
+        </section>
+
+        <textarea id="file-editor" spellcheck="false" disabled></textarea>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

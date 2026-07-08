@@ -1,0 +1,14 @@
+{
+  "name": "ssh-text-attach-demo",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/roles-up.mjs --profile host",
+    "dev": "node scripts/roles-up.mjs --profile host",
+    "server": "node src/server/server.js",
+    "docker:up": "node scripts/docker-up.mjs",
+    "test": "bun test",
+    "check": "node scripts/check.mjs"
+  }
+}

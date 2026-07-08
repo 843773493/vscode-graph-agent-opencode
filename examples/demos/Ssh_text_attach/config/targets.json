@@ -1,0 +1,24 @@
+{
+  "defaultTargetId": "7c9e2a4f1b6d",
+  "targets": [
+    {
+      "id": "7c9e2a4f1b6d",
+      "name": "青岚节点",
+      "kind": "local",
+      "backendOrigin": "http://127.0.0.1:7912"
+    },
+    {
+      "id": "3f8b1d6a9c02",
+      "name": "星桥节点",
+      "kind": "ssh",
+      "ssh": {
+        "host": "127.0.0.1",
+        "port": 2222,
+        "user": "demo",
+        "privateKeyPath": "ssh/id_ed25519",
+        "remoteBackendHost": "127.0.0.1",
+        "remoteBackendPort": 7912
+      }
+    }
+  ]
+}

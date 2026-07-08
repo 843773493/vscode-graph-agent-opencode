@@ -1,0 +1,30 @@
+services:
+  container-runtime:
+    image: ssh_text_attach-ssh-text-attach
+    build:
+      context: .
+      args:
+        SSH_TEXT_BASE_IMAGE: ${SSH_TEXT_BASE_IMAGE:-ssh-text-attach-node:22-bookworm-slim}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        ALL_PROXY: ${ALL_PROXY:-}
+        http_proxy: ${http_proxy:-}
+        https_proxy: ${https_proxy:-}
+        all_proxy: ${all_proxy:-}
+    container_name: ssh-text-attach-container-runtime
+    working_dir: /workspace/demo
+    command: ["node", "scripts/roles-up.mjs", "--profile", "container"]
+    volumes:
+      - .:/workspace/demo
+      - ssh-text-attach-container-boxteam:/workspace/demo/.boxteam
+    environment:
+      SSH_TEXT_DOCKER_PROFILE: container
+    ports:
+      - "2222:22"
+    expose:
+      - "7912"
+      - "7910"
+      - "7911"
+
+volumes:
+  ssh-text-attach-container-boxteam:

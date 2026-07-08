@@ -35,9 +35,10 @@ export default function SkillSummaryCard({
       : "";
     return `- ${invocation}${result.toolName}${suffix} -> ${result.resultText}`;
   });
-  const collapsedContent = toolLines.length > 0
-    ? toolLines.join("\n")
-    : "Skill 执行验证已折叠";
+  const collapsedContent =
+    item.toolResults.length > 0
+      ? `已读取 ${Array.from(new Set(item.readSkills)).length} 个 skill，调用 ${item.toolResults.length} 个扩展工具。`
+      : "Skill 执行验证已折叠";
   const content = [
     `**已读取 Skill**\n${readSkills}`,
     `**技能工具已执行**\n${toolLines.join("\n")}`,

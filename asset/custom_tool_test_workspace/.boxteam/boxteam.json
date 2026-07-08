@@ -6,6 +6,10 @@
           {
             "name": "test_tool_2",
             "factory": "app.agents.tools.testing:create_test_tool_2"
+          },
+          {
+            "name": "read_session_recent_text_messages",
+            "factory": "app.agents.tools.session_history:create_read_session_recent_text_messages_tool"
           }
         ]
       }

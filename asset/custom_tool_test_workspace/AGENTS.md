@@ -21,6 +21,7 @@
 当前工作区配置了扩展工具 skill。扩展工具不会直接出现在模型的 tools 列表中，模型应先根据用户提到的扩展工具名称找到对应 skill，再读取该 skill 的完整说明。
 
 - 当用户要求调用 `test_tool_2` 时，读取 `/.boxteam/skills/test-tool-2/SKILL.md`。
+- 当用户要求读取另一个会话最近 N 轮用户消息和模型文本消息时，读取 `/.boxteam/skills/read-session-recent-text-messages/SKILL.md`。
 - 不要根据本文件猜测调用参数；具体固定入口名称、目标工具名和参数必须以对应 skill 为准。
 
 读取 skill 后，必须发起真实工具调用，不要只描述调用计划。
