@@ -28,7 +28,7 @@ export default defineConfig({
     hmr: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8010",
+        target: "http://127.0.0.1:8014",
         changeOrigin: true,
       },
     },

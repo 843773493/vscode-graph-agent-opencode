@@ -24,7 +24,7 @@ import type {
 } from "./types/backend";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
-export const DEFAULT_BACKEND_PORT = 8010;
+export const DEFAULT_BACKEND_PORT = 8014;
 export const DEFAULT_BACKEND_TOKEN = "local-dev-token";
 export const DEFAULT_AGENT_ID = "default";
 export const DEFAULT_SESSION_TITLE = "新会话";
@@ -42,7 +42,7 @@ function getBaseUrl(port: number): string {
   return `http://${DEFAULT_BACKEND_HOST}:${port}`;
 }
 
-async function requestJson<T>(
+export async function requestJson<T>(
   port: number,
   path: string,
   init?: RequestJsonInit,
@@ -96,7 +96,7 @@ async function requestJson<T>(
   }
 }
 
-function unwrapApiData<T>(response: APIResponse<T>): T {
+export function unwrapApiData<T>(response: APIResponse<T>): T {
   if (response.data == null) {
     throw new Error(
       `后端响应缺少 data 字段: ${response.message || "unknown message"}`,

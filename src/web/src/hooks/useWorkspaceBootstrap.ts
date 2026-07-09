@@ -5,6 +5,7 @@ import {
   listAgents as apiListAgents,
   listSessions,
 } from "../api";
+import { listGatewayWorkspaces } from "../gatewayApi";
 import { readLastSessionId } from "../state/storage";
 import type { SetAppState } from "./contentViewLoaderTypes";
 
@@ -18,7 +19,8 @@ export function useWorkspaceBootstrap({
   const refreshSessions = useCallback(async () => {
     try {
       const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
-      const [workspace, sessions, agents] = await Promise.all([
+      const [gatewayWorkspaces, workspace, sessions, agents] = await Promise.all([
+        listGatewayWorkspaces(resolvedApiPort),
         getWorkspace(resolvedApiPort),
         listSessions(resolvedApiPort),
         apiListAgents(resolvedApiPort),
@@ -34,6 +36,9 @@ export function useWorkspaceBootstrap({
           null;
         return {
           ...prev,
+          gatewayWorkspaces: gatewayWorkspaces.items,
+          activeGatewayWorkspaceId: gatewayWorkspaces.active_workspace_id,
+          gatewayError: null,
           workspaceRoot: workspace.root_path,
           workspaceName: workspace.name,
           agents,
@@ -57,4 +62,6 @@ export function useWorkspaceBootstrap({
   useEffect(() => {
     void refreshSessions();
   }, [refreshSessions]);
+
+  return { refreshSessions };
 }

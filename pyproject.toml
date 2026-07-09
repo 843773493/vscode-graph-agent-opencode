@@ -5,6 +5,7 @@ description = "VS Code AI 编程助手后端"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.109.0",
+    "httpx>=0.27.0",
     "uvicorn>=0.27.0",
     "pydantic>=2.6.0",
     "python-multipart>=0.0.6",

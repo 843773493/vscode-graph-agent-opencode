@@ -1,5 +1,6 @@
 import React from 'react';
 import { useAppState } from '../hooks';
+import WorkspaceSwitcher from './workspace/WorkspaceSwitcher';
 
 function shortLabel(value: string | null | undefined): string {
   const trimmed = String(value ?? '').trim();
@@ -16,7 +17,14 @@ function Icon({ children }: { children: React.ReactNode }) {
 }
 
 export default function Toolbar({ workspaceName, workspaceRoot, status, agentId, onCreateSession }: { workspaceName: string | null | undefined; workspaceRoot: string | null | undefined; status: string; agentId: string | null | undefined; onCreateSession: () => void }) {
-  const { toggleHistoryPanel, setStatus } = useAppState();
+  const {
+    state,
+    toggleHistoryPanel,
+    setStatus,
+    activateGatewayWorkspace,
+    addLocalGatewayWorkspace,
+    addSshGatewayWorkspace,
+  } = useAppState();
   const wsLabel = workspaceRoot || workspaceName || undefined;
   const wsShort = shortLabel(wsLabel);
   const agentLabel = agentId || 'default';
@@ -48,6 +56,14 @@ export default function Toolbar({ workspaceName, workspaceRoot, status, agentId,
         </div>
       </div>
       <div className="toolbar-group toolbar-group-right">
+        <WorkspaceSwitcher
+          workspaces={state.gatewayWorkspaces}
+          activeWorkspaceId={state.activeGatewayWorkspaceId}
+          switching={state.workspaceSwitching}
+          onActivate={activateGatewayWorkspace}
+          onAddLocal={addLocalGatewayWorkspace}
+          onAddSsh={addSshGatewayWorkspace}
+        />
         <span className="toolbar-agent" title={agentLabel}>
             <Icon>
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2.5a2 2 0 0 1 2 2V5h1.5A2.5 2.5 0 0 1 14 7.5v4A2.5 2.5 0 0 1 11.5 14h-7A2.5 2.5 0 0 1 2 11.5v-4A2.5 2.5 0 0 1 4.5 5H6v-.5a2 2 0 0 1 2-2Zm-1 4.5h2v1h-2v-1Zm0 2.5h2v1h-2v-1Z" fill="currentColor"/></svg>

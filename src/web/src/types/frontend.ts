@@ -1,6 +1,7 @@
 // 前端内部类型
 import type {
   Agent,
+  GatewayWorkspace,
   LLMRequestLogRecord,
   Message,
   Session,
@@ -77,6 +78,10 @@ export interface SessionAttachmentSummary {
 
 export interface AppState {
   apiPort: number | null;
+  gatewayWorkspaces: GatewayWorkspace[];
+  activeGatewayWorkspaceId: string | null;
+  workspaceSwitching: boolean;
+  gatewayError: string | null;
   workspaceRoot: string | null;
   workspaceName: string | null;
   agents: Agent[];

@@ -22,11 +22,13 @@ const port = "8010";
 const frontendPort = "8011";
 const terminalBackendPort = "8012";
 const terminalFrontendPort = "8013";
+const gatewayPort = "8014";
 const host = "127.0.0.1";
 const terminalHost = process.env.BOXTEAM_TERMINAL_LISTEN_HOST ?? "0.0.0.0";
 const backendDebugPort = "8002";
 const frontendHealthUrl = `http://${host}:${frontendPort}/health`;
 const backendHealthUrl = `http://${host}:${port}/api/v1/health`;
+const gatewayHealthUrl = `http://${host}:${gatewayPort}/api/gateway/health`;
 const terminalBackendHealthUrl = `http://${host}:${terminalBackendPort}/health`;
 const terminalFrontendHealthUrl = `http://${host}:${terminalFrontendPort}/health`;
 const onlyLaunch = process.argv.slice(2).some((arg) => arg === "--only-launch");
@@ -98,6 +100,7 @@ async function killWindowsPort() {
       !trimmed.includes(`:${frontendPort}`) &&
       !trimmed.includes(`:${terminalBackendPort}`) &&
       !trimmed.includes(`:${terminalFrontendPort}`) &&
+      !trimmed.includes(`:${gatewayPort}`) &&
       !trimmed.includes(`:${backendDebugPort}`)
     )
       continue;
@@ -131,6 +134,7 @@ async function killUnixPort() {
         !line.includes(`:${frontendPort}`) &&
         !line.includes(`:${terminalBackendPort}`) &&
         !line.includes(`:${terminalFrontendPort}`) &&
+        !line.includes(`:${gatewayPort}`) &&
         !line.includes(`:${backendDebugPort}`)
       )
         continue;
@@ -147,7 +151,7 @@ async function killUnixPort() {
     return;
   }
 
-  for (const targetPort of [port, frontendPort, terminalBackendPort, terminalFrontendPort, backendDebugPort]) {
+  for (const targetPort of [port, frontendPort, terminalBackendPort, terminalFrontendPort, gatewayPort, backendDebugPort]) {
     const lsof = Bun.spawnSync(["lsof", "-ti", `tcp:${targetPort}`], {
       cwd: workspaceRoot,
       stdout: "pipe",
@@ -277,10 +281,33 @@ async function main() {
     workspaceRoot,
     runtimeEnv,
   );
+  const gateway = spawnDetached(
+    pythonBin,
+    [
+      "-m",
+      "uvicorn",
+      "app.gateway.main:app",
+      "--host",
+      host,
+      "--port",
+      gatewayPort,
+      "--log-level",
+      "warning",
+    ],
+    workspaceRoot,
+    {
+      ...runtimeEnv,
+      BOXTEAM_GATEWAY_ROOT: path.join(runtimeWorkspaceRoot, ".boxteam", "gateway"),
+      BOXTEAM_DEFAULT_BACKEND_URL: `http://${host}:${port}`,
+      BOXTEAM_DEFAULT_WORKSPACE_ROOT: runtimeWorkspaceRoot,
+      BOXTEAM_GATEWAY_FORCE_DEFAULT_ACTIVE: "1",
+    },
+  );
 
   await Promise.all([
     waitForHttpOk(frontendHealthUrl, "frontend"),
     waitForHttpOk(backendHealthUrl, "backend"),
+    waitForHttpOk(gatewayHealthUrl, "gateway"),
     waitForHttpOk(terminalBackendHealthUrl, "terminal backend"),
     waitForHttpOk(terminalFrontendHealthUrl, "terminal frontend"),
   ]);
@@ -288,13 +315,14 @@ async function main() {
   if (onlyLaunch) {
     frontend.unref();
     backend.unref();
+    gateway.unref();
     terminalBackend.unref();
     terminalFrontend.unref();
     return;
   }
 
   const stopBoth = async (exitCode) => {
-    for (const proc of [frontend, backend, terminalBackend, terminalFrontend]) {
+    for (const proc of [frontend, backend, gateway, terminalBackend, terminalFrontend]) {
       try {
         proc.kill();
       } catch {
@@ -325,6 +353,13 @@ async function main() {
       void stopBoth(1);
     });
 
+  gateway.exited
+    .then((code) => stopBoth(code))
+    .catch((error) => {
+      console.error(error);
+      void stopBoth(1);
+    });
+
   terminalFrontend.exited
     .then((code) => stopBoth(code))
     .catch((error) => {
@@ -335,7 +370,7 @@ async function main() {
   process.on("SIGINT", () => void stopBoth(130));
   process.on("SIGTERM", () => void stopBoth(143));
 
-  await Promise.race([frontend.exited, backend.exited]);
+  await Promise.race([frontend.exited, backend.exited, gateway.exited]);
 }
 
 await main();

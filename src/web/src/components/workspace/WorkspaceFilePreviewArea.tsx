@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { WorkspaceFileContent } from "../types/backend";
+import type { WorkspaceFileContent } from "../../types/backend";
 
 interface WorkspaceFilePreviewAreaProps {
   width: number;

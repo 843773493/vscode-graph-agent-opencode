@@ -89,5 +89,39 @@ export interface CursorPage<T> {
   has_more?: boolean;
 }
 
+export interface GatewayWorkspace {
+  workspace_id: string;
+  name: string;
+  root_path: string;
+  backend_url: string;
+  connection_kind: "local" | "ssh";
+  status: "ready" | "offline";
+  active: boolean;
+  managed: boolean;
+  remote: Record<string, unknown>;
+}
+
+export interface GatewayWorkspaceList {
+  active_workspace_id: string | null;
+  items: GatewayWorkspace[];
+}
+
+export interface AddLocalGatewayWorkspaceRequest {
+  root_path: string;
+  name?: string | null;
+  backend_url?: string | null;
+}
+
+export interface AddSshGatewayWorkspaceRequest {
+  name?: string | null;
+  host: string;
+  port: number;
+  username: string;
+  private_key_path: string;
+  remote_backend_host: string;
+  remote_backend_port: number;
+  remote_workspace_path: string;
+}
+
 export type SessionResourceKind = SessionResourceDTO["kind"];
 export type SessionResourceAction = NonNullable<SessionResourceDTO["available_actions"]>[number];

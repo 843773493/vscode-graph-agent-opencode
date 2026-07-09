@@ -8,7 +8,14 @@ import React, {
 import {
   DEFAULT_BACKEND_PORT,
 } from "./api";
+import {
+  activateGatewayWorkspace as apiActivateGatewayWorkspace,
+  addLocalGatewayWorkspace as apiAddLocalGatewayWorkspace,
+  addSshGatewayWorkspace as apiAddSshGatewayWorkspace,
+} from "./gatewayApi";
 import type {
+  AddLocalGatewayWorkspaceRequest,
+  AddSshGatewayWorkspaceRequest,
   AttachmentRef,
   SessionResourceAction,
   SessionResourceKind,
@@ -40,6 +47,10 @@ function defaultHistoryPanelOpen(): boolean {
 
 const INITIAL_STATE: AppState = {
   apiPort: DEFAULT_BACKEND_PORT,
+  gatewayWorkspaces: [],
+  activeGatewayWorkspaceId: null,
+  workspaceSwitching: false,
+  gatewayError: null,
   workspaceRoot: null,
   workspaceName: null,
   agents: [],
@@ -96,6 +107,13 @@ interface AppContextType {
   toggleHistoryPanel: () => void;
   toggleExpandDetails: (expand: boolean) => void;
   switchContentView: (view: ConversationContentView) => void;
+  activateGatewayWorkspace: (workspaceId: string) => Promise<void>;
+  addLocalGatewayWorkspace: (
+    payload: AddLocalGatewayWorkspaceRequest,
+  ) => Promise<void>;
+  addSshGatewayWorkspace: (
+    payload: AddSshGatewayWorkspaceRequest,
+  ) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -182,7 +200,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState,
   });
 
-  useWorkspaceBootstrap({ apiPort: state.apiPort, setState });
+  const { refreshSessions } = useWorkspaceBootstrap({ apiPort: state.apiPort, setState });
   useSessionHistoryLoader({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
@@ -194,6 +212,118 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshLLMRequestLogs,
     refreshSessionResources,
   });
+
+  const resetWorkspaceScopedState = useCallback(() => {
+    abortCurrentStream();
+    setState((prev) => ({
+      ...prev,
+      workspaceSwitching: true,
+      isBootstrapping: true,
+      error: null,
+      workspaceRoot: null,
+      workspaceName: null,
+      agents: [],
+      sessions: [],
+      currentSession: null,
+      messages: [],
+      traceEvents: [],
+      llmRequestLogs: [],
+      llmRequestLogsLoadedAt: null,
+      llmRequestLogsLoading: false,
+      llmRequestLogsError: null,
+      sessionResources: [],
+      sessionResourcesLoadedAt: null,
+      sessionResourcesLoading: false,
+      sessionResourcesError: null,
+      eventQueuesBySession: new Map(),
+      pendingConversations: new Map(),
+      contentView: "default",
+      agentStateJsonl: "",
+      agentStateMessageCount: 0,
+      agentStateLoadedAt: null,
+      agentStateLoading: false,
+      agentStateError: null,
+      status: "正在切换工作区",
+    }));
+  }, [abortCurrentStream]);
+
+  const finishWorkspaceRefresh = useCallback(async () => {
+    await refreshSessions();
+    setState((prev) => ({
+      ...prev,
+      workspaceSwitching: false,
+      status: "工作区已就绪",
+    }));
+  }, [refreshSessions]);
+
+  const activateGatewayWorkspace = useCallback(
+    async (workspaceId: string) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      resetWorkspaceScopedState();
+      try {
+        await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
+        await finishWorkspaceRefresh();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({
+          ...prev,
+          workspaceSwitching: false,
+          gatewayError: message,
+          error: message,
+          status: "工作区切换失败",
+          isBootstrapping: false,
+        }));
+        throw error;
+      }
+    },
+    [finishWorkspaceRefresh, resetWorkspaceScopedState, state.apiPort],
+  );
+
+  const addLocalGatewayWorkspace = useCallback(
+    async (payload: AddLocalGatewayWorkspaceRequest) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      resetWorkspaceScopedState();
+      try {
+        await apiAddLocalGatewayWorkspace(resolvedApiPort, payload);
+        await finishWorkspaceRefresh();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({
+          ...prev,
+          workspaceSwitching: false,
+          gatewayError: message,
+          error: message,
+          status: "添加本机工作区失败",
+          isBootstrapping: false,
+        }));
+        throw error;
+      }
+    },
+    [finishWorkspaceRefresh, resetWorkspaceScopedState, state.apiPort],
+  );
+
+  const addSshGatewayWorkspace = useCallback(
+    async (payload: AddSshGatewayWorkspaceRequest) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      resetWorkspaceScopedState();
+      try {
+        await apiAddSshGatewayWorkspace(resolvedApiPort, payload);
+        await finishWorkspaceRefresh();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({
+          ...prev,
+          workspaceSwitching: false,
+          gatewayError: message,
+          error: message,
+          status: "添加 SSH 工作区失败",
+          isBootstrapping: false,
+        }));
+        throw error;
+      }
+    },
+    [finishWorkspaceRefresh, resetWorkspaceScopedState, state.apiPort],
+  );
 
   const value = useMemo(
     () => ({
@@ -212,6 +342,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       toggleHistoryPanel,
       toggleExpandDetails,
       switchContentView,
+      activateGatewayWorkspace,
+      addLocalGatewayWorkspace,
+      addSshGatewayWorkspace,
     }),
     [
       state,
@@ -230,6 +363,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       toggleExpandDetails,
       refreshLLMRequestLogs,
       switchContentView,
+      activateGatewayWorkspace,
+      addLocalGatewayWorkspace,
+      addSshGatewayWorkspace,
     ],
   );
 

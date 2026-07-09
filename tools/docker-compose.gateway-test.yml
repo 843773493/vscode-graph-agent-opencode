@@ -1,0 +1,14 @@
+services:
+  boxteam-gateway-ssh-target:
+    build:
+      context: ..
+      dockerfile: tools/Dockerfile.gateway-test
+    image: boxteam-gateway-ssh-target:local
+    container_name: boxteam-gateway-ssh-target
+    ports:
+      - "${BOXTEAM_GATEWAY_E2E_SSH_PORT:-22222}:22"
+    volumes:
+      - ..:/workspace/vscode-graph-agent-opencode
+    environment:
+      BOXTEAM_PROJECT_ROOT: /workspace/vscode-graph-agent-opencode
+    working_dir: /workspace/vscode-graph-agent-opencode

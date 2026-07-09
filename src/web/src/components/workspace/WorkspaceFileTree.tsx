@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_BACKEND_PORT, getWorkspaceFiles } from "../api";
-import type { WorkspaceFileNode } from "../types/backend";
+import { DEFAULT_BACKEND_PORT, getWorkspaceFiles } from "../../api";
+import type { WorkspaceFileNode } from "../../types/backend";
 
 interface DirectoryState {
   items: WorkspaceFileNode[];

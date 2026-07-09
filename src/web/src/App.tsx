@@ -8,8 +8,8 @@ import RequestLogPanel from "./components/RequestLogPanel";
 import ResourcePanel from "./components/ResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
 import Toolbar from "./components/Toolbar";
-import WorkspaceFilePreviewArea from "./components/WorkspaceFilePreviewArea";
-import WorkspaceFileTree from "./components/WorkspaceFileTree";
+import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
+import WorkspaceFileTree from "./components/workspace/WorkspaceFileTree";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { DEFAULT_BACKEND_PORT, getWorkspaceFileContent } from "./api";
 import {
