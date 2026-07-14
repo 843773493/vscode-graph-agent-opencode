@@ -21,7 +21,7 @@ async def create_message_and_run(
     session_id: str,
     payload: MessageRunRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
     session_orchestrator: SessionOrchestrator = Depends(get_session_orchestrator),
 ):
@@ -35,7 +35,7 @@ async def list_messages(
     limit: int = 50,
     cursor: str | None = None,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
 ):
     result = await message_service.list(session_id=session_id, limit=limit, cursor=cursor)
@@ -50,7 +50,7 @@ async def list_messages(
 async def get_agent_state_messages(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
 ):
     result = await message_service.get_agent_state_messages(session_id=session_id)
@@ -62,7 +62,7 @@ async def get_message(
     session_id: str,
     message_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
 ):
     result = await message_service.get(session_id=session_id, message_id=message_id)

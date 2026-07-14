@@ -130,7 +130,7 @@ export interface APIResponse<T> {
   code: number;
   message: string;
   data: T | null;
-  request_id?: string | null;
+  request_id: string;
 }
 
 export interface CursorPage<T> {

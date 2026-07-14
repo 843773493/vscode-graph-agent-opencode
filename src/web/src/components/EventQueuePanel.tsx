@@ -52,8 +52,7 @@ function EventQueueCard({ item, index }: { item: FrontendReceivedEvent; index: n
   const eventTime = formatDateTime(eventTimestamp(item));
   const receivedTime = formatDateTime(item.receivedAt);
   const event = item.kind === "trace" ? item.event : null;
-  const jobId =
-    event?.job_id && event.job_id !== "unknown_job" ? event.job_id : "";
+  const jobId = event?.job_id ?? "";
   const toolSummary = toolEventSummary(type, payload);
 
   return (
@@ -121,8 +120,7 @@ function TextDeltaGroupCard({
   const first = items[0];
   const last = items[items.length - 1];
   const event = first?.kind === "trace" ? first.event : null;
-  const jobId =
-    event?.job_id && event.job_id !== "unknown_job" ? event.job_id : "";
+  const jobId = event?.job_id ?? "";
   const eventTime = first ? formatDateTime(eventTimestamp(first)) : "";
   const receivedTime = last ? formatDateTime(last.receivedAt) : "";
   const mergedText = items.map(textDeltaText).join("");

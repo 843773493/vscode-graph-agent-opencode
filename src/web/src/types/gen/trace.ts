@@ -10,7 +10,7 @@ export interface TraceEventDTO {
   event_id: string;
   part_id?: string | null;
   session_id: string;
-  job_id?: string | null;
+  job_id: string;
   type:
     | "agent_start"
     | "llm_request"

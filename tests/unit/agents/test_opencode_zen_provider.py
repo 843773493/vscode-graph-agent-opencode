@@ -16,7 +16,7 @@ from langchain_core.messages import (
     message_chunk_to_message,
 )
 
-from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel, _StreamPartState
 
 
 @pytest.fixture
@@ -159,13 +159,16 @@ def test_stream_parses_reasoning_content_from_delta(
             ]
         },
         first_chunk_yielded=False,
+        part_state=_StreamPartState(),
     )
 
     assert len(chunks) == 1
     assert chunks[0].message.additional_kwargs == {}
-    assert chunks[0].message.content == [
-        {"type": "reasoning", "reasoning": "这是思考过程"}
-    ]
+    block = chunks[0].message.content[0]
+    assert block["type"] == "reasoning"
+    assert block["reasoning"] == "这是思考过程"
+    assert block["id"].startswith("part_")
+    assert block["index"] == 0
 
 
 def test_stream_parses_reasoning_content_from_model_extra(
@@ -186,18 +189,21 @@ def test_stream_parses_reasoning_content_from_model_extra(
             ]
         },
         first_chunk_yielded=False,
+        part_state=_StreamPartState(),
     )
 
     assert len(chunks) == 1
     assert chunks[0].message.additional_kwargs == {}
-    assert chunks[0].message.content == [
-        {"type": "reasoning", "reasoning": "通过 model_extra 的思考"}
-    ]
+    block = chunks[0].message.content[0]
+    assert block["reasoning"] == "通过 model_extra 的思考"
+    assert block["id"].startswith("part_")
+    assert block["index"] == 0
 
 
 def test_split_tool_arguments_merge_into_one_structured_call(
     model: BoxteamLiteLLMChatModel,
 ):
+    part_state = _StreamPartState()
     first = model._delta_to_message_chunks(
         {
             "tool_calls": [
@@ -211,7 +217,8 @@ def test_split_tool_arguments_merge_into_one_structured_call(
                     },
                 }
             ]
-        }
+        },
+        part_state=part_state,
     )[0]
     second = model._delta_to_message_chunks(
         {
@@ -221,7 +228,8 @@ def test_split_tool_arguments_merge_into_one_structured_call(
                     "function": {"arguments": '"src/main.py"}'},
                 }
             ]
-        }
+        },
+        part_state=part_state,
     )[0]
 
     message = message_chunk_to_message(first + second)
@@ -240,12 +248,102 @@ def test_split_tool_arguments_merge_into_one_structured_call(
 def test_streamed_plain_text_chunks_concatenate_without_injected_newlines(
     model: BoxteamLiteLLMChatModel,
 ):
-    first = model._delta_to_message_chunks({"content": "AG"})[0]
-    second = model._delta_to_message_chunks({"content": "ENT_END"})[0]
+    part_state = _StreamPartState()
+    first = model._delta_to_message_chunks(
+        {"content": "AG"}, part_state=part_state
+    )[0]
+    second = model._delta_to_message_chunks(
+        {"content": "ENT_END"}, part_state=part_state
+    )[0]
 
     message = message_chunk_to_message(first + second)
 
-    assert message.content == "AGENT_END"
+    assert len(message.content) == 1
+    assert message.content[0]["text"] == "AGENT_END"
+    assert message.content[0]["id"].startswith("part_")
+    assert message.content[0]["index"] == 0
+
+
+def test_reasoning_deltas_merge_by_authoritative_part_identity(
+    model: BoxteamLiteLLMChatModel,
+):
+    part_state = _StreamPartState()
+    first = model._delta_to_message_chunks(
+        {"reasoning_content": "先分析"},
+        part_state=part_state,
+    )[0]
+    second = model._delta_to_message_chunks(
+        {"reasoning_content": "再决定"},
+        part_state=part_state,
+    )[0]
+
+    first_block = first.content[0]
+    second_block = second.content[0]
+    assert first_block["id"] == second_block["id"]
+    assert first_block["index"] == second_block["index"] == 0
+
+    message = message_chunk_to_message(first + second)
+    assert message.content == [
+        {
+            "type": "reasoning",
+            "reasoning": "先分析再决定",
+            "id": first_block["id"],
+            "index": 0,
+        }
+    ]
+
+
+def test_reasoning_text_and_post_tool_reasoning_use_distinct_parts(
+    model: BoxteamLiteLLMChatModel,
+):
+    part_state = _StreamPartState()
+    reasoning = model._delta_to_message_chunks(
+        {"reasoning_content": "分析"},
+        part_state=part_state,
+    )[0]
+    text = model._delta_to_message_chunks(
+        {"content": "先说明"},
+        part_state=part_state,
+    )[0]
+    model._delta_to_message_chunks(
+        {
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ]
+        },
+        part_state=part_state,
+    )
+    after_tool = model._delta_to_message_chunks(
+        {"reasoning_content": "工具后分析"},
+        part_state=part_state,
+    )[0]
+
+    blocks = [reasoning.content[0], text.content[0], after_tool.content[0]]
+    assert [block["index"] for block in blocks] == [0, 1, 2]
+    assert len({block["id"] for block in blocks}) == 3
+
+
+def test_concurrent_model_streams_do_not_share_part_state(
+    model: BoxteamLiteLLMChatModel,
+):
+    first_stream = _StreamPartState()
+    second_stream = _StreamPartState()
+
+    first = model._delta_to_message_chunks(
+        {"content": "A"},
+        part_state=first_stream,
+    )[0].content[0]
+    second = model._delta_to_message_chunks(
+        {"content": "B"},
+        part_state=second_stream,
+    )[0].content[0]
+
+    assert first["index"] == second["index"] == 0
+    assert first["id"] != second["id"]
 
 
 def test_stream_usage_maps_litellm_cached_tokens_to_langchain_metadata(
@@ -262,6 +360,7 @@ def test_stream_usage_maps_litellm_cached_tokens_to_langchain_metadata(
             },
         },
         first_chunk_yielded=True,
+        part_state=_StreamPartState(),
     )
 
     assert len(chunks) == 1
@@ -287,6 +386,7 @@ def test_stream_usage_accepts_provider_cache_hit_fallback_field(
             },
         },
         first_chunk_yielded=True,
+        part_state=_StreamPartState(),
     )
 
     assert chunks[0].message.usage_metadata == {
@@ -300,6 +400,7 @@ def test_stream_usage_accepts_provider_cache_hit_fallback_field(
 def test_split_malformed_arguments_become_invalid_structured_call(
     model: BoxteamLiteLLMChatModel,
 ):
+    part_state = _StreamPartState()
     first = model._delta_to_message_chunks(
         {
             "tool_calls": [
@@ -313,7 +414,8 @@ def test_split_malformed_arguments_become_invalid_structured_call(
                     },
                 }
             ]
-        }
+        },
+        part_state=part_state,
     )[0]
     second = model._delta_to_message_chunks(
         {
@@ -323,7 +425,8 @@ def test_split_malformed_arguments_become_invalid_structured_call(
                     "function": {"arguments": "broken}"},
                 }
             ]
-        }
+        },
+        part_state=part_state,
     )[0]
 
     message = message_chunk_to_message(first + second)

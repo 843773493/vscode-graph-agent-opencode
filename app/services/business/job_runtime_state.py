@@ -15,9 +15,9 @@ class JobRuntimeState:
     session_id: str
     message: str
     agent_id: str
-    message_id: str | None = None
+    message_id: str
+    message_created_at: str
     attachments: list[AttachmentRef] = field(default_factory=list)
-    message_created_at: str | None = None
     status: JobStatus = JobStatus.queued
     progress: int = 0
     error_message: Optional[str] = None

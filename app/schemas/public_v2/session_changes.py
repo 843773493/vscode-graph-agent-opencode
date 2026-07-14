@@ -39,6 +39,7 @@ class SessionFileChangeDTO(BaseModel):
     reviewed: bool = False
     latest_edit_id: str
     tool_call_ids: list[str] = Field(default_factory=list)
+    execution_ids: list[str] = Field(default_factory=list)
     turn_ids: list[str] = Field(default_factory=list)
     before_file: str | None = None
     after_file: str | None = None

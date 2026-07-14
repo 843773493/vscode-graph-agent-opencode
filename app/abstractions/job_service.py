@@ -26,8 +26,9 @@ class JobServiceProtocol(Protocol):
         self,
         session_id: str,
         message: str,
+        *,
         agent_id: str = "default",
-        message_id: str | None = None,
+        message_id: str,
         attachments: list[AttachmentRef] | None = None,
-        message_created_at: str | None = None,
+        message_created_at: str,
     ) -> str: ...

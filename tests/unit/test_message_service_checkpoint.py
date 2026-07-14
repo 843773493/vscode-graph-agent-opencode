@@ -11,6 +11,18 @@ from app.schemas.public_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
 
 
+MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
+
+
+def _visible_metadata(message_id: str, **extra: object) -> dict[str, object]:
+    return {
+        "message_id": message_id,
+        "created_at": MESSAGE_TIME,
+        "updated_at": MESSAGE_TIME,
+        **extra,
+    }
+
+
 @pytest.mark.asyncio
 async def test_message_service_loads_history_from_checkpoint(tmp_path):
     saver = FileSystemCheckpointSaver(base_dir=tmp_path)
@@ -18,8 +30,17 @@ async def test_message_service_loads_history_from_checkpoint(tmp_path):
     checkpoint = {
         "channel_values": {
             "messages": [
-                HumanMessage(content="hi"),
-                AIMessage(content="hello", response_metadata={"phase": "text"}),
+                HumanMessage(
+                    content="hi",
+                    response_metadata=_visible_metadata("msg_user"),
+                ),
+                AIMessage(
+                    content="hello",
+                    response_metadata=_visible_metadata(
+                        "msg_assistant",
+                        phase="text",
+                    ),
+                ),
             ],
         },
         "channel_versions": {"messages": 1},
@@ -50,6 +71,34 @@ async def test_message_service_returns_empty_when_no_checkpoint(tmp_path):
     service = MessageService(checkpointer=saver)
     messages = await service.list(session_id="sess_noexist", limit=10)
     assert messages.items == []
+
+
+@pytest.mark.asyncio
+async def test_message_service_rejects_visible_message_without_persisted_identity(
+    tmp_path,
+):
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {
+        "configurable": {"thread_id": "sess_invalid_message", "checkpoint_ns": ""}
+    }
+    checkpoint = {
+        "channel_values": {"messages": [HumanMessage(content="hi")]},
+        "channel_versions": {"messages": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-invalid-message",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
+
+    with pytest.raises(RuntimeError, match="缺少持久化 message_id"):
+        await MessageService(checkpointer=saver).list(
+            session_id="sess_invalid_message",
+            limit=10,
+        )
 
 
 @pytest.mark.asyncio
@@ -106,7 +155,7 @@ async def test_message_service_dedupes_visible_messages_by_message_id(tmp_path):
     config = {"configurable": {"thread_id": "sess_dedupe", "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content="请调用 test_tool_2",
-        response_metadata={"message_id": "msg_user_001"},
+        response_metadata=_visible_metadata("msg_user_001"),
     )
     checkpoint = {
         "channel_values": {
@@ -115,7 +164,7 @@ async def test_message_service_dedupes_visible_messages_by_message_id(tmp_path):
                 user_message.model_copy(update={"id": "langchain-copy-id"}),
                 AIMessage(
                     content="4568",
-                    response_metadata={"message_id": "msg_assistant_001"},
+                    response_metadata=_visible_metadata("msg_assistant_001"),
                 ),
             ],
         },
@@ -145,7 +194,7 @@ async def test_agent_state_dedupes_consecutive_duplicate_records(tmp_path):
     config = {"configurable": {"thread_id": "sess_state_dedupe", "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content="请调用 test_tool_2",
-        response_metadata={"message_id": "msg_user_001"},
+        response_metadata=_visible_metadata("msg_user_001"),
     )
     checkpoint = {
         "channel_values": {
@@ -154,7 +203,7 @@ async def test_agent_state_dedupes_consecutive_duplicate_records(tmp_path):
                 user_message.model_copy(update={"id": "langchain-copy-id"}),
                 AIMessage(
                     content="4568",
-                    response_metadata={"message_id": "msg_assistant_001"},
+                    response_metadata=_visible_metadata("msg_assistant_001"),
                 ),
             ],
         },
@@ -192,10 +241,18 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(tmp_path)
             },
             {"type": "output_text", "text": "最终回答"},
         ],
-        response_metadata={"message_id": "msg_001"},
+        response_metadata=_visible_metadata("msg_001"),
     )
     checkpoint = {
-        "channel_values": {"messages": [HumanMessage(content="hi"), reasoning_msg]},
+        "channel_values": {
+            "messages": [
+                HumanMessage(
+                    content="hi",
+                    response_metadata=_visible_metadata("msg_user"),
+                ),
+                reasoning_msg,
+            ]
+        },
         "channel_versions": {"messages": 1},
         "updated_channels": ["messages"],
         "id": "ckpt-r",
@@ -217,7 +274,7 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(tmp_path)
     content_blocks = assistant.metadata.get("content_blocks")
     assert isinstance(content_blocks, list)
     assert content_blocks == [
-        {"type": "reasoning", "reasoning": "先思考一下", "extras": {"id": "rs_abc123"}},
+        {"type": "reasoning", "reasoning": "先思考一下", "id": "rs_abc123"},
         {"type": "text", "text": "最终回答"},
     ]
 
@@ -241,7 +298,15 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(tmp_path
         name="default",
     )
     checkpoint = {
-        "channel_values": {"messages": [HumanMessage(content="现在几点"), reasoning_msg]},
+        "channel_values": {
+            "messages": [
+                HumanMessage(
+                    content="现在几点",
+                    response_metadata=_visible_metadata("msg_user"),
+                ),
+                reasoning_msg,
+            ]
+        },
         "channel_versions": {"messages": 1},
         "updated_channels": ["messages"],
         "id": "ckpt-tool-reasoning",
@@ -290,12 +355,18 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(tmp_path
             {"type": "reasoning", "reasoning": "工具返回 4568。"},
             {"type": "text", "text": "4568"},
         ],
-        response_metadata={"phase": "final_answer"},
+        response_metadata=_visible_metadata(
+            "msg_assistant",
+            phase="final_answer",
+        ),
     )
     checkpoint = {
         "channel_values": {
             "messages": [
-                HumanMessage(content="请调用 test_tool_2"),
+                HumanMessage(
+                    content="请调用 test_tool_2",
+                    response_metadata=_visible_metadata("msg_user"),
+                ),
                 tool_call_message,
                 final_message,
             ]
@@ -333,7 +404,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(tmp_path):
             image_block,
         ],
         response_metadata={
-            "message_id": "msg_image",
+            **_visible_metadata("msg_image"),
             "attachments": [
                 AttachmentRef(
                     file_id="assets/test.jpg",
@@ -385,7 +456,7 @@ async def test_message_service_uses_display_content_for_user_message_text(tmp_pa
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,abc123"}},
         ],
         response_metadata={
-            "message_id": "msg_video",
+            **_visible_metadata("msg_video"),
             "display_content": "请按时间顺序说明这个视频。",
             "attachments": [
                 AttachmentRef(
@@ -426,9 +497,18 @@ async def test_message_service_refusal_block(tmp_path):
     config = {"configurable": {"thread_id": "sess_refusal", "checkpoint_ns": ""}}
     msg = AIMessage(
         content=[{"type": "refusal", "refusal": "我拒绝回答"}],
+        response_metadata=_visible_metadata("msg_assistant"),
     )
     checkpoint = {
-        "channel_values": {"messages": [HumanMessage(content="hi"), msg]},
+        "channel_values": {
+            "messages": [
+                HumanMessage(
+                    content="hi",
+                    response_metadata=_visible_metadata("msg_user"),
+                ),
+                msg,
+            ]
+        },
         "channel_versions": {"messages": 1},
         "updated_channels": ["messages"],
         "id": "ckpt-rf",

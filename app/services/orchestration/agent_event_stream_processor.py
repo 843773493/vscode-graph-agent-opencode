@@ -4,7 +4,6 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
-import uuid
 from typing import Any
 
 from langchain_core.messages import ToolMessage
@@ -17,7 +16,10 @@ from app.agents.tools.apply_patch import (
     APPLY_PATCH_TOOL_NAME,
     load_apply_patch_journal_from_result,
 )
-from app.services.mapping.agent_content_mapper import split_agent_content
+from app.services.mapping.agent_content_mapper import (
+    AgentStreamContentPart,
+    extract_agent_stream_content_parts,
+)
 from app.abstractions.session_changes import (
     FileEditSnapshot,
     SessionChangesRecorderProtocol,
@@ -44,7 +46,7 @@ TEXT_DELTA_FLUSH_SECONDS = 0.04
 class AgentEventStreamResult:
     final_text: str
     final_text_part_id: str | None
-    latest_model_reasoning_text: str
+    latest_model_content_blocks: tuple[dict[str, object], ...]
     last_tool_result_text: str
     completed_custom_tool_names: tuple[str, ...]
     token_usage: ModelTokenUsagePayload = field(
@@ -237,7 +239,8 @@ async def process_agent_event_stream(
 ) -> AgentEventStreamResult:
     """消费 DeepAgent 事件流，并发布前端可观察的 trace 事件。"""
     collected_text_parts: list[str] = []
-    latest_model_reasoning_parts: list[str] = []
+    latest_model_part_order: list[str] = []
+    latest_model_parts: dict[str, dict[str, object]] = {}
     current_text_part_id: str | None = None
     current_text_part_kind: str | None = None
     current_text_part_chunks: list[str] = []
@@ -288,23 +291,53 @@ async def process_agent_event_stream(
         current_text_part_chunks = []
         pending_text_delta_chunks = []
 
-    async def publish_text_delta(kind: str, text: str) -> None:
+    def record_latest_model_part(part: AgentStreamContentPart) -> None:
+        existing = latest_model_parts.get(part.part_id)
+        text_key = "reasoning" if part.block_type == "reasoning" else (
+            "refusal" if part.block_type == "refusal" else "text"
+        )
+        if existing is None:
+            latest_model_part_order.append(part.part_id)
+            latest_model_parts[part.part_id] = {
+                "type": part.block_type,
+                text_key: part.text,
+                "id": part.part_id,
+                "index": part.index,
+            }
+            return
+        if existing.get("type") != part.block_type or existing.get("index") != part.index:
+            raise RuntimeError(
+                f"模型流 part 身份冲突: part_id={part.part_id} "
+                f"existing={existing!r} incoming={part!r}"
+            )
+        current_text = existing.get(text_key)
+        if not isinstance(current_text, str):
+            raise RuntimeError(f"模型流 part 缺少 {text_key}: part_id={part.part_id}")
+        existing[text_key] = current_text + part.text
+
+    async def publish_text_delta(part: AgentStreamContentPart) -> None:
         nonlocal current_text_part_id, current_text_part_kind, last_text_delta_flush_at
-        if current_text_part_kind != kind:
+        if current_text_part_id != part.part_id:
             await close_current_text_part()
         if current_text_part_id is None:
-            current_text_part_id = f"part_{uuid.uuid4().hex[:12]}"
-            current_text_part_kind = kind
+            current_text_part_id = part.part_id
+            current_text_part_kind = part.kind
             interrupt_state = SessionInterruptState.get(session_id)
             if not interrupt_state.active_tools_by_run_id:
                 SessionInterruptState.set(session_id, phase="text", tool_name=None)
                 set_interruptible_phase("text")
             await publish(
                 EventType.TEXT_START,
-                {"part_id": current_text_part_id, "kind": kind},
+                {"part_id": current_text_part_id, "kind": part.kind},
             )
-        current_text_part_chunks.append(text)
-        pending_text_delta_chunks.append(text)
+        elif current_text_part_kind != part.kind:
+            raise RuntimeError(
+                f"模型流 part kind 发生变化: part_id={part.part_id} "
+                f"{current_text_part_kind} -> {part.kind}"
+            )
+        record_latest_model_part(part)
+        current_text_part_chunks.append(part.text)
+        pending_text_delta_chunks.append(part.text)
         pending_length = sum(len(chunk) for chunk in pending_text_delta_chunks)
         if (
             pending_length >= TEXT_DELTA_FLUSH_CHARS
@@ -320,7 +353,8 @@ async def process_agent_event_stream(
 
         if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
             await close_current_text_part()
-            latest_model_reasoning_parts.clear()
+            latest_model_part_order.clear()
+            latest_model_parts.clear()
             model_run_id = _event_run_id(event)
             if model_run_id:
                 tracked_model_run_ids.add(model_run_id)
@@ -353,22 +387,23 @@ async def process_agent_event_stream(
                 content = getattr(chunk, "content", None) or ""
                 tool_calls = getattr(chunk, "tool_calls", None) or []
 
-            reasoning_content, text_content = split_agent_content(content)
-            if reasoning_content.strip():
-                latest_model_reasoning_parts.append(reasoning_content)
-                SessionInterruptState.set(
-                    session_id,
-                    current_text="".join(collected_text_parts),
-                )
-                await publish_text_delta("reasoning", reasoning_content)
-
-            if text_content and (text_content.strip() or collected_text_parts):
-                collected_text_parts.append(text_content)
-                SessionInterruptState.set(
-                    session_id,
-                    current_text="".join(collected_text_parts),
-                )
-                await publish_text_delta("markdown", text_content)
+            for part in extract_agent_stream_content_parts(content):
+                if part.kind == "reasoning":
+                    if not part.text.strip():
+                        continue
+                    SessionInterruptState.set(
+                        session_id,
+                        current_text="".join(collected_text_parts),
+                    )
+                    await publish_text_delta(part)
+                    continue
+                if part.text and (part.text.strip() or collected_text_parts):
+                    collected_text_parts.append(part.text)
+                    SessionInterruptState.set(
+                        session_id,
+                        current_text="".join(collected_text_parts),
+                    )
+                    await publish_text_delta(part)
 
             if tool_calls and (collected_text_parts or current_text_part_id is not None):
                 await close_current_text_part()
@@ -414,6 +449,7 @@ async def process_agent_event_stream(
             set_active_tool_name(interrupt_state.tool_name)
             payload: dict[str, object] = {
                 "part_id": run_id,
+                "execution_id": run_id,
                 "tool_name": display_context.tool_name,
                 "args": display_context.tool_args,
                 "agent_id": agent_id,
@@ -439,6 +475,18 @@ async def process_agent_event_stream(
                     f"tool={name or 'unknown_tool'}"
                 )
             raw_output = data.get("output")
+            if not isinstance(raw_output, ToolMessage):
+                raise TypeError(
+                    "工具结束事件必须返回带 tool_call_id 的 ToolMessage: "
+                    f"execution_id={run_id} tool={display_context.tool_name} "
+                    f"output_type={type(raw_output).__name__}"
+                )
+            tool_call_id = raw_output.tool_call_id
+            if not isinstance(tool_call_id, str) or not tool_call_id:
+                raise RuntimeError(
+                    "工具结束事件的 ToolMessage 缺少 tool_call_id: "
+                    f"execution_id={run_id} tool={display_context.tool_name}"
+                )
             raw_result_text = extract_tool_result_text(raw_output)
             output = raw_output
             if isinstance(raw_output, ToolMessage) and raw_output.status != "error":
@@ -471,7 +519,8 @@ async def process_agent_event_stream(
                         stored_edit = await session_changes_service.record_tool_file_edit(
                             session_id=session_id,
                             turn_id=turn_id,
-                            tool_call_id=run_id,
+                            tool_call_id=tool_call_id,
+                            execution_id=run_id,
                             tool_name=display_context.tool_name,
                             before=snapshot,
                         )
@@ -486,6 +535,8 @@ async def process_agent_event_stream(
                 set_active_tool_name(None)
             payload = {
                 "part_id": run_id,
+                "execution_id": run_id,
+                "tool_call_id": tool_call_id,
                 "tool_name": display_context.tool_name,
                 "result": result_text,
                 "agent_id": agent_id,
@@ -525,7 +576,9 @@ async def process_agent_event_stream(
     return AgentEventStreamResult(
         final_text="".join(collected_text_parts).strip(),
         final_text_part_id=final_text_part_id,
-        latest_model_reasoning_text="".join(latest_model_reasoning_parts),
+        latest_model_content_blocks=tuple(
+            latest_model_parts[part_id] for part_id in latest_model_part_order
+        ),
         last_tool_result_text=last_tool_result_text,
         completed_custom_tool_names=tuple(completed_custom_tool_names),
         token_usage=combine_model_token_usage(usage_parts),

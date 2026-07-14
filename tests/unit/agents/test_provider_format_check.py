@@ -199,5 +199,13 @@ async def test_litellm_fixture_stream_uses_standard_blocks():
         chunks.append(chunk)
 
     assert chunks[0].message.additional_kwargs == {}
-    assert chunks[0].message.content == [{"type": "reasoning", "reasoning": "思考"}]
-    assert chunks[-1].message.content == [{"type": "text", "text": "回答"}]
+    reasoning = chunks[0].message.content[0]
+    answer = chunks[-1].message.content[0]
+    assert reasoning["type"] == "reasoning"
+    assert reasoning["reasoning"] == "思考"
+    assert reasoning["id"].startswith("part_")
+    assert reasoning["index"] == 0
+    assert answer["type"] == "text"
+    assert answer["text"] == "回答"
+    assert answer["id"].startswith("part_")
+    assert answer["index"] == 1

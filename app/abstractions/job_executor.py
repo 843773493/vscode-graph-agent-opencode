@@ -12,9 +12,9 @@ class JobRuntimeStateProtocol(Protocol):
     session_id: str
     message: str
     agent_id: str
-    message_id: str | None
+    message_id: str
     attachments: list[AttachmentRef]
-    message_created_at: str | None
+    message_created_at: str
     status: JobStatus
     progress: int
     error_message: Optional[str]

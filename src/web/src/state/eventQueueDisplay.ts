@@ -50,7 +50,7 @@ function uniqueTraceItems(items: FrontendReceivedEvent[]): FrontendReceivedEvent
     if (item.kind !== "trace") {
       continue;
     }
-    const key = item.event.event_id || item.id;
+    const key = item.event.event_id;
     if (seen.has(key)) {
       continue;
     }

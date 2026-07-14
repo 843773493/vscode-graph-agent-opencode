@@ -20,7 +20,7 @@ router = APIRouter(prefix="/workspace", tags=["workspace"])
 @router.get("", response_model=APIResponse[WorkspaceDTO], summary="获取当前工作区信息")
 async def get_workspace(
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
     result = await workspace_service.get()
@@ -30,7 +30,7 @@ async def get_workspace(
 @router.get("/context", response_model=APIResponse[WorkspaceContextDTO], summary="获取工作区上下文")
 async def get_workspace_context(
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
     result = await workspace_service.get_context()
@@ -40,7 +40,7 @@ async def get_workspace_context(
 @router.get("/index", response_model=APIResponse[WorkspaceIndexStatusDTO], summary="获取工作区索引状态")
 async def get_workspace_index(
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
     result = await workspace_service.get_index_status()
@@ -54,7 +54,7 @@ async def get_workspace_index(
 )
 async def rebuild_workspace_index(
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
     result = await workspace_service.rebuild_index()
@@ -71,7 +71,7 @@ async def list_workspace_files(
         description="单个目录最多返回的子项数量",
     ),
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
     result = await workspace_service.list_files(path=path, limit=limit)
@@ -86,7 +86,7 @@ async def list_workspace_files(
 async def get_workspace_file_content(
     path: str = Query(description="相对工作区根目录的文件路径"),
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
     try:

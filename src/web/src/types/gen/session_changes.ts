@@ -31,6 +31,7 @@ export interface SessionFileChangeDTO {
   reviewed?: boolean;
   latest_edit_id: string;
   tool_call_ids?: string[];
+  execution_ids?: string[];
   turn_ids?: string[];
   before_file?: string | null;
   after_file?: string | null;

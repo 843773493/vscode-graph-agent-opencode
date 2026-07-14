@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any
 import uuid
@@ -98,10 +99,6 @@ def _build_missing_custom_tool_retry_reminder(
     )
 
 
-def _message_identity(*, fallback_prefix: str, message_id: str | None) -> str:
-    return message_id or fallback_prefix
-
-
 class AgentExecutionService(JobStepExecutor):
     def __init__(
         self,
@@ -169,11 +166,12 @@ class AgentExecutionService(JobStepExecutor):
         self,
         session_id: str,
         message: str,
+        *,
         agent_id: str | None = None,
-        job_id: str | None = None,
-        message_id: str | None = None,
+        job_id: str,
+        message_id: str,
         attachments: list[AttachmentRef] | None = None,
-        message_created_at: str | None = None,
+        message_created_at: str,
     ) -> str:
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
@@ -186,11 +184,14 @@ class AgentExecutionService(JobStepExecutor):
             raise RuntimeError("AgentExecutionService 未绑定 JobEventBus")
         bus = self._bus
 
-        if job_id is None:
-            raise ValueError(f"job_id is required for run_step. session_id={session_id}, agent_id={agent_id}. "
-                           f"Do not fallback to session_id. Always pass a valid job_id. "
-                           f"This is a deliberate design choice following local agent principles: "
-                           f"fail fast, never hide errors, never return fake defaults.")
+        if not job_id:
+            raise ValueError(f"run_step 缺少 job_id: session_id={session_id} agent_id={agent_id}")
+        if not message_id:
+            raise ValueError(f"run_step 缺少用户 message_id: session_id={session_id} job_id={job_id}")
+        if not message_created_at:
+            raise ValueError(
+                f"run_step 缺少用户 message_created_at: session_id={session_id} job_id={job_id}"
+            )
         effective_job_id = job_id
         import logging
         logger = logging.getLogger(__name__)
@@ -222,7 +223,7 @@ class AgentExecutionService(JobStepExecutor):
             )
 
         final_text = ""
-        latest_model_reasoning_text = ""
+        latest_model_content_blocks: tuple[dict[str, object], ...] = ()
         turn_token_usage_parts: list[ModelTokenUsagePayload] = []
         configured_custom_tool_names = get_configured_custom_tool_names(
             agent_id=resolved_agent_id,
@@ -270,10 +271,7 @@ class AgentExecutionService(JobStepExecutor):
 
             next_input_messages = [
                 HumanMessage(
-                    id=_message_identity(
-                        fallback_prefix=f"{effective_job_id}:user_input",
-                        message_id=message_id,
-                    ),
+                    id=message_id,
                     content=human_content,
                     response_metadata=human_response_metadata,
                 )
@@ -306,10 +304,8 @@ class AgentExecutionService(JobStepExecutor):
                 if final_text:
                     final_text_part_id = stream_result.final_text_part_id
                     if final_text_part_id is None:
-                        final_text_part_id = f"part_{uuid.uuid4().hex[:12]}"
-                        await _publish(
-                            EventType.TEXT_START,
-                            {"part_id": final_text_part_id, "kind": "markdown"},
+                        raise RuntimeError(
+                            "模型返回了最终文本，但模型流没有提供 markdown part_id"
                         )
                     await _publish(
                         EventType.TEXT_END,
@@ -319,7 +315,7 @@ class AgentExecutionService(JobStepExecutor):
                             "text": final_text,
                         },
                     )
-                latest_model_reasoning_text = stream_result.latest_model_reasoning_text
+                latest_model_content_blocks = stream_result.latest_model_content_blocks
                 missing_custom_tool_names = (
                     requested_custom_tool_names - completed_custom_tool_names
                 )
@@ -411,13 +407,22 @@ class AgentExecutionService(JobStepExecutor):
             checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
             turn_token_usage = combine_model_token_usage(turn_token_usage_parts)
             if checkpointer is not None:
-                persist_standard_assistant_checkpoint(
+                assistant_message_id = f"msg_{uuid.uuid4().hex[:12]}"
+                assistant_message_created_at = datetime.now(timezone.utc)
+                persisted = persist_standard_assistant_checkpoint(
                     checkpointer=checkpointer,
                     session_id=session_id,
-                    reasoning_text=latest_model_reasoning_text,
+                    content_blocks=latest_model_content_blocks,
                     final_text=final_text,
+                    message_id=assistant_message_id,
+                    message_created_at=assistant_message_created_at,
                     token_usage=turn_token_usage,
                 )
+                if final_text and not persisted:
+                    raise RuntimeError(
+                        "最终 assistant 消息未能写入 checkpoint: "
+                        f"session_id={session_id} job_id={effective_job_id}"
+                    )
 
             await _publish(EventType.AGENT_END, {
                 "final_text": final_text,

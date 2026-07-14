@@ -213,6 +213,9 @@ export async function listToolTestRuns(
 }
 
 export function unwrapApiData<T>(response: APIResponse<T>): T {
+  if (typeof response.request_id !== "string" || !response.request_id) {
+    throw new Error("后端响应缺少 request_id");
+  }
   if (response.data == null) {
     throw new Error(
       `后端响应缺少 data 字段: ${response.message || "unknown message"}`,
@@ -592,7 +595,7 @@ export async function sendMessage(
   payload: MessageRunRequest,
   workspaceId?: string | null,
 ): Promise<MessageRunAccepted> {
-  return unwrapApiData(
+  const accepted = unwrapApiData(
     await requestJson<APIResponse<MessageRunAccepted>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
@@ -603,6 +606,13 @@ export async function sendMessage(
       },
     ),
   );
+  if (typeof accepted.message_id !== "string" || !accepted.message_id) {
+    throw new Error("发送消息响应缺少 message_id");
+  }
+  if (typeof accepted.job_id !== "string" || !accepted.job_id) {
+    throw new Error("发送消息响应缺少 job_id");
+  }
+  return accepted;
 }
 
 export async function sendUserMessage(
@@ -669,12 +679,12 @@ export interface SessionStreamEvent {
   event_id: string;
   part_id?: string | null;
   session_id: string;
-  job_id: string | null;
+  job_id: string;
   step_id: string | null;
   agent_id: string | null;
   timestamp: string;
   type: string;
-  payload: Record<string, unknown>;
+  payload?: Record<string, unknown>;
   /** 后端 DTO 格式可能将真实事件数据嵌套在 raw 中 */
   raw?: Record<string, unknown>;
 }
@@ -718,29 +728,42 @@ function parseSseBlock(block: string): SessionStreamEvent | null {
     return null;
   }
 
-  try {
-    // 后端 SSE 的 event 行始终为 "trace"，真实事件类型在 JSON payload.type 中
-    const payload = JSON.parse(data) as SessionStreamEvent;
-    // 如果 payload.type 不存在（旧格式），则回退到 eventType
-    if (!payload.type) {
-      payload.type = eventType;
-    }
-    if (!payload.event_id && eventId) {
-      payload.event_id = eventId;
-    }
-    return payload;
-  } catch {
-    return {
-      event_id: `raw_${Date.now()}`,
-      session_id: "",
-      job_id: null,
-      step_id: null,
-      agent_id: null,
-      timestamp: new Date().toISOString(),
-      type: eventType,
-      payload: { raw: data },
-    };
+  if (eventType !== "trace") {
+    throw new Error(`SSE 事件类型错误: ${eventType}`);
   }
+  if (!eventId) {
+    throw new Error("SSE trace 缺少 id 行");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `SSE trace JSON 无法解析: event_id=${eventId} error=${detail}`,
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`SSE trace data 必须是对象: event_id=${eventId}`);
+  }
+  const payload = parsed as Partial<SessionStreamEvent>;
+  if (payload.event_id !== eventId) {
+    throw new Error(
+      `SSE trace event_id 不一致: transport=${eventId} payload=${String(payload.event_id)}`,
+    );
+  }
+  for (const [field, value] of [
+    ["session_id", payload.session_id],
+    ["job_id", payload.job_id],
+    ["timestamp", payload.timestamp],
+    ["type", payload.type],
+  ] as const) {
+    if (typeof value !== "string" || !value) {
+      throw new Error(`SSE trace 缺少 ${field}: event_id=${eventId}`);
+    }
+  }
+  return payload as SessionStreamEvent;
 }
 
 export async function streamSessionEvents(

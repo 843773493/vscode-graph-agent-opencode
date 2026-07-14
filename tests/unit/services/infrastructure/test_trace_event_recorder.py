@@ -56,6 +56,24 @@ async def test_recorder_rejects_event_without_resolvable_session_id(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_recorder_does_not_treat_session_shaped_job_id_as_session_id(tmp_path: Path):
+    bus = JobEventBus()
+    recorder = TraceEventRecorder(bus=bus, store=TraceEventStore(logs_dir=tmp_path))
+    await recorder.start()
+
+    try:
+        with pytest.raises(RuntimeError, match="缺少 session_id"):
+            await bus.publish(
+                job_id="ses_not_a_job",
+                event_type=EventType.AGENT_START,
+                payload={"message": "start", "agent_id": "default"},
+                agent_id="default",
+            )
+    finally:
+        await recorder.stop()
+
+
+@pytest.mark.asyncio
 async def test_failed_job_created_write_does_not_commit_job_session_mapping():
     class FailingSink:
         async def append(self, session_id, event):

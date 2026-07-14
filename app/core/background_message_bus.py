@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Deque, Dict, Set
 
 from app.schemas.background_message import (
@@ -83,7 +83,7 @@ class BackgroundMessageBus:
             kind=normalized_kind,
             content=content,
             payload=payload or {},
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
         )
 
         key = self._key(session_id, agent_id)

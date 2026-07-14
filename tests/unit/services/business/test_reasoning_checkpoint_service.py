@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -14,6 +15,9 @@ from app.services.business.reasoning_checkpoint_service import (
 )
 
 
+MESSAGE_TIME = datetime(2026, 7, 14, tzinfo=timezone.utc)
+
+
 @pytest.mark.asyncio
 async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp_path):
     session_id = "sess_standard_assistant"
@@ -24,7 +28,14 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
     checkpoint = {
         "channel_values": {
             "messages": [
-                HumanMessage(content="只回复 OK"),
+                HumanMessage(
+                    content="只回复 OK",
+                    response_metadata={
+                        "message_id": "msg_user",
+                        "created_at": MESSAGE_TIME.isoformat(),
+                        "updated_at": MESSAGE_TIME.isoformat(),
+                    },
+                ),
                 AIMessage(content=final_text, name="default"),
             ],
         },
@@ -42,8 +53,23 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
     changed = persist_standard_assistant_checkpoint(
         checkpointer=saver,
         session_id=session_id,
-        reasoning_text=reasoning_text,
+        content_blocks=(
+            {
+                "type": "reasoning",
+                "reasoning": reasoning_text,
+                "id": "part_reasoning",
+                "index": 0,
+            },
+            {
+                "type": "text",
+                "text": final_text,
+                "id": "part_answer",
+                "index": 1,
+            },
+        ),
         final_text=final_text,
+        message_id="msg_assistant",
+        message_created_at=MESSAGE_TIME,
         token_usage=ModelTokenUsagePayload(
             input_tokens=100,
             output_tokens=20,
@@ -61,9 +87,22 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
     assistant = messages[-1]
     assert isinstance(assistant, AIMessage)
     assert assistant.response_metadata["phase"] == "final_answer"
+    assert assistant.id == "msg_assistant"
+    assert assistant.response_metadata["message_id"] == "msg_assistant"
+    assert assistant.response_metadata["created_at"] == MESSAGE_TIME.isoformat()
     assert assistant.content == [
-        {"type": "reasoning", "reasoning": reasoning_text},
-        {"type": "text", "text": final_text},
+        {
+            "type": "reasoning",
+            "reasoning": reasoning_text,
+            "id": "part_reasoning",
+            "index": 0,
+        },
+        {
+            "type": "text",
+            "text": final_text,
+            "id": "part_answer",
+            "index": 1,
+        },
     ]
 
     messages_page = await MessageService(checkpointer=saver).list(session_id, limit=10)
@@ -84,8 +123,18 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
     assert state_assistant["role"] == "assistant"
     assert state_assistant["response_metadata"]["phase"] == "final_answer"
     assert state_assistant["content"] == [
-        {"type": "reasoning", "reasoning": reasoning_text},
-        {"type": "text", "text": final_text},
+        {
+            "type": "reasoning",
+            "reasoning": reasoning_text,
+            "id": "part_reasoning",
+            "index": 0,
+        },
+        {
+            "type": "text",
+            "text": final_text,
+            "id": "part_answer",
+            "index": 1,
+        },
     ]
 
 
@@ -102,7 +151,14 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
         "id": "call_1",
         "type": "tool_call",
     }
-    user_message = HumanMessage(content="调用工具")
+    user_message = HumanMessage(
+        content="调用工具",
+        response_metadata={
+            "message_id": "msg_user",
+            "created_at": MESSAGE_TIME.isoformat(),
+            "updated_at": MESSAGE_TIME.isoformat(),
+        },
+    )
     tool_call_message = AIMessage(
         content=[{"type": "reasoning", "reasoning": first_reasoning}],
         tool_calls=[tool_call],
@@ -144,8 +200,23 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     changed = persist_standard_assistant_checkpoint(
         checkpointer=saver,
         session_id=session_id,
-        reasoning_text=final_reasoning,
+        content_blocks=(
+            {
+                "type": "reasoning",
+                "reasoning": final_reasoning,
+                "id": "part_final_reasoning",
+                "index": 0,
+            },
+            {
+                "type": "text",
+                "text": final_text,
+                "id": "part_final_answer",
+                "index": 1,
+            },
+        ),
         final_text=final_text,
+        message_id="msg_assistant",
+        message_created_at=MESSAGE_TIME,
     )
 
     assert changed is True
@@ -158,8 +229,18 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     assert "<system_reminder>" in records[3]["content"]
     assert reminder in records[3]["content"]
     assert records[-1]["content"] == [
-        {"type": "reasoning", "reasoning": final_reasoning},
-        {"type": "text", "text": final_text},
+        {
+            "type": "reasoning",
+            "reasoning": final_reasoning,
+            "id": "part_final_reasoning",
+            "index": 0,
+        },
+        {
+            "type": "text",
+            "text": final_text,
+            "id": "part_final_answer",
+            "index": 1,
+        },
     ]
     assert first_reasoning not in records[-1]["content"][0]["reasoning"]
 

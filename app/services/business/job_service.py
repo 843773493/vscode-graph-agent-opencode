@@ -20,12 +20,12 @@ from app.services.business.job_runtime_state import JobRuntimeState
 class JobState:
     job_id: str
     session_id: str
+    message: str
+    message_id: str
+    message_created_at: str
+    agent_id: str
     status: JobStatus
-    message: str = ""
-    message_id: str | None = None
     attachments: list[AttachmentRef] = field(default_factory=list)
-    message_created_at: str | None = None
-    agent_id: str = "default"
     progress: int = 0
     error_message: Optional[str] = None
     result: Optional[str] = None
@@ -160,10 +160,11 @@ class JobService:
         self,
         session_id: str,
         message: str,
+        *,
         agent_id: str = "default",
-        message_id: str | None = None,
+        message_id: str,
         attachments: list[AttachmentRef] | None = None,
-        message_created_at: str | None = None,
+        message_created_at: str,
     ) -> str:
         import logging
         logger = logging.getLogger(__name__)
@@ -174,6 +175,10 @@ class JobService:
             len(message or ""),
             "pending",
         )
+        if not message_id:
+            raise ValueError("创建 Job 时必须传入已持久化的用户 message_id")
+        if not message_created_at:
+            raise ValueError("创建 Job 时必须传入用户消息的 message_created_at")
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         logger.info("[job_service] start_job assigned id: job_id=%s", job_id)
 

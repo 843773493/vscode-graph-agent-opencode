@@ -60,8 +60,24 @@ async def test_agent_state_keeps_reasoning_and_final_text_separate(
     assert isinstance(first_assistant_content, list)
     assert first_assistant_content[0]["type"] == "reasoning"
     assert isinstance(first_assistant_content[0]["reasoning"], str)
-    assert first_assistant_content[1] == {"type": "text", "text": "OK"}
+    assert first_assistant_content[0]["id"].startswith("part_")
+    assert first_assistant_content[0]["index"] == 0
+    assert first_assistant_content[1]["type"] == "text"
+    assert first_assistant_content[1]["text"] == "OK"
+    assert first_assistant_content[1]["id"].startswith("part_")
+    assert first_assistant_content[1]["index"] == 1
+    assert first_assistant_content[0]["id"] != first_assistant_content[1]["id"]
     assert assistant_records[-1]["response_metadata"]["phase"] == "final_answer"
+
+    traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
+    assert traces_response.status_code == 200
+    text_start_part_ids = {
+        trace["part_id"]
+        for trace in traces_response.json()["data"]
+        if trace.get("type") == "text_start"
+    }
+    assert first_assistant_content[0]["id"] in text_start_part_ids
+    assert first_assistant_content[1]["id"] in text_start_part_ids
 
     second_job_id = await _send_message(
         client,
@@ -75,6 +91,10 @@ async def test_agent_state_keeps_reasoning_and_final_text_separate(
     second_assistant_content = assistant_records[-1]["content"]
     assert isinstance(second_assistant_content, list)
     assert second_assistant_content[0]["type"] == "reasoning"
+    assert second_assistant_content[0]["id"].startswith("part_")
+    assert second_assistant_content[0]["index"] == 0
     assert second_assistant_content[1]["type"] == "text"
     assert second_assistant_content[1]["text"]
+    assert second_assistant_content[1]["id"].startswith("part_")
+    assert second_assistant_content[1]["index"] == 1
     assert assistant_records[-1]["response_metadata"]["phase"] == "final_answer"

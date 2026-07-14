@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 
 from langchain_core.messages import (
     AIMessage,
@@ -46,7 +46,12 @@ class MessageService:
         display_content = response_metadata.get("display_content")
         if role == MessageRole.user and isinstance(display_content, str):
             content = display_content
-        message_id = response_metadata.get("message_id") or f"msg_{index:06d}"
+        message_id = response_metadata.get("message_id")
+        if not isinstance(message_id, str) or not message_id:
+            raise RuntimeError(
+                "用户可见消息缺少持久化 message_id: "
+                f"checkpoint_index={index} message_type={message.type}"
+            )
         created_at = MessageService._metadata_datetime(response_metadata, "created_at")
         updated_at = MessageService._metadata_datetime(response_metadata, "updated_at")
         metadata: dict[str, object] = {
@@ -74,11 +79,14 @@ class MessageService:
     def _metadata_datetime(metadata: Mapping[object, object], key: str) -> datetime:
         value = metadata.get(key)
         if isinstance(value, datetime):
-            return value
-        if isinstance(value, str) and value:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        # TODO: 旧 checkpoint 没有消息时间戳；清理完旧数据后改为严格要求该字段。
-        return datetime.now()
+            parsed = value
+        elif isinstance(value, str) and value:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            raise RuntimeError(f"用户可见消息缺少持久化 {key}")
+        if parsed.tzinfo is None:
+            raise RuntimeError(f"用户可见消息的持久化 {key} 必须包含时区")
+        return parsed
 
     @staticmethod
     def _detect_role(message: BaseMessage) -> MessageRole:
@@ -170,7 +178,6 @@ class MessageService:
                 content_blocks if content_blocks else raw_content
             ),
         }
-
         tool_calls = getattr(message, "tool_calls", None) or []
         if tool_calls:
             record["tool_calls"] = MessageService._json_safe(tool_calls)
@@ -306,7 +313,12 @@ class MessageService:
                 text = part.get("text", "")
                 if isinstance(text, str):
                     text_parts.append(text)
-                    content_blocks.append({"type": "text", "text": text})
+                    text_block: dict[str, object] = {"type": "text", "text": text}
+                    if isinstance(part.get("id"), str):
+                        text_block["id"] = part["id"]
+                    if isinstance(part.get("index"), int):
+                        text_block["index"] = part["index"]
+                    content_blocks.append(text_block)
             elif part_type == "reasoning":
                 reasoning_text = part.get("reasoning")
                 if not isinstance(reasoning_text, str):
@@ -315,12 +327,15 @@ class MessageService:
                     "type": "reasoning",
                     "reasoning": reasoning_text,
                 }
-                extras: dict[str, object] = {}
                 if reasoning_id is None:
                     rid = part.get("id")
                     if isinstance(rid, str):
                         reasoning_id = rid
-                        extras["id"] = rid
+                if isinstance(part.get("id"), str):
+                    reasoning_block["id"] = part["id"]
+                if isinstance(part.get("index"), int):
+                    reasoning_block["index"] = part["index"]
+                extras: dict[str, object] = {}
                 if "extras" in part and isinstance(part["extras"], dict):
                     extras.update(part["extras"])
                 if extras:
@@ -396,7 +411,7 @@ class MessageService:
         注意：实际的持久化由 LangGraph checkpoint 负责；此方法只生成 message_id
         并返回 DTO，供 API 响应和事件发布使用。
         """
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         return MessageDTO(
             message_id=f"msg_{uuid.uuid4().hex[:12]}",
             session_id=session_id,

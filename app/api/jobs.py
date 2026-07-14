@@ -20,7 +20,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 async def get_job(
     job_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
     result = await job_service.get(job_id)
@@ -31,7 +31,7 @@ async def get_job(
 async def list_job_steps(
     job_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
     result = await job_service.list_steps(job_id)
@@ -44,7 +44,7 @@ async def list_job_events(
     after: str | None = None,
     limit: int = 100,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     event_service: EventService = Depends(get_event_service),
 ):
     result = await event_service.list(job_id=job_id, after=after, limit=limit)
@@ -56,11 +56,11 @@ async def stream_job_events(
     job_id: str,
     request: Request,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     event_service: EventService = Depends(get_event_service),
 ):
     subscriber_metadata = {
-        "request_id": request_id or "",
+        "request_id": request_id,
         "client_host": request.client.host if request.client else "",
         "user_agent": request.headers.get("user-agent", ""),
     }
@@ -80,7 +80,7 @@ async def control_job(
     job_id: str,
     payload: JobControlRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
     result = await job_service.control(job_id, payload)
@@ -91,7 +91,7 @@ async def control_job(
 async def list_job_artifacts(
     job_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     artifact_service: ArtifactService = Depends(get_artifact_service),
 ):
     result = await artifact_service.list_by_job(job_id)

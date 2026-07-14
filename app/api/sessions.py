@@ -57,7 +57,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 async def create_session(
     payload: SessionCreateRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
     result = await session_service.create(payload)
@@ -69,7 +69,7 @@ async def list_sessions(
     limit: int = 20,
     cursor: str | None = None,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
     result = await session_service.list(limit=limit, cursor=cursor)
@@ -80,7 +80,7 @@ async def list_sessions(
 async def get_session(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
     result = await session_service.get(session_id)
@@ -95,7 +95,7 @@ async def get_session(
 async def fork_session_context(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     fork_service: SessionContextForkService = Depends(
         get_session_context_fork_service
     ),
@@ -109,7 +109,7 @@ async def list_session_traces(
     session_id: str,
     after_event_id: str | None = Query(default=None),
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
     try:
@@ -127,7 +127,7 @@ async def list_session_traces(
 async def list_session_llm_request_logs(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     llm_request_log_service: LLMRequestLogService = Depends(get_llm_request_log_service),
 ):
     result = llm_request_log_service.list_session_logs(session_id)
@@ -142,7 +142,7 @@ async def list_session_llm_request_logs(
 async def list_session_resources(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_resource_service: SessionResourceService = Depends(get_session_resource_service),
 ):
     try:
@@ -160,7 +160,7 @@ async def list_session_resources(
 async def list_session_changesets(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_changes_service: SessionChangesService = Depends(get_session_changes_service),
 ):
     result = await session_changes_service.list_changesets(session_id)
@@ -176,7 +176,7 @@ async def get_session_changeset(
     session_id: str,
     changeset_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_changes_service: SessionChangesService = Depends(get_session_changes_service),
 ):
     try:
@@ -199,7 +199,7 @@ async def review_session_changeset_file(
     changeset_id: str,
     payload: SessionFileReviewRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_changes_service: SessionChangesService = Depends(get_session_changes_service),
 ):
     del changeset_id
@@ -225,7 +225,7 @@ async def control_session_resource(
     resource_id: str,
     payload: SessionResourceControlRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_resource_service: SessionResourceService = Depends(get_session_resource_service),
 ):
     try:
@@ -297,7 +297,7 @@ async def update_session(
     session_id: str,
     payload: SessionUpdateRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
     try:
@@ -311,7 +311,7 @@ async def update_session(
 async def delete_session(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
     session_resource_service: SessionResourceService = Depends(get_session_resource_service),
 ):
@@ -335,7 +335,7 @@ async def start_session_auto_continue(
     session_id: str,
     payload: SessionAutoContinueStartRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
 ):
     result = await auto_continue_service.start(session_id=session_id, poll_interval_seconds=payload.poll_interval_seconds)
@@ -350,7 +350,7 @@ async def start_session_auto_continue(
 async def stop_session_auto_continue(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
 ):
     result = await auto_continue_service.stop(session_id=session_id)
@@ -365,7 +365,7 @@ async def stop_session_auto_continue(
 async def get_session_auto_continue_status(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
 ):
     result = await auto_continue_service.get_status(session_id=session_id)
@@ -380,7 +380,7 @@ async def get_session_auto_continue_status(
 async def compact_session_context(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     context_compaction_service: ContextCompactionService = Depends(get_context_compaction_service),
 ):
     result = await context_compaction_service.compact(session_id=session_id)
@@ -395,7 +395,7 @@ async def compact_session_context(
 async def interrupt_session(
     session_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     session_interrupt_service: SessionInterruptService = Depends(get_session_interrupt_service),
 ):
     try:

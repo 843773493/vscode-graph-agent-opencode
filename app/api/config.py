@@ -13,7 +13,7 @@ router = APIRouter(prefix="/config", tags=["config"])
 @router.get("", response_model=APIResponse[ConfigDTO], summary="获取配置")
 async def get_config(
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     config_service: ConfigService = Depends(get_config_service),
 ):
     result = await config_service.get()
@@ -24,7 +24,7 @@ async def get_config(
 async def update_config(
     payload: ConfigUpdateRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     config_service: ConfigService = Depends(get_config_service),
 ):
     result = await config_service.update(payload)

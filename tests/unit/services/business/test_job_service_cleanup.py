@@ -35,17 +35,29 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs():
     running_job = JobState(
         job_id="job_running",
         session_id=session_id,
+        message="running",
+        message_id="msg_running",
+        message_created_at="2026-07-14T00:00:00+00:00",
+        agent_id="default",
         status=JobStatus.running,
         task=running_task,
     )
     queued_job = JobState(
         job_id="job_queued",
         session_id=session_id,
+        message="queued",
+        message_id="msg_queued",
+        message_created_at="2026-07-14T00:00:00+00:00",
+        agent_id="default",
         status=JobStatus.queued,
     )
     other_job = JobState(
         job_id="job_other",
         session_id="ses_other",
+        message="other",
+        message_id="msg_other",
+        message_created_at="2026-07-14T00:00:00+00:00",
+        agent_id="default",
         status=JobStatus.queued,
     )
     service._jobs[running_job.job_id] = running_job

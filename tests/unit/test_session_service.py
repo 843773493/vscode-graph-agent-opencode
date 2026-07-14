@@ -319,7 +319,7 @@ class TestSessionService:
         assert event.raw["payload"]["agent_id"] == "deep_agent"
 
     @pytest.mark.asyncio
-    async def test_list_trace_events_ignores_legacy_format(self):
+    async def test_list_trace_events_rejects_legacy_format(self):
         created = await self.service.create(SessionCreateRequest(title="Legacy Trace Session"))
 
         trace_dir = Path(self.temp_dir) / ".boxteam" / "logs" / "traces"
@@ -335,9 +335,8 @@ class TestSessionService:
         with open(trace_file, "w", encoding="utf-8") as f:
             f.write(json.dumps(legacy_trace_event, ensure_ascii=False) + "\n")
 
-        events = await self.service.list_trace_events(created.session_id)
-
-        assert events == []
+        with pytest.raises(RuntimeError, match="Trace 事件协议无效"):
+            await self.service.list_trace_events(created.session_id)
 
     @pytest.mark.asyncio
     async def test_stream_trace_events_emits_existing_and_new_events(self):
@@ -367,12 +366,17 @@ class TestSessionService:
 
         second_event = {
             "event_id": "evt_2",
+            "part_id": "run_search_files",
             "job_id": "job_1",
             "step_id": None,
             "agent_id": "deep_agent",
             "timestamp": "2024-03-09T12:00:01+00:00",
             "type": "tool_call_start",
-            "payload": {"tool_name": "search_files", "args": {}},
+            "payload": {
+                "execution_id": "run_search_files",
+                "tool_name": "search_files",
+                "args": {},
+            },
         }
         with open(trace_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(second_event, ensure_ascii=False) + "\n")
@@ -400,7 +404,8 @@ class TestSessionService:
                 "timestamp": "2024-03-09T12:00:00+00:00",
                 "type": "tool_call_end",
                 "payload": {"tool_name": "search_files"},
-            }
+            },
+            session_id="ses_1",
         )
 
         assert event is not None
@@ -429,7 +434,8 @@ class TestSessionService:
                     "args": {},
                     "skill_names": ["test-tool-2"],
                 },
-            }
+            },
+            session_id="ses_1",
         )
 
         assert event is not None

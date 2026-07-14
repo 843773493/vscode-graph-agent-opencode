@@ -200,8 +200,8 @@ export function useSessionRunActions({
         });
         throw error;
       }
-      const messageId = accepted.message_id ?? `local_user_${Date.now()}`;
-      const jobId = accepted.job_id ?? null;
+      const messageId = accepted.message_id;
+      const jobId = accepted.job_id;
 
       setState((prev) => {
         const next = cloneMaps(prev);

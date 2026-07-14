@@ -94,6 +94,9 @@ def aggregate_records(
                 tool_call_ids=tuple(
                     dict.fromkeys(record.tool_call_id for record in ordered)
                 ),
+                execution_ids=tuple(
+                    dict.fromkeys(record.execution_id for record in ordered)
+                ),
                 turn_ids=tuple(dict.fromkeys(record.turn_id for record in ordered)),
                 before_content=before_content,
                 after_content=after_content,
@@ -129,4 +132,3 @@ def preview(content: str | None) -> str | None:
         f"{content[:TEXT_PREVIEW_LIMIT]}\n\n"
         "[内容过长，已截断预览；完整内容请打开 changes 目录中的可读文件。]"
     )
-

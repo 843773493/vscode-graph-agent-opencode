@@ -64,7 +64,7 @@ class SessionOrchestrator:
         job_id = await self._job_service.start_job(
             session_id,
             message.content,
-            effective_agent_id,
+            agent_id=effective_agent_id,
             message_id=message.message_id,
             attachments=message.attachments,
             message_created_at=message.created_at.isoformat(),

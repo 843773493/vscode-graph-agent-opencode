@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
@@ -39,6 +39,17 @@ class FakeSessionChangesService:
         raise AssertionError(f"本测试不应记录文件修改: {kwargs}")
 
 
+class RecordingSessionChangesService:
+    def __init__(self) -> None:
+        self.recorded: list[dict[str, Any]] = []
+
+    def capture_before(self, file_path: str) -> object:
+        return {"file_path": file_path}
+
+    async def record_tool_file_edit(self, **kwargs: Any) -> None:
+        self.recorded.append(kwargs)
+
+
 @pytest.fixture
 def parallel_tool_events() -> list[dict[str, Any]]:
     return [
@@ -60,14 +71,26 @@ def parallel_tool_events() -> list[dict[str, Any]]:
             "event": "on_tool_end",
             "run_id": "run_a",
             "name": "read_file",
-            "data": {"output": "a result"},
+            "data": {
+                "output": ToolMessage(
+                    content="a result",
+                    tool_call_id="call_a",
+                    name="read_file",
+                )
+            },
             "metadata": {},
         },
         {
             "event": "on_tool_end",
             "run_id": "run_b",
             "name": "grep",
-            "data": {"output": "b result"},
+            "data": {
+                "output": ToolMessage(
+                    content="b result",
+                    tool_call_id="call_b",
+                    name="grep",
+                )
+            },
             "metadata": {},
         },
     ]
@@ -124,6 +147,60 @@ async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
 
 
 @pytest.mark.asyncio
+async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
+    tmp_path: Path,
+) -> None:
+    changes = RecordingSessionChangesService()
+    published: list[tuple[str, dict[str, Any]]] = []
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_write",
+            "name": "write_file",
+            "data": {"input": {"file_path": "src/example.txt", "content": "ok"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_write",
+            "name": "write_file",
+            "data": {
+                "output": ToolMessage(
+                    content="写入成功",
+                    tool_call_id="call_write",
+                    name="write_file",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_tool_identity",
+        turn_id="job_tool_identity",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=changes,
+        workspace_root=tmp_path,
+    )
+
+    assert len(changes.recorded) == 1
+    assert changes.recorded[0]["tool_call_id"] == "call_write"
+    assert changes.recorded[0]["execution_id"] == "run_write"
+    assert published[0][1]["part_id"] == "run_write"
+    assert published[0][1]["execution_id"] == "run_write"
+    assert published[1][1]["tool_call_id"] == "call_write"
+    assert published[1][1]["execution_id"] == "run_write"
+
+
+@pytest.mark.asyncio
 async def test_small_model_chunks_are_coalesced_before_publishing(
     tmp_path: Path,
     session_changes_service: FakeSessionChangesService,
@@ -132,7 +209,18 @@ async def test_small_model_chunks_are_coalesced_before_publishing(
         {
             "event": "on_chat_model_stream",
             "name": "ChatOpenAI",
-            "data": {"chunk": AIMessageChunk(content=text)},
+            "data": {
+                "chunk": AIMessageChunk(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": text,
+                            "id": "part_coalesced",
+                            "index": 0,
+                        }
+                    ]
+                )
+            },
             "metadata": {},
         }
         for text in ("a", "b", "c")
@@ -206,7 +294,14 @@ async def test_model_stream_usage_is_aggregated_across_calls(
             "name": "BoxteamLiteLLMChatModel",
             "data": {
                 "chunk": AIMessageChunk(
-                    content="OK",
+                    content=[
+                        {
+                            "type": "text",
+                            "text": "OK",
+                            "id": "part_usage_answer",
+                            "index": 0,
+                        }
+                    ],
                     usage_metadata={
                         "input_tokens": 140,
                         "output_tokens": 10,

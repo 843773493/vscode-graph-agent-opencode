@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -10,14 +12,28 @@ from app.schemas.event import ModelTokenUsagePayload
 
 
 def _build_assistant_content(
-    reasoning_text: str,
+    content_blocks: Sequence[Mapping[str, object]],
     final_text: str,
-) -> list[dict[str, str]]:
-    content: list[dict[str, str]] = []
-    if reasoning_text:
-        content.append({"type": "reasoning", "reasoning": reasoning_text})
+) -> list[dict[str, object]]:
+    content = [dict(block) for block in content_blocks]
+    text_block_index = -1
+    for index, block in enumerate(content):
+        block_type = block.get("type")
+        if block_type not in {"reasoning", "text", "refusal"}:
+            raise ValueError(f"最终 assistant content 含未知 block type: {block_type!r}")
+        part_id = block.get("id")
+        if not isinstance(part_id, str) or not part_id:
+            raise ValueError(f"最终 assistant content[{index}] 缺少 part id")
+        block_index = block.get("index")
+        if isinstance(block_index, bool) or not isinstance(block_index, int):
+            raise ValueError(f"最终 assistant content[{index}] 缺少 block index")
+        if block_type == "text":
+            text_block_index = index
+
     if final_text:
-        content.append({"type": "text", "text": final_text})
+        if text_block_index < 0:
+            raise ValueError("最终 assistant 文本缺少对应的 text content block")
+        content[text_block_index]["text"] = final_text
     return content
 
 
@@ -35,8 +51,10 @@ def _latest_final_assistant_index(messages: list[object]) -> int:
 def _rewrite_latest_assistant_message(
     messages: list[object],
     *,
-    reasoning_text: str,
+    content_blocks: Sequence[Mapping[str, object]],
     final_text: str,
+    message_id: str,
+    message_created_at: datetime,
     token_usage: ModelTokenUsagePayload | None,
 ) -> bool:
     index = _latest_final_assistant_index(messages)
@@ -46,11 +64,15 @@ def _rewrite_latest_assistant_message(
     message = messages[index]
     response_metadata = dict(message.response_metadata or {})
     response_metadata["phase"] = "final_answer"
+    response_metadata["message_id"] = message_id
+    response_metadata["created_at"] = message_created_at.isoformat()
+    response_metadata["updated_at"] = message_created_at.isoformat()
     if token_usage is not None and token_usage.reported_model_calls > 0:
         response_metadata["token_usage"] = token_usage.model_dump(mode="json")
     messages[index] = message.model_copy(
         update={
-            "content": _build_assistant_content(reasoning_text, final_text),
+            "id": message_id,
+            "content": _build_assistant_content(content_blocks, final_text),
             "additional_kwargs": {},
             "response_metadata": response_metadata,
         }
@@ -62,12 +84,18 @@ def persist_standard_assistant_checkpoint(
     *,
     checkpointer: BaseCheckpointSaver,
     session_id: str,
-    reasoning_text: str,
+    content_blocks: Sequence[Mapping[str, object]],
     final_text: str,
+    message_id: str,
+    message_created_at: datetime,
     token_usage: ModelTokenUsagePayload | None = None,
 ) -> bool:
     """把本轮最终 assistant 消息保存为 LangChain 标准 content blocks。"""
-    if not reasoning_text and not final_text:
+    if not message_id:
+        raise ValueError("最终 assistant 消息缺少 message_id")
+    if message_created_at.tzinfo is None:
+        raise ValueError("最终 assistant message_created_at 必须包含时区")
+    if not content_blocks and not final_text:
         return False
 
     config = build_checkpoint_config(session_id)
@@ -86,8 +114,10 @@ def persist_standard_assistant_checkpoint(
     messages = list(raw_messages)
     changed = _rewrite_latest_assistant_message(
         messages,
-        reasoning_text=reasoning_text,
+        content_blocks=content_blocks,
         final_text=final_text,
+        message_id=message_id,
+        message_created_at=message_created_at,
         token_usage=token_usage,
     )
     if not changed:

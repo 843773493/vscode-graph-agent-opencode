@@ -19,8 +19,7 @@ function groupMessagesIntoConversations(
 
   for (const message of messages) {
     if (message.role === "user") {
-      const messageId =
-        message.message_id || `conversation_${conversations.length}`;
+      const messageId = message.message_id;
       if (seenUserMessageIds.has(messageId)) {
         continue;
       }
@@ -42,8 +41,7 @@ function groupMessagesIntoConversations(
 
     if (!current) {
       current = {
-        conversationId:
-          message.message_id || `conversation_${conversations.length}`,
+        conversationId: message.message_id,
         sessionId: message.session_id,
         userMessage: null,
         assistantMessages: [],
@@ -398,7 +396,7 @@ function buildTraceOnlyConversations(
       assistantMessages: [],
       events: [],
       status: hasFailure ? "error" : hasCompletion ? "done" : "running",
-      jobId: event.job_id ?? null,
+      jobId: event.job_id,
       pending: false,
       source: "messages",
     });

@@ -47,6 +47,7 @@ async def test_records_readable_changesets_for_file_tools(
         session_id=session.session_id,
         turn_id="job_1",
         tool_call_id="call_1",
+        execution_id="run_1",
         tool_name="write_file",
         before=before,
     )
@@ -101,6 +102,7 @@ async def test_marks_file_changes_reviewed(
         session_id=session.session_id,
         turn_id="job_2",
         tool_call_id="call_2",
+        execution_id="run_2",
         tool_name="edit_file",
         before=before,
     )
@@ -150,6 +152,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         session_id=session.session_id,
         turn_id="job_1",
         tool_call_id="call_write_first",
+        execution_id="run_write_first",
         tool_name="write_file",
         before=before_first_create,
     )
@@ -160,6 +163,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         session_id=session.session_id,
         turn_id="job_1",
         tool_call_id="call_edit_first",
+        execution_id="run_edit_first",
         tool_name="edit_file",
         before=before_first_edit,
     )
@@ -170,6 +174,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         session_id=session.session_id,
         turn_id="job_1",
         tool_call_id="call_write_second",
+        execution_id="run_write_second",
         tool_name="write_file",
         before=before_second_create,
     )
@@ -180,6 +185,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         session_id=session.session_id,
         turn_id="job_2",
         tool_call_id="call_edit_first_again",
+        execution_id="run_edit_first_again",
         tool_name="edit_file",
         before=before_second_turn,
     )
@@ -208,6 +214,11 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         "call_write_first",
         "call_edit_first",
         "call_edit_first_again",
+    ]
+    assert first_change.execution_ids == [
+        "run_write_first",
+        "run_edit_first",
+        "run_edit_first_again",
     ]
     assert first_change.turn_ids == ["job_1", "job_2"]
     assert "+three" in first_change.diff_text

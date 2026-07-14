@@ -53,19 +53,8 @@ class TraceEventRecorder:
             if isinstance(value, str) and value:
                 return value
 
-        raw = event.model_dump(mode="json")
-        payload_raw = raw.get("payload") or {}
-        for key in ("session_id", "thread_id"):
-            value = payload_raw.get(key) or raw.get(key)
-            if isinstance(value, str) and value:
-                return value
-
         mapped = self._job_sessions.get(event.job_id)
         if mapped:
             return mapped
-
-        # Agent Runtime 的 fallback job_id 可以直接等于 session_id。
-        if event.job_id.startswith("ses_"):
-            return event.job_id
 
         return None

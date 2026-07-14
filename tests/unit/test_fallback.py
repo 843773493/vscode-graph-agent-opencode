@@ -52,8 +52,18 @@ def mock_dependencies():
     }
 
 
-def create_chunk(content="", tool_calls=None):
+def create_chunk(
+    content="",
+    tool_calls=None,
+    *,
+    part_id: str | None = None,
+    index: int | None = None,
+):
     """创建模拟的 chunk 对象。"""
+    if isinstance(content, str) and content:
+        if part_id is None or index is None:
+            raise ValueError("模拟文本 chunk 必须显式提供 part_id/index")
+        content = [{"type": "text", "text": content, "id": part_id, "index": index}]
     chunk = MagicMock()
     chunk.content = content
     chunk.message = None
@@ -95,7 +105,13 @@ async def test_primary_success_no_fallback(mock_dependencies):
                 yield {
                     "event": "on_chat_model_stream",
                     "name": "BoxteamLiteLLMChatModel",
-                    "data": {"chunk": create_chunk("主模型成功")},
+                    "data": {
+                        "chunk": create_chunk(
+                            "主模型成功",
+                            part_id="part_primary",
+                            index=0,
+                        )
+                    },
                     "metadata": {},
                 }
 
@@ -108,6 +124,8 @@ async def test_primary_success_no_fallback(mock_dependencies):
             message="test",
             agent_id="test_agent",
             job_id="job_test",
+            message_id="msg_test",
+            message_created_at="2026-07-14T00:00:00+00:00",
         )
 
         assert result == "主模型成功"
@@ -147,7 +165,14 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
                 "name": "ChatOpenAI",
                 "data": {
                     "chunk": create_chunk(
-                        [{"type": "reasoning", "reasoning": "先判断用户只要 OK。"}],
+                        [
+                            {
+                                "type": "reasoning",
+                                "reasoning": "先判断用户只要 OK。",
+                                "id": "part_reasoning",
+                                "index": 0,
+                            }
+                        ],
                     )
                 },
                 "metadata": {},
@@ -155,7 +180,18 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
-                "data": {"chunk": create_chunk([{"type": "text", "text": "OK"}])},
+                "data": {
+                    "chunk": create_chunk(
+                        [
+                            {
+                                "type": "text",
+                                "text": "OK",
+                                "id": "part_answer",
+                                "index": 1,
+                            }
+                        ]
+                    )
+                },
                 "metadata": {},
             }
 
@@ -168,6 +204,8 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
             message="test",
             agent_id="test_agent",
             job_id="job_test",
+            message_id="msg_test",
+            message_created_at="2026-07-14T00:00:00+00:00",
         )
 
     assert result == "OK"
@@ -199,13 +237,25 @@ async def test_text_deltas_share_stable_part_id(mock_dependencies):
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
-                "data": {"chunk": create_chunk("第一段\n\n")},
+                "data": {
+                    "chunk": create_chunk(
+                        "第一段\n\n",
+                        part_id="part_markdown",
+                        index=0,
+                    )
+                },
                 "metadata": {},
             }
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
-                "data": {"chunk": create_chunk("第二段")},
+                "data": {
+                    "chunk": create_chunk(
+                        "第二段",
+                        part_id="part_markdown",
+                        index=0,
+                    )
+                },
                 "metadata": {},
             }
 
@@ -218,6 +268,8 @@ async def test_text_deltas_share_stable_part_id(mock_dependencies):
             message="test",
             agent_id="test_agent",
             job_id="job_test",
+            message_id="msg_test",
+            message_created_at="2026-07-14T00:00:00+00:00",
         )
 
     assert result == "第一段\n\n第二段"
@@ -269,7 +321,14 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
                     "name": "ChatOpenAI",
                     "data": {
                         "chunk": create_chunk(
-                            [{"type": "reasoning", "reasoning": "我应该继续。"}],
+                            [
+                                {
+                                    "type": "reasoning",
+                                    "reasoning": "我应该继续。",
+                                    "id": "part_retry_reasoning",
+                                    "index": 0,
+                                }
+                            ],
                         )
                     },
                     "metadata": {},
@@ -279,7 +338,18 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
-                "data": {"chunk": create_chunk([{"type": "text", "text": "OK"}])},
+                "data": {
+                    "chunk": create_chunk(
+                        [
+                            {
+                                "type": "text",
+                                "text": "OK",
+                                "id": "part_retry_answer",
+                                "index": 0,
+                            }
+                        ]
+                    )
+                },
                 "metadata": {},
             }
 
@@ -292,6 +362,8 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
             message="test",
             agent_id="test_agent",
             job_id="job_test",
+            message_id="msg_test",
+            message_created_at="2026-07-14T00:00:00+00:00",
         )
 
     assert result == "OK"
@@ -333,14 +405,28 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
         AgentEventStreamResult(
             final_text="根据 AG",
             final_text_part_id="part_first",
-            latest_model_reasoning_text="",
+            latest_model_content_blocks=(
+                {
+                    "type": "text",
+                    "text": "根据 AG",
+                    "id": "part_first",
+                    "index": 0,
+                },
+            ),
             last_tool_result_text="",
             completed_custom_tool_names=(),
         ),
         AgentEventStreamResult(
             final_text="4568",
             final_text_part_id="part_second",
-            latest_model_reasoning_text="",
+            latest_model_content_blocks=(
+                {
+                    "type": "text",
+                    "text": "4568",
+                    "id": "part_second",
+                    "index": 0,
+                },
+            ),
             last_tool_result_text="4568",
             completed_custom_tool_names=("test_tool_2",),
         ),
@@ -367,6 +453,8 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
             message="请调用 test_tool_2",
             agent_id="test_agent",
             job_id="job_test",
+            message_id="msg_test",
+            message_created_at="2026-07-14T00:00:00+00:00",
         )
 
     assert result == "4568"
@@ -396,8 +484,13 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(mock_depe
     service = _make_service(deps)
 
     content_blocks = [
-        {"type": "reasoning", "reasoning": "先判断用户只要 OK。"},
-        {"type": "text", "text": "OK"},
+        {
+            "type": "reasoning",
+            "reasoning": "先判断用户只要 OK。",
+            "id": "part_reasoning",
+            "index": 0,
+        },
+        {"type": "text", "text": "OK", "id": "part_answer", "index": 1},
     ]
 
     with patch(
@@ -420,6 +513,8 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(mock_depe
             message="test",
             agent_id="test_agent",
             job_id="job_test",
+            message_id="msg_test",
+            message_created_at="2026-07-14T00:00:00+00:00",
         )
 
     assert result == "OK"
@@ -503,7 +598,13 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
-                "data": {"chunk": create_chunk("完成")},
+                "data": {
+                    "chunk": create_chunk(
+                        "完成",
+                        part_id="part_after_tool",
+                        index=0,
+                    )
+                },
                 "metadata": {},
             }
 
@@ -516,6 +617,8 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
             message="test",
             agent_id="test_agent",
             job_id="job_test",
+            message_id="msg_test",
+            message_created_at="2026-07-14T00:00:00+00:00",
         )
 
     assert result == "完成"
@@ -532,6 +635,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
     assert tool_start_payloads == [
         {
             "part_id": "run_python_exec",
+            "execution_id": "run_python_exec",
             "tool_name": "python_exec",
             "args": {"code": "print('LC_BLOCK_OK_2')"},
             "agent_id": "test_agent",
@@ -540,6 +644,8 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
     assert tool_end_payloads == [
         {
             "part_id": "run_python_exec",
+            "execution_id": "run_python_exec",
+            "tool_call_id": "call_1",
             "tool_name": "python_exec",
             "result": '{"stdout":"LC_BLOCK_OK_2\\n"}',
             "agent_id": "test_agent",
@@ -585,7 +691,13 @@ async def test_execution_delegates_model_fallback_to_single_agent(mock_dependenc
                     yield {
                         "event": "on_chat_model_stream",
                         "name": "ChatOpenAI",
-                        "data": {"chunk": create_chunk("fallback 成功")},
+                        "data": {
+                            "chunk": create_chunk(
+                                "fallback 成功",
+                                part_id="part_fallback_success",
+                                index=0,
+                            )
+                        },
                         "metadata": {},
                     }
 
@@ -600,6 +712,8 @@ async def test_execution_delegates_model_fallback_to_single_agent(mock_dependenc
                 message="test",
                 agent_id="test_agent",
                 job_id="job_test",
+                message_id="msg_test",
+                message_created_at="2026-07-14T00:00:00+00:00",
             )
 
             assert result == "fallback 成功"
@@ -624,6 +738,8 @@ async def test_all_models_fail(mock_dependencies):
                 message="test",
                 agent_id="test_agent",
                 job_id="job_test",
+                message_id="msg_test",
+                message_created_at="2026-07-14T00:00:00+00:00",
             )
 
 
@@ -644,7 +760,13 @@ async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
                     yield {
                         "event": "on_chat_model_stream",
                         "name": "ChatOpenAI",
-                        "data": {"chunk": create_chunk("fallback")},
+                        "data": {
+                            "chunk": create_chunk(
+                                "fallback",
+                                part_id="part_fallback",
+                                index=0,
+                            )
+                        },
                         "metadata": {},
                     }
 
@@ -659,6 +781,8 @@ async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
                 message="test",
                 agent_id="test_agent",
                 job_id="job_test",
+                message_id="msg_test",
+                message_created_at="2026-07-14T00:00:00+00:00",
             )
 
     publish_calls = [

@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.env import get_project_root, load_project_env
 from app.core.path_utils import get_user_workspace_root
+from app.core.trace_middleware import TraceMiddleware, get_request_id
 from app.gateway.config import load_gateway_config, resolve_gateway_path
 from app.gateway.processes import (
     allocate_local_port,
@@ -247,6 +248,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(TraceMiddleware)
 
 
 def get_registry(request: Request) -> GatewayWorkspaceRegistry:
@@ -265,39 +267,51 @@ def get_http_client(request: Request) -> httpx.AsyncClient:
 
 @app.get("/api/gateway/health", response_model=APIResponse[GatewayHealthDTO])
 async def health(
+    request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     return APIResponse(
-        data=GatewayHealthDTO(active_workspace_id=registry.active_workspace_id)
+        data=GatewayHealthDTO(active_workspace_id=registry.active_workspace_id),
+        request_id=request_id,
     )
 
 
 @app.get("/api/gateway/workspaces", response_model=APIResponse[GatewayWorkspaceListDTO])
 async def list_workspaces(
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
             items=await registry.list_dtos(),
-        )
+        ),
+        request_id=request_id,
     )
 
 
 @app.get("/api/gateway/ui-settings", response_model=APIResponse[WebUISettingsDTO])
 async def get_web_ui_settings(
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
 ):
-    return APIResponse(data=read_web_ui_settings(_gateway_root()))
+    return APIResponse(
+        data=read_web_ui_settings(_gateway_root()),
+        request_id=request_id,
+    )
 
 
 @app.put("/api/gateway/ui-settings", response_model=APIResponse[WebUISettingsDTO])
 async def update_web_ui_settings(
     payload: WebUISettingsUpdateDTO,
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
 ):
-    return APIResponse(data=merge_web_ui_settings(payload, gateway_root=_gateway_root()))
+    return APIResponse(
+        data=merge_web_ui_settings(payload, gateway_root=_gateway_root()),
+        request_id=request_id,
+    )
 
 
 @app.get("/api/gateway/local-directories", response_model=APIResponse[LocalDirectoryListDTO])
@@ -305,6 +319,7 @@ async def list_local_directories(
     path: str | None = Query(default=None, description="要浏览的本机目录；为空时使用用户主目录"),
     limit: int = Query(default=120, ge=1, le=500),
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
 ):
     root_path = _resolve_local_directory(path)
     entries: list[LocalDirectoryEntryDTO] = []
@@ -333,7 +348,8 @@ async def list_local_directories(
             entries=entries,
             truncated=len(directories) > limit,
             limit=limit,
-        )
+        ),
+        request_id=request_id,
     )
 
 
@@ -341,6 +357,7 @@ async def list_local_directories(
 async def add_local_workspace(
     payload: AddLocalWorkspaceRequest,
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     workspace_root = Path(payload.root_path).expanduser().resolve()
@@ -388,7 +405,8 @@ async def add_local_workspace(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
             items=await registry.list_dtos(),
-        )
+        ),
+        request_id=request_id,
     )
 
 
@@ -396,6 +414,7 @@ async def add_local_workspace(
 async def add_ssh_workspace(
     payload: AddSshWorkspaceRequest,
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     try:
@@ -417,7 +436,8 @@ async def add_ssh_workspace(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
             items=await registry.list_dtos(),
-        )
+        ),
+        request_id=request_id,
     )
 
 
@@ -428,6 +448,7 @@ async def add_ssh_workspace(
 async def activate_workspace(
     workspace_id: str,
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     try:
@@ -435,7 +456,8 @@ async def activate_workspace(
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(
-        data=ActivateGatewayWorkspaceResultDTO(active_workspace_id=workspace_id)
+        data=ActivateGatewayWorkspaceResultDTO(active_workspace_id=workspace_id),
+        request_id=request_id,
     )
 
 
@@ -443,6 +465,7 @@ async def activate_workspace(
 async def reorder_workspaces(
     payload: ReorderGatewayWorkspacesRequest,
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     try:
@@ -453,7 +476,8 @@ async def reorder_workspaces(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
             items=await registry.list_dtos(),
-        )
+        ),
+        request_id=request_id,
     )
 
 
@@ -461,6 +485,7 @@ async def reorder_workspaces(
 async def remove_workspace(
     workspace_id: str,
     _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     try:
@@ -473,7 +498,8 @@ async def remove_workspace(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
             items=await registry.list_dtos(),
-        )
+        ),
+        request_id=request_id,
     )
 
 
@@ -485,6 +511,7 @@ def _proxy_headers(request: Request) -> dict[str, str]:
             continue
         headers[key] = value
     headers["X-Local-Token"] = LOCAL_TOKEN
+    headers["X-Request-ID"] = get_request_id(request)
     return headers
 
 

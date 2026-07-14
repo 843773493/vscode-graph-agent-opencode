@@ -6,6 +6,7 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.trace_middleware import get_request_id
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.business.agent_service import AgentService
 from app.services.business.context_compaction_service import ContextCompactionService
@@ -55,10 +56,6 @@ class _AppContainerProtocol:
     workspace_service: WorkspaceService
     agent_execution_service: AgentExecutionService
     session_orchestrator: SessionOrchestrator
-
-
-def get_request_id(x_request_id: str | None = Header(default=None)) -> str | None:
-    return x_request_id
 
 
 def verify_local_token(x_local_token: str | None = Header(default=None)) -> str:

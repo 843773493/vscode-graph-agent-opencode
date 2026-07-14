@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.callbacks import (
@@ -114,6 +116,69 @@ def _openai_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@dataclass(slots=True)
+class _StreamPartState:
+    """为单次模型响应分配稳定的 LangChain content part 身份。"""
+
+    next_index: int = 0
+    active_kind: str | None = None
+    active_part_id: str | None = None
+    active_index: int | None = None
+    active_provider_part_id: str | None = None
+
+    def close(self) -> None:
+        self.active_kind = None
+        self.active_part_id = None
+        self.active_index = None
+        self.active_provider_part_id = None
+
+    def decorate(self, block: dict[str, Any]) -> dict[str, Any]:
+        block_type = block.get("type")
+        if block_type == "reasoning":
+            kind = "reasoning"
+        elif block_type in {"text", "output_text", "refusal"}:
+            kind = "markdown"
+        else:
+            self.close()
+            return block
+
+        provider_part_id = block.get("id")
+        extras = block.get("extras")
+        if not isinstance(provider_part_id, str) and isinstance(extras, dict):
+            raw_provider_part_id = extras.get("id") or extras.get("provider_part_id")
+            if isinstance(raw_provider_part_id, str):
+                provider_part_id = raw_provider_part_id
+
+        provider_changed = (
+            isinstance(provider_part_id, str)
+            and self.active_provider_part_id is not None
+            and provider_part_id != self.active_provider_part_id
+        )
+        if self.active_kind != kind or provider_changed:
+            self.active_kind = kind
+            self.active_part_id = f"part_{uuid.uuid4().hex[:12]}"
+            self.active_index = self.next_index
+            self.active_provider_part_id = (
+                provider_part_id if isinstance(provider_part_id, str) else None
+            )
+            self.next_index += 1
+        elif isinstance(provider_part_id, str) and self.active_provider_part_id is None:
+            self.active_provider_part_id = provider_part_id
+
+        if self.active_part_id is None or self.active_index is None:
+            raise RuntimeError("模型流 content part 状态未初始化")
+
+        decorated = dict(block)
+        if isinstance(provider_part_id, str):
+            decorated_extras = dict(extras) if isinstance(extras, dict) else {}
+            decorated_extras.pop("id", None)
+            decorated_extras["provider_part_id"] = provider_part_id
+            decorated["extras"] = decorated_extras
+        decorated["id"] = self.active_part_id
+        decorated["index"] = self.active_index
+        return decorated
+
+
 class BoxteamLiteLLMChatModel(ChatLiteLLM):
     """LiteLLM 模型包装层，统一输出 LangChain 标准 content blocks。"""
 
@@ -150,7 +215,9 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             if block_type == "text":
                 text = block.get("text")
                 if isinstance(text, str):
-                    normalized.append(block)
+                    normalized.append({"type": "text", "text": text})
+                    if set(block) != {"type", "text"}:
+                        changed = True
                 else:
                     changed = True
                 continue
@@ -336,13 +403,35 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             )
         return tool_call_chunks
 
-    def _delta_to_message_chunks(self, delta: Mapping[str, Any]) -> list[AIMessageChunk]:
+    def _stream_content(
+        self,
+        content: Any,
+        *,
+        part_state: _StreamPartState,
+    ) -> Any:
+        normalized = self.normalize_output_content(content)
+        if not isinstance(normalized, list):
+            return normalized
+        return [
+            part_state.decorate(block) if isinstance(block, dict) else block
+            for block in normalized
+        ]
+
+    def _delta_to_message_chunks(
+        self,
+        delta: Mapping[str, Any],
+        *,
+        part_state: _StreamPartState,
+    ) -> list[AIMessageChunk]:
         chunks: list[AIMessageChunk] = []
         reasoning = self._delta_reasoning(delta)
         if reasoning:
             chunks.append(
                 AIMessageChunk(
-                    content=[{"type": "reasoning", "reasoning": reasoning}],
+                    content=self._stream_content(
+                        [{"type": "reasoning", "reasoning": reasoning}],
+                        part_state=part_state,
+                    ),
                 )
             )
 
@@ -350,17 +439,14 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         if content:
             chunks.append(
                 AIMessageChunk(
-                    content=(
-                        content
-                        if isinstance(content, str)
-                        else self.normalize_output_content(content)
-                    ),
+                    content=self._stream_content(content, part_state=part_state),
                 )
             )
 
         raw_tool_calls = delta.get("tool_calls")
         tool_call_chunks = self._delta_tool_call_chunks(raw_tool_calls)
         if tool_call_chunks:
+            part_state.close()
             chunks.append(
                 AIMessageChunk(
                     content="",
@@ -395,6 +481,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
         first_chunk_yielded = False
+        part_state = _StreamPartState()
         for raw_chunk in self.completion_with_retry(
             messages=message_dicts,
             run_manager=run_manager,
@@ -403,6 +490,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             for cg_chunk in self._convert_stream_response_chunk(
                 raw_chunk,
                 first_chunk_yielded=first_chunk_yielded,
+                part_state=part_state,
             ):
                 first_chunk_yielded = True
                 if run_manager:
@@ -424,6 +512,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
         first_chunk_yielded = False
+        part_state = _StreamPartState()
         async for raw_chunk in await self.acompletion_with_retry(
             messages=message_dicts,
             run_manager=run_manager,
@@ -432,6 +521,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             for cg_chunk in self._convert_stream_response_chunk(
                 raw_chunk,
                 first_chunk_yielded=first_chunk_yielded,
+                part_state=part_state,
             ):
                 first_chunk_yielded = True
                 if run_manager:
@@ -446,6 +536,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         raw_chunk: Any,
         *,
         first_chunk_yielded: bool,
+        part_state: _StreamPartState,
     ) -> list[ChatGenerationChunk]:
         chunk = _as_dict(raw_chunk)
         usage_metadata = None
@@ -467,7 +558,10 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             delta["vertex_ai_grounding_metadata"] = chunk["vertex_ai_grounding_metadata"]
 
         result: list[ChatGenerationChunk] = []
-        for message_chunk in self._delta_to_message_chunks(delta):
+        for message_chunk in self._delta_to_message_chunks(
+            delta,
+            part_state=part_state,
+        ):
             if usage_metadata:
                 message_chunk.usage_metadata = usage_metadata
             if not first_chunk_yielded:
@@ -496,9 +590,13 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         for generation in result.generations:
             message = generation.message
             if isinstance(message, AIMessage):
+                part_state = _StreamPartState()
                 message = message.model_copy(
                     update={
-                        "content": self.normalize_output_content(message.content),
+                        "content": self._stream_content(
+                            message.content,
+                            part_state=part_state,
+                        ),
                     }
                 )
             generations.append(
@@ -514,70 +612,79 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         scenario: str,
     ) -> AsyncIterator[ChatGenerationChunk]:
         """构造本地 fixture 流，用于 provider 格式自检。"""
+        part_state = _StreamPartState()
         if scenario == "reasoning_only":
             for delta in ["先", "思考", "一下", "结论"]:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(
-                        content=[{"type": "reasoning", "reasoning": delta}]
-                    )
-                )
+                message = self._delta_to_message_chunks(
+                    {"reasoning_content": delta},
+                    part_state=part_state,
+                )[0]
+                yield ChatGenerationChunk(message=message)
             return
         if scenario == "text_only":
             for delta in ["你好", "，", "世界"]:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(content=[{"type": "text", "text": delta}])
-                )
+                message = self._delta_to_message_chunks(
+                    {"content": delta},
+                    part_state=part_state,
+                )[0]
+                yield ChatGenerationChunk(message=message)
             return
         if scenario == "mixed_reasoning_text":
             for delta in ["思考", "中"]:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(
-                        content=[{"type": "reasoning", "reasoning": delta}]
-                    )
-                )
+                message = self._delta_to_message_chunks(
+                    {"reasoning_content": delta},
+                    part_state=part_state,
+                )[0]
+                yield ChatGenerationChunk(message=message)
             for delta in ["最终", "回答"]:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(content=[{"type": "text", "text": delta}])
-                )
+                message = self._delta_to_message_chunks(
+                    {"content": delta},
+                    part_state=part_state,
+                )[0]
+                yield ChatGenerationChunk(message=message)
             return
         if scenario == "tool_call":
-            yield ChatGenerationChunk(
-                message=AIMessageChunk(content=[{"type": "text", "text": "调用工具"}])
-            )
-            yield ChatGenerationChunk(
-                message=AIMessageChunk(
-                    content="",
-                    tool_call_chunks=[
+            for message in self._delta_to_message_chunks(
+                {
+                    "content": "调用工具",
+                    "tool_calls": [
                         {
-                            "name": "list_files",
-                            "args": '{"path": "."}',
-                            "id": "call_abc",
                             "index": 0,
+                            "id": "call_abc",
+                            "function": {
+                                "name": "list_files",
+                                "arguments": '{"path": "."}',
+                            },
                         }
                     ],
-                )
-            )
+                },
+                part_state=part_state,
+            ):
+                yield ChatGenerationChunk(message=message)
             return
         if scenario == "reasoning_then_tool":
-            yield ChatGenerationChunk(
-                message=AIMessageChunk(content=[{"type": "reasoning", "reasoning": "思考"}])
-            )
-            yield ChatGenerationChunk(
-                message=AIMessageChunk(content=[{"type": "text", "text": "决定调用"}])
-            )
-            yield ChatGenerationChunk(
-                message=AIMessageChunk(
-                    content="",
-                    tool_call_chunks=[
+            for message in self._delta_to_message_chunks(
+                {"reasoning_content": "思考"},
+                part_state=part_state,
+            ):
+                yield ChatGenerationChunk(message=message)
+            for message in self._delta_to_message_chunks(
+                {
+                    "content": "决定调用",
+                    "tool_calls": [
                         {
-                            "name": "shell",
-                            "args": '{"cmd": "ls"}',
-                            "id": "call_xyz",
                             "index": 0,
+                            "id": "call_xyz",
+                            "function": {
+                                "name": "shell",
+                                "arguments": '{"cmd": "ls"}',
+                            },
                         }
                     ],
-                )
-            )
+                },
+                part_state=part_state,
+            ):
+                yield ChatGenerationChunk(message=message)
             return
         raise ValueError(f"未知 provider 自检场景: {scenario!r}")
 

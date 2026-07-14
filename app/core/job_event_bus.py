@@ -6,7 +6,7 @@ import uuid
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Deque, Dict, Set
 
@@ -147,21 +147,13 @@ class EventFactorySpec:
     ) -> Event:
         event_payload = dict(payload)
         part_id = event_payload.pop("part_id", None)
-        if self.event_type in {
-            EventType.TEXT_START,
-            EventType.TEXT_DELTA,
-            EventType.TEXT_END,
-            EventType.TOOL_CALL_START,
-            EventType.TOOL_CALL_END,
-        } and not part_id:
-            raise ValueError(f"{self.event_type} 事件缺少 part_id")
         return self.event_class(
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
             part_id=part_id,
             job_id=job_id,
             step_id=step_id,
             agent_id=agent_id,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             type=self.event_type,
             payload=self.payload_class(**event_payload),
         )

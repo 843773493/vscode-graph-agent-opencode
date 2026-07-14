@@ -66,7 +66,7 @@ class APIResponse(BaseModel, Generic[T]):
     code: int = Field(default=0)
     message: str = Field(default="ok")
     data: Optional[T] = None
-    request_id: Optional[str] = None
+    request_id: str
 
 
 class CursorPage(BaseModel, Generic[T]):

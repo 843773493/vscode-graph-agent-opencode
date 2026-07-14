@@ -262,7 +262,7 @@ function contentCharCount(value: unknown): number {
     return value.reduce((total, item) => total + contentCharCount(item), 0);
   }
   if (isRecord(value)) {
-    return Object.values(value).reduce(
+    return Object.values(value).reduce<number>(
       (total, item) => total + contentCharCount(item),
       0,
     );
@@ -273,7 +273,9 @@ function contentCharCount(value: unknown): number {
 function requestToolDefinitions(log: LLMRequestLogRecord): RequestToolDefinitionDisplay[] {
   const tools = Array.isArray(log.request.tools) ? log.request.tools : [];
   return tools.map((tool, index) => {
-    const definition = isRecord(tool) ? tool : { value: tool };
+    const definition: Record<string, unknown> = isRecord(tool)
+      ? tool
+      : { value: tool };
     const functionDefinition = isRecord(definition.function)
       ? definition.function
       : null;

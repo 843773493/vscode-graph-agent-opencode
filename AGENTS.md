@@ -22,7 +22,7 @@
 
 1. 不要在代码中硬编码环境变量值。
 2. 使用 `bun install` 安装 JS/TS 依赖，使用 `uv sync` 安装 Python 依赖。
-3. 如果仓库根目录下存在 `.venv` 目录，请使用 `.venv\Scripts\python.exe` 及其 `pytest`，而不是全局 Python 解释器。
+3. 如果仓库根目录下存在 `.venv` 目录，Windows 使用 `.venv\Scripts\python.exe`，Linux/macOS 使用 `.venv/bin/python`；优先通过 `uv run` 调用 Python、pytest 等命令，不要使用全局 Python 解释器。
 4. 将懒加载的包单独放在 `runtime` 模块中。
 5. 解析仓库内路径时，默认以项目根目录为起点，优先基于运行时工作目录 `Path.cwd()` 或显式传入的绝对路径，从根目录向下查找各个文件；不要使用 `parent` / `parents` 这类方式通过文件位置向上推导仓库根目录。
 6. LLM provider 默认采用最小配置，只要求模型名称、endpoint、API key 和 provider 处理方式；采样参数、reasoning 参数和输出上限由上游模型采用默认值。
@@ -32,14 +32,14 @@
 ### 执行和质量
 
 1. 每次编写代码文件时，都运行静态分析。
-2. 每次修改 Webview UI（`src/webview-ui/`）后，都要执行 `cd src/webview-ui && ..\\..\\tools\\bun.exe run build` 重新编译，并在结束前确认构建成功。
+2. 每次修改浏览器 UI（`src/web/`）后，都要执行 `bun --cwd src/web run build`；每次修改 Webview UI（`src/webview-ui/`）后，都要执行 `bun --cwd src/webview-ui run build`，并在结束前确认构建成功。
 
 ### 代码组织
 
 1. 如果 `package.json` 中的命令过长，将其移到 `scripts/` 下的 `.mjs` 脚本中。
 2. 仓库中的 JavaScript 代码必须始终使用 ESM（ES 模块）通过 `import`/`export`，避免使用 CommonJS。
-3. 前端目录负责页面、交互、状态、API 调用以及少量展示逻辑。
-4. 前端后端目录负责业务规则、权限、数据库、订单流程、风险控制和核心计算。
+3. `src/web` 与 `src/webview-ui` 负责页面、交互、状态、API 调用以及少量展示逻辑。
+4. `app/` 中除 `app/gateway/` 外的工作区后端模块负责 Agent 业务规则、会话状态和核心计算；`app/gateway/` 只负责工作区路由和代理。
 5. **UI 优先开发 `src/web`（浏览器前端 8011，端口以 `scripts/dev.mjs` 的 `frontendPort` 为准），稳定后同步到 `src/webview-ui`（VS Code Webview 5173）。用户说"UI"默认指 `src/web`。**
 
 ### 提交和目录规范
@@ -70,14 +70,14 @@
 
 ### 目标
 
-1. 这是一个 AI 编程助手的后端在用户的本地工作区运行，并配合前端 VS Code 扩展以提供 IDE 级的自主编码体验。
+1. 这是一个在用户本地工作区运行的 AI 编程助手，由 FastAPI 工作区后端、Workspace Gateway、浏览器前端和 VS Code 扩展共同提供 IDE 级自主编码体验。
 
 ### 本地运行时设计
 
 1. 没有云服务功能；没有优雅降级、高可用性或多租户功能。
 2. 故障必须透明：直接抛出详细错误，绝不悄无声息地失败。
 3. 友好开发者：问题发生时直接崩溃，以便调试。
-4. 零外部依赖：不需要数据库、消息队列或云服务。
+4. 本地控制面不依赖数据库、消息队列或云端控制服务；模型 Provider、Web 搜索、SSH 工作区等显式配置的外部能力不属于“零网络依赖”。
 
 ### 工作区安全性
 
@@ -85,13 +85,17 @@
 
 ### 架构原则
 
-1. 前端与 FastAPI 通信；`JobService` 调度 `AgentExecutionService`，`AgentExecutionService` 驱动 `DeepAgent` 执行内置工具。
-2. 事件总线通过 SSE 向前端推送实时更新。
+1. 浏览器前端默认请求同源 `/api`：Vite 将请求转发到 Workspace Gateway，Gateway 再路由到当前激活工作区的 FastAPI 后端；不要假设 `src/web` 直接访问 8010。
+2. Workspace Gateway 只负责工作区注册、目标生命周期和透明代理，不实现 Agent 业务逻辑，也不直接读写工作区 `.boxteam/` 业务数据。
+3. 工作区后端中，`JobService` 调度 `AgentExecutionService`，`AgentExecutionService` 驱动 `DeepAgent` 执行内置工具。
+4. Gateway 自有接口使用 `/api/gateway/*`，工作区业务接口使用 `/api/v1/*`；浏览器访问后者时仍先经过 Gateway。
+5. Gateway 与工作区后端都必须安装 `TraceMiddleware`。Gateway 生成或接受本次请求唯一的 `request_id`，自有 API 在响应体和 `X-Request-ID` 响应头中返回它，代理 API 通过 `X-Request-ID` 向工作区后端透传同一值；任何一层不得补造第二个请求 ID。
+6. 事件总线通过 SSE 向前端推送实时更新。
 
 ### 前端状态管理原则
 
-1. 前后端是唯一的真实来源（后端优先的状态管理）。
-2. 前端不拥有业务状态的权威来源；所有状态更改必须通过后端 API。
+1. 后端是业务状态的唯一权威来源；Gateway 负责选择目标工作区并透明传输，前端只保存展示态和后端状态镜像。
+2. 前端不拥有业务状态的权威来源；所有业务状态更改必须通过后端 API，不能仅修改本地 React 状态伪造成功。
 3. 成功时，用后端返回的完整对象完全替换前端状态，而不是部分修补字段。
 4. 失败时，主动从后端重新获取数据以确保一致性。
 5. 这适用于核心业务状态，如代理切换、会话管理和消息发送。
@@ -103,22 +107,34 @@
 
 ### 测试工作区隔离
 
-1. Web UI、E2E 或 subagent 进行真实操作测试时，只能使用当前用户的默认工作区，或复用 `out/tests/e2e/` 下已有的隔离测试工作区。
-2. 测试需要独立工作区时，从 `asset/` 选择合适的测试工作区复制到 `out/tests/` 下，再使用复制后的目录；不要直接修改或注册 `asset/` 中的模板目录。
+1. Web UI、E2E 或 subagent 进行真实操作测试时，只能使用当前用户的默认工作区，或使用 `out/tests/temp/<task_name>/workspace/` 下的临时隔离工作区。
+2. 测试需要独立工作区时，从 `asset/` 选择合适的测试工作区复制到 `out/tests/temp/<task_name>/workspace/`，再使用复制后的目录；不要直接修改或注册 `asset/` 中的模板目录。
 3. 禁止把本项目根目录注册为测试工作区，也禁止为了测试在项目根目录产生 `.boxteam/`、会话、运行时状态或其他测试数据。
-4. 向 subagent 委派 Web 或 E2E 测试时，任务说明必须明确指定上述允许的测试工作区，不能让 subagent 自行选择或新增项目根目录工作区。
+4. 向 subagent 委派 Web 或 E2E 测试时，任务说明必须明确指定 `out/tests/temp/<task_name>/` 下的工作区和产物目录，不能让 subagent 自行选择目录，也不能新增项目根目录工作区。
+
+### 测试产物管理
+
+1. 所有临时测试文件统一放在 `out/tests/temp/<task_name>/`。其中隔离工作区使用 `workspace/` 子目录，截图、录屏、HTML 快照、浏览器下载、Playwright trace、审查报告和临时日志使用 `artifacts/` 子目录。
+2. **严禁在项目根目录生成或保存任何测试图片、截图、录屏或其他临时测试文件。** 同样不得把临时产物直接放在 `out/tests/` 顶层、`src/`、`app/`、`asset/` 或 `reference_repo/` 中。
+3. `asset/` 是只读测试模板目录，不是测试输出目录。既有其它 `out/tests/` 子目录不能作为新增临时产物的默认位置；新任务统一使用 `out/tests/temp/`。
+4. 调用截图、浏览器或审查工具前必须显式设置 `out/tests/temp/<task_name>/artifacts/`，不能依赖工具的默认当前目录。工具不支持指定目录时，应在调用前切换到该目录，不得先在仓库根目录生成再移动或遗留。
+5. 测试结束时必须列出本次生成的产物。纯临时产物应主动删除；用户需要查看的产物可以暂时保留，但必须报告其路径，并继续放在对应的 `out/tests/temp/<task_name>/` 中。
+6. 测试生成的二进制文件默认不得加入 Git。只有用户明确要求将其作为长期测试基线或产品资源时，才允许提交，并应放入语义明确的专用目录而不是仓库根目录或 `out/tests/temp/`。
 
 ### 运行时说明
 
 1. 在 JS/TS 环境中使用 `bun`；使用 `bun install` 安装依赖，使用 `bun run dev` 启动本地开发环境。
-2. `bun run dev` 会执行 `scripts/dev.mjs`：后端监听 `127.0.0.1:8010`，`src/web` 浏览器前端监听 `127.0.0.1:8011`。
-3. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖。单独启动后端时使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8010`。
-4. API 文档可访问 http://127.0.0.1:8010/api/v1/docs
+2. `bun run dev` 会执行 `scripts/dev.mjs`。当前主服务监听关系为：工作区后端 `127.0.0.1:8010`、浏览器前端 `0.0.0.0:8011`、Workspace Gateway `127.0.0.1:8014`；Terminal 和 Browser 辅助服务分别使用 8012/8013 与 8015/8016，默认监听 `0.0.0.0`。
+3. `scripts/dev.mjs` 启动前会清理 8010–8016 以及调试端口 8002 的旧监听进程，其中包括 Gateway。需要验证完整 Web 产品时必须通过该脚本统一重启，不要只手动重启 8010 后端而保留旧 Gateway 或旧前端。
+4. 需要让启动命令返回但服务继续运行时使用 `bun run scripts/dev.mjs --only-launch`；普通 `bun run dev` 会持续管理整组子进程，任一关键进程退出时会停止其余进程。
+5. 验证 Web 可用性不能只检查 8010 健康接口或 8011 HTML。至少应通过 8011 实际请求 `/api/gateway/health`、`/api/gateway/workspaces` 和 `/api/v1/workspace`，确认页面初始化链路、激活工作区以及响应头/响应体 `request_id` 均正确；涉及交互时还应进行真实浏览器测试。
+6. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖。仅调试单个工作区后端时可使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8010`，但这不代表 Gateway 和 Web 全链路已经启动。
+7. 工作区后端 API 文档位于 http://127.0.0.1:8010/api/v1/docs；Gateway API 文档位于 http://127.0.0.1:8014/api/gateway/docs。
 
 ### 配置
 
 1. 对所有 JS/TS 相关工具使用 `bun`。
-2. 使用 `uv`适用于所有与 Python 相关的工具。
+2. 对所有 Python 相关工具使用 `uv`。
 
 ## 代理协作
 

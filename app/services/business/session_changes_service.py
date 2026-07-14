@@ -70,6 +70,7 @@ class SessionChangesService:
         session_id: str,
         turn_id: str,
         tool_call_id: str,
+        execution_id: str,
         tool_name: str,
         before: FileEditSnapshot,
     ) -> StoredFileEdit | None:
@@ -95,6 +96,7 @@ class SessionChangesService:
             session_id=session_id,
             turn_id=turn_id,
             tool_call_id=tool_call_id,
+            execution_id=execution_id,
             tool_name=tool_name,
             file_path=before.file_path,
             kind=detect_change_kind(
@@ -252,6 +254,7 @@ class SessionChangesService:
                     reviewed=reviewed_map.get(change.file_path) is True,
                     latest_edit_id=change.latest_edit_id,
                     tool_call_ids=list(change.tool_call_ids),
+                    execution_ids=list(change.execution_ids),
                     turn_ids=list(change.turn_ids),
                     before_file=before_file,
                     after_file=after_file,

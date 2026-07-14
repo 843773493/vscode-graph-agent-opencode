@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.background_task_registry import BackgroundTaskHandle
@@ -46,7 +46,7 @@ class BackgroundTaskHistoryStore:
                 if record.status not in {"pending", "running"}:
                     continue
                 record.status = "lost"
-                record.ended_at = datetime.now()
+                record.ended_at = datetime.now(timezone.utc)
                 record.metadata["status_note"] = "后端进程结束，后台任务已失去运行实体。"
                 changed = True
             if changed:

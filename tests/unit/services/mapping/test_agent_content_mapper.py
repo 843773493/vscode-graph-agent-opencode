@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services.mapping.agent_content_mapper import (
+    extract_agent_stream_content_parts,
     extract_reasoning_summary,
     split_agent_content,
 )
@@ -43,3 +46,35 @@ def test_extract_reasoning_summary_supports_summary_text_entries():
         )
         == "片段一片段二"
     )
+
+
+def test_extract_agent_stream_parts_preserves_authoritative_identity():
+    parts = extract_agent_stream_content_parts(
+        [
+            {
+                "type": "reasoning",
+                "reasoning": "分析",
+                "id": "part_reasoning",
+                "index": 0,
+            },
+            {
+                "type": "text",
+                "text": "回答",
+                "id": "part_answer",
+                "index": 1,
+            },
+        ]
+    )
+
+    assert [(part.part_id, part.index, part.kind, part.text) for part in parts] == [
+        ("part_reasoning", 0, "reasoning", "分析"),
+        ("part_answer", 1, "markdown", "回答"),
+    ]
+
+
+def test_extract_agent_stream_parts_rejects_text_without_part_identity():
+    with pytest.raises(ValueError, match="缺少权威 part id"):
+        extract_agent_stream_content_parts([{"type": "text", "text": "回答"}])
+
+    with pytest.raises(TypeError, match="必须是带 id/index"):
+        extract_agent_stream_content_parts("回答")

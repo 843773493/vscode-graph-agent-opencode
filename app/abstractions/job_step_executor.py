@@ -10,10 +10,11 @@ class JobStepExecutor(Protocol):
         self,
         session_id: str,
         message: str,
+        *,
         agent_id: str | None = None,
-        job_id: str | None = None,
-        message_id: str | None = None,
+        job_id: str,
+        message_id: str,
         attachments: list[AttachmentRef] | None = None,
-        message_created_at: str | None = None,
+        message_created_at: str,
     ) -> str:
         ...

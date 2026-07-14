@@ -13,10 +13,7 @@ export function rawTracePayload(event: TraceEvent): Record<string, unknown> {
 }
 
 export function traceJobId(event: TraceEvent): string {
-  if (event.job_id && event.job_id !== "unknown_job") {
-    return event.job_id;
-  }
-  return typeof event.raw?.job_id === "string" ? event.raw.job_id : "";
+  return event.job_id;
 }
 
 export function tracePayloadString(event: TraceEvent, key: string): string {
@@ -31,7 +28,7 @@ export function dedupeTraceEvents(events: TraceEvent[]): TraceEvent[] {
     .filter((event) => {
       const id = event.event_id;
       if (!id) {
-        return true;
+        throw new Error(`Trace 事件缺少 event_id: type=${event.type}`);
       }
       if (seenEventIds.has(id)) {
         return false;
@@ -46,11 +43,11 @@ export function dedupeTraceEvents(events: TraceEvent[]): TraceEvent[] {
 }
 
 function frontendEventQueueId(event: TraceEvent, source: FrontendEventSource) {
-  return `${source}:${event.event_id || `${event.type}:${event.timestamp}`}`;
+  return `${source}:${event.event_id}`;
 }
 
 function traceEventSessionId(event: TraceEvent): string {
-  return event.session_id ?? event.raw?.session_id ?? "";
+  return event.session_id;
 }
 
 function traceEventWithSession(
@@ -60,17 +57,9 @@ function traceEventWithSession(
   if (event.session_id === sessionId) {
     return event;
   }
-
-  return {
-    ...event,
-    session_id: sessionId,
-    raw: event.raw
-      ? {
-          ...event.raw,
-          session_id: event.raw.session_id ?? sessionId,
-        }
-      : event.raw,
-  };
+  throw new Error(
+    `Trace 事件 session_id 不一致: expected=${sessionId} actual=${event.session_id} event_id=${event.event_id}`,
+  );
 }
 
 export function appendReceivedEvents(
@@ -243,7 +232,7 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
         job_id:
           typeof raw.job_id === "string"
             ? raw.job_id
-            : (event.job_id ?? "unknown_job"),
+            : event.job_id,
         type: typeof raw.type === "string" ? raw.type : event.type,
         timestamp:
           typeof raw.timestamp === "string" ? raw.timestamp : event.timestamp,
@@ -263,11 +252,8 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
   return {
     event_id: event.event_id,
     part_id: event.part_id ?? normalizedRaw?.part_id ?? null,
-    session_id:
-      typeof event.session_id === "string"
-        ? event.session_id
-        : (normalizedRaw?.session_id ?? ""),
-    job_id: event.job_id ?? "unknown_job",
+    session_id: event.session_id,
+    job_id: event.job_id,
     step_id: event.step_id ?? null,
     agent_id: event.agent_id ?? null,
     timestamp: event.timestamp,

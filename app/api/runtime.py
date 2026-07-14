@@ -24,7 +24,7 @@ class UiSnapshotRequest(BaseModel):
 @router.get("/status", response_model=APIResponse[RuntimeStatusDTO], summary="获取运行时状态")
 async def get_runtime_status(
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     runtime_service: RuntimeService = Depends(get_runtime_service),
 ):
     result = await runtime_service.status()
@@ -34,7 +34,7 @@ async def get_runtime_status(
 @router.post("/shutdown", response_model=APIResponse[RuntimeShutdownDTO], summary="关闭运行时")
 async def shutdown_runtime(
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     runtime_service: RuntimeService = Depends(get_runtime_service),
 ):
     result = await runtime_service.shutdown()
@@ -45,7 +45,7 @@ async def shutdown_runtime(
 async def save_log_snapshot(
     payload: UiSnapshotRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     runtime_service: RuntimeService = Depends(get_runtime_service),
     log_service: LogService = Depends(get_log_service),
 ):

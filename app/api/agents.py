@@ -13,7 +13,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 @router.get("", response_model=APIResponse[list[AgentDTO]], summary="获取 Agent 列表")
 async def list_agents(
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     agent_service: AgentService = Depends(get_agent_service),
 ):
     result = await agent_service.list()
@@ -24,7 +24,7 @@ async def list_agents(
 async def get_agent(
     agent_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     agent_service: AgentService = Depends(get_agent_service),
 ):
     result = await agent_service.get(agent_id)

@@ -10,7 +10,6 @@ from typing import AsyncGenerator
 from pydantic import RootModel
 
 from app.schemas.event import Event
-from app.services.mapping.legacy_trace_event_migrator import migrate_legacy_trace_events
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +91,9 @@ class TraceEventStore:
                 try:
                     value = json.loads(line)
                 except Exception as exc:
-                    logger.warning("跳过无法解析的 trace 行: session_id=%s error=%s line=%r", session_id, exc, line[:200])
-                    continue
+                    raise RuntimeError(
+                        f"Trace 行无法解析: session_id={session_id} line={line[:200]!r}"
+                    ) from exc
                 if not isinstance(value, dict):
                     raise RuntimeError(
                         f"Trace 行必须是 JSON object: session_id={session_id} line={line[:200]!r}"
@@ -101,16 +101,13 @@ class TraceEventStore:
                 raw_events.append(value)
 
         events: list[Event] = []
-        for raw_event in migrate_legacy_trace_events(raw_events):
+        for raw_event in raw_events:
             try:
                 events.append(_AnyEvent.model_validate(raw_event).root)
             except Exception as exc:
-                logger.warning(
-                    "跳过无法升级的 trace 事件: session_id=%s error=%s event=%r",
-                    session_id,
-                    exc,
-                    raw_event,
-                )
+                raise RuntimeError(
+                    f"Trace 事件协议无效: session_id={session_id} event={raw_event!r}"
+                ) from exc
         return events
 
     @staticmethod
@@ -160,13 +157,10 @@ class TraceEventStore:
                 try:
                     raw_event = json.loads(stripped.decode("utf-8"))
                 except Exception as exc:
-                    logger.warning(
-                        "跳过无法解析的 trace 行: session_id=%s error=%s line=%r",
-                        session_id,
-                        exc,
-                        stripped[:200],
-                    )
-                    continue
+                    raise RuntimeError(
+                        f"Trace 游标扫描遇到损坏行: session_id={session_id} "
+                        f"line={stripped[:200]!r}"
+                    ) from exc
                 if isinstance(raw_event, dict) and raw_event.get("event_id") == after_event_id:
                     return stream.tell()
         raise TraceCursorGoneError(session_id, after_event_id)
@@ -200,29 +194,24 @@ class TraceEventStore:
                         try:
                             raw_event = json.loads(stripped.decode("utf-8"))
                         except Exception as exc:
-                            logger.warning(
-                                "跳过无法解析的 trace 行: session_id=%s error=%s line=%r",
-                                session_id,
-                                exc,
-                                stripped[:200],
-                            )
-                            continue
+                            raise RuntimeError(
+                                f"Trace 流遇到损坏行: session_id={session_id} "
+                                f"line={stripped[:200]!r}"
+                            ) from exc
                         if not isinstance(raw_event, dict):
                             raise RuntimeError(
                                 f"Trace 流事件必须是 JSON object: session_id={session_id}"
                             )
                         raw_events.append(raw_event)
 
-                    for raw_event in migrate_legacy_trace_events(raw_events):
+                    for raw_event in raw_events:
                         try:
                             yield _AnyEvent.model_validate(raw_event).root
                         except Exception as exc:
-                            logger.warning(
-                                "跳过无法升级的 trace 流事件: session_id=%s error=%s event=%r",
-                                session_id,
-                                exc,
-                                raw_event,
-                            )
+                            raise RuntimeError(
+                                "Trace 流事件协议无效: "
+                                f"session_id={session_id} event={raw_event!r}"
+                            ) from exc
 
             async with condition:
                 try:

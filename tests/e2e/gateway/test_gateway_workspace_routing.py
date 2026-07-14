@@ -63,6 +63,9 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             timeout=30,
         ) as client:
             default_workspace_response = await client.get("/api/v1/workspace")
+            default_request_id = default_workspace_response.json()["request_id"]
+            assert default_request_id
+            assert default_workspace_response.headers["X-Request-ID"] == default_request_id
             assert Path(workspace_root_from_response(default_workspace_response)).resolve() == primary_workspace
 
             add_response = await client.post(
@@ -74,6 +77,8 @@ async def test_gateway_routes_sessions_between_local_workspaces(
                 },
             )
             assert add_response.status_code == 200, add_response.text
+            assert add_response.json()["request_id"]
+            assert add_response.headers["X-Request-ID"] == add_response.json()["request_id"]
             workspace_list = add_response.json()["data"]
             default_workspace_id = next(
                 item["workspace_id"]
@@ -175,4 +180,3 @@ async def test_gateway_routes_sessions_between_local_workspaces(
         close_gateway_process(gateway)
         close_backend_process(secondary_backend)
         close_backend_process(primary_backend)
-

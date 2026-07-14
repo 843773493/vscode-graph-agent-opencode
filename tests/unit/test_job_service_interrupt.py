@@ -40,6 +40,10 @@ async def test_job_control_pause_cancels_running_task(monkeypatch):
     job = JobState(
         job_id="job_test_pause",
         session_id="session_test",
+        message="pause me",
+        message_id="msg_pause",
+        message_created_at="2026-07-14T00:00:00+00:00",
+        agent_id="default",
         status=JobStatus.running,
         task=DummyTask(),
     )
@@ -63,6 +67,9 @@ async def test_job_control_resume_restarts_completed_pause(monkeypatch):
     job = JobState(
         job_id="job_test_resume",
         session_id="session_test",
+        message_id="msg_resume",
+        message_created_at="2026-07-14T00:00:00+00:00",
+        agent_id="default",
         status=JobStatus.paused,
         task=DummyTask(done=True),
         message="resume me",
@@ -102,6 +109,10 @@ async def test_job_control_cancel_requests_task_cancel(monkeypatch):
     job = JobState(
         job_id="job_test_cancel",
         session_id="session_test",
+        message="cancel me",
+        message_id="msg_cancel",
+        message_created_at="2026-07-14T00:00:00+00:00",
+        agent_id="default",
         status=JobStatus.running,
         task=task,
     )
@@ -133,8 +144,18 @@ async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch
     monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
 
     session_id = "session_queue_test"
-    first_job_id = await service.start_job(session_id, "first")
-    second_job_id = await service.start_job(session_id, "second")
+    first_job_id = await service.start_job(
+        session_id,
+        "first",
+        message_id="msg_first",
+        message_created_at="2026-07-14T00:00:00+00:00",
+    )
+    second_job_id = await service.start_job(
+        session_id,
+        "second",
+        message_id="msg_second",
+        message_created_at="2026-07-14T00:00:01+00:00",
+    )
 
     assert started_jobs == [first_job_id]
     assert service._session_current_job[session_id] == first_job_id

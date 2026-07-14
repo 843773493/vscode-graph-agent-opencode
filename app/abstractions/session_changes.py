@@ -24,6 +24,7 @@ class StoredFileEdit:
     session_id: str
     turn_id: str
     tool_call_id: str
+    execution_id: str
     tool_name: str
     file_path: str
     kind: SessionFileChangeKind
@@ -45,6 +46,7 @@ class AggregatedFileChange:
     deletions: int
     latest_edit_id: str
     tool_call_ids: tuple[str, ...]
+    execution_ids: tuple[str, ...]
     turn_ids: tuple[str, ...]
     before_content: str | None
     after_content: str | None
@@ -103,6 +105,7 @@ class SessionChangesRecorderProtocol(Protocol):
         session_id: str,
         turn_id: str,
         tool_call_id: str,
+        execution_id: str,
         tool_name: str,
         before: FileEditSnapshot,
     ) -> StoredFileEdit | None: ...

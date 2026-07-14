@@ -42,27 +42,30 @@ class TraceEventMapper:
         if event_type not in self._SUPPORTED_TYPES:
             return None
 
-        payload = event.get("payload") or {}
+        payload = event.get("payload")
         if not isinstance(payload, dict):
-            payload = {}
+            raise TypeError(
+                f"Trace 事件 payload 必须是 dict: event_type={event_type}"
+            )
 
-        # session_id 优先级：payload > event 顶层 > 传入参数 > 空字符串
-        resolved_session_id = (
-            payload.get("session_id")
-            or event.get("session_id")
-            or session_id
-            or event.get("thread_id")
-            or ""
-        )
-        job_id = event.get("job_id") or payload.get("job_id")
+        if not session_id:
+            raise ValueError("Trace 映射缺少存储范围 session_id")
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError(f"Trace 事件缺少 event_id: event_type={event_type}")
+        job_id = event.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            raise ValueError(
+                f"Trace 事件缺少 job_id: event_id={event_id} event_type={event_type}"
+            )
         step_id = event.get("step_id")
-        timestamp = self._parse_timestamp(event.get("timestamp"), payload.get("timestamp"))
+        timestamp = self._parse_timestamp(event.get("timestamp"), event_id=event_id)
 
         phase, title, content, status, tool_name = self._build_view_model(event_type, payload)
         skill_names = self._skill_names(payload)
 
         return TraceEventDTO(
-            event_id=event.get("event_id") or "",
+            event_id=event_id,
             part_id=event.get("part_id"),
             session_id=session_id,
             job_id=job_id,
@@ -134,13 +137,20 @@ class TraceEventMapper:
         error_text = payload.get("error") or "执行失败"
         return "error", "执行失败", error_text, "failed", None
 
-    def _parse_timestamp(self, *values: Any) -> datetime:
-        for value in values:
-            if isinstance(value, datetime):
-                return value
-            if isinstance(value, str):
-                try:
-                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-        return datetime.now().astimezone()
+    def _parse_timestamp(self, value: Any, *, event_id: str) -> datetime:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError(
+                    f"Trace 事件 timestamp 格式错误: event_id={event_id} value={value!r}"
+                ) from exc
+        else:
+            raise TypeError(
+                f"Trace 事件缺少 timestamp: event_id={event_id} value={value!r}"
+            )
+        if parsed.tzinfo is None:
+            raise ValueError(f"Trace 事件 timestamp 必须包含时区: event_id={event_id}")
+        return parsed

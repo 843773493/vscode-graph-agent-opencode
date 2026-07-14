@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from cachetools import LRUCache
@@ -112,7 +112,7 @@ def create_monitor_session_agent_end_tool(
         resolved_timeout_seconds = timeout_seconds or None
         resolved_max_events = max_events or None
 
-        submitted_at = datetime.now()
+        submitted_at = datetime.now(timezone.utc)
         monitor_source_id = f"monitor:{target_session_id}:{uuid.uuid4().hex[:12]}"
 
         async def _monitor_background_task() -> dict[str, Any]:

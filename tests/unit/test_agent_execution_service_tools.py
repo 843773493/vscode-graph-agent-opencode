@@ -466,7 +466,7 @@ async def test_monitor_and_collect_forward_agent_end_final_text(tmp_path):
                 final_text="答案是 56088",
                 agent_id="deep_agent",
             ),
-            timestamp=datetime.now() + timedelta(seconds=1),
+            timestamp=datetime.now().astimezone() + timedelta(seconds=1),
         ),
     )
 

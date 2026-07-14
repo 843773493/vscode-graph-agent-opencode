@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional, Protocol
 
 
@@ -88,8 +88,8 @@ class BackgroundTaskRegistry:
             session_id=session_id,
             task_name=task_name,
             status="running",
-            created_at=datetime.now(),
-            started_at=datetime.now(),
+            created_at=datetime.now(timezone.utc),
+            started_at=datetime.now(timezone.utc),
             metadata=metadata or {},
         )
         self._history_store.upsert(handle)
@@ -109,7 +109,7 @@ class BackgroundTaskRegistry:
                 handle.metadata["error_message"] = str(exc)
                 raise
             finally:
-                handle.ended_at = datetime.now()
+                handle.ended_at = datetime.now(timezone.utc)
                 self._history_store.upsert(handle)
 
         task = asyncio.create_task(
@@ -162,7 +162,7 @@ class BackgroundTaskRegistry:
         if record.handle.status in {"pending", "running"}:
             record.handle.status = "cancelled"
             if record.handle.ended_at is None:
-                record.handle.ended_at = datetime.now()
+                record.handle.ended_at = datetime.now(timezone.utc)
         self._history_store.upsert(record.handle)
         return record.handle
 
@@ -183,7 +183,7 @@ class BackgroundTaskRegistry:
                 )
             historical_handle.status = "deleted"
             if historical_handle.ended_at is None:
-                historical_handle.ended_at = datetime.now()
+                historical_handle.ended_at = datetime.now(timezone.utc)
             self._history_store.upsert(historical_handle)
             return historical_handle
 
@@ -192,7 +192,7 @@ class BackgroundTaskRegistry:
 
         record.handle.status = "deleted"
         if record.handle.ended_at is None:
-            record.handle.ended_at = datetime.now()
+            record.handle.ended_at = datetime.now(timezone.utc)
         self._history_store.upsert(record.handle)
 
         del self._tasks[session_id][task_id]

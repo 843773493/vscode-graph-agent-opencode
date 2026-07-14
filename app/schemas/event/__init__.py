@@ -8,8 +8,8 @@
 """
 
 from datetime import datetime
-from typing import Any, Literal, Optional, Union
-from pydantic import BaseModel, Field
+from typing import Any, Literal, Optional, Self, Union
+from pydantic import BaseModel, Field, model_validator
 
 # ============= 1. 基础事件结构（所有事件的公共字段） =============
 
@@ -21,6 +21,21 @@ class BaseEvent(BaseModel):
     step_id: Optional[str] = None
     agent_id: Optional[str] = None
     timestamp: datetime
+
+    @model_validator(mode="after")
+    def validate_part_identity(self) -> Self:
+        if self.timestamp.tzinfo is None:
+            raise ValueError("事件 timestamp 必须包含时区")
+        event_type = getattr(self, "type", None)
+        if event_type in {
+            "text_start",
+            "text_delta",
+            "text_end",
+            "tool_call_start",
+            "tool_call_end",
+        } and not self.part_id:
+            raise ValueError(f"{event_type} 事件缺少 part_id")
+        return self
 
 
 # ============= 2. 各事件的Payload Schema（不含type字段） =============
@@ -105,6 +120,7 @@ class AgentEndPayload(BaseModel):
 
 class ToolCallStartPayload(BaseModel):
     """TOOL_CALL_START 事件的 payload"""
+    execution_id: str
     tool_name: str
     args: dict[str, Any] = Field(default_factory=dict)
     agent_id: str | None = None
@@ -139,6 +155,8 @@ class ToolOutputReferencePayload(BaseModel):
 
 class ToolCallEndPayload(BaseModel):
     """TOOL_CALL_END 事件的 payload"""
+    execution_id: str
+    tool_call_id: str
     tool_name: str
     result: str = ""
     agent_id: str | None = None

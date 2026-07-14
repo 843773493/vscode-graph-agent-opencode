@@ -30,7 +30,7 @@ router = APIRouter(prefix="/tools", tags=["tools"])
 async def list_tools(
     agent_id: str = "default",
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),
 ):
     result = await tool_service.list(agent_id)
@@ -45,7 +45,7 @@ async def list_tools(
 async def update_tool_selection(
     payload: ToolSelectionPatchRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),
 ):
     result = await tool_service.update_selection(payload)
@@ -61,7 +61,7 @@ async def list_tool_tests(
     tool_name: str | None = None,
     limit: int = 20,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     test_service: ToolTestService = Depends(get_tool_test_service),
 ):
     result = ToolTestRunListDTO(items=test_service.list(tool_name=tool_name, limit=limit))
@@ -76,7 +76,7 @@ async def list_tool_tests(
 async def get_tool_test(
     run_id: str,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     test_service: ToolTestService = Depends(get_tool_test_service),
 ):
     return APIResponse(data=test_service.get(run_id), request_id=request_id)
@@ -91,7 +91,7 @@ async def start_tool_test(
     tool_id: str,
     payload: ToolTestStartRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     test_service: ToolTestService = Depends(get_tool_test_service),
 ):
     result = await test_service.start(tool_name=tool_id, request=payload)
@@ -103,7 +103,7 @@ async def get_tool(
     tool_id: str,
     agent_id: str = "default",
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),
 ):
     result = await tool_service.get(tool_id, agent_id)
@@ -115,7 +115,7 @@ async def invoke_tool(
     tool_id: str,
     payload: ToolInvokeRequest,
     _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
+    request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),
 ):
     result = await tool_service.invoke(tool_id, payload)

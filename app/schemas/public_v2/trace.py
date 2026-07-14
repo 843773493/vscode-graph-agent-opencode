@@ -10,7 +10,7 @@ class TraceEventDTO(BaseModel):
     event_id: str
     part_id: Optional[str] = None
     session_id: str
-    job_id: Optional[str] = None
+    job_id: str
     type: Literal[
         "agent_start",
         "llm_request",
