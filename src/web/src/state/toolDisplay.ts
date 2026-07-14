@@ -1,9 +1,17 @@
 import type { TimelineItem } from "./timelineTypes";
 import { isRecord } from "../utils/jsonDisplay";
 import { skillNameFromPath } from "../utils/skillPaths";
-import { toBrowserReachableTerminalUrl } from "../utils/terminalUrls";
+import { toBrowserReachableAttachUrl } from "../utils/attachUrls";
 
 type AggregatedToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
+
+const ROUTINE_INTERNAL_TOOL_NAMES = new Set([
+  "execute",
+  "glob",
+  "grep",
+  "ls",
+  "read_file",
+]);
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {
   if (isRecord(value)) {
@@ -94,7 +102,7 @@ function formatPersistentTerminalToolContent(item: AggregatedToolItem): string |
     fieldText(resultRecord, "attach_url") ||
     fieldText(terminalRecord ?? {}, "attach_url");
   const displayAttachUrl = attachUrl
-    ? toBrowserReachableTerminalUrl(attachUrl)
+    ? toBrowserReachableAttachUrl(attachUrl)
     : "";
   const terminalStatus =
     fieldText(terminalRecord ?? {}, "status") ||
@@ -179,6 +187,10 @@ export function isSkillInternalToolItem(item: AggregatedToolItem): boolean {
       fieldText(inputRecord, "file_path") || fieldText(inputRecord, "path"),
     ),
   );
+}
+
+export function isRoutineInternalToolItem(item: AggregatedToolItem): boolean {
+  return ROUTINE_INTERNAL_TOOL_NAMES.has(item.toolName);
 }
 
 function formatCustomToolSkillContent(item: AggregatedToolItem): string | null {

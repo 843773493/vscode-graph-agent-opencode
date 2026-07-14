@@ -14,6 +14,32 @@
   gap: 9px;
 }
 
+.resource-closed-group {
+  margin: 0 10px 10px;
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, transparent);
+}
+
+.resource-closed-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.resource-closed-group > .panel-list {
+  padding: 0 8px 8px;
+}
+
 .resource-kind,
 .resource-status {
   display: inline-flex;

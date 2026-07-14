@@ -11,6 +11,7 @@ interface DirectoryState {
 
 interface WorkspaceFileTreeProps {
   apiPort: number | null;
+  workspaceId: string | null;
   workspaceName: string | null;
   workspaceRoot: string | null;
   activeFilePath: string | null;
@@ -51,6 +52,7 @@ function shortWorkspaceLabel(workspaceRoot: string | null, workspaceName: string
 
 export default function WorkspaceFileTree({
   apiPort,
+  workspaceId,
   workspaceName,
   workspaceRoot,
   activeFilePath,
@@ -84,7 +86,7 @@ export default function WorkspaceFileTree({
       }));
 
       try {
-        const result = await getWorkspaceFiles(port, path);
+        const result = await getWorkspaceFiles(port, path, workspaceId);
         setDirectories((prev) => ({
           ...prev,
           [path]: {
@@ -110,14 +112,14 @@ export default function WorkspaceFileTree({
         return false;
       }
     },
-    [onStatusChange, port],
+    [onStatusChange, port, workspaceId],
   );
 
   useEffect(() => {
     setExpandedPaths(new Set([ROOT_PATH]));
     setDirectories({});
     void loadDirectory(ROOT_PATH);
-  }, [loadDirectory, workspaceRoot]);
+  }, [loadDirectory, workspaceId, workspaceRoot]);
 
   useEffect(() => {
     if (lastCollapseVersionRef.current === collapseVersion) {

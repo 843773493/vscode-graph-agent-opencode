@@ -4,11 +4,12 @@ import type {
   SessionResourceKind,
 } from "../types/backend";
 import { formatDateTime } from "../utils/format";
-import { toBrowserReachableTerminalUrl } from "../utils/terminalUrls";
+import { toBrowserReachableAttachUrl } from "../utils/attachUrls";
 import {
   actionLabel,
   kindLabel,
   metadataRows,
+  resourceName,
   resourceStateSummary,
   statusLabel,
 } from "../state/resourceDisplay";
@@ -19,6 +20,7 @@ export default function ResourceCard({
   onControl,
   onCopy,
   onOpenTerminal,
+  onOpenBrowser,
   onShowConversation,
 }: {
   resource: SessionResource;
@@ -29,15 +31,17 @@ export default function ResourceCard({
     action: SessionResourceAction,
   ) => void;
   onCopy: (resourceId: string) => void;
-  onOpenTerminal: (resourceId: string) => void;
+  onOpenTerminal: (resourceId: string, attachUrl: string) => void;
+  onOpenBrowser: (resourceId: string, attachUrl: string) => void;
   onShowConversation: (jobId?: string) => void;
 }) {
   const rows = metadataRows(resource);
   const attachUrl =
     typeof resource.metadata.attach_url === "string"
-      ? toBrowserReachableTerminalUrl(resource.metadata.attach_url)
+      ? toBrowserReachableAttachUrl(resource.metadata.attach_url)
       : null;
   const canOpenTerminal = resource.kind === "terminal" && resource.status === "running";
+  const canOpenBrowser = resource.kind === "browser" && resource.status === "running";
   const stateSummary = resourceStateSummary(resource);
 
   return (
@@ -47,7 +51,7 @@ export default function ResourceCard({
           <span className={`resource-kind resource-kind-${resource.kind}`}>
             {kindLabel(resource.kind)}
           </span>
-          <span className="panel-type">{resource.name}</span>
+          <span className="panel-type">{resourceName(resource)}</span>
         </div>
         <div className={`resource-status resource-status-${resource.status}`}>
           {statusLabel(resource.status)}
@@ -78,30 +82,34 @@ export default function ResourceCard({
         >
           复制 UUID
         </button>
-        {attachUrl ? (
+        {attachUrl && resource.kind === "terminal" ? (
           <button
             type="button"
             className="resource-action-button resource-action-open"
             disabled={!canOpenTerminal}
             onClick={() => {
               if (canOpenTerminal) {
-                window.open(attachUrl, "_blank", "noopener,noreferrer");
-                onOpenTerminal(resource.resource_id);
+                onOpenTerminal(resource.resource_id, attachUrl);
               }
             }}
-            title={canOpenTerminal ? "打开终端页面" : "终端已不可连接"}
+            title={canOpenTerminal ? "在预览区打开并连接终端" : "终端已不可连接"}
           >
             打开终端
           </button>
         ) : null}
-        {resource.kind === "job" ? (
+        {attachUrl && resource.kind === "browser" ? (
           <button
             type="button"
-            className="resource-action-button"
-            onClick={() => onShowConversation(resource.resource_id)}
-            title="查看该 Job 对应回复"
+            className="resource-action-button resource-action-open"
+            disabled={!canOpenBrowser}
+            onClick={() => {
+              if (canOpenBrowser) {
+                onOpenBrowser(resource.resource_id, attachUrl);
+              }
+            }}
+            title={canOpenBrowser ? "在预览区打开并连接浏览器" : "浏览器已不可连接"}
           >
-            查看回复
+            打开浏览器
           </button>
         ) : null}
         {resource.available_actions.map((action) => (

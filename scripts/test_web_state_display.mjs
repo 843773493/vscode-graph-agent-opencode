@@ -5,6 +5,11 @@ const testFiles = [
   "./src/state/tests/requestLogDisplay.test.ts",
   "./src/state/tests/agentStateDisplay.test.ts",
   "./src/state/tests/eventQueueDisplay.test.ts",
+  "./src/state/tests/chatResponseParts.test.ts",
+  "./src/state/tests/tokenUsage.test.ts",
+  "./src/state/tests/sessionTree.test.ts",
+  "./src/state/tests/workspaceFileReferences.test.ts",
+  "./src/state/tests/gatewayWorkspaceState.test.ts",
 ];
 
 for (const testFile of testFiles) {

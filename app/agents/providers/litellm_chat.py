@@ -18,7 +18,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.messages.ai import UsageMetadata
+from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_litellm import ChatLiteLLM
 
@@ -47,16 +47,51 @@ def _usage_value(usage: Any, key: str) -> Any:
     return getattr(usage, key, None)
 
 
+def _first_usage_value(usage: Any, *keys: str) -> Any:
+    for key in keys:
+        value = _usage_value(usage, key)
+        if value is not None:
+            return value
+    return None
+
+
 def _create_usage_metadata(usage: Any) -> UsageMetadata:
     input_tokens = int(_usage_value(usage, "prompt_tokens") or 0)
     output_tokens = int(_usage_value(usage, "completion_tokens") or 0)
     raw_total = _usage_value(usage, "total_tokens")
     total_tokens = int(raw_total) if raw_total is not None else input_tokens + output_tokens
-    return {
+    metadata: UsageMetadata = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
     }
+    prompt_details = _usage_value(usage, "prompt_tokens_details")
+    cached_tokens = _first_usage_value(
+        prompt_details,
+        "cached_tokens",
+    )
+    if cached_tokens is None:
+        cached_tokens = _first_usage_value(
+            usage,
+            "cache_read_input_tokens",
+            "prompt_cache_hit_tokens",
+        )
+    cache_creation_tokens = _first_usage_value(
+        prompt_details,
+        "cache_creation_tokens",
+        "cache_write_tokens",
+    )
+    if cache_creation_tokens is None:
+        cache_creation_tokens = _usage_value(usage, "cache_creation_input_tokens")
+
+    input_details: InputTokenDetails = {}
+    if cached_tokens is not None:
+        input_details["cache_read"] = int(cached_tokens)
+    if cache_creation_tokens is not None:
+        input_details["cache_creation"] = int(cache_creation_tokens)
+    if input_details:
+        metadata["input_token_details"] = input_details
+    return metadata
 
 
 def _message_chunk_token(message: AIMessageChunk) -> str:
@@ -79,14 +114,9 @@ def _openai_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _openai_compatible_model_name(model: str) -> str:
-    return model if model.startswith("openai/") else f"openai/{model}"
-
-
 class BoxteamLiteLLMChatModel(ChatLiteLLM):
     """LiteLLM 模型包装层，统一输出 LangChain 标准 content blocks。"""
 
-    provider_interface: str = "litellm"
     provider_id: str | None = None
 
     @staticmethod
@@ -264,7 +294,11 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         messages: list[BaseMessage],
         stop: list[str] | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        params = self._client_params
+        params = {
+            key: value
+            for key, value in self._client_params.items()
+            if value is not None
+        }
         if stop is not None:
             if "stop" in params:
                 raise ValueError("`stop` 同时出现在输入和默认参数中")
@@ -316,7 +350,11 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         if content:
             chunks.append(
                 AIMessageChunk(
-                    content=self.normalize_output_content(content),
+                    content=(
+                        content
+                        if isinstance(content, str)
+                        else self.normalize_output_content(content)
+                    ),
                 )
             )
 
@@ -436,10 +474,20 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 message_chunk.response_metadata = {
                     "model_name": self.model_name or self.model,
                     "model_provider": "litellm",
-                    "provider_interface": self.provider_interface,
+                    "custom_llm_provider": self.custom_llm_provider,
+                    "provider_id": self.provider_id,
                 }
                 first_chunk_yielded = True
             result.append(ChatGenerationChunk(message=message_chunk))
+        if usage_metadata is not None and not result:
+            result.append(
+                ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content="",
+                        usage_metadata=usage_metadata,
+                    )
+                )
+            )
         return result
 
     def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
@@ -566,29 +614,31 @@ def build_litellm_chat_model(
     *,
     provider: dict[str, Any],
     runtime_config: dict[str, Any],
-    openai_compatible: bool,
     request_options: dict[str, Any],
 ) -> BoxteamLiteLLMChatModel:
     model_name = provider["model"]
-    if openai_compatible:
-        model_name = _openai_compatible_model_name(model_name)
 
-    model_kwargs: dict[str, Any] = {}
-    if request_options.get("extra_body"):
-        model_kwargs["extra_body"] = request_options["extra_body"]
+    request_parameters: dict[str, Any] = {}
+    runtime_parameter_names = {
+        "temperature": "temperature",
+        "top_p": "top_p",
+        "max_output_tokens": "max_tokens",
+    }
+    for runtime_name, request_name in runtime_parameter_names.items():
+        if runtime_name in runtime_config:
+            request_parameters[request_name] = runtime_config[runtime_name]
+    request_parameters.update(request_options.get("overrides") or {})
 
     kwargs: dict[str, Any] = {
         "model": model_name,
         "api_key": provider["api_key"],
-        "temperature": runtime_config["temperature"],
-        "top_p": runtime_config["top_p"],
-        "max_tokens": runtime_config["max_output_tokens"],
+        "custom_llm_provider": provider["custom_llm_provider"],
         "max_retries": 3,
         "streaming": True,
-        "model_kwargs": model_kwargs,
-        "provider_interface": provider.get("interface") or "litellm",
+        "model_kwargs": request_parameters,
         "provider_id": provider.get("id"),
     }
+
     if provider.get("endpoint"):
         kwargs["api_base"] = provider["endpoint"]
     if request_options.get("default_headers"):

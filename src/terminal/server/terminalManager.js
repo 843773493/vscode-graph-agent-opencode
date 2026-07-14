@@ -40,6 +40,7 @@ export class TerminalManager {
     this.stateFile = this.stateStore.stateFile;
     this.terminalFrontendBaseUrl = terminalFrontendBaseUrl.replace(/\/$/, "");
     this.sessions = new Map();
+    this.persistQueue = Promise.resolve();
   }
 
   async init() {
@@ -102,11 +103,14 @@ export class TerminalManager {
   }
 
   async persist() {
-    await this.stateStore.write({
-      workspace_root: this.workspaceRoot,
-      updated_at: nowIso(),
-      terminals: [...this.sessions.values()].map((session) => session.toRecord()),
+    this.persistQueue = this.persistQueue.then(async () => {
+      await this.stateStore.write({
+        workspace_root: this.workspaceRoot,
+        updated_at: nowIso(),
+        terminals: [...this.sessions.values()].map((session) => session.toRecord()),
+      });
     });
+    await this.persistQueue;
   }
 
   list({ sessionId = null } = {}) {
@@ -169,8 +173,10 @@ export class TerminalManager {
 
   async resize(id, cols, rows) {
     const session = this.get(id);
-    session.resize(cols, rows);
-    await this.persist();
+    const resized = session.resize(cols, rows);
+    if (resized) {
+      await this.persist();
+    }
     return session.snapshot();
   }
 

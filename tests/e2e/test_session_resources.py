@@ -27,7 +27,7 @@ async def wait_for_monitor_resource(
                 return resource
         await asyncio.sleep(1)
 
-    pytest.fail("未在会话资源中看到 monitor_session_agent_end 后台任务")
+    pytest.fail("未在后台连接中看到 monitor_session_agent_end 后台任务")
 
 
 async def load_agent_state_records(
@@ -73,12 +73,12 @@ async def test_session_resource_api_lists_and_controls_model_created_background_
     resources_response = await client.get(f"/api/v1/sessions/{session_id}/resources")
     assert resources_response.status_code == 200
     resources = resources_response.json()["data"]["items"]
-    job_resources = [
+    transient_job_resources = [
         resource
         for resource in resources
         if resource["kind"] == "job" and resource["resource_id"] == job_id
     ]
-    assert job_resources, f"资源视图缺少触发模型工具调用的 job: {resources}"
+    assert not transient_job_resources, f"后台连接不应展示一次性 agent job: {resources}"
 
     monitor_resource = await wait_for_monitor_resource(client, session_id)
     assert monitor_resource["session_id"] == session_id
@@ -105,7 +105,7 @@ async def test_session_resource_api_lists_and_controls_model_created_background_
         and record.get("type") == "human"
         and "<system_reminder>" in str(record.get("content", ""))
     ]
-    assert reminder_records, f"Agent State 未持久化资源取消 system_reminder: {records}"
+    assert reminder_records, f"Agent State 未持久化后台连接取消 system_reminder: {records}"
     reminder = reminder_records[-1]
     assert "monitor_session_agent_end" in str(reminder.get("content", ""))
     assert task_id in str(reminder.get("content", ""))

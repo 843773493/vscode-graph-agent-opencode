@@ -1,0 +1,3 @@
+release: summer
+phase: planned
+channel: stable

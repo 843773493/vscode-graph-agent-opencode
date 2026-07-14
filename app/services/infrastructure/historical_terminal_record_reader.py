@@ -73,6 +73,14 @@ class HistoricalTerminalRecordReader:
         if record.get("type") != "tool" or record.get("name") != "persistent_terminal":
             return None
 
+        response_metadata = record.get("response_metadata")
+        if isinstance(response_metadata, Mapping):
+            fork_source_session_id = response_metadata.get(
+                "context_fork_source_session_id"
+            )
+            if isinstance(fork_source_session_id, str) and fork_source_session_id:
+                return None
+
         content = record.get("content")
         if isinstance(content, str):
             stripped_content = content.strip()

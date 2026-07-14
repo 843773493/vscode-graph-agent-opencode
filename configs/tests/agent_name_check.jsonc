@@ -7,36 +7,31 @@
         "endpoint": "https://opencode.ai/zen/v1",
         "model": "big-pickle",
         "api_key": "${OPENCODE_ZEN_API_KEY}",
-        "interface": "opencode_zen"
+        "custom_llm_provider": "openai"
       },
       {
         "id": "backup_1",
         "endpoint": "https://api.kilo.ai/api/gateway",
         "model": "openrouter/free",
         "api_key": "${KILO_API_KEY}",
-        "interface": "opencode_zen"
+        "custom_llm_provider": "openai"
       },
       {
         "id": "backup_2",
         "endpoint": "https://openrouter.ai/api/v1",
-        "model": "openai/gpt-oss-120b:free",
+        "model": "openrouter/free",
         "api_key": "${OPENROUTER_API_KEY}",
-        "interface": "opencode_zen"
+        "custom_llm_provider": "openrouter"
       },
       {
         "id": "backup_3",
         "endpoint": "https://www.cctq.ai/v1",
-        "model": "gpt-5.4-mini",
+        "model": "gpt-5.6-luna",
         "api_key": "${CCTQ_API_KEY}",
-        "interface": "opencode_zen",
+        "custom_llm_provider": "openai",
         "capabilities": [
           "image_input"
-        ],
-        "request_options": {
-          "extra_body": {
-            "reasoning_effort": "low"
-          }
-        }
+        ]
       }
     ]
   },
@@ -57,10 +52,7 @@
           "backup_1",
           "backup_2",
           "backup_3"
-        ],
-        "temperature": 0.2,
-        "top_p": 1,
-        "max_output_tokens": 4000
+        ]
       }
     },
     "coder": {
@@ -74,10 +66,7 @@
           "backup_1",
           "backup_2",
           "backup_3"
-        ],
-        "temperature": 0.15,
-        "top_p": 1,
-        "max_output_tokens": 5000
+        ]
       }
     }
   }

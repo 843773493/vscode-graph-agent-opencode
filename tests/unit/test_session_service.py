@@ -137,6 +137,72 @@ class TestSessionService:
         assert updated.title_source == "auto"
 
     @pytest.mark.asyncio
+    async def test_session_parent_relationship_is_persisted_and_can_be_removed(self):
+        parent = await self.service.create(SessionCreateRequest(title="Parent"))
+        child = await self.service.create(SessionCreateRequest(title="Child"))
+        grandchild = await self.service.create(SessionCreateRequest(title="Grandchild"))
+
+        bound_child = await self.service.update(
+            child.session_id,
+            SessionUpdateRequest(parent_session_id=parent.session_id),
+        )
+        await self.service.update(
+            grandchild.session_id,
+            SessionUpdateRequest(parent_session_id=child.session_id),
+        )
+
+        assert bound_child.parent_session_id == parent.session_id
+        assert (await self.service.get(child.session_id)).parent_session_id == parent.session_id
+
+        unbound_child = await self.service.update(
+            child.session_id,
+            SessionUpdateRequest(parent_session_id=None),
+        )
+
+        assert unbound_child.parent_session_id is None
+        assert (await self.service.get(grandchild.session_id)).parent_session_id == child.session_id
+
+    @pytest.mark.asyncio
+    async def test_session_parent_relationship_rejects_self_and_cycles(self):
+        parent = await self.service.create(SessionCreateRequest(title="Parent"))
+        child = await self.service.create(SessionCreateRequest(title="Child"))
+        await self.service.update(
+            child.session_id,
+            SessionUpdateRequest(parent_session_id=parent.session_id),
+        )
+
+        with pytest.raises(ValueError, match="自身"):
+            await self.service.update(
+                parent.session_id,
+                SessionUpdateRequest(parent_session_id=parent.session_id),
+            )
+
+        with pytest.raises(ValueError, match="循环"):
+            await self.service.update(
+                parent.session_id,
+                SessionUpdateRequest(parent_session_id=child.session_id),
+            )
+
+    @pytest.mark.asyncio
+    async def test_delete_parent_detaches_direct_children(self):
+        parent = await self.service.create(SessionCreateRequest(title="Parent"))
+        child = await self.service.create(SessionCreateRequest(title="Child"))
+        grandchild = await self.service.create(SessionCreateRequest(title="Grandchild"))
+        await self.service.update(
+            child.session_id,
+            SessionUpdateRequest(parent_session_id=parent.session_id),
+        )
+        await self.service.update(
+            grandchild.session_id,
+            SessionUpdateRequest(parent_session_id=child.session_id),
+        )
+
+        await self.service.delete(parent.session_id)
+
+        assert (await self.service.get(child.session_id)).parent_session_id is None
+        assert (await self.service.get(grandchild.session_id)).parent_session_id == child.session_id
+
+    @pytest.mark.asyncio
     async def test_delete_session(self):
         created = await self.service.create(SessionCreateRequest(title="Delete Test"))
 
@@ -147,7 +213,7 @@ class TestSessionService:
 
         assert result.session_id == created.session_id
         assert result.status == "deleted"
-        assert result.cleaned_jobs == 0
+        assert result.cleaned_execution_runs == 0
         assert not session_dir.exists()
 
         with pytest.raises(NotFoundError):

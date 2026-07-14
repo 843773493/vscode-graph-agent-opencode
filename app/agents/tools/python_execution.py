@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
@@ -18,7 +19,20 @@ def get_python_executable() -> Path:
 
     env_python = os.environ.get("BOXTEAM_PYTHON_EXECUTABLE")
     if env_python:
-        candidates.append(Path(env_python))
+        candidates.append(Path(env_python).expanduser())
+
+    uv_project_environment = os.environ.get("UV_PROJECT_ENVIRONMENT")
+    if uv_project_environment:
+        uv_env_path = Path(uv_project_environment).expanduser()
+        candidates.extend(
+            [
+                uv_env_path / "Scripts" / "python.exe",
+                uv_env_path / "bin" / "python",
+            ]
+        )
+
+    if sys.executable:
+        candidates.append(Path(sys.executable).expanduser())
 
     candidates.extend(
         [
@@ -30,7 +44,7 @@ def get_python_executable() -> Path:
     )
 
     for python_executable in candidates:
-        if python_executable.exists():
+        if python_executable.is_file():
             return python_executable
 
     candidate_list = "\n".join(str(path) for path in candidates)

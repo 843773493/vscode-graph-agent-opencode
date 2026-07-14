@@ -7,6 +7,10 @@ import { useSessionRunActions } from "./useSessionRunActions";
 export function useSessionActions({
   apiPort,
   currentSession,
+  activeGatewayWorkspaceId,
+  currentSessionGatewayWorkspaceId,
+  currentSessionCacheKey,
+  defaultGatewayWorkspaceId,
   contentView,
   setState,
   abortCurrentStream,
@@ -15,6 +19,10 @@ export function useSessionActions({
 }: {
   apiPort: number;
   currentSession: Session | null;
+  activeGatewayWorkspaceId: string | null;
+  currentSessionGatewayWorkspaceId: string | null;
+  currentSessionCacheKey: string | null;
+  defaultGatewayWorkspaceId: string | null;
   contentView: ConversationContentView;
   setState: SetAppState;
   abortCurrentStream: () => void;
@@ -24,6 +32,10 @@ export function useSessionActions({
   const lifecycleActions = useSessionLifecycleActions({
     apiPort,
     currentSession,
+    defaultGatewayWorkspaceId,
+    activeGatewayWorkspaceId,
+    currentSessionGatewayWorkspaceId,
+    currentSessionCacheKey,
     setState,
     abortCurrentStream,
     invalidateAgentState,
@@ -31,6 +43,10 @@ export function useSessionActions({
   const runActions = useSessionRunActions({
     apiPort,
     currentSession,
+    activeGatewayWorkspaceId,
+    currentSessionGatewayWorkspaceId,
+    currentSessionCacheKey,
+    defaultGatewayWorkspaceId,
     contentView,
     setState,
     refreshAgentStateSnapshot,

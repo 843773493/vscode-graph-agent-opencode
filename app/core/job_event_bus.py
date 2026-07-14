@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Deque, Dict, Set
 
+from app.abstractions.job_event_bus import (
+    DurableEventListener,
+    EventSubscriberOverflowError,
+    EventSubscriptionProtocol,
+)
 from app.schemas.event import (
     Event,
     BaseEvent,
@@ -29,6 +37,61 @@ from app.schemas.event import (
     TextEndEvent, TextEndPayload,
     SessionInterruptedEvent, SessionInterruptedPayload,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class EventSubscription(asyncio.Queue[Event]):
+    """支持事件类型过滤，并在溢出后向消费者暴露明确错误的临时订阅。"""
+
+    def __init__(
+        self,
+        *,
+        job_id: str,
+        subscriber_kind: str,
+        metadata: Mapping[str, str] | None,
+        maxsize: int,
+        event_types: frozenset[str] | None,
+    ) -> None:
+        super().__init__(maxsize=maxsize)
+        self.job_id = job_id
+        self.subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
+        self.subscriber_kind = subscriber_kind
+        self.metadata = MappingProxyType(dict(metadata or {}))
+        self.created_at = datetime.now().astimezone()
+        self.event_types = event_types
+        self._overflow_error: EventSubscriberOverflowError | None = None
+
+    def accepts(self, event_type: str) -> bool:
+        return self.event_types is None or event_type in self.event_types
+
+    def offer(self, event: Event) -> bool:
+        if not self.accepts(event.type):
+            return True
+        try:
+            self.put_nowait(event)
+        except asyncio.QueueFull:
+            self._overflow_error = EventSubscriberOverflowError(
+                subscription_id=self.subscription_id,
+                subscriber_kind=self.subscriber_kind,
+                job_id=event.job_id,
+                event_type=event.type,
+                max_queue_size=self.maxsize,
+            )
+            return False
+        return True
+
+    async def get(self) -> Event:
+        if self._overflow_error is not None:
+            raise self._overflow_error
+        event = await super().get()
+        if self._overflow_error is not None:
+            raise self._overflow_error
+        return event
+
+    @property
+    def overflow_error(self) -> EventSubscriberOverflowError | None:
+        return self._overflow_error
 
 
 class EventType:
@@ -82,14 +145,25 @@ class EventFactorySpec:
         step_id: str | None,
         agent_id: str | None,
     ) -> Event:
+        event_payload = dict(payload)
+        part_id = event_payload.pop("part_id", None)
+        if self.event_type in {
+            EventType.TEXT_START,
+            EventType.TEXT_DELTA,
+            EventType.TEXT_END,
+            EventType.TOOL_CALL_START,
+            EventType.TOOL_CALL_END,
+        } and not part_id:
+            raise ValueError(f"{self.event_type} 事件缺少 part_id")
         return self.event_class(
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            part_id=part_id,
             job_id=job_id,
             step_id=step_id,
             agent_id=agent_id,
             timestamp=datetime.now(),
             type=self.event_type,
-            payload=self.payload_class(**payload),
+            payload=self.payload_class(**event_payload),
         )
 
 
@@ -118,11 +192,11 @@ EVENT_FACTORY_REGISTRY: dict[str, EventFactorySpec] = {
 class JobEventBus:
     def __init__(self):
         self._job_events: Dict[str, Deque[Event]] = {}
-        self._subscribers: Dict[str, Set[asyncio.Queue[Event]]] = {}
-        self._global_subscribers: Set[asyncio.Queue[Event]] = set()
+        self._subscribers: Dict[str, Set[EventSubscription]] = {}
+        self._durable_listeners: Set[DurableEventListener] = set()
         self._max_history: int = 1000
         self._lock = asyncio.Lock()
-        self._listener_count: int = 0
+        self._job_publish_locks: Dict[str, asyncio.Lock] = {}
 
     async def publish(
         self,
@@ -141,31 +215,37 @@ class JobEventBus:
 
         # 根据 event_type 构建具体的事件对象
         event = self._build_event(job_id, event_type, payload, step_id, agent_id)
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("[job_event_bus] publish: job_id=%s event_type=%s listener_count=%s payload_keys=%s", job_id, event_type, self._listener_count, list(payload.keys()))
-
-        # 存储并广播
         async with self._lock:
-            if job_id not in self._job_events:
-                self._job_events[job_id] = deque(maxlen=self._max_history)
-            self._job_events[job_id].append(event)
+            publish_lock = self._job_publish_locks.setdefault(job_id, asyncio.Lock())
 
-            if self._listener_count > 0 and job_id in self._subscribers:
-                for queue in list(self._subscribers[job_id]):
-                    try:
-                        queue.put_nowait(event)
-                    except asyncio.QueueFull:
-                        pass
+        async with publish_lock:
+            # 持久化监听器属于发布事务的一部分。写入失败时 publish 直接失败，
+            # 不允许临时 SSE 消费者先看到一个没有被权威存储记录的事件。
+            async with self._lock:
+                durable_listeners = tuple(self._durable_listeners)
 
-            if self._listener_count > 0 and self._global_subscribers:
-                for queue in list(self._global_subscribers):
-                    try:
-                        queue.put_nowait(event)
-                    except asyncio.QueueFull:
-                        pass
+            for listener in durable_listeners:
+                await listener(event)
 
-        logger.info("[job_event_bus] publish done: job_id=%s event_type=%s event_id=%s", job_id, event_type, event.event_id)
+            # 持久化成功后再更新内存历史并广播给临时订阅者。
+            async with self._lock:
+                if job_id not in self._job_events:
+                    self._job_events[job_id] = deque(maxlen=self._max_history)
+                self._job_events[job_id].append(event)
+
+                subscribers = self._subscribers.get(job_id)
+                if subscribers:
+                    overflowed = [subscription for subscription in subscribers if not subscription.offer(event)]
+                    for subscription in overflowed:
+                        subscribers.remove(subscription)
+                        logger.error(
+                            "%s metadata=%s created_at=%s",
+                            subscription.overflow_error,
+                            dict(subscription.metadata),
+                            subscription.created_at.isoformat(),
+                        )
+                    if not subscribers:
+                        del self._subscribers[job_id]
 
         return event
 
@@ -188,34 +268,72 @@ class JobEventBus:
             agent_id=agent_id,
         )
 
-    async def subscribe(self, job_id: str) -> asyncio.Queue[Event]:
-        queue = asyncio.Queue(maxsize=100)
+    async def subscribe(
+        self,
+        job_id: str,
+        *,
+        subscriber_kind: str,
+        metadata: Mapping[str, str] | None = None,
+        event_types: frozenset[str] | None = None,
+    ) -> EventSubscription:
+        if not subscriber_kind:
+            raise ValueError("subscriber_kind 不能为空")
+        subscription = EventSubscription(
+            job_id=job_id,
+            subscriber_kind=subscriber_kind,
+            metadata=metadata,
+            maxsize=100,
+            event_types=event_types,
+        )
         async with self._lock:
             if job_id not in self._subscribers:
                 self._subscribers[job_id] = set()
-            self._subscribers[job_id].add(queue)
-            self._listener_count += 1
-        return queue
+            self._subscribers[job_id].add(subscription)
+        logger.info(
+            "事件订阅已创建: subscription_id=%s subscriber_kind=%s job_id=%s "
+            "event_types=%s created_at=%s metadata=%s",
+            subscription.subscription_id,
+            subscription.subscriber_kind,
+            job_id,
+            sorted(event_types) if event_types else "all",
+            subscription.created_at.isoformat(),
+            dict(subscription.metadata),
+        )
+        return subscription
 
-    async def unsubscribe(self, job_id: str, queue: asyncio.Queue[Event]) -> None:
+    async def unsubscribe(
+        self,
+        job_id: str,
+        subscription: EventSubscriptionProtocol,
+        *,
+        reason: str,
+    ) -> None:
         async with self._lock:
+            removed = False
             if job_id in self._subscribers:
-                self._subscribers[job_id].discard(queue)
-                self._listener_count -= 1
+                if subscription in self._subscribers[job_id]:
+                    self._subscribers[job_id].remove(subscription)
+                    removed = True
                 if not self._subscribers[job_id]:
                     del self._subscribers[job_id]
+        logger.info(
+            "事件订阅已解除: subscription_id=%s subscriber_kind=%s job_id=%s "
+            "reason=%s removed=%s metadata=%s",
+            subscription.subscription_id,
+            subscription.subscriber_kind,
+            job_id,
+            reason,
+            removed,
+            dict(subscription.metadata),
+        )
 
-    async def subscribe_all(self) -> asyncio.Queue[Event]:
-        queue = asyncio.Queue(maxsize=1000)
+    async def register_durable_listener(self, listener: DurableEventListener) -> None:
         async with self._lock:
-            self._global_subscribers.add(queue)
-            self._listener_count += 1
-        return queue
+            self._durable_listeners.add(listener)
 
-    async def unsubscribe_all(self, queue: asyncio.Queue[Event]) -> None:
+    async def unregister_durable_listener(self, listener: DurableEventListener) -> None:
         async with self._lock:
-            self._global_subscribers.discard(queue)
-            self._listener_count -= 1
+            self._durable_listeners.discard(listener)
 
     async def list_events(self, job_id: str, after: str | None = None, limit: int = 20) -> list[Event]:
         """获取事件列表（返回 discriminated union 类型）"""

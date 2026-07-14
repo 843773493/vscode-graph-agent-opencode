@@ -2,6 +2,7 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -12,6 +13,10 @@ import {
   activateGatewayWorkspace as apiActivateGatewayWorkspace,
   addLocalGatewayWorkspace as apiAddLocalGatewayWorkspace,
   addSshGatewayWorkspace as apiAddSshGatewayWorkspace,
+  listGatewayWorkspaces as apiListGatewayWorkspaces,
+  removeGatewayWorkspace as apiRemoveGatewayWorkspace,
+  reorderGatewayWorkspaces as apiReorderGatewayWorkspaces,
+  updateGatewayUiSettings as apiUpdateGatewayUiSettings,
 } from "./gatewayApi";
 import type {
   AddLocalGatewayWorkspaceRequest,
@@ -19,6 +24,8 @@ import type {
   AttachmentRef,
   SessionResourceAction,
   SessionResourceKind,
+  SessionFileChange,
+  WebUiSettingsUpdate,
 } from "./types/backend";
 import type {
   AppState,
@@ -29,40 +36,53 @@ import {
 } from "./state/conversations";
 import { useContentViewLoader } from "./hooks/useContentViewLoader";
 import { useContentViewEffects } from "./hooks/useContentViewEffects";
-import { usePendingConversationPoller } from "./hooks/usePendingConversationPoller";
 import { useSessionHistoryLoader } from "./hooks/useSessionHistoryLoader";
 import { useSessionEventStream } from "./hooks/useSessionEventStream";
 import { useSessionActions } from "./hooks/useSessionActions";
 import { useWorkspaceBootstrap } from "./hooks/useWorkspaceBootstrap";
+import {
+  readCachedUiSettings,
+  writeCachedUiSettings,
+} from "./state/storage";
+import { sessionScopeKey } from "./state/sessionScope";
+import { applyGatewayWorkspaceListAfterRemoval } from "./state/gatewayWorkspaceState";
 
 export { getConversationsForSession } from "./state/conversations";
 export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
 
-function defaultHistoryPanelOpen(): boolean {
-  if (typeof window === "undefined") {
-    return true;
-  }
-  return window.innerWidth > 640;
-}
+const CACHED_UI_SETTINGS = readCachedUiSettings();
 
 const INITIAL_STATE: AppState = {
   apiPort: DEFAULT_BACKEND_PORT,
   gatewayWorkspaces: [],
   activeGatewayWorkspaceId: null,
+  sessionsByWorkspace: new Map(),
+  sessionGatewayWorkspaceById: new Map(),
+  removingGatewayWorkspaceIds: new Set(),
+  sessionHistoryReloadNonce: 0,
   workspaceSwitching: false,
   gatewayError: null,
+  uiSettings: CACHED_UI_SETTINGS,
+  uiSettingsLoaded: false,
   workspaceRoot: null,
   workspaceName: null,
   agents: [],
   sessions: [],
   sessionAttachmentSummaries: new Map(),
   currentSession: null,
+  currentSessionWorkspaceId: null,
   messages: [],
   traceEvents: [],
   llmRequestLogs: [],
   llmRequestLogsLoadedAt: null,
   llmRequestLogsLoading: false,
   llmRequestLogsError: null,
+  sessionChangesets: [],
+  selectedChangesetId: null,
+  activeChangeset: null,
+  sessionChangesLoadedAt: null,
+  sessionChangesLoading: false,
+  sessionChangesError: null,
   sessionResources: [],
   sessionResourcesLoadedAt: null,
   sessionResourcesLoading: false,
@@ -73,7 +93,7 @@ const INITIAL_STATE: AppState = {
   error: null,
   isBootstrapping: true,
   expandDetails: false,
-  historyPanelOpen: defaultHistoryPanelOpen(),
+  agentSessionsPanelOpen: true,
   contentView: "default",
   agentStateJsonl: "",
   agentStateMessageCount: 0,
@@ -92,9 +112,20 @@ interface AppContextType {
   switchAgent: (agentId: string) => Promise<void>;
   interruptSession: () => void;
   selectSession: (sessionId: string) => void;
+  selectWorkspaceSession: (workspaceId: string, sessionId: string) => void;
   createSession: (title?: string) => Promise<void>;
+  forkSessionContext: (
+    workspaceId: string,
+    sourceSessionId: string,
+  ) => Promise<void>;
+  startNewSessionDraft: (workspaceId?: string | null) => void;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
+  setSessionParent: (
+    workspaceId: string,
+    sessionId: string,
+    parentSessionId: string | null,
+  ) => Promise<void>;
   refreshSessionResources: (
     sessionId: string,
     options?: { silent?: boolean },
@@ -104,16 +135,27 @@ interface AppContextType {
     resourceId: string,
     action: SessionResourceAction,
   ) => Promise<void>;
-  toggleHistoryPanel: () => void;
+  refreshSessionChanges: (sessionId: string, changesetId?: string | null) => Promise<void>;
+  reviewSessionChangeFile: (
+    file: SessionFileChange,
+    reviewed: boolean,
+  ) => Promise<void>;
+  toggleAgentSessionsPanel: () => void;
   toggleExpandDetails: (expand: boolean) => void;
   switchContentView: (view: ConversationContentView) => void;
-  activateGatewayWorkspace: (workspaceId: string) => Promise<void>;
+  activateGatewayWorkspace: (
+    workspaceId: string,
+    preferredSessionId?: string | null,
+  ) => Promise<void>;
   addLocalGatewayWorkspace: (
     payload: AddLocalGatewayWorkspaceRequest,
   ) => Promise<void>;
   addSshGatewayWorkspace: (
     payload: AddSshGatewayWorkspaceRequest,
   ) => Promise<void>;
+  removeGatewayWorkspace: (workspaceId: string) => Promise<void>;
+  reorderGatewayWorkspaces: (workspaceIds: string[]) => Promise<void>;
+  updateUiSettings: (payload: WebUiSettingsUpdate) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -128,22 +170,37 @@ export function useAppState() {
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
+  const currentSessionId = state.currentSession?.session_id ?? null;
+  const defaultGatewayWorkspaceId =
+    state.gatewayWorkspaces.find((workspace) => workspace.system_default)
+      ?.workspace_id ?? state.activeGatewayWorkspaceId;
+  const currentSessionGatewayWorkspaceId = currentSessionId
+    ? state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId
+    : state.activeGatewayWorkspaceId;
+  const currentSessionCacheKey =
+    currentSessionId && currentSessionGatewayWorkspaceId
+      ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSessionId)
+      : currentSessionId;
   const {
     invalidateAgentState,
     refreshSessionResources,
+    refreshSessionChanges,
     refreshAgentStateSnapshot,
     refreshLLMRequestLogs,
+    reviewSessionChangeFile,
     controlSessionResource,
     switchContentView,
   } = useContentViewLoader({
     apiPort: state.apiPort ?? DEFAULT_BACKEND_PORT,
     currentSession: state.currentSession,
+    currentSessionGatewayWorkspaceId,
     setState,
   });
-  const currentSessionId = state.currentSession?.session_id ?? null;
   const { abortCurrentStream } = useSessionEventStream({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
+    workspaceId: currentSessionGatewayWorkspaceId,
+    sessionCacheKey: currentSessionCacheKey,
     setState,
   });
 
@@ -151,18 +208,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({ ...prev, status: text }));
   }, []);
 
+  const updateUiSettings = useCallback(
+    async (payload: WebUiSettingsUpdate) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      const settings = await apiUpdateGatewayUiSettings(resolvedApiPort, payload);
+      writeCachedUiSettings(settings);
+      setState((prev) => ({
+        ...prev,
+        uiSettings: settings,
+        uiSettingsLoaded: true,
+      }));
+    },
+    [state.apiPort],
+  );
+
+  useEffect(() => {
+    if (
+      !state.uiSettingsLoaded ||
+      state.uiSettings.layout.content_view === state.contentView
+    ) {
+      return;
+    }
+    void updateUiSettings({ layout: { content_view: state.contentView } });
+  }, [state.contentView, state.uiSettings.layout.content_view, state.uiSettingsLoaded, updateUiSettings]);
+
   const {
     compactSession,
     createSession,
+    forkSessionContext,
     deleteSession,
     interruptSession: interruptSessionCallback,
     renameSession,
+    setSessionParent,
     selectSession,
+    selectWorkspaceSession,
     sendMessage,
+    startNewSessionDraft,
     switchAgent,
   } = useSessionActions({
     apiPort: state.apiPort ?? DEFAULT_BACKEND_PORT,
     currentSession: state.currentSession,
+    activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
+    currentSessionGatewayWorkspaceId,
+    currentSessionCacheKey,
+    defaultGatewayWorkspaceId,
     contentView: state.contentView,
     setState,
     abortCurrentStream,
@@ -170,46 +259,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshAgentStateSnapshot,
   });
 
-  const toggleHistoryPanel = useCallback(() => {
-    setState((prev) => ({ ...prev, historyPanelOpen: !prev.historyPanelOpen }));
-  }, []);
+  const toggleAgentSessionsPanel = useCallback(() => {
+    let nextOpen: boolean | null = null;
+    setState((prev) => {
+      const resolvedNextOpen = !prev.agentSessionsPanelOpen;
+      nextOpen = resolvedNextOpen;
+      return { ...prev, agentSessionsPanelOpen: resolvedNextOpen };
+    });
+    if (nextOpen !== null) {
+      void updateUiSettings({ layout: { agent_sessions_panel_open: nextOpen } }).catch(
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((prev) => ({ ...prev, status: `保存页面设置失败: ${message}` }));
+        },
+      );
+    }
+  }, [updateUiSettings]);
 
   const toggleExpandDetails = useCallback((expand: boolean) => {
     setState((prev) => ({ ...prev, expandDetails: expand }));
   }, []);
 
-  const pendingPollKey = useMemo(() => {
-    if (!currentSessionId) {
-      return "";
-    }
-
-    const pendingList = state.pendingConversations.get(currentSessionId) ?? [];
-    return pendingList
-      .filter((conversation) => conversation.pending)
-      .map(
-        (conversation) =>
-          `${conversation.conversationId}:${conversation.jobId ?? ""}`,
-      )
-      .join("|");
-  }, [currentSessionId, state.pendingConversations]);
-
-  usePendingConversationPoller({
+  const { invalidateWorkspaceRefreshes, refreshSessions } = useWorkspaceBootstrap({
     apiPort: state.apiPort,
-    sessionId: currentSessionId,
-    pendingPollKey,
     setState,
   });
-
-  const { refreshSessions } = useWorkspaceBootstrap({ apiPort: state.apiPort, setState });
   useSessionHistoryLoader({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
+    workspaceId: currentSessionGatewayWorkspaceId,
+    sessionCacheKey: currentSessionCacheKey,
+    reloadNonce: state.sessionHistoryReloadNonce,
     setState,
   });
   useContentViewEffects({
     contentView: state.contentView,
     sessionId: currentSessionId,
     refreshLLMRequestLogs,
+    refreshSessionChanges,
     refreshSessionResources,
   });
 
@@ -218,37 +305,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({
       ...prev,
       workspaceSwitching: true,
-      isBootstrapping: true,
       error: null,
-      workspaceRoot: null,
-      workspaceName: null,
-      agents: [],
-      sessions: [],
-      currentSession: null,
-      messages: [],
-      traceEvents: [],
-      llmRequestLogs: [],
-      llmRequestLogsLoadedAt: null,
-      llmRequestLogsLoading: false,
-      llmRequestLogsError: null,
-      sessionResources: [],
-      sessionResourcesLoadedAt: null,
-      sessionResourcesLoading: false,
-      sessionResourcesError: null,
-      eventQueuesBySession: new Map(),
-      pendingConversations: new Map(),
-      contentView: "default",
-      agentStateJsonl: "",
-      agentStateMessageCount: 0,
-      agentStateLoadedAt: null,
-      agentStateLoading: false,
-      agentStateError: null,
       status: "正在切换工作区",
     }));
   }, [abortCurrentStream]);
 
-  const finishWorkspaceRefresh = useCallback(async () => {
-    await refreshSessions();
+  const finishWorkspaceRefresh = useCallback(async (preferredSessionId?: string | null) => {
+    const applied = await refreshSessions(preferredSessionId);
+    if (!applied) {
+      return;
+    }
     setState((prev) => ({
       ...prev,
       workspaceSwitching: false,
@@ -257,12 +323,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [refreshSessions]);
 
   const activateGatewayWorkspace = useCallback(
-    async (workspaceId: string) => {
+    async (workspaceId: string, preferredSessionId?: string | null) => {
       const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
       resetWorkspaceScopedState();
       try {
         await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
-        await finishWorkspaceRefresh();
+        await finishWorkspaceRefresh(preferredSessionId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setState((prev) => ({
@@ -276,7 +342,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
     },
-    [finishWorkspaceRefresh, resetWorkspaceScopedState, state.apiPort],
+    [
+      finishWorkspaceRefresh,
+      resetWorkspaceScopedState,
+      state.apiPort,
+    ],
   );
 
   const addLocalGatewayWorkspace = useCallback(
@@ -285,6 +355,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       resetWorkspaceScopedState();
       try {
         await apiAddLocalGatewayWorkspace(resolvedApiPort, payload);
+        const normalizedPath = payload.root_path.trim();
+        if (normalizedPath) {
+          const recentPaths = [
+            normalizedPath,
+            ...state.uiSettings.recent_local_workspace_paths,
+          ].filter(
+            (path, index, paths) =>
+              path.trim() && paths.findIndex((item) => item === path) === index,
+          );
+          const settings = await apiUpdateGatewayUiSettings(resolvedApiPort, {
+            recent_local_workspace_paths: recentPaths,
+          });
+          writeCachedUiSettings(settings);
+        }
         await finishWorkspaceRefresh();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -325,6 +409,163 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [finishWorkspaceRefresh, resetWorkspaceScopedState, state.apiPort],
   );
 
+  const removeGatewayWorkspace = useCallback(
+    async (workspaceId: string) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      const removedActiveWorkspace =
+        workspaceId === state.activeGatewayWorkspaceId;
+      let workspaceRemoved = false;
+      invalidateWorkspaceRefreshes();
+      setState((prev) => ({
+        ...prev,
+        removingGatewayWorkspaceIds: new Set([
+          ...prev.removingGatewayWorkspaceIds,
+          workspaceId,
+        ]),
+        gatewayError: null,
+        error: null,
+        status: "正在删除工作区",
+      }));
+      try {
+        const workspaceList = await apiRemoveGatewayWorkspace(
+          resolvedApiPort,
+          workspaceId,
+        );
+        workspaceRemoved = true;
+        const activeWorkspaceChanged =
+          workspaceList.active_workspace_id !== state.activeGatewayWorkspaceId;
+        if (removedActiveWorkspace || activeWorkspaceChanged) {
+          abortCurrentStream();
+        }
+        setState((prev) => {
+          const reconciledState = applyGatewayWorkspaceListAfterRemoval(
+            prev,
+            workspaceId,
+            workspaceList,
+          );
+          if (!removedActiveWorkspace && !activeWorkspaceChanged) {
+            return reconciledState;
+          }
+          const activeWorkspace = workspaceList.items.find(
+            (workspace) =>
+              workspace.workspace_id === workspaceList.active_workspace_id,
+          );
+          return {
+            ...reconciledState,
+            workspaceSwitching: true,
+            workspaceRoot: activeWorkspace?.root_path ?? null,
+            workspaceName: activeWorkspace?.name ?? null,
+            sessions: workspaceList.active_workspace_id
+              ? reconciledState.sessionsByWorkspace.get(
+                  workspaceList.active_workspace_id,
+                ) ?? []
+              : [],
+            currentSession: null,
+            currentSessionWorkspaceId: null,
+            messages: [],
+            traceEvents: [],
+            llmRequestLogs: [],
+            sessionResources: [],
+            agentStateJsonl: "",
+            agentStateMessageCount: 0,
+          };
+        });
+        if (removedActiveWorkspace || activeWorkspaceChanged) {
+          await finishWorkspaceRefresh();
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        const operationMessage = workspaceRemoved
+          ? `工作区已删除，但新活动工作区加载失败: ${errorMessage}`
+          : errorMessage;
+        let reconciliationMessage: string | null = null;
+        try {
+          const workspaceList = await apiListGatewayWorkspaces(resolvedApiPort);
+          setState((prev) => {
+            const removingGatewayWorkspaceIds = new Set(
+              prev.removingGatewayWorkspaceIds,
+            );
+            removingGatewayWorkspaceIds.delete(workspaceId);
+            return {
+              ...prev,
+              gatewayWorkspaces: workspaceList.items,
+              activeGatewayWorkspaceId: workspaceList.active_workspace_id,
+              removingGatewayWorkspaceIds,
+            };
+          });
+        } catch (reconciliationError) {
+          reconciliationMessage =
+            reconciliationError instanceof Error
+              ? reconciliationError.message
+              : String(reconciliationError);
+        }
+        const message = reconciliationMessage
+          ? `${operationMessage}；重新读取工作区列表也失败: ${reconciliationMessage}`
+          : operationMessage;
+        setState((prev) => ({
+          ...prev,
+          workspaceSwitching: false,
+          removingGatewayWorkspaceIds: new Set(
+            [...prev.removingGatewayWorkspaceIds].filter(
+              (removingId) => removingId !== workspaceId,
+            ),
+          ),
+          gatewayError: message,
+          error: message,
+          status: workspaceRemoved
+            ? message
+            : `删除工作区失败: ${message}`,
+          isBootstrapping: false,
+        }));
+        throw error;
+      }
+    },
+    [
+      abortCurrentStream,
+      finishWorkspaceRefresh,
+      invalidateWorkspaceRefreshes,
+      state.activeGatewayWorkspaceId,
+      state.apiPort,
+    ],
+  );
+
+  const reorderGatewayWorkspaces = useCallback(
+    async (workspaceIds: string[]) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      try {
+        const workspaceList = await apiReorderGatewayWorkspaces(resolvedApiPort, {
+          workspace_ids: workspaceIds,
+        });
+        setState((prev) => {
+          const activeWorkspaceId =
+            workspaceList.active_workspace_id ?? prev.activeGatewayWorkspaceId;
+          const activeWorkspace = workspaceList.items.find(
+            (workspace) => workspace.workspace_id === activeWorkspaceId,
+          );
+          return {
+            ...prev,
+            gatewayWorkspaces: workspaceList.items,
+            activeGatewayWorkspaceId: activeWorkspaceId,
+            workspaceRoot: activeWorkspace?.root_path ?? prev.workspaceRoot,
+            workspaceName: activeWorkspace?.name ?? prev.workspaceName,
+            status: "工作区顺序已更新",
+          };
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({
+          ...prev,
+          gatewayError: message,
+          error: message,
+          status: `工作区排序失败: ${message}`,
+        }));
+        throw error;
+      }
+    },
+    [state.apiPort],
+  );
+
   const value = useMemo(
     () => ({
       state,
@@ -334,17 +575,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       switchAgent,
       interruptSession: interruptSessionCallback,
       selectSession,
+      selectWorkspaceSession,
       createSession,
+      forkSessionContext,
+      startNewSessionDraft,
       renameSession,
+      setSessionParent,
       deleteSession,
       refreshSessionResources,
+      refreshSessionChanges,
+      reviewSessionChangeFile,
       controlSessionResource,
-      toggleHistoryPanel,
+      toggleAgentSessionsPanel,
       toggleExpandDetails,
       switchContentView,
       activateGatewayWorkspace,
       addLocalGatewayWorkspace,
       addSshGatewayWorkspace,
+      removeGatewayWorkspace,
+      reorderGatewayWorkspaces,
+      updateUiSettings,
     }),
     [
       state,
@@ -354,18 +604,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       switchAgent,
       interruptSessionCallback,
       selectSession,
+      selectWorkspaceSession,
       createSession,
+      forkSessionContext,
+      startNewSessionDraft,
       renameSession,
+      setSessionParent,
       deleteSession,
       refreshSessionResources,
+      refreshSessionChanges,
+      reviewSessionChangeFile,
       controlSessionResource,
-      toggleHistoryPanel,
+      toggleAgentSessionsPanel,
       toggleExpandDetails,
       refreshLLMRequestLogs,
       switchContentView,
       activateGatewayWorkspace,
       addLocalGatewayWorkspace,
       addSshGatewayWorkspace,
+      removeGatewayWorkspace,
+      reorderGatewayWorkspaces,
+      updateUiSettings,
     ],
   );
 

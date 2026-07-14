@@ -137,6 +137,8 @@ async function main() {
         ["/vendor/xterm/xterm.css", path.join(assetRoot, "node_modules", "@xterm", "xterm", "css", "xterm.css")],
         ["/vendor/xterm/xterm.js", path.join(assetRoot, "node_modules", "@xterm", "xterm", "lib", "xterm.js")],
         ["/vendor/xterm/addon-fit.js", path.join(assetRoot, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js")],
+        ["/vendor/codicon/codicon.css", path.join(assetRoot, "src", "web", "node_modules", "@vscode", "codicons", "dist", "codicon.css")],
+        ["/vendor/codicon/codicon.ttf", path.join(assetRoot, "src", "web", "node_modules", "@vscode", "codicons", "dist", "codicon.ttf")],
       ]);
       const vendorPath = vendorMap.get(url.pathname);
       if (vendorPath) {

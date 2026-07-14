@@ -84,14 +84,20 @@ export const COMPOSER_SLASH_COMMANDS: SlashCommandOption[] = [
   {
     id: "resources",
     command: "/resources",
-    title: "资源视图",
-    description: "查看当前会话后台任务和快捷操作。",
+    title: "后台连接",
+    description: "查看可保留、可重新打开或可连接的终端、浏览器和持续后台任务。",
+  },
+  {
+    id: "changes",
+    command: "/changes",
+    title: "变更",
+    description: "查看本会话文件工具产生的可审查变更。",
   },
   {
     id: "state",
     command: "/state",
-    title: "Agent 视图",
-    description: "Show Agent State messages.",
+    title: "上下文状态",
+    description: "按卡片查看 Agent 当前内部上下文状态。",
   },
   {
     id: "view",

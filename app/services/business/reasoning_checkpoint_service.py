@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.schemas.event import ModelTokenUsagePayload
 
 
 def _build_assistant_content(
@@ -36,6 +37,7 @@ def _rewrite_latest_assistant_message(
     *,
     reasoning_text: str,
     final_text: str,
+    token_usage: ModelTokenUsagePayload | None,
 ) -> bool:
     index = _latest_final_assistant_index(messages)
     if index < 0:
@@ -44,6 +46,8 @@ def _rewrite_latest_assistant_message(
     message = messages[index]
     response_metadata = dict(message.response_metadata or {})
     response_metadata["phase"] = "final_answer"
+    if token_usage is not None and token_usage.reported_model_calls > 0:
+        response_metadata["token_usage"] = token_usage.model_dump(mode="json")
     messages[index] = message.model_copy(
         update={
             "content": _build_assistant_content(reasoning_text, final_text),
@@ -60,6 +64,7 @@ def persist_standard_assistant_checkpoint(
     session_id: str,
     reasoning_text: str,
     final_text: str,
+    token_usage: ModelTokenUsagePayload | None = None,
 ) -> bool:
     """把本轮最终 assistant 消息保存为 LangChain 标准 content blocks。"""
     if not reasoning_text and not final_text:
@@ -83,6 +88,7 @@ def persist_standard_assistant_checkpoint(
         messages,
         reasoning_text=reasoning_text,
         final_text=final_text,
+        token_usage=token_usage,
     )
     if not changed:
         return False

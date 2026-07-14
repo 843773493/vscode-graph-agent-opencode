@@ -6,13 +6,16 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app.core.env import get_project_root, load_project_env
+from app.core.path_utils import get_user_workspace_root
+from app.gateway.config import load_gateway_config, resolve_gateway_path
 from app.gateway.processes import (
     allocate_local_port,
+    allocate_ssh_tunnel_port,
     start_local_backend_process,
     start_ssh_tunnel_process,
     wait_for_http_ok,
@@ -24,6 +27,15 @@ from app.gateway.schemas import (
     AddSshWorkspaceRequest,
     GatewayHealthDTO,
     GatewayWorkspaceListDTO,
+    LocalDirectoryEntryDTO,
+    LocalDirectoryListDTO,
+    ReorderGatewayWorkspacesRequest,
+    WebUISettingsDTO,
+    WebUISettingsUpdateDTO,
+)
+from app.gateway.ui_settings import (
+    merge_web_ui_settings,
+    read_web_ui_settings,
 )
 from app.schemas.public_v2.common import APIResponse
 
@@ -54,7 +66,17 @@ def _gateway_root() -> Path:
     workspace_root = os.environ.get("WORKSPACE_ROOT")
     if workspace_root:
         return Path(workspace_root).expanduser().resolve() / ".boxteam" / "gateway"
-    return get_project_root() / ".boxteam" / "gateway"
+    return get_user_workspace_root() / ".boxteam" / "gateway"
+
+
+def _resolve_local_directory(raw_path: str | None) -> Path:
+    target_path = Path(raw_path).expanduser() if raw_path else Path.home()
+    resolved_path = target_path.resolve()
+    if not resolved_path.exists():
+        raise HTTPException(status_code=400, detail=f"本机目录不存在: {resolved_path}")
+    if not resolved_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"路径不是目录: {resolved_path}")
+    return resolved_path
 
 
 def _workspace_name(root_path: str, fallback: str = "workspace") -> str:
@@ -62,26 +84,137 @@ def _workspace_name(root_path: str, fallback: str = "workspace") -> str:
     return name or fallback
 
 
+def _default_workspace_root() -> Path | None:
+    configured_root = os.environ.get("BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT")
+    if configured_root:
+        root_path = Path(configured_root).expanduser().resolve()
+    else:
+        root_path = get_user_workspace_root()
+    root_path.mkdir(parents=True, exist_ok=True)
+    return root_path
+
+
+def _gateway_config_workspace_root(default_root_path: Path | None) -> Path | None:
+    configured_root = os.environ.get("BOXTEAM_GATEWAY_CONFIG_WORKSPACE_ROOT")
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+    raw_runtime_root = os.environ.get("WORKSPACE_ROOT")
+    if raw_runtime_root:
+        return Path(raw_runtime_root).expanduser().resolve()
+    return default_root_path
+
+
+async def _register_ssh_workspace(
+    *,
+    registry: GatewayWorkspaceRegistry,
+    name: str | None,
+    host: str,
+    port: int,
+    username: str,
+    private_key_path: str,
+    remote_backend_host: str,
+    remote_backend_port: int,
+    remote_workspace_path: str,
+    activate: bool,
+) -> WorkspaceTarget:
+    resolved_private_key_path = resolve_gateway_path(private_key_path)
+    if not resolved_private_key_path.is_file():
+        raise FileNotFoundError(f"SSH 私钥不存在: {resolved_private_key_path}")
+    normalized_remote_workspace_path = remote_workspace_path.strip()
+    if not normalized_remote_workspace_path:
+        raise ValueError("remote_workspace_path 不能为空")
+
+    local_port = allocate_ssh_tunnel_port()
+    backend_url = f"http://127.0.0.1:{local_port}"
+    tunnel = start_ssh_tunnel_process(
+        host=host,
+        port=port,
+        username=username,
+        private_key_path=resolved_private_key_path,
+        local_port=local_port,
+        remote_backend_host=remote_backend_host,
+        remote_backend_port=remote_backend_port,
+        log_dir=_gateway_root() / "logs",
+    )
+    try:
+        await wait_for_http_ok(f"{backend_url}/api/v1/health", tunnel.process)
+    except Exception:
+        tunnel.close()
+        raise
+
+    workspace_id = GatewayWorkspaceRegistry.build_ssh_workspace_id(
+        root_path=normalized_remote_workspace_path,
+        host=host,
+        port=port,
+        username=username,
+        remote_backend_host=remote_backend_host,
+        remote_backend_port=remote_backend_port,
+    )
+    return registry.upsert(
+        WorkspaceTarget(
+            workspace_id=workspace_id,
+            name=name or _workspace_name(normalized_remote_workspace_path, "remote"),
+            root_path=normalized_remote_workspace_path,
+            backend_url=backend_url,
+            connection_kind="ssh",
+            managed=True,
+            remote={
+                "host": host,
+                "port": port,
+                "username": username,
+                "remote_backend_host": remote_backend_host,
+                "remote_backend_port": remote_backend_port,
+            },
+        ),
+        process=tunnel,
+        activate=activate,
+    )
+
+
 async def _create_registry() -> GatewayWorkspaceRegistry:
     registry = GatewayWorkspaceRegistry(storage_path=_gateway_root() / "workspaces.json")
-    default_root = os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_ROOT") or os.environ.get("WORKSPACE_ROOT")
+    default_root_path = _default_workspace_root()
     default_backend_url = os.environ.get("BOXTEAM_DEFAULT_BACKEND_URL")
-    if default_root and default_backend_url:
-        root_path = str(Path(default_root).expanduser().resolve())
+    default_workspace_id: str | None = None
+    if default_root_path and default_backend_url:
+        root_path = str(default_root_path)
         backend_url = default_backend_url.rstrip("/")
         workspace_id = GatewayWorkspaceRegistry.build_workspace_id("local", root_path, backend_url)
-        force_default_active = os.environ.get("BOXTEAM_GATEWAY_FORCE_DEFAULT_ACTIVE") == "1"
+        default_workspace_id = workspace_id
         registry.upsert(
             WorkspaceTarget(
                 workspace_id=workspace_id,
-                name=os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or _workspace_name(root_path),
+                name=os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or _workspace_name(root_path, "boxteam_workspace"),
                 root_path=root_path,
                 backend_url=backend_url,
                 connection_kind="local",
                 managed=False,
+                removable=False,
+                system_default=True,
             ),
-            activate=force_default_active or registry.active_workspace_id is None,
+            activate=True,
         )
+        registry.remove_backend_aliases(
+            backend_url=backend_url,
+            keep_workspace_id=workspace_id,
+        )
+    gateway_config = load_gateway_config(_gateway_config_workspace_root(default_root_path))
+    for configured_workspace in gateway_config.workspaces:
+        await _register_ssh_workspace(
+            registry=registry,
+            name=configured_workspace.name,
+            host=configured_workspace.host,
+            port=configured_workspace.port,
+            username=configured_workspace.username,
+            private_key_path=configured_workspace.private_key_path,
+            remote_backend_host=configured_workspace.remote_backend_host,
+            remote_backend_port=configured_workspace.remote_backend_port,
+            remote_workspace_path=configured_workspace.remote_workspace_path,
+            activate=configured_workspace.activate,
+        )
+    if default_workspace_id:
+        registry.activate(default_workspace_id)
+    registry.ensure_default_workspace_first()
     return registry
 
 
@@ -152,6 +285,58 @@ async def list_workspaces(
     )
 
 
+@app.get("/api/gateway/ui-settings", response_model=APIResponse[WebUISettingsDTO])
+async def get_web_ui_settings(
+    _: str = Depends(verify_gateway_token),
+):
+    return APIResponse(data=read_web_ui_settings(_gateway_root()))
+
+
+@app.put("/api/gateway/ui-settings", response_model=APIResponse[WebUISettingsDTO])
+async def update_web_ui_settings(
+    payload: WebUISettingsUpdateDTO,
+    _: str = Depends(verify_gateway_token),
+):
+    return APIResponse(data=merge_web_ui_settings(payload, gateway_root=_gateway_root()))
+
+
+@app.get("/api/gateway/local-directories", response_model=APIResponse[LocalDirectoryListDTO])
+async def list_local_directories(
+    path: str | None = Query(default=None, description="要浏览的本机目录；为空时使用用户主目录"),
+    limit: int = Query(default=120, ge=1, le=500),
+    _: str = Depends(verify_gateway_token),
+):
+    root_path = _resolve_local_directory(path)
+    entries: list[LocalDirectoryEntryDTO] = []
+    with os.scandir(root_path) as directory_iterator:
+        directory_entries = list(directory_iterator)
+    directories = [
+        entry
+        for entry in directory_entries
+        if entry.is_dir(follow_symlinks=False)
+    ]
+    directories.sort(key=lambda entry: (entry.name.lower(), entry.name))
+    for entry in directories[:limit]:
+        entry_path = Path(entry.path).resolve()
+        entries.append(
+            LocalDirectoryEntryDTO(
+                name=entry.name,
+                path=str(entry_path),
+            )
+        )
+    parent_path = root_path.parent if root_path.parent != root_path else None
+    return APIResponse(
+        data=LocalDirectoryListDTO(
+            path=str(root_path),
+            parent_path=str(parent_path) if parent_path is not None else None,
+            home_path=str(Path.home().resolve()),
+            entries=entries,
+            truncated=len(directories) > limit,
+            limit=limit,
+        )
+    )
+
+
 @app.post("/api/gateway/workspaces/local", response_model=APIResponse[GatewayWorkspaceListDTO])
 async def add_local_workspace(
     payload: AddLocalWorkspaceRequest,
@@ -197,6 +382,7 @@ async def add_local_workspace(
             managed=managed_process is not None,
         ),
         process=managed_process,
+        activate=False,
     )
     return APIResponse(
         data=GatewayWorkspaceListDTO(
@@ -212,53 +398,21 @@ async def add_ssh_workspace(
     _: str = Depends(verify_gateway_token),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
-    private_key_path = Path(payload.private_key_path).expanduser().resolve()
-    if not private_key_path.is_file():
-        raise HTTPException(status_code=400, detail=f"SSH 私钥不存在: {private_key_path}")
-    if not payload.remote_workspace_path.strip():
-        raise HTTPException(status_code=400, detail="remote_workspace_path 不能为空")
-
-    local_port = allocate_local_port()
-    backend_url = f"http://127.0.0.1:{local_port}"
-    tunnel = start_ssh_tunnel_process(
-        host=payload.host,
-        port=payload.port,
-        username=payload.username,
-        private_key_path=private_key_path,
-        local_port=local_port,
-        remote_backend_host=payload.remote_backend_host,
-        remote_backend_port=payload.remote_backend_port,
-        log_dir=_gateway_root() / "logs",
-    )
     try:
-        await wait_for_http_ok(f"{backend_url}/api/v1/health", tunnel.process)
-    except Exception:
-        tunnel.close()
-        raise
-
-    workspace_id = GatewayWorkspaceRegistry.build_workspace_id(
-        "ssh",
-        payload.remote_workspace_path,
-        backend_url,
-    )
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id=workspace_id,
-            name=payload.name or _workspace_name(payload.remote_workspace_path, "remote"),
-            root_path=payload.remote_workspace_path,
-            backend_url=backend_url,
-            connection_kind="ssh",
-            managed=True,
-            remote={
-                "host": payload.host,
-                "port": payload.port,
-                "username": payload.username,
-                "remote_backend_host": payload.remote_backend_host,
-                "remote_backend_port": payload.remote_backend_port,
-            },
-        ),
-        process=tunnel,
-    )
+        await _register_ssh_workspace(
+            registry=registry,
+            name=payload.name,
+            host=payload.host,
+            port=payload.port,
+            username=payload.username,
+            private_key_path=payload.private_key_path,
+            remote_backend_host=payload.remote_backend_host,
+            remote_backend_port=payload.remote_backend_port,
+            remote_workspace_path=payload.remote_workspace_path,
+            activate=False,
+        )
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
@@ -285,6 +439,24 @@ async def activate_workspace(
     )
 
 
+@app.put("/api/gateway/workspaces/order", response_model=APIResponse[GatewayWorkspaceListDTO])
+async def reorder_workspaces(
+    payload: ReorderGatewayWorkspacesRequest,
+    _: str = Depends(verify_gateway_token),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+):
+    try:
+        registry.reorder(payload.workspace_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(
+        data=GatewayWorkspaceListDTO(
+            active_workspace_id=registry.active_workspace_id,
+            items=await registry.list_dtos(),
+        )
+    )
+
+
 @app.delete("/api/gateway/workspaces/{workspace_id}", response_model=APIResponse[GatewayWorkspaceListDTO])
 async def remove_workspace(
     workspace_id: str,
@@ -293,6 +465,8 @@ async def remove_workspace(
 ):
     try:
         registry.remove(workspace_id)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(

@@ -5,6 +5,7 @@ export type TraceEventInfo = {
   payload: Record<string, unknown>;
   timestamp: string | null;
   eventId: string | null;
+  partId: string | null;
 };
 
 function getRequiredString(
@@ -82,6 +83,7 @@ export function extractEventInfo(event: TraceEvent): TraceEventInfo {
     payload: effectivePayload,
     timestamp: event.timestamp ?? null,
     eventId: event.event_id ?? null,
+    partId: event.part_id ?? null,
   };
 }
 

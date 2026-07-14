@@ -15,15 +15,21 @@ export interface SessionResourceControlRequest {
 export interface SessionResourceControlResultDTO {
   session_id: string;
   resource_id: string;
-  kind: "job" | "background_task" | "terminal";
+  kind: "background_task" | "terminal" | "browser";
   action: "pause" | "resume" | "cancel" | "delete";
   status: string;
   resource?: SessionResourceDTO | null;
 }
+/**
+ * 会话后台连接。
+ *
+ * 这里只描述可保留、可重新打开或可连接的长生命周期对象，例如持久终端、
+ * 浏览器页面和持续后台任务。一次性 agent job 属于执行状态/事件流，不进入该列表。
+ */
 export interface SessionResourceDTO {
   resource_id: string;
   session_id: string;
-  kind: "job" | "background_task" | "terminal";
+  kind: "background_task" | "terminal" | "browser";
   name: string;
   status: string;
   created_at: string;

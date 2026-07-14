@@ -21,6 +21,7 @@ def create_system_time_emitter_tool(
     session_id: str,
     agent_id: str = "default",
     *,
+    background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBusProtocol,
 ) -> BaseTool:
     """创建向后台消息总线发送系统时间的工具。"""
@@ -37,35 +38,46 @@ def create_system_time_emitter_tool(
             raise ValueError("message_count 必须大于 0")
 
         resolved_source_id = source_id or f"time_{session_id}_{int(time.time() * 1000)}"
-        emitted_messages = []
+        async def _emit_background_task() -> dict[str, Any]:
+            emitted_messages = []
+            for index in range(message_count):
+                current_time = datetime.now().isoformat(timespec="seconds")
+                message = background_message_bus.emit(
+                    session_id,
+                    agent_id,
+                    current_time,
+                    kind=BackgroundMessageKind.normal,
+                    source_id=resolved_source_id,
+                    payload={
+                        "index": index + 1,
+                        "message_count": message_count,
+                        "interval_seconds": interval_seconds,
+                    },
+                )
+                emitted_messages.append(message.model_dump(mode="json"))
+                if index < message_count - 1:
+                    await asyncio.sleep(interval_seconds)
+            return {
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "source_id": resolved_source_id,
+                "interval_seconds": interval_seconds,
+                "message_count": message_count,
+                "messages": emitted_messages,
+            }
 
-        for index in range(message_count):
-            current_time = datetime.now().isoformat(timespec="seconds")
-            message = background_message_bus.emit(
-                session_id,
-                agent_id,
-                current_time,
-                kind=BackgroundMessageKind.normal,
-                source_id=resolved_source_id,
-                payload={
-                    "index": index + 1,
-                    "message_count": message_count,
-                    "interval_seconds": interval_seconds,
-                },
-            )
-            emitted_messages.append(message.model_dump(mode="json"))
-
-            if index < message_count - 1:
-                await asyncio.sleep(interval_seconds)
-
-        return {
-            "session_id": session_id,
-            "agent_id": agent_id,
-            "source_id": resolved_source_id,
-            "interval_seconds": interval_seconds,
-            "message_count": message_count,
-            "messages": emitted_messages,
-        }
+        handle = background_task_registry.spawn(
+            session_id=session_id,
+            task_name="emit_system_time_messages",
+            runner=_emit_background_task,
+            metadata={
+                "target_session_id": session_id,
+                "source_id": resolved_source_id,
+                "interval_seconds": interval_seconds,
+                "message_count": message_count,
+            },
+        )
+        return handle.to_dict()
 
     return emit_system_time_messages
 
@@ -87,21 +99,28 @@ def create_monitor_session_agent_end_tool(
         poll_interval_seconds: float = 1.0,
         max_events: int | None = None,
     ) -> dict[str, Any]:
-        """开启后台任务，持续监控特定 session 的 AGENT_END 事件并转发最终文本。"""
+        """开启后台任务，持续监控 AGENT_END；timeout_seconds/max_events 为 0 表示不限制。"""
         if not target_session_id:
             raise ValueError("target_session_id 不能为空")
-        if timeout_seconds is not None and timeout_seconds <= 0:
-            raise ValueError("timeout_seconds 必须大于 0 或 None")
+        if timeout_seconds is not None and timeout_seconds < 0:
+            raise ValueError("timeout_seconds 不能为负数")
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds 必须大于 0")
-        if max_events is not None and max_events <= 0:
-            raise ValueError("max_events 必须为正整数或 None")
+        if max_events is not None and max_events < 0:
+            raise ValueError("max_events 不能为负数")
+
+        resolved_timeout_seconds = timeout_seconds or None
+        resolved_max_events = max_events or None
 
         submitted_at = datetime.now()
         monitor_source_id = f"monitor:{target_session_id}:{uuid.uuid4().hex[:12]}"
 
         async def _monitor_background_task() -> dict[str, Any]:
-            deadline = None if timeout_seconds is None else asyncio.get_running_loop().time() + timeout_seconds
+            deadline = (
+                None
+                if resolved_timeout_seconds is None
+                else asyncio.get_running_loop().time() + resolved_timeout_seconds
+            )
             seen_event_ids = LRUCache(maxsize=10000)
             emitted_events: list[dict[str, Any]] = []
             emitted_count = 0
@@ -114,17 +133,17 @@ def create_monitor_session_agent_end_tool(
                         event = await source_queue.get()
                         await master_queue.put((job_id, event))
                 except asyncio.CancelledError:
-                    await job_event_bus.unsubscribe(job_id, source_queue)
+                    await job_event_bus.unsubscribe(
+                        job_id,
+                        source_queue,
+                        reason="background_forwarder_cancelled",
+                    )
                     raise
 
             async def _update_subscriptions() -> None:
                 while True:
-                    try:
-                        current_jobs = await job_service.list(session_id=target_session_id)
-                        current_job_ids = {job.job_id for job in current_jobs}
-                    except Exception:
-                        await asyncio.sleep(poll_interval_seconds)
-                        continue
+                    current_jobs = await job_service.list(session_id=target_session_id)
+                    current_job_ids = {job.job_id for job in current_jobs}
 
                     for job_id in list(forward_tasks.keys()):
                         if job_id not in current_job_ids:
@@ -133,12 +152,18 @@ def create_monitor_session_agent_end_tool(
 
                     for job in current_jobs:
                         if job.job_id not in forward_tasks:
-                            try:
-                                queue = await job_event_bus.subscribe(job.job_id)
-                                task = asyncio.create_task(_forward_events(job.job_id, queue))
-                                forward_tasks[job.job_id] = task
-                            except Exception:
-                                continue
+                            queue = await job_event_bus.subscribe(
+                                job.job_id,
+                                subscriber_kind="agent_end_monitor",
+                                metadata={
+                                    "owner_session_id": session_id,
+                                    "target_session_id": target_session_id,
+                                    "agent_id": agent_id,
+                                },
+                                event_types=frozenset({EventType.AGENT_END}),
+                            )
+                            task = asyncio.create_task(_forward_events(job.job_id, queue))
+                            forward_tasks[job.job_id] = task
 
                     await asyncio.sleep(poll_interval_seconds)
 
@@ -146,6 +171,13 @@ def create_monitor_session_agent_end_tool(
 
             try:
                 while True:
+                    if manager_task.done():
+                        manager_task.result()
+                        raise RuntimeError("AGENT_END 监控的订阅管理任务意外结束")
+                    for forward_task in forward_tasks.values():
+                        if forward_task.done():
+                            forward_task.result()
+                            raise RuntimeError("AGENT_END 监控的事件转发任务意外结束")
                     if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                         if emitted_count == 0:
                             raise TimeoutError(f"监控 session {target_session_id} 的 AGENT_END 超时")
@@ -196,7 +228,7 @@ def create_monitor_session_agent_end_tool(
                         "emitted_background_message": emitted_message.model_dump(mode="json"),
                     })
 
-                    if max_events is not None and emitted_count >= max_events:
+                    if resolved_max_events is not None and emitted_count >= resolved_max_events:
                         break
 
                 return {
@@ -218,9 +250,9 @@ def create_monitor_session_agent_end_tool(
             runner=_monitor_background_task,
             metadata={
                 "target_session_id": target_session_id,
-                "timeout_seconds": timeout_seconds,
+                "timeout_seconds": resolved_timeout_seconds,
                 "poll_interval_seconds": poll_interval_seconds,
-                "max_events": max_events,
+                "max_events": resolved_max_events,
                 "source_id": monitor_source_id,
                 "submitted_at": submitted_at.isoformat(),
             },

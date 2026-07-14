@@ -13,9 +13,11 @@ function event(
   index: number,
   type: TraceEvent["type"],
   payload: Record<string, unknown>,
+  partId: string | null = null,
 ): TraceEvent {
   return {
     event_id: `evt_${index}`,
+    part_id: partId,
     session_id: "ses_event_display",
     job_id: "job_event_display",
     type,
@@ -33,16 +35,16 @@ const customToolEvents: TraceEvent[] = [
     tool_name: "test_tool_2",
     args: {},
     invocation_tool_name: "invoke_custom_tool",
-    tool_call_run_id: "run_test_tool_2",
-  }),
+  }, "run_test_tool_2"),
   event(2, "tool_call_end", {
     tool_name: "test_tool_2",
     result: "4568",
     invocation_tool_name: "invoke_custom_tool",
-    tool_call_run_id: "run_test_tool_2",
-  }),
-  event(3, "text_end", { text: "4568" }),
-  event(4, "agent_end", { final_text: "4568" }),
+  }, "run_test_tool_2"),
+  event(3, "text_start", { kind: "markdown" }, "final_1"),
+  event(4, "text_delta", { kind: "markdown", text: "4568" }, "final_1"),
+  event(5, "text_end", { kind: "markdown", text: "4568" }, "final_1"),
+  event(6, "agent_end", { final_text: "4568" }),
 ];
 
 const eventSummary = buildKeyTraceSummary(
@@ -75,8 +77,7 @@ const failedItems = buildTraceTimelineItems([
         tool_name: "test_tool_2",
         args: {},
         invocation_tool_name: "invoke_custom_tool",
-        tool_call_run_id: "run_failed_tool",
-      }),
+      }, "run_failed_tool"),
       event(6, "error", {
         error: "未知扩展工具: test_tool_2。当前可用扩展工具: 无",
         phase: "agent_execution",

@@ -2,12 +2,18 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AppProvider } from './hooks';
+import '@vscode/codicons/dist/codicon.css';
 import './index.css';
 import './styles/panelShared.css';
 import './styles/agentState.css';
 import './styles/eventQueue.css';
 import './styles/requestLog.css';
 import './styles/resourcePanel.css';
+import './styles/workspace.css';
+import './styles/agentSessionsPanel.css';
+import './styles/workbenchLayout.css';
+import './styles/toolControl.css';
+import './styles/chatMessages.css';
 
 declare global {
   interface ImportMeta {
@@ -38,7 +44,4 @@ root.render(
 
 if (import.meta.hot) {
   import.meta.hot.accept();
-  import.meta.hot.dispose(() => {
-    window.__graphAgentRoot = undefined;
-  });
 }

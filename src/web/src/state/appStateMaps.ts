@@ -6,5 +6,7 @@ export function cloneMaps(state: AppState): AppState {
     eventQueuesBySession: new Map(state.eventQueuesBySession),
     pendingConversations: new Map(state.pendingConversations),
     sessionAttachmentSummaries: new Map(state.sessionAttachmentSummaries),
+    sessionsByWorkspace: new Map(state.sessionsByWorkspace),
+    sessionGatewayWorkspaceById: new Map(state.sessionGatewayWorkspaceById),
   };
 }

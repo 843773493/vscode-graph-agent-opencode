@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Protocol
 
 
 @dataclass(slots=True)
@@ -30,6 +30,37 @@ class BackgroundTaskHandle:
             "metadata": self.metadata,
         }
 
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "BackgroundTaskHandle":
+        return cls(
+            task_id=str(value["task_id"]),
+            session_id=str(value["session_id"]),
+            task_name=str(value["task_name"]),
+            status=str(value["status"]),
+            created_at=datetime.fromisoformat(str(value["created_at"])),
+            started_at=(
+                datetime.fromisoformat(str(value["started_at"]))
+                if value.get("started_at")
+                else None
+            ),
+            ended_at=(
+                datetime.fromisoformat(str(value["ended_at"]))
+                if value.get("ended_at")
+                else None
+            ),
+            metadata=dict(value.get("metadata") or {}),
+        )
+
+
+class BackgroundTaskHistoryStoreProtocol(Protocol):
+    def upsert(self, handle: BackgroundTaskHandle) -> None: ...
+
+    def list_session(self, session_id: str) -> list[BackgroundTaskHandle]: ...
+
+    def mark_active_tasks_lost(self) -> None: ...
+
+    def delete_session(self, session_id: str) -> None: ...
+
 
 @dataclass(slots=True)
 class _BackgroundTaskRecord:
@@ -38,8 +69,10 @@ class _BackgroundTaskRecord:
 
 
 class BackgroundTaskRegistry:
-    def __init__(self):
+    def __init__(self, *, history_store: BackgroundTaskHistoryStoreProtocol):
         self._tasks: dict[str, dict[str, _BackgroundTaskRecord]] = {}
+        self._history_store = history_store
+        self._history_store.mark_active_tasks_lost()
 
     def spawn(
         self,
@@ -54,27 +87,30 @@ class BackgroundTaskRegistry:
             task_id=task_id,
             session_id=session_id,
             task_name=task_name,
-            status="pending",
+            status="running",
             created_at=datetime.now(),
+            started_at=datetime.now(),
             metadata=metadata or {},
         )
+        self._history_store.upsert(handle)
 
         async def _wrapped_runner() -> Any:
-            handle.status = "running"
-            handle.started_at = datetime.now()
-
             try:
                 result = await runner()
                 handle.status = "completed"
+                if result is not None:
+                    handle.metadata["result"] = result
                 return result
             except asyncio.CancelledError:
                 handle.status = "cancelled"
                 raise
-            except Exception:
+            except Exception as exc:
                 handle.status = "failed"
+                handle.metadata["error_message"] = str(exc)
                 raise
             finally:
                 handle.ended_at = datetime.now()
+                self._history_store.upsert(handle)
 
         task = asyncio.create_task(
             _wrapped_runner(),
@@ -95,7 +131,18 @@ class BackgroundTaskRegistry:
         return record.task if record else None
 
     def list_handles(self, session_id: str) -> list[BackgroundTaskHandle]:
-        return [record.handle for record in self._tasks.get(session_id, {}).values()]
+        return [
+            record.handle
+            for record in self._tasks.get(session_id, {}).values()
+            if record.handle.status in {"pending", "running"}
+        ]
+
+    def list_closed_handles(self, session_id: str) -> list[BackgroundTaskHandle]:
+        return [
+            handle
+            for handle in self._history_store.list_session(session_id)
+            if handle.status not in {"pending", "running"}
+        ]
 
     async def cancel(self, session_id: str, task_id: str) -> BackgroundTaskHandle:
         record = self._tasks.get(session_id, {}).get(task_id)
@@ -116,12 +163,29 @@ class BackgroundTaskRegistry:
             record.handle.status = "cancelled"
             if record.handle.ended_at is None:
                 record.handle.ended_at = datetime.now()
+        self._history_store.upsert(record.handle)
         return record.handle
 
     async def delete(self, session_id: str, task_id: str) -> BackgroundTaskHandle:
         record = self._tasks.get(session_id, {}).get(task_id)
         if record is None:
-            raise ValueError(f"后台任务不存在: session_id={session_id}, task_id={task_id}")
+            historical_handle = next(
+                (
+                    handle
+                    for handle in self._history_store.list_session(session_id)
+                    if handle.task_id == task_id
+                ),
+                None,
+            )
+            if historical_handle is None:
+                raise ValueError(
+                    f"后台任务不存在: session_id={session_id}, task_id={task_id}"
+                )
+            historical_handle.status = "deleted"
+            if historical_handle.ended_at is None:
+                historical_handle.ended_at = datetime.now()
+            self._history_store.upsert(historical_handle)
+            return historical_handle
 
         if not record.task.done():
             await self.cancel(session_id, task_id)
@@ -129,6 +193,7 @@ class BackgroundTaskRegistry:
         record.handle.status = "deleted"
         if record.handle.ended_at is None:
             record.handle.ended_at = datetime.now()
+        self._history_store.upsert(record.handle)
 
         del self._tasks[session_id][task_id]
         if not self._tasks[session_id]:
@@ -139,4 +204,5 @@ class BackgroundTaskRegistry:
         task_ids = list(self._tasks.get(session_id, {}).keys())
         for task_id in task_ids:
             await self.delete(session_id, task_id)
+        self._history_store.delete_session(session_id)
         return len(task_ids)

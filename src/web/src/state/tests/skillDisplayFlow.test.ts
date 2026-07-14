@@ -14,9 +14,11 @@ function event(
   index: number,
   type: TraceEvent["type"],
   payload: Record<string, unknown>,
+  partId: string | null = null,
 ): TraceEvent {
   return {
     event_id: `evt_${index}`,
+    part_id: partId,
     session_id: "ses_skill_display",
     job_id: "job_skill_display",
     type,
@@ -37,54 +39,58 @@ function aggregatedTools(items: TimelineItem[]) {
 }
 
 const skillEvents: TraceEvent[] = [
-  event(1, "text_delta", {
+  event(1, "text_start", { kind: "reasoning" }, "reasoning_1"),
+  event(2, "text_delta", {
     text: "我先查看工作区扩展工具索引。",
     kind: "reasoning",
-  }),
-  event(2, "tool_call_start", {
+  }, "reasoning_1"),
+  event(3, "text_end", { kind: "reasoning", text: "我先查看工作区扩展工具索引。" }, "reasoning_1"),
+  event(4, "tool_call_start", {
     tool_name: "glob",
     args: { pattern: "**/AGENTS.md" },
-  }),
-  event(3, "tool_call_end", {
+  }, "tool_glob"),
+  event(5, "tool_call_end", {
     tool_name: "glob",
     result: "['/.boxteam/AGENTS.md', '/.boxteam/skills/test-tool-2/AGENTS.md', '/AGENTS.md']",
-  }),
-  event(4, "text_delta", {
+  }, "tool_glob"),
+  event(6, "text_start", { kind: "reasoning" }, "reasoning_2"),
+  event(7, "text_delta", {
     text: "我已经找到 skill 目录，接着读取具体说明。",
     kind: "reasoning",
-  }),
-  event(5, "tool_call_start", {
+  }, "reasoning_2"),
+  event(8, "text_end", { kind: "reasoning", text: "我已经找到 skill 目录，接着读取具体说明。" }, "reasoning_2"),
+  event(9, "tool_call_start", {
     tool_name: "read_file",
     args: { file_path: "/.boxteam/AGENTS.md" },
-  }),
-  event(6, "tool_call_end", {
+  }, "tool_read_agents"),
+  event(10, "tool_call_end", {
     tool_name: "read_file",
     result: "当用户要求调用 `test_tool_2` 时，读取 `/.boxteam/skills/test-tool-2/SKILL.md`。",
-  }),
-  event(7, "tool_call_start", {
+  }, "tool_read_agents"),
+  event(11, "tool_call_start", {
     tool_name: "read_file",
     args: { file_path: "/.boxteam/skills/test-tool-2/SKILL.md" },
-  }),
-  event(8, "tool_call_end", {
+  }, "tool_read_skill"),
+  event(12, "tool_call_end", {
     tool_name: "read_file",
     result: "---\nname: test-tool-2\nallowed-tools: test_tool_2\n---",
-  }),
-  event(9, "tool_call_start", {
+  }, "tool_read_skill"),
+  event(13, "tool_call_start", {
     tool_name: "test_tool_2",
     args: {},
     skill_names: ["test-tool-2", "test-tool-2"],
     invocation_tool_name: "invoke_custom_tool",
-    tool_call_run_id: "run_test_tool_2",
-  }),
-  event(10, "tool_call_end", {
+  }, "run_test_tool_2"),
+  event(14, "tool_call_end", {
     tool_name: "test_tool_2",
     result: "4568",
     skill_names: ["test-tool-2"],
     invocation_tool_name: "invoke_custom_tool",
-    tool_call_run_id: "run_test_tool_2",
-  }),
-  event(11, "text_end", { text: "4568" }),
-  event(12, "agent_end", { final_text: "4568" }),
+  }, "run_test_tool_2"),
+  event(15, "text_start", { kind: "markdown" }, "final_1"),
+  event(16, "text_delta", { kind: "markdown", text: "4568" }, "final_1"),
+  event(17, "text_end", { kind: "markdown", text: "4568" }, "final_1"),
+  event(18, "agent_end", { final_text: "4568" }),
 ];
 
 const conversation: ConversationView = {
@@ -119,7 +125,7 @@ assert(
 
 const finalText = items.find(
   (item): item is Extract<TimelineItem, { kind: "aggregated_text" }> =>
-    item.kind === "aggregated_text" && item.phase !== "reasoning",
+    item.kind === "aggregated_text" && item.partKind === "markdown",
 );
 assert(finalText?.text === "4568", "默认视图缺少最终回复文本 4568");
 
@@ -153,7 +159,7 @@ assert(
 );
 assert(
   items.some(
-    (item) => item.kind === "aggregated_text" && item.phase === "reasoning",
+    (item) => item.kind === "aggregated_text" && item.partKind === "reasoning",
   ),
   "默认视图应保留推理卡片，由折叠状态控制密度，而不是隐藏卡片",
 );

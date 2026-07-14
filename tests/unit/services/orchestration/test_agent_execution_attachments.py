@@ -6,9 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.agents.provider_capabilities import (
-    IMAGE_INPUT,
     detect_required_capabilities,
-    select_providers_for_capabilities,
 )
 from app.schemas.public_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_content_service import build_human_content
@@ -151,55 +149,6 @@ def test_build_human_content_labels_multiple_attachments_in_order():
         "附件 1/2：first.jpg",
         "附件 2/2：second.png",
     ]
-
-
-def test_select_providers_for_image_request_uses_image_input_provider_only():
-    """图片请求应跳过未声明 image_input 的 provider，避免先产生一串不支持图片的错误。"""
-    providers = [
-        {"id": "primary", "model": "text-only"},
-        {"id": "backup_1", "model": "text-only-2"},
-        {"id": "backup_3", "model": "vision", "capabilities": ["image_input"]},
-    ]
-
-    selected = select_providers_for_capabilities(providers, {IMAGE_INPUT})
-
-    assert selected == [providers[2]]
-
-
-def test_select_providers_for_image_request_accepts_legacy_vision_alias():
-    """历史 vision 标记仍应按 image_input 处理，避免旧配置突然失效。"""
-    providers = [
-        {"id": "primary", "model": "text-only"},
-        {"id": "backup_3", "model": "vision", "capabilities": ["vision"]},
-    ]
-
-    selected = select_providers_for_capabilities(providers, {IMAGE_INPUT})
-
-    assert selected == [providers[1]]
-
-
-def test_select_providers_for_text_request_keeps_configured_order():
-    """普通文本请求仍按 agent 配置顺序进行 fallback。"""
-    providers = [
-        {"id": "primary", "model": "text-only"},
-        {"id": "backup_3", "model": "vision", "capabilities": ["image_input"]},
-    ]
-
-    selected = select_providers_for_capabilities(
-        providers,
-        detect_required_capabilities("请描述项目"),
-    )
-
-    assert selected == providers
-
-
-def test_select_providers_for_image_request_requires_image_input_capability():
-    """图片请求没有 image_input provider 时应提前给出可理解配置错误。"""
-    with pytest.raises(RuntimeError, match="image_input"):
-        select_providers_for_capabilities(
-            [{"id": "primary", "model": "text-only"}],
-            {IMAGE_INPUT},
-        )
 
 
 def test_detect_required_capabilities_detects_multimodal_content():

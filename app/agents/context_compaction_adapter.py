@@ -6,7 +6,6 @@ from deepagents.middleware.summarization import create_summarization_middleware
 from langchain_core.messages import AnyMessage, BaseMessage
 
 from app.agents.agent_factory import build_runtime_for_agent
-from app.agents.summarization_paths import apply_boxteam_summarization_paths
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.context_history_store import ContextHistoryStore
 
@@ -110,7 +109,6 @@ class AgentSummarizationCompactor:
             runtime["model"],
             self._history_store.backend,
         )
-        apply_boxteam_summarization_paths(summarization)
         return summarization
 
     @staticmethod

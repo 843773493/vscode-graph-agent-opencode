@@ -83,7 +83,12 @@ def map_event_to_observation_sse(event: Event) -> SessionExecutionSseDTO:
             job_id=event.job_id,
             type="session.status.changed",
             time=event.timestamp,
-            payload=SessionStatusDTO(session_id=_session_id(event), status="idle", message="job cancelled", active_job_id=None),
+            payload=SessionStatusDTO(
+                session_id=_session_id(event),
+                status="idle",
+                message="job cancelled",
+                active_job_id=None,
+            ).model_dump(mode="json"),
         )
     elif event_type == "job_failed":
         mapped_event = SessionExecutionEventDTO(
@@ -106,7 +111,7 @@ def map_event_to_observation_sse(event: Event) -> SessionExecutionSseDTO:
                 status="busy" if _payload_field(event, "status", "") != "idle" else "idle",
                 message=_payload_field(event, "reason", None),
                 active_job_id=_payload_field(event, "blocked_by_job_id", None),
-            ),
+            ).model_dump(mode="json"),
         )
     elif event_type == "agent_start":
         mapped_event = SessionExecutionEventDTO(
@@ -138,7 +143,7 @@ def map_event_to_observation_sse(event: Event) -> SessionExecutionSseDTO:
                 active_job_id=None,
                 is_streaming=False,
                 is_idle=True,
-            ),
+            ).model_dump(mode="json"),
         )
     elif event_type == "error":
         mapped_event = SessionExecutionEventDTO(
@@ -156,7 +161,11 @@ def map_event_to_observation_sse(event: Event) -> SessionExecutionSseDTO:
             job_id=event.job_id,
             type="session.status.changed",
             time=event.timestamp,
-            payload=SessionStatusDTO(session_id=_session_id(event), status="busy", message=f"unmapped event: {event_type}"),
+            payload=SessionStatusDTO(
+                session_id=_session_id(event),
+                status="busy",
+                message=f"unmapped event: {event_type}",
+            ).model_dump(mode="json"),
         )
 
     return SessionExecutionSseDTO(event=mapped_event, raw_type=event.type, raw_payload=payload)

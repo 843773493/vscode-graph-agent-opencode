@@ -66,17 +66,16 @@ class ConfigService:
         return self._config_dir / "boxteam.json"
 
     def _load_boxteam_config(self) -> dict:
-        if self._boxteam_config is None:
-            config_path = self._get_boxteam_config_path()
-            if config_path.exists():
-                with config_path.open("r", encoding="utf-8") as f:
-                    config = commentjson.load(f)
-            else:
-                config = {}
-            if self._workspace_root is not None:
-                config = self._apply_workspace_override(config, self._workspace_root)
-            self._boxteam_config = config
-        return self._boxteam_config
+        config_path = self._get_boxteam_config_path()
+        if config_path.exists():
+            with config_path.open("r", encoding="utf-8") as f:
+                config = commentjson.load(f)
+        else:
+            config = {}
+        if self._workspace_root is not None:
+            config = self._apply_workspace_override(config, self._workspace_root)
+        self._boxteam_config = config
+        return config
 
     def _apply_workspace_override(self, base_config: dict[str, Any], workspace_root: Path) -> dict[str, Any]:
         override_dir = workspace_root / ".boxteam"
@@ -210,19 +209,32 @@ class ConfigService:
         config = self._load_boxteam_config()
         providers = config.get("llm", {}).get("providers", [])
 
-        result = []
-        for provider in providers:
-            expanded = provider.copy()
-            api_key = provider.get("api_key", "")
-            if api_key.startswith("${") and api_key.endswith("}"):
-                var_name = api_key[2:-1]
-                env_value = os.environ.get(var_name)
-                if env_value is None:
-                    raise ValueError(f'环境变量 {var_name} 未设置')
-                expanded["api_key"] = env_value
-            result.append(expanded)
+        return [self._expand_provider(provider) for provider in providers]
 
-        return result
+    def get_llm_provider(self, provider_id: str) -> dict[str, Any]:
+        config = self._load_boxteam_config()
+        providers = config.get("llm", {}).get("providers", [])
+        for provider in providers:
+            if not isinstance(provider, dict):
+                raise TypeError("llm.providers 配置项必须是对象")
+            if provider.get("id") == provider_id:
+                return self._expand_provider(provider)
+        raise ValueError(f"不存在的 LLM provider: {provider_id}")
+
+    def _expand_provider(self, provider: object) -> dict[str, Any]:
+        if not isinstance(provider, dict):
+            raise TypeError("llm.providers 配置项必须是对象")
+        expanded = provider.copy()
+        api_key = provider.get("api_key", "")
+        if not isinstance(api_key, str):
+            raise TypeError("llm.providers[].api_key 必须是字符串")
+        if api_key.startswith("${") and api_key.endswith("}"):
+            var_name = api_key[2:-1]
+            env_value = os.environ.get(var_name)
+            if env_value is None:
+                raise ValueError(f"环境变量 {var_name} 未设置")
+            expanded["api_key"] = env_value
+        return expanded
 
     def get_default_agent_runtime_config(self) -> dict[str, Any]:
         return self.get_agent_runtime_config(self.get_default_agent_id())
@@ -272,6 +284,15 @@ class ConfigService:
             raise ValueError("agents 配置必须是对象")
         return agents
 
+    def get_gateway_config(self) -> dict[str, Any]:
+        config = self._load_boxteam_config()
+        gateway = config.get("gateway", {})
+        if gateway is None:
+            return {}
+        if not isinstance(gateway, dict):
+            raise ValueError("gateway 配置必须是对象")
+        return gateway
+
     def get_agent_runtime_config(self, agent_id: str | None = None) -> dict[str, Any]:
         config = self._load_boxteam_config()
         providers = self.get_llm_providers()
@@ -282,9 +303,6 @@ class ConfigService:
         default_runtime = {
             "system_prompt": "You are a helpful assistant.",
             "providers": providers,
-            "temperature": 0.2,
-            "top_p": 1,
-            "max_output_tokens": 4000,
         }
 
         agents = config.get("agents", {})
@@ -322,13 +340,14 @@ class ConfigService:
                 )
             selected_providers.append(provider)
 
-        return {
+        runtime_config: dict[str, Any] = {
             "system_prompt": instructions.get("system_prompt", default_runtime["system_prompt"]),
             "providers": selected_providers,
-            "temperature": model_cfg.get("temperature", default_runtime["temperature"]),
-            "top_p": model_cfg.get("top_p", default_runtime["top_p"]),
-            "max_output_tokens": model_cfg.get("max_output_tokens", default_runtime["max_output_tokens"]),
         }
+        for option_name in ("temperature", "top_p", "max_output_tokens"):
+            if option_name in model_cfg:
+                runtime_config[option_name] = model_cfg[option_name]
+        return runtime_config
 
     def get_agent_tool_config(self, agent_id: str | None = None) -> dict[str, Any]:
         config = self._load_boxteam_config()

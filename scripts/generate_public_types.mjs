@@ -133,7 +133,8 @@ async function main() {
 		'  SessionResourceListDTO,',
 		"} from './session_resource';",
 		"export type { SessionNetworkWaitDTO, SessionObservationStateDTO, SessionStatusDTO } from './session_status';",
-		"export type { ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO } from './tool';",
+		"export type { ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO, ToolSelectionChange, ToolSelectionPatchRequest } from './tool';",
+		"export type { ToolTestAttemptDTO, ToolTestProviderResultDTO, ToolTestRunDTO, ToolTestRunListDTO, ToolTestStartRequest } from './tool_test';",
 		"export type { TraceEventDTO } from './trace';",
 		"export type { WorkspaceContextDTO, WorkspaceDTO, WorkspaceFileContentDTO, WorkspaceFileListDTO, WorkspaceFileNodeDTO } from './workspace';",
 	];

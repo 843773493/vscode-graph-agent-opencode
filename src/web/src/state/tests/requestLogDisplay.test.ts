@@ -1,5 +1,10 @@
 import type { LLMRequestLogRecord } from "../../types/backend";
-import { buildRequestLogDisplay, buildRequestLogKeyFlow } from "../requestLogDisplay";
+import {
+  buildRequestLogDisplay,
+  buildRequestLogKeyFlow,
+  buildRequestReplayDisplay,
+  normalizeRequestLogJsonForDisplay,
+} from "../requestLogDisplay";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -209,4 +214,102 @@ const malformedDisplay = buildRequestLogDisplay(malformedArgumentLog);
 assert(
   malformedDisplay.calledToolNames.includes("invoke_custom_tool"),
   "请求日志遇到不完整 JSON 参数时不应崩溃，应退回显示固定入口",
+);
+
+const replayLog = {
+  timestamp: 4,
+  session_id: "ses_request_replay",
+  file_path: "/tmp/request-replay.json",
+  file_name: "request-replay.json",
+  request: {
+    messages: [{ type: "human", content: "测试" }],
+    system_message: { type: "system", content: [{ type: "text", text: "最终提示词" }] },
+    tools: [
+      {
+        name: "read_file",
+        description: "读取文件",
+        args: { type: "object", properties: {} },
+      },
+    ],
+    replay: {
+      schema_version: 1,
+      message_count: 1,
+      system_prompt_char_count: 123,
+      prompt_components: [
+        {
+          source: "agent_factory",
+          label: "默认指令",
+          operation: "append",
+          content_blocks: [{ type: "text", text: "基础提示词" }],
+          block_count: 1,
+          char_count: 5,
+        },
+        {
+          source: "WorkspaceAgentsMiddleware",
+          label: "工作区 AGENTS.md",
+          operation: "append",
+          content_blocks: [{ type: "text", text: "工作区规则" }],
+          block_count: 1,
+          char_count: 5,
+        },
+      ],
+      tools: { count: 1, names: ["read_file"], schema_char_count: 88 },
+    },
+  },
+  response: { result: [] },
+} as LLMRequestLogRecord;
+
+const replayDisplay = buildRequestReplayDisplay(replayLog);
+assert(!replayDisplay.legacy, "新日志应读取后端记录的 Prompt 来源，而不是退回旧日志模式");
+assert(
+  replayDisplay.promptComponents.map((item) => item.label).join(",") ===
+    "默认指令,工作区 AGENTS.md",
+  "请求组成应按 middleware 实际执行顺序展示",
+);
+assert(
+  replayDisplay.tools.length === 1 && replayDisplay.tools[0]?.name === "read_file",
+  "请求组成应包含当次真正发送给模型的工具定义",
+);
+assert(
+  replayDisplay.systemPromptCharCount === 123 && replayDisplay.toolSchemaCharCount === 88,
+  "折叠摘要应优先使用后端记录的统计值",
+);
+
+const legacyReplay = buildRequestReplayDisplay({
+  ...replayLog,
+  request: {
+    messages: [],
+    tools: [],
+    system_message: { content: "旧日志最终提示词" },
+  },
+});
+assert(
+  legacyReplay.legacy && legacyReplay.promptComponents[0]?.source === "legacy_log",
+  "旧日志没有回放元数据时应明确标记，并仍允许查看最终 System Prompt",
+);
+
+const normalized = normalizeRequestLogJsonForDisplay({
+  response: {
+    content: [
+      { type: "text", text: "你" },
+      { type: "text", text: "好" },
+      { type: "reasoning", reasoning: "先" },
+      { type: "reasoning", reasoning: "想" },
+      { type: "text_delta", payload: { text: "A" } },
+      { type: "text_delta", payload: { text: "B" } },
+      { type: "text_delta", payload: { text: "C" }, source: "another" },
+    ],
+  },
+}) as { response: { content: Array<Record<string, unknown>> } };
+const normalizedContent = normalized.response.content;
+assert(normalizedContent.length === 4, "连续的文本、reasoning 和 text_delta 应分别合并");
+assert(normalizedContent[0]?.text === "你好", "连续 text 块应合并为一个展示块");
+assert(normalizedContent[1]?.reasoning === "先想", "连续 reasoning 块应合并为一个展示块");
+assert(
+  (normalizedContent[2]?.payload as { text: string }).text === "AB",
+  "同元数据的连续 text_delta 应合并",
+);
+assert(
+  (normalizedContent[3]?.payload as { text: string }).text === "C",
+  "来源不同的 text_delta 不应错误合并",
 );

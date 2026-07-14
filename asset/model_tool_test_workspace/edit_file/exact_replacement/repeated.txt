@@ -1,0 +1,6 @@
+service=api
+ENV=staging
+service=worker
+ENV=staging
+service=scheduler
+ENV=staging

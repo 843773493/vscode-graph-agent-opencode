@@ -2,7 +2,7 @@ import type { ConversationView } from "../types/frontend";
 import {
   aggregateConversationEvents,
   buildPendingStatusItem,
-} from "./traceAggregation";
+} from "./trace/traceAggregation";
 import { normalizeTimelineMessage } from "./timelineMessages";
 import type { TimelineItem } from "./timelineTypes";
 

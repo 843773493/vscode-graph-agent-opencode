@@ -1,0 +1,4 @@
+project = "BoxTeam"
+status = "draft"
+owner = "local-agent"
+mode = "local"

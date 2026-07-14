@@ -114,9 +114,12 @@ class SessionService:
 
         update_data = session.model_dump(exclude_unset=True)
 
-        old_agent_id = existing.current_agent_id
-        new_agent_id = update_data.get("agent_id")
-        agent_id_changed = new_agent_id is not None and new_agent_id != old_agent_id
+        if "parent_session_id" in update_data:
+            await self._validate_parent_session(
+                session_id=session_id,
+                workspace_id=existing.workspace_id,
+                parent_session_id=update_data["parent_session_id"],
+            )
 
         for key, value in update_data.items():
             if key == "agent_id":
@@ -129,14 +132,6 @@ class SessionService:
         if "title" in update_data and "title_source" not in update_data:
             existing.title_source = "user"
 
-        if agent_id_changed:
-            try:
-                pass
-            except Exception:
-                pass
-
-        import time
-        time.sleep(0.001)
         existing.updated_at = datetime.now(timezone.utc)
 
         session_file = get_session_file(session_id)
@@ -145,11 +140,51 @@ class SessionService:
 
         return existing
 
+    async def _validate_parent_session(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        parent_session_id: str | None,
+    ) -> None:
+        if parent_session_id is None:
+            return
+        if parent_session_id == session_id:
+            raise ValueError("会话不能绑定到自身")
+
+        ancestor_id: str | None = parent_session_id
+        visited: set[str] = set()
+        while ancestor_id is not None:
+            if ancestor_id == session_id:
+                raise ValueError("会话绑定会形成循环父子关系")
+            if ancestor_id in visited:
+                raise RuntimeError(f"现有会话树包含循环关系: session_id={ancestor_id}")
+            visited.add(ancestor_id)
+            try:
+                ancestor = await self.get(ancestor_id)
+            except NotFoundError as exc:
+                raise ValueError(f"父会话不存在: {ancestor_id}") from exc
+            if ancestor.workspace_id != workspace_id:
+                raise ValueError("父子会话必须属于同一个工作区")
+            ancestor_id = ancestor.parent_session_id
+
     async def delete(self, session_id: str) -> DeleteSessionResultDTO:
         session_dir = get_session_path(session_id)
 
         if not session_dir.exists():
             raise NotFoundError(f"Session {session_id} not found")
+
+        sessions = await self.list(limit=100_000)
+        direct_children = [
+            session
+            for session in sessions.items
+            if session.parent_session_id == session_id
+        ]
+        for child in direct_children:
+            await self.update(
+                child.session_id,
+                SessionUpdateRequest(parent_session_id=None),
+            )
 
         import shutil
         shutil.rmtree(session_dir)
@@ -159,16 +194,24 @@ class SessionService:
         await self.get(session_id)
         return SessionControlResultDTO(session_id=session_id, action=action, status="executed")
 
-    async def list_trace_events(self, session_id: str) -> list[TraceEventDTO]:
+    async def list_trace_events(
+        self,
+        session_id: str,
+        after_event_id: str | None = None,
+    ) -> list[TraceEventDTO]:
         await self.get(session_id)
-        events = self._trace_event_store.read_events(session_id)
+        events = self._trace_event_store.read_events(session_id, after_event_id)
         mapper = TraceEventMapper()
         return mapper.map_many([event.model_dump() for event in events], session_id=session_id)
 
-    async def stream_trace_events(self, session_id: str):
+    async def ensure_trace_cursor(self, session_id: str, after_event_id: str | None) -> None:
+        await self.get(session_id)
+        self._trace_event_store.ensure_cursor(session_id, after_event_id)
+
+    async def stream_trace_events(self, session_id: str, after_event_id: str | None = None):
         await self.get(session_id)
         mapper = TraceEventMapper()
-        async for event in self._trace_event_store.stream_events(session_id):
+        async for event in self._trace_event_store.stream_events(session_id, after_event_id):
             dto = mapper.map_one(event.model_dump(), session_id=session_id)
             if dto is not None:
                 yield dto

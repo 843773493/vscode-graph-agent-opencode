@@ -20,11 +20,38 @@ import {
 
 export interface RequestLogDisplayModel {
   model: string;
-  requestText: string;
   responseText: string;
   phaseLabel: string;
   toolNames: string[];
   calledToolNames: string[];
+  messageCount: number;
+  responseMessageCount: number;
+}
+
+export interface RequestPromptComponentDisplay {
+  source: string;
+  label: string;
+  operation: "append" | "replace";
+  contentBlocks: unknown[];
+  blockCount: number;
+  charCount: number;
+}
+
+export interface RequestToolDefinitionDisplay {
+  name: string;
+  description: string;
+  schemaFieldCount: number;
+  definition: unknown;
+}
+
+export interface RequestReplayDisplay {
+  schemaVersion: number | null;
+  legacy: boolean;
+  promptComponents: RequestPromptComponentDisplay[];
+  tools: RequestToolDefinitionDisplay[];
+  messageCount: number;
+  systemPromptCharCount: number;
+  toolSchemaCharCount: number;
 }
 
 export interface RequestLogKeyFlow {
@@ -113,10 +140,6 @@ function messagePreview(messages: unknown, options: { includeReasoning: boolean 
     })
     .filter(Boolean)
     .join("\n");
-}
-
-function requestPreview(log: LLMRequestLogRecord): string {
-  return messagePreview(log.request.messages, { includeReasoning: true }).trim();
 }
 
 function responsePreview(log: LLMRequestLogRecord): string {
@@ -213,6 +236,229 @@ function compactPreview(text: string, maxLength = 240): string {
   return compactKeyFlowText(text, maxLength);
 }
 
+function numberField(value: unknown, key: string): number | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const item = value[key];
+  return typeof item === "number" && Number.isFinite(item) ? item : null;
+}
+
+function replayContentBlocks(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return [{ type: "text", text: value }];
+  }
+  return value === undefined || value === null ? [] : [value];
+}
+
+function contentCharCount(value: unknown): number {
+  if (typeof value === "string") {
+    return value.length;
+  }
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + contentCharCount(item), 0);
+  }
+  if (isRecord(value)) {
+    return Object.values(value).reduce(
+      (total, item) => total + contentCharCount(item),
+      0,
+    );
+  }
+  return 0;
+}
+
+function requestToolDefinitions(log: LLMRequestLogRecord): RequestToolDefinitionDisplay[] {
+  const tools = Array.isArray(log.request.tools) ? log.request.tools : [];
+  return tools.map((tool, index) => {
+    const definition = isRecord(tool) ? tool : { value: tool };
+    const functionDefinition = isRecord(definition.function)
+      ? definition.function
+      : null;
+    const name =
+      (typeof definition.name === "string" ? definition.name : "") ||
+      (functionDefinition && typeof functionDefinition.name === "string"
+        ? functionDefinition.name
+        : "") ||
+      `tool_${index + 1}`;
+    const description =
+      (typeof definition.description === "string" ? definition.description : "") ||
+      (functionDefinition && typeof functionDefinition.description === "string"
+        ? functionDefinition.description
+        : "");
+    const schema = isRecord(definition.args)
+      ? definition.args
+      : functionDefinition && isRecord(functionDefinition.parameters)
+        ? functionDefinition.parameters
+        : null;
+    const schemaFieldCount = schema ? Object.keys(schema).length : 0;
+    return {
+      name,
+      description,
+      schemaFieldCount,
+      definition: tool,
+    };
+  });
+}
+
+export function buildRequestReplayDisplay(
+  log: LLMRequestLogRecord,
+): RequestReplayDisplay {
+  const replay = isRecord(log.request.replay) ? log.request.replay : null;
+  const rawComponents = replay && Array.isArray(replay.prompt_components)
+    ? replay.prompt_components
+    : [];
+  const promptComponents = rawComponents.flatMap((item, index) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+    const contentBlocks = replayContentBlocks(item.content_blocks);
+    const operation = item.operation === "replace" ? "replace" : "append";
+    return [{
+      source: typeof item.source === "string" ? item.source : "unknown_middleware",
+      label: typeof item.label === "string" ? item.label : `Prompt 组成 ${index + 1}`,
+      operation,
+      contentBlocks,
+      blockCount: numberField(item, "block_count") ?? contentBlocks.length,
+      charCount: numberField(item, "char_count") ?? contentCharCount(contentBlocks),
+    } satisfies RequestPromptComponentDisplay];
+  });
+
+  const legacy = promptComponents.length === 0;
+  if (legacy) {
+    const systemMessage = isRecord(log.request.system_message)
+      ? log.request.system_message
+      : null;
+    const contentBlocks = replayContentBlocks(systemMessage?.content);
+    if (contentBlocks.length > 0) {
+      promptComponents.push({
+        source: "legacy_log",
+        label: "最终 System Prompt（旧日志未记录来源）",
+        operation: "replace",
+        contentBlocks,
+        blockCount: contentBlocks.length,
+        charCount: contentCharCount(contentBlocks),
+      });
+    }
+  }
+
+  const tools = requestToolDefinitions(log);
+  const replayTools = replay && isRecord(replay.tools) ? replay.tools : null;
+  const requestMessages = Array.isArray(log.request.messages)
+    ? log.request.messages
+    : [];
+  return {
+    schemaVersion: replay ? numberField(replay, "schema_version") : null,
+    legacy,
+    promptComponents,
+    tools,
+    messageCount: replay
+      ? numberField(replay, "message_count") ?? requestMessages.length
+      : requestMessages.length,
+    systemPromptCharCount: replay
+      ? numberField(replay, "system_prompt_char_count") ??
+        contentCharCount(promptComponents.map((item) => item.contentBlocks))
+      : contentCharCount(promptComponents.map((item) => item.contentBlocks)),
+    toolSchemaCharCount: replayTools
+      ? numberField(replayTools, "schema_char_count") ?? 0
+      : contentCharCount(log.request.tools),
+  };
+}
+
+export function requestPromptComponentText(
+  component: RequestPromptComponentDisplay,
+): string {
+  return component.contentBlocks
+    .map((block) => {
+      if (typeof block === "string") {
+        return block;
+      }
+      if (isRecord(block) && typeof block.text === "string") {
+        return block.text;
+      }
+      return JSON.stringify(block, null, 2);
+    })
+    .filter((text) => text.length > 0)
+    .join("\n\n");
+}
+
+function mergeCandidate(value: unknown): {
+  kind: string;
+  text: string;
+  metadata: string;
+} | null {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return null;
+  }
+  if (
+    (value.type === "text" || value.type === "output_text") &&
+    typeof value.text === "string"
+  ) {
+    const metadata = { ...value };
+    delete metadata.text;
+    return { kind: "text", text: value.text, metadata: JSON.stringify(metadata) };
+  }
+  if (value.type === "reasoning" && typeof value.reasoning === "string") {
+    const metadata = { ...value };
+    delete metadata.reasoning;
+    return { kind: "reasoning", text: value.reasoning, metadata: JSON.stringify(metadata) };
+  }
+  if (value.type === "text_delta" && isRecord(value.payload) && typeof value.payload.text === "string") {
+    const metadata = { ...value, payload: { ...value.payload } };
+    delete metadata.payload.text;
+    return { kind: "text_delta", text: value.payload.text, metadata: JSON.stringify(metadata) };
+  }
+  return null;
+}
+
+function mergeDisplayItems(previous: unknown, current: unknown): unknown | null {
+  const left = mergeCandidate(previous);
+  const right = mergeCandidate(current);
+  if (!left || !right || left.kind !== right.kind || left.metadata !== right.metadata) {
+    return null;
+  }
+  if (!isRecord(previous)) {
+    return null;
+  }
+  if (left.kind === "reasoning") {
+    return { ...previous, reasoning: left.text + right.text };
+  }
+  if (left.kind === "text_delta" && isRecord(previous.payload)) {
+    return {
+      ...previous,
+      payload: { ...previous.payload, text: left.text + right.text },
+    };
+  }
+  return { ...previous, text: left.text + right.text };
+}
+
+export function normalizeRequestLogJsonForDisplay(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const normalized: unknown[] = [];
+    for (const item of value) {
+      const next = normalizeRequestLogJsonForDisplay(item);
+      const merged = mergeDisplayItems(normalized[normalized.length - 1], next);
+      if (merged === null) {
+        normalized.push(next);
+      } else {
+        normalized[normalized.length - 1] = merged;
+      }
+    }
+    return normalized;
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      normalizeRequestLogJsonForDisplay(item),
+    ]),
+  );
+}
+
 function uniquePush(items: string[], seen: Set<string>, value: string): void {
   if (!value || seen.has(value)) {
     return;
@@ -260,13 +506,16 @@ function isCustomInvokerValidationError(resultText: string): boolean {
 
 export function buildRequestLogDisplay(log: LLMRequestLogRecord): RequestLogDisplayModel {
   const responseText = compactPreview(responsePreview(log));
+  const requestMessages = Array.isArray(log.request.messages) ? log.request.messages : [];
+  const responseMessages = Array.isArray(log.response.result) ? log.response.result : [];
   return {
     model: modelLabel(log),
-    requestText: compactPreview(requestPreview(log)),
     responseText,
     phaseLabel: responsePhaseLabel(log),
     toolNames: requestToolNames(log),
     calledToolNames: responseCalledToolNames(log),
+    messageCount: requestMessages.length,
+    responseMessageCount: responseMessages.length,
   };
 }
 

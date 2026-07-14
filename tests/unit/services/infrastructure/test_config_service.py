@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 from app.schemas.public_v2.config import ConfigUpdateRequest
@@ -24,7 +25,7 @@ def _base_config() -> dict:
                     "endpoint": "https://example.com/v1",
                     "model": "model-a",
                     "api_key": "${TEST_API_KEY}",
-                    "interface": "opencode_zen",
+                    "custom_llm_provider": "openai",
                 }
             ]
         },
@@ -134,3 +135,152 @@ def test_get_agent_tool_config_reads_custom_tools(tmp_path: Path):
             "factory": "app.agents.tools.testing:create_test_tool_2",
         }
     ]
+
+
+def test_custom_tool_options_schema_accepts_embedding_config(tmp_path: Path) -> None:
+    config = _base_config()
+    config["agents"]["default"]["tools"] = {
+        "custom": [
+            {
+                "name": "fetch_webpage",
+                "factory": "app.agents.tools.web:create_fetch_webpage_tool",
+                "options": {
+                    "embedding": {
+                        "provider_id": "primary",
+                        "model": "text-embedding-3-small",
+                    }
+                },
+            }
+        ]
+    }
+    config_path = _write_boxteam_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    service.validate_boxteam_config()
+
+
+def test_get_llm_provider_only_resolves_selected_provider_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _base_config()
+    config["llm"]["providers"].append(
+        {
+            "id": "embedding",
+            "endpoint": "https://embedding.example.com/v1",
+            "model": "embedding-model",
+            "api_key": "${EMBEDDING_API_KEY}",
+            "custom_llm_provider": "openai",
+        }
+    )
+    monkeypatch.delenv("TEST_API_KEY", raising=False)
+    monkeypatch.setenv("EMBEDDING_API_KEY", "embedding-secret")
+    config_path = _write_boxteam_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    provider = service.get_llm_provider("embedding")
+
+    assert provider["api_key"] == "embedding-secret"
+
+
+def test_provider_request_override_schema_accepts_raw_completion_parameters(
+    tmp_path: Path,
+) -> None:
+    config = _base_config()
+    config["llm"]["providers"][0]["request_options"] = {
+        "overrides": {
+            "temperature": 1,
+            "max_tokens": None,
+            "extra_body": {
+                "reasoning": True,
+                "max_output_tokens": 1200,
+            },
+        }
+    }
+    config_path = _write_boxteam_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    service.validate_boxteam_config()
+
+
+def test_agent_runtime_omits_unspecified_generation_parameters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config_path = _write_boxteam_config(tmp_path, _base_config())
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    runtime = service.get_agent_runtime_config("default")
+
+    assert "temperature" not in runtime
+    assert "top_p" not in runtime
+    assert "max_output_tokens" not in runtime
+
+
+def test_provider_request_override_schema_rejects_legacy_extra_body(
+    tmp_path: Path,
+) -> None:
+    config = _base_config()
+    config["llm"]["providers"][0]["request_options"] = {
+        "extra_body": {"reasoning": True}
+    }
+    config_path = _write_boxteam_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    with pytest.raises(jsonschema.ValidationError):
+        service.validate_boxteam_config()
+
+
+def test_gateway_config_schema_accepts_ssh_workspace(tmp_path: Path):
+    config = _base_config()
+    config["gateway"] = {
+        "workspaces": [
+            {
+                "kind": "ssh",
+                "name": "remote workspace",
+                "host": "127.0.0.1",
+                "port": 22222,
+                "username": "root",
+                "private_key_path": "asset/gateway_ssh/id_ed25519",
+                "remote_backend_host": "127.0.0.1",
+                "remote_backend_port": 8010,
+                "remote_workspace_path": "/workspace/project",
+                "activate": False,
+            }
+        ]
+    }
+    config_path = _write_boxteam_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    service.validate_boxteam_config()
+
+
+@pytest.mark.parametrize(
+    ("invalid_fields", "expected_path"),
+    [
+        ({"remote_backend_port": 0}, ["gateway", "workspaces", 0, "remote_backend_port"]),
+        ({"unexpected": True}, ["gateway", "workspaces", 0]),
+    ],
+)
+def test_gateway_config_schema_rejects_invalid_workspace(
+    tmp_path: Path,
+    invalid_fields: dict[str, object],
+    expected_path: list[str | int],
+):
+    config = _base_config()
+    workspace = {
+        "host": "127.0.0.1",
+        "username": "root",
+        "private_key_path": "id_ed25519",
+        "remote_workspace_path": "/workspace/project",
+        **invalid_fields,
+    }
+    config["gateway"] = {"workspaces": [workspace]}
+    config_path = _write_boxteam_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    with pytest.raises(jsonschema.ValidationError) as error_info:
+        service.validate_boxteam_config()
+
+    assert list(error_info.value.absolute_path) == expected_path

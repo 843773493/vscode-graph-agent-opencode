@@ -5,12 +5,9 @@ from typing import Any, Protocol, TYPE_CHECKING
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.agents.agent_factory import (
-    build_candidate_models_for_agent_content,
-    create_runtime_deep_agent_for_session,
-    resolve_agent_id,
-)
+from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.skill_runtime import discover_workspace_custom_tool_skill_map
 from app.agents.custom_tools import custom_tool_spec_names
@@ -18,6 +15,7 @@ from app.services.infrastructure.config_service import ConfigService
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
+from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 
 if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
@@ -31,9 +29,13 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_session_orchestrator(self) -> SessionOrchestratorProtocol: ...
 
+    def get_job_service(self) -> JobServiceProtocol: ...
+
     def get_checkpointer(self) -> BaseCheckpointSaver: ...
 
     def get_terminal_manager_client(self) -> TerminalManagerClient: ...
+
+    def get_browser_manager_client(self) -> BrowserManagerClient: ...
 
 
 def build_session_agent_runtime(
@@ -47,7 +49,8 @@ def build_session_agent_runtime(
     dependency_provider: AgentRuntimeDependencyProvider,
     name: str | None = None,
     override_model: Any = None,
-    fallback_middleware_enabled: bool = True,
+    model_routing_enabled: bool = True,
+    tool_denylist: set[str] | None = None,
 ) -> Any:
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
     checkpointer = dependency_provider.get_checkpointer()
@@ -60,29 +63,18 @@ def build_session_agent_runtime(
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
+        job_service=dependency_provider.get_job_service(),
         message_service=dependency_provider.get_message_service(),
         session_service=dependency_provider.get_session_service(),
         session_orchestrator=dependency_provider.get_session_orchestrator(),
         terminal_manager_client=dependency_provider.get_terminal_manager_client(),
+        browser_manager_client=dependency_provider.get_browser_manager_client(),
         checkpointer=checkpointer,
         name=name or resolved_agent_id,
         override_model=override_model,
-        fallback_middleware_enabled=fallback_middleware_enabled,
+        model_routing_enabled=model_routing_enabled,
+        tool_denylist=tool_denylist,
     )
-
-
-def build_candidate_models_for_session_request(
-    *,
-    agent_id: str,
-    config_service: ConfigService,
-    content: object,
-) -> list[Any]:
-    return build_candidate_models_for_agent_content(
-        agent_id=agent_id,
-        config_service=config_service,
-        content=content,
-    )
-
 
 def get_workspace_custom_tool_skill_sources(
     *,

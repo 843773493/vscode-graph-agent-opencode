@@ -5,6 +5,18 @@ from langchain_core.tools import BaseTool, tool
 from app.agents.custom_tools import CustomToolFactoryContext
 
 
+LARGE_TEST_TARGET_LINE_INDEX = 1_200
+LARGE_TEST_TARGET_VALUE = "BOXTEAM_MIDDLE_SECRET_7F3A9C"
+LARGE_TEST_OUTPUT = "\n".join(
+    (
+        f"large-output-line-{index:04d}: retrieval-target={LARGE_TEST_TARGET_VALUE}"
+        if index == LARGE_TEST_TARGET_LINE_INDEX
+        else f"large-output-line-{index:04d}: {'x' * 40}"
+    )
+    for index in range(2_400)
+)
+
+
 def create_test_tool() -> BaseTool:
     """创建一个用于测试工具调用链路的工具。"""
 
@@ -26,3 +38,15 @@ def create_test_tool_2(context: CustomToolFactoryContext) -> BaseTool:
         return "4568"
 
     return test_tool_2
+
+
+def create_large_test_output_tool(context: CustomToolFactoryContext) -> BaseTool:
+    """创建用于验证大工具输出物化链路的扩展工具。"""
+    del context
+
+    @tool("large_test_output")
+    def large_test_output() -> str:
+        """返回稳定且超过 ToolOutputStore 默认阈值的多行文本。"""
+        return LARGE_TEST_OUTPUT
+
+    return large_test_output

@@ -1,14 +1,49 @@
-import type { CSSProperties } from "react";
-import type { WorkspaceFileContent } from "../../types/backend";
+import { useEffect, useRef, type CSSProperties } from "react";
+import type { SessionFileChange, WorkspaceFileContent } from "../../types/backend";
+import type { WorkspaceFileSelection } from "../../utils/workspaceFileReferences";
+
+export type WorkspacePreviewTab =
+  | (WorkspaceFileContent & {
+      previewType: "file";
+      selection: WorkspaceFileSelection | null;
+    })
+  | {
+      previewType: "file-placeholder";
+      path: string;
+      name: string;
+    }
+  | {
+      previewType: "terminal";
+      path: string;
+      name: string;
+      terminalId: string;
+      attachUrl: string;
+    }
+  | {
+      previewType: "browser";
+      path: string;
+      name: string;
+      browserId: string;
+      attachUrl: string;
+    }
+  | {
+      previewType: "session-diff";
+      path: string;
+      name: string;
+      change: SessionFileChange;
+      changesetLabel: string;
+    };
 
 interface WorkspaceFilePreviewAreaProps {
-  width: number;
-  tabs: WorkspaceFileContent[];
+  flexRatio: number;
+  maximized: boolean;
+  tabs: WorkspacePreviewTab[];
   activePath: string | null;
   loadingPath: string | null;
   error: string | null;
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
+  onToggleMaximized: () => void;
   onClosePanel: () => void;
 }
 
@@ -27,25 +62,68 @@ function lineRows(content: string): string[] {
   return normalized.split("\n");
 }
 
+function diffLineKind(line: string): "add" | "remove" | "meta" | "context" {
+  if (line.startsWith("+") && !line.startsWith("+++")) {
+    return "add";
+  }
+  if (line.startsWith("-") && !line.startsWith("---")) {
+    return "remove";
+  }
+  if (
+    line.startsWith("@@") ||
+    line.startsWith("---") ||
+    line.startsWith("+++")
+  ) {
+    return "meta";
+  }
+  return "context";
+}
+
+function changeKindLabel(kind: SessionFileChange["kind"]) {
+  if (kind === "create") {
+    return "新增";
+  }
+  if (kind === "delete") {
+    return "删除";
+  }
+  return "修改";
+}
+
 export default function WorkspaceFilePreviewArea({
-  width,
+  flexRatio,
+  maximized,
   tabs,
   activePath,
   loadingPath,
   error,
   onSelectTab,
   onCloseTab,
+  onToggleMaximized,
   onClosePanel,
 }: WorkspaceFilePreviewAreaProps) {
+  const selectedLineRef = useRef<HTMLDivElement | null>(null);
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? tabs[0] ?? null;
-  const activeLines = activeTab ? lineRows(activeTab.content) : [];
+  const activeLines = activeTab?.previewType === "file" ? lineRows(activeTab.content) : [];
+  const activeDiffLines =
+    activeTab?.previewType === "session-diff"
+      ? lineRows(activeTab.change.diff_text)
+      : [];
   const lineNumberWidth = Math.max(2, String(activeLines.length).length);
-  const showLoadingEmpty = loadingPath && !activeTab;
+  const diffLineNumberWidth = Math.max(2, String(activeDiffLines.length).length);
+  const showLoadingEmpty = loadingPath &&
+    (!activeTab || activeTab.previewType === "file-placeholder");
+
+  useEffect(() => {
+    if (activeTab?.previewType !== "file" || !activeTab.selection) {
+      return;
+    }
+    selectedLineRef.current?.scrollIntoView({ block: "center" });
+  }, [activeTab]);
 
   return (
     <section
-      className="workspace-preview-panel"
-      style={{ flexBasis: width, width }}
+      className={`workspace-preview-panel${maximized ? " maximized" : ""}`}
+      style={{ flexBasis: 0, flexGrow: flexRatio }}
       aria-label="文件预览区"
     >
       <header className="workspace-preview-tabs">
@@ -62,7 +140,18 @@ export default function WorkspaceFilePreviewArea({
                   title={tab.path}
                   onClick={() => onSelectTab(tab.path)}
                 >
-                  <span className="workspace-preview-tab-icon">◇</span>
+                  <span
+                    className={`workspace-preview-tab-icon codicon ${
+                      tab.previewType === "terminal"
+                        ? "codicon-terminal"
+                        : tab.previewType === "browser"
+                          ? "codicon-globe"
+                          : tab.previewType === "session-diff"
+                            ? "codicon-diff"
+                            : "codicon-file"
+                    }`}
+                    aria-hidden="true"
+                  />
                   <span className="workspace-preview-tab-label">{tab.name}</span>
                 </button>
                 <button
@@ -86,6 +175,19 @@ export default function WorkspaceFilePreviewArea({
         <div className="workspace-preview-actions">
           <button
             type="button"
+            className="workspace-preview-panel-action"
+            title={maximized ? "还原编辑器区域" : "最大化编辑器区域"}
+            aria-label={maximized ? "还原编辑器区域" : "最大化编辑器区域"}
+            aria-pressed={maximized}
+            onClick={onToggleMaximized}
+          >
+            <span
+              className={`codicon ${maximized ? "codicon-screen-normal" : "codicon-screen-full"}`}
+              aria-hidden="true"
+            />
+          </button>
+          <button
+            type="button"
             className="workspace-preview-panel-close"
             title="隐藏文件预览"
             aria-label="隐藏文件预览"
@@ -97,7 +199,7 @@ export default function WorkspaceFilePreviewArea({
       </header>
 
       <div className="workspace-preview-content">
-        {activeTab ? (
+        {activeTab?.previewType === "file" ? (
           <>
             <div className="workspace-preview-toolbar">
               <span className="workspace-preview-title">{activeTab.path}</span>
@@ -113,8 +215,93 @@ export default function WorkspaceFilePreviewArea({
                 className="workspace-preview-code-table"
                 style={{ "--preview-line-number-width": `${lineNumberWidth}ch` } as CSSProperties}
               >
-                {activeLines.map((line, index) => (
-                  <div className="workspace-preview-line" key={`${index}-${line.length}`}>
+                {activeLines.map((line, index) => {
+                  const lineNumber = index + 1;
+                  const selected = activeTab.selection
+                    ? lineNumber >= activeTab.selection.startLine &&
+                      lineNumber <= activeTab.selection.endLine
+                    : false;
+                  return (
+                    <div
+                      ref={
+                        selected && lineNumber === activeTab.selection?.startLine
+                          ? selectedLineRef
+                          : undefined
+                      }
+                      className={`workspace-preview-line${selected ? " selected-reference" : ""}`}
+                      key={`${index}-${line.length}`}
+                      data-line-number={lineNumber}
+                    >
+                      <span className="workspace-preview-line-number">
+                        {index + 1}
+                      </span>
+                      <code className="workspace-preview-line-code">
+                        {line.length > 0 ? line : "\u00A0"}
+                      </code>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        ) : activeTab?.previewType === "terminal" ? (
+          <>
+            <div className="workspace-preview-toolbar">
+              <span className="workspace-preview-title">终端 {activeTab.terminalId}</span>
+              <a
+                className="workspace-preview-meta workspace-preview-terminal-link"
+                href={activeTab.attachUrl}
+                target="_blank"
+                rel="noreferrer"
+                title="在新窗口打开终端"
+              >
+                新窗口
+              </a>
+            </div>
+            <iframe
+              className="workspace-preview-terminal-frame"
+              src={activeTab.attachUrl}
+              title={`终端 ${activeTab.terminalId}`}
+            />
+          </>
+        ) : activeTab?.previewType === "browser" ? (
+          <>
+            <div className="workspace-preview-toolbar">
+              <span className="workspace-preview-title">浏览器 {activeTab.browserId}</span>
+              <a
+                className="workspace-preview-meta workspace-preview-terminal-link"
+                href={activeTab.attachUrl}
+                target="_blank"
+                rel="noreferrer"
+                title="在新窗口打开浏览器"
+              >
+                新窗口
+              </a>
+            </div>
+            <iframe
+              className="workspace-preview-terminal-frame workspace-preview-browser-frame"
+              src={activeTab.attachUrl}
+              title={`浏览器 ${activeTab.browserId}`}
+            />
+          </>
+        ) : activeTab?.previewType === "session-diff" ? (
+          <>
+            <div className="workspace-preview-toolbar">
+              <span className="workspace-preview-title">{activeTab.change.file_path}</span>
+              <span className="workspace-preview-meta">
+                {activeTab.changesetLabel} · {changeKindLabel(activeTab.change.kind)} · +{activeTab.change.additions} -{activeTab.change.deletions}
+              </span>
+            </div>
+            <div className="workspace-preview-diff-scroll">
+              <div
+                className="workspace-preview-code-table workspace-preview-diff-table"
+                style={{ "--preview-line-number-width": `${diffLineNumberWidth}ch` } as CSSProperties}
+              >
+                {activeDiffLines.map((line, index) => (
+                  <div
+                    className={`workspace-preview-line workspace-preview-diff-line diff-${diffLineKind(line)}`}
+                    key={`${index}-${line.length}`}
+                  >
                     <span className="workspace-preview-line-number">{index + 1}</span>
                     <code className="workspace-preview-line-code">
                       {line.length > 0 ? line : "\u00A0"}

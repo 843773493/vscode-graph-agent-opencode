@@ -1,14 +1,34 @@
 import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { createSession as apiCreateSession, sendMessage as apiSendMessage, DEFAULT_AGENT_ID, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions, streamSessionEvents } from './api';
+import { createSession as apiCreateSession, sendMessage as apiSendMessage, DEFAULT_AGENT_ID, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions, streamSessionEvents, TraceCursorGoneError, updateSession as apiUpdateSession } from './api';
 import type { ActiveJob, Message, Session, TraceEvent } from './types/backend';
 import type { AppState, ConversationView } from './types/frontend';
 import { clearRuntimeLog, getVsCodeState, interceptConsoleToMessageSink, setVsCodeState, writeRuntimeLog } from './vscode';
 
 type StreamEvent = {
   eventType: string;
+  eventId?: string;
   payload: Record<string, unknown>;
+  event?: TraceEvent;
 };
+
+function waitForStreamReconnect(signal: AbortSignal, delayMs: number): Promise<void> {
+  return new Promise(resolve => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timerId);
+      resolve();
+    };
+    const timerId = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 function escapeHtml(value: string): string {
   return String(value)
@@ -288,6 +308,7 @@ interface AppContextType {
   sendMessage: (content: string) => void;
   selectSession: (sessionId: string) => void;
   createSession: (title?: string) => void;
+  setSessionParent: (sessionId: string, parentSessionId: string | null) => Promise<void>;
   toggleHistoryPanel: () => void;
   toggleExpandDetails: (expand: boolean) => void;
 }
@@ -426,7 +447,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const sessions = normalizeSessionList(sessionsPage.items ?? []);
     const currentSession = state.currentSession ? sessions.find(session => session.session_id === state.currentSession?.session_id) ?? sessions[0] ?? null : sessions[0] ?? null;
     const messagesPage = currentSession ? await listMessages(state.apiPort, currentSession.session_id) : { items: [] as Message[] };
-    const traces = currentSession ? await getSessionTraces(state.apiPort, currentSession.session_id) : [] as TraceEvent[];
 
     setState(prev => {
       const next = cloneMaps(prev);
@@ -435,7 +455,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       next.sessions = sessions;
       next.currentSession = currentSession;
       next.messages = normalizeMessageList(messagesPage.items ?? []);
-      next.traceEvents = normalizeTraceEventList(traces);
       next.status = '已刷新消息';
       return next;
     });
@@ -490,18 +509,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const currentSessionId = state.currentSession?.session_id ?? null;
+    const apiPort = state.apiPort;
     activeSessionIdRef.current = currentSessionId;
-    if (!state.apiPort || !currentSessionId) {
+    if (!apiPort || !currentSessionId) {
       return;
     }
 
     streamAbortRef.current?.abort();
     const controller = new AbortController();
     streamAbortRef.current = controller;
+    let lastEventId = state.traceEvents[state.traceEvents.length - 1]?.event_id ?? null;
 
-    void streamSessionEvents(state.apiPort, currentSessionId, {
-      signal: controller.signal,
-      onEvent: ({ eventType, payload }: StreamEvent) => {
+    const connect = async () => {
+      while (!controller.signal.aborted) {
+        try {
+          await streamSessionEvents(apiPort, currentSessionId, {
+            afterEventId: lastEventId,
+            signal: controller.signal,
+            onEvent: ({ eventType, eventId, payload, event }: StreamEvent) => {
+        if (eventId) {
+          lastEventId = eventId;
+        }
         if (!activeSessionIdRef.current) {
           return;
         }
@@ -509,6 +537,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setState(prev => {
           const next = cloneMaps(prev);
           const sessionId = activeSessionIdRef.current ?? '';
+          if (event && !next.traceEvents.some(item => item.event_id === event.event_id)) {
+            next.traceEvents = [...next.traceEvents, event];
+          }
           const pending = next.pendingConversations.get(sessionId);
           if (pending) {
             pending.events = [
@@ -532,15 +563,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
           return next;
         });
-      },
-      onError: (error: unknown) => {
-        setState(prev => ({ ...prev, status: error instanceof Error ? error.message : String(error) }));
-      },
-    }).catch((error: unknown) => {
-      if (!controller.signal.aborted) {
-        setState(prev => ({ ...prev, status: error instanceof Error ? error.message : String(error) }));
+            },
+          });
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return;
+          }
+          if (error instanceof TraceCursorGoneError) {
+            try {
+              const traces = await getSessionTraces(apiPort, currentSessionId);
+              lastEventId = traces[traces.length - 1]?.event_id ?? null;
+              setState(prev => ({
+                ...prev,
+                traceEvents: normalizeTraceEventList(traces),
+                status: '事件游标已恢复，正在继续接收',
+              }));
+            } catch (recoveryError) {
+              const message = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+              setState(prev => ({ ...prev, status: `恢复事件历史失败: ${message}` }));
+            }
+          } else {
+            const message = error instanceof Error ? error.message : String(error);
+            setState(prev => ({ ...prev, status: `事件流断开，正在重连: ${message}` }));
+          }
+        }
+        await waitForStreamReconnect(controller.signal, 500);
       }
-    });
+    };
+
+    void connect();
 
     return () => {
       controller.abort();
@@ -667,6 +718,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [state.apiPort]);
 
+  const setSessionParent = useCallback(async (
+    sessionId: string,
+    parentSessionId: string | null,
+  ) => {
+    if (!state.apiPort) {
+      throw new Error('后端端口未初始化');
+    }
+    try {
+      const updated = await apiUpdateSession(state.apiPort, sessionId, {
+        parent_session_id: parentSessionId,
+      });
+      setState(prev => ({
+        ...prev,
+        sessions: prev.sessions.map(item => item.session_id === sessionId ? updated : item),
+        currentSession: prev.currentSession?.session_id === sessionId ? updated : prev.currentSession,
+        status: parentSessionId ? '已绑定子会话' : '已解除父会话绑定',
+      }));
+    } catch (error) {
+      const refreshed = await listSessions(state.apiPort);
+      setState(prev => ({
+        ...prev,
+        sessions: normalizeSessionList(refreshed.items ?? []),
+        status: `更新会话树失败: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+      throw error;
+    }
+  }, [state.apiPort]);
+
   const toggleHistoryPanel = useCallback(() => setState(prev => ({ ...prev, historyPanelOpen: !prev.historyPanelOpen })), []);
   const toggleExpandDetails = useCallback((expand: boolean) => setState(prev => ({ ...prev, expandDetails: expand })), []);
 
@@ -676,9 +755,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     sendMessage,
     selectSession,
     createSession,
+    setSessionParent,
     toggleHistoryPanel,
     toggleExpandDetails,
-  }), [state, setStatus, sendMessage, selectSession, createSession, toggleHistoryPanel, toggleExpandDetails]);
+  }), [state, setStatus, sendMessage, selectSession, createSession, setSessionParent, toggleHistoryPanel, toggleExpandDetails]);
 
   useEffect(() => {
     if (state.apiPort == null) {

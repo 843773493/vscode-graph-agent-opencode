@@ -1,10 +1,15 @@
 from __future__ import annotations
 import asyncio
+import logging
+from collections.abc import Mapping
 from typing import AsyncGenerator
 
-from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_event_bus import EventSubscriberOverflowError, JobEventBusProtocol
 from app.schemas.event import Event
 from app.services.mapping.observation_event_mapper import map_event_to_observation_sse
+
+
+logger = logging.getLogger(__name__)
 
 
 class EventService:
@@ -29,7 +34,12 @@ class EventService:
             raise RuntimeError("EventService 未绑定 JobEventBus")
         return await self.bus.get_event(event_id)
 
-    async def stream_sse(self, job_id: str) -> AsyncGenerator[str, None]:
+    async def stream_sse(
+        self,
+        job_id: str,
+        *,
+        subscriber_metadata: Mapping[str, str] | None = None,
+    ) -> AsyncGenerator[str, None]:
         """
         SSE流式推送事件。
         
@@ -39,22 +49,43 @@ class EventService:
         """
         if self.bus is None:
             raise RuntimeError("EventService 未绑定 JobEventBus")
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("[event_service] stream_sse subscribe begin: job_id=%s", job_id)
-        queue = await self.bus.subscribe(job_id)
-        logger.info("[event_service] stream_sse subscribed: job_id=%s", job_id)
+        subscription = await self.bus.subscribe(
+            job_id,
+            subscriber_kind="job_sse",
+            metadata=subscriber_metadata,
+        )
+        logger.info(
+            "Job SSE 已连接: subscription_id=%s job_id=%s metadata=%s",
+            subscription.subscription_id,
+            job_id,
+            dict(subscription.metadata),
+        )
         try:
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30)
-                    logger.info("[event_service] stream_sse event: job_id=%s event_type=%s event_id=%s", job_id, event.type, event.event_id)
+                    event = await asyncio.wait_for(subscription.get(), timeout=30)
                     observation = map_event_to_observation_sse(event)
                     yield f"event: {observation.event.type}\n"
                     yield f"data: {observation.model_dump_json()}\n\n"
                 except asyncio.TimeoutError:
-                    logger.info("[event_service] stream_sse ping: job_id=%s", job_id)
                     yield ": ping\n\n"
+        except EventSubscriberOverflowError:
+            logger.exception(
+                "Job SSE 因订阅溢出关闭: subscription_id=%s job_id=%s metadata=%s",
+                subscription.subscription_id,
+                job_id,
+                dict(subscription.metadata),
+            )
+            raise
         finally:
-            logger.info("[event_service] stream_sse unsubscribe: job_id=%s", job_id)
-            await self.bus.unsubscribe(job_id, queue)
+            logger.info(
+                "Job SSE 已断开: subscription_id=%s job_id=%s metadata=%s",
+                subscription.subscription_id,
+                job_id,
+                dict(subscription.metadata),
+            )
+            await self.bus.unsubscribe(
+                job_id,
+                subscription,
+                reason="sse_stream_closed",
+            )

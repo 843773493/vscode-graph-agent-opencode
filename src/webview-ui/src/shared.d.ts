@@ -46,21 +46,30 @@ declare module '../../shared/api.js' {
 
   export interface StreamEvent<TPayload = Record<string, unknown>> {
     eventType: string;
+    eventId?: string;
     payload: TPayload;
+    event?: TraceEvent;
+  }
+
+  export class TraceCursorGoneError extends Error {
+    readonly eventId: string;
+    readonly status: 410;
   }
 
   export function getWorkspace(port: number): Promise<WorkspaceInfo>;
   export function listAgents(port: number): Promise<unknown[]>;
   export function listSessions(port: number): Promise<PageResult<Session>>;
   export function createSession(port: number, title?: string): Promise<Session>;
+  export function updateSession(port: number, sessionId: string, payload: { parent_session_id: string | null }): Promise<Session>;
   export function listMessages(port: number, sessionId: string): Promise<PageResult<Message>>;
   export function sendMessage(port: number, sessionId: string, payload: unknown): Promise<SessionAcceptResult>;
   export function getJob(port: number, jobId: string): Promise<unknown>;
-  export function getSessionTraces(port: number, sessionId: string): Promise<TraceEvent[]>;
-  export function streamJobEvents(
+  export function getSessionTraces(port: number, sessionId: string, afterEventId?: string | null): Promise<TraceEvent[]>;
+  export function streamSessionEvents(
     port: number,
-    jobId: string,
+    sessionId: string,
     options?: {
+      afterEventId?: string | null;
       onEvent?: (event: StreamEvent) => void;
       onError?: (error: unknown) => void;
       signal?: AbortSignal;

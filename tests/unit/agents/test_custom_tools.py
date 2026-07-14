@@ -33,6 +33,7 @@ def _context() -> CustomToolFactoryContext:
         session_orchestrator=MagicMock(),
         config_service=MagicMock(),
         terminal_manager_client=MagicMock(),
+        browser_manager_client=MagicMock(),
     )
 
 
@@ -43,6 +44,30 @@ def test_build_custom_tools_loads_factory_from_config_spec() -> None:
     assert tools[0].invoke({}) == "4568"
 
 
+def test_build_custom_tools_passes_each_spec_options_to_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_options: list[dict[str, object]] = []
+
+    def fake_factory(context: CustomToolFactoryContext):
+        received_options.append(dict(context.tool_options))
+        from app.agents.tools.testing import create_test_tool_2
+
+        return create_test_tool_2(context)
+
+    monkeypatch.setattr(
+        "app.agents.custom_tools._load_factory",
+        lambda _factory_path: fake_factory,
+    )
+
+    build_custom_tools(
+        [{**TEST_TOOL_SPEC, "options": {"mode": "strict"}}],
+        context=_context(),
+    )
+
+    assert received_options == [{"mode": "strict"}]
+
+
 def test_custom_tool_spec_names_reads_names_from_config_spec() -> None:
     assert custom_tool_spec_names([TEST_TOOL_SPEC]) == {"test_tool_2"}
 
@@ -50,3 +75,11 @@ def test_custom_tool_spec_names_reads_names_from_config_spec() -> None:
 def test_build_custom_tools_rejects_name_only_config() -> None:
     with pytest.raises(ValueError, match="不支持只写工具名"):
         build_custom_tools(["test_tool_2"], context=_context())
+
+
+def test_build_custom_tools_rejects_non_object_options() -> None:
+    with pytest.raises(TypeError, match="options 必须是对象"):
+        build_custom_tools(
+            [{**TEST_TOOL_SPEC, "options": "invalid"}],
+            context=_context(),
+        )

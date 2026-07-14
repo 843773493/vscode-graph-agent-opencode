@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Dict, Any
+import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -22,6 +24,7 @@ from app.core.job_event_bus import EventType
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_interrupt_state import SessionInterruptState
 from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.event import ModelTokenUsagePayload
 from app.agents.agent_factory import resolve_agent_id
 from app.services.infrastructure.attachment_content_service import build_human_content
 from app.services.infrastructure.config_service import ConfigService
@@ -29,7 +32,6 @@ from app.abstractions.job_step_executor import JobStepExecutor
 from app.runtime.agent_runtime import (
     AgentRuntimeDependencyProvider,
     build_agent_tool_definitions,
-    build_candidate_models_for_session_request,
     build_session_agent_runtime,
     get_configured_custom_tool_names,
     get_workspace_custom_tool_skill_sources,
@@ -41,10 +43,10 @@ from app.services.mapping.agent_content_mapper import split_agent_content
 from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
 )
-from app.services.orchestration.agent_pseudo_tool_recovery import (
-    recover_or_sanitize_final_text,
-)
+from app.abstractions.session_changes import SessionChangesRecorderProtocol
+from app.abstractions.tool_selection import ToolSelectionReader
 from app.services.orchestration.agent_event_stream_processor import (
+    combine_model_token_usage,
     process_agent_event_stream,
 )
 from app.services.orchestration.agent_stream_helpers import (
@@ -109,6 +111,9 @@ class AgentExecutionService(JobStepExecutor):
         background_message_bus: BackgroundMessageBusProtocol,
         job_event_bus: JobEventBusProtocol,
         dependency_provider: AgentRuntimeDependencyProvider,
+        session_changes_service: SessionChangesRecorderProtocol,
+        tool_selection_store: ToolSelectionReader,
+        workspace_root: Path,
     ):
         self._agent_cache = {}
         self._config_service = config_service
@@ -116,6 +121,9 @@ class AgentExecutionService(JobStepExecutor):
         self._background_message_bus = background_message_bus
         self._bus = job_event_bus
         self._dependency_provider = dependency_provider
+        self._session_changes_service = session_changes_service
+        self._tool_selection_store = tool_selection_store
+        self._workspace_root = workspace_root
 
     def _get_or_create_agent(self, session_id: str, agent_id: str | None = None):
         if self._config_service is None:
@@ -198,7 +206,12 @@ class AgentExecutionService(JobStepExecutor):
         agent_token = set_current_agent_id(resolved_agent_id)
         interruptible_phase_token = set_interruptible_phase("text")
         active_tool_name_token = set_active_tool_name(None)
-        SessionInterruptState.set(session_id, phase=None, tool_name=None)
+        SessionInterruptState.set(
+            session_id,
+            phase=None,
+            tool_name=None,
+            clear_active_tools=True,
+        )
 
         async def _publish(event_type: str, payload: dict[str, Any]) -> None:
             await bus.publish(
@@ -210,10 +223,15 @@ class AgentExecutionService(JobStepExecutor):
 
         final_text = ""
         latest_model_reasoning_text = ""
+        turn_token_usage_parts: list[ModelTokenUsagePayload] = []
         configured_custom_tool_names = get_configured_custom_tool_names(
             agent_id=resolved_agent_id,
             config_service=self._config_service,
         )
+        disabled_tool_names = self._tool_selection_store.disabled_tools(
+            resolved_agent_id
+        )
+        configured_custom_tool_names -= disabled_tool_names
         requested_custom_tool_names = _custom_tools_requested_by_message(
             message,
             configured_custom_tool_names,
@@ -239,191 +257,172 @@ class AgentExecutionService(JobStepExecutor):
 
             logger.info("[agent_execution_service] agent.astream_events begin: job_id=%s", effective_job_id)
 
-            # 为 fallback 收集需要的模型配置；多模态请求只使用声明了对应输入能力的 provider。
-            candidate_models = build_candidate_models_for_session_request(
+            agent = build_session_agent_runtime(
+                session_id=session_id,
                 agent_id=resolved_agent_id,
                 config_service=self._config_service,
-                content=human_content,
+                background_task_registry=self._background_task_registry,
+                background_message_bus=self._background_message_bus,
+                job_event_bus=self._bus,
+                dependency_provider=self._dependency_provider,
+                tool_denylist=disabled_tool_names,
             )
-            if not candidate_models:
-                raise RuntimeError("当前 agent 没有可用的模型 provider")
 
-            current_model_index = 0
-            final_text = ""
-
+            next_input_messages = [
+                HumanMessage(
+                    id=_message_identity(
+                        fallback_prefix=f"{effective_job_id}:user_input",
+                        message_id=message_id,
+                    ),
+                    content=human_content,
+                    response_metadata=human_response_metadata,
+                )
+            ]
+            empty_response_retries = 0
+            custom_tool_response_retries = 0
+            completed_custom_tool_names: set[str] = set()
             while True:
-                try:
-                    if current_model_index > 0:
-                        await _publish(EventType.AGENT_START, {
-                            "message": f"回退到模型 #{current_model_index} ({candidate_models[current_model_index].__class__.__name__}) 继续处理",
-                            "agent_id": resolved_agent_id,
-                        })
-                        logger.info("[agent_execution_service] fallback to model #%s: job_id=%s", current_model_index, effective_job_id)
-
-                    agent = build_session_agent_runtime(
-                        session_id=session_id,
-                        agent_id=resolved_agent_id,
-                        config_service=self._config_service,
-                        background_task_registry=self._background_task_registry,
-                        background_message_bus=self._background_message_bus,
-                        job_event_bus=self._bus,
-                        dependency_provider=self._dependency_provider,
-                        override_model=candidate_models[current_model_index],
-                        fallback_middleware_enabled=False,
+                stream_result = await process_agent_event_stream(
+                    agent=agent,
+                    input_payload={"messages": next_input_messages},
+                    config=config,
+                    session_id=session_id,
+                    turn_id=effective_job_id,
+                    agent_id=resolved_agent_id,
+                    custom_tool_skill_sources=custom_tool_skill_sources,
+                    publish=_publish,
+                    session_changes_service=self._session_changes_service,
+                    workspace_root=self._workspace_root,
+                )
+                turn_token_usage_parts.append(stream_result.token_usage)
+                final_text = stream_result.final_text
+                completed_custom_tool_names.update(
+                    stream_result.completed_custom_tool_names
+                )
+                final_text = unwrap_json_string_tool_result(
+                    final_text,
+                    stream_result.last_tool_result_text,
+                )
+                if final_text:
+                    final_text_part_id = stream_result.final_text_part_id
+                    if final_text_part_id is None:
+                        final_text_part_id = f"part_{uuid.uuid4().hex[:12]}"
+                        await _publish(
+                            EventType.TEXT_START,
+                            {"part_id": final_text_part_id, "kind": "markdown"},
+                        )
+                    await _publish(
+                        EventType.TEXT_END,
+                        {
+                            "part_id": final_text_part_id,
+                            "kind": "markdown",
+                            "text": final_text,
+                        },
                     )
+                latest_model_reasoning_text = stream_result.latest_model_reasoning_text
+                missing_custom_tool_names = (
+                    requested_custom_tool_names - completed_custom_tool_names
+                )
+                if final_text and not missing_custom_tool_names:
+                    break
+                if final_text and missing_custom_tool_names:
+                    custom_tool_response_retries += 1
+                    if custom_tool_response_retries > CUSTOM_TOOL_RESPONSE_RETRY_LIMIT:
+                        raise RuntimeError(
+                            "Agent 返回了最终文本，但没有执行用户请求中的自定义扩展工具。"
+                            f" session_id={session_id} job_id={effective_job_id} "
+                            f"missing_tools={sorted(missing_custom_tool_names)} "
+                            f"retry_limit={CUSTOM_TOOL_RESPONSE_RETRY_LIMIT}"
+                        )
 
+                    reminder = _build_missing_custom_tool_retry_reminder(
+                        missing_tool_names=missing_custom_tool_names,
+                        attempt=custom_tool_response_retries,
+                    )
+                    logger.warning(
+                        "[agent_execution_service] custom tool requested but not executed, retrying: "
+                        "job_id=%s missing_tools=%s attempt=%s",
+                        effective_job_id,
+                        sorted(missing_custom_tool_names),
+                        custom_tool_response_retries,
+                    )
+                    await _publish(
+                        EventType.AGENT_START,
+                        {
+                            "message": "模型没有执行用户请求中的扩展工具，继续请求真实工具调用",
+                            "agent_id": resolved_agent_id,
+                        },
+                    )
                     next_input_messages = [
                         HumanMessage(
-                            id=_message_identity(
-                                fallback_prefix=f"{effective_job_id}:user_input",
-                                message_id=message_id,
-                            ),
-                            content=human_content,
-                            response_metadata=human_response_metadata,
-                        )
-                    ]
-                    empty_response_retries = 0
-                    custom_tool_response_retries = 0
-                    completed_custom_tool_names: set[str] = set()
-                    while True:
-                        stream_result = await process_agent_event_stream(
-                            agent=agent,
-                            input_payload={"messages": next_input_messages},
-                            config=config,
-                            session_id=session_id,
-                            agent_id=resolved_agent_id,
-                            custom_tool_skill_sources=custom_tool_skill_sources,
-                            publish=_publish,
-                        )
-                        final_text = stream_result.final_text
-                        completed_custom_tool_names.update(
-                            stream_result.completed_custom_tool_names
-                        )
-                        final_text = unwrap_json_string_tool_result(
-                            final_text,
-                            stream_result.last_tool_result_text,
-                        )
-                        final_text = await recover_or_sanitize_final_text(
-                            agent=agent,
-                            final_text=final_text,
-                            session_id=session_id,
-                            agent_id=resolved_agent_id,
-                            job_id=effective_job_id,
-                            publish=_publish,
-                            logger=logger,
-                        )
-                        latest_model_reasoning_text = stream_result.latest_model_reasoning_text
-                        missing_custom_tool_names = (
-                            requested_custom_tool_names - completed_custom_tool_names
-                        )
-                        if final_text and not missing_custom_tool_names:
-                            break
-                        if final_text and missing_custom_tool_names:
-                            custom_tool_response_retries += 1
-                            if custom_tool_response_retries > CUSTOM_TOOL_RESPONSE_RETRY_LIMIT:
-                                raise RuntimeError(
-                                    "Agent 返回了最终文本，但没有执行用户请求中的自定义扩展工具。"
-                                    f" session_id={session_id} job_id={effective_job_id} "
-                                    f"missing_tools={sorted(missing_custom_tool_names)} "
-                                    f"retry_limit={CUSTOM_TOOL_RESPONSE_RETRY_LIMIT}"
-                                )
-
-                            reminder = _build_missing_custom_tool_retry_reminder(
-                                missing_tool_names=missing_custom_tool_names,
-                                attempt=custom_tool_response_retries,
-                            )
-                            logger.warning(
-                                "[agent_execution_service] custom tool requested but not executed, retrying: "
-                                "job_id=%s missing_tools=%s attempt=%s",
-                                effective_job_id,
-                                sorted(missing_custom_tool_names),
-                                custom_tool_response_retries,
-                            )
-                            await _publish(
-                                EventType.AGENT_START,
-                                {
-                                    "message": "模型没有执行用户请求中的扩展工具，继续请求真实工具调用",
-                                    "agent_id": resolved_agent_id,
-                                },
-                            )
-                            next_input_messages = [
-                                HumanMessage(
-                                    id=f"{effective_job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
-                                    content=f"<system_reminder>\n{reminder}\n</system_reminder>",
-                                    response_metadata={
-                                        "source": "missing_custom_tool_retry",
-                                        "attempt": custom_tool_response_retries,
-                                        "missing_tools": sorted(missing_custom_tool_names),
-                                    },
-                                )
-                            ]
-                            continue
-
-                        empty_response_retries += 1
-                        if empty_response_retries > EMPTY_RESPONSE_RETRY_LIMIT:
-                            raise RuntimeError(
-                                "Agent 连续返回空的用户可见回复。"
-                                f" session_id={session_id} job_id={effective_job_id} "
-                                f"retry_limit={EMPTY_RESPONSE_RETRY_LIMIT}"
-                            )
-
-                        reminder = _build_empty_response_retry_reminder(
-                            empty_response_retries
-                        )
-                        logger.warning(
-                            "[agent_execution_service] empty visible response, retrying: "
-                            "job_id=%s attempt=%s",
-                            effective_job_id,
-                            empty_response_retries,
-                        )
-                        await _publish(
-                            EventType.AGENT_START,
-                            {
-                                "message": "模型只返回了内部推理，继续请求工具调用或最终回复",
-                                "agent_id": resolved_agent_id,
+                            id=f"{effective_job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
+                            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
+                            response_metadata={
+                                "source": "missing_custom_tool_retry",
+                                "attempt": custom_tool_response_retries,
+                                "missing_tools": sorted(missing_custom_tool_names),
                             },
                         )
-                        next_input_messages = [
-                            HumanMessage(
-                                id=f"{effective_job_id}:empty_response_retry:{empty_response_retries}",
-                                content=f"<system_reminder>\n{reminder}\n</system_reminder>",
-                                response_metadata={
-                                    "source": "empty_response_retry",
-                                    "attempt": empty_response_retries,
-                                },
-                            )
-                        ]
-                    break
+                    ]
+                    continue
 
-                except Exception as e:
-                    # 检查是否还有 fallback 模型可用
-                    if current_model_index + 1 < len(candidate_models):
-                        logger.warning("[agent_execution_service] model #%s failed, trying fallback #%s: job_id=%s error=%s", current_model_index, current_model_index + 1, effective_job_id, str(e))
-                        current_model_index += 1
-                        continue
-                    else:
-                        # 所有模型都失败了
-                        logger.error("[agent_execution_service] all models failed: job_id=%s last_error=%s", effective_job_id, str(e))
-                        raise
+                empty_response_retries += 1
+                if empty_response_retries > EMPTY_RESPONSE_RETRY_LIMIT:
+                    raise RuntimeError(
+                        "Agent 连续返回空的用户可见回复。"
+                        f" session_id={session_id} job_id={effective_job_id} "
+                        f"retry_limit={EMPTY_RESPONSE_RETRY_LIMIT}"
+                    )
+
+                reminder = _build_empty_response_retry_reminder(empty_response_retries)
+                logger.warning(
+                    "[agent_execution_service] empty visible response, retrying: "
+                    "job_id=%s attempt=%s",
+                    effective_job_id,
+                    empty_response_retries,
+                )
+                await _publish(
+                    EventType.AGENT_START,
+                    {
+                        "message": "模型只返回了内部推理，继续请求工具调用或最终回复",
+                        "agent_id": resolved_agent_id,
+                    },
+                )
+                next_input_messages = [
+                    HumanMessage(
+                        id=f"{effective_job_id}:empty_response_retry:{empty_response_retries}",
+                        content=f"<system_reminder>\n{reminder}\n</system_reminder>",
+                        response_metadata={
+                            "source": "empty_response_retry",
+                            "attempt": empty_response_retries,
+                        },
+                    )
+                ]
 
             if final_text:
-                SessionInterruptState.set(session_id, phase=None, tool_name=None)
+                SessionInterruptState.set(
+                    session_id,
+                    phase=None,
+                    tool_name=None,
+                    clear_active_tools=True,
+                )
                 set_interruptible_phase("text")
                 set_active_tool_name(None)
-                await _publish(EventType.TEXT_END, {"text": final_text})
-
             checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
+            turn_token_usage = combine_model_token_usage(turn_token_usage_parts)
             if checkpointer is not None:
                 persist_standard_assistant_checkpoint(
                     checkpointer=checkpointer,
                     session_id=session_id,
                     reasoning_text=latest_model_reasoning_text,
                     final_text=final_text,
+                    token_usage=turn_token_usage,
                 )
 
             await _publish(EventType.AGENT_END, {
                 "final_text": final_text,
                 "agent_id": resolved_agent_id,
+                "token_usage": turn_token_usage.model_dump(mode="json"),
             })
 
             logger.info("[agent_execution_service] response ready: job_id=%s response_length=%s", effective_job_id, len(final_text))
@@ -459,7 +458,8 @@ class AgentExecutionService(JobStepExecutor):
     def get_for_session(self, session_id: str, agent_id: str | None = None):
         return self._get_or_create_agent(session_id, agent_id)
 
-    def get_available_tools(self) -> list[dict[str, Any]]:
+    def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]:
         session_id = "tools_inspection_session"
-        agent = self._get_or_create_agent(session_id)
+        resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
+        agent = self._get_or_create_agent(session_id, resolved_agent_id)
         return build_agent_tool_definitions(agent)

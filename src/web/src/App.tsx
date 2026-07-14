@@ -1,87 +1,110 @@
 import AgentStatePanel from "./components/AgentStatePanel";
 import BootstrapState from "./components/BootstrapState";
 import ChatPanel from "./components/ChatPanel";
-import Composer from "./components/Composer";
+import Composer from "./components/composer/Composer";
 import EventQueuePanel from "./components/EventQueuePanel";
-import HistoryPanel from "./components/HistoryPanel";
+import AgentSessionsPanel from "./components/AgentSessionsPanel";
 import RequestLogPanel from "./components/RequestLogPanel";
 import ResourcePanel from "./components/ResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
 import Toolbar from "./components/Toolbar";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
-import WorkspaceFileTree from "./components/workspace/WorkspaceFileTree";
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { DEFAULT_BACKEND_PORT, getWorkspaceFileContent } from "./api";
+import { WorkspaceFileReferenceProvider } from "./components/workspace/WorkspaceFileReferenceContext";
+import WorkspaceAuxiliaryPanel, {
+  type WorkspaceAuxiliaryTab,
+} from "./components/workspace/WorkspaceAuxiliaryPanel";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { DEFAULT_BACKEND_PORT, getSessionChangesets } from "./api";
 import {
   FRONTEND_EVENT_QUEUE_LIMIT,
   getConversationsForSession,
   useAppState,
 } from "./hooks";
-import type { WorkspaceFileContent, WorkspaceFileNode } from "./types/backend";
+import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
+import {
+  DEFAULT_MAIN_AREA_RATIOS,
+  LAYOUT_RESIZING_CLASS,
+  defaultAuxiliaryVisible,
+  resizeAdjacentMainAreas,
+  resolveMainAreaRatios,
+  type MainAreaKey,
+  type LayoutResizeTarget,
+} from "./layout/workbenchLayout";
+import { sessionScopeKey } from "./state/sessionScope";
+import type {
+  SessionChangesSummary,
+  SessionFileChange,
+  WebUiMainAreaRatios,
+} from "./types/backend";
 
 type SessionNameDialogState = { sessionId: string; initialTitle: string };
-type AuxiliaryTab = "changes" | "files";
-type LayoutResizeTarget = "history-right" | "preview-left" | "auxiliary-left";
-
-const DEFAULT_HISTORY_PANEL_WIDTH = 300;
-const MIN_HISTORY_PANEL_WIDTH = 220;
-const MAX_HISTORY_PANEL_WIDTH = 420;
-const DEFAULT_PREVIEW_WIDTH = 520;
-const MIN_PREVIEW_WIDTH = 280;
-const MAX_PREVIEW_WIDTH = 920;
-const DEFAULT_AUXILIARY_WIDTH = 335;
-const MIN_AUXILIARY_WIDTH = 280;
-const MAX_AUXILIARY_WIDTH = 520;
-const LAYOUT_RESIZING_CLASS = "is-layout-resizing";
-
-function clampLayoutWidth(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function defaultAuxiliaryVisible(): boolean {
-  if (typeof window === "undefined") {
-    return true;
-  }
-  return window.innerWidth > 900;
-}
-
-function defaultPreviewWidth(): number {
-  if (typeof window === "undefined") {
-    return DEFAULT_PREVIEW_WIDTH;
-  }
-  return window.innerWidth <= 1180 ? 340 : DEFAULT_PREVIEW_WIDTH;
-}
 
 export default function AppShell() {
   const {
     state,
     selectSession,
-    toggleHistoryPanel,
-    createSession,
+    selectWorkspaceSession,
+    startNewSessionDraft,
+    forkSessionContext,
     renameSession,
+    setSessionParent,
     deleteSession,
+    refreshSessionChanges,
     refreshSessionResources,
+    reviewSessionChangeFile,
     controlSessionResource,
     switchContentView,
+    activateGatewayWorkspace,
+    removeGatewayWorkspace,
+    reorderGatewayWorkspaces,
+    updateUiSettings,
     setStatus,
   } = useAppState();
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
-  const [auxiliaryTab, setAuxiliaryTab] = useState<AuxiliaryTab>("changes");
-  const [auxiliaryVisible, setAuxiliaryVisible] = useState(defaultAuxiliaryVisible);
+  const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>("changes");
+  const [auxiliaryVisible, setAuxiliaryVisible] = useState(
+    () => state.uiSettings.layout.auxiliary_visible ?? defaultAuxiliaryVisible(),
+  );
   const [fileTreeSearchOpen, setFileTreeSearchOpen] = useState(false);
   const [fileTreeCollapseVersion, setFileTreeCollapseVersion] = useState(0);
-  const [historyPanelWidth, setHistoryPanelWidth] = useState(DEFAULT_HISTORY_PANEL_WIDTH);
-  const [previewVisible, setPreviewVisible] = useState(false);
-  const [previewWidth, setPreviewWidth] = useState(defaultPreviewWidth);
-  const [auxiliaryWidth, setAuxiliaryWidth] = useState(DEFAULT_AUXILIARY_WIDTH);
-  const [previewTabs, setPreviewTabs] = useState<WorkspaceFileContent[]>([]);
-  const [activePreviewPath, setActivePreviewPath] = useState<string | null>(null);
-  const [previewLoadingPath, setPreviewLoadingPath] = useState<string | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [mainAreaRatios, setMainAreaRatios] = useState(() =>
+    resolveMainAreaRatios(state.uiSettings.layout.main_area_ratios),
+  );
+  const [customizationsCollapsed, setCustomizationsCollapsed] = useState(
+    () => state.uiSettings.layout.customizations_collapsed ?? false,
+  );
+  const [customizationsHeight, setCustomizationsHeight] = useState(() =>
+    Math.min(
+      420,
+      Math.max(
+        129,
+        state.uiSettings.layout.customizations_height ?? 286,
+      ),
+    ),
+  );
+  const [defaultViewChangesHint, setDefaultViewChangesHint] = useState<{
+    sessionId: string;
+    summary: SessionChangesSummary;
+  } | null>(null);
+  const [defaultViewChangesLoading, setDefaultViewChangesLoading] = useState(false);
+  const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
   const cleanupLayoutResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
+  const activeSessionWorkspaceId =
+    state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
+  const activeSessionCacheKey =
+    activeSession && activeSessionWorkspaceId
+      ? sessionScopeKey(activeSessionWorkspaceId, activeSession.session_id)
+      : activeSession?.session_id ?? null;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -103,11 +126,20 @@ export default function AppShell() {
   }, []);
 
   useEffect(() => {
-    setPreviewTabs([]);
-    setActivePreviewPath(null);
-    setPreviewLoadingPath(null);
-    setPreviewError(null);
-  }, [state.workspaceRoot]);
+    const layout = state.uiSettings.layout;
+    if (typeof layout.auxiliary_visible === "boolean") {
+      setAuxiliaryVisible(layout.auxiliary_visible);
+    }
+    setMainAreaRatios(resolveMainAreaRatios(layout.main_area_ratios));
+    if (typeof layout.customizations_collapsed === "boolean") {
+      setCustomizationsCollapsed(layout.customizations_collapsed);
+    }
+    if (typeof layout.customizations_height === "number") {
+      setCustomizationsHeight(
+        Math.min(420, Math.max(129, layout.customizations_height)),
+      );
+    }
+  }, [state.uiSettings]);
 
   useEffect(() => {
     return () => {
@@ -115,18 +147,210 @@ export default function AppShell() {
     };
   }, []);
 
-  const conversations = activeSession
-    ? getConversationsForSession(activeSession.session_id, state)
-    : [];
-  const receivedEvents = activeSession
-    ? (state.eventQueuesBySession.get(activeSession.session_id) ?? [])
-    : [];
-  const sortedSessions = [...state.sessions].sort(
-    (a, b) =>
-      new Date(b.updated_at || b.created_at || "").getTime() -
-      new Date(a.updated_at || a.created_at || "").getTime(),
+  const conversations = useMemo(
+    () => activeSession
+      ? getConversationsForSession(
+          activeSession.session_id,
+          state,
+          activeSessionCacheKey ?? activeSession.session_id,
+        )
+      : [],
+    [
+      activeSession,
+      activeSessionCacheKey,
+      state.messages,
+      state.pendingConversations,
+      state.traceEvents,
+    ],
   );
-  const historyVisible = state.historyPanelOpen;
+  const receivedEvents = activeSession
+    ? (state.eventQueuesBySession.get(activeSessionCacheKey ?? activeSession.session_id) ?? [])
+    : [];
+  const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+  const sortedSessions = useMemo(
+    () => [...state.sessions].sort(
+      (a, b) =>
+        new Date(b.updated_at || b.created_at || "").getTime() -
+        new Date(a.updated_at || a.created_at || "").getTime(),
+    ),
+    [state.sessions],
+  );
+  const persistLayoutSettings = useCallback(
+    (layout: Parameters<typeof updateUiSettings>[0]["layout"]) => {
+      void updateUiSettings({ layout }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setStatus(`保存页面设置失败: ${message}`);
+      });
+    },
+    [setStatus, updateUiSettings],
+  );
+  const agentSessionsVisible = state.agentSessionsPanelOpen;
+  const workspacePreview = useWorkspacePreviewTabs({
+    apiPort: resolvedApiPort,
+    workspaceId: activeSessionWorkspaceId,
+    workspaceRoot: state.workspaceRoot ?? "",
+    settingsLoaded: state.uiSettingsLoaded,
+    restoredLayout: state.uiSettings.layout,
+    onPersistLayout: persistLayoutSettings,
+    onStatusChange: setStatus,
+  });
+  const previewVisible = workspacePreview.visible;
+  const previewMaximized = workspacePreview.maximized;
+  const previewTabs = workspacePreview.tabs;
+  const activePreviewPath = workspacePreview.activePath;
+  const previewLoadingPath = workspacePreview.loadingPath;
+  const previewError = workspacePreview.error;
+
+  const openSessionChangeInPreview = (file: SessionFileChange) => {
+    if (!state.activeChangeset) {
+      return;
+    }
+    const key = `${state.activeChangeset.changeset_id}:${file.file_path}:${file.reviewed}`;
+    lastOpenedChangesPreviewKeyRef.current = key;
+    workspacePreview.openSessionChangePreview(state.activeChangeset, file);
+  };
+
+  useEffect(() => {
+    if (!activeSession || state.contentView !== "default") {
+      setDefaultViewChangesHint(null);
+      setDefaultViewChangesLoading(false);
+      return;
+    }
+
+    if (auxiliaryVisible && auxiliaryTab === "changes") {
+      if (state.activeChangeset?.session_id === activeSession.session_id) {
+        setDefaultViewChangesHint({
+          sessionId: activeSession.session_id,
+          summary: state.activeChangeset.summary,
+        });
+        setDefaultViewChangesLoading(false);
+      } else {
+        setDefaultViewChangesLoading(state.sessionChangesLoading);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    setDefaultViewChangesLoading(true);
+    void getSessionChangesets(
+      resolvedApiPort,
+      activeSession.session_id,
+      activeSessionWorkspaceId,
+    )
+      .then((list) => {
+        if (cancelled) {
+          return;
+        }
+        const summary =
+          list.items.find((item) => item.is_default)?.summary ??
+          list.items[0]?.summary ??
+          { files: 0, additions: 0, deletions: 0 };
+        setDefaultViewChangesHint({
+          sessionId: activeSession.session_id,
+          summary,
+        });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        setDefaultViewChangesHint(null);
+        setStatus(`会话文件变更提示加载失败: ${message}`);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDefaultViewChangesLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSession,
+    activeSessionWorkspaceId,
+    auxiliaryTab,
+    auxiliaryVisible,
+    resolvedApiPort,
+    setStatus,
+    state.activeChangeset,
+    state.contentView,
+    state.sessionChangesLoading,
+  ]);
+
+  useEffect(() => {
+    if (state.contentView !== "changes") {
+      return;
+    }
+
+    setAuxiliaryVisible(true);
+    setAuxiliaryTab("changes");
+  }, [state.contentView]);
+
+  useEffect(() => {
+    if (state.contentView !== "changes") {
+      return;
+    }
+
+    if (!state.activeChangeset || state.activeChangeset.files.length === 0) {
+      return;
+    }
+
+    const activeDiffFile = state.activeChangeset.files.find(
+      (file) =>
+        activePreviewPath ===
+        `session-diff://${state.activeChangeset?.changeset_id}/${encodeURIComponent(file.file_path)}`,
+    );
+    const targetFile = activeDiffFile ?? state.activeChangeset.files[0];
+    const key = `${state.activeChangeset.changeset_id}:${targetFile.file_path}:${targetFile.reviewed}`;
+    if (lastOpenedChangesPreviewKeyRef.current === key) {
+      return;
+    }
+    lastOpenedChangesPreviewKeyRef.current = key;
+    workspacePreview.openSessionChangePreview(state.activeChangeset, targetFile);
+  }, [
+    activePreviewPath,
+    state.activeChangeset,
+    state.contentView,
+    workspacePreview.openSessionChangePreview,
+  ]);
+
+  useEffect(() => {
+    if (
+      !activeSession ||
+      !auxiliaryVisible ||
+      auxiliaryTab !== "changes" ||
+      state.contentView === "changes"
+    ) {
+      return;
+    }
+    if (state.sessionChangesLoading || state.sessionChangesError) {
+      return;
+    }
+    if (state.activeChangeset?.session_id === activeSession.session_id) {
+      return;
+    }
+    const timerId = window.setTimeout(() => {
+      void refreshSessionChanges(activeSession.session_id);
+    }, 120);
+    return () => window.clearTimeout(timerId);
+  }, [
+    activeSession,
+    auxiliaryTab,
+    auxiliaryVisible,
+    refreshSessionChanges,
+    state.activeChangeset,
+    state.contentView,
+    state.sessionChangesError,
+    state.sessionChangesLoading,
+  ]);
+  const handleToggleAuxiliaryPanel = () => {
+    const nextVisible = !auxiliaryVisible;
+    setAuxiliaryVisible(nextVisible);
+    persistLayoutSettings({ auxiliary_visible: nextVisible });
+    setStatus(nextVisible ? "已显示右侧侧边栏" : "已隐藏右侧侧边栏");
+  };
   const startLayoutResize = (
     target: LayoutResizeTarget,
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -135,41 +359,68 @@ export default function AppShell() {
     cleanupLayoutResizeRef.current?.();
 
     const startX = event.clientX;
-    const startHistoryPanelWidth = historyPanelWidth;
-    const startPreviewWidth = previewWidth;
-    const startAuxiliaryWidth = auxiliaryWidth;
+    const startRatios = mainAreaRatios;
+    const effectiveStartRatios = previewMaximized
+      ? {
+          ...startRatios,
+          workspace_preview:
+            startRatios.agent_sessions +
+            startRatios.chat +
+            startRatios.workspace_preview,
+        }
+      : startRatios;
+    const [left, leftSelector, right, rightSelector]: [
+      MainAreaKey,
+      string,
+      MainAreaKey,
+      string,
+    ] = target === "agent-sessions-right"
+      ? ["agent_sessions", ".agent-sessions-panel", "chat", ".sessions-part-card"]
+      : target === "preview-left"
+        ? ["chat", ".sessions-part-card", "workspace_preview", ".workspace-preview-panel"]
+        : previewVisible
+          ? ["workspace_preview", ".workspace-preview-panel", "auxiliary", ".auxiliary-panel"]
+          : ["chat", ".sessions-part-card", "auxiliary", ".auxiliary-panel"];
+    const leftArea = document.querySelector<HTMLElement>(leftSelector);
+    const rightArea = document.querySelector<HTMLElement>(rightSelector);
+    if (!leftArea || !rightArea) {
+      throw new Error(
+        `主页布局区域不存在: left=${leftSelector}, right=${rightSelector}`,
+      );
+    }
+    const leftWidth = leftArea.getBoundingClientRect().width;
+    const rightWidth = rightArea.getBoundingClientRect().width;
+    let latestRatios: WebUiMainAreaRatios = startRatios;
+    let moved = false;
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const deltaX = moveEvent.clientX - startX;
-      if (target === "history-right") {
-        setHistoryPanelWidth(
-          clampLayoutWidth(
-            startHistoryPanelWidth + deltaX,
-            MIN_HISTORY_PANEL_WIDTH,
-            MAX_HISTORY_PANEL_WIDTH,
-          ),
-        );
+      if (deltaX === 0) {
         return;
       }
-
-      if (target === "preview-left") {
-        setPreviewWidth(
-          clampLayoutWidth(
-            startPreviewWidth - deltaX,
-            MIN_PREVIEW_WIDTH,
-            MAX_PREVIEW_WIDTH,
-          ),
-        );
-        return;
+      moved = true;
+      const resizedRatios = resizeAdjacentMainAreas({
+        ratios: effectiveStartRatios,
+        left,
+        right,
+        leftWidth,
+        rightWidth,
+        deltaX,
+      });
+      if (previewMaximized && left === "workspace_preview") {
+        const scale =
+          resizedRatios.workspace_preview /
+          effectiveStartRatios.workspace_preview;
+        latestRatios = {
+          agent_sessions: startRatios.agent_sessions * scale,
+          chat: startRatios.chat * scale,
+          workspace_preview: startRatios.workspace_preview * scale,
+          auxiliary: resizedRatios.auxiliary,
+        };
+      } else {
+        latestRatios = resizedRatios;
       }
-
-      setAuxiliaryWidth(
-        clampLayoutWidth(
-          startAuxiliaryWidth - deltaX,
-          MIN_AUXILIARY_WIDTH,
-          MAX_AUXILIARY_WIDTH,
-        ),
-      );
+      setMainAreaRatios(latestRatios);
     };
 
     const finishResize = () => {
@@ -178,6 +429,9 @@ export default function AppShell() {
       window.removeEventListener("pointercancel", finishResize);
       document.body.classList.remove(LAYOUT_RESIZING_CLASS);
       cleanupLayoutResizeRef.current = null;
+      if (moved) {
+        persistLayoutSettings({ main_area_ratios: latestRatios });
+      }
     };
 
     document.body.classList.add(LAYOUT_RESIZING_CLASS);
@@ -186,11 +440,28 @@ export default function AppShell() {
     window.addEventListener("pointercancel", finishResize);
     cleanupLayoutResizeRef.current = finishResize;
   };
-  const handleCreateSession = () => {
+  const resetMainAreaRatios = () => {
+    const ratios = { ...DEFAULT_MAIN_AREA_RATIOS };
+    setMainAreaRatios(ratios);
+    persistLayoutSettings({ main_area_ratios: ratios });
+  };
+  const handleCreateSession = (workspaceId?: string | null) => {
     setNameDialog(null);
     setNameDialogError(null);
-    void createSession().catch(() => {
-      // 创建失败时由 createSession 写入全局状态，这里只避免未处理 Promise。
+    startNewSessionDraft(workspaceId);
+  };
+  const handleSelectAgentSession = (workspaceId: string, sessionId: string) => {
+    selectWorkspaceSession(workspaceId, sessionId);
+  };
+  const handleRemoveWorkspace = (workspaceId: string, workspaceName: string) => {
+    const confirmed = window.confirm(
+      `删除工作区「${workspaceName || workspaceId}」？会话文件不会被删除，只会从 Web Gateway 列表移除。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    void removeGatewayWorkspace(workspaceId).catch(() => {
+      // 失败状态由 removeGatewayWorkspace 写入全局状态。
     });
   };
   const handleRenameSession = (sessionId: string, currentTitle: string) => {
@@ -276,58 +547,20 @@ export default function AppShell() {
     }, 80);
   };
 
-  const openWorkspaceFilePreview = (node: WorkspaceFileNode) => {
-    if (node.kind !== "file" && node.kind !== "symlink" && node.kind !== "other") {
-      return;
-    }
-
-    const existingTab = previewTabs.find((tab) => tab.path === node.path);
-    if (existingTab) {
-      setPreviewVisible(true);
-      setActivePreviewPath(existingTab.path);
-      setPreviewError(null);
-      setStatus(`已切换预览: ${existingTab.path}`);
-      return;
-    }
-
-    setPreviewVisible(true);
-    setActivePreviewPath(node.path);
-    setPreviewLoadingPath(node.path);
-    setPreviewError(null);
-    setStatus(`正在读取文件: ${node.path}`);
-
-    void getWorkspaceFileContent(state.apiPort ?? DEFAULT_BACKEND_PORT, node.path)
-      .then((content) => {
-        setPreviewTabs((prev) => {
-          const withoutDuplicate = prev.filter((tab) => tab.path !== content.path);
-          return [...withoutDuplicate, content];
-        });
-        setActivePreviewPath(content.path);
-        setStatus(`已打开预览: ${content.path}`);
-      })
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        setPreviewError(message);
-        setStatus(`文件预览失败: ${message}`);
-      })
-      .finally(() => {
-        setPreviewLoadingPath(null);
-      });
-  };
-
-  const closeWorkspaceFilePreview = (path: string) => {
-    setPreviewTabs((prev) => {
-      const closedIndex = prev.findIndex((tab) => tab.path === path);
-      const nextTabs = prev.filter((tab) => tab.path !== path);
-      if (activePreviewPath === path) {
-        const fallbackTab = nextTabs[Math.max(0, closedIndex - 1)] ?? nextTabs[0] ?? null;
-        setActivePreviewPath(fallbackTab?.path ?? null);
-      }
-      return nextTabs;
-    });
-  };
-
   const renderContentView = () => {
+    if (state.error) {
+      return (
+        <div className="empty-state error-state">
+          <div className="error-title">前端初始化失败</div>
+          <div className="error-message">{state.error}</div>
+        </div>
+      );
+    }
+
+    if (state.isBootstrapping) {
+      return <BootstrapState />;
+    }
+
     if (state.contentView === "agent") {
       return (
         <AgentStatePanel
@@ -376,135 +609,108 @@ export default function AppShell() {
             }
           }}
           onControl={controlSessionResource}
+          onOpenTerminalPreview={workspacePreview.openTerminalPreview}
+          onOpenBrowserPreview={workspacePreview.openBrowserPreview}
           onShowConversation={showConversation}
         />
       );
     }
 
+    const activeSessionChangeHint =
+      defaultViewChangesHint &&
+      defaultViewChangesHint.sessionId === activeSession?.session_id
+        ? defaultViewChangesHint.summary
+        : state.contentView === "changes" && state.activeChangeset
+          ? state.activeChangeset.summary
+        : null;
+
     return (
       <ChatPanel
         conversations={conversations}
         expandDetails={state.expandDetails}
+        hasActiveSession={Boolean(activeSession)}
+        sessionChangeSummary={activeSessionChangeHint}
+        sessionChangesLoading={defaultViewChangesLoading}
+        onOpenChanges={() => {
+          void switchContentView("changes");
+        }}
       />
-    );
-  };
-
-  const renderAuxiliaryPanel = () => {
-    if (auxiliaryTab === "changes") {
-      return (
-        <div className="auxiliary-view-body auxiliary-changes-body">
-          <div className="auxiliary-actions-row">
-            <button type="button" disabled title="等待后端提供 diff 数据">
-              打开更改
-            </button>
-            <button
-              type="button"
-              onClick={() => setStatus("已刷新 Changes 视图，当前没有工作区 diff 数据")}
-            >
-              刷新
-            </button>
-          </div>
-          <div className="auxiliary-change-summary auxiliary-change-summary-hero">
-            <span className="auxiliary-change-stat added">+0</span>
-            <span className="auxiliary-change-stat removed">-0</span>
-            <span className="auxiliary-change-muted">无工作区更改</span>
-          </div>
-          <section className="auxiliary-tree-section">
-            <header>工作区更改</header>
-            <div className="auxiliary-empty-row">
-              <span className="codicon-lite">⎇</span>
-              <span>当前会话更改会显示在这里</span>
-            </div>
-          </section>
-          <section className="auxiliary-tree-section">
-            <header>其他文件</header>
-            <div className="auxiliary-empty-row muted">
-              <span className="codicon-lite">◇</span>
-              <span>暂无可展示文件</span>
-            </div>
-          </section>
-          <div className="auxiliary-service-note">
-            Changes 的真实 diff 树由 VS Code Sessions 服务提供；Web 端当前保留视图结构和刷新反馈。
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="auxiliary-view-body auxiliary-files-body">
-        <WorkspaceFileTree
-          apiPort={state.apiPort}
-          workspaceName={state.workspaceName}
-          workspaceRoot={state.workspaceRoot}
-          activeFilePath={activePreviewPath}
-          searchOpen={fileTreeSearchOpen}
-          collapseVersion={fileTreeCollapseVersion}
-          onOpenFile={openWorkspaceFilePreview}
-          onStatusChange={setStatus}
-        />
-      </div>
     );
   };
 
   return (
-    <div
-      className={`app-shell agent-sessions-workbench shell-gradient-background ${historyVisible ? "history-open" : "history-closed"}`}
-      data-history-open={String(historyVisible)}
+    <WorkspaceFileReferenceProvider
+      key={activeSessionCacheKey ?? "no-session"}
+      apiPort={resolvedApiPort}
+      workspaceId={activeSessionWorkspaceId}
+      workspaceRoot={state.workspaceRoot ?? ""}
+      onOpen={workspacePreview.openWorkspaceFileReference}
+    >
+      <div
+      className={`app-shell agent-sessions-workbench shell-gradient-background ${agentSessionsVisible ? "agent-sessions-open" : "agent-sessions-closed"}`}
+      data-agent-sessions-open={String(agentSessionsVisible)}
     >
       <Toolbar
-        workspaceName={state.workspaceName}
-        workspaceRoot={state.workspaceRoot}
-        status={state.status}
-        agentId={state.currentSession?.current_agent_id ?? "default"}
+        sessionTitle={state.currentSession?.title ?? null}
         onCreateSession={handleCreateSession}
+        auxiliaryVisible={auxiliaryVisible}
+        onToggleAuxiliaryPanel={handleToggleAuxiliaryPanel}
       />
       <main className="content sessions-workbench-grid">
-        {state.error ? (
-          <div className="empty-state error-state">
-            <div className="error-title">前端初始化失败</div>
-            <div className="error-message">{state.error}</div>
-          </div>
-        ) : state.isBootstrapping ? (
-          <BootstrapState />
-        ) : null}
         <div
-          className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${previewVisible ? "" : " preview-collapsed"}`}
+          className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${previewVisible ? "" : " preview-collapsed"}${previewMaximized ? " preview-maximized" : ""}`}
         >
-          {historyVisible ? (
-            <button
-              type="button"
-              className="history-backdrop"
-              aria-label="关闭会话侧栏"
-              onClick={toggleHistoryPanel}
-            />
-          ) : null}
-          <HistoryPanel
+          <AgentSessionsPanel
             sessions={sortedSessions}
             currentSessionId={activeSession?.session_id ?? ""}
             onSelectSession={selectSession}
             onRenameSession={handleRenameSession}
             onDeleteSession={handleDeleteSession}
+            onSetSessionParent={setSessionParent}
+            onForkSessionContext={forkSessionContext}
             onStatusChange={setStatus}
-            isOpen={historyVisible}
-            onClose={toggleHistoryPanel}
+            isOpen={agentSessionsVisible}
             workspaceName={state.workspaceName ?? ""}
-            workspaceRoot={state.workspaceRoot ?? ""}
+            gatewayWorkspaces={state.gatewayWorkspaces}
+            activeGatewayWorkspaceId={state.activeGatewayWorkspaceId}
+            sessionsByWorkspace={state.sessionsByWorkspace}
+            workspaceSwitching={state.workspaceSwitching}
+            removingGatewayWorkspaceIds={state.removingGatewayWorkspaceIds}
+            onActivateWorkspace={activateGatewayWorkspace}
+            onRemoveWorkspace={handleRemoveWorkspace}
+            onReorderWorkspaces={reorderGatewayWorkspaces}
+            onSelectWorkspaceSession={handleSelectAgentSession}
             activeSession={activeSession}
             sessionAttachmentSummaries={state.sessionAttachmentSummaries}
             onCreateSession={handleCreateSession}
-            width={historyPanelWidth}
+            flexRatio={mainAreaRatios.agent_sessions}
+            customizationsCollapsed={customizationsCollapsed}
+            customizationsHeight={customizationsHeight}
+            onCustomizationsCollapsedChange={(collapsed) => {
+              setCustomizationsCollapsed(collapsed);
+              persistLayoutSettings({ customizations_collapsed: collapsed });
+            }}
+            onCustomizationsHeightChange={(height, commit) => {
+              setCustomizationsHeight(height);
+              if (commit) {
+                persistLayoutSettings({ customizations_height: height });
+              }
+            }}
           />
-          {historyVisible ? (
+          {agentSessionsVisible ? (
             <button
               type="button"
-              className="layout-sash layout-sash-history-right"
+              className="layout-sash layout-sash-agent-sessions-right"
               title="拖拽调整会话侧栏宽度，双击还原"
               aria-label="调整会话侧栏宽度"
-              onPointerDown={(event) => startLayoutResize("history-right", event)}
-              onDoubleClick={() => setHistoryPanelWidth(DEFAULT_HISTORY_PANEL_WIDTH)}
+              onPointerDown={(event) => startLayoutResize("agent-sessions-right", event)}
+              onDoubleClick={resetMainAreaRatios}
             />
           ) : null}
-          <section className="chat-panel sessions-part-card">
+          <section
+            className="chat-panel sessions-part-card"
+            style={{ flexBasis: 0, flexGrow: mainAreaRatios.chat }}
+          >
             <div className="session-view-surface">
               <div className="session-view-content">{renderContentView()}</div>
               <Composer />
@@ -518,20 +724,33 @@ export default function AppShell() {
                 title="拖拽调整文件预览区宽度，双击还原"
                 aria-label="调整文件预览区宽度"
                 onPointerDown={(event) => startLayoutResize("preview-left", event)}
-                onDoubleClick={() => setPreviewWidth(defaultPreviewWidth())}
+                onDoubleClick={resetMainAreaRatios}
               />
               <WorkspaceFilePreviewArea
-                width={previewWidth}
+                flexRatio={
+                  previewMaximized
+                    ? mainAreaRatios.agent_sessions +
+                      mainAreaRatios.chat +
+                      mainAreaRatios.workspace_preview
+                    : mainAreaRatios.workspace_preview
+                }
+                maximized={previewMaximized}
                 tabs={previewTabs}
                 activePath={activePreviewPath}
                 loadingPath={previewLoadingPath}
                 error={previewError}
                 onSelectTab={(path) => {
-                  setActivePreviewPath(path);
-                  setPreviewError(null);
+                  workspacePreview.selectWorkspacePreviewTab(path);
+                  workspacePreview.setError(null);
                 }}
-                onCloseTab={closeWorkspaceFilePreview}
-                onClosePanel={() => setPreviewVisible(false)}
+                onCloseTab={workspacePreview.closeWorkspaceFilePreview}
+                onToggleMaximized={() => {
+                  workspacePreview.setMaximized((maximized) => !maximized);
+                }}
+                onClosePanel={() => {
+                  workspacePreview.setMaximized(false);
+                  workspacePreview.setVisible(false);
+                }}
               />
             </>
           ) : null}
@@ -543,70 +762,53 @@ export default function AppShell() {
                 title="拖拽调整右侧栏宽度，双击还原"
                 aria-label="调整右侧栏宽度"
                 onPointerDown={(event) => startLayoutResize("auxiliary-left", event)}
-                onDoubleClick={() => setAuxiliaryWidth(DEFAULT_AUXILIARY_WIDTH)}
+                onDoubleClick={resetMainAreaRatios}
               />
-              <aside
-                className="auxiliary-panel"
-                style={{ flexBasis: auxiliaryWidth, width: auxiliaryWidth }}
-              >
-              <header className="auxiliary-titlebar">
-                <nav className="auxiliary-tabs" aria-label="会话详情">
-                  <button
-                    type="button"
-                    className={auxiliaryTab === "changes" ? "active" : ""}
-                    onClick={() => setAuxiliaryTab("changes")}
-                  >
-                    更改
-                  </button>
-                  <button
-                    type="button"
-                    className={auxiliaryTab === "files" ? "active" : ""}
-                    onClick={() => setAuxiliaryTab("files")}
-                  >
-                    文件
-                  </button>
-                </nav>
-                <div className="auxiliary-title-actions" aria-label="文件视图操作">
-                  <button
-                    type="button"
-                    className={`auxiliary-icon-button${fileTreeSearchOpen ? " active" : ""}`}
-                    title="搜索"
-                    aria-label="搜索文件"
-                    onClick={() => {
-                      setAuxiliaryTab("files");
-                      setFileTreeSearchOpen((open) => !open);
-                    }}
-                  >
-                    <span className="auxiliary-action-icon search" aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className="auxiliary-icon-button"
-                    title="全部折叠"
-                    aria-label="全部折叠"
-                    onClick={() => {
-                      setAuxiliaryTab("files");
-                      setFileTreeCollapseVersion((version) => version + 1);
-                    }}
-                  >
-                    <span className="auxiliary-action-icon collapse-all" aria-hidden="true" />
-                  </button>
-                </div>
-              </header>
-              {renderAuxiliaryPanel()}
-              </aside>
+              <WorkspaceAuxiliaryPanel
+                flexRatio={mainAreaRatios.auxiliary}
+                tab={auxiliaryTab}
+                apiPort={resolvedApiPort}
+                workspaceId={activeSessionWorkspaceId}
+                workspaceName={state.workspaceName ?? ""}
+                workspaceRoot={state.workspaceRoot ?? ""}
+                activeFilePath={activePreviewPath}
+                sessionChangesets={state.sessionChangesets}
+                selectedChangesetId={state.selectedChangesetId}
+                activeChangeset={state.activeChangeset}
+                sessionChangesLoading={state.sessionChangesLoading}
+                sessionChangesError={state.sessionChangesError}
+                sessionChangesLoadedAt={state.sessionChangesLoadedAt}
+                searchOpen={fileTreeSearchOpen}
+                collapseVersion={fileTreeCollapseVersion}
+                onTabChange={setAuxiliaryTab}
+                onToggleSearch={() => {
+                  setAuxiliaryTab("files");
+                  setFileTreeSearchOpen((open) => !open);
+                }}
+                onCollapseAll={() => {
+                  setAuxiliaryTab("files");
+                  setFileTreeCollapseVersion((version) => version + 1);
+                }}
+                onSelectSessionChangeset={(changesetId) => {
+                  if (activeSession) {
+                    void refreshSessionChanges(activeSession.session_id, changesetId);
+                  }
+                }}
+                onRefreshSessionChanges={() => {
+                  if (activeSession) {
+                    void refreshSessionChanges(
+                      activeSession.session_id,
+                      state.selectedChangesetId,
+                    );
+                  }
+                }}
+                onOpenSessionChangeFile={openSessionChangeInPreview}
+                onReviewSessionChangeFile={reviewSessionChangeFile}
+                onOpenFile={workspacePreview.openWorkspaceFilePreview}
+                onStatusChange={setStatus}
+              />
             </>
-          ) : (
-            <button
-              type="button"
-              className="auxiliary-restore-button"
-              title="显示详情"
-              aria-label="显示详情"
-              onClick={() => setAuxiliaryVisible(true)}
-            >
-              ◰
-            </button>
-          )}
+          ) : null}
         </div>
       </main>
       <SessionNameDialog
@@ -620,6 +822,7 @@ export default function AppShell() {
         onCancel={closeNameDialog}
         onSubmit={submitNameDialog}
       />
-    </div>
+      </div>
+    </WorkspaceFileReferenceProvider>
   );
 }

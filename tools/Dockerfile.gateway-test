@@ -10,16 +10,31 @@ RUN apt-get update \
 
 RUN python -m pip install --no-cache-dir uv
 
-RUN useradd -m -s /bin/bash boxteam \
-    && mkdir -p /run/sshd /home/boxteam/.ssh \
-    && chmod 700 /home/boxteam/.ssh
+ARG BOXTEAM_GATEWAY_E2E_SSH_USER=root
+
+RUN set -eu; \
+    user_home="$(getent passwd "${BOXTEAM_GATEWAY_E2E_SSH_USER}" | cut -d: -f6)"; \
+    if [ -z "${user_home}" ]; then \
+        echo "SSH 用户不存在: ${BOXTEAM_GATEWAY_E2E_SSH_USER}" >&2; \
+        exit 1; \
+    fi; \
+    mkdir -p /run/sshd "${user_home}/.ssh" /etc/ssh/sshd_config.d; \
+    chmod 700 "${user_home}/.ssh"; \
+    chown -R "${BOXTEAM_GATEWAY_E2E_SSH_USER}:" "${user_home}/.ssh"; \
+    printf '%s\n' \
+        'PubkeyAuthentication yes' \
+        'PasswordAuthentication no' \
+        'PermitRootLogin prohibit-password' \
+        > /etc/ssh/sshd_config.d/boxteam-gateway-e2e.conf
 
 COPY asset/gateway_ssh/id_ed25519.pub /tmp/boxteam_gateway_test_key.pub
 
-RUN cat /tmp/boxteam_gateway_test_key.pub > /home/boxteam/.ssh/authorized_keys \
-    && chown -R boxteam:boxteam /home/boxteam/.ssh \
-    && chmod 600 /home/boxteam/.ssh/authorized_keys \
-    && rm /tmp/boxteam_gateway_test_key.pub
+RUN set -eu; \
+    user_home="$(getent passwd "${BOXTEAM_GATEWAY_E2E_SSH_USER}" | cut -d: -f6)"; \
+    cat /tmp/boxteam_gateway_test_key.pub > "${user_home}/.ssh/authorized_keys"; \
+    chown -R "${BOXTEAM_GATEWAY_E2E_SSH_USER}:" "${user_home}/.ssh"; \
+    chmod 600 "${user_home}/.ssh/authorized_keys"; \
+    rm /tmp/boxteam_gateway_test_key.pub
 
 WORKDIR /workspace/vscode-graph-agent-opencode
 

@@ -7,9 +7,9 @@ import {
 } from "react";
 import {
   getSession,
-  getSessionTraces,
   listMessages,
   streamSessionEvents,
+  TraceCursorGoneError,
   type SessionStreamEvent,
 } from "../api";
 import { cloneMaps } from "../state/appStateMaps";
@@ -34,19 +34,36 @@ import {
 } from "../state/traceEvents";
 import { replaceSessionMetadata } from "../state/sessions";
 import type { AppState, ConversationView } from "../types/frontend";
+import {
+  recoverTraceSnapshot,
+  waitForReconnect,
+} from "./sessionEventStreamRecovery";
 
 type SetAppState = Dispatch<SetStateAction<AppState>>;
 
 async function refreshSessionMetadata(
   apiPort: number,
   sessionId: string,
+  workspaceId: string | null,
+  sessionCacheKey: string,
   setState: SetAppState,
+  announceAutoTitle: boolean = true,
 ) {
-  const updatedSession = await getSession(apiPort, sessionId);
+  const updatedSession = await getSession(apiPort, sessionId, workspaceId);
   setState((prev) => {
-    const next = replaceSessionMetadata(prev, updatedSession);
-    if (prev.currentSession?.session_id === updatedSession.session_id) {
+    if (workspaceId && prev.currentSessionWorkspaceId !== workspaceId) {
+      return prev;
+    }
+    const next = replaceSessionMetadata(prev, updatedSession, workspaceId);
+    next.currentSessionWorkspaceId = workspaceId ?? next.currentSessionWorkspaceId;
+    if (
+      announceAutoTitle &&
+      prev.currentSession?.session_id === updatedSession.session_id
+    ) {
       next.status = `已自动命名会话: ${updatedSession.title}`;
+    }
+    if (workspaceId) {
+      next.sessionGatewayWorkspaceById.set(sessionCacheKey, workspaceId);
     }
     return next;
   });
@@ -55,41 +72,34 @@ async function refreshSessionMetadata(
 async function refreshTerminalSession(
   apiPort: number,
   sessionId: string,
+  workspaceId: string | null,
+  sessionCacheKey: string,
   terminalTraceEvent: ReturnType<typeof buildTraceEvent>,
   setState: SetAppState,
 ) {
-  const [messages, traceEvents, updatedSession] = await Promise.all([
-    listMessages(apiPort, sessionId),
-    getSessionTraces(apiPort, sessionId),
-    getSession(apiPort, sessionId),
+  const [messages, updatedSession] = await Promise.all([
+    listMessages(apiPort, sessionId, workspaceId),
+    getSession(apiPort, sessionId, workspaceId),
   ]);
   setState((latest) => {
-    const latestNext = replaceSessionMetadata(latest, updatedSession);
+    if (workspaceId && latest.currentSessionWorkspaceId !== workspaceId) {
+      return latest;
+    }
+    const latestNext = replaceSessionMetadata(latest, updatedSession, workspaceId);
+    latestNext.currentSessionWorkspaceId =
+      workspaceId ?? latestNext.currentSessionWorkspaceId;
     removePendingForTraceEvent(
       latestNext.pendingConversations,
-      sessionId,
+      sessionCacheKey,
       terminalTraceEvent,
     );
     if (latest.currentSession?.session_id !== sessionId) {
       return latestNext;
     }
     latestNext.messages = messages.items;
-    const refreshedTraceEvents = dedupeTraceEvents(traceEvents);
-    latestNext.traceEvents = refreshedTraceEvents;
     updateAttachmentSummariesFromMessages(
       latestNext.sessionAttachmentSummaries,
       latestNext.messages,
-    );
-    updateAttachmentSummariesFromTraces(
-      latestNext.sessionAttachmentSummaries,
-      sessionId,
-      refreshedTraceEvents,
-    );
-    appendReceivedEvents(
-      latestNext.eventQueuesBySession,
-      sessionId,
-      refreshedTraceEvents,
-      "terminal_refresh",
     );
     latestNext.status = terminalStatusTextForEvent(terminalTraceEvent.type);
     return latestNext;
@@ -99,13 +109,18 @@ async function refreshTerminalSession(
 export function useSessionEventStream({
   apiPort,
   sessionId,
+  workspaceId,
+  sessionCacheKey,
   setState,
 }: {
   apiPort: number | null;
   sessionId: string | null;
+  workspaceId: string | null;
+  sessionCacheKey: string | null;
   setState: SetAppState;
 }) {
   const streamAbortRef = useRef<AbortController | null>(null);
+  const lastEventIdRef = useRef<string | null>(null);
 
   const abortCurrentStream = useCallback(() => {
     streamAbortRef.current?.abort();
@@ -121,40 +136,55 @@ export function useSessionEventStream({
     abortCurrentStream();
     const controller = new AbortController();
     streamAbortRef.current = controller;
+    const targetWorkspaceId = workspaceId;
+    const targetSessionCacheKey = sessionCacheKey ?? sessionId;
+    lastEventIdRef.current = null;
+    const pendingStreamEvents: SessionStreamEvent[] = [];
+    let flushTimerId: number | null = null;
 
-    void streamSessionEvents(apiPort, sessionId, {
-      signal: controller.signal,
-      onEvent: (event: SessionStreamEvent) => {
-        const traceEvent = buildTraceEvent(event);
-        const shouldRefreshSessionMetadata =
-          event.type === "status_change" &&
-          tracePayloadString(traceEvent, "reason") ===
-            "session_auto_title_updated";
-        const shouldRefreshTerminalSession = isJobTerminalTraceType(event.type);
+    const flushStreamEvents = () => {
+      if (flushTimerId !== null) {
+        window.clearTimeout(flushTimerId);
+        flushTimerId = null;
+      }
+      const events = pendingStreamEvents.splice(0);
+      if (events.length === 0 || controller.signal.aborted) {
+        return;
+      }
+      const traceEvents = events.map(buildTraceEvent);
 
-        setState((prev) => {
-          if (prev.currentSession?.session_id !== sessionId) {
-            return prev;
-          }
-          const next = cloneMaps(prev);
-          next.traceEvents = dedupeTraceEvents([...next.traceEvents, traceEvent]);
-          updateAttachmentSummariesFromTraces(
-            next.sessionAttachmentSummaries,
-            sessionId,
-            [traceEvent],
-          );
-          appendReceivedEvents(
-            next.eventQueuesBySession,
-            sessionId,
-            [traceEvent],
-            "sse",
-          );
+      setState((prev) => {
+        if (prev.currentSession?.session_id !== sessionId) {
+          return prev;
+        }
+        if (
+          targetWorkspaceId &&
+          prev.currentSessionWorkspaceId !== targetWorkspaceId
+        ) {
+          return prev;
+        }
+        const next = cloneMaps(prev);
+        next.traceEvents = dedupeTraceEvents([...next.traceEvents, ...traceEvents]);
+        updateAttachmentSummariesFromTraces(
+          next.sessionAttachmentSummaries,
+          sessionId,
+          traceEvents,
+        );
+        appendReceivedEvents(
+          next.eventQueuesBySession,
+          sessionId,
+          traceEvents,
+          "sse",
+          targetSessionCacheKey,
+        );
 
-          const pendingList = next.pendingConversations.get(sessionId) ?? [];
+        for (const [index, traceEvent] of traceEvents.entries()) {
+          const event = events[index];
+          const pendingList =
+            next.pendingConversations.get(targetSessionCacheKey) ?? [];
           if (pendingList.length === 0) {
-            return next;
+            continue;
           }
-
           let pendingIndex = pendingList.findIndex((conversation) =>
             conversationMatchesTraceEvent(conversation, traceEvent),
           );
@@ -162,7 +192,7 @@ export function useSessionEventStream({
             pendingIndex = 0;
           }
           if (pendingIndex === -1) {
-            return next;
+            continue;
           }
 
           const pending = pendingList[pendingIndex];
@@ -170,7 +200,6 @@ export function useSessionEventStream({
             ...pending,
             events: dedupeTraceEvents([...pending.events, traceEvent]),
           };
-
           if (event.type === "status_change") {
             const status = tracePayloadString(traceEvent, "status");
             updatedPending.status = status === "queued" ? "queued" : "running";
@@ -192,53 +221,172 @@ export function useSessionEventStream({
 
           const updatedPendingList = [...pendingList];
           updatedPendingList[pendingIndex] = updatedPending;
-          writePendingList(next.pendingConversations, sessionId, updatedPendingList);
-
-          return next;
-        });
-        if (shouldRefreshSessionMetadata) {
-          void refreshSessionMetadata(apiPort, sessionId, setState).catch(
-            (error: unknown) => {
-              const message =
-                error instanceof Error ? error.message : String(error);
-              setState((latest) => ({
-                ...latest,
-                status: `刷新会话标题失败: ${message}`,
-              }));
-            },
+          writePendingList(
+            next.pendingConversations,
+            targetSessionCacheKey,
+            updatedPendingList,
           );
         }
-        if (shouldRefreshTerminalSession) {
-          void refreshTerminalSession(
+        return next;
+      });
+
+      const titleEventIndex = events.findIndex(
+        (event, index) =>
+          event.type === "status_change" &&
+          tracePayloadString(traceEvents[index], "reason") ===
+            "session_auto_title_updated",
+      );
+      if (titleEventIndex !== -1) {
+        void refreshSessionMetadata(
+          apiPort,
+          sessionId,
+          targetWorkspaceId,
+          targetSessionCacheKey,
+          setState,
+        ).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((latest) => ({
+            ...latest,
+            status: `刷新会话标题失败: ${message}`,
+          }));
+        });
+      }
+      let terminalEventIndex = -1;
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        if (isJobTerminalTraceType(events[index].type)) {
+          terminalEventIndex = index;
+          break;
+        }
+      }
+      if (terminalEventIndex !== -1) {
+        void refreshTerminalSession(
+          apiPort,
+          sessionId,
+          targetWorkspaceId,
+          targetSessionCacheKey,
+          traceEvents[terminalEventIndex],
+          setState,
+        ).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((latest) => ({
+            ...latest,
+            status: `刷新失败: ${message}`,
+          }));
+        });
+      }
+    };
+
+    const enqueueStreamEvent = (event: SessionStreamEvent) => {
+      if (event.event_id) {
+        lastEventIdRef.current = event.event_id;
+      }
+      pendingStreamEvents.push(event);
+      if (isJobTerminalTraceType(event.type)) {
+        flushStreamEvents();
+        return;
+      }
+      if (flushTimerId === null) {
+        flushTimerId = window.setTimeout(flushStreamEvents, 32);
+      }
+    };
+
+    const connect = async () => {
+      let snapshotLoaded = false;
+      while (!controller.signal.aborted && !snapshotLoaded) {
+        try {
+          lastEventIdRef.current = await recoverTraceSnapshot(
             apiPort,
             sessionId,
-            traceEvent,
+            targetWorkspaceId,
+            targetSessionCacheKey,
             setState,
-          ).catch((error: unknown) => {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            setState((latest) => ({
-              ...latest,
-              status: `刷新失败: ${message}`,
-            }));
-          });
+            "事件历史加载完成",
+          );
+          await refreshSessionMetadata(
+            apiPort,
+            sessionId,
+            targetWorkspaceId,
+            targetSessionCacheKey,
+            setState,
+            false,
+          );
+          snapshotLoaded = true;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((prev) => ({
+            ...prev,
+            status: `加载事件历史失败，正在重试: ${message}`,
+          }));
+          await waitForReconnect(controller.signal, 500);
         }
-      },
-      onError: (error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({ ...prev, status: `事件流错误: ${message}` }));
-      },
-    }).catch((error: unknown) => {
-      if (!controller.signal.aborted) {
-        const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({ ...prev, status: `事件流错误: ${message}` }));
       }
-    });
+
+      while (!controller.signal.aborted) {
+        try {
+          await streamSessionEvents(apiPort, sessionId, {
+            workspaceId: targetWorkspaceId,
+            afterEventId: lastEventIdRef.current,
+            signal: controller.signal,
+            onEvent: enqueueStreamEvent,
+          });
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return;
+          }
+          if (error instanceof TraceCursorGoneError) {
+            try {
+              lastEventIdRef.current = await recoverTraceSnapshot(
+                apiPort,
+                sessionId,
+                targetWorkspaceId,
+                targetSessionCacheKey,
+                setState,
+                "事件游标已恢复，正在继续接收",
+              );
+            } catch (recoveryError) {
+              const message =
+                recoveryError instanceof Error
+                  ? recoveryError.message
+                  : String(recoveryError);
+              setState((prev) => ({
+                ...prev,
+                status: `恢复事件历史失败: ${message}`,
+              }));
+            }
+          } else {
+            const message = error instanceof Error ? error.message : String(error);
+            setState((prev) => ({
+              ...prev,
+              status: `事件流断开，正在重连: ${message}`,
+            }));
+          }
+        }
+
+        if (!controller.signal.aborted) {
+          await waitForReconnect(controller.signal, 500);
+        }
+      }
+    };
+
+    const connectTimerId = window.setTimeout(() => {
+      void connect();
+    }, 120);
 
     return () => {
+      window.clearTimeout(connectTimerId);
+      if (flushTimerId !== null) {
+        window.clearTimeout(flushTimerId);
+      }
       controller.abort();
     };
-  }, [abortCurrentStream, apiPort, sessionId, setState]);
+  }, [
+    abortCurrentStream,
+    apiPort,
+    sessionCacheKey,
+    sessionId,
+    setState,
+    workspaceId,
+  ]);
 
   return { abortCurrentStream };
 }

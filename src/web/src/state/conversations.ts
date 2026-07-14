@@ -29,6 +29,7 @@ function groupMessagesIntoConversations(
         conversationId: messageId,
         sessionId: message.session_id,
         userMessage: message,
+        assistantMessages: [],
         events: [],
         status: "done",
         jobId: String(message.metadata?.job_id ?? "") || null,
@@ -45,6 +46,7 @@ function groupMessagesIntoConversations(
           message.message_id || `conversation_${conversations.length}`,
         sessionId: message.session_id,
         userMessage: null,
+        assistantMessages: [],
         events: [],
         status: "done",
         jobId: String(message.metadata?.job_id ?? "") || null,
@@ -52,6 +54,9 @@ function groupMessagesIntoConversations(
         source: "messages",
       };
       conversations.push(current);
+    }
+    if (message.role === "assistant") {
+      current.assistantMessages = [...(current.assistantMessages ?? []), message];
     }
   }
 
@@ -175,10 +180,18 @@ function mergeConversation(
   persisted: ConversationView,
   pending: ConversationView,
 ): ConversationView {
+  const assistantMessages = [
+    ...(persisted.assistantMessages ?? []),
+    ...(pending.assistantMessages ?? []),
+  ].filter(
+    (message, index, all) =>
+      all.findIndex((candidate) => candidate.message_id === message.message_id) === index,
+  );
   return {
     ...persisted,
     ...pending,
     userMessage: persisted.userMessage ?? pending.userMessage,
+    assistantMessages,
     events: dedupeTraceEvents([...persisted.events, ...pending.events]),
     source: persisted.source,
   };
@@ -289,20 +302,22 @@ export function writePendingList(
   map: Map<string, ConversationView[]>,
   sessionId: string,
   list: ConversationView[],
+  mapKey: string = sessionId,
 ) {
   if (list.length === 0) {
-    map.delete(sessionId);
+    map.delete(mapKey);
     return;
   }
-  map.set(sessionId, list);
+  map.set(mapKey, list);
 }
 
 export function removePendingForTraceEvent(
   map: Map<string, ConversationView[]>,
   sessionId: string,
   event: TraceEvent,
+  mapKey: string = sessionId,
 ) {
-  const pendingList = map.get(sessionId) ?? [];
+  const pendingList = map.get(mapKey) ?? [];
   if (pendingList.length === 0) {
     return;
   }
@@ -313,6 +328,7 @@ export function removePendingForTraceEvent(
     pendingList.filter(
       (conversation) => !conversationMatchesTraceEvent(conversation, event),
     ),
+    mapKey,
   );
 }
 
@@ -379,6 +395,7 @@ function buildTraceOnlyConversations(
         created_at: timestamp,
         updated_at: timestamp,
       },
+      assistantMessages: [],
       events: [],
       status: hasFailure ? "error" : hasCompletion ? "done" : "running",
       jobId: event.job_id ?? null,
@@ -393,6 +410,7 @@ function buildTraceOnlyConversations(
 export function getConversationsForSession(
   sessionId: string,
   state: AppState,
+  sessionCacheKey: string = sessionId,
 ): ConversationView[] {
   const messageConversations = groupMessagesIntoConversations(
     state.messages.filter((message) => message.session_id === sessionId),
@@ -405,7 +423,7 @@ export function getConversationsForSession(
     conversations,
     state.traceEvents,
   );
-  const pendingList = state.pendingConversations.get(sessionId) ?? [];
+  const pendingList = state.pendingConversations.get(sessionCacheKey) ?? [];
 
   if (pendingList.length === 0) {
     return dedupeConversationViews(withTraceEvents);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,11 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tools.testing import (
+    LARGE_TEST_OUTPUT,
+    LARGE_TEST_TARGET_LINE_INDEX,
+    LARGE_TEST_TARGET_VALUE,
+)
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from tests.e2e.utils import (
@@ -238,6 +244,14 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
         and get_trace_payload(trace).get("tool_name") == "test_tool_2"
     ]
     assert custom_tool_start_dtos[-1].get("skill_names", []) == ["test-tool-2"]
+    custom_tool_end_payloads = [
+        get_trace_payload(trace)
+        for trace in traces
+        if trace.get("type") == "tool_call_end"
+        and get_trace_payload(trace).get("tool_name") == "test_tool_2"
+    ]
+    assert custom_tool_end_payloads[-1]["result"] == "4568"
+    assert custom_tool_end_payloads[-1].get("tool_output") is None
 
     logs_response = await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
     assert logs_response.status_code == 200
@@ -269,7 +283,157 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
 
 
 @pytest.mark.asyncio
-async def test_custom_tool_reads_recent_text_messages_from_another_session(
+async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
+    client: httpx.AsyncClient,
+    e2e_workspace_root_path: str,
+):
+    create_session_response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Large Tool Output E2E"},
+    )
+    assert create_session_response.status_code == 200
+    session_id = create_session_response.json()["data"]["session_id"]
+
+    message_response = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "message": {
+                "content": (
+                    "请读取工作区中 large_test_output 对应的 skill，"
+                    "按说明真实调用 large_test_output。目标值不在工具返回的头尾预览中，"
+                    "你必须继续使用 grep 和 read_file 从完整文件中找到它，"
+                    "最后严格按 skill 要求回复。"
+                )
+            },
+            "run": {"mode": "single_agent", "agent_id": "default"},
+        },
+    )
+    assert message_response.status_code == 200
+    job_id = message_response.json()["data"]["job_id"]
+    job_data = await wait_for_job_done(client, job_id, max_attempts=120)
+    assert job_data["status"] in {"completed", "succeeded"}
+
+    traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
+    assert traces_response.status_code == 200
+    traces = traces_response.json()["data"]
+    tool_end_payloads = [
+        get_trace_payload(trace)
+        for trace in traces
+        if trace.get("type") == "tool_call_end"
+        and get_trace_payload(trace).get("tool_name") == "large_test_output"
+    ]
+    assert tool_end_payloads
+    payload = tool_end_payloads[-1]
+    result = payload["result"]
+    assert isinstance(result, str)
+    assert "工具输出过大" in result
+    assert "large-output-line-0000" in result
+    assert "large-output-line-2399" in result
+    assert LARGE_TEST_TARGET_VALUE not in result
+    assert len(result.encode("utf-8")) <= 50 * 1024
+
+    reference = payload.get("tool_output")
+    assert isinstance(reference, dict)
+    assert reference["type"] == "tool_output"
+    assert reference["tool_name"] == "large_test_output"
+    assert reference["read_path"] == f"/{reference['path']}"
+    assert reference["byte_count"] == len(LARGE_TEST_OUTPUT.encode("utf-8"))
+    assert reference["line_count"] == 2_400
+    assert reference["content_sha256"] == hashlib.sha256(
+        LARGE_TEST_OUTPUT.encode("utf-8")
+    ).hexdigest()
+    relative_path = Path(reference["path"])
+    assert not relative_path.is_absolute()
+    assert relative_path.parts[:4] == (
+        ".boxteam",
+        "sessions",
+        session_id,
+        "tool-results",
+    )
+    output_path = Path(e2e_workspace_root_path) / relative_path
+    assert output_path.read_text(encoding="utf-8") == LARGE_TEST_OUTPUT
+
+    tool_start_payloads = [
+        get_trace_payload(trace)
+        for trace in traces
+        if trace.get("type") == "tool_call_start"
+    ]
+    large_call_index = next(
+        index
+        for index, item in enumerate(tool_start_payloads)
+        if item.get("tool_name") == "large_test_output"
+    )
+    grep_call_index = next(
+        index
+        for index, item in enumerate(tool_start_payloads)
+        if index > large_call_index and item.get("tool_name") == "grep"
+    )
+    read_call_index = next(
+        index
+        for index, item in enumerate(tool_start_payloads)
+        if index > grep_call_index and item.get("tool_name") == "read_file"
+    )
+    grep_args = tool_start_payloads[grep_call_index].get("args")
+    assert isinstance(grep_args, dict)
+    assert grep_args.get("pattern") == "retrieval-target"
+    assert grep_args.get("path") in {
+        reference["read_path"],
+        str(Path(reference["read_path"]).parent),
+    }
+    assert grep_args.get("output_mode") == "content"
+    read_args = tool_start_payloads[read_call_index].get("args")
+    assert isinstance(read_args, dict)
+    assert read_args.get("file_path") == reference["read_path"]
+    read_offset = read_args.get("offset")
+    read_limit = read_args.get("limit", 100)
+    assert isinstance(read_offset, int)
+    assert isinstance(read_limit, int)
+    assert read_offset <= LARGE_TEST_TARGET_LINE_INDEX < read_offset + read_limit
+
+    logs_response = await client.get(
+        f"/api/v1/sessions/{session_id}/llm-request-logs"
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["data"]
+    tool_messages = [
+        message
+        for log in logs
+        for message in log.get("request", {}).get("messages", [])
+        if isinstance(message, dict) and message.get("type") == "tool"
+    ]
+    assert any(
+        isinstance(message.get("content"), str)
+        and "工具输出过大" in message["content"]
+        for message in tool_messages
+    )
+    large_preview_messages = [
+        message
+        for message in tool_messages
+        if isinstance(message.get("artifact"), dict)
+        and isinstance(message["artifact"].get("tool_output"), dict)
+        and message["artifact"]["tool_output"].get("tool_name")
+        == "large_test_output"
+    ]
+    assert large_preview_messages
+    assert all(
+        isinstance(message.get("content"), str)
+        and LARGE_TEST_TARGET_VALUE not in message["content"]
+        for message in large_preview_messages
+    )
+    assert all(
+        not isinstance(message.get("content"), str)
+        or len(message["content"].encode("utf-8")) <= 50 * 1024
+        for message in tool_messages
+    )
+
+    messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")
+    assert messages_response.status_code == 200
+    messages = messages_response.json()["data"]["items"]
+    assert last_assistant_message(messages).strip() == LARGE_TEST_TARGET_VALUE
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session(
     client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
 ):
@@ -303,10 +467,14 @@ async def test_custom_tool_reads_recent_text_messages_from_another_session(
 
     prompt = (
         "请先读取当前工作区 AGENTS.md 里的扩展工具说明。"
-        "当你看到用户要求读取另一个会话最近用户消息和模型文本消息时，"
+        "当你看到用户要求读取另一个会话最近消息和上下文 JSONL 时，"
         "必须根据 AGENTS.md 找到并读取正确的 skill。"
-        f"然后使用默认 rounds 调用 read_session_recent_text_messages，读取 session_id={source_session_id}。"
-        "最终回复只能是该工具返回的 JSON 字符串，不要添加解释。"
+        f"先使用默认 rounds 调用 read_session_recent_text_messages，读取 session_id={source_session_id}；"
+        "保存它返回的 context_snapshot.snapshot_id。"
+        f"再调用 grep_session_context_jsonl 搜索 {source_marker}，并把 snapshot_id 作为 expected_snapshot_id；"
+        "最后调用 read_session_context_jsonl 读取 grep 命中的第一行，line_count=1，"
+        "继续传同一个 expected_snapshot_id。"
+        "最终只回复一个 JSON 对象，键为 recent、grep、read，值分别是三次工具返回的 JSON 对象，不要解释。"
     )
     reader_message_response = await client.post(
         f"/api/v1/sessions/{reader_session_id}/messages",
@@ -324,19 +492,30 @@ async def test_custom_tool_reads_recent_text_messages_from_another_session(
     assert messages_response.status_code == 200
     messages = messages_response.json()["data"]["items"]
     result = _json_object_from_text(last_assistant_message(messages))
-    assert result["session_id"] == source_session_id
-    assert result["rounds"] == 5
-    assert result["user_message_count"] >= 1
+    recent_result = result["recent"]
+    grep_result = result["grep"]
+    read_result = result["read"]
+    assert recent_result["session_id"] == source_session_id
+    assert recent_result["rounds"] == 5
+    assert recent_result["user_message_count"] >= 1
+    snapshot_id = recent_result["context_snapshot"]["snapshot_id"]
+    assert snapshot_id
     assert any(
         item.get("role") == "user" and source_marker in item.get("text", "")
-        for item in result["messages"]
+        for item in recent_result["messages"]
     )
     assert any(
         item.get("role") == "assistant"
         and item.get("type") == "text"
         and source_marker in item.get("text", "")
-        for item in result["messages"]
+        for item in recent_result["messages"]
     )
+    assert grep_result["context_snapshot"]["snapshot_id"] == snapshot_id
+    assert grep_result["context_snapshot"]["consistency"] == "matched"
+    assert grep_result["returned_match_count"] >= 1
+    assert read_result["context_snapshot"]["snapshot_id"] == snapshot_id
+    assert read_result["context_snapshot"]["consistency"] == "matched"
+    assert source_marker in read_result["lines"][0]["text"]
 
     traces_response = await client.get(f"/api/v1/sessions/{reader_session_id}/traces")
     assert traces_response.status_code == 200
@@ -351,28 +530,37 @@ async def test_custom_tool_reads_recent_text_messages_from_another_session(
         path.endswith("/.boxteam/skills/read-session-recent-text-messages/SKILL.md")
         for path in read_file_paths
     )
-    custom_tool_start_dtos = [
-        trace
-        for trace in traces
-        if trace.get("type") == "tool_call_start"
-        and get_trace_payload(trace).get("tool_name") == "read_session_recent_text_messages"
-    ]
-    assert custom_tool_start_dtos
-    assert custom_tool_start_dtos[-1].get("skill_names", []) == [
-        "read-session-recent-text-messages"
-    ]
-    assert (
-        get_trace_payload(custom_tool_start_dtos[-1]).get("invocation_tool_name")
-        == CUSTOM_TOOL_INVOKER_NAME
-    )
+    for custom_tool_name in (
+        "read_session_recent_text_messages",
+        "grep_session_context_jsonl",
+        "read_session_context_jsonl",
+    ):
+        custom_tool_start_dtos = [
+            trace
+            for trace in traces
+            if trace.get("type") == "tool_call_start"
+            and get_trace_payload(trace).get("tool_name") == custom_tool_name
+        ]
+        assert custom_tool_start_dtos
+        assert custom_tool_start_dtos[-1].get("skill_names", []) == [
+            "read-session-recent-text-messages"
+        ]
+        assert (
+            get_trace_payload(custom_tool_start_dtos[-1]).get("invocation_tool_name")
+            == CUSTOM_TOOL_INVOKER_NAME
+        )
 
     logs_response = await client.get(f"/api/v1/sessions/{reader_session_id}/llm-request-logs")
     assert logs_response.status_code == 200
     logs = logs_response.json()["data"]
-    assert any(
-        "read_session_recent_text_messages" in _custom_tool_targets_from_llm_log(log)
-        for log in logs
+    invoked_custom_tools = set().union(
+        *[_custom_tool_targets_from_llm_log(log) for log in logs]
     )
+    assert {
+        "read_session_recent_text_messages",
+        "grep_session_context_jsonl",
+        "read_session_context_jsonl",
+    } <= invoked_custom_tools
 
     reader_agent_state_response = await client.get(
         f"/api/v1/sessions/{reader_session_id}/agent-state/messages"

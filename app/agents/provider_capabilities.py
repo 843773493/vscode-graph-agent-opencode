@@ -10,10 +10,14 @@ IMAGE_INPUT = "image_input"
 VIDEO_INPUT = "video_input"
 AUDIO_INPUT = "audio_input"
 
-CAPABILITY_ALIASES = {
-    # TODO: 兼容历史配置名 vision，后续配置全部迁移到 image_input 后可移除。
-    "vision": IMAGE_INPUT,
-}
+SUPPORTED_PROVIDER_CAPABILITIES: frozenset[ProviderCapability] = frozenset(
+    {
+        TEXT_INPUT,
+        IMAGE_INPUT,
+        VIDEO_INPUT,
+        AUDIO_INPUT,
+    }
+)
 
 CONTENT_BLOCK_CAPABILITY_REQUIREMENTS: dict[str, set[ProviderCapability]] = {
     "image": {IMAGE_INPUT},
@@ -27,8 +31,8 @@ CONTENT_BLOCK_CAPABILITY_REQUIREMENTS: dict[str, set[ProviderCapability]] = {
 }
 
 
-def normalize_provider_capabilities(provider: dict[str, Any]) -> set[ProviderCapability]:
-    """读取 provider capabilities，并把历史别名归一到规范能力名。"""
+def parse_provider_capabilities(provider: dict[str, Any]) -> set[ProviderCapability]:
+    """读取并严格校验 provider capabilities。"""
     raw_capabilities = provider.get("capabilities", [])
     capabilities: set[ProviderCapability] = {TEXT_INPUT}
     if not isinstance(raw_capabilities, list):
@@ -37,7 +41,14 @@ def normalize_provider_capabilities(provider: dict[str, Any]) -> set[ProviderCap
     for item in raw_capabilities:
         if not isinstance(item, str):
             raise TypeError("provider.capabilities 只能包含字符串")
-        capabilities.add(CAPABILITY_ALIASES.get(item, item))
+        if item not in SUPPORTED_PROVIDER_CAPABILITIES:
+            provider_id = provider.get("id") or provider.get("model") or "<unknown>"
+            supported = ", ".join(sorted(SUPPORTED_PROVIDER_CAPABILITIES))
+            raise ValueError(
+                f"provider {provider_id!r} 包含不支持的 capability: {item!r}。"
+                f"允许值: {supported}"
+            )
+        capabilities.add(item)
     return capabilities
 
 
@@ -56,37 +67,19 @@ def detect_required_capabilities(content: object) -> set[ProviderCapability]:
     return required
 
 
-def _format_capabilities(capabilities: Iterable[ProviderCapability]) -> str:
-    return ", ".join(sorted(capabilities))
-
-
-def select_providers_for_capabilities(
-    providers: list[dict[str, Any]],
-    required_capabilities: set[ProviderCapability],
-) -> list[dict[str, Any]]:
-    """按请求需要的输入能力筛选 provider，保留原始 fallback 顺序。"""
-    required = set(required_capabilities)
-    if not required:
-        return providers
-
-    selected: list[dict[str, Any]] = []
-    provider_summaries: list[str] = []
-    for provider in providers:
-        provider_capabilities = normalize_provider_capabilities(provider)
-        provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
-        provider_summaries.append(
-            f"{provider_id}({_format_capabilities(provider_capabilities)})"
-        )
-        if required.issubset(provider_capabilities):
-            selected.append(provider)
-
-    if selected:
-        return selected
-
-    raise RuntimeError(
-        "当前消息需要模型输入能力 "
-        f"[{_format_capabilities(required)}]，但当前 agent 的模型链路没有匹配的 provider。"
-        f"已配置 provider: {', '.join(provider_summaries)}。"
-        "请在支持该输入类型的 provider 上配置 capabilities，"
-        "例如 image_input、video_input 或 audio_input，并将它加入该 agent 的 fallback_providers。"
-    )
+def detect_required_capabilities_from_messages(
+    messages: Iterable[object],
+) -> set[ProviderCapability]:
+    """扫描完整模型消息上下文，包括工具返回的多模态 content blocks。"""
+    required: set[ProviderCapability] = {TEXT_INPUT}
+    for message in messages:
+        if isinstance(message, dict):
+            content = message.get("content")
+            content_blocks = message.get("content_blocks")
+        else:
+            content = getattr(message, "content", None)
+            content_blocks = getattr(message, "content_blocks", None)
+        required.update(detect_required_capabilities(content))
+        if content_blocks is not content:
+            required.update(detect_required_capabilities(content_blocks))
+    return required

@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.schemas.event import ModelTokenUsagePayload
 from app.services.business.message_service import MessageService
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
@@ -43,6 +44,14 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
         session_id=session_id,
         reasoning_text=reasoning_text,
         final_text=final_text,
+        token_usage=ModelTokenUsagePayload(
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+            cache_read_input_tokens=80,
+            model_calls=2,
+            reported_model_calls=2,
+        ),
     )
 
     assert changed is True
@@ -59,6 +68,14 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
 
     messages_page = await MessageService(checkpointer=saver).list(session_id, limit=10)
     assert messages_page.items[-1].content == final_text
+    assert messages_page.items[-1].metadata["token_usage"] == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 120,
+        "cache_read_input_tokens": 80,
+        "model_calls": 2,
+        "reported_model_calls": 2,
+    }
 
     message_service = MessageService(checkpointer=saver)
     state_snapshot = await message_service.get_agent_state_messages(session_id)

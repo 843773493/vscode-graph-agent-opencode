@@ -40,6 +40,7 @@ async def lifespan(_: FastAPI):
 
     yield
 
+    await container.tool_test_service.shutdown()
     await container.trace_event_recorder.stop()
     _.state.container = None
 

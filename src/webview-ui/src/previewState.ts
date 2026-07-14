@@ -16,7 +16,11 @@ const now = () => new Date().toISOString();
 
 const previewSession: Session = {
   session_id: 'preview-session',
+  workspace_id: 'preview-workspace',
   title: '浏览器预览会话',
+  title_source: 'user',
+  current_agent_id: 'preview-agent',
+  parent_session_id: null,
   status: 'running',
   agent_id: 'preview-agent',
   created_at: now(),

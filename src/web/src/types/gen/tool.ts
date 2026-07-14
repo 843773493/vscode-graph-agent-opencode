@@ -14,6 +14,11 @@ export interface ToolDTO {
     [k: string]: unknown;
   };
   category?: string | null;
+  group_id?: string;
+  group_name?: string;
+  kind?: string;
+  enabled?: boolean;
+  test_supported?: boolean;
 }
 export interface ToolInvokeRequest {
   parameters?: {
@@ -27,4 +32,15 @@ export interface ToolInvokeResultDTO {
   parameters?: {
     [k: string]: unknown;
   };
+}
+export interface ToolSelectionChange {
+  tool_id: string;
+  enabled: boolean;
+}
+export interface ToolSelectionPatchRequest {
+  agent_id?: string;
+  /**
+   * @minItems 1
+   */
+  changes: [ToolSelectionChange, ...ToolSelectionChange[]];
 }

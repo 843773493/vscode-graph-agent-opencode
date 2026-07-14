@@ -63,6 +63,7 @@ class TraceEventMapper:
 
         return TraceEventDTO(
             event_id=event.get("event_id") or "",
+            part_id=event.get("part_id"),
             session_id=session_id,
             job_id=job_id,
             type=event_type,

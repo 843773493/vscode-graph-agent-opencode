@@ -8,7 +8,7 @@
 """
 
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 # ============= 1. 基础事件结构（所有事件的公共字段） =============
@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 class BaseEvent(BaseModel):
     """所有事件的基类"""
     event_id: str
+    part_id: Optional[str] = None
     job_id: str
     step_id: Optional[str] = None
     agent_id: Optional[str] = None
@@ -82,10 +83,24 @@ class AgentStepPayload(BaseModel):
     phase: str | None = None
 
 
+class ModelTokenUsagePayload(BaseModel):
+    """一次用户回复内所有模型调用的累计 token 统计。"""
+
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    cache_read_input_tokens: int | None = Field(default=None, ge=0)
+    model_calls: int = Field(default=0, ge=0)
+    reported_model_calls: int = Field(default=0, ge=0)
+
+
 class AgentEndPayload(BaseModel):
     """AGENT_END 事件的 payload"""
     final_text: str = ""
     agent_id: str
+    token_usage: ModelTokenUsagePayload = Field(
+        default_factory=ModelTokenUsagePayload
+    )
 
 
 class ToolCallStartPayload(BaseModel):
@@ -93,9 +108,33 @@ class ToolCallStartPayload(BaseModel):
     tool_name: str
     args: dict[str, Any] = Field(default_factory=dict)
     agent_id: str | None = None
-    tool_call_run_id: str | None = None
     skill_names: list[str] = Field(default_factory=list)
     invocation_tool_name: str | None = None
+
+
+class FileEditPayload(BaseModel):
+    """工具产生的可审查文件变更摘要。"""
+    edit_id: str
+    file_path: str
+    kind: str
+    additions: int = 0
+    deletions: int = 0
+    diff_file: str
+    before_file: str | None = None
+    after_file: str | None = None
+
+
+class ToolOutputReferencePayload(BaseModel):
+    """过大工具输出在工作区内的持久化引用。"""
+    type: Literal["tool_output"] = "tool_output"
+    path: str
+    read_path: str
+    tool_name: str
+    tool_call_id: str
+    byte_count: int
+    line_count: int
+    content_sha256: str
+    truncated: bool = True
 
 
 class ToolCallEndPayload(BaseModel):
@@ -103,9 +142,11 @@ class ToolCallEndPayload(BaseModel):
     tool_name: str
     result: str = ""
     agent_id: str | None = None
-    tool_call_run_id: str | None = None
     invocation_tool_name: str | None = None
     skill_names: list[str] = Field(default_factory=list)
+    tool_output: ToolOutputReferencePayload | None = None
+    file_edit: FileEditPayload | None = None
+    file_edits: list[FileEditPayload] = Field(default_factory=list)
 
 
 class ErrorPayload(BaseModel):
@@ -131,16 +172,17 @@ class SessionInterruptedPayload(BaseModel):
 class TextDeltaPayload(BaseModel):
     """TEXT_DELTA 事件的 payload"""
     text: str
-    kind: str = "text"  # "text" | "reasoning" | "tool"
+    kind: Literal["markdown", "reasoning"]
 
 
 class TextStartPayload(BaseModel):
     """TEXT_START 事件的 payload（标记 assistant 文本开始）"""
-    pass
+    kind: Literal["markdown", "reasoning"]
 
 
 class TextEndPayload(BaseModel):
     """TEXT_END 事件的 payload（标记 assistant 文本结束）"""
+    kind: Literal["markdown", "reasoning"]
     text: str = ""
 
 
@@ -239,7 +281,7 @@ class SessionInterruptedEvent(BaseEvent):
 class TextStartEvent(BaseEvent):
     """Assistant 文本开始事件"""
     type: Literal["text_start"] = "text_start"
-    payload: TextStartPayload = Field(default_factory=TextStartPayload)
+    payload: TextStartPayload
 
 
 class TextDeltaEvent(BaseEvent):
@@ -251,7 +293,7 @@ class TextDeltaEvent(BaseEvent):
 class TextEndEvent(BaseEvent):
     """Assistant 文本结束事件"""
     type: Literal["text_end"] = "text_end"
-    payload: TextEndPayload = Field(default_factory=TextEndPayload)
+    payload: TextEndPayload
 
 
 # ============= 4. Discriminated Union 类型 =============

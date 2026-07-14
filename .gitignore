@@ -74,3 +74,11 @@ out/
 /asset/skill_test_workspace/.boxteam/logs/
 /asset/skill_test_workspace/.boxteam/sessions/
 /asset/skill_test_workspace/.boxteam/terminal-manager/
+/asset/custom_tool_test_workspace/.boxteam/artifacts/
+/asset/custom_tool_test_workspace/.boxteam/cache/
+/asset/custom_tool_test_workspace/.boxteam/checkpoints/
+/asset/custom_tool_test_workspace/.boxteam/gateway/
+/asset/custom_tool_test_workspace/.boxteam/logs/
+/asset/custom_tool_test_workspace/.boxteam/sessions/
+/asset/custom_tool_test_workspace/.boxteam/browser-manager/
+/asset/custom_tool_test_workspace/.boxteam/terminal-manager/

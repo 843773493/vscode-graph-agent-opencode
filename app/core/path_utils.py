@@ -51,6 +51,11 @@ def get_checkpoints_dir() -> Path:
     return get_boxteam_root() / "checkpoints"
 
 
+def get_session_changes_dir(session_id: str) -> Path:
+    """获取某个会话的可读文件变更记录目录。"""
+    return get_session_path(session_id) / "changes"
+
+
 def initialize_directories() -> None:
     """初始化所有必需的目录，应该在应用启动时显式调用"""
     get_boxteam_root().mkdir(exist_ok=True, parents=True)

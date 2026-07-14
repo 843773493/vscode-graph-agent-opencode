@@ -3,6 +3,10 @@ import type {
   AddSshGatewayWorkspaceRequest,
   APIResponse,
   GatewayWorkspaceList,
+  LocalDirectoryList,
+  ReorderGatewayWorkspacesRequest,
+  WebUiSettings,
+  WebUiSettingsUpdate,
 } from "./types/backend";
 import { requestJson, unwrapApiData } from "./api";
 
@@ -59,6 +63,77 @@ export async function addSshGatewayWorkspace(
         method: "POST",
         body: JSON.stringify(payload),
       },
+    ),
+  );
+}
+
+export async function removeGatewayWorkspace(
+  port: number,
+  workspaceId: string,
+): Promise<GatewayWorkspaceList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayWorkspaceList>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}`,
+      { method: "DELETE" },
+    ),
+  );
+}
+
+export async function reorderGatewayWorkspaces(
+  port: number,
+  payload: ReorderGatewayWorkspacesRequest,
+): Promise<GatewayWorkspaceList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayWorkspaceList>>(
+      port,
+      "/api/gateway/workspaces/order",
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
+  );
+}
+
+export async function getGatewayUiSettings(port: number): Promise<WebUiSettings> {
+  return unwrapApiData(
+    await requestJson<APIResponse<WebUiSettings>>(
+      port,
+      "/api/gateway/ui-settings",
+    ),
+  );
+}
+
+export async function updateGatewayUiSettings(
+  port: number,
+  payload: WebUiSettingsUpdate,
+): Promise<WebUiSettings> {
+  return unwrapApiData(
+    await requestJson<APIResponse<WebUiSettings>>(
+      port,
+      "/api/gateway/ui-settings",
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
+  );
+}
+
+export async function browseGatewayLocalDirectories(
+  port: number,
+  path?: string | null,
+): Promise<LocalDirectoryList> {
+  const query = new URLSearchParams();
+  if (path?.trim()) {
+    query.set("path", path.trim());
+  }
+  const suffix = query.toString();
+  return unwrapApiData(
+    await requestJson<APIResponse<LocalDirectoryList>>(
+      port,
+      `/api/gateway/local-directories${suffix ? `?${suffix}` : ""}`,
     ),
   );
 }

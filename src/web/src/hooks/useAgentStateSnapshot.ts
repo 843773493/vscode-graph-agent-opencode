@@ -23,9 +23,11 @@ export function resetAgentStateFields(
 
 export function useAgentStateSnapshotLoader({
   apiPort,
+  workspaceId,
   setState,
 }: {
   apiPort: number;
+  workspaceId: string | null;
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
@@ -43,11 +45,11 @@ export function useAgentStateSnapshotLoader({
         contentView: "agent",
         agentStateLoading: true,
         agentStateError: null,
-        status: "正在读取 Agent State 快照",
+        status: "正在读取上下文状态",
       }));
 
       try {
-        const snapshot = await getAgentStateMessages(apiPort, sessionId);
+        const snapshot = await getAgentStateMessages(apiPort, sessionId, workspaceId);
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||
@@ -64,7 +66,7 @@ export function useAgentStateSnapshotLoader({
             agentStateLoadedAt: new Date().toISOString(),
             agentStateLoading: false,
             agentStateError: null,
-            status: `Agent State 快照已加载 (${snapshot.message_count} 条消息)`,
+            status: `上下文状态已加载 (${snapshot.message_count} 条消息)`,
           };
         });
       } catch (error) {
@@ -82,12 +84,12 @@ export function useAgentStateSnapshotLoader({
             contentView: "agent",
             agentStateLoading: false,
             agentStateError: message,
-            status: `Agent State 加载失败: ${message}`,
+            status: `上下文状态加载失败: ${message}`,
           };
         });
       }
     },
-    [apiPort, setState],
+    [apiPort, workspaceId, setState],
   );
 
   return {

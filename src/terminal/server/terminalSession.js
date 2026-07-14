@@ -97,14 +97,20 @@ function latestCommandExitCode(buffer, doneMarker = null) {
 }
 
 function displayBuffer(buffer) {
-  return normalizeTerminalLines(buffer)
-    .split("\n")
-    .filter(
-      (line) =>
-        !line.includes("__BOXTEAM_CMD_START_") &&
-        !line.includes("__BOXTEAM_CMD_DONE_"),
-    )
-    .join("\r\n");
+  const parts = buffer.split(/(\r\n|\n)/);
+  let display = "";
+  for (let index = 0; index < parts.length; index += 2) {
+    const line = parts[index] || "";
+    const separator = parts[index + 1] || "";
+    if (
+      line.includes("__BOXTEAM_CMD_START_") ||
+      line.includes("__BOXTEAM_CMD_DONE_")
+    ) {
+      continue;
+    }
+    display += line + separator;
+  }
+  return display;
 }
 
 export class TerminalSession {
@@ -285,13 +291,16 @@ export class TerminalSession {
   }
 
   resize(cols, rows) {
+    if (this.cols === cols && this.rows === rows) {
+      return false;
+    }
     this.cols = cols;
     this.rows = rows;
     if (this.ptyProcess && this.status === "running") {
       this.ptyProcess.resize(cols, rows);
     }
     this.touch();
-    void this.manager.persist();
+    return true;
   }
 
   async terminateForRelease({ status, commandStatus, reason }) {

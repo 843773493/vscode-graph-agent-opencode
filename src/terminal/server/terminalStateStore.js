@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 
 export const STATE_FILE_NAME = "terminals.json";
 
@@ -31,6 +31,8 @@ export class TerminalStateStore {
 
   async write(data) {
     await mkdir(this.stateDir, { recursive: true });
-    await writeFile(this.stateFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    const temporaryFile = `${this.stateFile}.${process.pid}.tmp`;
+    await writeFile(temporaryFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    await rename(temporaryFile, this.stateFile);
   }
 }

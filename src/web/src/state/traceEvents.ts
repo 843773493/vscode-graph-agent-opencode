@@ -78,12 +78,13 @@ export function appendReceivedEvents(
   sessionId: string,
   events: TraceEvent[],
   source: FrontendEventSource,
+  mapKey: string = sessionId,
 ) {
   if (events.length === 0) {
     return;
   }
 
-  const current = map.get(sessionId) ?? [];
+  const current = map.get(mapKey) ?? [];
   const seen = new Set(current.map((item) => item.id));
   const receivedAt = new Date().toISOString();
   const appended: FrontendReceivedEvent[] = [];
@@ -113,7 +114,7 @@ export function appendReceivedEvents(
   }
 
   map.set(
-    sessionId,
+    mapKey,
     trimReceivedEventQueue([...current, ...appended], FRONTEND_EVENT_QUEUE_LIMIT),
   );
 }
@@ -162,8 +163,9 @@ export function appendFrontendEvent(
   title: string,
   payload: Record<string, unknown> = {},
   detail = "",
+  mapKey: string = sessionId,
 ) {
-  const current = map.get(sessionId) ?? [];
+  const current = map.get(mapKey) ?? [];
   const receivedAt = new Date().toISOString();
   const event: FrontendReceivedEvent = {
     id: `frontend:${type}:${receivedAt}`,
@@ -177,7 +179,7 @@ export function appendFrontendEvent(
     payload,
   };
   map.set(
-    sessionId,
+    mapKey,
     trimReceivedEventQueue([...current, event], FRONTEND_EVENT_QUEUE_LIMIT),
   );
 }
@@ -236,6 +238,8 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
     ? {
         event_id:
           typeof raw.event_id === "string" ? raw.event_id : event.event_id,
+        part_id:
+          typeof raw.part_id === "string" ? raw.part_id : event.part_id,
         job_id:
           typeof raw.job_id === "string"
             ? raw.job_id
@@ -258,6 +262,7 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
     : undefined;
   return {
     event_id: event.event_id,
+    part_id: event.part_id ?? normalizedRaw?.part_id ?? null,
     session_id:
       typeof event.session_id === "string"
         ? event.session_id

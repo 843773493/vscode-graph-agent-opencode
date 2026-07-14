@@ -26,10 +26,21 @@ class SessionOrchestrator:
         self._job_service = job_service
         self._job_event_bus = job_event_bus
 
-    async def create_and_run(self, session_id: str, content: str) -> str:
+    async def create_and_run(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        message_role: MessageRole = MessageRole.user,
+        metadata: dict[str, object] | None = None,
+    ) -> MessageRunAccepted:
         session = await self._session_service.get(session_id)
         run_request = MessageRunRequest(
-            message=MessageCreateRequest(role=MessageRole.user, content=content),
+            message=MessageCreateRequest(
+                role=message_role,
+                content=content,
+                metadata=metadata or {},
+            ),
             run=RunOptions(mode=RunMode.single_agent, agent_id=session.current_agent_id),
         )
         return await self.create_message(session_id, run_request)

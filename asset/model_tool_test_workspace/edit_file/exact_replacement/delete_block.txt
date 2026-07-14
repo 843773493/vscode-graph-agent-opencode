@@ -1,0 +1,6 @@
+[current]
+enabled=true
+
+[deprecated]
+enabled=true
+owner=team

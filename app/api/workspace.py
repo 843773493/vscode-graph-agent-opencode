@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_request_id, get_workspace_service, verify_local_token
 from app.schemas.public_v2.common import APIResponse
@@ -89,5 +89,10 @@ async def get_workspace_file_content(
     request_id: str | None = Depends(get_request_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
-    result = await workspace_service.get_file_content(path=path)
+    try:
+        result = await workspace_service.get_file_content(path=path)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (IsADirectoryError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

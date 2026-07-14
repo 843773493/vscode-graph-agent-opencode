@@ -5,20 +5,20 @@
         "endpoint": "https://opencode.ai/zen/v1",
         "model": "big-pickle",
         "api_key": "${OPENCODE_ZEN_API_KEY}",
-        "interface": "opencode_zen"
+        "custom_llm_provider": "openai"
       },
       {
         "endpoint": "https://openrouter.ai/api/v1",
         "model": "openrouter/free",
         "api_key": "${OPENROUTER_API_KEY}",
-        "interface": "responses",
+        "custom_llm_provider": "openrouter",
         "auth_header": "Authorization"
       },
       {
         "endpoint": "https://openrouter.ai/api/v1",
         "model": "openrouter/free",
         "api_key": "${OPENROUTER_API_KEY}",
-        "interface": "responses",
+        "custom_llm_provider": "openrouter",
         "auth_header": "Authorization"
       }
     ]

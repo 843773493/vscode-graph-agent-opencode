@@ -11,7 +11,12 @@ import type {
   MessageRunAccepted,
   MessageRunRequest,
   Session,
+  SessionChangesSummary,
+  SessionChangeset,
+  SessionChangesetList,
+  SessionFileChange,
   SessionCompactResult,
+  SessionFileReviewResult,
   SessionResourceAction,
   SessionResourceControlResult,
   SessionResourceKind,
@@ -22,6 +27,12 @@ import type {
   WorkspaceFileList,
   WorkspaceInfo,
 } from "./types/backend";
+import type {
+  ToolCatalogItem,
+  ToolSelectionChange,
+  ToolTestRun,
+  ToolTestRunList,
+} from "./types/toolTesting";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
@@ -29,10 +40,28 @@ export const DEFAULT_BACKEND_TOKEN = "local-dev-token";
 export const DEFAULT_AGENT_ID = "default";
 export const DEFAULT_SESSION_TITLE = "新会话";
 const AGENT_STATE_TIMEOUT_MS = 10000;
+const SESSION_HISTORY_TIMEOUT_MS = 10000;
 
 type RequestJsonInit = RequestInit & {
   timeoutMs?: number;
 };
+
+function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+  return headers;
+}
+
+function workspaceHeader(workspaceId?: string | null): Record<string, string> {
+  return workspaceId ? { "X-BoxTeam-Workspace-Id": workspaceId } : {};
+}
 
 function getBaseUrl(port: number): string {
   if (typeof window !== "undefined" && window.location.port !== String(port)) {
@@ -47,7 +76,7 @@ export async function requestJson<T>(
   path: string,
   init?: RequestJsonInit,
 ): Promise<T> {
-  const { timeoutMs, signal, ...fetchInit } = init ?? {};
+  const { timeoutMs, signal, headers, ...fetchInit } = init ?? {};
   const controller = timeoutMs ? new AbortController() : null;
   const timeoutErrorMessage = `请求超时: ${path}`;
   let timeoutId: number | null = null;
@@ -62,12 +91,12 @@ export async function requestJson<T>(
 
   try {
     const fetchPromise = fetch(`${getBaseUrl(port)}${path}`, {
+      ...fetchInit,
       headers: {
         "Content-Type": "application/json",
         "X-Local-Token": DEFAULT_BACKEND_TOKEN,
-        ...(fetchInit.headers ?? {}),
+        ...normalizeHeaders(headers),
       },
-      ...fetchInit,
       signal: signal ?? controller?.signal,
     });
     const response = timeoutPromise
@@ -96,6 +125,93 @@ export async function requestJson<T>(
   }
 }
 
+export async function getToolCatalog(
+  port: number,
+  agentId: string,
+  workspaceId?: string | null,
+): Promise<ToolCatalogItem[]> {
+  const query = new URLSearchParams({ agent_id: agentId });
+  return unwrapApiData(
+    await requestJson<APIResponse<ToolCatalogItem[]>>(
+      port,
+      `/api/v1/tools?${query.toString()}`,
+      { headers: workspaceHeader(workspaceId) },
+    ),
+  );
+}
+
+export async function updateToolSelection(
+  port: number,
+  agentId: string,
+  changes: ToolSelectionChange[],
+  workspaceId?: string | null,
+): Promise<ToolCatalogItem[]> {
+  return unwrapApiData(
+    await requestJson<APIResponse<ToolCatalogItem[]>>(
+      port,
+      "/api/v1/tools/selection",
+      {
+        method: "PATCH",
+        headers: workspaceHeader(workspaceId),
+        body: JSON.stringify({
+          agent_id: agentId,
+          changes,
+        }),
+      },
+    ),
+  );
+}
+
+export async function startToolTest(
+  port: number,
+  toolId: string,
+  agentId: string,
+  workspaceId?: string | null,
+): Promise<ToolTestRun> {
+  return unwrapApiData(
+    await requestJson<APIResponse<ToolTestRun>>(
+      port,
+      `/api/v1/tools/${encodeURIComponent(toolId)}/tests`,
+      {
+        method: "POST",
+        headers: workspaceHeader(workspaceId),
+        body: JSON.stringify({
+          agent_id: agentId,
+          provider_ids: [],
+        }),
+      },
+    ),
+  );
+}
+
+export async function getToolTestRun(
+  port: number,
+  runId: string,
+  workspaceId?: string | null,
+): Promise<ToolTestRun> {
+  return unwrapApiData(
+    await requestJson<APIResponse<ToolTestRun>>(
+      port,
+      `/api/v1/tools/tests/${encodeURIComponent(runId)}`,
+      { headers: workspaceHeader(workspaceId) },
+    ),
+  );
+}
+
+export async function listToolTestRuns(
+  port: number,
+  workspaceId?: string | null,
+): Promise<ToolTestRun[]> {
+  const result = unwrapApiData(
+    await requestJson<APIResponse<ToolTestRunList>>(
+      port,
+      "/api/v1/tools/tests?limit=50",
+      { headers: workspaceHeader(workspaceId) },
+    ),
+  );
+  return result.items;
+}
+
 export function unwrapApiData<T>(response: APIResponse<T>): T {
   if (response.data == null) {
     throw new Error(
@@ -104,6 +220,49 @@ export function unwrapApiData<T>(response: APIResponse<T>): T {
   }
 
   return response.data;
+}
+
+function normalizeSessionChangesSummary(
+  summary: Partial<SessionChangesSummary> | null | undefined,
+): SessionChangesSummary {
+  return {
+    files: summary?.files ?? 0,
+    additions: summary?.additions ?? 0,
+    deletions: summary?.deletions ?? 0,
+  };
+}
+
+function normalizeSessionFileChange(file: SessionFileChange): SessionFileChange {
+  return {
+    ...file,
+    additions: file.additions ?? 0,
+    deletions: file.deletions ?? 0,
+    reviewed: file.reviewed ?? false,
+    tool_call_ids: file.tool_call_ids ?? [],
+    turn_ids: file.turn_ids ?? [],
+  };
+}
+
+function normalizeSessionChangesetList(
+  value: SessionChangesetList,
+): SessionChangesetList {
+  return {
+    ...value,
+    items: value.items.map((item) => ({
+      ...item,
+      is_default: item.is_default ?? false,
+      summary: normalizeSessionChangesSummary(item.summary),
+    })),
+  };
+}
+
+function normalizeSessionChangeset(value: SessionChangeset): SessionChangeset {
+  return {
+    ...value,
+    status: value.status ?? "ready",
+    summary: normalizeSessionChangesSummary(value.summary),
+    files: (value.files ?? []).map(normalizeSessionFileChange),
+  };
 }
 
 function normalizePageResult<T>(value: unknown): CursorPage<T> {
@@ -124,15 +283,23 @@ function normalizePageResult<T>(value: unknown): CursorPage<T> {
   };
 }
 
-export async function getWorkspace(port: number): Promise<WorkspaceInfo> {
+export async function getWorkspace(
+  port: number,
+  workspaceId?: string | null,
+): Promise<WorkspaceInfo> {
   return unwrapApiData(
-    await requestJson<APIResponse<WorkspaceInfo>>(port, "/api/v1/workspace"),
+    await requestJson<APIResponse<WorkspaceInfo>>(
+      port,
+      "/api/v1/workspace",
+      workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
+    ),
   );
 }
 
 export async function getWorkspaceFiles(
   port: number,
   path: string = "",
+  workspaceId?: string | null,
 ): Promise<WorkspaceFileList> {
   const query = new URLSearchParams();
   if (path) {
@@ -144,6 +311,7 @@ export async function getWorkspaceFiles(
     await requestJson<APIResponse<WorkspaceFileList>>(
       port,
       `/api/v1/workspace/files${suffix ? `?${suffix}` : ""}`,
+      workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
     ),
   );
 }
@@ -151,20 +319,30 @@ export async function getWorkspaceFiles(
 export async function getWorkspaceFileContent(
   port: number,
   path: string,
+  workspaceId?: string | null,
 ): Promise<WorkspaceFileContent> {
   const query = new URLSearchParams({ path });
   return unwrapApiData(
     await requestJson<APIResponse<WorkspaceFileContent>>(
       port,
       `/api/v1/workspace/files/content?${query.toString()}`,
+      workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
     ),
   );
 }
 
-export async function listSessions(port: number): Promise<CursorPage<Session>> {
+export async function listSessions(
+  port: number,
+  workspaceId?: string | null,
+): Promise<CursorPage<Session>> {
   const data = await requestJson<APIResponse<CursorPage<Session>>>(
     port,
     "/api/v1/sessions",
+    workspaceId
+      ? {
+          headers: workspaceHeader(workspaceId),
+        }
+      : undefined,
   );
   return normalizePageResult<Session>(unwrapApiData(data));
 }
@@ -172,30 +350,58 @@ export async function listSessions(port: number): Promise<CursorPage<Session>> {
 export async function getSession(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
 ): Promise<Session> {
   return unwrapApiData(
     await requestJson<APIResponse<Session>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
     ),
   );
 }
 
-export async function listAgents(port: number): Promise<Agent[]> {
+export async function listAgents(
+  port: number,
+  workspaceId?: string | null,
+): Promise<Agent[]> {
   return unwrapApiData(
-    await requestJson<APIResponse<Agent[]>>(port, "/api/v1/agents"),
+    await requestJson<APIResponse<Agent[]>>(
+      port,
+      "/api/v1/agents",
+      workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
+    ),
   );
 }
 
 export async function createSession(
   port: number,
   title: string = DEFAULT_SESSION_TITLE,
+  workspaceId?: string | null,
 ): Promise<Session> {
   return unwrapApiData(
     await requestJson<APIResponse<Session>>(port, "/api/v1/sessions", {
       method: "POST",
+      headers: workspaceHeader(workspaceId),
       body: JSON.stringify({ title }),
     }),
+  );
+}
+
+export async function forkSessionContext(
+  port: number,
+  sessionId: string,
+  workspaceId?: string | null,
+): Promise<Session> {
+  return unwrapApiData(
+    await requestJson<APIResponse<Session>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/fork-context`,
+      {
+        method: "POST",
+        headers: workspaceHeader(workspaceId),
+      },
+    ),
   );
 }
 
@@ -203,6 +409,7 @@ export async function updateSession(
   port: number,
   sessionId: string,
   payload: SessionUpdateRequest,
+  workspaceId?: string | null,
 ): Promise<Session> {
   return unwrapApiData(
     await requestJson<APIResponse<Session>>(
@@ -210,6 +417,7 @@ export async function updateSession(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       {
         method: "PATCH",
+        headers: workspaceHeader(workspaceId),
         body: JSON.stringify(payload),
       },
     ),
@@ -219,12 +427,13 @@ export async function updateSession(
 export async function deleteSession(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
 ): Promise<DeleteSessionResult> {
   return unwrapApiData(
     await requestJson<APIResponse<DeleteSessionResult>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-      { method: "DELETE" },
+      { method: "DELETE", headers: workspaceHeader(workspaceId) },
     ),
   );
 }
@@ -233,19 +442,21 @@ export function updateSessionAgent(
   port: number,
   sessionId: string,
   agentId: string,
+  workspaceId?: string | null,
 ): Promise<Session> {
-  return updateSession(port, sessionId, { agent_id: agentId });
+  return updateSession(port, sessionId, { agent_id: agentId }, workspaceId);
 }
 
 export async function compactSessionContext(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
 ): Promise<SessionCompactResult> {
   return unwrapApiData(
     await requestJson<APIResponse<SessionCompactResult>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`,
-      { method: "POST" },
+      { method: "POST", headers: workspaceHeader(workspaceId) },
     ),
   );
 }
@@ -253,10 +464,15 @@ export async function compactSessionContext(
 export async function listMessages(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
 ): Promise<CursorPage<Message>> {
   const data = await requestJson<APIResponse<CursorPage<Message>>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      headers: workspaceHeader(workspaceId),
+      timeoutMs: SESSION_HISTORY_TIMEOUT_MS,
+    },
   );
   return normalizePageResult<Message>(unwrapApiData(data));
 }
@@ -264,11 +480,15 @@ export async function listMessages(
 export async function getAgentStateMessages(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
 ): Promise<AgentStateMessages> {
   const data = await requestJson<APIResponse<AgentStateMessages>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/agent-state/messages`,
-    { timeoutMs: AGENT_STATE_TIMEOUT_MS },
+    {
+      headers: workspaceHeader(workspaceId),
+      timeoutMs: AGENT_STATE_TIMEOUT_MS,
+    },
   );
   return unwrapApiData(data);
 }
@@ -276,10 +496,12 @@ export async function getAgentStateMessages(
 export async function getLLMRequestLogs(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
 ): Promise<LLMRequestLogRecord[]> {
   const data = await requestJson<APIResponse<LLMRequestLogRecord[]>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/llm-request-logs`,
+    { headers: workspaceHeader(workspaceId) },
   );
   return unwrapApiData(data);
 }
@@ -287,10 +509,59 @@ export async function getLLMRequestLogs(
 export async function getSessionResources(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
 ): Promise<SessionResourceList> {
   const data = await requestJson<APIResponse<SessionResourceList>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/resources`,
+    { headers: workspaceHeader(workspaceId) },
+  );
+  return unwrapApiData(data);
+}
+
+export async function getSessionChangesets(
+  port: number,
+  sessionId: string,
+  workspaceId?: string | null,
+): Promise<SessionChangesetList> {
+  const data = await requestJson<APIResponse<SessionChangesetList>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/changesets`,
+    { headers: workspaceHeader(workspaceId) },
+  );
+  return normalizeSessionChangesetList(unwrapApiData(data));
+}
+
+export async function getSessionChangeset(
+  port: number,
+  sessionId: string,
+  changesetId: string,
+  workspaceId?: string | null,
+): Promise<SessionChangeset> {
+  const data = await requestJson<APIResponse<SessionChangeset>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/changesets/${encodeURIComponent(changesetId)}`,
+    { headers: workspaceHeader(workspaceId) },
+  );
+  return normalizeSessionChangeset(unwrapApiData(data));
+}
+
+export async function reviewSessionChangeFile(
+  port: number,
+  sessionId: string,
+  changesetId: string,
+  filePath: string,
+  reviewed: boolean,
+  workspaceId?: string | null,
+): Promise<SessionFileReviewResult> {
+  const data = await requestJson<APIResponse<SessionFileReviewResult>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/changesets/${encodeURIComponent(changesetId)}/review`,
+    {
+      method: "POST",
+      headers: workspaceHeader(workspaceId),
+      body: JSON.stringify({ file_path: filePath, reviewed }),
+    },
   );
   return unwrapApiData(data);
 }
@@ -301,12 +572,14 @@ export async function controlSessionResource(
   kind: SessionResourceKind,
   resourceId: string,
   action: SessionResourceAction,
+  workspaceId?: string | null,
 ): Promise<SessionResourceControlResult> {
   const data = await requestJson<APIResponse<SessionResourceControlResult>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(resourceId)}/control`,
     {
       method: "POST",
+      headers: workspaceHeader(workspaceId),
       body: JSON.stringify({ action }),
     },
   );
@@ -317,6 +590,7 @@ export async function sendMessage(
   port: number,
   sessionId: string,
   payload: MessageRunRequest,
+  workspaceId?: string | null,
 ): Promise<MessageRunAccepted> {
   return unwrapApiData(
     await requestJson<APIResponse<MessageRunAccepted>>(
@@ -324,6 +598,7 @@ export async function sendMessage(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
       {
         method: "POST",
+        headers: workspaceHeader(workspaceId),
         body: JSON.stringify(payload),
       },
     ),
@@ -336,6 +611,7 @@ export async function sendUserMessage(
   content: string,
   agentId: string = DEFAULT_AGENT_ID,
   attachments: AttachmentRef[] = [],
+  workspaceId?: string | null,
 ): Promise<MessageRunAccepted> {
   const payload: MessageRunRequest = {
     message: {
@@ -352,18 +628,19 @@ export async function sendUserMessage(
     },
   };
 
-  return sendMessage(port, sessionId, payload);
+  return sendMessage(port, sessionId, payload, workspaceId);
 }
 
 export async function interruptSession(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
 ): Promise<InterruptSessionResult> {
   return unwrapApiData(
     await requestJson<APIResponse<InterruptSessionResult>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
-      { method: "POST" },
+      { method: "POST", headers: workspaceHeader(workspaceId) },
     ),
   );
 }
@@ -371,16 +648,26 @@ export async function interruptSession(
 export async function getSessionTraces(
   port: number,
   sessionId: string,
+  workspaceId?: string | null,
+  afterEventId?: string | null,
 ): Promise<TraceEvent[]> {
+  const query = afterEventId
+    ? `?${new URLSearchParams({ after_event_id: afterEventId }).toString()}`
+    : "";
   const result = await requestJson<APIResponse<TraceEvent[]>>(
     port,
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces`,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces${query}`,
+    {
+      headers: workspaceHeader(workspaceId),
+      timeoutMs: SESSION_HISTORY_TIMEOUT_MS,
+    },
   );
   return unwrapApiData(result);
 }
 
 export interface SessionStreamEvent {
   event_id: string;
+  part_id?: string | null;
   session_id: string;
   job_id: string | null;
   step_id: string | null;
@@ -392,8 +679,18 @@ export interface SessionStreamEvent {
   raw?: Record<string, unknown>;
 }
 
+export class TraceCursorGoneError extends Error {
+  readonly status = 410;
+
+  constructor(readonly eventId: string) {
+    super(`Trace 事件游标已失效: ${eventId}`);
+    this.name = "TraceCursorGoneError";
+  }
+}
+
 function parseSseBlock(block: string): SessionStreamEvent | null {
   let eventType = "message";
+  let eventId = "";
   const dataLines: string[] = [];
 
   for (const line of block.split("\n")) {
@@ -403,6 +700,11 @@ function parseSseBlock(block: string): SessionStreamEvent | null {
 
     if (line.startsWith("event:")) {
       eventType = line.slice(6).trim();
+      continue;
+    }
+
+    if (line.startsWith("id:")) {
+      eventId = line.slice(3).trim();
       continue;
     }
 
@@ -423,6 +725,9 @@ function parseSseBlock(block: string): SessionStreamEvent | null {
     if (!payload.type) {
       payload.type = eventType;
     }
+    if (!payload.event_id && eventId) {
+      payload.event_id = eventId;
+    }
     return payload;
   } catch {
     return {
@@ -442,6 +747,8 @@ export async function streamSessionEvents(
   port: number,
   sessionId: string,
   options?: {
+    workspaceId?: string | null;
+    afterEventId?: string | null;
     onEvent?: (event: SessionStreamEvent) => void;
     onError?: (error: unknown) => void;
     signal?: AbortSignal;
@@ -453,9 +760,16 @@ export async function streamSessionEvents(
     headers: {
       accept: "text/event-stream",
       "X-Local-Token": DEFAULT_BACKEND_TOKEN,
+      ...workspaceHeader(options?.workspaceId),
+      ...(options?.afterEventId
+        ? { "Last-Event-ID": options.afterEventId }
+        : {}),
     },
   });
 
+  if (response.status === 410) {
+    throw new TraceCursorGoneError(options?.afterEventId ?? "");
+  }
   if (!response.ok || !response.body) {
     throw new Error(
       `无法连接会话事件流: ${response.status} ${response.statusText}`,

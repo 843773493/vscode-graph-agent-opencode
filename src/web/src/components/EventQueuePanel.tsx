@@ -18,9 +18,7 @@ import {
 function sourceLabel(source: FrontendReceivedEvent["source"]): string {
   if (source === "frontend") return "页面操作";
   if (source === "initial_load") return "历史加载";
-  if (source === "pending_poll") return "后台刷新";
   if (source === "sse") return "实时事件";
-  if (source === "terminal_refresh") return "完成同步";
   return source;
 }
 

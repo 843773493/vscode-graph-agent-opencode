@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -13,6 +14,7 @@ from app.agents.tools.background import (
     create_monitor_session_agent_end_tool,
     create_system_time_emitter_tool,
 )
+from app.agents.tools.apply_patch import create_apply_patch_tool
 from app.agents.tools.python_execution import (
     create_python_execution_tool,
     get_python_executable,
@@ -38,6 +40,7 @@ def build_default_tools(
     session_service: Any | None = None,
     config_service: Any | None = None,
     terminal_manager_client: TerminalManagerClient | None = None,
+    workspace_root: Path | None = None,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
     if session_orchestrator is None:
@@ -52,10 +55,12 @@ def build_default_tools(
         raise RuntimeError("build_default_tools 需要显式传入 TerminalManagerClient")
     return [
         create_test_tool(),
+        create_apply_patch_tool(workspace_root=workspace_root),
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
         create_system_time_emitter_tool(
             session_id=session_id,
             agent_id=agent_id,
+            background_task_registry=background_task_registry,
             background_message_bus=background_message_bus,
         ),
         create_monitor_session_agent_end_tool(
@@ -77,6 +82,7 @@ def build_default_tools(
             terminal_client=terminal_manager_client,
         ),
         create_send_message_to_session_tool(
+            sender_session_id=session_id,
             sender_agent_id=sender_agent_id,
             session_orchestrator=session_orchestrator,
         ),
@@ -85,6 +91,7 @@ def build_default_tools(
 
 __all__ = [
     "build_default_tools",
+    "create_apply_patch_tool",
     "create_background_message_collection_tool",
     "create_monitor_session_agent_end_tool",
     "create_persistent_terminal_tool",

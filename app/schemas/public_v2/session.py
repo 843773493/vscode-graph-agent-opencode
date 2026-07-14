@@ -20,6 +20,7 @@ class SessionUpdateRequest(BaseModel):
     title: Optional[str] = None
     agent_id: Optional[str] = None
     title_source: Optional[TitleSource] = None
+    parent_session_id: Optional[str] = None
 
 
 class SessionDTO(TimestampedDTO):
@@ -28,6 +29,7 @@ class SessionDTO(TimestampedDTO):
     title: str
     title_source: TitleSource = "default"
     current_agent_id: str
+    parent_session_id: Optional[str] = None
 
 
 class SessionListResultDTO(BaseModel):
@@ -57,7 +59,10 @@ class SessionAutoContinueStatusDTO(BaseModel):
 class DeleteSessionResultDTO(BaseModel):
     session_id: str
     status: str
-    cleaned_jobs: int = 0
+    cleaned_execution_runs: int = Field(
+        default=0,
+        description="删除会话时清理的一次性 agent 执行记录数量；这些记录不属于后台连接。",
+    )
     cleaned_background_tasks: int = 0
     cleaned_terminals: int = 0
 

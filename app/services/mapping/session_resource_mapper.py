@@ -4,7 +4,6 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 from app.core.background_task_registry import BackgroundTaskHandle
-from app.schemas.public_v2.job import JobDTO
 from app.schemas.public_v2.session_resource import (
     SessionResourceAction,
     SessionResourceDTO,
@@ -12,42 +11,14 @@ from app.schemas.public_v2.session_resource import (
 
 
 class SessionResourceMapper:
-    def __init__(self, *, terminal_attach_url: Callable[[str], str]) -> None:
-        self._terminal_attach_url = terminal_attach_url
-
-    def job_to_resource(
+    def __init__(
         self,
-        job: JobDTO,
         *,
-        available_actions: list[SessionResourceAction],
-        progress_note: str | None = None,
-    ) -> SessionResourceDTO:
-        metadata: dict[str, object] = {
-            "mode": job.mode.value,
-            "entry_agent": job.entry_agent,
-            "progress": job.progress,
-        }
-        if progress_note:
-            metadata["progress_note"] = progress_note
-        if job.current_step:
-            metadata["current_step"] = job.current_step
-        if job.error_message:
-            metadata["error_message"] = job.error_message
-        metadata.update(job.metadata)
-
-        return SessionResourceDTO(
-            resource_id=job.job_id,
-            session_id=job.session_id,
-            kind="job",
-            name=f"Job / {job.entry_agent}",
-            status=job.status.value,
-            created_at=job.created_at,
-            updated_at=job.updated_at,
-            started_at=None,
-            ended_at=job.ended_at,
-            available_actions=available_actions,
-            metadata=metadata,
-        )
+        terminal_attach_url: Callable[[str], str],
+        browser_attach_url: Callable[[str], str],
+    ) -> None:
+        self._terminal_attach_url = terminal_attach_url
+        self._browser_attach_url = browser_attach_url
 
     def background_task_to_resource(
         self,
@@ -121,6 +92,56 @@ class SessionResourceMapper:
             session_id=session_id,
             kind="terminal",
             name=f"终端 / {terminal_id}",
+            status=status,
+            created_at=created_at,
+            updated_at=updated_at,
+            started_at=started_at,
+            ended_at=ended_at,
+            available_actions=available_actions,
+            metadata=metadata,
+        )
+
+    def browser_to_resource(
+        self,
+        browser: dict[str, object],
+        *,
+        available_actions: list[SessionResourceAction],
+    ) -> SessionResourceDTO:
+        browser_id = str(browser["browser_id"])
+        session_id = str(browser["session_id"])
+        status = str(browser.get("status") or "unknown")
+        created_at = parse_datetime(browser.get("created_at"), "created_at", browser_id)
+        updated_at = parse_datetime(browser.get("updated_at"), "updated_at", browser_id)
+        started_at = parse_optional_datetime(browser.get("started_at"), "started_at", browser_id)
+        ended_at = parse_optional_datetime(browser.get("ended_at"), "ended_at", browser_id)
+
+        metadata = {
+            "page_id": browser.get("page_id") or browser_id,
+            "url": browser.get("url"),
+            "title": browser.get("title"),
+            "viewport": browser.get("viewport"),
+            "attach_url": browser.get("attach_url") or self._browser_attach_url(browser_id),
+            "client_count": browser.get("client_count"),
+            "sequence": browser.get("sequence"),
+            "pending_dialog": browser.get("pending_dialog"),
+            "pending_file_chooser": browser.get("pending_file_chooser"),
+            "release_reason": browser.get("release_reason"),
+            "error_message": browser.get("error_message"),
+        }
+        if status == "lost":
+            metadata["status_note"] = "浏览器管理器重启后无法重新 attach 旧页面，请重新打开页面。"
+        elif status == "closed":
+            metadata["status_note"] = "浏览器页面已关闭，仅保留历史记录，当前不可 attach。"
+        elif status == "deleted":
+            metadata["status_note"] = "浏览器页面已删除，仅保留历史记录，当前不可 attach。"
+        elif status == "failed":
+            metadata["status_note"] = "浏览器页面启动或导航失败，仅保留失败记录。"
+
+        return SessionResourceDTO(
+            resource_id=browser_id,
+            session_id=session_id,
+            kind="browser",
+            name=f"浏览器 / {browser.get('title') or browser_id}",
             status=status,
             created_at=created_at,
             updated_at=updated_at,

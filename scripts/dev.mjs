@@ -1,13 +1,24 @@
 import path from "node:path";
-import { existsSync } from "node:fs";
+import os from "node:os";
+import { existsSync, mkdirSync } from "node:fs";
 
 const workspaceRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
+const defaultUserWorkspaceRoot = path.resolve(
+  process.env.BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT ??
+    path.join(os.homedir(), ".boxteams", "boxteam_workspace"),
+);
 const runtimeWorkspaceRoot = process.env.WORKSPACE_ROOT
   ? path.resolve(process.env.WORKSPACE_ROOT)
-  : workspaceRoot;
+  : defaultUserWorkspaceRoot;
+const gatewayConfigWorkspaceRoot = path.resolve(
+  process.env.BOXTEAM_GATEWAY_CONFIG_WORKSPACE_ROOT ??
+    path.join(workspaceRoot, "asset", "custom_tool_test_workspace"),
+);
 const webRoot = path.resolve(workspaceRoot, "src", "web");
 const terminalBackendRoot = path.resolve(workspaceRoot, "src", "terminal", "server");
 const terminalFrontendRoot = path.resolve(workspaceRoot, "src", "terminal", "client");
+const browserBackendRoot = path.resolve(workspaceRoot, "src", "browser", "server");
+const browserFrontendRoot = path.resolve(workspaceRoot, "src", "browser", "client");
 const isWindows = process.platform === "win32";
 // TODO: 当前仓库保留 Windows 版 tools/bun.exe，Linux/macOS 先复用启动脚本的 Bun。
 const bunBin = isWindows
@@ -23,14 +34,19 @@ const frontendPort = "8011";
 const terminalBackendPort = "8012";
 const terminalFrontendPort = "8013";
 const gatewayPort = "8014";
+const browserBackendPort = "8015";
+const browserFrontendPort = "8016";
 const host = "127.0.0.1";
 const terminalHost = process.env.BOXTEAM_TERMINAL_LISTEN_HOST ?? "0.0.0.0";
+const browserHost = process.env.BOXTEAM_BROWSER_LISTEN_HOST ?? "0.0.0.0";
 const backendDebugPort = "8002";
 const frontendHealthUrl = `http://${host}:${frontendPort}/health`;
 const backendHealthUrl = `http://${host}:${port}/api/v1/health`;
 const gatewayHealthUrl = `http://${host}:${gatewayPort}/api/gateway/health`;
 const terminalBackendHealthUrl = `http://${host}:${terminalBackendPort}/health`;
 const terminalFrontendHealthUrl = `http://${host}:${terminalFrontendPort}/health`;
+const browserBackendHealthUrl = `http://${host}:${browserBackendPort}/health`;
+const browserFrontendHealthUrl = `http://${host}:${browserFrontendPort}/health`;
 const onlyLaunch = process.argv.slice(2).some((arg) => arg === "--only-launch");
 
 function requirePath(targetPath, label) {
@@ -101,6 +117,8 @@ async function killWindowsPort() {
       !trimmed.includes(`:${terminalBackendPort}`) &&
       !trimmed.includes(`:${terminalFrontendPort}`) &&
       !trimmed.includes(`:${gatewayPort}`) &&
+      !trimmed.includes(`:${browserBackendPort}`) &&
+      !trimmed.includes(`:${browserFrontendPort}`) &&
       !trimmed.includes(`:${backendDebugPort}`)
     )
       continue;
@@ -135,6 +153,8 @@ async function killUnixPort() {
         !line.includes(`:${terminalBackendPort}`) &&
         !line.includes(`:${terminalFrontendPort}`) &&
         !line.includes(`:${gatewayPort}`) &&
+        !line.includes(`:${browserBackendPort}`) &&
+        !line.includes(`:${browserFrontendPort}`) &&
         !line.includes(`:${backendDebugPort}`)
       )
         continue;
@@ -151,7 +171,16 @@ async function killUnixPort() {
     return;
   }
 
-  for (const targetPort of [port, frontendPort, terminalBackendPort, terminalFrontendPort, gatewayPort, backendDebugPort]) {
+  for (const targetPort of [
+    port,
+    frontendPort,
+    terminalBackendPort,
+    terminalFrontendPort,
+    gatewayPort,
+    browserBackendPort,
+    browserFrontendPort,
+    backendDebugPort,
+  ]) {
     const lsof = Bun.spawnSync(["lsof", "-ti", `tcp:${targetPort}`], {
       cwd: workspaceRoot,
       stdout: "pipe",
@@ -208,7 +237,11 @@ async function main() {
   requirePath(webRoot, "浏览器前端目录");
   requirePath(terminalBackendRoot, "终端后端目录");
   requirePath(terminalFrontendRoot, "终端前端目录");
+  requirePath(browserBackendRoot, "浏览器控制后端目录");
+  requirePath(browserFrontendRoot, "浏览器控制前端目录");
+  mkdirSync(defaultUserWorkspaceRoot, { recursive: true });
   requirePath(runtimeWorkspaceRoot, "运行工作区目录");
+  requirePath(gatewayConfigWorkspaceRoot, "Gateway 配置工作区目录");
 
   await (isWindows ? killWindowsPort() : killUnixPort());
 
@@ -216,6 +249,13 @@ async function main() {
     WORKSPACE_ROOT: runtimeWorkspaceRoot,
     BOXTEAM_PROJECT_ROOT: workspaceRoot,
     BOXTEAM_TERMINAL_WORKSPACE_ROOT: runtimeWorkspaceRoot,
+    BOXTEAM_BROWSER_WORKSPACE_ROOT: runtimeWorkspaceRoot,
+    BOXTEAM_BROWSER_BACKEND_URL: `http://${host}:${browserBackendPort}`,
+    BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${browserFrontendPort}`,
+  };
+  const defaultBackendEnv = {
+    ...runtimeEnv,
+    WORKSPACE_ROOT: defaultUserWorkspaceRoot,
   };
 
   const frontend = spawnDetached(bunBin, ["run", "dev"], webRoot, runtimeEnv);
@@ -253,6 +293,40 @@ async function main() {
     terminalFrontendRoot,
     runtimeEnv,
   );
+  const browserBackend = spawnDetached(
+    nodeBin,
+    [
+      "backend.js",
+      "--host",
+      browserHost,
+      "--port",
+      browserBackendPort,
+      "--workspace-root",
+      runtimeWorkspaceRoot,
+      "--frontend-url",
+      `http://${host}:${browserFrontendPort}`,
+    ],
+    browserBackendRoot,
+    runtimeEnv,
+  );
+  const browserFrontend = spawnDetached(
+    nodeBin,
+    [
+      "server.js",
+      "--host",
+      browserHost,
+      "--port",
+      browserFrontendPort,
+      "--backend-url",
+      "auto",
+      "--workspace-root",
+      runtimeWorkspaceRoot,
+      "--asset-root",
+      workspaceRoot,
+    ],
+    browserFrontendRoot,
+    runtimeEnv,
+  );
   const backendArgs = [];
   if (isPortListening(backendDebugPort)) {
     console.warn(
@@ -279,7 +353,7 @@ async function main() {
     pythonBin,
     backendArgs,
     workspaceRoot,
-    runtimeEnv,
+    defaultBackendEnv,
   );
   const gateway = spawnDetached(
     pythonBin,
@@ -297,10 +371,12 @@ async function main() {
     workspaceRoot,
     {
       ...runtimeEnv,
-      BOXTEAM_GATEWAY_ROOT: path.join(runtimeWorkspaceRoot, ".boxteam", "gateway"),
+      BOXTEAM_GATEWAY_ROOT: path.join(defaultUserWorkspaceRoot, ".boxteam", "gateway"),
       BOXTEAM_DEFAULT_BACKEND_URL: `http://${host}:${port}`,
-      BOXTEAM_DEFAULT_WORKSPACE_ROOT: runtimeWorkspaceRoot,
-      BOXTEAM_GATEWAY_FORCE_DEFAULT_ACTIVE: "1",
+      BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultUserWorkspaceRoot,
+      BOXTEAM_GATEWAY_CONFIG_WORKSPACE_ROOT: gatewayConfigWorkspaceRoot,
+      BOXTEAM_BROWSER_BACKEND_URL: `http://${host}:${browserBackendPort}`,
+      BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${browserFrontendPort}`,
     },
   );
 
@@ -310,6 +386,8 @@ async function main() {
     waitForHttpOk(gatewayHealthUrl, "gateway"),
     waitForHttpOk(terminalBackendHealthUrl, "terminal backend"),
     waitForHttpOk(terminalFrontendHealthUrl, "terminal frontend"),
+    waitForHttpOk(browserBackendHealthUrl, "browser backend"),
+    waitForHttpOk(browserFrontendHealthUrl, "browser frontend"),
   ]);
 
   if (onlyLaunch) {
@@ -318,11 +396,21 @@ async function main() {
     gateway.unref();
     terminalBackend.unref();
     terminalFrontend.unref();
+    browserBackend.unref();
+    browserFrontend.unref();
     return;
   }
 
   const stopBoth = async (exitCode) => {
-    for (const proc of [frontend, backend, gateway, terminalBackend, terminalFrontend]) {
+    for (const proc of [
+      frontend,
+      backend,
+      gateway,
+      terminalBackend,
+      terminalFrontend,
+      browserBackend,
+      browserFrontend,
+    ]) {
       try {
         proc.kill();
       } catch {
@@ -367,10 +455,32 @@ async function main() {
       void stopBoth(1);
     });
 
+  browserBackend.exited
+    .then((code) => stopBoth(code))
+    .catch((error) => {
+      console.error(error);
+      void stopBoth(1);
+    });
+
+  browserFrontend.exited
+    .then((code) => stopBoth(code))
+    .catch((error) => {
+      console.error(error);
+      void stopBoth(1);
+    });
+
   process.on("SIGINT", () => void stopBoth(130));
   process.on("SIGTERM", () => void stopBoth(143));
 
-  await Promise.race([frontend.exited, backend.exited, gateway.exited]);
+  await Promise.race([
+    frontend.exited,
+    backend.exited,
+    gateway.exited,
+    terminalBackend.exited,
+    terminalFrontend.exited,
+    browserBackend.exited,
+    browserFrontend.exited,
+  ]);
 }
 
 await main();

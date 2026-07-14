@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_artifact_service, get_event_service, get_job_service, get_request_id, verify_local_token
@@ -54,11 +54,22 @@ async def list_job_events(
 @router.get("/{job_id}/events/stream", summary="订阅任务事件流")
 async def stream_job_events(
     job_id: str,
+    request: Request,
     _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
     event_service: EventService = Depends(get_event_service),
 ):
+    subscriber_metadata = {
+        "request_id": request_id or "",
+        "client_host": request.client.host if request.client else "",
+        "user_agent": request.headers.get("user-agent", ""),
+    }
+
     async def event_generator():
-        async for chunk in event_service.stream_sse(job_id):
+        async for chunk in event_service.stream_sse(
+            job_id,
+            subscriber_metadata=subscriber_metadata,
+        ):
             yield chunk
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

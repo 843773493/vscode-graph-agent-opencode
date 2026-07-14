@@ -1,6 +1,8 @@
 import { useCallback } from "react";
 import {
   compactSessionContext as apiCompactSessionContext,
+  createSession as apiCreateSession,
+  DEFAULT_SESSION_TITLE,
   interruptSession as apiInterruptSession,
   sendUserMessage as apiSendMessage,
 } from "../api";
@@ -10,38 +12,130 @@ import { cloneMaps } from "../state/appStateMaps";
 import { updateSessionAttachmentSummary } from "../state/attachments";
 import { writePendingList } from "../state/conversations";
 import { appendFrontendEvent } from "../state/traceEvents";
+import { writeLastSessionId } from "../state/storage";
 import type { SetAppState } from "./contentViewLoaderTypes";
+import { sessionScopeKey } from "../state/sessionScope";
 
 export function useSessionRunActions({
   apiPort,
   currentSession,
+  activeGatewayWorkspaceId,
+  currentSessionGatewayWorkspaceId,
+  currentSessionCacheKey,
+  defaultGatewayWorkspaceId,
   contentView,
   setState,
   refreshAgentStateSnapshot,
 }: {
   apiPort: number;
   currentSession: Session | null;
+  activeGatewayWorkspaceId: string | null;
+  currentSessionGatewayWorkspaceId: string | null;
+  currentSessionCacheKey: string | null;
+  defaultGatewayWorkspaceId: string | null;
   contentView: ConversationContentView;
   setState: SetAppState;
   refreshAgentStateSnapshot: (sessionId: string) => Promise<void>;
 }) {
   const sendMessage = useCallback(
     async (content: string, attachments: AttachmentRef[] = []) => {
-      if (!currentSession) {
-        throw new Error("当前没有可发送消息的会话");
+      let session = currentSession;
+      if (!session) {
+        const targetWorkspaceId = activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
+        setState((prev) => ({ ...prev, status: "正在创建会话" }));
+        try {
+          session = await apiCreateSession(
+            apiPort,
+            DEFAULT_SESSION_TITLE,
+            targetWorkspaceId,
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((prev) => ({ ...prev, status: `创建会话失败: ${message}` }));
+          throw error;
+        }
+        const createdSession = session;
+        setState((prev) => {
+          const next = cloneMaps(prev);
+          const resolvedWorkspaceId =
+            targetWorkspaceId ?? prev.activeGatewayWorkspaceId;
+          const workspace = prev.gatewayWorkspaces.find(
+            (item) => item.workspace_id === resolvedWorkspaceId,
+          );
+          const previousWorkspaceSessions = resolvedWorkspaceId
+            ? prev.sessionsByWorkspace.get(resolvedWorkspaceId) ?? []
+            : prev.sessions;
+          if (resolvedWorkspaceId && workspace) {
+            next.activeGatewayWorkspaceId = resolvedWorkspaceId;
+            next.currentSessionWorkspaceId = resolvedWorkspaceId;
+            next.workspaceRoot = workspace.root_path;
+            next.workspaceName = workspace.name;
+          }
+          next.sessions = [
+            createdSession,
+            ...previousWorkspaceSessions.filter(
+              (item) => item.session_id !== createdSession.session_id,
+            ),
+          ];
+          if (resolvedWorkspaceId) {
+            next.sessionsByWorkspace.set(resolvedWorkspaceId, next.sessions);
+            next.sessionGatewayWorkspaceById.set(
+              sessionScopeKey(resolvedWorkspaceId, createdSession.session_id),
+              resolvedWorkspaceId,
+            );
+          }
+          next.currentSession = createdSession;
+          next.currentSessionWorkspaceId = resolvedWorkspaceId ?? null;
+          writeLastSessionId(createdSession.session_id);
+          next.messages = [];
+          next.traceEvents = [];
+          next.llmRequestLogs = [];
+          next.llmRequestLogsLoadedAt = null;
+          next.llmRequestLogsLoading = false;
+          next.llmRequestLogsError = null;
+          next.sessionResources = [];
+          next.sessionResourcesLoadedAt = null;
+          next.sessionResourcesLoading = false;
+          next.sessionResourcesError = null;
+          next.contentView = "default";
+          appendFrontendEvent(
+            next.eventQueuesBySession,
+            createdSession.session_id,
+            "session_created",
+            "创建会话",
+            {
+              session_id: createdSession.session_id,
+              title: createdSession.title,
+            },
+            createdSession.title,
+            resolvedWorkspaceId
+              ? sessionScopeKey(resolvedWorkspaceId, createdSession.session_id)
+              : createdSession.session_id,
+          );
+          return next;
+        });
       }
 
-      const session = currentSession;
+      const activeSession = session;
+      const activeSessionGatewayWorkspaceId =
+        currentSessionGatewayWorkspaceId ??
+        activeGatewayWorkspaceId ??
+        defaultGatewayWorkspaceId;
+      const activeSessionCacheKey =
+        currentSessionCacheKey ??
+        (activeSessionGatewayWorkspaceId
+          ? sessionScopeKey(activeSessionGatewayWorkspaceId, activeSession.session_id)
+          : activeSession.session_id);
       const pendingSubmissionId = `pending_submission_${Date.now()}`;
       const submittedAt = new Date().toISOString();
       setState((prev) => {
         const next = cloneMaps(prev);
         const conversation: ConversationView = {
           conversationId: pendingSubmissionId,
-          sessionId: session.session_id,
+          sessionId: activeSession.session_id,
           userMessage: {
             message_id: pendingSubmissionId,
-            session_id: session.session_id,
+            session_id: activeSession.session_id,
             role: "user",
             content,
             metadata: {
@@ -52,6 +146,7 @@ export function useSessionRunActions({
             created_at: submittedAt,
             updated_at: submittedAt,
           },
+          assistantMessages: [],
           events: [],
           status: "running",
           jobId: null,
@@ -61,13 +156,13 @@ export function useSessionRunActions({
         };
         updateSessionAttachmentSummary(
           next.sessionAttachmentSummaries,
-          session.session_id,
+          activeSession.session_id,
           attachments,
           submittedAt,
         );
         const pendingList =
-          next.pendingConversations.get(session.session_id) ?? [];
-        next.pendingConversations.set(session.session_id, [
+          next.pendingConversations.get(activeSessionCacheKey) ?? [];
+        next.pendingConversations.set(activeSessionCacheKey, [
           ...pendingList,
           conversation,
         ]);
@@ -80,20 +175,21 @@ export function useSessionRunActions({
       try {
         accepted = await apiSendMessage(
           apiPort,
-          session.session_id,
+          activeSession.session_id,
           content,
-          session.current_agent_id,
+          activeSession.current_agent_id,
           attachments,
+          activeSessionGatewayWorkspaceId,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setState((prev) => {
           const next = cloneMaps(prev);
           const pendingList =
-            next.pendingConversations.get(session.session_id) ?? [];
+            next.pendingConversations.get(activeSessionCacheKey) ?? [];
           writePendingList(
             next.pendingConversations,
-            session.session_id,
+            activeSessionCacheKey,
             pendingList.filter(
               (conversation) =>
                 conversation.pendingSubmissionId !== pendingSubmissionId,
@@ -111,10 +207,10 @@ export function useSessionRunActions({
         const next = cloneMaps(prev);
         const conversation: ConversationView = {
           conversationId: messageId,
-          sessionId: session.session_id,
+          sessionId: activeSession.session_id,
           userMessage: {
             message_id: messageId,
-            session_id: session.session_id,
+            session_id: activeSession.session_id,
             role: "user",
             content,
             metadata: {
@@ -126,6 +222,7 @@ export function useSessionRunActions({
             created_at: submittedAt,
             updated_at: submittedAt,
           },
+          assistantMessages: [],
           events: [],
           status: accepted.status === "queued" ? "queued" : "running",
           jobId,
@@ -133,8 +230,8 @@ export function useSessionRunActions({
           pendingSubmissionId,
           source: "pending",
         };
-        const pendingList = next.pendingConversations.get(session.session_id) ?? [];
-        next.pendingConversations.set(session.session_id, [
+        const pendingList = next.pendingConversations.get(activeSessionCacheKey) ?? [];
+        next.pendingConversations.set(activeSessionCacheKey, [
           ...pendingList.filter(
             (item) => item.pendingSubmissionId !== pendingSubmissionId,
           ),
@@ -146,7 +243,15 @@ export function useSessionRunActions({
         return next;
       });
     },
-    [apiPort, currentSession, setState],
+    [
+      activeGatewayWorkspaceId,
+      apiPort,
+      currentSession,
+      currentSessionCacheKey,
+      currentSessionGatewayWorkspaceId,
+      defaultGatewayWorkspaceId,
+      setState,
+    ],
   );
 
   const compactSession = useCallback(async () => {
@@ -162,7 +267,11 @@ export function useSessionRunActions({
     }));
 
     try {
-      const result = await apiCompactSessionContext(apiPort, session.session_id);
+      const result = await apiCompactSessionContext(
+        apiPort,
+        session.session_id,
+        currentSessionGatewayWorkspaceId,
+      );
       setState((prev) => {
         const next = cloneMaps(prev);
         next.compactLoading = false;
@@ -187,6 +296,7 @@ export function useSessionRunActions({
             history_file_path: result.history_file_path,
           },
           result.message,
+          currentSessionCacheKey ?? result.session_id,
         );
         return next;
       });
@@ -207,6 +317,7 @@ export function useSessionRunActions({
     apiPort,
     contentView,
     currentSession,
+    currentSessionGatewayWorkspaceId,
     refreshAgentStateSnapshot,
     setState,
   ]);
@@ -217,9 +328,13 @@ export function useSessionRunActions({
     }
 
     setState((prev) => ({ ...prev, status: "正在中断生成..." }));
-    const result = await apiInterruptSession(apiPort, currentSession.session_id);
+    const result = await apiInterruptSession(
+      apiPort,
+      currentSession.session_id,
+      currentSessionGatewayWorkspaceId,
+    );
     setState((prev) => ({ ...prev, status: `已中断: ${result.phase}` }));
-  }, [apiPort, currentSession, setState]);
+  }, [apiPort, currentSession, currentSessionGatewayWorkspaceId, setState]);
 
   return {
     compactSession,

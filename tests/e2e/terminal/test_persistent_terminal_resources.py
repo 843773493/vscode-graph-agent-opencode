@@ -321,6 +321,78 @@ async def test_persistent_terminal_tool_is_visible_and_resource_can_be_attached(
 
 
 @pytest.mark.asyncio
+async def test_terminal_resize_does_not_create_fake_newlines_or_input(
+    terminal_manager_processes: tuple[int, int],
+):
+    backend_port, _frontend_port = terminal_manager_processes
+    terminal_api_url = f"http://127.0.0.1:{backend_port}"
+    async with httpx.AsyncClient(base_url=terminal_api_url, timeout=5) as terminal_client:
+        create_response = await terminal_client.post(
+            "/api/terminals",
+            json={
+                "session_id": "ses_terminal_resize_regression",
+                "title": "Terminal Resize Regression",
+                "cols": 80,
+                "rows": 24,
+            },
+        )
+        assert create_response.status_code == 200
+        terminal_id = create_response.json()["data"]["terminal_id"]
+
+        deadline = time.monotonic() + 5
+        stable_snapshot: dict[str, object] | None = None
+        while time.monotonic() < deadline:
+            snapshot_response = await terminal_client.get(f"/api/terminals/{terminal_id}")
+            assert snapshot_response.status_code == 200
+            candidate = snapshot_response.json()["data"]
+            if str(candidate["buffer"]).endswith("$ "):
+                stable_snapshot = candidate
+                break
+            await asyncio.sleep(0.05)
+        assert stable_snapshot is not None, "交互式 shell 未在期限内进入 prompt"
+
+        async with websockets.connect(f"ws://127.0.0.1:{backend_port}/terminal") as websocket:
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "attach",
+                        "terminalId": terminal_id,
+                        "cols": 80,
+                        "rows": 24,
+                    }
+                )
+            )
+            await _recv_ws_type(websocket, "attached")
+            await asyncio.sleep(0.1)
+            before_response = await terminal_client.get(f"/api/terminals/{terminal_id}")
+            before = before_response.json()["data"]
+
+            for _ in range(12):
+                await websocket.send(json.dumps({"type": "resize", "cols": 80, "rows": 24}))
+            await asyncio.sleep(0.15)
+            unchanged_response = await terminal_client.get(f"/api/terminals/{terminal_id}")
+            unchanged = unchanged_response.json()["data"]
+            assert unchanged["sequence"] == before["sequence"]
+            assert unchanged["last_input"] is None
+            assert unchanged["last_input_source"] is None
+
+            for cols in (79, 78, 77, 76):
+                await websocket.send(json.dumps({"type": "resize", "cols": cols, "rows": 24}))
+            await asyncio.sleep(0.2)
+
+        resized_response = await terminal_client.get(f"/api/terminals/{terminal_id}")
+        resized = resized_response.json()["data"]
+        display_buffer = str(resized["display_buffer"])
+        assert resized["last_input"] is None
+        assert resized["last_input_source"] is None
+        assert "\r\x1b[K\r" in display_buffer
+        assert "\r\n\x1b[K\r\n" not in display_buffer
+
+        delete_response = await terminal_client.delete(f"/api/terminals/{terminal_id}")
+        assert delete_response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_session_resources_restore_missing_terminal_refs_from_agent_state(
     terminal_manager_processes: tuple[int, int],
     client: httpx.AsyncClient,

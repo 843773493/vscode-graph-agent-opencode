@@ -11,9 +11,13 @@ export interface Message {
 
 export interface Session {
   session_id: string;
+  workspace_id: string;
   title: string;
-  status: string;
-  agent_id: string;
+  title_source: 'default' | 'user' | 'auto';
+  current_agent_id: string;
+  parent_session_id: string | null;
+  status?: string;
+  agent_id?: string;
   created_at: string | null;
   updated_at: string | null;
 }

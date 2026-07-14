@@ -136,6 +136,7 @@ export interface SessionDTO {
   title: string;
   title_source?: "default" | "user" | "auto";
   current_agent_id: string;
+  parent_session_id?: string | null;
 }
 export interface SessionExecutionEventDTO {
   event_id: string;

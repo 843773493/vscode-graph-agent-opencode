@@ -8,6 +8,8 @@ import {
     listSessions as sharedListSessions,
     sendMessage as sharedSendMessage,
     streamSessionEvents as sharedStreamSessionEvents,
+    TraceCursorGoneError,
+    updateSession as sharedUpdateSession,
 } from '../../shared/api.js';
 import {
     DEFAULT_AGENT_ID,
@@ -36,7 +38,9 @@ export interface SessionAcceptResult {
 
 export interface StreamEvent<TPayload = Record<string, unknown>> {
   eventType: string;
+  eventId?: string;
   payload: TPayload;
+  event?: TraceEvent;
 }
 
 function normalizePageResult<T>(value: unknown): PageResult<T> {
@@ -64,6 +68,14 @@ export async function createSession(port: number, title: string = DEFAULT_SESSIO
   return (await sharedCreateSession(port, title)) as Session;
 }
 
+export async function updateSession(
+  port: number,
+  sessionId: string,
+  payload: { parent_session_id: string | null },
+): Promise<Session> {
+  return (await sharedUpdateSession(port, sessionId, payload)) as Session;
+}
+
 export async function listMessages(port: number, sessionId: string): Promise<PageResult<Message>> {
   return normalizePageResult<Message>(await sharedListMessages(port, sessionId));
 }
@@ -76,14 +88,15 @@ export async function getJob(port: number, jobId: string): Promise<ActiveJob | n
   return (await sharedGetJob(port, jobId)) as ActiveJob | null;
 }
 
-export async function getSessionTraces(port: number, sessionId: string): Promise<TraceEvent[]> {
-  return (await sharedGetSessionTraces(port, sessionId)) as TraceEvent[];
+export async function getSessionTraces(port: number, sessionId: string, afterEventId?: string | null): Promise<TraceEvent[]> {
+  return (await sharedGetSessionTraces(port, sessionId, afterEventId)) as TraceEvent[];
 }
 
 export async function streamSessionEvents(
   port: number,
   sessionId: string,
   options?: {
+    afterEventId?: string | null;
     onEvent?: (event: StreamEvent) => void;
     onError?: (error: unknown) => void;
     signal?: AbortSignal;
@@ -93,3 +106,4 @@ export async function streamSessionEvents(
 }
 
 export { DEFAULT_AGENT_ID, DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_PORT, DEFAULT_BACKEND_TOKEN, DEFAULT_SESSION_TITLE };
+export { TraceCursorGoneError };

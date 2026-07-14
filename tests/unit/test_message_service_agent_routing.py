@@ -6,6 +6,7 @@ import pytest
 
 from app.core.job_event_bus import JobEventBus
 from app.runtime.session_orchestrator import SessionOrchestrator
+from app.schemas.public_v2.common import MessageRole
 
 
 class _FakeSession:
@@ -28,15 +29,20 @@ class _FakeConfigService:
 
 
 class _FakeMessageService:
+    def __init__(self) -> None:
+        self.created_messages = []
+
     async def create(self, session_id: str, message_create):
         from app.schemas.public_v2.message import MessageDTO
-        from app.schemas.public_v2.common import MessageRole
+
+        self.created_messages.append(message_create)
 
         return MessageDTO(
             message_id="msg_test",
             session_id=session_id,
-            role=MessageRole.user,
+            role=message_create.role,
             content=message_create.content,
+            metadata=message_create.metadata,
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
@@ -76,6 +82,36 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
     assert captured["message"] == "hello"
     assert captured["agent_id"] == "default"
     assert result.job_id == "job_test_001"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_preserves_system_reminder_role_and_metadata():
+    class _FakeJobService:
+        async def start_job(self, *args, **kwargs) -> str:
+            return "job_system_reminder"
+
+    message_service = _FakeMessageService()
+    orchestrator = SessionOrchestrator(
+        message_service=message_service,
+        session_service=_FakeSessionService("default"),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=JobEventBus(),
+    )
+
+    await orchestrator.create_and_run(
+        "ses_target",
+        "<system_reminder>提醒</system_reminder>",
+        message_role=MessageRole.system,
+        metadata={"simulate_user": False, "sender_session_id": "ses_sender"},
+    )
+
+    created = message_service.created_messages[0]
+    assert created.role == MessageRole.system
+    assert created.metadata == {
+        "simulate_user": False,
+        "sender_session_id": "ses_sender",
+    }
 
 
 @pytest.mark.asyncio

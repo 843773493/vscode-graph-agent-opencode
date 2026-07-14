@@ -1,31 +1,29 @@
 import { useEffect } from "react";
-import {
-  getSessionTraces,
-  listMessages,
-} from "../api";
+import { listMessages } from "../api";
 import { cloneMaps } from "../state/appStateMaps";
-import {
-  updateAttachmentSummariesFromMessages,
-  updateAttachmentSummariesFromTraces,
-} from "../state/attachments";
-import {
-  appendFrontendEvent,
-  appendReceivedEvents,
-  dedupeTraceEvents,
-} from "../state/traceEvents";
+import { updateAttachmentSummariesFromMessages } from "../state/attachments";
+import { appendFrontendEvent } from "../state/traceEvents";
 import type { SetAppState } from "./contentViewLoaderTypes";
 
 export function useSessionHistoryLoader({
   apiPort,
   sessionId,
+  workspaceId,
+  sessionCacheKey,
+  reloadNonce,
   setState,
 }: {
   apiPort: number | null;
   sessionId: string | null;
+  workspaceId: string | null;
+  sessionCacheKey: string | null;
+  reloadNonce: number;
   setState: SetAppState;
 }) {
   useEffect(() => {
     if (!apiPort || !sessionId) return;
+    const targetWorkspaceId = workspaceId;
+    const targetSessionCacheKey = sessionCacheKey ?? sessionId;
 
     let cancelled = false;
     setState((prev) => {
@@ -37,37 +35,29 @@ export function useSessionHistoryLoader({
         "session_load_started",
         "开始加载会话历史",
         { session_id: sessionId },
+        "",
+        targetSessionCacheKey,
       );
       return next;
     });
 
-    void (async () => {
+    const timerId = window.setTimeout(() => void (async () => {
       try {
-        const [messages, traceEvents] = await Promise.all([
-          listMessages(apiPort, sessionId),
-          getSessionTraces(apiPort, sessionId),
-        ]);
+        const messages = await listMessages(apiPort, sessionId, targetWorkspaceId);
         if (cancelled) return;
         setState((prev) => {
           if (prev.currentSession?.session_id !== sessionId) return prev;
+          if (
+            targetWorkspaceId &&
+            prev.currentSessionWorkspaceId !== targetWorkspaceId
+          ) {
+            return prev;
+          }
           const next = cloneMaps(prev);
-          const fetchedTraceEvents = dedupeTraceEvents(traceEvents);
           next.messages = messages.items ?? [];
-          next.traceEvents = fetchedTraceEvents;
           updateAttachmentSummariesFromMessages(
             next.sessionAttachmentSummaries,
             next.messages,
-          );
-          updateAttachmentSummariesFromTraces(
-            next.sessionAttachmentSummaries,
-            sessionId,
-            fetchedTraceEvents,
-          );
-          appendReceivedEvents(
-            next.eventQueuesBySession,
-            sessionId,
-            fetchedTraceEvents,
-            "initial_load",
           );
           appendFrontendEvent(
             next.eventQueuesBySession,
@@ -77,9 +67,11 @@ export function useSessionHistoryLoader({
             {
               session_id: sessionId,
               message_count: messages.items?.length ?? 0,
-              trace_event_count: fetchedTraceEvents.length,
             },
+            "",
+            targetSessionCacheKey,
           );
+          next.status = "会话历史加载完成";
           return next;
         });
       } catch (error) {
@@ -98,14 +90,23 @@ export function useSessionHistoryLoader({
             "会话历史加载失败",
             { session_id: sessionId, error: message },
             message,
+            targetSessionCacheKey,
           );
           return next;
         });
       }
-    })();
+    })(), 120);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timerId);
     };
-  }, [apiPort, sessionId, setState]);
+  }, [
+    apiPort,
+    reloadNonce,
+    sessionCacheKey,
+    sessionId,
+    setState,
+    workspaceId,
+  ]);
 }

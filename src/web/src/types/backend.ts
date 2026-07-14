@@ -23,6 +23,14 @@ import type {
   SessionResourceDTO,
   SessionResourceListDTO,
 } from "./gen/session_resource";
+import type {
+  SessionChangesSummaryDTO,
+  SessionChangesetDTO,
+  SessionChangesetListDTO,
+  SessionChangesetListItemDTO,
+  SessionFileChangeDTO,
+  SessionFileReviewResultDTO,
+} from "./gen/session_changes";
 import type { TraceEventDTO } from "./gen/trace";
 export type {
   WorkspaceDTO as WorkspaceInfo,
@@ -59,6 +67,7 @@ export type SessionResourceControlResult = Omit<
 };
 
 type TraceRaw = NonNullable<TraceEventDTO["raw"]> & {
+  part_id?: string | null;
   payload?: Record<string, unknown>;
   session_id?: string;
   agent_id?: string | null;
@@ -75,6 +84,47 @@ export interface TraceEvent
   payload?: Record<string, unknown>;
   raw?: TraceRaw;
 }
+
+export type SessionChangesSummary = Required<SessionChangesSummaryDTO>;
+
+export type SessionChangesetKind = "all" | "turn";
+export type SessionFileChangeKind = "create" | "edit" | "delete";
+
+export type SessionChangesetListItem = Omit<
+  SessionChangesetListItemDTO,
+  "is_default" | "summary"
+> & {
+  is_default: boolean;
+  summary: SessionChangesSummary;
+};
+
+export type SessionChangesetList = Omit<SessionChangesetListDTO, "items"> & {
+  items: SessionChangesetListItem[];
+};
+
+export type SessionFileChange = Omit<
+  SessionFileChangeDTO,
+  "additions" | "deletions" | "reviewed" | "tool_call_ids" | "turn_ids"
+> & {
+  kind: SessionFileChangeKind;
+  additions: number;
+  deletions: number;
+  reviewed: boolean;
+  tool_call_ids: string[];
+  turn_ids: string[];
+};
+
+export type SessionChangeset = Omit<
+  SessionChangesetDTO,
+  "status" | "summary" | "files"
+> & {
+  change_kind: SessionChangesetKind;
+  status: "ready";
+  summary: SessionChangesSummary;
+  files: SessionFileChange[];
+};
+
+export type SessionFileReviewResult = SessionFileReviewResultDTO;
 
 export interface APIResponse<T> {
   code: number;
@@ -98,6 +148,8 @@ export interface GatewayWorkspace {
   status: "ready" | "offline";
   active: boolean;
   managed: boolean;
+  removable: boolean;
+  system_default: boolean;
   remote: Record<string, unknown>;
 }
 
@@ -121,6 +173,61 @@ export interface AddSshGatewayWorkspaceRequest {
   remote_backend_host: string;
   remote_backend_port: number;
   remote_workspace_path: string;
+}
+
+export interface ReorderGatewayWorkspacesRequest {
+  workspace_ids: string[];
+}
+
+export interface WebUiMainAreaRatios {
+  agent_sessions: number;
+  chat: number;
+  workspace_preview: number;
+  auxiliary: number;
+}
+
+export interface WebUiLayoutSettings {
+  agent_sessions_panel_open?: boolean | null;
+  auxiliary_visible?: boolean | null;
+  main_area_ratios?: WebUiMainAreaRatios | null;
+  workspace_preview_visible?: boolean | null;
+  workspace_preview_maximized?: boolean | null;
+  workspace_preview_file_paths?: string[] | null;
+  workspace_preview_active_file_path?: string | null;
+  customizations_collapsed?: boolean | null;
+  customizations_height?: number | null;
+  content_view?:
+    | "default"
+    | "events"
+    | "requests"
+    | "changes"
+    | "resources"
+    | "agent"
+    | null;
+}
+
+export interface WebUiSettings {
+  layout: WebUiLayoutSettings;
+  recent_local_workspace_paths: string[];
+}
+
+export interface WebUiSettingsUpdate {
+  layout?: WebUiLayoutSettings | null;
+  recent_local_workspace_paths?: string[] | null;
+}
+
+export interface LocalDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface LocalDirectoryList {
+  path: string;
+  parent_path?: string | null;
+  home_path: string;
+  entries: LocalDirectoryEntry[];
+  truncated: boolean;
+  limit: number;
 }
 
 export type SessionResourceKind = SessionResourceDTO["kind"];

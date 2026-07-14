@@ -53,6 +53,54 @@ async def test_message_service_returns_empty_when_no_checkpoint(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_agent_context_state_applies_summarization_event(tmp_path):
+    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_compacted", "checkpoint_ns": ""}}
+    checkpoint = {
+        "channel_values": {
+            "messages": [
+                HumanMessage(content="旧问题"),
+                AIMessage(content="旧回答"),
+                HumanMessage(content="保留问题"),
+                AIMessage(content="保留回答"),
+            ],
+            "_summarization_event": {
+                "cutoff_index": 2,
+                "summary_message": HumanMessage(
+                    content="旧上下文摘要",
+                    additional_kwargs={"lc_source": "summarization"},
+                ),
+                "file_path": "/conversation_history/sess_compacted.md",
+            },
+        },
+        "channel_versions": {"messages": 1, "_summarization_event": 1},
+        "updated_channels": ["_summarization_event"],
+        "id": "ckpt-compacted",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1, "_summarization_event": 1},
+    )
+
+    state = await MessageService(checkpointer=saver).get_agent_context_state(
+        "sess_compacted"
+    )
+
+    assert state["checkpoint_id"] == "ckpt-compacted"
+    assert state["raw_message_count"] == 4
+    assert state["compacted"] is True
+    assert state["compaction_cutoff"] == 2
+    assert state["history_file_path"] == "/conversation_history/sess_compacted.md"
+    assert [record["content"] for record in state["records"]] == [
+        "旧上下文摘要",
+        "保留问题",
+        "保留回答",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_message_service_dedupes_visible_messages_by_message_id(tmp_path):
     saver = FileSystemCheckpointSaver(base_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_dedupe", "checkpoint_ns": ""}}

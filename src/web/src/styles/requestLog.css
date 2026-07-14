@@ -1,3 +1,9 @@
+.request-log-card,
+.request-log-key-flow {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
 .request-log-card {
   border-color: color-mix(
     in srgb,
@@ -6,30 +12,112 @@
   );
 }
 
-.request-log-key-flow {
-  flex: 0 0 auto;
+.request-log-collapse-summary,
+.request-log-json-summary {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  cursor: pointer;
+  border: 0;
+  margin: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.request-log-card-summary {
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+}
+
+.request-log-card-heading,
+.request-log-card-stats,
+.request-log-key-flow > .request-log-collapse-summary,
+.request-log-called-tools > .request-log-collapse-summary,
+.request-log-replay > .request-log-collapse-summary,
+.request-replay-component > .request-log-collapse-summary,
+.request-replay-tools > .request-log-collapse-summary,
+.request-replay-tool > .request-log-collapse-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 7px;
+}
+
+.request-log-card-heading {
+  min-width: 0;
+}
+
+.request-log-card-heading > :last-child {
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
+.request-log-card-stats {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
+.request-log-card-stats > span,
+.request-log-key-flow > .request-log-collapse-summary .panel-pill,
+.request-log-called-tools > .request-log-collapse-summary > span:last-child,
+.request-log-replay > .request-log-collapse-summary > span:not(:first-child),
+.request-replay-component > .request-log-collapse-summary > span:not(:first-child),
+.request-replay-tools > .request-log-collapse-summary > span:not(:first-child),
+.request-replay-tool > .request-log-collapse-summary > span {
+  border: var(--surface-border);
+  border-radius: 999px;
+  padding: 1px 6px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, transparent);
+  line-height: 1.5;
+}
+
+.request-log-card-body {
   display: grid;
   gap: 8px;
-  margin: 10px 10px 0;
-  padding: 10px;
+  padding: 9px 10px 10px;
+  border-top: var(--surface-border);
+}
+
+.request-log-key-flow {
   border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
-  border-radius: 8px;
   background: color-mix(in srgb, var(--vscode-list-hoverBackground) 64%, transparent);
 }
 
-.request-log-key-flow-title {
-  color: var(--vscode-editor-foreground);
-  font-size: 12px;
+.request-log-key-flow > .request-log-collapse-summary,
+.request-log-called-tools > .request-log-collapse-summary,
+.request-log-replay > .request-log-collapse-summary {
+  padding: 8px;
+}
+
+.request-log-summary-title,
+.request-replay-component-title {
+  min-width: 0;
+  color: var(--vscode-foreground);
   font-weight: 700;
 }
 
-.request-log-key-flow-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+.request-log-key-flow > .request-log-collapse-summary .panel-pill,
+.request-log-called-tools > .request-log-collapse-summary > span:last-child {
+  margin-left: auto;
 }
 
-.request-log-key-flow-grid div {
+.request-log-key-flow-list {
+  margin: 0;
+  padding: 0 8px 8px;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.request-log-key-flow-list li {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
   min-width: 0;
   border: var(--surface-border);
   border-radius: 6px;
@@ -37,29 +125,42 @@
   background: var(--vscode-editor-background);
 }
 
-.request-log-key-flow-grid span,
-.request-log-key-flow-grid strong {
-  display: block;
+.request-log-flow-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.request-log-key-flow-list li > div,
+.request-log-key-flow-list li span,
+.request-log-key-flow-list li strong {
   min-width: 0;
+}
+
+.request-log-key-flow-list li span,
+.request-log-key-flow-list li strong {
+  display: block;
   overflow-wrap: anywhere;
 }
 
-.request-log-key-flow-grid span {
+.request-log-key-flow-list li > div > span {
   margin-bottom: 4px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
 }
 
-.request-log-key-flow-grid strong {
+.request-log-key-flow-list strong {
   color: var(--vscode-editor-foreground);
   font-size: 12px;
   line-height: 1.45;
-}
-
-.request-log-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  white-space: pre-wrap;
 }
 
 .request-log-summary {
@@ -81,48 +182,41 @@
   font-weight: 700;
 }
 
-.request-log-tools {
-  display: grid;
-  gap: 6px;
-  border: var(--surface-border);
-  border-radius: 6px;
-  padding: 8px;
-  background: color-mix(
-    in srgb,
-    var(--vscode-editor-background) 80%,
-    var(--vscode-button-background)
-  );
-}
-
-.request-log-called-tools {
-  display: grid;
-  gap: 6px;
+.request-log-called-tools,
+.request-log-replay {
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: 7px;
   background: color-mix(in srgb, var(--vscode-list-hoverBackground) 62%, transparent);
 }
 
-.request-log-tools-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.request-log-called-tools > .request-log-collapse-summary,
+.request-log-replay > .request-log-collapse-summary,
+.request-replay-component > .request-log-collapse-summary,
+.request-replay-tools > .request-log-collapse-summary,
+.request-replay-tool > .request-log-collapse-summary {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 10px;
+}
+
+.request-log-tool-list,
+.request-replay-list,
+.request-replay-tool-list {
+  display: grid;
+  gap: 6px;
 }
 
 .request-log-tool-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  padding: 0 8px 8px;
 }
 
 .request-log-tool-chip {
-  max-width: 100%;
+  min-width: 0;
   border: var(--surface-border);
-  border-radius: 999px;
-  padding: 2px 6px;
+  border-radius: 6px;
+  padding: 4px 6px;
   background: var(--vscode-editor-background);
   color: var(--vscode-foreground);
   font-size: 11px;
@@ -136,16 +230,69 @@
 }
 
 .request-log-tool-empty {
+  padding: 0 8px 8px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
 }
 
-@media (max-width: 760px) {
-  .request-log-key-flow-grid {
-    grid-template-columns: 1fr;
-  }
+.request-log-replay > .request-log-collapse-summary > .request-log-summary-title {
+  margin-right: auto;
+}
 
-  .request-log-summary-grid {
-    grid-template-columns: 1fr;
-  }
+.request-log-legacy {
+  color: var(--vscode-editorWarning-foreground);
+}
+
+.request-replay-list {
+  padding: 0 8px 8px;
+}
+
+.request-replay-component,
+.request-replay-tools,
+.request-replay-tool {
+  min-width: 0;
+  overflow: hidden;
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: var(--vscode-editor-background);
+}
+
+.request-replay-component > .request-log-collapse-summary,
+.request-replay-tools > .request-log-collapse-summary,
+.request-replay-tool > .request-log-collapse-summary {
+  padding: 7px 8px;
+}
+
+.request-replay-component > .request-log-collapse-summary > .request-replay-component-title,
+.request-replay-tools > .request-log-collapse-summary > .request-replay-component-title,
+.request-replay-tool > .request-log-collapse-summary > code {
+  margin-right: auto;
+  overflow-wrap: anywhere;
+}
+
+.request-replay-tool-list {
+  padding: 0 7px 7px;
+}
+
+.request-replay-component > pre,
+.request-replay-tool > pre {
+  max-height: min(56vh, 640px);
+  margin: 0;
+  overflow: auto;
+  border-top: var(--surface-border);
+  border-radius: 0;
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 请求日志经常包含完整 system prompt、工具 schema 和大段响应。
+ * 只有用户展开时才生成 JSON 文本，并让展开区独立滚动。 */
+.request-log-json-summary {
+  padding: 7px 9px;
+}
+
+.request-log-card .request-log-json.is-open > pre {
+  max-height: min(60vh, 640px);
+  overflow: auto;
 }

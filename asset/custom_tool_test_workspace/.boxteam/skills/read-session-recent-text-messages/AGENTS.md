@@ -1,10 +1,10 @@
 # 目录用途
 
-`.boxteam/skills/read-session-recent-text-messages/` 存放 `read_session_recent_text_messages` 扩展工具的测试 skill。
+`.boxteam/skills/read-session-recent-text-messages/` 存放 Session Context 扩展工具组的测试 skill。
 
 # 可修改内容
 
-- 可以维护 `read_session_recent_text_messages` 的 skill 元数据、调用入口说明和返回结构要求。
+- 可以维护 recent、grep、read 三个 Session Context 工具的调用入口和一致性说明。
 
 # 不可修改内容
 

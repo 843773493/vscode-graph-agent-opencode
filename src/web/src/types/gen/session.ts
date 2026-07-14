@@ -9,7 +9,10 @@
 export interface DeleteSessionResultDTO {
   session_id: string;
   status: string;
-  cleaned_jobs?: number;
+  /**
+   * 删除会话时清理的一次性 agent 执行记录数量；这些记录不属于后台连接。
+   */
+  cleaned_execution_runs?: number;
   cleaned_background_tasks?: number;
   cleaned_terminals?: number;
 }
@@ -60,6 +63,7 @@ export interface SessionDTO {
   title: string;
   title_source?: "default" | "user" | "auto";
   current_agent_id: string;
+  parent_session_id?: string | null;
 }
 export interface SessionInterruptResultDTO {
   session_id: string;
@@ -78,6 +82,7 @@ export interface SessionUpdateRequest {
   title?: string | null;
   agent_id?: string | null;
   title_source?: ("default" | "user" | "auto") | null;
+  parent_session_id?: string | null;
 }
 export interface TimestampedDTO {
   created_at: string;

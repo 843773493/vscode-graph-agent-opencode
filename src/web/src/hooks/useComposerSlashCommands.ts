@@ -47,6 +47,7 @@ export function useComposerSlashCommands({
   setViewMenuOpen,
   setStatus,
   createSession,
+  startNewSessionDraft,
   renameCurrentSession,
   switchContentView,
   compactSession,
@@ -61,6 +62,7 @@ export function useComposerSlashCommands({
   setViewMenuOpen: Dispatch<SetStateAction<boolean>>;
   setStatus: (text: string) => void;
   createSession: (title?: string) => Promise<void>;
+  startNewSessionDraft: () => void;
   renameCurrentSession: (inlineTitle: string) => void;
   switchContentView: (view: ConversationContentView) => void;
   compactSession: () => Promise<void>;
@@ -85,7 +87,11 @@ export function useComposerSlashCommands({
           break;
         case "new":
           setAttachments([]);
-          void createSession(args.trim() || "新会话");
+          if (args.trim()) {
+            void createSession(args.trim());
+          } else {
+            startNewSessionDraft();
+          }
           break;
         case "rename":
           renameCurrentSession(args);
@@ -160,6 +166,9 @@ export function useComposerSlashCommands({
         case "resources":
           switchContentView("resources");
           break;
+        case "changes":
+          switchContentView("changes");
+          break;
         case "state":
           switchContentView("agent");
           break;
@@ -183,6 +192,7 @@ export function useComposerSlashCommands({
       setInput,
       setStatus,
       setViewMenuOpen,
+      startNewSessionDraft,
       state.compactLoading,
       state.currentSession,
       state.messages,

@@ -1,28 +1,30 @@
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Header, HTTPException, Request
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.job_event_bus import JobEventBus
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.business.agent_service import AgentService
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.event_service import EventService
-from app.services.business.job_service import JobService
 from app.services.business.message_service import MessageService
+from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.tool_service import ToolService
+from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.tool_testing.service import ToolTestService
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.runtime.session_orchestrator import SessionOrchestrator
 
@@ -40,12 +42,16 @@ class _AppContainerProtocol:
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
+    session_context_fork_service: SessionContextForkService
     context_compaction_service: ContextCompactionService
+    session_changes_service: SessionChangesService
     session_resource_service: SessionResourceService
     session_service: SessionService
     llm_request_log_service: LLMRequestLogService
     log_service: LogService
     tool_service: ToolService
+    tool_test_service: ToolTestService
+    tool_selection_store: ToolSelectionStore
     workspace_service: WorkspaceService
     agent_execution_service: AgentExecutionService
     session_orchestrator: SessionOrchestrator
@@ -154,6 +160,13 @@ def get_session_interrupt_service(request: Request) -> SessionInterruptService:
     return service
 
 
+def get_session_changes_service(request: Request) -> SessionChangesService:
+    service = getattr(_get_container(request), "session_changes_service", None)
+    if not isinstance(service, SessionChangesService):
+        raise RuntimeError("SessionChangesService 尚未在应用启动阶段初始化")
+    return service
+
+
 def get_context_compaction_service(request: Request) -> ContextCompactionService:
     service = getattr(_get_container(request), "context_compaction_service", None)
     if not isinstance(service, ContextCompactionService):
@@ -175,6 +188,13 @@ def get_session_service(request: Request) -> SessionService:
     return service
 
 
+def get_session_context_fork_service(request: Request) -> SessionContextForkService:
+    service = getattr(_get_container(request), "session_context_fork_service", None)
+    if not isinstance(service, SessionContextForkService):
+        raise RuntimeError("SessionContextForkService 尚未在应用启动阶段初始化")
+    return service
+
+
 def get_llm_request_log_service(request: Request) -> LLMRequestLogService:
     service = getattr(_get_container(request), "llm_request_log_service", None)
     if not isinstance(service, LLMRequestLogService):
@@ -193,6 +213,20 @@ def get_tool_service(request: Request) -> ToolService:
     service = getattr(_get_container(request), "tool_service", None)
     if not isinstance(service, ToolService):
         raise RuntimeError("ToolService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_tool_test_service(request: Request) -> ToolTestService:
+    service = getattr(_get_container(request), "tool_test_service", None)
+    if not isinstance(service, ToolTestService):
+        raise RuntimeError("ToolTestService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_tool_selection_store(request: Request) -> ToolSelectionStore:
+    service = getattr(_get_container(request), "tool_selection_store", None)
+    if not isinstance(service, ToolSelectionStore):
+        raise RuntimeError("ToolSelectionStore 尚未在应用启动阶段初始化")
     return service
 
 

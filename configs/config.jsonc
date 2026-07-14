@@ -55,9 +55,92 @@
       "propertyNames": {
         "pattern": "^[a-zA-Z0-9._-]{2,64}$"
       }
+    },
+    "gateway": {
+      "$ref": "#/$defs/gatewayConfig"
     }
   },
   "$defs": {
+    "gatewayConfig": {
+      "type": "object",
+      "description": "Gateway 管理的跨端工作区配置。",
+      "additionalProperties": false,
+      "properties": {
+        "workspaces": {
+          "type": "array",
+          "description": "Gateway 启动时通过 SSH 连接的远程工作区。",
+          "items": {
+            "$ref": "#/$defs/gatewaySshWorkspace"
+          },
+          "default": []
+        }
+      }
+    },
+
+    "gatewaySshWorkspace": {
+      "type": "object",
+      "description": "通过 SSH 隧道连接远端 BoxTeam 后端的工作区。",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "username",
+        "private_key_path",
+        "remote_workspace_path"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "ssh",
+          "default": "ssh"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 22
+        },
+        "username": {
+          "type": "string",
+          "minLength": 1
+        },
+        "private_key_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remote_backend_host": {
+          "type": "string",
+          "minLength": 1,
+          "default": "127.0.0.1"
+        },
+        "remote_backend_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8010
+        },
+        "remote_workspace_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activate": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+
     "provider": {
       "type": "object",
       "additionalProperties": false,
@@ -66,7 +149,7 @@
         "endpoint",
         "model",
         "api_key",
-        "interface"
+        "custom_llm_provider"
       ],
       "properties": {
         "id": {
@@ -90,26 +173,21 @@
           "type": "string",
           "minLength": 1
         },
-        "interface": {
+        "custom_llm_provider": {
           "type": "string",
-          "enum": [
-            "chat.completion",
-            "responses",
-            "opencode_zen",
-            "litellm"
-          ]
+          "minLength": 1,
+          "description": "LiteLLM custom_llm_provider 参数，例如 openai、openrouter、anthropic。"
         },
         "capabilities": {
           "type": "array",
-          "description": "Provider capabilities used by request routing. Use image_input, video_input or audio_input. vision is accepted as a legacy alias for image_input.",
+          "description": "Provider capabilities used by request routing. Supported values are text_input, image_input, video_input and audio_input.",
           "items": {
             "type": "string",
             "enum": [
               "text_input",
               "image_input",
               "video_input",
-              "audio_input",
-              "vision"
+              "audio_input"
             ]
           },
           "uniqueItems": true
@@ -123,9 +201,9 @@
           "description": "Provider-specific request options passed to the chat model client.",
           "additionalProperties": false,
           "properties": {
-            "extra_body": {
+            "overrides": {
               "type": "object",
-              "description": "Additional JSON body fields sent with each chat completion request.",
+              "description": "Raw LiteLLM completion parameters. These values override agent-level defaults such as temperature, top_p and max_tokens. Put provider body extensions under extra_body.",
               "additionalProperties": true
             },
             "default_headers": {
@@ -296,19 +374,18 @@
           "type": "number",
           "minimum": 0,
           "maximum": 2,
-          "default": 0.2
+          "description": "Optional explicit sampling temperature. Omit to use the provider/model default."
         },
         "top_p": {
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "default": 1
+          "description": "Optional explicit nucleus sampling value. Omit to use the provider/model default."
         },
         "max_output_tokens": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 65536,
-          "default": 4000
+          "description": "Optional explicit output cap. Omit to avoid imposing a client-side output limit."
         }
       }
     },
@@ -379,6 +456,11 @@
               "factory": {
                 "type": "string",
                 "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*:[a-zA-Z_][a-zA-Z0-9_.]*$"
+              },
+              "options": {
+                "type": "object",
+                "description": "传给该工具 factory 的专属配置。",
+                "additionalProperties": true
               }
             }
           },

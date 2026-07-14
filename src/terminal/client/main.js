@@ -1,6 +1,7 @@
 const backendBaseUrl = window.BOXTEAM_TERMINAL_BACKEND_URL || "http://127.0.0.1:8012";
 const params = new URLSearchParams(window.location.search);
 const terminalId = params.get("terminalId");
+document.documentElement.classList.toggle("embedded-terminal", params.get("embedded") === "1");
 
 const terminalIdElement = document.querySelector("#terminal-id");
 const statusLine = document.querySelector("#status-line");
@@ -8,6 +9,7 @@ const attachToggle = document.querySelector("#attach-toggle");
 const refreshSnapshotButton = document.querySelector("#refresh-snapshot");
 const terminateButton = document.querySelector("#terminate-terminal");
 const deleteButton = document.querySelector("#delete-terminal");
+const attachToggleLabel = attachToggle.querySelector(".sr-only");
 const terminalContainer = document.querySelector("#terminal");
 const agentForm = document.querySelector("#agent-form");
 const agentInput = document.querySelector("#agent-input");
@@ -35,6 +37,24 @@ let attached = false;
 let deleted = false;
 let currentTerminalStatus = null;
 let statusPollTimer = null;
+let resizeFrame = null;
+let lastSentCols = null;
+let lastSentRows = null;
+
+function setAttachButtonMode(mode) {
+  const labels = {
+    detached: "连接终端",
+    attaching: "正在连接终端",
+    attached: "断开终端",
+  };
+  const label = labels[mode] || labels.detached;
+  attachToggle.classList.toggle("is-attached", mode === "attached");
+  attachToggle.title = label;
+  attachToggle.setAttribute("aria-label", label);
+  if (attachToggleLabel) {
+    attachToggleLabel.textContent = label;
+  }
+}
 
 function backendWsUrl() {
   const url = new URL(backendBaseUrl);
@@ -95,7 +115,7 @@ function markDeleted(message = "终端已删除或不存在", snapshot = null) {
   currentTerminalStatus = "deleted";
   socket?.close();
   socket = null;
-  attachToggle.textContent = "连接";
+  setAttachButtonMode("detached");
   if (terminalId) {
     terminalIdElement.textContent = `${terminalId} · ${statusLabel("deleted")}`;
   }
@@ -116,16 +136,20 @@ function describeSnapshot(snapshot) {
 }
 
 function sanitizeTerminalDisplay(value) {
-  return String(value || "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n")
-    .filter(
-      (line) =>
-        !line.includes("__BOXTEAM_CMD_START_") &&
-        !line.includes("__BOXTEAM_CMD_DONE_"),
-    )
-    .join("\r\n");
+  const parts = String(value || "").split(/(\r\n|\n)/);
+  let display = "";
+  for (let index = 0; index < parts.length; index += 2) {
+    const line = parts[index] || "";
+    const separator = parts[index + 1] || "";
+    if (
+      line.includes("__BOXTEAM_CMD_START_") ||
+      line.includes("__BOXTEAM_CMD_DONE_")
+    ) {
+      continue;
+    }
+    display += line + separator;
+  }
+  return display;
 }
 
 function snapshotDisplayBuffer(snapshot) {
@@ -140,14 +164,26 @@ function send(message) {
 }
 
 function resizeRemote() {
-  fitAddon.fit();
-  if (attached && socket?.readyState === WebSocket.OPEN) {
+  if (resizeFrame !== null) {
+    return;
+  }
+  resizeFrame = window.requestAnimationFrame(() => {
+    resizeFrame = null;
+    fitAddon.fit();
+    if (!attached || socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (terminal.cols === lastSentCols && terminal.rows === lastSentRows) {
+      return;
+    }
     send({
       type: "resize",
       cols: terminal.cols,
       rows: terminal.rows,
     });
-  }
+    lastSentCols = terminal.cols;
+    lastSentRows = terminal.rows;
+  });
 }
 
 async function loadSnapshot() {
@@ -177,6 +213,7 @@ async function loadSnapshot() {
   terminal.clear();
   terminal.write(snapshotDisplayBuffer(snapshot));
   updateControls();
+  return snapshot;
 }
 
 async function syncTerminalState() {
@@ -207,7 +244,7 @@ async function syncTerminalState() {
     attached = false;
     socket?.close();
     socket = null;
-    attachToggle.textContent = "连接";
+    setAttachButtonMode("detached");
     terminal.clear();
     terminal.write(snapshotDisplayBuffer(snapshot));
     setStatus(describeSnapshot(snapshot));
@@ -235,7 +272,9 @@ function detach() {
   socket?.close();
   socket = null;
   attached = false;
-  attachToggle.textContent = "连接";
+  lastSentCols = null;
+  lastSentRows = null;
+  setAttachButtonMode("detached");
   setStatus("已 detach，终端仍在后台运行");
   updateControls();
 }
@@ -245,7 +284,15 @@ function attach() {
     setStatus("URL 缺少 terminalId 参数", true);
     return;
   }
+  if (attached) {
+    return;
+  }
+  if (socket && socket.readyState !== WebSocket.CLOSED) {
+    setStatus("正在连接终端...");
+    return;
+  }
   socket = new WebSocket(backendWsUrl());
+  setAttachButtonMode("attaching");
   setStatus("正在连接终端...");
 
   socket.addEventListener("open", () => {
@@ -256,6 +303,8 @@ function attach() {
       cols: terminal.cols,
       rows: terminal.rows,
     });
+    lastSentCols = terminal.cols;
+    lastSentRows = terminal.rows;
   });
 
   socket.addEventListener("message", (event) => {
@@ -263,21 +312,21 @@ function attach() {
     if (message.type === "attached") {
       attached = true;
       currentTerminalStatus = message.snapshot?.status || currentTerminalStatus;
-      attachToggle.textContent = "断开";
+      setAttachButtonMode("attached");
       terminal.clear();
       terminal.write(message.snapshot ? snapshotDisplayBuffer(message.snapshot) : "");
       setStatus(message.snapshot ? `已 attach · ${describeSnapshot(message.snapshot)}` : "已 attach");
       if (currentTerminalStatus !== "running") {
         attached = false;
         socket?.close();
-        attachToggle.textContent = "连接";
+        setAttachButtonMode("detached");
       }
       updateControls();
       return;
     }
     if (message.type === "detached") {
       attached = false;
-      attachToggle.textContent = "连接";
+      setAttachButtonMode("detached");
       setStatus("已 detach，终端仍在后台运行");
       updateControls();
       return;
@@ -303,7 +352,9 @@ function attach() {
 
   socket.addEventListener("close", () => {
     attached = false;
-    attachToggle.textContent = "连接";
+    lastSentCols = null;
+    lastSentRows = null;
+    setAttachButtonMode("detached");
     updateControls();
   });
 
@@ -321,10 +372,15 @@ terminal.onData((data) => {
 
 window.addEventListener("resize", resizeRemote);
 window.addEventListener("beforeunload", () => {
+  if (resizeFrame !== null) {
+    window.cancelAnimationFrame(resizeFrame);
+  }
   if (statusPollTimer !== null) {
     window.clearInterval(statusPollTimer);
   }
 });
+
+setAttachButtonMode("detached");
 
 attachToggle.addEventListener("click", () => {
   if (attached) {
@@ -401,7 +457,12 @@ deleteButton.addEventListener("click", async () => {
 });
 
 void loadSnapshot()
-  .then(startStatusPolling)
+  .then((snapshot) => {
+    if (snapshot?.status === "running") {
+      attach();
+    }
+    startStatusPolling();
+  })
   .catch((error) => {
     setStatus(error instanceof Error ? error.message : String(error), true);
     updateControls();

@@ -1,6 +1,6 @@
 # 目录用途
 
-`src/web/src/state/trace/` 存放 trace 时间线聚合的聚焦 helper，服务于 `src/web/src/state/traceAggregation.ts`。
+`src/web/src/state/trace/` 存放 trace 时间线聚合入口及其聚焦 helper。
 
 # 可修改内容
 

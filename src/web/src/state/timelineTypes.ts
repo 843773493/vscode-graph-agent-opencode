@@ -28,7 +28,7 @@ export type TimelineItem =
       kind: "aggregated_text";
       id: string;
       text: string;
-      phase: string;
+      partKind: "markdown" | "reasoning";
       active: boolean;
       timestamp: string | null;
       eventCount: number;
@@ -43,6 +43,7 @@ export type TimelineItem =
       timestamp: string | null;
       rawStart: Record<string, unknown>;
       rawEnd: Record<string, unknown>;
+      active: boolean;
       failed?: boolean;
     }
   | {

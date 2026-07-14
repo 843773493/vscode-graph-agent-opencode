@@ -2,22 +2,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from deepagents.backends import LocalShellBackend
+from deepagents.backends import CompositeBackend
 from langchain_core.messages import AnyMessage, get_buffer_string
 
-from app.agents.summarization_paths import COMPACT_HISTORY_PATH_PREFIX
+from app.agents.workspace_backend import build_workspace_backend
 from app.core.path_utils import get_workspace_root
 
 
 class ContextHistoryStore:
     def __init__(self) -> None:
-        self._backend = LocalShellBackend(
-            root_dir=str(get_workspace_root()),
-            virtual_mode=True,
-        )
+        self._backend = build_workspace_backend(get_workspace_root())
 
     @property
-    def backend(self) -> LocalShellBackend:
+    def backend(self) -> CompositeBackend:
         return self._backend
 
     async def offload_history(
@@ -26,7 +23,8 @@ class ContextHistoryStore:
         session_id: str,
         messages: list[AnyMessage],
     ) -> str:
-        path = f"{COMPACT_HISTORY_PATH_PREFIX}/{session_id}.md"
+        artifacts_root = self._backend.artifacts_root.rstrip("/")
+        path = f"{artifacts_root}/conversation_history/{session_id}.md"
         timestamp = datetime.now(UTC).isoformat()
         new_section = (
             f"## Summarized at {timestamp}\n\n"

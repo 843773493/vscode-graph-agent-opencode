@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 class TraceEventDTO(BaseModel):
     event_id: str
+    part_id: Optional[str] = None
     session_id: str
     job_id: Optional[str] = None
     type: Literal[

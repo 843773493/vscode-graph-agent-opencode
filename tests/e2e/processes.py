@@ -117,6 +117,23 @@ def wait_for_backend_ready(port: int, process: subprocess.Popen[str]) -> None:
     raise TimeoutError(f"后端在 {E2E_READY_TIMEOUT_SECONDS} 秒内未就绪，端口: {port}")
 
 
+def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
+    deadline = time.monotonic() + E2E_READY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"测试进程提前退出: pid={process.pid}, returncode={process.returncode}, url={url}"
+            )
+        try:
+            with urlopen(url, timeout=1) as response:
+                if response.status == 200:
+                    return
+        except Exception:
+            time.sleep(1)
+
+    raise TimeoutError(f"测试服务在 {E2E_READY_TIMEOUT_SECONDS} 秒内未就绪: {url}")
+
+
 def start_backend_process(
     *,
     workspace_root: str,

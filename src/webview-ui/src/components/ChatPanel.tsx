@@ -721,7 +721,6 @@ export default function ChatPanel({ conversations, expandDetails }: ChatPanelPro
       ) : (
         timelineItems.map((item, index) => <TimelineCard key={item.id} item={item} index={index} />)
       )}
-      <div className="event-stream-bottom-spacer" />
     </section>
   );
 }

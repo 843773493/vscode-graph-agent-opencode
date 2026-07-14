@@ -24,6 +24,9 @@ dependencies = [
     "pytest-xdist>=3.8.0",
     "pydantic-to-typescript>=2.0.0",
     "langchain-litellm==0.7.0",
+    "litellm>=1.90.2",
+    "langchain-community>=0.4.2",
+    "ddgs>=9.14.4",
 ]
 
 [project.optional-dependencies]

@@ -4,9 +4,11 @@ import type { SetAppState } from "./contentViewLoaderTypes";
 
 export function useRequestLogLoader({
   apiPort,
+  workspaceId,
   setState,
 }: {
   apiPort: number;
+  workspaceId: string | null;
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
@@ -28,7 +30,7 @@ export function useRequestLogLoader({
       }));
 
       try {
-        const records = await getLLMRequestLogs(apiPort, sessionId);
+        const records = await getLLMRequestLogs(apiPort, sessionId, workspaceId);
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||
@@ -67,7 +69,7 @@ export function useRequestLogLoader({
         });
       }
     },
-    [apiPort, setState],
+    [apiPort, workspaceId, setState],
   );
 
   return {

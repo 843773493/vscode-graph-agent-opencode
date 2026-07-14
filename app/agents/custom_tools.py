@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from importlib import import_module
 from pathlib import Path
 from typing import Protocol
@@ -10,6 +10,7 @@ from langchain_core.tools import BaseTool
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
 from app.abstractions.session_resources import (
+    BrowserManagerClientProtocol,
     BackgroundTaskRegistryProtocol,
     TerminalManagerClientProtocol,
 )
@@ -41,6 +42,8 @@ class CustomToolFactoryContext:
     session_orchestrator: SessionOrchestratorProtocol
     config_service: CustomToolConfigProtocol
     terminal_manager_client: TerminalManagerClientProtocol
+    browser_manager_client: BrowserManagerClientProtocol
+    tool_options: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +90,9 @@ def _spec_name(spec: object) -> str:
     return name
 
 
-def _normalize_spec(spec: object) -> tuple[str, CustomToolFactory]:
+def _normalize_spec(
+    spec: object,
+) -> tuple[str, CustomToolFactory, Mapping[str, object]]:
     name = _spec_name(spec)
     if not isinstance(spec, Mapping):
         raise TypeError(f"tools.custom 条目必须是对象，实际类型: {type(spec).__name__}")
@@ -96,7 +101,11 @@ def _normalize_spec(spec: object) -> tuple[str, CustomToolFactory]:
     if not isinstance(factory_path, str) or not factory_path.strip():
         raise ValueError(f"tools.custom 条目缺少 factory: {spec}")
 
-    return name, _load_factory(factory_path)
+    options = spec.get("options", {})
+    if not isinstance(options, Mapping):
+        raise TypeError(f"tools.custom[{name}].options 必须是对象")
+
+    return name, _load_factory(factory_path), dict(options)
 
 
 def custom_tool_spec_names(specs: Iterable[object]) -> set[str]:
@@ -115,12 +124,12 @@ def build_custom_tools(
     tools: list[BaseTool] = []
     seen_names: set[str] = set()
     for spec in specs:
-        name, factory = _normalize_spec(spec)
+        name, factory, options = _normalize_spec(spec)
         if name in seen_names:
             raise ValueError(f"重复的自定义扩展工具: {name}")
         seen_names.add(name)
 
-        tool = factory(context)
+        tool = factory(replace(context, tool_options=options))
         if not isinstance(tool, BaseTool):
             raise TypeError(
                 f"自定义扩展工具 factory 必须返回 BaseTool: name={name}, "
@@ -151,6 +160,7 @@ def build_custom_tool_bundle(
     session_orchestrator: SessionOrchestratorProtocol,
     config_service: CustomToolConfigProtocol,
     terminal_manager_client: TerminalManagerClientProtocol,
+    browser_manager_client: BrowserManagerClientProtocol,
 ) -> CustomToolBundle:
     context = CustomToolFactoryContext(
         session_id=session_id,
@@ -166,6 +176,7 @@ def build_custom_tool_bundle(
         session_orchestrator=session_orchestrator,
         config_service=config_service,
         terminal_manager_client=terminal_manager_client,
+        browser_manager_client=browser_manager_client,
     )
     tools = build_custom_tools(specs, context=context)
     return CustomToolBundle(tools=tools)

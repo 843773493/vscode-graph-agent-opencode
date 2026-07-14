@@ -3,8 +3,9 @@ services:
     build:
       context: ..
       dockerfile: tools/Dockerfile.gateway-test
+      args:
+        BOXTEAM_GATEWAY_E2E_SSH_USER: "${BOXTEAM_GATEWAY_E2E_SSH_USER:-root}"
     image: boxteam-gateway-ssh-target:local
-    container_name: boxteam-gateway-ssh-target
     ports:
       - "${BOXTEAM_GATEWAY_E2E_SSH_PORT:-22222}:22"
     volumes:

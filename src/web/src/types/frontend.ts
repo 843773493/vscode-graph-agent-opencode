@@ -5,24 +5,26 @@ import type {
   LLMRequestLogRecord,
   Message,
   Session,
+  SessionChangeset,
+  SessionChangesetListItem,
   SessionCompactResult,
   SessionResource,
   TraceEvent,
+  WebUiSettings,
 } from "./backend";
 
 export type ConversationContentView =
   | "default"
   | "events"
   | "requests"
+  | "changes"
   | "resources"
   | "agent";
 
 export type FrontendEventSource =
   | "frontend"
   | "initial_load"
-  | "pending_poll"
-  | "sse"
-  | "terminal_refresh";
+  | "sse";
 
 interface FrontendReceivedEventBase {
   id: string;
@@ -42,6 +44,7 @@ export interface FrontendReceivedLifecycleEvent
   type:
     | "session_selected"
     | "session_created"
+    | "session_context_forked"
     | "session_renamed"
     | "agent_switched"
     | "context_compacted"
@@ -61,6 +64,8 @@ export interface ConversationView {
   conversationId: string;
   sessionId: string;
   userMessage: Message | null;
+  /** 当历史 trace 不完整时，用持久化 Assistant 消息恢复最终正文。 */
+  assistantMessages?: Message[];
   // 助手消息内容由 ChatPanel 从 traceEvents 聚合得到，不再在 hooks 中维护。
   events: TraceEvent[];
   status: "queued" | "running" | "done" | "error";
@@ -68,6 +73,15 @@ export interface ConversationView {
   pending: boolean;
   pendingSubmissionId?: string;
   source: "messages" | "pending";
+}
+
+export interface ConversationTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadInputTokens: number | null;
+  modelCalls: number;
+  reportedModelCalls: number;
 }
 
 export interface SessionAttachmentSummary {
@@ -80,20 +94,33 @@ export interface AppState {
   apiPort: number | null;
   gatewayWorkspaces: GatewayWorkspace[];
   activeGatewayWorkspaceId: string | null;
+  sessionsByWorkspace: Map<string, Session[]>;
+  sessionGatewayWorkspaceById: Map<string, string>;
+  removingGatewayWorkspaceIds: Set<string>;
+  sessionHistoryReloadNonce: number;
   workspaceSwitching: boolean;
   gatewayError: string | null;
+  uiSettings: WebUiSettings;
+  uiSettingsLoaded: boolean;
   workspaceRoot: string | null;
   workspaceName: string | null;
   agents: Agent[];
   sessions: Session[];
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
   currentSession: Session | null;
+  currentSessionWorkspaceId: string | null;
   messages: Message[];
   traceEvents: TraceEvent[];
   llmRequestLogs: LLMRequestLogRecord[];
   llmRequestLogsLoadedAt: string | null;
   llmRequestLogsLoading: boolean;
   llmRequestLogsError: string | null;
+  sessionChangesets: SessionChangesetListItem[];
+  selectedChangesetId: string | null;
+  activeChangeset: SessionChangeset | null;
+  sessionChangesLoadedAt: string | null;
+  sessionChangesLoading: boolean;
+  sessionChangesError: string | null;
   sessionResources: SessionResource[];
   sessionResourcesLoadedAt: string | null;
   sessionResourcesLoading: boolean;
@@ -104,7 +131,7 @@ export interface AppState {
   error: string | null;
   isBootstrapping: boolean;
   expandDetails: boolean;
-  historyPanelOpen: boolean;
+  agentSessionsPanelOpen: boolean;
   contentView: ConversationContentView;
   agentStateJsonl: string;
   agentStateMessageCount: number;

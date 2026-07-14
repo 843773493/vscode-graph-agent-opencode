@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
@@ -8,6 +8,8 @@ from app.api.deps import (
     get_llm_request_log_service,
     get_request_id,
     get_session_auto_continue_service,
+    get_session_changes_service,
+    get_session_context_fork_service,
     get_session_interrupt_service,
     get_session_resource_service,
     get_session_service,
@@ -31,12 +33,21 @@ from app.schemas.public_v2.session_resource import (
     SessionResourceKind,
     SessionResourceListDTO,
 )
+from app.schemas.public_v2.session_changes import (
+    SessionChangesetDTO,
+    SessionChangesetListDTO,
+    SessionFileReviewRequest,
+    SessionFileReviewResultDTO,
+)
 from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.context_compaction_service import ContextCompactionService
+from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.trace_event_store import TraceCursorGoneError
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -76,14 +87,35 @@ async def get_session(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.post(
+    "/{session_id}/fork-context",
+    response_model=APIResponse[SessionDTO],
+    summary="复制 Agent 上下文状态并创建子会话",
+)
+async def fork_session_context(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    fork_service: SessionContextForkService = Depends(
+        get_session_context_fork_service
+    ),
+):
+    result = await fork_service.fork(session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.get("/{session_id}/traces", response_model=APIResponse[list[TraceEventDTO]], summary="获取会话执行轨迹")
 async def list_session_traces(
     session_id: str,
+    after_event_id: str | None = Query(default=None),
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
-    result = await session_service.list_trace_events(session_id)
+    try:
+        result = await session_service.list_trace_events(session_id, after_event_id)
+    except TraceCursorGoneError as exc:
+        raise _trace_cursor_gone_http_error(exc) from exc
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -105,7 +137,7 @@ async def list_session_llm_request_logs(
 @router.get(
     "/{session_id}/resources",
     response_model=APIResponse[SessionResourceListDTO],
-    summary="获取会话资源列表",
+    summary="获取会话后台连接列表",
 )
 async def list_session_resources(
     session_id: str,
@@ -120,10 +152,72 @@ async def list_session_resources(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.get(
+    "/{session_id}/changesets",
+    response_model=APIResponse[SessionChangesetListDTO],
+    summary="获取会话文件变更视图列表",
+)
+async def list_session_changesets(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    session_changes_service: SessionChangesService = Depends(get_session_changes_service),
+):
+    result = await session_changes_service.list_changesets(session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{session_id}/changesets/{changeset_id}",
+    response_model=APIResponse[SessionChangesetDTO],
+    summary="获取会话文件变更详情",
+)
+async def get_session_changeset(
+    session_id: str,
+    changeset_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    session_changes_service: SessionChangesService = Depends(get_session_changes_service),
+):
+    try:
+        result = await session_changes_service.get_changeset(
+            session_id=session_id,
+            changeset_id=changeset_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/changesets/{changeset_id}/review",
+    response_model=APIResponse[SessionFileReviewResultDTO],
+    summary="标记或取消标记会话文件变更已审查",
+)
+async def review_session_changeset_file(
+    session_id: str,
+    changeset_id: str,
+    payload: SessionFileReviewRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str | None = Depends(get_request_id),
+    session_changes_service: SessionChangesService = Depends(get_session_changes_service),
+):
+    del changeset_id
+    try:
+        result = await session_changes_service.set_file_reviewed(
+            session_id=session_id,
+            file_path=payload.file_path,
+            reviewed=payload.reviewed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.post(
     "/{session_id}/resources/{kind}/{resource_id}/control",
     response_model=APIResponse[SessionResourceControlResultDTO],
-    summary="控制会话资源",
+    summary="控制会话后台连接",
 )
 async def control_session_resource(
     session_id: str,
@@ -149,11 +243,28 @@ async def control_session_resource(
 @router.get("/{session_id}/traces/stream", summary="订阅会话执行轨迹流")
 async def stream_session_traces(
     session_id: str,
+    after_event_id: str | None = Query(default=None),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _: str = Depends(verify_local_token),
     session_service: SessionService = Depends(get_session_service),
 ):
+    if after_event_id and last_event_id and after_event_id != last_event_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "trace_cursor_conflict",
+                "message": "after_event_id 与 Last-Event-ID 不一致",
+                "session_id": session_id,
+            },
+        )
+    cursor = last_event_id or after_event_id
+    try:
+        await session_service.ensure_trace_cursor(session_id, cursor)
+    except TraceCursorGoneError as exc:
+        raise _trace_cursor_gone_http_error(exc) from exc
+
     async def event_generator():
-        async for event in session_service.stream_trace_events(session_id):
+        async for event in session_service.stream_trace_events(session_id, cursor):
             if hasattr(event, "model_dump_json"):
                 data = event.model_dump_json()
             else:
@@ -161,10 +272,24 @@ async def stream_session_traces(
 
                 data = json.dumps(event, ensure_ascii=False, default=str)
 
-            yield f"event: trace\n"
+            yield f"id: {event.event_id}\n"
+            yield "event: trace\n"
             yield f"data: {data}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+def _trace_cursor_gone_http_error(exc: TraceCursorGoneError) -> HTTPException:
+    return HTTPException(
+        status_code=410,
+        detail={
+            "code": "trace_cursor_gone",
+            "message": "事件游标已不在当前会话历史中",
+            "session_id": exc.session_id,
+            "requested_event_id": exc.event_id,
+            "recovery": "reload_snapshot",
+        },
+    )
 
 
 @router.patch("/{session_id}", response_model=APIResponse[SessionDTO], summary="更新会话")
@@ -175,7 +300,10 @@ async def update_session(
     request_id: str | None = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
-    result = await session_service.update(session_id, payload)
+    try:
+        result = await session_service.update(session_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -190,7 +318,7 @@ async def delete_session(
     cleanup_result = await session_resource_service.cleanup_session(session_id)
     result = (await session_service.delete(session_id)).model_copy(
         update={
-            "cleaned_jobs": cleanup_result.cleaned_jobs,
+            "cleaned_execution_runs": cleanup_result.cleaned_execution_runs,
             "cleaned_background_tasks": cleanup_result.cleaned_background_tasks,
             "cleaned_terminals": cleanup_result.cleaned_terminals,
         }

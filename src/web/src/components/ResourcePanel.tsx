@@ -6,7 +6,11 @@ import type {
 } from "../types/backend";
 import { formatDateTime } from "../utils/format";
 import ResourceCard from "./ResourceCard";
-import { actionLabelForKind, statusLabel } from "../state/resourceDisplay";
+import {
+  actionLabelForKind,
+  isClosedBackgroundTask,
+  statusLabel,
+} from "../state/resourceDisplay";
 
 export default function ResourcePanel({
   resources,
@@ -16,6 +20,8 @@ export default function ResourcePanel({
   sessionId,
   onRefresh,
   onControl,
+  onOpenTerminalPreview,
+  onOpenBrowserPreview,
   onShowConversation,
 }: {
   resources: SessionResource[];
@@ -29,11 +35,19 @@ export default function ResourcePanel({
     resourceId: string,
     action: SessionResourceAction,
   ) => Promise<void>;
+  onOpenTerminalPreview: (terminalId: string, attachUrl: string) => void;
+  onOpenBrowserPreview: (browserId: string, attachUrl: string) => void;
   onShowConversation: (jobId?: string) => void;
 }) {
   const [busyResourceId, setBusyResourceId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [openedTerminalId, setOpenedTerminalId] = useState<string | null>(null);
+  const [openedBrowserId, setOpenedBrowserId] = useState<string | null>(null);
+  const [closedGroupOpen, setClosedGroupOpen] = useState(false);
+
+  useEffect(() => {
+    setClosedGroupOpen(false);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!openedTerminalId) {
@@ -47,10 +61,27 @@ export default function ResourcePanel({
       return;
     }
     setNotice(
-      `终端 ${openedTerminalId} ${statusLabel(terminal.status)}，当前不可连接；历史信息仍可在资源卡片查看。`,
+      `终端 ${openedTerminalId} ${statusLabel(terminal.status)}，当前不可连接；历史信息仍可在后台连接卡片查看。`,
     );
     setOpenedTerminalId(null);
   }, [openedTerminalId, resources]);
+
+  useEffect(() => {
+    if (!openedBrowserId) {
+      return;
+    }
+    const browser = resources.find(
+      (resource) =>
+        resource.kind === "browser" && resource.resource_id === openedBrowserId,
+    );
+    if (!browser || browser.status === "running") {
+      return;
+    }
+    setNotice(
+      `浏览器 ${openedBrowserId} ${statusLabel(browser.status)}，当前不可连接；历史信息仍可在后台连接卡片查看。`,
+    );
+    setOpenedBrowserId(null);
+  }, [openedBrowserId, resources]);
 
   const handleControl = (
     kind: SessionResourceKind,
@@ -61,7 +92,7 @@ export default function ResourcePanel({
       const confirmed = window.confirm(
         kind === "terminal"
           ? `确认删除终端 ${resourceId}？删除后当前终端不可再 attach，只保留历史记录。`
-          : `确认删除资源 ${resourceId}？`,
+          : `确认删除后台连接 ${resourceId}？`,
       );
       if (!confirmed) {
         return;
@@ -70,6 +101,7 @@ export default function ResourcePanel({
     setBusyResourceId(resourceId);
     setNotice("");
     setOpenedTerminalId(null);
+    setOpenedBrowserId(null);
     void onControl(kind, resourceId, action)
       .then(() => {
         setNotice(`已执行 ${actionLabelForKind(kind, action)}: ${resourceId}`);
@@ -126,9 +158,15 @@ export default function ResourcePanel({
     }
   };
 
-  const handleOpenTerminal = (resourceId: string) => {
+  const handleOpenTerminal = (resourceId: string, attachUrl: string) => {
     setOpenedTerminalId(resourceId);
-    setNotice(`已打开终端页面: ${resourceId}。如果没有看到，请检查浏览器新标签页。`);
+    onOpenTerminalPreview(resourceId, attachUrl);
+    setNotice(`已在预览区连接终端: ${resourceId}`);
+  };
+  const handleOpenBrowser = (resourceId: string, attachUrl: string) => {
+    setOpenedBrowserId(resourceId);
+    onOpenBrowserPreview(resourceId, attachUrl);
+    setNotice(`已在预览区连接浏览器: ${resourceId}`);
   };
   const historicalResourceCount = resources.filter(
     (resource) =>
@@ -136,15 +174,20 @@ export default function ResourcePanel({
       resource.status === "lost" ||
       resource.metadata.resource_source === "历史记录",
   ).length;
+  const closedBackgroundTasks = resources.filter(isClosedBackgroundTask);
+  const openResources = resources.filter(
+    (resource) => !isClosedBackgroundTask(resource),
+  );
   const resourceCountText =
     historicalResourceCount > 0
-      ? `${resources.length} 个资源（含 ${historicalResourceCount} 个历史/不可连接资源）`
-      : `${resources.length} 个资源`;
+      ? `${resources.length} 个连接（含 ${historicalResourceCount} 个历史/不可连接连接）`
+      : `${resources.length} 个连接`;
+  const waitingForFirstMessage = !sessionId || error === "当前没有会话可读取资源";
 
   return (
     <section className="panel-view resource-panel">
       <div className="panel-header">
-        <div className="panel-title">资源视图</div>
+        <div className="panel-title">后台连接</div>
         <div className="panel-header-meta">
           <span>{resourceCountText}</span>
           <span>{sessionId || "无会话"}</span>
@@ -155,7 +198,7 @@ export default function ResourcePanel({
           className="resource-refresh-button"
           onClick={onRefresh}
           disabled={loading || !sessionId}
-          title="刷新资源"
+          title="刷新后台连接"
         >
           刷新
         </button>
@@ -171,15 +214,20 @@ export default function ResourcePanel({
       </div>
 
       <div className="resource-status-note">
-        运行中终端可打开并 attach；已删除或已断开的终端只保留历史信息，当前不可连接。
+        这里只展示可保留、可重新打开或可连接的后台对象，例如持久终端、浏览器页面和持续后台任务；一次性 agent job 请在默认视图或事件视图查看。
       </div>
       {notice ? <div className="resource-notice">{notice}</div> : null}
-      {loading ? <div className="empty-state">正在读取会话资源...</div> : null}
-      {error ? <div className="empty-state">会话资源加载失败：{error}</div> : null}
+      {loading ? <div className="empty-state">正在读取后台连接...</div> : null}
+      {error && !waitingForFirstMessage ? (
+        <div className="empty-state">后台连接加载失败：{error}</div>
+      ) : null}
+      {waitingForFirstMessage && !loading ? (
+        <div className="empty-state">发送第一条消息后，这里会显示当前会话创建的可连接后台对象。</div>
+      ) : null}
 
-      {!loading && !error && resources.length > 0 ? (
+      {!loading && !error && openResources.length > 0 ? (
         <div className="panel-list">
-          {resources.map((resource) => (
+          {openResources.map((resource) => (
             <ResourceCard
               key={`${resource.kind}-${resource.resource_id}`}
               resource={resource}
@@ -187,14 +235,45 @@ export default function ResourcePanel({
               onControl={handleControl}
               onCopy={handleCopy}
               onOpenTerminal={handleOpenTerminal}
+              onOpenBrowser={handleOpenBrowser}
               onShowConversation={onShowConversation}
             />
           ))}
         </div>
       ) : null}
 
+      {!loading && !error && closedBackgroundTasks.length > 0 ? (
+        <section className="resource-closed-group">
+          <button
+            type="button"
+            className="resource-closed-summary"
+            aria-expanded={closedGroupOpen}
+            onClick={() => setClosedGroupOpen((open) => !open)}
+          >
+            已关闭后台连接 ({closedBackgroundTasks.length})
+            <span aria-hidden="true">{closedGroupOpen ? "⌄" : "›"}</span>
+          </button>
+          {closedGroupOpen ? (
+            <div className="panel-list">
+              {closedBackgroundTasks.map((resource) => (
+                <ResourceCard
+                  key={`${resource.kind}-${resource.resource_id}`}
+                  resource={resource}
+                  busy={busyResourceId === resource.resource_id}
+                  onControl={handleControl}
+                  onCopy={handleCopy}
+                  onOpenTerminal={handleOpenTerminal}
+                  onOpenBrowser={handleOpenBrowser}
+                  onShowConversation={onShowConversation}
+                />
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       {!loading && !error && resources.length === 0 ? (
-        <div className="empty-state">当前会话还没有后台资源</div>
+        <div className="empty-state">当前会话还没有后台连接</div>
       ) : null}
     </section>
   );

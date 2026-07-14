@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,8 +17,8 @@ def mock_dependencies():
     config_service.resolve_agent_id.return_value = "test_agent"
     config_service.get_agent_runtime_config.return_value = {
         "providers": [
-            {"interface": "chat.completion", "model": "primary", "api_key": "k", "endpoint": "e", "temperature": 0.7, "top_p": 1.0, "max_output_tokens": 1024},
-            {"interface": "chat.completion", "model": "fallback", "api_key": "k", "endpoint": "e", "temperature": 0.7, "top_p": 1.0, "max_output_tokens": 1024},
+            {"custom_llm_provider": "openai", "model": "primary", "api_key": "k", "endpoint": "e", "temperature": 0.7, "top_p": 1.0, "max_output_tokens": 1024},
+            {"custom_llm_provider": "openai", "model": "fallback", "api_key": "k", "endpoint": "e", "temperature": 0.7, "top_p": 1.0, "max_output_tokens": 1024},
         ],
         "temperature": 0.7,
         "top_p": 1.0,
@@ -30,6 +31,9 @@ def mock_dependencies():
     msg_bus = MagicMock()
     job_event_bus = MagicMock()
     job_event_bus.publish = AsyncMock()
+    session_changes_service = MagicMock()
+    tool_selection_store = MagicMock()
+    tool_selection_store.disabled_tools.return_value = set()
 
     dependency_provider = MagicMock()
     dependency_provider.get_message_service.return_value = MagicMock()
@@ -42,6 +46,8 @@ def mock_dependencies():
         "registry": registry,
         "msg_bus": msg_bus,
         "job_event_bus": job_event_bus,
+        "session_changes_service": session_changes_service,
+        "tool_selection_store": tool_selection_store,
         "dependency_provider": dependency_provider,
     }
 
@@ -53,21 +59,34 @@ def create_chunk(content="", tool_calls=None):
     chunk.message = None
     chunk.tool_calls = tool_calls or []
     chunk.additional_kwargs = {}
+    chunk.usage_metadata = None
     chunk.id = "test-id"
     return chunk
+
+
+def _make_service(deps):
+    """用当前测试夹具构造 AgentExecutionService。"""
+    return AgentExecutionService(
+        config_service=deps["config_service"],
+        background_task_registry=deps["registry"],
+        background_message_bus=deps["msg_bus"],
+        job_event_bus=deps["job_event_bus"],
+        dependency_provider=deps["dependency_provider"],
+        session_changes_service=deps["session_changes_service"],
+        tool_selection_store=deps["tool_selection_store"],
+        workspace_root=Path.cwd(),
+    )
 
 
 @pytest.mark.asyncio
 async def test_primary_success_no_fallback(mock_dependencies):
     """测试：主模型成功时，不使用 fallback。"""
     deps = mock_dependencies
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    deps["tool_selection_store"].disabled_tools.return_value = {
+        "apply_patch",
+        "test_tool_2",
+    }
+    service = _make_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -93,6 +112,10 @@ async def test_primary_success_no_fallback(mock_dependencies):
 
         assert result == "主模型成功"
         assert mock_build.call_count == 1
+        assert mock_build.call_args.kwargs["tool_denylist"] == {
+            "apply_patch",
+            "test_tool_2",
+        }
 
 
 @pytest.mark.asyncio
@@ -102,7 +125,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
-                "interface": "chat.completion",
+                "custom_llm_provider": "openai",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -113,13 +136,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
         "max_output_tokens": 1024,
         "system_prompt": "test",
     }
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -159,10 +176,64 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
         for call in deps["job_event_bus"].publish.call_args_list
         if call.kwargs.get("event_type") == "text_delta"
     ]
-    assert text_delta_payloads == [
-        {"text": "先判断用户只要 OK。", "kind": "reasoning"},
-        {"text": "OK", "kind": "text"},
+    assert [
+        (payload["text"], payload["kind"])
+        for payload in text_delta_payloads
+    ] == [
+        ("先判断用户只要 OK。", "reasoning"),
+        ("OK", "markdown"),
     ]
+    assert text_delta_payloads[0]["part_id"] != text_delta_payloads[1]["part_id"]
+
+
+@pytest.mark.asyncio
+async def test_text_deltas_share_stable_part_id(mock_dependencies):
+    """同一个 Markdown part 的多个增量必须共享稳定 part_id。"""
+    deps = mock_dependencies
+    service = _make_service(deps)
+
+    with patch(
+        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+    ) as mock_build:
+        async def mock_events(*args, **kwargs):
+            yield {
+                "event": "on_chat_model_stream",
+                "name": "ChatOpenAI",
+                "data": {"chunk": create_chunk("第一段\n\n")},
+                "metadata": {},
+            }
+            yield {
+                "event": "on_chat_model_stream",
+                "name": "ChatOpenAI",
+                "data": {"chunk": create_chunk("第二段")},
+                "metadata": {},
+            }
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = mock_events
+        mock_build.return_value = mock_agent
+
+        result = await service.run_step(
+            session_id="test",
+            message="test",
+            agent_id="test_agent",
+            job_id="job_test",
+        )
+
+    assert result == "第一段\n\n第二段"
+    part_events = [
+        call
+        for call in deps["job_event_bus"].publish.call_args_list
+        if call.kwargs.get("event_type") in {"text_start", "text_delta", "text_end"}
+    ]
+    assert [call.kwargs["event_type"] for call in part_events] == [
+        "text_start",
+        "text_delta",
+        "text_end",
+    ]
+    assert len({call.kwargs["payload"]["part_id"] for call in part_events}) == 1
+    assert part_events[1].kwargs["payload"]["text"] == "第一段\n\n第二段"
+    assert part_events[-1].kwargs["payload"]["text"] == "第一段\n\n第二段"
 
 
 @pytest.mark.asyncio
@@ -172,7 +243,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
-                "interface": "chat.completion",
+                "custom_llm_provider": "openai",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -183,13 +254,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
         "max_output_tokens": 1024,
         "system_prompt": "test",
     }
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
 
     input_messages: list[object] = []
 
@@ -241,7 +306,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
-                "interface": "chat.completion",
+                "custom_llm_provider": "openai",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -261,24 +326,20 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
             }
         ],
     }
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
 
     input_messages: list[object] = []
     stream_results = [
         AgentEventStreamResult(
             final_text="根据 AG",
+            final_text_part_id="part_first",
             latest_model_reasoning_text="",
             last_tool_result_text="",
             completed_custom_tool_names=(),
         ),
         AgentEventStreamResult(
             final_text="4568",
+            final_text_part_id="part_second",
             latest_model_reasoning_text="",
             last_tool_result_text="4568",
             completed_custom_tool_names=("test_tool_2",),
@@ -321,7 +382,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(mock_depe
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
-                "interface": "chat.completion",
+                "custom_llm_provider": "openai",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -332,13 +393,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(mock_depe
         "max_output_tokens": 1024,
         "system_prompt": "test",
     }
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
 
     content_blocks = [
         {"type": "reasoning", "reasoning": "先判断用户只要 OK。"},
@@ -373,10 +428,14 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(mock_depe
         for call in deps["job_event_bus"].publish.call_args_list
         if call.kwargs.get("event_type") == "text_delta"
     ]
-    assert text_delta_payloads == [
-        {"text": "先判断用户只要 OK。", "kind": "reasoning"},
-        {"text": "OK", "kind": "text"},
+    assert [
+        (payload["text"], payload["kind"])
+        for payload in text_delta_payloads
+    ] == [
+        ("先判断用户只要 OK。", "reasoning"),
+        ("OK", "markdown"),
     ]
+    assert text_delta_payloads[0]["part_id"] != text_delta_payloads[1]["part_id"]
     assert all("type" not in payload["text"] for payload in text_delta_payloads)
 
 
@@ -387,7 +446,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
-                "interface": "chat.completion",
+                "custom_llm_provider": "openai",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -398,13 +457,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
         "max_output_tokens": 1024,
         "system_prompt": "test",
     }
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -429,12 +482,14 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
             }
             yield {
                 "event": "on_tool_start",
+                "run_id": "run_python_exec",
                 "name": "python_exec",
                 "data": {"input": {"code": "print('LC_BLOCK_OK_2')"}},
                 "metadata": {},
             }
             yield {
                 "event": "on_tool_end",
+                "run_id": "run_python_exec",
                 "name": "python_exec",
                 "data": {
                     "output": ToolMessage(
@@ -476,6 +531,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
     ]
     assert tool_start_payloads == [
         {
+            "part_id": "run_python_exec",
             "tool_name": "python_exec",
             "args": {"code": "print('LC_BLOCK_OK_2')"},
             "agent_id": "test_agent",
@@ -483,6 +539,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
     ]
     assert tool_end_payloads == [
         {
+            "part_id": "run_python_exec",
             "tool_name": "python_exec",
             "result": '{"stdout":"LC_BLOCK_OK_2\\n"}',
             "agent_id": "test_agent",
@@ -495,13 +552,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
 def test_extract_final_text_uses_visible_text_from_standard_blocks(mock_dependencies):
     """从最终消息提取正文时不能把 reasoning block 拼进回复。"""
     deps = mock_dependencies
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
     result = {
         "messages": [
             HumanMessage(content="只回复 OK"),
@@ -518,42 +569,27 @@ def test_extract_final_text_uses_visible_text_from_standard_blocks(mock_dependen
 
 
 @pytest.mark.asyncio
-async def test_fallback_on_primary_failure(mock_dependencies):
-    """测试：主模型失败时，回退到 fallback 模型成功。"""
+async def test_execution_delegates_model_fallback_to_single_agent(mock_dependencies):
+    """模型 fallback 由请求中间件完成，执行服务不应重建 Agent。"""
     deps = mock_dependencies
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
     ) as mock_build:
         with patch("app.runtime.agent_runtime.build_session_agent_runtime", mock_build):
-            call_count = 0
-
             def create_mock_agent(*args, **kwargs):
-                nonlocal call_count
-                call_count += 1
                 mock_agent = MagicMock()
 
-                if call_count == 1:
-                    async def mock_events(*args, **kwargs):
-                        raise Exception("主模型失败")
-                        yield  # 使其成为异步生成器（虽然永远不会执行到这里）
-                    mock_agent.astream_events = mock_events
-                else:
-                    async def mock_events(*args, **kwargs):
-                        yield {
-                            "event": "on_chat_model_stream",
-                            "name": "ChatOpenAI",
-                            "data": {"chunk": create_chunk("fallback 成功")},
-                            "metadata": {},
-                        }
-                    mock_agent.astream_events = mock_events
+                async def mock_events(*args, **kwargs):
+                    yield {
+                        "event": "on_chat_model_stream",
+                        "name": "ChatOpenAI",
+                        "data": {"chunk": create_chunk("fallback 成功")},
+                        "metadata": {},
+                    }
+
+                mock_agent.astream_events = mock_events
 
                 return mock_agent
 
@@ -567,20 +603,15 @@ async def test_fallback_on_primary_failure(mock_dependencies):
             )
 
             assert result == "fallback 成功"
-            assert call_count == 2
+            assert mock_build.call_count == 1
+            assert "override_model" not in mock_build.call_args.kwargs
 
 
 @pytest.mark.asyncio
 async def test_all_models_fail(mock_dependencies):
     """测试：所有模型都失败时，抛出异常。"""
     deps = mock_dependencies
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -597,42 +628,27 @@ async def test_all_models_fail(mock_dependencies):
 
 
 @pytest.mark.asyncio
-async def test_fallback_publishes_event(mock_dependencies):
-    """测试：fallback 时发布 AGENT_START 事件。"""
+async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
+    """模型中间件内部 fallback 不应伪装成一次新的 Agent 启动。"""
     deps = mock_dependencies
-    service = AgentExecutionService(
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-    )
+    service = _make_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
     ) as mock_build:
         with patch("app.runtime.agent_runtime.build_session_agent_runtime", mock_build):
-            call_count = 0
-
             def create_mock_agent(*args, **kwargs):
-                nonlocal call_count
-                call_count += 1
                 mock_agent = MagicMock()
 
-                if call_count == 1:
-                    async def mock_events(*args, **kwargs):
-                        raise Exception("主模型失败")
-                        yield  # 使其成为异步生成器（虽然永远不会执行到这里）
-                    mock_agent.astream_events = mock_events
-                else:
-                    async def mock_events(*args, **kwargs):
-                        yield {
-                            "event": "on_chat_model_stream",
-                            "name": "ChatOpenAI",
-                            "data": {"chunk": create_chunk("fallback")},
-                            "metadata": {},
-                        }
-                    mock_agent.astream_events = mock_events
+                async def mock_events(*args, **kwargs):
+                    yield {
+                        "event": "on_chat_model_stream",
+                        "name": "ChatOpenAI",
+                        "data": {"chunk": create_chunk("fallback")},
+                        "metadata": {},
+                    }
+
+                mock_agent.astream_events = mock_events
 
                 return mock_agent
 
@@ -645,10 +661,9 @@ async def test_fallback_publishes_event(mock_dependencies):
                 job_id="job_test",
             )
 
-    # 验证发布过 fallback 事件（至少2次 AGENT_START：主模型启动 + fallback 启动）
     publish_calls = [
         c
         for c in deps["job_event_bus"].publish.call_args_list
         if c.kwargs.get("event_type") == "agent_start"
     ]
-    assert len(publish_calls) >= 2
+    assert len(publish_calls) == 1

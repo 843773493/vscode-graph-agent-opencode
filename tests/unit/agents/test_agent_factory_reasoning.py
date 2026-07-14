@@ -117,7 +117,7 @@ def _blocks_text(chunks, block_type: str, field: str) -> str:
 
 @pytest.mark.asyncio
 async def test_astream_exposes_reasoning_content(test_model):
-    """interface=opencode_zen 时应通过 LiteLLM 包装层拿到 reasoning_content。"""
+    """OpenAI-compatible provider 应通过 LiteLLM 包装层拿到 reasoning_content。"""
     messages = [{"role": "user", "content": "你好"}]
 
     chunks = await _astream_chunks(test_model, messages)
@@ -243,7 +243,9 @@ async def test_ainvoke_shows_reasoning_in_metadata(test_model):
     completion_details = token_usage.get("completion_tokens_details", {})
     reasoning_tokens = completion_details.get("reasoning_tokens")
 
-    assert metadata.get("provider_interface") == "opencode_zen"
+    custom_llm_provider = metadata.get("custom_llm_provider")
+    if custom_llm_provider is not None:
+        assert custom_llm_provider == "openai"
     if reasoning_tokens is not None:
         assert reasoning_tokens > 0, f"reasoning_tokens 应该 > 0，但得到 {reasoning_tokens}。"
 

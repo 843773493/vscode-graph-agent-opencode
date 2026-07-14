@@ -18,10 +18,12 @@ import type { RefreshOptions, SetAppState } from "./contentViewLoaderTypes";
 export function useSessionResourceLoader({
   apiPort,
   currentSession,
+  workspaceId,
   setState,
 }: {
   apiPort: number;
   currentSession: Session | null;
+  workspaceId: string | null;
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
@@ -40,11 +42,11 @@ export function useSessionResourceLoader({
         contentView: "resources",
         sessionResourcesLoading: silent ? prev.sessionResourcesLoading : true,
         sessionResourcesError: null,
-        status: silent ? prev.status : "正在读取会话资源",
+        status: silent ? prev.status : "正在读取后台连接",
       }));
 
       try {
-        const resources = await getSessionResources(apiPort, sessionId);
+        const resources = await getSessionResources(apiPort, sessionId, workspaceId);
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||
@@ -59,8 +61,8 @@ export function useSessionResourceLoader({
             silent && previousCount === nextCount
               ? prev.status
               : silent
-                ? `会话资源已更新 (${nextCount} 个)`
-                : `会话资源已加载 (${nextCount} 个)`;
+                ? `后台连接已更新 (${nextCount} 个)`
+                : `后台连接已加载 (${nextCount} 个)`;
           return {
             ...prev,
             contentView: "resources",
@@ -86,12 +88,12 @@ export function useSessionResourceLoader({
             contentView: "resources",
             sessionResourcesLoading: false,
             sessionResourcesError: message,
-            status: silent ? prev.status : `会话资源加载失败: ${message}`,
+            status: silent ? prev.status : `后台连接加载失败: ${message}`,
           };
         });
       }
     },
-    [apiPort, setState],
+    [apiPort, workspaceId, setState],
   );
 
   const controlSessionResource = useCallback(
@@ -116,6 +118,7 @@ export function useSessionResourceLoader({
         kind,
         resourceId,
         action,
+        workspaceId,
       );
 
       setState((prev) => {
@@ -141,7 +144,7 @@ export function useSessionResourceLoader({
         };
       });
     },
-    [apiPort, currentSession, setState],
+    [apiPort, currentSession, workspaceId, setState],
   );
 
   return {

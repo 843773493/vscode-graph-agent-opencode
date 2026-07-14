@@ -1,26 +1,51 @@
 from __future__ import annotations
 
+import difflib
+import hashlib
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, NotRequired, TypedDict
 
-from deepagents.backends import LocalShellBackend
+from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.skills import (
     SkillMetadata,
     SkillsMiddleware,
     append_to_system_message,
 )
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain.agents.middleware.types import ExtendedModelResponse
+from langchain.agents.middleware.types import (
+    AgentState,
+    ExtendedModelResponse,
+    PrivateStateAttr,
+)
+from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.runtime import Runtime
 
 from app.core.path_utils import get_workspace_root
+from app.agents.workspace_backend import build_workspace_backend
 
 WORKSPACE_AGENTS_FILE = "AGENTS.md"
 WORKSPACE_SKILLS_SOURCE = "/.boxteam/skills"
 
 
+class WorkspaceAgentsSnapshot(TypedDict):
+    applied_content: str
+    observed_content: NotRequired[str]
+    compaction_marker: str | None
+
+
+class WorkspaceAgentsState(AgentState):
+    _workspace_agents_snapshot: Annotated[
+        NotRequired[WorkspaceAgentsSnapshot],
+        PrivateStateAttr,
+    ]
+
+
 class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
-    """把 workspace 根目录 AGENTS.md 注入模型 system message。"""
+    """冻结会话 AGENTS.md system prompt，并把后续变化追加为 reminder。"""
+
+    state_schema = WorkspaceAgentsState
 
     def __init__(self, *, workspace_root: Path) -> None:
         self._workspace_root = workspace_root
@@ -28,14 +53,18 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
     def _agents_path(self) -> Path:
         return self._workspace_root / WORKSPACE_AGENTS_FILE
 
-    def _load_agents_text(self) -> str:
+    def _load_agents_content(self) -> str:
         agents_path = self._agents_path()
         if not agents_path.exists():
             return ""
         if not agents_path.is_file():
             raise RuntimeError(f"工作区 AGENTS.md 路径不是文件: {agents_path}")
         content = agents_path.read_text(encoding="utf-8")
-        if not content.strip():
+        return content if content.strip() else ""
+
+    @staticmethod
+    def _format_agents_text(content: str) -> str:
+        if not content:
             return ""
         return (
             "## Workspace AGENTS.md\n\n"
@@ -47,8 +76,138 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
             "</workspace_agents_md>"
         )
 
+    @staticmethod
+    def _compaction_marker(event: object) -> str | None:
+        if event is None:
+            return None
+        if not isinstance(event, Mapping):
+            raise TypeError("_summarization_event 必须是 mapping")
+        cutoff_index = event.get("cutoff_index")
+        if not isinstance(cutoff_index, int) or cutoff_index < 0:
+            raise TypeError("_summarization_event.cutoff_index 必须是非负整数")
+        summary_message = event.get("summary_message")
+        if isinstance(summary_message, BaseMessage):
+            serialized_summary: object = summary_message.model_dump(mode="json")
+        elif isinstance(summary_message, Mapping):
+            serialized_summary = dict(summary_message)
+        else:
+            raise TypeError("_summarization_event.summary_message 必须是消息对象")
+        marker_source = json.dumps(
+            {
+                "cutoff_index": cutoff_index,
+                "file_path": event.get("file_path"),
+                "summary_message": serialized_summary,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(marker_source.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _snapshot(state: WorkspaceAgentsState) -> WorkspaceAgentsSnapshot | None:
+        snapshot = state.get("_workspace_agents_snapshot")
+        if snapshot is None:
+            return None
+        if not isinstance(snapshot, Mapping):
+            raise TypeError("_workspace_agents_snapshot 必须是 mapping")
+        applied_content = snapshot.get("applied_content")
+        observed_content = snapshot.get("observed_content")
+        compaction_marker = snapshot.get("compaction_marker")
+        if not isinstance(applied_content, str):
+            raise TypeError("_workspace_agents_snapshot.applied_content 必须是字符串")
+        if observed_content is not None and not isinstance(observed_content, str):
+            raise TypeError("_workspace_agents_snapshot.observed_content 必须是字符串")
+        if compaction_marker is not None and not isinstance(compaction_marker, str):
+            raise TypeError("_workspace_agents_snapshot.compaction_marker 必须是字符串")
+        normalized: WorkspaceAgentsSnapshot = {
+            "applied_content": applied_content,
+            "compaction_marker": compaction_marker,
+        }
+        if observed_content is not None:
+            normalized["observed_content"] = observed_content
+        return normalized
+
+    @staticmethod
+    def _build_change_reminder(previous: str, current: str) -> str:
+        diff = "".join(
+            difflib.unified_diff(
+                previous.splitlines(keepends=True),
+                current.splitlines(keepends=True),
+                fromfile="AGENTS.md（会话已应用版本）",
+                tofile="AGENTS.md（当前工作区版本）",
+            )
+        )
+        if not diff:
+            raise RuntimeError("AGENTS.md 内容变化但没有生成差异")
+        return (
+            "<system_reminder>\n"
+            "工作区根目录 AGENTS.md 在当前会话期间发生变化。为保持模型提示缓存，"
+            "本轮不会替换 system prompt 中已加载的完整版本；以下增量变更从现在起生效。"
+            "会话上下文完成压缩后，当前工作区的最新完整 AGENTS.md 将重新加载到 "
+            "system prompt。\n\n"
+            "<workspace_agents_md_change path=\"/AGENTS.md\">\n"
+            f"{diff}"
+            "</workspace_agents_md_change>\n"
+            "</system_reminder>"
+        )
+
+    def before_model(
+        self,
+        state: WorkspaceAgentsState,
+        runtime: Runtime,
+    ) -> dict[str, Any] | None:
+        del runtime
+        current_content = self._load_agents_content()
+        current_marker = self._compaction_marker(state.get("_summarization_event"))
+        snapshot = self._snapshot(state)
+        if snapshot is None:
+            return {
+                "_workspace_agents_snapshot": {
+                    "applied_content": current_content,
+                    "compaction_marker": current_marker,
+                }
+            }
+
+        if current_marker is not None and current_marker != snapshot["compaction_marker"]:
+            return {
+                "_workspace_agents_snapshot": {
+                    "applied_content": current_content,
+                    "compaction_marker": current_marker,
+                }
+            }
+
+        previous_content = snapshot.get(
+            "observed_content",
+            snapshot["applied_content"],
+        )
+        if current_content == previous_content:
+            return None
+
+        reminder = self._build_change_reminder(previous_content, current_content)
+        return {
+            "_workspace_agents_snapshot": {
+                **snapshot,
+                "observed_content": current_content,
+            },
+            "messages": [
+                HumanMessage(
+                    content=reminder,
+                    response_metadata={
+                        "source": "workspace_agents_change",
+                        "path": "/AGENTS.md",
+                    },
+                )
+            ],
+        }
+
     def modify_request(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
-        agents_text = self._load_agents_text()
+        snapshot = self._snapshot(request.state)
+        if snapshot is None:
+            raise RuntimeError(
+                "WorkspaceAgentsMiddleware.before_model 未初始化会话 AGENTS.md 快照"
+            )
+        agents_text = self._format_agents_text(snapshot["applied_content"])
         if not agents_text:
             return request
         return request.override(
@@ -111,10 +270,7 @@ def discover_workspace_skill_metadata(
     if not sources:
         return []
 
-    backend = LocalShellBackend(
-        root_dir=str(resolved_workspace_root),
-        virtual_mode=True,
-    )
+    backend = build_workspace_backend(resolved_workspace_root)
     middleware = SkillsMiddleware(
         backend=backend,
         sources=sources,
@@ -152,7 +308,7 @@ def discover_workspace_custom_tool_skill_map(
 def append_skill_middlewares(
     middleware_stack: list[AgentMiddleware],
     *,
-    backend: LocalShellBackend | None,
+    backend: BackendProtocol | None,
     skills: list[Any] | None,
 ) -> None:
     """集中维护 workspace skill metadata middleware 顺序。"""

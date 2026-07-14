@@ -14,6 +14,7 @@ from langchain_core.messages import (
 )
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from app.abstractions.custom_tool_context import AgentContextState
 from app.core.checkpoint_config import build_checkpoint_config
 from app.schemas.public_v2.common import CursorPage, MessageRole
 from app.schemas.public_v2.message import (
@@ -426,6 +427,87 @@ class MessageService:
                 f"Agent State messages 中出现不支持的消息类型: {type(message).__name__}"
             )
         return self._dedupe_consecutive_agent_state_records(records)
+
+    async def get_agent_context_state(self, session_id: str) -> AgentContextState:
+        """读取应用压缩事件后，模型当前实际使用的消息上下文。"""
+        if self._checkpointer is None:
+            raise RuntimeError("MessageService 未配置 checkpointer，无法读取 Agent Context")
+
+        checkpoint_tuple = await self._checkpointer.aget_tuple(
+            build_checkpoint_config(session_id)
+        )
+        if checkpoint_tuple is None:
+            return {
+                "records": [],
+                "checkpoint_id": "",
+                "raw_message_count": 0,
+                "compacted": False,
+                "compaction_cutoff": None,
+                "history_file_path": None,
+            }
+
+        checkpoint = checkpoint_tuple.checkpoint
+        channel_values = checkpoint.get("channel_values", {})
+        if not isinstance(channel_values, Mapping):
+            raise TypeError(
+                "LangGraph checkpoint channel_values 应为 mapping，"
+                f"实际类型: {type(channel_values).__name__}"
+            )
+        raw_messages = channel_values.get("messages", [])
+        if not isinstance(raw_messages, list):
+            raise TypeError(
+                f"Agent Context messages 应为 list，实际类型: {type(raw_messages).__name__}"
+            )
+
+        event = channel_values.get("_summarization_event")
+        compacted = event is not None
+        compaction_cutoff: int | None = None
+        history_file_path: str | None = None
+        effective_messages = list(raw_messages)
+        if event is not None:
+            if not isinstance(event, Mapping):
+                raise TypeError(
+                    "_summarization_event 应为 mapping，"
+                    f"实际类型: {type(event).__name__}"
+                )
+            summary_message = event.get("summary_message")
+            compaction_cutoff = event.get("cutoff_index")
+            if not isinstance(compaction_cutoff, int) or compaction_cutoff < 0:
+                raise TypeError(
+                    "_summarization_event.cutoff_index 应为非负整数，"
+                    f"实际值: {compaction_cutoff!r}"
+                )
+            if summary_message is None:
+                raise ValueError("_summarization_event 缺少 summary_message")
+            raw_history_file_path = event.get("file_path")
+            if raw_history_file_path is not None and not isinstance(
+                raw_history_file_path,
+                str,
+            ):
+                raise TypeError("_summarization_event.file_path 应为字符串或 null")
+            history_file_path = raw_history_file_path
+            effective_messages = [summary_message, *raw_messages[compaction_cutoff:]]
+
+        records: list[dict[str, object]] = []
+        for message in effective_messages:
+            if isinstance(message, BaseMessage):
+                records.append(self._message_to_agent_state_record(message))
+            elif isinstance(message, Mapping):
+                records.append(self._mapping_to_agent_state_record(message))
+            else:
+                raise TypeError(
+                    "Agent Context messages 中出现不支持的消息类型: "
+                    f"{type(message).__name__}"
+                )
+
+        return {
+            "records": self._dedupe_consecutive_agent_state_records(records),
+            "checkpoint_id": str(checkpoint.get("id") or ""),
+            "raw_message_count": len(raw_messages),
+            "compacted": compacted,
+            "compaction_cutoff": compaction_cutoff,
+            "history_file_path": history_file_path,
+        }
 
     async def get_agent_state_messages(self, session_id: str) -> AgentStateMessagesDTO:
         records = await self.list_agent_state_records(session_id, strict=True)

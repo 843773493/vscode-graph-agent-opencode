@@ -5,17 +5,12 @@
       {
         "id": "backup_3",
         "endpoint": "https://www.cctq.ai/v1",
-        "model": "gpt-5.4-mini",
+        "model": "gpt-5.6-luna",
         "api_key": "${CCTQ_API_KEY}",
-        "interface": "opencode_zen",
+        "custom_llm_provider": "openai",
         "capabilities": [
           "image_input"
-        ],
-        "request_options": {
-          "extra_body": {
-            "reasoning_effort": "low"
-          }
-        }
+        ]
       }
     ]
   },
@@ -34,10 +29,7 @@
       },
       "model": {
         "primary_provider": "backup_3",
-        "fallback_providers": [],
-        "temperature": 0,
-        "top_p": 1,
-        "max_output_tokens": 1000
+        "fallback_providers": []
       },
       "tools": {
         "denylist": [],
