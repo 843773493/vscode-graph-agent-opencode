@@ -1,14 +1,16 @@
 import json
 import asyncio
 import tempfile
-from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.exceptions import NotFoundError
-from app.core.path_utils import get_session_file, get_session_path
-from app.core.path_utils import get_logs_dir
-from app.schemas.public_v2.session import SessionCreateRequest, SessionUpdateRequest
+from app.core.path_utils import get_session_file, get_session_path, get_sessions_dir
+from app.schemas.public_v2.session import (
+    SessionCreateRequest,
+    SessionUpdateRequest,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.business.session_service import SessionService
@@ -25,10 +27,8 @@ class TestSessionService:
         self.original_workspace = os.environ.get("WORKSPACE_ROOT")
         os.environ["WORKSPACE_ROOT"] = self.temp_dir
 
-        from app.core.path_utils import get_sessions_dir
-
         get_sessions_dir().mkdir(exist_ok=True, parents=True)
-        self.trace_event_store = TraceEventStore(logs_dir=get_logs_dir())
+        self.trace_event_store = TraceEventStore(sessions_dir=get_sessions_dir())
         self.service = SessionService(
             config_service=ConfigService(),
             trace_event_store=self.trace_event_store,
@@ -52,7 +52,7 @@ class TestSessionService:
         session = await self.service.create(request)
 
         assert session.session_id.startswith("ses_")
-        assert len(session.session_id) == 16
+        assert len(session.session_id) == 36
         assert session.title == "Test Session"
         assert session.title_source == "user"
         assert isinstance(session.current_agent_id, str)
@@ -83,6 +83,65 @@ class TestSessionService:
         session = await self.service.create(request)
 
         assert session.current_agent_id == "default"
+
+    @pytest.mark.asyncio
+    async def test_create_delegated_session_persists_provenance(self):
+        parent = await self.service.create(SessionCreateRequest(title="Parent"))
+
+        child = await self.service.create_delegated(
+            title="Delegated",
+            agent_id=parent.current_agent_id,
+            parent_session_id=parent.session_id,
+            parent_job_id="job_parent",
+            parent_tool_call_id="call_task",
+            subagent_type="general-purpose",
+        )
+
+        assert child.parent_session_id == parent.session_id
+        assert child.kind == "delegated"
+        assert child.delegation is not None
+        assert child.delegation.parent_tool_call_id == "call_task"
+        persisted = await self.service.get(child.session_id)
+        assert persisted == child
+
+        failed = await self.service.set_delegation_start_result(
+            child.session_id,
+            status="failed",
+            error="调度器不可用",
+        )
+        assert failed.delegation is not None
+        assert failed.delegation.start_status == "failed"
+        assert failed.delegation.start_error == "调度器不可用"
+        assert await self.service.get(child.session_id) == failed
+
+    @pytest.mark.asyncio
+    async def test_public_create_rejects_internal_session_kind(self):
+        with pytest.raises(ValidationError, match="kind"):
+            SessionCreateRequest.model_validate(
+                {"title": "Broken", "kind": "delegated"}
+            )
+
+    @pytest.mark.asyncio
+    async def test_detaching_delegated_session_keeps_immutable_provenance(self):
+        parent = await self.service.create(SessionCreateRequest(title="Parent"))
+        child = await self.service.create_delegated(
+            title="Delegated",
+            agent_id=parent.current_agent_id,
+            parent_session_id=parent.session_id,
+            parent_job_id="job_parent",
+            parent_tool_call_id="call_task",
+            subagent_type="general-purpose",
+        )
+
+        detached = await self.service.update(
+            child.session_id,
+            SessionUpdateRequest(parent_session_id=None),
+        )
+
+        assert detached.parent_session_id is None
+        assert detached.kind == "delegated"
+        assert detached.delegation is not None
+        assert detached.delegation.parent_session_id == parent.session_id
 
     @pytest.mark.asyncio
     async def test_update_session_can_switch_agent(self):
@@ -208,6 +267,16 @@ class TestSessionService:
 
         session_dir = get_session_path(created.session_id)
         assert session_dir.exists()
+        for relative_path in (
+            "checkpoints/checkpoints.jsonl",
+            "logs/traces/events.jsonl",
+            "logs/llm_requests/1.json",
+            "resources/background_tasks.json",
+            "context/history.md",
+        ):
+            artifact = session_dir / relative_path
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text("{}\n", encoding="utf-8")
 
         result = await self.service.delete(created.session_id)
 
@@ -285,9 +354,9 @@ class TestSessionService:
     async def test_list_trace_events_returns_event_union(self):
         created = await self.service.create(SessionCreateRequest(title="Trace Session"))
 
-        trace_dir = Path(self.temp_dir) / ".boxteam" / "logs" / "traces"
+        trace_dir = get_session_path(created.session_id) / "logs" / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
-        trace_file = trace_dir / f"trace_{created.session_id}.jsonl"
+        trace_file = trace_dir / "events.jsonl"
 
         trace_event = {
             "event_id": "evt_1",
@@ -322,9 +391,9 @@ class TestSessionService:
     async def test_list_trace_events_rejects_legacy_format(self):
         created = await self.service.create(SessionCreateRequest(title="Legacy Trace Session"))
 
-        trace_dir = Path(self.temp_dir) / ".boxteam" / "logs" / "traces"
+        trace_dir = get_session_path(created.session_id) / "logs" / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
-        trace_file = trace_dir / f"trace_{created.session_id}.jsonl"
+        trace_file = trace_dir / "events.jsonl"
 
         legacy_trace_event = {
             "timestamp": 1710000000000,
@@ -342,9 +411,9 @@ class TestSessionService:
     async def test_stream_trace_events_emits_existing_and_new_events(self):
         created = await self.service.create(SessionCreateRequest(title="Stream Trace Session"))
 
-        trace_dir = Path(self.temp_dir) / ".boxteam" / "logs" / "traces"
+        trace_dir = get_session_path(created.session_id) / "logs" / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
-        trace_file = trace_dir / f"trace_{created.session_id}.jsonl"
+        trace_file = trace_dir / "events.jsonl"
 
         first_event = {
             "event_id": "evt_1",

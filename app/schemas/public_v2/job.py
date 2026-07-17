@@ -10,6 +10,7 @@ from .common import ControlAction, ControlScope, JobStatus, RunMode, StepStatus,
 
 class JobDTO(TimestampedDTO):
     job_id: str
+    message_id: str
     session_id: str
     mode: RunMode
     status: JobStatus

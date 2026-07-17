@@ -8,11 +8,7 @@ from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointMetadata
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.schemas.public_v2.session import (
-    SessionCreateRequest,
-    SessionDTO,
-    SessionUpdateRequest,
-)
+from app.schemas.public_v2.session import SessionDTO
 from app.services.business.session_service import SessionService
 
 
@@ -34,16 +30,10 @@ class SessionContextForkService:
             build_checkpoint_config(source_session_id)
         )
 
-        child_session = await self._session_service.create(
-            SessionCreateRequest(
-                title=f"{source_session.title}（上下文副本）",
-                title_source="auto",
-                agent_id=source_session.current_agent_id,
-            )
-        )
-        child_session = await self._session_service.update(
-            child_session.session_id,
-            SessionUpdateRequest(parent_session_id=source_session_id),
+        child_session = await self._session_service.create_context_fork(
+            title=f"{source_session.title}（上下文副本）",
+            agent_id=source_session.current_agent_id,
+            parent_session_id=source_session_id,
         )
 
         if source_checkpoint is None:

@@ -159,6 +159,8 @@ class ToolCallEndPayload(BaseModel):
     tool_call_id: str
     tool_name: str
     result: str = ""
+    status: Literal["success", "error"] = "success"
+    failed: bool = False
     agent_id: str | None = None
     invocation_tool_name: str | None = None
     skill_names: list[str] = Field(default_factory=list)

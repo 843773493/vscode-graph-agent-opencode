@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +9,11 @@ import pytest
 
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
 from tests.e2e.utils import get_trace_payload, last_assistant_message, wait_for_job_done
+from tests.e2e.utils import prepare_e2e_workspace
 
 
 CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
     "AGENTS.md",
-    ".boxteam/boxteam.json",
     ".boxteam/skills",
 )
 
@@ -22,43 +21,20 @@ CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
 @pytest.fixture(scope="module")
 def e2e_workspace_root_path(
     request: pytest.FixtureRequest,
-    e2e_session_marker: str,
 ) -> str:
     project_root = Path.cwd().resolve()
     tests_root = project_root / "tests" / "e2e"
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
-    workspace_root = project_root / "out" / "tests" / "e2e" / relative_test_path
-    template_root = project_root / "asset" / "custom_tool_test_workspace"
-    lock_file = workspace_root / ".e2e_session_lock"
-
-    same_session = (
-        lock_file.exists()
-        and lock_file.read_text(encoding="utf-8").strip() == e2e_session_marker
+    workspace_root = (
+        project_root / "out" / "tests" / "temp" / "e2e" / relative_test_path / "workspace"
     )
-    if workspace_root.exists() and not same_session:
-        shutil.rmtree(workspace_root)
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    for item in workspace_root.iterdir():
-        if item.resolve() == lock_file.resolve():
-            continue
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
-
-    for relative_item in CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS:
-        item = template_root / relative_item
-        if not item.exists():
-            raise FileNotFoundError(f"custom tool e2e 模板缺少必要文件: {item}")
-        target = workspace_root / relative_item
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if item.is_dir():
-            shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
-
-    lock_file.write_text(e2e_session_marker, encoding="utf-8")
+    template_root = project_root / "asset" / "custom_tool_test_workspace"
+    prepare_e2e_workspace(
+        workspace_root=workspace_root,
+        template_root=template_root,
+        template_items=CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS,
+    )
     return str(workspace_root)
 
 

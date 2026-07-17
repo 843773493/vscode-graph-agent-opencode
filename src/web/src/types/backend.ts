@@ -7,6 +7,8 @@ export type {
   AgentStateMessagesDTO as AgentStateMessages,
   AttachmentRef,
   MessageDTO as Message,
+  MessageReplayAccepted,
+  MessageReplayRequest,
   MessageRunAccepted,
   MessageRunRequest,
   RunOptions,
@@ -14,6 +16,7 @@ export type {
 export type {
   DeleteSessionResultDTO as DeleteSessionResult,
   SessionCompactResultDTO as SessionCompactResult,
+  SessionInformationSnapshotDTO as SessionInformationSnapshot,
   SessionDTO as Session,
   SessionInterruptResultDTO as InterruptSessionResult,
   SessionUpdateRequest,
@@ -150,12 +153,39 @@ export interface GatewayWorkspace {
   managed: boolean;
   removable: boolean;
   system_default: boolean;
-  remote: Record<string, unknown>;
+  remote: GatewaySshRemoteDetails;
+  services: Record<string, GatewayServiceStatus>;
+  connection_error?: string | null;
+  checked_at: string;
+}
+
+export interface GatewaySshRemoteDetails {
+  [key: string]: unknown;
+  host?: string;
+  port?: number;
+  username?: string;
+  remote_backend_host?: string;
+  remote_backend_port?: number;
+}
+
+export interface GatewayServiceStatus {
+  status: "ready" | "offline" | "unavailable";
+  health_path: string;
+  local_url?: string | null;
+  local_port?: number | null;
+  remote_host?: string | null;
+  remote_port?: number | null;
+  error?: string | null;
 }
 
 export interface GatewayWorkspaceList {
   active_workspace_id: string | null;
   items: GatewayWorkspace[];
+}
+
+export interface GatewayHealth {
+  status: "ok";
+  active_workspace_id: string | null;
 }
 
 export interface AddLocalGatewayWorkspaceRequest {
@@ -164,15 +194,27 @@ export interface AddLocalGatewayWorkspaceRequest {
   backend_url?: string | null;
 }
 
-export interface AddSshGatewayWorkspaceRequest {
+interface AddSshGatewayWorkspaceRequestBase {
   name?: string | null;
-  host: string;
-  port: number;
-  username: string;
-  private_key_path: string;
-  remote_backend_host: string;
-  remote_backend_port: number;
   remote_workspace_path: string;
+}
+
+export interface AddSshGatewayWorkspaceFromWorkspaceRequest
+  extends AddSshGatewayWorkspaceRequestBase {
+  connection_workspace_id: string;
+}
+
+export interface AddSshGatewayWorkspaceFromConfigRequest
+  extends AddSshGatewayWorkspaceRequestBase {
+  ssh_config_host: string;
+}
+
+export type AddSshGatewayWorkspaceRequest =
+  | AddSshGatewayWorkspaceFromWorkspaceRequest
+  | AddSshGatewayWorkspaceFromConfigRequest;
+
+export interface RenameGatewayWorkspaceRequest {
+  name: string;
 }
 
 export interface ReorderGatewayWorkspacesRequest {
@@ -187,6 +229,7 @@ export interface WebUiMainAreaRatios {
 }
 
 export interface WebUiLayoutSettings {
+  workbench_view?: "sessions" | "gateway" | null;
   agent_sessions_panel_open?: boolean | null;
   auxiliary_visible?: boolean | null;
   main_area_ratios?: WebUiMainAreaRatios | null;
@@ -216,18 +259,34 @@ export interface WebUiSettingsUpdate {
   recent_local_workspace_paths?: string[] | null;
 }
 
-export interface LocalDirectoryEntry {
+export interface GatewayDirectoryEntry {
   name: string;
   path: string;
 }
 
-export interface LocalDirectoryList {
+export interface GatewayDirectoryList {
   path: string;
   parent_path?: string | null;
   home_path: string;
-  entries: LocalDirectoryEntry[];
+  entries: GatewayDirectoryEntry[];
   truncated: boolean;
   limit: number;
+}
+
+export interface SshConnectionOption {
+  connection_id: string;
+  source: "boxteam" | "ssh_config";
+  label: string;
+  host: string;
+  port: number;
+  username: string;
+  workspace_id?: string | null;
+  ssh_config_host?: string | null;
+  initial_path?: string | null;
+}
+
+export interface SshConnectionOptionList {
+  items: SshConnectionOption[];
 }
 
 export type SessionResourceKind = SessionResourceDTO["kind"];

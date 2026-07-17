@@ -117,6 +117,9 @@ class TraceEventMapper:
             return "tool", "调用工具", f"正在调用 {tool_name}", "running", tool_name
         if event_type == "tool_call_end":
             tool_name = payload.get("tool_name") or payload.get("name") or "未知工具"
+            if payload.get("status") == "error" or payload.get("failed") is True:
+                content = payload.get("result") or f"工具 {tool_name} 执行失败"
+                return "tool", "工具失败", str(content), "failed", tool_name
             return "tool", "工具返回", f"工具 {tool_name} 已返回结果", "completed", tool_name
         if event_type == "agent_end":
             return "agent", "执行结束", payload.get("final_text") or "agent 已完成本轮处理", "completed", None

@@ -93,7 +93,6 @@ def create_open_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool
                 "browserId": browser_id,
                 "url": browser.get("url"),
                 "title": browser.get("title"),
-                "attach_url": browser.get("attach_url"),
                 "forceNew": forceNew,
                 "summary": page.get("summary"),
             }
@@ -102,7 +101,7 @@ def create_open_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool
     return StructuredTool.from_function(
         coroutine=open_browser_page,
         name="openBrowserPage",
-        description="在可附加浏览器中打开 URL，并返回 pageId、attach_url 和页面摘要。",
+        description="在可附加浏览器中打开 URL，并返回 pageId 和页面摘要。",
         args_schema=OpenBrowserPageInput,
     )
 

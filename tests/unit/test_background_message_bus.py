@@ -7,7 +7,7 @@ from app.core.background_message_bus import (
     emit_background_message,
     emit_interrupt_background_message,
 )
-from app.schemas.background_message import BackgroundMessageKind
+from app.abstractions.background_message_bus import BackgroundMessageKind
 
 
 @pytest.fixture(autouse=True)

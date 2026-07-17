@@ -35,11 +35,11 @@ from tests.e2e.processes import (
     terminate_process,
     wait_for_http_ok,
 )
+from tests.e2e.utils import prepare_e2e_workspace
 
 
 CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
     "AGENTS.md",
-    ".boxteam/boxteam.json",
     ".boxteam/skills",
 )
 
@@ -134,43 +134,20 @@ async def _recv_ws_type(websocket, expected_type: str) -> dict[str, object]:
 
 
 @pytest.fixture(scope="module")
-def e2e_workspace_root_path(request: pytest.FixtureRequest, e2e_session_marker: str) -> str:
+def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     project_root = Path.cwd().resolve()
     tests_root = project_root / "tests" / "e2e"
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
-    workspace_root = project_root / "out" / "tests" / "e2e" / relative_test_path
+    workspace_root = (
+        project_root / "out" / "tests" / "temp" / "e2e" / relative_test_path / "workspace"
+    )
     template_root = project_root / "asset" / "custom_tool_test_workspace"
-    lock_file = workspace_root / ".e2e_session_lock"
-
-    same_session = lock_file.exists() and lock_file.read_text(encoding="utf-8").strip() == e2e_session_marker
-    if workspace_root.exists() and not same_session:
-        shutil.rmtree(workspace_root)
-    workspace_root.mkdir(parents=True, exist_ok=True)
-
-    for item in workspace_root.iterdir():
-        if item.resolve() == lock_file.resolve():
-            continue
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
-
-    for relative_item in CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS:
-        item = template_root / relative_item
-        if not item.exists():
-            raise FileNotFoundError(f"custom tool e2e 模板缺少必要文件: {item}")
-        target = workspace_root / item.name
-        if relative_item.startswith(".boxteam/"):
-            target = workspace_root / relative_item
-            target.parent.mkdir(parents=True, exist_ok=True)
-        if item.is_dir():
-            shutil.copytree(item, target)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, target)
-
-    lock_file.write_text(e2e_session_marker, encoding="utf-8")
+    prepare_e2e_workspace(
+        workspace_root=workspace_root,
+        template_root=template_root,
+        template_items=CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS,
+    )
     return str(workspace_root)
 
 
@@ -301,7 +278,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     )
     page_id = str(opened["pageId"])
     assert page_id.startswith("browser_")
-    assert opened["attach_url"] == f"http://127.0.0.1:{frontend_port}/?browserId={page_id}"
+    assert "attach_url" not in opened
 
     summary = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
     assert "BoxTeam Browser Tool Test" in str(summary["summary"])
@@ -409,9 +386,12 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     assert browser_resource["status"] == "running"
     assert "cancel" in browser_resource["available_actions"]
     assert "delete" in browser_resource["available_actions"]
-    assert browser_resource["metadata"]["attach_url"] == opened["attach_url"]
+    assert "attach_url" not in browser_resource["metadata"]
 
-    with urlopen(str(opened["attach_url"]), timeout=5) as response:
+    with urlopen(
+        f"http://127.0.0.1:{frontend_port}/?browserId={page_id}",
+        timeout=5,
+    ) as response:
         html = response.read().decode("utf-8")
     assert response.status == 200
     assert "可附加浏览器" in html

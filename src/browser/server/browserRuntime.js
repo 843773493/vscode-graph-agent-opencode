@@ -10,6 +10,15 @@ export function browserLaunchArgs() {
   return args;
 }
 
+export function browserLaunchOptions() {
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
+  return {
+    headless: true,
+    args: browserLaunchArgs(),
+    ...(executablePath ? { executablePath } : {}),
+  };
+}
+
 function isSerializablePrimitive(value) {
   return value === null || ["string", "number", "boolean"].includes(typeof value);
 }

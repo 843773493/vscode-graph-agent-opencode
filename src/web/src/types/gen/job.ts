@@ -51,6 +51,7 @@ export interface JobDTO {
   created_at: string;
   updated_at: string;
   job_id: string;
+  message_id: string;
   session_id: string;
   mode: RunMode;
   status: JobStatus;

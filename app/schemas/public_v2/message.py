@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -41,6 +41,24 @@ class MessageRunAccepted(BaseModel):
     message_id: str
     job_id: str
     status: str
+
+
+TurnReplayAction = Literal["retry_failed", "regenerate", "edit_and_continue"]
+
+
+class MessageReplayRequest(BaseModel):
+    action: TurnReplayAction
+    content: str | None = None
+    acknowledge_context_only: bool = False
+
+
+class MessageReplayAccepted(MessageRunAccepted):
+    session_id: str
+    action: TurnReplayAction
+    replaced_message_id: str
+    removed_message_count: int
+    workspace_changes_reverted: Literal[False] = False
+    notice: str
 
 
 class MessageDTO(TimestampedDTO):

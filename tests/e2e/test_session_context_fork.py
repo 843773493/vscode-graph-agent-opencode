@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 
@@ -23,19 +24,36 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
     assert create_response.status_code == 200
     source = create_response.json()["data"]
     source_session_id = source["session_id"]
+    message_timestamp = datetime.now(timezone.utc).isoformat()
 
     checkpointer = FileSystemCheckpointSaver(
-        base_dir=Path(e2e_workspace_root_path) / ".boxteam" / "checkpoints"
+        sessions_dir=Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
     )
     checkpoint = {
         "v": 1,
         "id": "e2e-source-checkpoint",
         "ts": "2026-07-13T00:00:00+00:00",
         "channel_values": {
-            "messages": [
-                HumanMessage(content="项目代号是 ORBIT"),
-                AIMessage(content="我会记住项目代号 ORBIT"),
-            ],
+                    "messages": [
+                    HumanMessage(
+                        id="msg_orbit_user",
+                        content="项目代号是 ORBIT",
+                        response_metadata={
+                            "message_id": "msg_orbit_user",
+                            "created_at": message_timestamp,
+                            "updated_at": message_timestamp,
+                        },
+                    ),
+                    AIMessage(
+                        id="msg_orbit_assistant",
+                        content="我会记住项目代号 ORBIT",
+                        response_metadata={
+                            "message_id": "msg_orbit_assistant",
+                            "created_at": message_timestamp,
+                            "updated_at": message_timestamp,
+                        },
+                    ),
+                ],
             "scratchpad": {"project_code": "ORBIT"},
         },
         "channel_versions": {"messages": 1, "scratchpad": 1},

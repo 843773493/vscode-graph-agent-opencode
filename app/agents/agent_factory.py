@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-from typing import Any, Callable, TYPE_CHECKING
 from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Callable
 
+from deepagents.middleware.permissions import FilesystemPermission
+from deepagents.middleware.skills import append_to_system_message
 from langchain.agents import create_agent
+from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.messages import SystemMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from deepagents.middleware.subagents import SubAgent, CompiledSubAgent
-from deepagents.middleware.async_subagents import AsyncSubAgent
-from deepagents.middleware.permissions import FilesystemPermission
-from langchain.agents.middleware import InterruptOnConfig
 
 from app.core.path_utils import get_workspace_root
 from app.agents.agent_tools import build_default_tools
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
+from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
 from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
     filter_tools_by_name,
@@ -31,10 +31,20 @@ from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
     build_provider_model_candidate,
 )
+from app.agents.tool_invocation_context import (
+    ToolInvocationContext,
+    ToolInvocationContextMiddleware,
+)
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.workspace_backend import build_workspace_backend
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.session_context import (
+    SessionContextQueryProtocol,
+    WorkspaceSessionContextClientProtocol,
+)
+from app.abstractions.session_subagent import SessionSubagentProtocol
+from app.abstractions.team import TeamCoordinationProtocol
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
@@ -47,18 +57,23 @@ if TYPE_CHECKING:
     from app.services.business.session_service import SessionService
 
 
-BASE_AGENT_PROMPT = """响应规范：
-- 不要在普通 assistant 正文中输出内部思考、推理过程、执行计划或自我叙述，例如 "The user asked..."、"Let me..."。
-- 如果需要调用工具，直接调用工具；最终回答只包含用户需要看到的结果。
-- 当下一步是工具调用时，不要输出“正在调用”“我将调用”等过渡正文；描述工具名不等于完成工具调用。
-- 当用户或工作区文档要求通过某个工具入口执行动作时，必须发起真实工具调用。
-- 手动创建、修改或删除代码文件时，优先调用 apply_patch 工具；不要用 shell 重定向、cat 或 Python 写文件。格式化命令或批量生成产物不受此限制。
-- 调用 apply_patch 时必须同时提供 input 和 explanation。input 必须包含完整边界，不能省略 Begin Patch：
-  {"input":"*** Begin Patch\\n*** Update File: /absolute/path\\n@@\\n-old\\n+new\\n*** End Patch","explanation":"简短说明修改目标"}
-- 最终回答引用工作区文件时，使用 `[相对路径](相对路径#L行号)`；范围使用 `#L起始行-L结束行`。Web UI 会验证工作区文件并在文件预览区打开及定位，不要把这类链接描述成普通浏览器相对 URL。
-- 使用用户的语言回复，除非用户明确要求其它语言。"""
-
+AGENT_GRAPH_RECURSION_LIMIT = 9999
 PROVIDER_REQUEST_OPTION_KEYS = {"overrides", "default_headers"}
+
+
+def _team_aware_system_prompt(
+    system_prompt: str | SystemMessage,
+    *,
+    enabled: bool,
+) -> str | SystemMessage:
+    if not enabled:
+        return system_prompt
+    base_message = (
+        system_prompt
+        if isinstance(system_prompt, SystemMessage)
+        else SystemMessage(content=system_prompt)
+    )
+    return append_to_system_message(base_message, TEAM_COORDINATION_SYSTEM_PROMPT)
 
 
 def build_model_from_provider(provider: dict[str, Any], runtime_config: dict[str, Any]) -> Any:
@@ -148,7 +163,6 @@ def create_my_deep_agent(
     custom_tool_specs: Sequence[object] | None = None,
     tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
-    subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
     skills: list[Any] | None = None,
     memory: list[str] | None = None,
     permissions: list[FilesystemPermission] | None = None,
@@ -162,15 +176,20 @@ def create_my_deep_agent(
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
+    session_subagent_service: SessionSubagentProtocol | None = None,
+    team_service: TeamCoordinationProtocol | None = None,
     config_service: ConfigService | None = None,
     terminal_manager_client: TerminalManagerClient | None = None,
     browser_manager_client: BrowserManagerClient | None = None,
+    session_context_query_service: SessionContextQueryProtocol | None = None,
+    workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
 ) -> Any:
     if checkpointer is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
 
     resolved_sender_agent_id = sender_agent_id or agent_id
     resolved_tool_denylist = set(tool_denylist or set())
+    tool_invocation_context = ToolInvocationContext()
 
     if background_task_registry is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundTaskRegistry")
@@ -184,10 +203,18 @@ def create_my_deep_agent(
         raise RuntimeError("create_my_deep_agent 需要显式传入 SessionService")
     if session_orchestrator is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 SessionOrchestrator")
+    if session_subagent_service is None:
+        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionSubagentService")
+    if team_service is None:
+        raise RuntimeError("create_my_deep_agent 需要显式传入 TeamCoordinationService")
     if job_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 JobService")
     if config_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 ConfigService")
+    if session_context_query_service is None:
+        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionContextQueryService")
+    if workspace_session_context_client is None:
+        raise RuntimeError("create_my_deep_agent 需要显式传入 WorkspaceSessionContextClient")
 
     workspace_root = get_workspace_root()
 
@@ -207,9 +234,13 @@ def create_my_deep_agent(
             message_service=message_service,
             session_service=session_service,
             session_orchestrator=session_orchestrator,
+            session_subagent_service=session_subagent_service,
+            team_service=team_service,
             config_service=config_service,
             terminal_manager_client=terminal_manager_client,
+            invocation_context=tool_invocation_context,
             workspace_root=workspace_root,
+            include_test_tools=config_service.development_test_tools_enabled(),
         )
         custom_tool_bundle = build_custom_tool_bundle(
             custom_tool_specs or [],
@@ -221,8 +252,8 @@ def create_my_deep_agent(
             background_message_bus=background_message_bus,
             job_event_bus=job_event_bus,
             job_service=job_service,
-            message_service=message_service,
-            session_service=session_service,
+            session_context_query_service=session_context_query_service,
+            workspace_session_context_client=workspace_session_context_client,
             session_orchestrator=session_orchestrator,
             config_service=config_service,
             terminal_manager_client=terminal_manager_client,
@@ -239,6 +270,23 @@ def create_my_deep_agent(
     resolved_tools = filter_tools_by_name(resolved_tools, resolved_tool_denylist)
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
+    resolved_tool_names = {
+        getattr(tool, "name", "")
+        for tool in resolved_tools
+    }
+    session_delegation_tools = {"task", "create_team_member"}
+    if (
+        session_delegation_tools & resolved_tool_names
+        and "send_message_to_session" not in resolved_tool_names
+    ):
+        raise ValueError(
+            "task/create_team_member 依赖 send_message_to_session 完成 Agent 通信；"
+            "不能启用委派工具时单独禁用 send_message_to_session"
+        )
+    resolved_system_prompt = _team_aware_system_prompt(
+        system_prompt,
+        enabled="create_team" in resolved_tool_names,
+    )
 
     runtime_middleware: list[AgentMiddleware] = []
     append_skill_middlewares(
@@ -258,6 +306,9 @@ def create_my_deep_agent(
         session_id=session_id,
         store=ToolOutputStore(workspace_root=workspace_root),
     )
+    tool_invocation_context_middleware = ToolInvocationContextMiddleware(
+        tool_invocation_context
+    )
 
     deepagent_middleware = build_deep_agent_middleware(
         model=model,
@@ -265,40 +316,18 @@ def create_my_deep_agent(
         workspace_root=workspace_root,
         permissions=permissions,
         resolved_skills=resolved_skills,
-        resolved_tools=resolved_tools,
-        subagents=subagents,
         resolved_tool_denylist=resolved_tool_denylist,
         interrupt_on=interrupt_on,
         runtime_middleware=runtime_middleware,
         model_routing_middleware=model_routing_middleware,
+        tool_invocation_context_middleware=tool_invocation_context_middleware,
         tool_output_middleware=tool_output_middleware,
         memory=memory,
     )
 
-    if isinstance(system_prompt, SystemMessage):
-        final_system_prompt = SystemMessage(
-            content_blocks=[
-                *system_prompt.content_blocks,
-                {
-                    "type": "text",
-                    "text": (
-                        f"\n\n当前运行时 session_id：{session_id}。"
-                        "当工具参数要求当前会话 ID 时直接使用该值，不要探测环境或文件。"
-                        f"\n\n{BASE_AGENT_PROMPT}"
-                    ),
-                },
-            ]
-        )
-    else:
-        final_system_prompt = (
-            f"{system_prompt}\n\n当前运行时 session_id：{session_id}。"
-            "当工具参数要求当前会话 ID 时直接使用该值，不要探测环境或文件。"
-            f"\n\n{BASE_AGENT_PROMPT}"
-        )
-
     agent = create_agent(
         model,
-        system_prompt=final_system_prompt,
+        system_prompt=resolved_system_prompt,
         tools=list(resolved_tools) if resolved_tools else None,
         middleware=deepagent_middleware,
         response_format=None,
@@ -313,7 +342,7 @@ def create_my_deep_agent(
     if hasattr(agent, "with_config"):
         return agent.with_config(
             {
-                "recursion_limit": 9999,
+                "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
                 "metadata": {
                     "ls_integration": "deepagents",
                     "versions": {"deepagents": "custom"},
@@ -337,6 +366,8 @@ def create_runtime_deep_agent_for_session(
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
+    session_subagent_service: SessionSubagentProtocol | None = None,
+    team_service: TeamCoordinationProtocol | None = None,
     sender_agent_id: str | None = None,
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
@@ -344,6 +375,8 @@ def create_runtime_deep_agent_for_session(
     checkpointer: BaseCheckpointSaver | None = None,
     terminal_manager_client: TerminalManagerClient | None = None,
     browser_manager_client: BrowserManagerClient | None = None,
+    session_context_query_service: SessionContextQueryProtocol | None = None,
+    workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
     name: str | None = None,
     override_model: Any = None,
     model_routing_enabled: bool = True,
@@ -379,7 +412,11 @@ def create_runtime_deep_agent_for_session(
         message_service=message_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
+        session_subagent_service=session_subagent_service,
+        team_service=team_service,
         terminal_manager_client=terminal_manager_client,
         browser_manager_client=browser_manager_client,
+        session_context_query_service=session_context_query_service,
+        workspace_session_context_client=workspace_session_context_client,
         config_service=service,
     )

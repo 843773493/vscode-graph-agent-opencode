@@ -1,6 +1,6 @@
-import type { Session } from "../types/backend";
-import type { AppState } from "../types/frontend";
-import { cloneMaps } from "./appStateMaps";
+import type { Session } from "../../types/backend";
+import type { AppState } from "../../types/frontend";
+import { cloneMaps } from "../appStateMaps";
 import { sessionScopeKey } from "./sessionScope";
 
 export function replaceSessionMetadata(

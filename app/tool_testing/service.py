@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 import time
 from pathlib import Path
 from typing import Any
-import uuid
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.agent_factory import build_model_from_provider
+from app.core.identifier import create_prefixed_id
 from app.schemas.public_v2.tool_test import (
     ToolTestAttemptDTO,
     ToolTestProviderResultDTO,
@@ -92,7 +92,7 @@ class ToolTestService:
         now = datetime.now(UTC)
         total_per_provider = len(cases) * request.repetitions
         run = ToolTestRunDTO(
-            run_id=f"tooltest_{uuid.uuid4().hex[:12]}",
+            run_id=create_prefixed_id("tooltest"),
             tool_name=tool_name,
             status="queued",
             progress=0,
@@ -221,7 +221,7 @@ class ToolTestService:
     ) -> ToolTestAttemptDTO:
         provider_id = str(provider["id"])
         model_name = str(provider.get("model") or "")
-        attempt_id = f"attempt_{uuid.uuid4().hex[:12]}"
+        attempt_id = create_prefixed_id("attempt")
         case_dir = self._store.prepare_case_dir(
             tool_name=case.tool_name,
             provider_id=provider_id,

@@ -16,12 +16,14 @@ from app.abstractions.session_resources import (
 )
 from app.abstractions.custom_tool_context import (
     CustomToolConfigProtocol,
-    CustomToolMessageProtocol,
-    CustomToolSessionProtocol,
 )
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_context import (
+    SessionContextQueryProtocol,
+    WorkspaceSessionContextClientProtocol,
+)
 
 
 CustomToolSpec = Mapping[str, object]
@@ -37,8 +39,8 @@ class CustomToolFactoryContext:
     background_message_bus: BackgroundMessageBusProtocol
     job_event_bus: JobEventBusProtocol
     job_service: JobServiceProtocol | None
-    message_service: CustomToolMessageProtocol
-    session_service: CustomToolSessionProtocol
+    session_context_query_service: SessionContextQueryProtocol
+    workspace_session_context_client: WorkspaceSessionContextClientProtocol
     session_orchestrator: SessionOrchestratorProtocol
     config_service: CustomToolConfigProtocol
     terminal_manager_client: TerminalManagerClientProtocol
@@ -155,8 +157,8 @@ def build_custom_tool_bundle(
     background_message_bus: BackgroundMessageBusProtocol,
     job_event_bus: JobEventBusProtocol,
     job_service: JobServiceProtocol | None,
-    message_service: CustomToolMessageProtocol,
-    session_service: CustomToolSessionProtocol,
+    session_context_query_service: SessionContextQueryProtocol,
+    workspace_session_context_client: WorkspaceSessionContextClientProtocol,
     session_orchestrator: SessionOrchestratorProtocol,
     config_service: CustomToolConfigProtocol,
     terminal_manager_client: TerminalManagerClientProtocol,
@@ -171,8 +173,8 @@ def build_custom_tool_bundle(
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
         job_service=job_service,
-        message_service=message_service,
-        session_service=session_service,
+        session_context_query_service=session_context_query_service,
+        workspace_session_context_client=workspace_session_context_client,
         session_orchestrator=session_orchestrator,
         config_service=config_service,
         terminal_manager_client=terminal_manager_client,

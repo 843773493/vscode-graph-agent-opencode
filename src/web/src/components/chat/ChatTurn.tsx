@@ -3,6 +3,10 @@ import { conversationTokenUsage } from "../../state/tokenUsage";
 import { aggregateConversationEvents, buildPendingStatusItem } from "../../state/trace/traceAggregation";
 import type { TimelineItem } from "../../state/timelineTypes";
 import type { ConversationView } from "../../types/frontend";
+import type {
+  AttachmentRef,
+  MessageReplayRequest,
+} from "../../types/backend";
 import AttachmentList from "../AttachmentList";
 import MarkdownContent from "./MarkdownContent";
 import ResponseActionToolbar from "./ResponseActionToolbar";
@@ -33,7 +37,10 @@ function assistantFallback(conversation: ConversationView): string {
       candidate.phase === "final_answer" && !isFragmented(candidate.content),
   );
   if (healthyFinal.length > 0) {
-    return healthyFinal[healthyFinal.length - 1].content;
+    return healthyFinal.reduce(
+      (best, candidate) => candidate.content.length > best.length ? candidate.content : best,
+      "",
+    );
   }
   const healthy = candidates.filter((candidate) => !isFragmented(candidate.content));
   return healthy.reduce(
@@ -120,10 +127,29 @@ function buildRenderGroups(items: TimelineItem[]): RenderGroup[] {
 export default function ChatTurn({
   conversation,
   showRawDetails,
+  isLastTurn,
+  sessionBusy,
+  onReplayTurn,
 }: {
   conversation: ConversationView;
   showRawDetails: boolean;
+  isLastTurn: boolean;
+  sessionBusy: boolean;
+  onReplayTurn: (
+    targetMessageId: string,
+    action: MessageReplayRequest["action"],
+    displayContent: string,
+    content?: string,
+    attachments?: AttachmentRef[],
+  ) => Promise<void>;
 }): React.ReactNode {
+  const [editing, setEditing] = React.useState(false);
+  const [editContent, setEditContent] = React.useState("");
+  const [confirmAction, setConfirmAction] = React.useState<
+    "retry_failed" | "regenerate" | null
+  >(null);
+  const [actionRunning, setActionRunning] = React.useState(false);
+  const [actionError, setActionError] = React.useState<string | null>(null);
   const parts = React.useMemo(
     () => aggregateConversationEvents(
       conversation.events,
@@ -173,16 +199,119 @@ export default function ChatTurn({
   );
   const userMessage = conversation.userMessage;
   const userAttachments = userMessage?.attachments ?? [];
+  const failedByJob = isLastTurn
+    && conversation.status === "error"
+    && !conversation.events.some((event) =>
+      ["job_cancelled", "session_interrupted"].includes(event.type),
+    );
+
+  const startEditing = React.useCallback(() => {
+    if (!userMessage || sessionBusy) {
+      return;
+    }
+    setEditContent(userMessage.content);
+    setActionError(null);
+    setConfirmAction(null);
+    setEditing(true);
+  }, [sessionBusy, userMessage]);
+
+  const executeReplay = React.useCallback(async (
+    action: MessageReplayRequest["action"],
+    content?: string,
+  ) => {
+    if (!userMessage || actionRunning || sessionBusy) {
+      return;
+    }
+    setActionRunning(true);
+    setActionError(null);
+    try {
+      await onReplayTurn(
+        userMessage.message_id,
+        action,
+        userMessage.content,
+        content,
+        userAttachments,
+      );
+      setEditing(false);
+      setConfirmAction(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionRunning(false);
+    }
+  }, [actionRunning, onReplayTurn, sessionBusy, userAttachments, userMessage]);
 
   return (
     <article className="chat-turn" data-conversation-id={conversation.conversationId}>
       {userMessage ? (
         <div className="chat-user-row">
-          <div className="chat-user-bubble">
-            {userMessage.content ? <div className="chat-user-text">{userMessage.content}</div> : null}
-            {userAttachments.length > 0 ? (
-              <AttachmentList attachments={userAttachments} />
-            ) : null}
+          <div className={`chat-user-bubble${editing ? " is-editing" : ""}`}>
+            {editing ? (
+              <form
+                className="chat-request-edit-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void executeReplay("edit_and_continue", editContent.trim());
+                }}
+              >
+                <textarea
+                  className="chat-request-edit-input"
+                  value={editContent}
+                  aria-label="编辑用户消息"
+                  autoFocus
+                  disabled={actionRunning}
+                  onChange={(event) => setEditContent(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setEditing(false);
+                      setActionError(null);
+                    }
+                  }}
+                />
+                {userAttachments.length > 0 ? (
+                  <AttachmentList attachments={userAttachments} />
+                ) : null}
+                <div className="chat-turn-action-warning">
+                  将移除此消息之后的会话上下文，但不会撤销已产生的文件修改。
+                </div>
+                <div className="chat-request-edit-actions">
+                  <button
+                    type="button"
+                    disabled={actionRunning}
+                    onClick={() => {
+                      setEditing(false);
+                      setActionError(null);
+                    }}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    className="primary"
+                    disabled={actionRunning || !editContent.trim()}
+                  >
+                    {actionRunning ? "正在继续..." : "编辑并从此处继续"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="chat-request-edit-button"
+                  title="编辑并从此处继续"
+                  aria-label="编辑并从此处继续"
+                  disabled={sessionBusy}
+                  onClick={startEditing}
+                >
+                  <span className="codicon codicon-edit" aria-hidden="true" />
+                </button>
+                {userMessage.content ? <div className="chat-user-text">{userMessage.content}</div> : null}
+                {userAttachments.length > 0 ? (
+                  <AttachmentList attachments={userAttachments} />
+                ) : null}
+              </>
+            )}
           </div>
         </div>
       ) : null}
@@ -220,7 +349,55 @@ export default function ChatTurn({
             <ResponseActionToolbar
               responseText={finalResponseText}
               tokenUsage={tokenUsage}
+              canRegenerate={isLastTurn && !sessionBusy}
+              onRegenerate={() => setConfirmAction("regenerate")}
             />
+          ) : null}
+          {failedByJob ? (
+            // TODO: 后续为失败轮次重试补齐重试策略、模型切换和参数选择；当前按原输入重试。
+            <button
+              type="button"
+              className="chat-failed-retry-button"
+              disabled={actionRunning || sessionBusy}
+              onClick={() => setConfirmAction("retry_failed")}
+            >
+              <span className="codicon codicon-refresh" aria-hidden="true" />
+              重试失败轮次
+            </button>
+          ) : null}
+          {confirmAction ? (
+            <div className="chat-turn-action-confirmation" role="group" aria-label="确认轮次操作">
+              <div className="chat-turn-action-warning">
+                将移除此消息之后的会话上下文，但不会撤销已产生的文件修改。
+              </div>
+              <div className="chat-request-edit-actions">
+                <button
+                  type="button"
+                  disabled={actionRunning}
+                  onClick={() => setConfirmAction(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={actionRunning}
+                  onClick={() => void executeReplay(confirmAction)}
+                >
+                  {actionRunning
+                    ? "正在执行..."
+                    : confirmAction === "regenerate"
+                      ? "确认重新生成"
+                      : "确认重试"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {actionError ? (
+            <div className="chat-inline-error" role="alert">
+              <span className="codicon codicon-error" aria-hidden="true" />
+              <span>{actionError}</span>
+            </div>
           ) : null}
         </div>
       </div>

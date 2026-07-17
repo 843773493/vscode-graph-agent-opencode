@@ -10,6 +10,7 @@ from typing import IO
 from urllib.request import Request, urlopen
 
 import httpx
+import commentjson
 
 from tests.e2e.processes import (
     kill_process_on_port,
@@ -56,6 +57,7 @@ def start_gateway_process(
     default_backend_url: str,
     port: int,
     ssh_tunnel_port_range: tuple[int, int] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> GatewayProcess:
     kill_process_on_port(port)
     project_root = Path.cwd().resolve()
@@ -68,12 +70,18 @@ def start_gateway_process(
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["BOXTEAM_GATEWAY_ROOT"] = str(workspace_root / ".boxteam" / "gateway")
+    env["BOXTEAM_USER_CONFIG_PATH"] = str(
+        workspace_root / ".boxteam" / "boxteam.jsonc"
+    )
     env["BOXTEAM_DEFAULT_BACKEND_URL"] = default_backend_url
     env["BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT"] = str(workspace_root)
+    env["BOXTEAM_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
     env["PYTHONUNBUFFERED"] = "1"
     if ssh_tunnel_port_range is not None:
         env["BOXTEAM_GATEWAY_SSH_TUNNEL_PORT_MIN"] = str(ssh_tunnel_port_range[0])
         env["BOXTEAM_GATEWAY_SSH_TUNNEL_PORT_MAX"] = str(ssh_tunnel_port_range[1])
+    if extra_env:
+        env.update(extra_env)
     process = subprocess.Popen(
         [
             str(python_executable),
@@ -127,28 +135,31 @@ def write_gateway_ssh_workspace_config(
     username: str,
     remote_backend_port: int,
     remote_workspace_path: str,
+    private_key_path: Path,
 ) -> None:
     boxteam_dir = workspace_root / ".boxteam"
     boxteam_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "gateway": {
-            "workspaces": [
-                {
-                    "kind": "ssh",
-                    "name": "remote docker",
-                    "host": "127.0.0.1",
-                    "port": ssh_port,
-                    "username": username,
-                    "private_key_path": "asset/gateway_ssh/id_ed25519",
-                    "remote_backend_host": "127.0.0.1",
-                    "remote_backend_port": remote_backend_port,
-                    "remote_workspace_path": remote_workspace_path,
-                    "activate": False,
-                }
-            ]
-        }
+    config_path = boxteam_dir / "boxteam.jsonc"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Gateway E2E 工作区配置不存在: {config_path}")
+    payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
+    payload["gateway"] = {
+        "workspaces": [
+            {
+                "kind": "ssh",
+                "name": "remote docker",
+                "host": "127.0.0.1",
+                "port": ssh_port,
+                "username": username,
+                "private_key_path": str(private_key_path.resolve()),
+                "remote_backend_host": "127.0.0.1",
+                "remote_backend_port": remote_backend_port,
+                "remote_workspace_path": remote_workspace_path,
+                "activate": False,
+            }
+        ]
     }
-    (boxteam_dir / "boxteam.json").write_text(
+    config_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

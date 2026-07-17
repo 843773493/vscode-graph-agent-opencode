@@ -49,6 +49,7 @@ export function aggregateConversationEvents(
   const items: TimelineItem[] = [];
   const seenEventIds = new Set<string>();
   const textPartIndexes = new Map<string, number>();
+  const textPartSegmentStarts = new Map<string, number>();
   const pendingToolCalls = new Map<string, PendingToolCall>();
   const skillFlow = createSkillKeyFlowState();
   let hasOutputContent = false;
@@ -121,7 +122,19 @@ export function aggregateConversationEvents(
     if (type === "text_start") {
       const id = requiredPartId(partId, eventType);
       if (textPartIndexes.has(id)) {
-        throw new Error(`事件 ${eventType} 重复开始 part_id=${id}`);
+        const current = textPart(id, eventType);
+        const kind = requiredPartKind(payload, eventType);
+        if (current.partKind !== kind) {
+          throw new Error(`part_id=${id} 的 kind 从 ${current.partKind} 变成了 ${kind}`);
+        }
+        textPartSegmentStarts.set(id, current.text.length);
+        replaceTextPart(id, {
+          ...current,
+          active: isRunning,
+          eventCount: current.eventCount + 1,
+          rawEvents: [...current.rawEvents, { type: eventType, payload }],
+        });
+        continue;
       }
       const item: TextPart = {
         kind: "aggregated_text",
@@ -134,6 +147,7 @@ export function aggregateConversationEvents(
         rawEvents: [{ type: eventType, payload }],
       };
       textPartIndexes.set(id, items.length);
+      textPartSegmentStarts.set(id, 0);
       items.push(item);
       continue;
     }
@@ -167,9 +181,16 @@ export function aggregateConversationEvents(
         throw new Error(`part_id=${id} 的结束 kind 与开始 kind 不一致`);
       }
       const finalText = getOptionalString(payload, "text");
+      const segmentStart = textPartSegmentStarts.get(id) ?? 0;
+      const streamedSegment = current.text.slice(segmentStart);
+      const resolvedText = !finalText || finalText === streamedSegment
+        ? current.text
+        : segmentStart > 0
+          ? current.text.slice(0, segmentStart) + finalText
+          : finalText;
       const next = {
         ...current,
-        text: finalText || current.text,
+        text: resolvedText,
         active: false,
         eventCount: current.eventCount + 1,
         rawEvents: [...current.rawEvents, { type: eventType, payload }],

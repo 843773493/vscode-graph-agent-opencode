@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +23,7 @@ from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_litellm import ChatLiteLLM
 
+from app.core.identifier import create_prefixed_id
 from app.agents.providers._format_check import (
     FormatCheckItem,
     FormatCheckResult,
@@ -156,7 +156,7 @@ class _StreamPartState:
         )
         if self.active_kind != kind or provider_changed:
             self.active_kind = kind
-            self.active_part_id = f"part_{uuid.uuid4().hex[:12]}"
+            self.active_part_id = create_prefixed_id("part")
             self.active_index = self.next_index
             self.active_provider_part_id = (
                 provider_part_id if isinstance(provider_part_id, str) else None

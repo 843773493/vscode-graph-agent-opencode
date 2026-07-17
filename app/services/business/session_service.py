@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 from app.core.exceptions import NotFoundError
+from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir
-from app.schemas.event import Event
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
     SessionControlResultDTO,
     SessionCreateRequest,
+    SessionDelegationDTO,
     SessionDTO,
     SessionListResultDTO,
+    SessionKind,
     SessionUpdateRequest,
     TitleSource,
 )
@@ -63,12 +63,9 @@ class SessionService:
             if session_dir.is_dir():
                 session_file = session_dir / "session.json"
                 if session_file.exists():
-                    try:
-                        with open(session_file, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                            sessions.append(SessionDTO.model_validate(data))
-                    except Exception:
-                        continue
+                    with open(session_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    sessions.append(SessionDTO.model_validate(data))
 
         sessions.sort(key=lambda s: s.created_at, reverse=True)
         paginated = sessions[skip:skip+limit]
@@ -76,22 +73,85 @@ class SessionService:
         return SessionListResultDTO(items=paginated, total=len(sessions), cursor=None)
 
     async def create(self, session: SessionCreateRequest) -> SessionDTO:
-        session_id = f"ses_{uuid.uuid4().hex[:12]}"
+        return await self._create(
+            title=session.title,
+            title_source=session.title_source,
+            agent_id=session.agent_id,
+        )
+
+    async def create_context_fork(
+        self,
+        *,
+        title: str,
+        agent_id: str,
+        parent_session_id: str,
+    ) -> SessionDTO:
+        return await self._create(
+            title=title,
+            title_source="auto",
+            agent_id=agent_id,
+            parent_session_id=parent_session_id,
+            kind="context_fork",
+        )
+
+    async def create_delegated(
+        self,
+        *,
+        title: str,
+        agent_id: str,
+        parent_session_id: str,
+        parent_job_id: str,
+        parent_tool_call_id: str,
+        subagent_type: str,
+    ) -> SessionDTO:
+        return await self._create(
+            title=title,
+            title_source="auto",
+            agent_id=agent_id,
+            parent_session_id=parent_session_id,
+            kind="delegated",
+            delegation=SessionDelegationDTO(
+                parent_session_id=parent_session_id,
+                parent_job_id=parent_job_id,
+                parent_tool_call_id=parent_tool_call_id,
+                subagent_type=subagent_type,
+            ),
+        )
+
+    async def _create(
+        self,
+        *,
+        title: str | None,
+        title_source: TitleSource | None,
+        agent_id: str | None,
+        parent_session_id: str | None = None,
+        kind: SessionKind = "normal",
+        delegation: SessionDelegationDTO | None = None,
+    ) -> SessionDTO:
+        session_id = create_prefixed_id("ses")
         now = datetime.now(timezone.utc)
         if self._config_service is None:
             raise RuntimeError("SessionService 未绑定 ConfigService")
         config_service = self._config_service
-        resolved_agent_id = config_service.validate_agent_id(session.agent_id)
+        resolved_agent_id = config_service.validate_agent_id(agent_id)
+        await self._validate_parent_session(
+            session_id=session_id,
+            workspace_id="ws_local",
+            parent_session_id=parent_session_id,
+        )
 
         session_data = SessionDTO(
             session_id=session_id,
             workspace_id="ws_local",
-            title=session.title,
+            title=title or "新会话",
             title_source=self._infer_created_title_source(
-                session.title,
-                session.title_source,
+                title,
+                title_source,
             ),
             current_agent_id=resolved_agent_id,
+            parent_session_id=parent_session_id,
+            kind=kind,
+            delegation=delegation,
             created_at=now,
             updated_at=now
         )
@@ -104,6 +164,26 @@ class SessionService:
 
         return session_data
 
+    async def set_delegation_start_result(
+        self,
+        session_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> SessionDTO:
+        if status not in {"running", "failed"}:
+            raise ValueError(f"不支持的委派启动状态: {status}")
+        existing = await self.get(session_id)
+        if existing.delegation is None:
+            raise ValueError(f"会话不是委派子会话: {session_id}")
+        existing.delegation.start_status = status
+        existing.delegation.start_error = error
+        existing.updated_at = datetime.now(timezone.utc)
+        session_file = get_session_file(session_id)
+        with open(session_file, "w", encoding="utf-8") as f:
+            json.dump(existing.model_dump(), f, ensure_ascii=False, indent=2, default=str)
+        return existing
+
     async def update(self, session_id: str, session: SessionUpdateRequest) -> SessionDTO:
         existing = await self.get(session_id)
 
@@ -115,11 +195,22 @@ class SessionService:
         update_data = session.model_dump(exclude_unset=True)
 
         if "parent_session_id" in update_data:
+            requested_parent_id = update_data["parent_session_id"]
+            if (
+                existing.kind != "normal"
+                and requested_parent_id is not None
+                and requested_parent_id != existing.parent_session_id
+            ):
+                raise ValueError(
+                    f"{existing.kind} 会话不能改绑到另一个父会话；请新建会话"
+                )
             await self._validate_parent_session(
                 session_id=session_id,
                 workspace_id=existing.workspace_id,
-                parent_session_id=update_data["parent_session_id"],
+                parent_session_id=requested_parent_id,
             )
+            if requested_parent_id is None and existing.kind == "context_fork":
+                update_data["kind"] = "normal"
 
         for key, value in update_data.items():
             if key == "agent_id":

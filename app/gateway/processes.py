@@ -10,6 +10,9 @@ from pathlib import Path
 
 import httpx
 
+from app.gateway.service_types import LocalForwardSpec
+from app.gateway.ssh_command import build_ssh_command
+
 
 GATEWAY_PROCESS_READY_TIMEOUT_SECONDS = 45
 DEFAULT_SSH_TUNNEL_PORT_MIN = 41000
@@ -143,6 +146,7 @@ def start_local_backend_process(
     workspace_root: Path,
     port: int,
     log_dir: Path,
+    extra_env: dict[str, str] | None = None,
 ) -> ManagedProcess:
     python_executable = resolve_python_executable(project_root)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +155,8 @@ def start_local_backend_process(
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["PYTHONUNBUFFERED"] = "1"
+    if extra_env:
+        env.update(extra_env)
     process = subprocess.Popen(
         [
             str(python_executable),
@@ -173,37 +179,85 @@ def start_local_backend_process(
     return ManagedProcess(process=process, log_file=log_file)
 
 
+def start_local_node_service_process(
+    *,
+    project_root: Path,
+    workspace_root: Path,
+    service: str,
+    port: int,
+    log_dir: Path,
+) -> ManagedProcess:
+    if service not in {"terminal", "browser"}:
+        raise ValueError(f"不支持的本地辅助服务: {service}")
+    backend_path = project_root / "src" / service / "server" / "backend.js"
+    if not backend_path.is_file():
+        raise FileNotFoundError(f"辅助服务入口不存在: {backend_path}")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_dir / f"local-{service}-{port}.log", "a", encoding="utf-8")
+    env = os.environ.copy()
+    env["WORKSPACE_ROOT"] = str(workspace_root)
+    env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
+    process = subprocess.Popen(
+        [
+            "node",
+            str(backend_path),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--workspace-root",
+            str(workspace_root),
+            "--frontend-url",
+            "http://127.0.0.1",
+        ],
+        cwd=project_root,
+        env=env,
+        stdout=log_file,
+        stderr=log_file,
+        text=True,
+    )
+    return ManagedProcess(process=process, log_file=log_file)
+
+
 def start_ssh_tunnel_process(
     *,
     host: str,
     port: int,
     username: str,
-    private_key_path: Path,
-    local_port: int,
-    remote_backend_host: str,
-    remote_backend_port: int,
+    private_key_path: Path | None,
+    ssh_config_host: str | None,
+    forwards: tuple[LocalForwardSpec, ...],
     log_dir: Path,
 ) -> ManagedProcess:
+    if not forwards:
+        raise ValueError("SSH 隧道至少需要一个端口转发")
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / f"ssh-tunnel-{local_port}.log", "a", encoding="utf-8")
+    log_file = open(
+        log_dir / f"ssh-tunnel-{forwards[0].local_port}.log",
+        "a",
+        encoding="utf-8",
+    )
+    forward_arguments: list[str] = ["-N"]
+    for forward in forwards:
+        forward_arguments.extend(
+            [
+                "-L",
+                (
+                    f"127.0.0.1:{forward.local_port}:"
+                    f"{forward.remote_host}:{forward.remote_port}"
+                ),
+            ]
+        )
+    forward_arguments.extend(["-o", "ExitOnForwardFailure=yes"])
     process = subprocess.Popen(
-        [
-            "ssh",
-            "-N",
-            "-L",
-            f"127.0.0.1:{local_port}:{remote_backend_host}:{remote_backend_port}",
-            "-i",
-            str(private_key_path),
-            "-p",
-            str(port),
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            f"{username}@{host}",
-        ],
+        build_ssh_command(
+            host=host,
+            port=port,
+            username=username,
+            private_key_path=str(private_key_path) if private_key_path is not None else None,
+            ssh_config_host=ssh_config_host,
+            extra_arguments=forward_arguments,
+        ),
         stdout=log_file,
         stderr=log_file,
         text=True,

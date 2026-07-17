@@ -4,139 +4,186 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import ToolMessage
 
+from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
 from app.agents.tools.session_history import (
     create_grep_session_context_jsonl_tool,
-    create_read_session_context_jsonl_tool,
     create_read_session_recent_text_messages_tool,
+)
+from app.schemas.public_v2.session_context import (
+    SessionContextGrepResultDTO,
+    SessionContextSnapshotMetadataDTO,
+    SessionRecentTextMessagesDTO,
 )
 
 
-class _FakeSessionService:
-    async def get(self, session_id: str) -> object:
-        return {"session_id": session_id}
+def _snapshot() -> SessionContextSnapshotMetadataDTO:
+    return SessionContextSnapshotMetadataDTO(
+        snapshot_id="ckpt-remote",
+        content_sha256="a" * 64,
+        generated_at="2026-07-16T00:00:00+00:00",
+        line_count=1,
+        raw_message_count=1,
+        byte_count=10,
+        compacted=False,
+        consistency="not_checked",
+    )
 
 
-class _FakeMessageService:
+class _FakeLocalQueryService:
     def __init__(self) -> None:
-        self.checkpoint_id = "ckpt-1"
-        self.records = [
-            {"role": "user", "type": "human", "content": "ALPHA 用户问题"},
-            {"role": "assistant", "type": "ai", "content": "ALPHA 模型回答"},
-        ]
+        self.recent_calls: list[tuple[str, int]] = []
 
-    async def get_agent_context_state(self, session_id: str) -> dict[str, object]:
-        return {
-            "records": list(self.records),
-            "checkpoint_id": self.checkpoint_id,
-            "raw_message_count": len(self.records),
-            "compacted": False,
-            "compaction_cutoff": None,
-            "history_file_path": None,
-        }
+    async def recent_text(
+        self,
+        session_id: str,
+        *,
+        rounds: int = 5,
+    ) -> SessionRecentTextMessagesDTO:
+        self.recent_calls.append((session_id, rounds))
+        return SessionRecentTextMessagesDTO(
+            session_id=session_id,
+            rounds=rounds,
+            user_message_count=0,
+            context_snapshot=_snapshot(),
+        )
 
 
-def _context(message_service: _FakeMessageService) -> SimpleNamespace:
-    return SimpleNamespace(
-        message_service=message_service,
-        session_service=_FakeSessionService(),
-    )
+class _FakeWorkspaceClient:
+    def __init__(self) -> None:
+        self.grep_calls: list[tuple[str, str, str]] = []
+
+    async def grep_in_workspace(
+        self,
+        workspace_id: str,
+        session_id: str,
+        *,
+        pattern: str,
+        case_sensitive: bool = False,
+        max_matches: int = 20,
+        expected_snapshot_id: str | None = None,
+    ) -> SessionContextGrepResultDTO:
+        del case_sensitive, max_matches, expected_snapshot_id
+        self.grep_calls.append((workspace_id, session_id, pattern))
+        return SessionContextGrepResultDTO(
+            session_id=session_id,
+            pattern=pattern,
+            case_sensitive=False,
+            context_snapshot=_snapshot(),
+            total_matching_lines=0,
+            returned_match_count=0,
+            matches_truncated=False,
+        )
+
+
+class _FailingWorkspaceClient:
+    async def recent_text_in_workspace(
+        self,
+        workspace_id: str,
+        session_id: str,
+        *,
+        rounds: int = 5,
+    ) -> SessionRecentTextMessagesDTO:
+        del session_id, rounds
+        raise WorkspaceSessionContextAccessError(
+            f"Gateway 工作区不存在: {workspace_id}。"
+            "请检查并修正 workspace_id 后重试；无法确认时请提醒用户"
+        )
 
 
 @pytest.mark.asyncio
-async def test_recent_grep_and_read_share_snapshot_metadata():
-    message_service = _FakeMessageService()
-    context = _context(message_service)
-    recent_tool = create_read_session_recent_text_messages_tool(context)
-    grep_tool = create_grep_session_context_jsonl_tool(context)
-    read_tool = create_read_session_context_jsonl_tool(context)
-
-    recent = json.loads(
-        await recent_tool.ainvoke({"session_id": "ses_target", "rounds": 1})
+async def test_recent_tool_without_workspace_uses_local_query_service():
+    local_service = _FakeLocalQueryService()
+    context = SimpleNamespace(
+        session_context_query_service=local_service,
+        workspace_session_context_client=_FakeWorkspaceClient(),
     )
-    snapshot_id = recent["context_snapshot"]["snapshot_id"]
-    assert snapshot_id == "ckpt-1"
-    assert recent["context_snapshot"]["line_count"] == 2
-    assert recent["context_snapshot"]["consistency"] == "not_checked"
-
-    grep_result = json.loads(
-        await grep_tool.ainvoke(
-            {
-                "session_id": "ses_target",
-                "pattern": "ALPHA",
-                "expected_snapshot_id": snapshot_id,
-            }
-        )
-    )
-    assert grep_result["context_snapshot"]["consistency"] == "matched"
-    assert [match["line_number"] for match in grep_result["matches"]] == [1, 2]
-
-    read_result = json.loads(
-        await read_tool.ainvoke(
-            {
-                "session_id": "ses_target",
-                "line_start": 2,
-                "line_count": 1,
-                "expected_snapshot_id": snapshot_id,
-            }
-        )
-    )
-    assert read_result["context_snapshot"]["consistency"] == "matched"
-    assert read_result["lines"][0]["line_number"] == 2
-    assert "ALPHA 模型回答" in read_result["lines"][0]["text"]
-
-
-@pytest.mark.asyncio
-async def test_read_warns_when_context_changed_after_grep():
-    message_service = _FakeMessageService()
-    context = _context(message_service)
-    grep_tool = create_grep_session_context_jsonl_tool(context)
-    read_tool = create_read_session_context_jsonl_tool(context)
-
-    grep_result = json.loads(
-        await grep_tool.ainvoke(
-            {"session_id": "ses_target", "pattern": "ALPHA"}
-        )
-    )
-    old_snapshot_id = grep_result["context_snapshot"]["snapshot_id"]
-
-    message_service.checkpoint_id = "ckpt-2"
-    message_service.records.append(
-        {"role": "user", "type": "human", "content": "BETA 新消息"}
-    )
-    read_result = json.loads(
-        await read_tool.ainvoke(
-            {
-                "session_id": "ses_target",
-                "expected_snapshot_id": old_snapshot_id,
-            }
-        )
-    )
-
-    metadata = read_result["context_snapshot"]
-    assert metadata["snapshot_id"] == "ckpt-2"
-    assert metadata["consistency"] == "changed"
-    assert "不要与旧 grep/read 结果" in metadata["warning"]
-
-
-@pytest.mark.asyncio
-async def test_read_clips_large_jsonl_lines_with_hash():
-    message_service = _FakeMessageService()
-    message_service.records = [
-        {"role": "assistant", "type": "ai", "content": "x" * 5000}
-    ]
-    read_tool = create_read_session_context_jsonl_tool(_context(message_service))
+    tool = create_read_session_recent_text_messages_tool(context)
 
     result = json.loads(
-        await read_tool.ainvoke(
+        await tool.ainvoke({"session_id": "ses_local", "rounds": 3})
+    )
+
+    assert result["session_id"] == "ses_local"
+    assert local_service.recent_calls == [("ses_local", 3)]
+
+
+@pytest.mark.asyncio
+async def test_grep_tool_with_workspace_uses_gateway_client():
+    workspace_client = _FakeWorkspaceClient()
+    context = SimpleNamespace(
+        session_context_query_service=_FakeLocalQueryService(),
+        workspace_session_context_client=workspace_client,
+    )
+    tool = create_grep_session_context_jsonl_tool(context)
+
+    result = json.loads(
+        await tool.ainvoke(
             {
-                "session_id": "ses_target",
-                "max_chars_per_line": 200,
+                "workspace_id": "gw_target",
+                "session_id": "ses_remote",
+                "pattern": "ALPHA",
             }
         )
     )
 
-    line = result["lines"][0]
-    assert line["truncated"] is True
-    assert len(line["text"]) == 200
-    assert len(line["line_sha256"]) == 64
+    assert result["session_id"] == "ses_remote"
+    assert workspace_client.grep_calls == [
+        ("gw_target", "ses_remote", "ALPHA")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_rejects_blank_workspace_id():
+    context = SimpleNamespace(
+        session_context_query_service=_FakeLocalQueryService(),
+        workspace_session_context_client=_FakeWorkspaceClient(),
+    )
+    tool = create_read_session_recent_text_messages_tool(context)
+
+    result = await tool.ainvoke(
+        {
+            "type": "tool_call",
+            "id": "call_blank_workspace",
+            "name": tool.name,
+            "args": {"workspace_id": "   ", "session_id": "ses_target"},
+        }
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "workspace_id 不能是空字符串" in result.text
+
+
+@pytest.mark.asyncio
+async def test_custom_invoker_returns_gateway_access_error_to_ai_as_tool_message():
+    context = SimpleNamespace(
+        session_context_query_service=_FakeLocalQueryService(),
+        workspace_session_context_client=_FailingWorkspaceClient(),
+    )
+    target_tool = create_read_session_recent_text_messages_tool(context)
+    invoker = create_custom_tool_invoker_tool([target_tool])
+
+    result = await invoker.ainvoke(
+        {
+            "type": "tool_call",
+            "id": "call_cross_workspace",
+            "name": invoker.name,
+            "args": {
+                "tool_name": target_tool.name,
+                "arguments": {
+                    "workspace_id": "gw_typo",
+                    "session_id": "ses_target",
+                },
+            },
+        }
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.tool_call_id == "call_cross_workspace"
+    assert result.status == "error"
+    assert "gw_typo" in result.text
+    assert "修正 workspace_id 后重试" in result.text
+    assert "提醒用户" in result.text

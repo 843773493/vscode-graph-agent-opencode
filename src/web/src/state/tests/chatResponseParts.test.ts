@@ -90,6 +90,31 @@ const failedResultParts = aggregateConversationEvents(
 const failedResultTool = failedResultParts.find((item) => item.kind === "aggregated_tool");
 assert(failedResultTool?.failed === true, "Error: 工具结果必须显示为失败状态");
 
+const failedStatusParts = aggregateConversationEvents(
+  [
+    event(18, "tool_call_start", {
+      tool_name: "read_session_recent_text_messages",
+      args: { workspace_id: "gw_typo", session_id: "ses_target" },
+    }, "tool_workspace_error"),
+    event(19, "tool_call_end", {
+      tool_name: "read_session_recent_text_messages",
+      result: "Gateway 工作区不存在: gw_typo；请修正 workspace_id 后重试",
+      status: "error",
+      failed: true,
+    }, "tool_workspace_error"),
+  ],
+  "conversation_workspace_error",
+  false,
+);
+const failedStatusTool = failedStatusParts.find(
+  (item) => item.kind === "aggregated_tool",
+);
+assert(failedStatusTool?.failed === true, "status=error 的工具结果必须显示为失败卡片");
+assert(
+  failedStatusTool?.resultText.includes("修正 workspace_id 后重试") === true,
+  "失败工具卡必须展示模型收到的完整可操作错误",
+);
+
 const incompleteHistoryParts = aggregateConversationEvents(
   streamingEvents,
   "conversation_part",
@@ -136,3 +161,21 @@ const streamedPart = buildTraceEvent({
   payload: { kind: "markdown" },
 });
 assert(streamedPart.part_id === "part_stream", "SSE 适配层必须保留顶层 part_id");
+
+const resumedPart = aggregateConversationEvents(
+  [
+    event(20, "text_start", { kind: "markdown" }, "markdown_resumed"),
+    event(21, "text_delta", { kind: "markdown", text: "前半" }, "markdown_resumed"),
+    event(22, "text_end", { kind: "markdown", text: "前半" }, "markdown_resumed"),
+    event(23, "text_start", { kind: "markdown" }, "markdown_resumed"),
+    event(24, "text_delta", { kind: "markdown", text: "后半" }, "markdown_resumed"),
+    event(25, "text_end", { kind: "markdown", text: "后半" }, "markdown_resumed"),
+  ],
+  "conversation_resumed_part",
+  false,
+);
+const resumedText = resumedPart.find((item) => item.id === "markdown_resumed");
+assert(
+  resumedText?.kind === "aggregated_text" && resumedText.text === "前半后半",
+  "同一权威 part 暂停后恢复时应继续合并，不得让整轮消息崩溃或丢失前段文本",
+);

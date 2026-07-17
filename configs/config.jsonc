@@ -58,9 +58,24 @@
     },
     "gateway": {
       "$ref": "#/$defs/gatewayConfig"
+    },
+    "development": {
+      "$ref": "#/$defs/developmentConfig"
     }
   },
   "$defs": {
+    "developmentConfig": {
+      "type": "object",
+      "description": "仅由开发安装生成器写入的功能开关。",
+      "additionalProperties": false,
+      "properties": {
+        "test_tools": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+
     "gatewayConfig": {
       "type": "object",
       "description": "Gateway 管理的跨端工作区配置。",
@@ -88,6 +103,11 @@
         "remote_workspace_path"
       ],
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "是否在 Gateway 启动时连接该工作区。",
+          "default": true
+        },
         "kind": {
           "type": "string",
           "const": "ssh",
@@ -129,6 +149,28 @@
           "minimum": 1,
           "maximum": 65535,
           "default": 8010
+        },
+        "remote_terminal_backend_host": {
+          "type": "string",
+          "minLength": 1,
+          "default": "127.0.0.1"
+        },
+        "remote_terminal_backend_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8012
+        },
+        "remote_browser_backend_host": {
+          "type": "string",
+          "minLength": 1,
+          "default": "127.0.0.1"
+        },
+        "remote_browser_backend_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8015
         },
         "remote_workspace_path": {
           "type": "string",

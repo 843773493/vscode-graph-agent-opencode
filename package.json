@@ -10,6 +10,7 @@
     "test:extension": "vscode-test",
     "dev": "bun run scripts/dev.mjs",
     "dev:web": "bun run scripts/dev.mjs",
+    "install:config": "uv run python -m configs.boxteam --project-root .",
     "build:webview-ui": "bun --cwd=src/webview-ui run build",
     "gen:public-types": "bun run ./scripts/generate_public_types.mjs"
   },

@@ -22,6 +22,12 @@ class BrowserManagerProcesses:
     frontend_port: int
 
 
+@dataclass(frozen=True, slots=True)
+class BrowserFrontendProcess:
+    process: subprocess.Popen[str]
+    port: int
+
+
 def start_browser_manager_processes(
     *,
     workspace_root: Path,
@@ -100,6 +106,53 @@ def close_browser_manager_processes(handle: BrowserManagerProcesses) -> None:
     terminate_process(handle.backend_process)
     kill_process_on_port(handle.frontend_port)
     kill_process_on_port(handle.backend_port)
+
+
+def start_browser_frontend_process(
+    *,
+    workspace_root: Path,
+    frontend_port: int,
+) -> BrowserFrontendProcess:
+    kill_process_on_port(frontend_port)
+    project_root = Path.cwd().resolve()
+    node_bin = shutil.which("node")
+    if node_bin is None:
+        raise RuntimeError("未找到 node，无法启动浏览器 attach 前端")
+    env = os.environ.copy()
+    env["WORKSPACE_ROOT"] = str(workspace_root)
+    process = subprocess.Popen(
+        [
+            node_bin,
+            "server.js",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(frontend_port),
+            "--backend-url",
+            "http://127.0.0.1:8015",
+            "--workspace-root",
+            str(workspace_root),
+            "--asset-root",
+            str(project_root),
+        ],
+        cwd=project_root / "src" / "browser" / "client",
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    handle = BrowserFrontendProcess(process=process, port=frontend_port)
+    try:
+        wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", process)
+    except Exception:
+        close_browser_frontend_process(handle)
+        raise
+    return handle
+
+
+def close_browser_frontend_process(handle: BrowserFrontendProcess) -> None:
+    terminate_process(handle.process)
+    kill_process_on_port(handle.port)
 
 
 def browser_test_data_url() -> str:

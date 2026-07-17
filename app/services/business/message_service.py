@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
@@ -14,8 +13,9 @@ from langchain_core.messages import (
 )
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from app.abstractions.custom_tool_context import AgentContextState
+from app.abstractions.session_context import AgentContextState
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.identifier import create_prefixed_id
 from app.schemas.public_v2.common import CursorPage, MessageRole
 from app.schemas.public_v2.message import (
     AgentStateMessagesDTO,
@@ -39,7 +39,7 @@ class MessageService:
         index: int,
         message: BaseMessage,
     ) -> MessageDTO:
-        role = MessageService._detect_role(message)
+        role = MessageService._persisted_role(message)
         extracted = MessageService._extract_content(message)
         content = extracted["content"]
         response_metadata = message.response_metadata or {}
@@ -97,6 +97,16 @@ class MessageService:
         if isinstance(message, ToolMessage):
             return MessageRole.tool
         return MessageRole.system
+
+    @staticmethod
+    def _persisted_role(message: BaseMessage) -> MessageRole:
+        response_metadata = message.response_metadata or {}
+        persisted_role = response_metadata.get("message_role")
+        if persisted_role is None:
+            return MessageService._detect_role(message)
+        if not isinstance(persisted_role, str):
+            raise TypeError("checkpoint message_role 必须是字符串")
+        return MessageRole(persisted_role)
 
     @staticmethod
     def _json_safe(value: object) -> object:
@@ -172,7 +182,7 @@ class MessageService:
         content_blocks = extracted["content_blocks"]
         raw_content = getattr(message, "content", "")
         record: dict[str, object] = {
-            "role": MessageService._detect_role(message).value,
+            "role": MessageService._persisted_role(message).value,
             "type": message.type,
             "content": MessageService._json_safe(
                 content_blocks if content_blocks else raw_content
@@ -413,7 +423,7 @@ class MessageService:
         """
         now = datetime.now(timezone.utc)
         return MessageDTO(
-            message_id=f"msg_{uuid.uuid4().hex[:12]}",
+            message_id=create_prefixed_id("msg"),
             session_id=session_id,
             role=message_create.role,
             content=message_create.content,

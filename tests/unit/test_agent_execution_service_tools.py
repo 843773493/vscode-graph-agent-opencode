@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
+from langchain.tools import ToolRuntime
+from langchain_core.tools import tool
 
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
@@ -19,6 +22,8 @@ from app.agents.agent_tools import (
 from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
 )
+from app.runtime.agent_runtime import build_agent_tool_definitions
+from app.agents.tool_invocation_context import ToolInvocationContext
 
 
 class _DummyConfigService:
@@ -182,11 +187,19 @@ class _FakeJobService:
 
 
 class _FakeSessionService:
+    def __init__(self, *, kind: str = "normal") -> None:
+        self.kind = kind
+
     async def get(self, session_id):
+        kind = self.kind
+
         class _Session:
             current_agent_id = "deep_agent"
 
-        return _Session()
+        session = _Session()
+        session.kind = kind
+        session.delegation = object() if kind == "delegated" else None
+        return session
 
 
 class _FakeMessageService:
@@ -214,6 +227,15 @@ class _FakeSessionOrchestrator:
         return _FakeResult()
 
 
+class _FakeSessionSubagentService:
+    async def delegate(self, **kwargs):
+        raise AssertionError(f"本测试不应执行 task 工具: {kwargs}")
+
+
+class _FakeTeamService:
+    pass
+
+
 class _FakeTerminalManagerClient:
     pass
 
@@ -229,6 +251,30 @@ class _FakeResult:
             "job_id": self.job_id,
             "status": self.status,
         }
+
+
+def test_tool_catalog_uses_model_visible_schema_without_runtime_fields():
+    @tool
+    def runtime_aware_tool(value: str, runtime: ToolRuntime) -> str:
+        """返回输入值。"""
+        assert runtime.tool_call_id
+        return value
+
+    tool_node = SimpleNamespace(
+        data=SimpleNamespace(tools_by_name={runtime_aware_tool.name: runtime_aware_tool})
+    )
+    agent = SimpleNamespace(
+        get_graph=lambda: SimpleNamespace(nodes={"tools": tool_node})
+    )
+
+    definitions = build_agent_tool_definitions(agent)
+
+    assert len(definitions) == 1
+    assert definitions[0]["name"] == "runtime_aware_tool"
+    assert definitions[0]["parameters"]["properties"] == {
+        "value": {"title": "Value", "type": "string"}
+    }
+    assert definitions[0]["parameters"]["required"] == ["value"]
 
 
 @pytest.mark.asyncio
@@ -252,8 +298,12 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
         message_service=message_service,
         session_service=session_service,
         session_orchestrator=_FakeSessionOrchestrator(),
+        session_subagent_service=_FakeSessionSubagentService(),
+        team_service=_FakeTeamService(),
         config_service=config_service,
         terminal_manager_client=_FakeTerminalManagerClient(),
+        invocation_context=ToolInvocationContext(),
+        include_test_tools=True,
     )
 
     tool_names = [tool.name for tool in tools]
@@ -265,7 +315,34 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     assert "collect_background_messages" in tool_names
     assert "persistent_terminal" in tool_names
     assert "send_message_to_session" in tool_names
-    assert len(tools) == 8
+    assert "task" in tool_names
+    assert "create_team" in tool_names
+    assert "attach_team_session" in tool_names
+    assert "assign_team_task" in tool_names
+    assert "update_team_task" in tool_names
+    assert len(tools) == 16
+
+
+@pytest.mark.asyncio
+async def test_agent_omits_test_tool_without_development_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    tools = build_default_tools(
+        session_id="session_production",
+        background_task_registry=_FakeBackgroundTaskRegistry(),
+        background_message_bus=_FakeBackgroundMessageBus(),
+        job_event_bus=_FakeJobEventBus(),
+        job_service=_FakeJobService(),
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService(),
+        session_orchestrator=_FakeSessionOrchestrator(),
+        session_subagent_service=_FakeSessionSubagentService(),
+        team_service=_FakeTeamService(),
+        config_service=_DummyConfigService(),
+        terminal_manager_client=_FakeTerminalManagerClient(),
+        invocation_context=ToolInvocationContext(),
+    )
+
+    assert "test_tool" not in {tool.name for tool in tools}
 
 
 
@@ -293,8 +370,12 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService(),
         session_orchestrator=_FakeSessionOrchestrator(),
+        session_subagent_service=_FakeSessionSubagentService(),
+        team_service=_FakeTeamService(),
         config_service=config_service,
         terminal_manager_client=_FakeTerminalManagerClient(),
+        invocation_context=ToolInvocationContext(),
+        include_test_tools=True,
     )
 
     direct_tool_names = [tool.name for tool in tools]
@@ -307,6 +388,14 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         "collect_background_messages",
         "persistent_terminal",
         "send_message_to_session",
+        "task",
+        "create_team",
+        "list_my_teams",
+        "get_team_board",
+        "create_team_member",
+        "attach_team_session",
+        "assign_team_task",
+        "update_team_task",
     ]
 
 
@@ -315,7 +404,7 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(monkeypatc
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     background_message_bus = _FakeBackgroundMessageBus()
     background_task_registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(boxteam_root=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
     )
 
     async def fake_sleep(_seconds):
@@ -362,6 +451,7 @@ async def test_monitor_session_agent_end_tool_emits_interrupt_message(monkeypatc
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
         job_service=job_service,
+        session_service=_FakeSessionService(),
     )
 
     result = await tool.ainvoke(
@@ -399,6 +489,7 @@ async def test_monitor_session_agent_end_accepts_zero_as_unlimited(tmp_path):
         background_message_bus=_FakeBackgroundMessageBus(),
         job_event_bus=_FakeJobEventBus(),
         job_service=_FakeJobService(),
+        session_service=_FakeSessionService(),
     )
 
     result = await tool.ainvoke(
@@ -417,7 +508,7 @@ async def test_monitor_session_agent_end_accepts_zero_as_unlimited(tmp_path):
 async def test_monitor_and_collect_forward_agent_end_final_text(tmp_path):
     background_message_bus = BackgroundMessageBus()
     background_task_registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(boxteam_root=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
     )
     job_event_bus = _FakeJobEventBus()
     job_service = _FakeJobService()
@@ -428,6 +519,7 @@ async def test_monitor_and_collect_forward_agent_end_final_text(tmp_path):
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
         job_service=job_service,
+        session_service=_FakeSessionService(),
     )
     collect_tool = create_background_message_collection_tool(
         "monitor_session",
@@ -486,6 +578,21 @@ async def test_monitor_and_collect_forward_agent_end_final_text(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_monitor_rejects_delegated_session_final_text_forwarding():
+    tool = create_monitor_session_agent_end_tool(
+        "monitor_session",
+        background_task_registry=_FakeBackgroundTaskRegistry(),
+        background_message_bus=_FakeBackgroundMessageBus(),
+        job_event_bus=_FakeJobEventBus(),
+        job_service=_FakeJobService(),
+        session_service=_FakeSessionService(kind="delegated"),
+    )
+
+    with pytest.raises(ValueError, match="必须通过 send_message_to_session"):
+        await tool.ainvoke({"target_session_id": "target_session"})
+
+
+@pytest.mark.asyncio
 async def test_send_message_to_session_defaults_to_system_injected_sender(
     monkeypatch,
     tmp_path,
@@ -506,6 +613,9 @@ async def test_send_message_to_session_defaults_to_system_injected_sender(
     assert result["status"] == "accepted"
     assert result["simulate_user"] is False
     assert result["sender_session_id"] == "ses_sender"
+    assert result["kind"] == "result"
+    assert result["reply_required"] is False
+    assert result["communication_id"].startswith("comm_")
     schema = tool.args_schema.model_json_schema()
     assert "role" not in schema["properties"]
     simulate_user_schema = schema["properties"]["simulate_user"]
@@ -524,6 +634,49 @@ async def test_send_message_to_session_defaults_to_system_injected_sender(
     assert isinstance(metadata, dict)
     assert metadata["source"] == "send_message_to_session"
     assert metadata["simulate_user"] is False
+    assert metadata["communication_id"] == result["communication_id"]
+    assert metadata["kind"] == "result"
+    assert metadata["reply_required"] is False
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_session_question_requires_directional_reply():
+    orchestrator = _FakeSessionOrchestrator()
+    tool = create_send_message_to_session_tool(
+        sender_session_id="ses_sender",
+        session_orchestrator=orchestrator,
+    )
+
+    result = await tool.ainvoke(
+        {
+            "target_session_id": "ses_target",
+            "content": "你确认这个结论吗？",
+            "kind": "question",
+        }
+    )
+
+    assert result["kind"] == "question"
+    assert result["reply_required"] is True
+    metadata = orchestrator.calls[0]["metadata"]
+    assert metadata["communication_id"] == result["communication_id"]
+    assert metadata["reply_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_session_reply_requires_correlation_id():
+    tool = create_send_message_to_session_tool(
+        sender_session_id="ses_sender",
+        session_orchestrator=_FakeSessionOrchestrator(),
+    )
+
+    with pytest.raises(ValueError, match="reply_to_communication_id"):
+        await tool.ainvoke(
+            {
+                "target_session_id": "ses_target",
+                "content": "确认",
+                "kind": "reply",
+            }
+        )
 
 
 @pytest.mark.asyncio

@@ -11,9 +11,12 @@
 
 - 不要把业务规则和流程编排塞到这里。
 - 不要把纯模型转换逻辑放到这里。
+- 不要为会话数据重新引入顶层 `checkpoints/`、`background_tasks/`、`conversation_history/`、`logs/llm_requests/` 或 `logs/traces/` 等分散目录。
 
 ## 规范
 
 - 保持实现可替换，优先通过协议向上暴露能力。
 - 失败时直接抛错，避免“看起来成功”的假默认值。
 - 不要引入与 `app/core/` 职责重复的内容。
+- 会话专属持久化必须使用 `${workspace_abs_path}/.boxteam/sessions/{session_id}/` 下的对应子目录；工作区通用日志、缓存和非会话产物才可使用 `.boxteam/` 顶层公共目录。
+- 新增会话存储时必须同时考虑会话删除、导出和迁移，确保操作整个会话目录即可完整处理数据。

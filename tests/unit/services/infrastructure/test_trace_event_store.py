@@ -29,7 +29,7 @@ from app.services.infrastructure.trace_event_store import (
 
 @pytest.mark.asyncio
 async def test_store_append_and_read(tmp_path: Path):
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     session_id = "ses_1"
 
     event = AgentStartEvent(
@@ -49,7 +49,7 @@ async def test_store_append_and_read(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_store_stream_new_events(tmp_path: Path):
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     session_id = "ses_2"
 
     stream = store.stream_events(session_id)
@@ -69,7 +69,7 @@ async def test_store_stream_new_events(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_store_reads_and_streams_after_event_cursor(tmp_path: Path):
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     session_id = "ses_cursor"
     now = datetime.now(timezone.utc)
 
@@ -97,7 +97,7 @@ async def test_store_reads_and_streams_after_event_cursor(tmp_path: Path):
 
 
 def test_store_rejects_missing_event_cursor(tmp_path: Path):
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     session_id = "ses_missing_cursor"
 
     with pytest.raises(TraceCursorGoneError, match="evt_missing"):
@@ -109,7 +109,7 @@ def test_store_rejects_missing_event_cursor(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_store_appends_message_trace_for_key_events(tmp_path: Path):
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     session_id = "ses_3"
     now = datetime.now(timezone.utc)
 
@@ -167,13 +167,13 @@ async def test_store_appends_message_trace_for_key_events(tmp_path: Path):
     message_events = store.read_message_events(session_id)
     assert [e.type for e in message_events] == ["job_created", "text_end", "tool_call_start", "tool_call_end"]
 
-    message_file = tmp_path / "traces" / f"trace_message_{session_id}.jsonl"
+    message_file = tmp_path / session_id / "logs" / "traces" / "messages.jsonl"
     assert message_file.exists()
 
 
 @pytest.mark.asyncio
 async def test_store_stream_message_events(tmp_path: Path):
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     session_id = "ses_4"
 
     stream = store.stream_message_events(session_id)
@@ -194,7 +194,7 @@ async def test_store_stream_message_events(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_store_file_write_does_not_block_event_loop(monkeypatch, tmp_path: Path):
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     release_write = threading.Event()
     original_append = store._append_event_files
 
@@ -223,9 +223,9 @@ async def test_store_file_write_does_not_block_event_loop(monkeypatch, tmp_path:
 
 
 def test_read_events_rejects_legacy_events_without_part_identity(tmp_path: Path):
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     session_id = "ses_legacy_parts"
-    trace_file = tmp_path / "traces" / f"trace_{session_id}.jsonl"
+    trace_file = tmp_path / session_id / "logs" / "traces" / "events.jsonl"
     trace_file.parent.mkdir(parents=True)
     base = {
         "job_id": "job_legacy",

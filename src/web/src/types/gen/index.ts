@@ -10,7 +10,7 @@ export type { JobDTO, JobStatus, RunMode, StepDTO, StepStatus } from './job';
 export type { LLMRequestLogRecordDTO } from './llm_request_log';
 export type { AttachmentRef, MessageDTO, MessageRunAccepted, MessageRunRequest, RunOptions } from './message';
 export type { RuntimeInfoDTO, RuntimeShutdownDTO, RuntimeShutdownResultDTO, RuntimeStatusDTO, UiSnapshotResultDTO } from './runtime';
-export type { SessionDTO, SessionListResultDTO } from './session';
+export type { SessionInformationSnapshotDTO, SessionDTO, SessionListResultDTO } from './session';
 export type {
   JobProgressDTO,
   MessageDeltaDTO,
@@ -28,6 +28,7 @@ export type {
   SessionResourceListDTO,
 } from './session_resource';
 export type { SessionNetworkWaitDTO, SessionObservationStateDTO, SessionStatusDTO } from './session_status';
+export type { TeamBoardDTO, TeamEventDTO, TeamListDTO, TeamMemberDTO, TeamMemberOperationDTO, TeamTaskDTO, TeamTaskOperationDTO } from './team';
 export type { ToolDTO, ToolInvokeRequest, ToolInvokeResultDTO, ToolSelectionChange, ToolSelectionPatchRequest } from './tool';
 export type { ToolTestAttemptDTO, ToolTestProviderResultDTO, ToolTestRunDTO, ToolTestRunListDTO, ToolTestStartRequest } from './tool_test';
 export type { TraceEventDTO } from './trace';

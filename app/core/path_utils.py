@@ -1,8 +1,36 @@
 from __future__ import annotations
+
 import os
 from pathlib import Path
-from typing import Optional
+
 from app.core.exceptions import ForbiddenError
+from app.core.storage_migration import migrate_workspace_storage_layout
+
+
+def resolve_boxteam_home(home: Path | None = None) -> Path:
+    """按显式环境变量或指定用户目录解析 BoxTeam 全局根目录。"""
+    configured_root = os.environ.get("BOXTEAM_HOME")
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+    return (home or Path.home()).expanduser().resolve() / ".boxteams"
+
+
+def get_boxteam_home() -> Path:
+    """获取 BoxTeam 的用户级安装与全局数据根目录。"""
+    return resolve_boxteam_home()
+
+
+def get_user_config_root() -> Path:
+    """获取用户级全局配置目录。"""
+    return get_boxteam_home() / "config"
+
+
+def get_user_config_path() -> Path:
+    """获取用户级全局配置文件。"""
+    configured_path = os.environ.get("BOXTEAM_USER_CONFIG_PATH")
+    if configured_path:
+        return Path(configured_path).expanduser().resolve()
+    return get_user_config_root() / "boxteam.jsonc"
 
 
 def get_user_workspace_root() -> Path:
@@ -11,8 +39,15 @@ def get_user_workspace_root() -> Path:
     if configured_root:
         return Path(configured_root).expanduser().resolve()
 
-    home_dir = Path.home().resolve()
-    return home_dir / ".boxteams" / "boxteam_workspace"
+    return get_boxteam_home() / "boxteam_workspace"
+
+
+def get_gateway_root() -> Path:
+    """获取跨工作区 Gateway 控制面数据目录。"""
+    configured_root = os.environ.get("BOXTEAM_GATEWAY_ROOT")
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+    return get_boxteam_home() / "state" / "gateway"
 
 
 def get_workspace_root() -> Path:
@@ -32,8 +67,10 @@ def get_runtime_workspace_root() -> Path:
 
     return get_user_workspace_root()
 
+
 def get_boxteam_root() -> Path:
     return get_workspace_root() / ".boxteam"
+
 
 def get_sessions_dir() -> Path:
     return get_boxteam_root() / "sessions"
@@ -47,24 +84,26 @@ def get_artifacts_dir() -> Path:
 def get_cache_dir() -> Path:
     return get_boxteam_root() / "cache"
 
-def get_checkpoints_dir() -> Path:
-    return get_boxteam_root() / "checkpoints"
-
-
 def get_session_changes_dir(session_id: str) -> Path:
     """获取某个会话的可读文件变更记录目录。"""
     return get_session_path(session_id) / "changes"
+
+
+def get_session_logs_dir(session_id: str) -> Path:
+    return get_session_path(session_id) / "logs"
 
 
 def initialize_directories() -> None:
     """初始化所有必需的目录，应该在应用启动时显式调用"""
     get_boxteam_root().mkdir(exist_ok=True, parents=True)
     get_sessions_dir().mkdir(exist_ok=True, parents=True)
-    get_checkpoints_dir().mkdir(exist_ok=True, parents=True)
     get_logs_dir().mkdir(exist_ok=True, parents=True)
     get_artifacts_dir().mkdir(exist_ok=True, parents=True)
     get_cache_dir().mkdir(exist_ok=True, parents=True)
-    get_user_workspace_root().mkdir(exist_ok=True, parents=True)
+    migrate_workspace_storage_layout(
+        boxteam_root=get_boxteam_root(),
+        sessions_root=get_sessions_dir(),
+    )
 
 
 def safe_join(base_path: Path, *paths: str) -> Path:

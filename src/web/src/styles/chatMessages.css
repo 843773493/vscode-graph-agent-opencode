@@ -31,6 +31,7 @@
 }
 
 .chat-user-bubble {
+  position: relative;
   max-width: min(90%, 760px);
   padding: 8px 12px;
   border: 1px solid var(--vscode-chat-requestBorder, rgba(128, 128, 128, 0.18));
@@ -38,6 +39,122 @@
   background: var(--vscode-chat-requestBubbleBackground, rgba(127, 127, 127, 0.1));
   color: var(--vscode-editor-foreground);
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03);
+}
+
+.chat-request-edit-button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--vscode-cornerRadius-small, 4px);
+  background: transparent;
+  color: var(--vscode-icon-foreground, var(--vscode-editor-foreground));
+  opacity: 0;
+}
+
+.chat-user-bubble:hover .chat-request-edit-button,
+.chat-user-bubble:focus-within .chat-request-edit-button {
+  opacity: 1;
+}
+
+.chat-request-edit-button:hover,
+.chat-request-edit-button:focus-visible {
+  outline: none;
+  background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.14));
+}
+
+.chat-user-bubble:has(.chat-request-edit-button) .chat-user-text {
+  padding-right: 22px;
+}
+
+.chat-user-bubble.is-editing {
+  width: min(92%, 760px);
+  max-width: min(92%, 760px);
+  padding: 10px;
+  border-color: var(--vscode-focusBorder, #007fd4);
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder, #007fd4) inset;
+}
+
+.chat-request-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-request-edit-input {
+  width: 100%;
+  min-height: 92px;
+  max-height: 280px;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  outline: none;
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+  font: inherit;
+  line-height: 1.5;
+}
+
+.chat-request-edit-input:focus {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.chat-request-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.chat-request-edit-actions button,
+.chat-failed-retry-button {
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid var(--vscode-button-border, rgba(128, 128, 128, 0.28));
+  border-radius: 5px;
+  background: var(--vscode-button-secondaryBackground, rgba(127, 127, 127, 0.12));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+  font: inherit;
+}
+
+.chat-request-edit-actions button.primary {
+  border-color: var(--vscode-button-border, transparent);
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+}
+
+.chat-request-edit-actions button:disabled,
+.chat-failed-retry-button:disabled {
+  opacity: 0.55;
+}
+
+.chat-turn-action-warning {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chat-turn-action-confirmation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--vscode-chat-requestBorder, rgba(128, 128, 128, 0.24));
+  border-radius: 7px;
+  background: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.07));
+}
+
+.chat-failed-retry-button {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
 }
 
 .chat-user-text {
@@ -385,6 +502,11 @@
 
 .chat-response-action-button:focus-visible {
   box-shadow: 0 0 0 1px var(--vscode-focusBorder, #007fd4) inset;
+}
+
+.chat-response-action-button:disabled {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .chat-copy-response.is-copied {

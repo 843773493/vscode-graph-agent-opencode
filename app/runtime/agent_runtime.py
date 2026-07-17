@@ -7,6 +7,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_subagent import SessionSubagentProtocol
+from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.skill_runtime import discover_workspace_custom_tool_skill_map
@@ -16,6 +18,10 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.abstractions.session_context import (
+    SessionContextQueryProtocol,
+    WorkspaceSessionContextClientProtocol,
+)
 
 if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
@@ -29,6 +35,10 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_session_orchestrator(self) -> SessionOrchestratorProtocol: ...
 
+    def get_session_subagent_service(self) -> SessionSubagentProtocol: ...
+
+    def get_team_service(self) -> TeamCoordinationProtocol: ...
+
     def get_job_service(self) -> JobServiceProtocol: ...
 
     def get_checkpointer(self) -> BaseCheckpointSaver: ...
@@ -36,6 +46,12 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_terminal_manager_client(self) -> TerminalManagerClient: ...
 
     def get_browser_manager_client(self) -> BrowserManagerClient: ...
+
+    def get_session_context_query_service(self) -> SessionContextQueryProtocol: ...
+
+    def get_workspace_session_context_client(
+        self,
+    ) -> WorkspaceSessionContextClientProtocol: ...
 
 
 def build_session_agent_runtime(
@@ -67,8 +83,16 @@ def build_session_agent_runtime(
         message_service=dependency_provider.get_message_service(),
         session_service=dependency_provider.get_session_service(),
         session_orchestrator=dependency_provider.get_session_orchestrator(),
+        session_subagent_service=dependency_provider.get_session_subagent_service(),
+        team_service=dependency_provider.get_team_service(),
         terminal_manager_client=dependency_provider.get_terminal_manager_client(),
         browser_manager_client=dependency_provider.get_browser_manager_client(),
+        session_context_query_service=(
+            dependency_provider.get_session_context_query_service()
+        ),
+        workspace_session_context_client=(
+            dependency_provider.get_workspace_session_context_client()
+        ),
         checkpointer=checkpointer,
         name=name or resolved_agent_id,
         override_model=override_model,
@@ -111,13 +135,15 @@ def build_agent_tool_definitions(agent: Any) -> list[dict[str, Any]]:
 
     tools: list[dict[str, Any]] = []
     for tool_name, tool in tool_map.items():
-        args_schema = getattr(tool, "args_schema", None)
-        if hasattr(args_schema, "model_json_schema"):
-            parameters = args_schema.model_json_schema()
-        elif hasattr(args_schema, "schema"):
-            parameters = args_schema.schema()
-        else:
-            parameters = {"type": "object", "properties": {}}
+        tool_call_schema = getattr(tool, "tool_call_schema", None)
+        if not hasattr(tool_call_schema, "model_json_schema"):
+            raise TypeError(
+                "Agent 工具缺少可供模型调用的 JSON Schema: "
+                f"tool_name={tool_name} tool_type={type(tool).__name__}"
+            )
+        # tool_call_schema 是 LangChain 面向模型公开的权威参数模型；args_schema
+        # 还包含 ToolRuntime 等运行时注入字段，不能用于工具目录或模型请求。
+        parameters = tool_call_schema.model_json_schema()
         tools.append(
             {
                 "id": tool_name,

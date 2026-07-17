@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import datetime, timezone
 
 from app.core.background_task_registry import BackgroundTaskHandle
@@ -11,15 +10,6 @@ from app.schemas.public_v2.session_resource import (
 
 
 class SessionResourceMapper:
-    def __init__(
-        self,
-        *,
-        terminal_attach_url: Callable[[str], str],
-        browser_attach_url: Callable[[str], str],
-    ) -> None:
-        self._terminal_attach_url = terminal_attach_url
-        self._browser_attach_url = browser_attach_url
-
     def background_task_to_resource(
         self,
         handle: BackgroundTaskHandle,
@@ -70,7 +60,6 @@ class SessionResourceMapper:
             "process_group_id": terminal.get("process_group_id"),
             "process_session_id": terminal.get("process_session_id"),
             "release_reason": terminal.get("release_reason"),
-            "attach_url": terminal.get("attach_url") or self._terminal_attach_url(terminal_id),
             "client_count": terminal.get("client_count"),
             "sequence": terminal.get("sequence"),
         }
@@ -120,7 +109,6 @@ class SessionResourceMapper:
             "url": browser.get("url"),
             "title": browser.get("title"),
             "viewport": browser.get("viewport"),
-            "attach_url": browser.get("attach_url") or self._browser_attach_url(browser_id),
             "client_count": browser.get("client_count"),
             "sequence": browser.get("sequence"),
             "pending_dialog": browser.get("pending_dialog"),

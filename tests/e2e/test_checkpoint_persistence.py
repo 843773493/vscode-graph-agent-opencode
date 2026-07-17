@@ -61,7 +61,12 @@ async def test_checkpoint_save_reload_and_survive_restart(
     assert first_job_data["status"] in {"completed", "succeeded"}
 
     checkpoint_jsonl = (
-        Path(e2e_workspace_root_path) / ".boxteam" / "checkpoints" / session_id / "checkpoints.jsonl"
+        Path(e2e_workspace_root_path)
+        / ".boxteam"
+        / "sessions"
+        / session_id
+        / "checkpoints"
+        / "checkpoints.jsonl"
     )
     assert checkpoint_jsonl.exists(), "第一次运行后 checkpoint JSONL 文件应已创建"
 

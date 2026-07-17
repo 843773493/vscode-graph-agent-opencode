@@ -132,10 +132,7 @@ class FakeJobService:
 
 
 def _resource_mapper() -> SessionResourceMapper:
-    return SessionResourceMapper(
-        terminal_attach_url=lambda terminal_id: f"http://127.0.0.1:8013/?terminalId={terminal_id}",
-        browser_attach_url=lambda browser_id: f"http://127.0.0.1:8016/?browserId={browser_id}",
-    )
+    return SessionResourceMapper()
 
 
 def _provider_registry(
@@ -186,7 +183,7 @@ def test_deleted_terminal_resource_explains_historical_status():
     assert "终端已删除" in str(resource.metadata["status_note"])
 
 
-def test_running_browser_resource_maps_attach_url_and_actions():
+def test_running_browser_resource_maps_identity_and_actions():
     browser = {
         "browser_id": "browser_123",
         "session_id": "ses_123",
@@ -204,14 +201,15 @@ def test_running_browser_resource_maps_attach_url_and_actions():
 
     assert resource.kind == "browser"
     assert resource.status == "running"
-    assert resource.metadata["attach_url"] == "http://127.0.0.1:8016/?browserId=browser_123"
+    assert resource.metadata["page_id"] == "browser_123"
+    assert "attach_url" not in resource.metadata
     assert resource.available_actions == ["cancel", "delete"]
 
 
 @pytest.mark.asyncio
 async def test_browser_provider_excludes_deleted_records(tmp_path):
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(boxteam_root=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
     )
     browser_manager = FakeBrowserManagerClient(
         browsers=[
@@ -244,7 +242,7 @@ async def test_browser_provider_excludes_deleted_records(tmp_path):
 async def test_list_includes_closed_background_task_history(tmp_path):
     session_id = "ses_closed_history"
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(boxteam_root=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
     )
 
     async def wait_forever() -> None:
@@ -279,7 +277,7 @@ async def test_list_includes_closed_background_task_history(tmp_path):
 async def test_list_excludes_deleted_background_task_history(tmp_path):
     session_id = "ses_deleted_history"
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(boxteam_root=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
     )
 
     async def wait_forever() -> None:
@@ -311,7 +309,7 @@ async def test_list_excludes_deleted_background_task_history(tmp_path):
 async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(tmp_path):
     session_id = "ses_cleanup"
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(boxteam_root=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
     )
 
     async def long_running_task() -> None:
@@ -369,7 +367,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(tmp_pa
 @pytest.mark.asyncio
 async def test_cancel_monitor_background_task_injects_system_reminder(tmp_path):
     session_id = "ses_cancel_monitor"
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config(session_id)
     await saver.aput(
         config,
@@ -388,7 +386,7 @@ async def test_cancel_monitor_background_task_injects_system_reminder(tmp_path):
     )
 
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(boxteam_root=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
     )
 
     async def long_running_task() -> None:

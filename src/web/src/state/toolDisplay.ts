@@ -1,7 +1,6 @@
 import type { TimelineItem } from "./timelineTypes";
 import { isRecord } from "../utils/jsonDisplay";
 import { skillNameFromPath } from "../utils/skillPaths";
-import { toBrowserReachableAttachUrl } from "../utils/attachUrls";
 
 type AggregatedToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 
@@ -98,25 +97,15 @@ function formatPersistentTerminalToolContent(item: AggregatedToolItem): string |
     fieldText(resultRecord, "terminal_id") ||
     fieldText(terminalRecord ?? {}, "terminal_id");
   const status = fieldText(resultRecord, "status");
-  const attachUrl =
-    fieldText(resultRecord, "attach_url") ||
-    fieldText(terminalRecord ?? {}, "attach_url");
-  const displayAttachUrl = attachUrl
-    ? toBrowserReachableAttachUrl(attachUrl)
-    : "";
   const terminalStatus =
     fieldText(terminalRecord ?? {}, "status") ||
-    (displayAttachUrl ? "终端会话仍保留，可打开并 attach" : "");
+    (terminalId ? "终端会话仍保留，可从后台连接面板打开" : "");
   const output =
     fieldText(resultRecord, "output") || fieldText(resultRecord, "recent_output");
   const displaySummary = fieldText(resultRecord, "display_summary");
-  const browserDisplaySummary =
-    displaySummary && attachUrl
-      ? displaySummary.split(attachUrl).join(displayAttachUrl)
-      : displaySummary;
 
   const sections = [
-    browserDisplaySummary ? `**摘要**\n${browserDisplaySummary}` : "",
+    displaySummary ? `**摘要**\n${displaySummary}` : "",
     "**输入参数**",
     toolFieldLines([
       ["动作", fieldText(inputRecord, "action") || "run_command"],
@@ -133,10 +122,9 @@ function formatPersistentTerminalToolContent(item: AggregatedToolItem): string |
       ["终端 UUID", terminalId ? markdownCode(terminalId) : ""],
       ["退出码", fieldText(resultRecord, "exit_code")],
       ["命令", fieldText(resultRecord, "command")],
-      ["打开地址", displayAttachUrl],
     ]),
-    displayAttachUrl
-      ? "说明：命令完成不代表终端关闭；打开终端页面后，可在页面底部输入框继续发送命令。"
+    terminalId
+      ? "说明：命令完成不代表终端关闭；可从后台连接面板重新打开终端。"
       : "",
     output ? `\n输出：\n\`\`\`text\n${output}\n\`\`\`` : "",
   ].filter((part) => part.trim().length > 0);
@@ -150,8 +138,7 @@ function persistentTerminalCollapsedText(item: AggregatedToolItem): string | nul
   }
   const resultRecord = parseJsonRecord(item.rawEnd.result) ?? {};
   const status = fieldText(resultRecord, "status");
-  const attachUrl = fieldText(resultRecord, "attach_url");
-  if (status === "completed" && attachUrl) {
+  if (status === "completed" && fieldText(resultRecord, "terminal_id")) {
     return "命令已完成，终端仍可打开";
   }
   if (status === "background") {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -134,6 +135,7 @@ async def test_session_resource_api_lists_and_controls_model_created_background_
 @pytest.mark.asyncio
 async def test_delete_session_cleans_background_tasks(
     client: httpx.AsyncClient,
+    e2e_workspace_root_path: str,
 ):
     create_session_response = await client.post(
         "/api/v1/sessions",
@@ -158,6 +160,9 @@ async def test_delete_session_cleans_background_tasks(
     delete_data = delete_response.json()["data"]
     assert delete_data["status"] == "deleted"
     assert delete_data["cleaned_background_tasks"] >= 1
+    assert not (
+        Path(e2e_workspace_root_path) / ".boxteam" / "sessions" / session_id
+    ).exists()
 
     list_response = await client.get("/api/v1/sessions")
     assert list_response.status_code == 200

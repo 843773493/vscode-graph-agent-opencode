@@ -3,9 +3,10 @@ import { createPortal } from "react-dom";
 import { browseGatewayLocalDirectories } from "../../gatewayApi";
 import type {
   AddLocalGatewayWorkspaceRequest,
+  GatewayDirectoryList,
   GatewayWorkspace,
-  LocalDirectoryList,
 } from "../../types/backend";
+import WorkspaceDirectoryBrowser from "./WorkspaceDirectoryBrowser";
 
 interface WorkspaceLocalDialogProps {
   open: boolean;
@@ -92,7 +93,7 @@ export default function WorkspaceLocalDialog({
   });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [browserListing, setBrowserListing] = useState<LocalDirectoryList | null>(null);
+  const [browserListing, setBrowserListing] = useState<GatewayDirectoryList | null>(null);
   const [browserLoading, setBrowserLoading] = useState(false);
   const [browserError, setBrowserError] = useState<string | null>(null);
 
@@ -210,67 +211,13 @@ export default function WorkspaceLocalDialog({
               ))}
             </div>
           ) : null}
-          <section className="workspace-dialog-wide workspace-directory-browser">
-            <header className="workspace-directory-browser-header">
-              <span>选择目录</span>
-              <div className="workspace-directory-browser-actions">
-                {browserListing?.parent_path ? (
-                  <button
-                    type="button"
-                    onClick={() => loadDirectory(browserListing.parent_path ?? null)}
-                    disabled={browserLoading}
-                  >
-                    上一级
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => loadDirectory(form.rootPath.trim() || null)}
-                  disabled={browserLoading}
-                >
-                  刷新
-                </button>
-                <button
-                  type="button"
-                  onClick={() => loadDirectory(browserListing?.home_path ?? null)}
-                  disabled={browserLoading}
-                >
-                  主目录
-                </button>
-              </div>
-            </header>
-            <div className="workspace-directory-current" title={browserListing?.path ?? form.rootPath}>
-              {(browserListing?.path ?? form.rootPath) || "主目录"}
-            </div>
-            {browserError ? (
-              <div className="workspace-directory-error">{browserError}</div>
-            ) : null}
-            <div className="workspace-directory-list" aria-busy={browserLoading}>
-              {browserLoading ? (
-                <div className="workspace-directory-empty">正在读取目录...</div>
-              ) : browserListing && browserListing.entries.length > 0 ? (
-                browserListing.entries.map((entry) => (
-                  <button
-                    key={entry.path}
-                    type="button"
-                    className="workspace-directory-row"
-                    onClick={() => loadDirectory(entry.path)}
-                    title={entry.path}
-                  >
-                    <span className="codicon codicon-folder" aria-hidden="true" />
-                    <span>{entry.name}</span>
-                  </button>
-                ))
-              ) : (
-                <div className="workspace-directory-empty">该目录下没有可进入的子目录</div>
-              )}
-            </div>
-            {browserListing?.truncated ? (
-              <div className="workspace-directory-hint">
-                仅显示前 {browserListing.limit} 个目录，可在输入框中继续输入精确路径。
-              </div>
-            ) : null}
-          </section>
+          <WorkspaceDirectoryBrowser
+            listing={browserListing}
+            currentPath={form.rootPath}
+            loading={browserLoading}
+            error={browserError}
+            onNavigate={(path) => void loadDirectory(path)}
+          />
           <label>
             <span>工作区名称</span>
             <input

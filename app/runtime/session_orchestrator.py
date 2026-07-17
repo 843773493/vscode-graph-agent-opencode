@@ -4,7 +4,13 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.job_event_bus import EventType
 from app.schemas.public_v2.common import MessageRole, RunMode
-from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions, MessageRunAccepted
+from app.schemas.public_v2.message import (
+    MessageCreateRequest,
+    MessageDTO,
+    MessageRunAccepted,
+    MessageRunRequest,
+    RunOptions,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
@@ -49,8 +55,25 @@ class SessionOrchestrator:
         import logging
         logger = logging.getLogger(__name__)
         logger.info("[session_orchestrator] create_message begin: session_id=%s", session_id)
-        session = await self._session_service.get(session_id)
         requested_agent_id = payload.run.agent_id if payload.run else None
+        message = await self._message_service.create(session_id, payload.message)
+        return await self.dispatch_prepared_message(
+            session_id,
+            message,
+            requested_agent_id=requested_agent_id,
+        )
+
+    async def dispatch_prepared_message(
+        self,
+        session_id: str,
+        message: MessageDTO,
+        *,
+        requested_agent_id: str | None,
+    ) -> MessageRunAccepted:
+        """调度一条已生成稳定 message_id 的用户消息。"""
+        import logging
+        logger = logging.getLogger(__name__)
+        session = await self._session_service.get(session_id)
         if requested_agent_id is None:
             requested_agent_id = session.current_agent_id
         effective_agent_id = self._config_service.resolve_agent_id(requested_agent_id)
@@ -59,7 +82,6 @@ class SessionOrchestrator:
         except ValueError:
             effective_agent_id = self._config_service.get_default_agent_id()
 
-        message = await self._message_service.create(session_id, payload.message)
         logger.info("[session_orchestrator] message created: session_id=%s message_id=%s", session_id, message.message_id)
         job_id = await self._job_service.start_job(
             session_id,
@@ -68,6 +90,8 @@ class SessionOrchestrator:
             message_id=message.message_id,
             attachments=message.attachments,
             message_created_at=message.created_at.isoformat(),
+            message_role=message.role,
+            message_metadata=message.metadata,
         )
         logger.info("[session_orchestrator] start_job returned: session_id=%s job_id=%s", session_id, job_id)
         await self._job_event_bus.publish(

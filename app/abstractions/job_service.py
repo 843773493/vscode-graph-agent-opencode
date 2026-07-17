@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
+from app.schemas.public_v2.common import MessageRole
 from app.schemas.public_v2.message import AttachmentRef
 
 
@@ -31,4 +32,6 @@ class JobServiceProtocol(Protocol):
         message_id: str,
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
+        message_role: MessageRole = MessageRole.user,
+        message_metadata: dict[str, object] | None = None,
     ) -> str: ...

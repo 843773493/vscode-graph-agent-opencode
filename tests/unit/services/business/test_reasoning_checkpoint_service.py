@@ -23,7 +23,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
     session_id = "sess_standard_assistant"
     reasoning_text = "用户只要求回复 OK。"
     final_text = "OK"
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config(session_id)
     checkpoint = {
         "channel_values": {
@@ -172,7 +172,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     )
     final_message = AIMessage(content=final_text, name="default")
 
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config(session_id)
     checkpoint = {
         "channel_values": {

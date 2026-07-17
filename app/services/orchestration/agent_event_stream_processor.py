@@ -43,12 +43,19 @@ TEXT_DELTA_FLUSH_SECONDS = 0.04
 
 
 @dataclass(frozen=True, slots=True)
+class SuccessfulToolCall:
+    tool_name: str
+    tool_args: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class AgentEventStreamResult:
     final_text: str
     final_text_part_id: str | None
     latest_model_content_blocks: tuple[dict[str, object], ...]
     last_tool_result_text: str
-    completed_custom_tool_names: tuple[str, ...]
+    successful_tool_calls: tuple[SuccessfulToolCall, ...] = ()
+    completed_custom_tool_names: tuple[str, ...] = ()
     token_usage: ModelTokenUsagePayload = field(
         default_factory=ModelTokenUsagePayload
     )
@@ -243,12 +250,15 @@ async def process_agent_event_stream(
     latest_model_parts: dict[str, dict[str, object]] = {}
     current_text_part_id: str | None = None
     current_text_part_kind: str | None = None
-    current_text_part_chunks: list[str] = []
+    text_part_chunks: dict[str, list[str]] = {}
+    text_part_kinds: dict[str, str] = {}
+    started_text_part_ids: set[str] = set()
     pending_text_delta_chunks: list[str] = []
     last_text_delta_flush_at = time.monotonic()
     tool_contexts_by_run_id: dict[str, ToolEventDisplayContext] = {}
     file_edit_snapshots_by_run_id: dict[str, list[FileEditSnapshot]] = {}
     last_tool_result_text = ""
+    successful_tool_calls: list[SuccessfulToolCall] = []
     completed_custom_tool_names: list[str] = []
     tracked_model_run_ids: set[str] = set()
     model_usage_by_run_id: dict[str, ModelTokenUsagePayload] = {}
@@ -273,7 +283,7 @@ async def process_agent_event_stream(
         last_text_delta_flush_at = time.monotonic()
 
     async def close_current_text_part() -> None:
-        nonlocal current_text_part_id, current_text_part_kind, current_text_part_chunks
+        nonlocal current_text_part_id, current_text_part_kind
         nonlocal pending_text_delta_chunks
         if current_text_part_id is None or current_text_part_kind is None:
             return
@@ -283,12 +293,11 @@ async def process_agent_event_stream(
             {
                 "part_id": current_text_part_id,
                 "kind": current_text_part_kind,
-                "text": "".join(current_text_part_chunks),
+                "text": "".join(text_part_chunks[current_text_part_id]),
             },
         )
         current_text_part_id = None
         current_text_part_kind = None
-        current_text_part_chunks = []
         pending_text_delta_chunks = []
 
     def record_latest_model_part(part: AgentStreamContentPart) -> None:
@@ -322,21 +331,31 @@ async def process_agent_event_stream(
         if current_text_part_id is None:
             current_text_part_id = part.part_id
             current_text_part_kind = part.kind
+            known_kind = text_part_kinds.get(part.part_id)
+            if known_kind is not None and known_kind != part.kind:
+                raise RuntimeError(
+                    f"模型流 part kind 发生变化: part_id={part.part_id} "
+                    f"{known_kind} -> {part.kind}"
+                )
+            text_part_kinds[part.part_id] = part.kind
+            text_part_chunks.setdefault(part.part_id, [])
             interrupt_state = SessionInterruptState.get(session_id)
             if not interrupt_state.active_tools_by_run_id:
                 SessionInterruptState.set(session_id, phase="text", tool_name=None)
                 set_interruptible_phase("text")
-            await publish(
-                EventType.TEXT_START,
-                {"part_id": current_text_part_id, "kind": part.kind},
-            )
+            if part.part_id not in started_text_part_ids:
+                await publish(
+                    EventType.TEXT_START,
+                    {"part_id": current_text_part_id, "kind": part.kind},
+                )
+                started_text_part_ids.add(part.part_id)
         elif current_text_part_kind != part.kind:
             raise RuntimeError(
                 f"模型流 part kind 发生变化: part_id={part.part_id} "
                 f"{current_text_part_kind} -> {part.kind}"
             )
         record_latest_model_part(part)
-        current_text_part_chunks.append(part.text)
+        text_part_chunks[part.part_id].append(part.text)
         pending_text_delta_chunks.append(part.text)
         pending_length = sum(len(chunk) for chunk in pending_text_delta_chunks)
         if (
@@ -382,10 +401,8 @@ async def process_agent_event_stream(
             chunk_message = getattr(chunk, "message", None)
             if chunk_message is not None:
                 content = getattr(chunk_message, "content", None) or ""
-                tool_calls = getattr(chunk_message, "tool_calls", None) or []
             else:
                 content = getattr(chunk, "content", None) or ""
-                tool_calls = getattr(chunk, "tool_calls", None) or []
 
             for part in extract_agent_stream_content_parts(content):
                 if part.kind == "reasoning":
@@ -405,14 +422,13 @@ async def process_agent_event_stream(
                     )
                     await publish_text_delta(part)
 
-            if tool_calls and (collected_text_parts or current_text_part_id is not None):
-                await close_current_text_part()
-                collected_text_parts.clear()
-                SessionInterruptState.set(session_id, current_text="")
             continue
 
         if event_type == "on_tool_start":
             await close_current_text_part()
+            if collected_text_parts:
+                collected_text_parts.clear()
+                SessionInterruptState.set(session_id, current_text="")
             if not name:
                 raise RuntimeError("工具开始事件缺少 name")
             raw_tool_name = name
@@ -499,6 +515,13 @@ async def process_agent_event_stream(
             result_text = extract_tool_result_text(output)
             last_tool_result_text = result_text
             skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
+            if raw_output.status != "error":
+                successful_tool_calls.append(
+                    SuccessfulToolCall(
+                        tool_name=display_context.tool_name,
+                        tool_args=dict(display_context.tool_args),
+                    )
+                )
             if display_context.invocation_tool_name == CUSTOM_TOOL_INVOKER_NAME:
                 completed_custom_tool_names.append(display_context.tool_name)
             stored_edits: list[StoredFileEdit] = []
@@ -539,6 +562,8 @@ async def process_agent_event_stream(
                 "tool_call_id": tool_call_id,
                 "tool_name": display_context.tool_name,
                 "result": result_text,
+                "status": raw_output.status,
+                "failed": raw_output.status == "error",
                 "agent_id": agent_id,
             }
             tool_output_reference = extract_tool_output_reference(output)
@@ -580,6 +605,7 @@ async def process_agent_event_stream(
             latest_model_parts[part_id] for part_id in latest_model_part_order
         ),
         last_tool_result_text=last_tool_result_text,
+        successful_tool_calls=tuple(successful_tool_calls),
         completed_custom_tool_names=tuple(completed_custom_tool_names),
         token_usage=combine_model_token_usage(usage_parts),
     )

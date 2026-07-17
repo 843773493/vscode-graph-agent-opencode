@@ -42,6 +42,7 @@ export interface JobDTO {
   created_at: string;
   updated_at: string;
   job_id: string;
+  message_id: string;
   session_id: string;
   mode: RunMode;
   status: JobStatus;
@@ -137,6 +138,17 @@ export interface SessionDTO {
   title_source?: "default" | "user" | "auto";
   current_agent_id: string;
   parent_session_id?: string | null;
+  kind?: "normal" | "context_fork" | "delegated";
+  delegation?: SessionDelegationDTO | null;
+}
+export interface SessionDelegationDTO {
+  parent_session_id: string;
+  parent_job_id: string;
+  parent_tool_call_id: string;
+  subagent_type: string;
+  start_status?: "pending" | "running" | "failed";
+  start_error?: string | null;
+  [k: string]: unknown;
 }
 export interface SessionExecutionEventDTO {
   event_id: string;

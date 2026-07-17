@@ -4,7 +4,6 @@ import type {
   SessionResourceKind,
 } from "../types/backend";
 import { formatDateTime } from "../utils/format";
-import { toBrowserReachableAttachUrl } from "../utils/attachUrls";
 import {
   actionLabel,
   kindLabel,
@@ -31,15 +30,11 @@ export default function ResourceCard({
     action: SessionResourceAction,
   ) => void;
   onCopy: (resourceId: string) => void;
-  onOpenTerminal: (resourceId: string, attachUrl: string) => void;
-  onOpenBrowser: (resourceId: string, attachUrl: string) => void;
+  onOpenTerminal: (resourceId: string) => void;
+  onOpenBrowser: (resourceId: string) => void;
   onShowConversation: (jobId?: string) => void;
 }) {
   const rows = metadataRows(resource);
-  const attachUrl =
-    typeof resource.metadata.attach_url === "string"
-      ? toBrowserReachableAttachUrl(resource.metadata.attach_url)
-      : null;
   const canOpenTerminal = resource.kind === "terminal" && resource.status === "running";
   const canOpenBrowser = resource.kind === "browser" && resource.status === "running";
   const stateSummary = resourceStateSummary(resource);
@@ -82,14 +77,14 @@ export default function ResourceCard({
         >
           复制 UUID
         </button>
-        {attachUrl && resource.kind === "terminal" ? (
+        {resource.kind === "terminal" ? (
           <button
             type="button"
             className="resource-action-button resource-action-open"
             disabled={!canOpenTerminal}
             onClick={() => {
               if (canOpenTerminal) {
-                onOpenTerminal(resource.resource_id, attachUrl);
+                onOpenTerminal(resource.resource_id);
               }
             }}
             title={canOpenTerminal ? "在预览区打开并连接终端" : "终端已不可连接"}
@@ -97,14 +92,14 @@ export default function ResourceCard({
             打开终端
           </button>
         ) : null}
-        {attachUrl && resource.kind === "browser" ? (
+        {resource.kind === "browser" ? (
           <button
             type="button"
             className="resource-action-button resource-action-open"
             disabled={!canOpenBrowser}
             onClick={() => {
               if (canOpenBrowser) {
-                onOpenBrowser(resource.resource_id, attachUrl);
+                onOpenBrowser(resource.resource_id);
               }
             }}
             title={canOpenBrowser ? "在预览区打开并连接浏览器" : "浏览器已不可连接"}

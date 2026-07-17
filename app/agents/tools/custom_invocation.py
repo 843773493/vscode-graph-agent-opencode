@@ -103,4 +103,5 @@ def create_custom_tool_invoker_tool(custom_tools: Sequence[BaseTool]) -> BaseToo
         name=CUSTOM_TOOL_INVOKER_NAME,
         description=description,
         args_schema=CustomToolInvocationInput,
+        handle_tool_error=True,
     )

@@ -14,6 +14,6 @@
 
 # 规范
 
-- 私钥仅用于本仓库本地 e2e 测试。
+- 私钥仅用于本仓库本地 e2e 测试，开发安装时使用专用名称复制到用户 `.ssh` 目录。
 - 公钥由 `tools/Dockerfile.gateway-test` 在构建测试容器时写入 `authorized_keys`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

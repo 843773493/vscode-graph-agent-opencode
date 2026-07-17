@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from app.schemas.public_v2.common import JobStatus
+from app.schemas.public_v2.common import JobStatus, MessageRole
 from app.schemas.public_v2.message import AttachmentRef
 
 
@@ -17,6 +17,8 @@ class JobRuntimeState:
     agent_id: str
     message_id: str
     message_created_at: str
+    message_role: MessageRole = MessageRole.user
+    message_metadata: dict[str, object] = field(default_factory=dict)
     attachments: list[AttachmentRef] = field(default_factory=list)
     status: JobStatus = JobStatus.queued
     progress: int = 0

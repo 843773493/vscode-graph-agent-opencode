@@ -25,7 +25,7 @@ def _visible_metadata(message_id: str, **extra: object) -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_message_service_loads_history_from_checkpoint(tmp_path):
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess1", "checkpoint_ns": ""}}
     checkpoint = {
         "channel_values": {
@@ -67,7 +67,7 @@ async def test_message_service_loads_history_from_checkpoint(tmp_path):
 
 @pytest.mark.asyncio
 async def test_message_service_returns_empty_when_no_checkpoint(tmp_path):
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     service = MessageService(checkpointer=saver)
     messages = await service.list(session_id="sess_noexist", limit=10)
     assert messages.items == []
@@ -77,7 +77,7 @@ async def test_message_service_returns_empty_when_no_checkpoint(tmp_path):
 async def test_message_service_rejects_visible_message_without_persisted_identity(
     tmp_path,
 ):
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {
         "configurable": {"thread_id": "sess_invalid_message", "checkpoint_ns": ""}
     }
@@ -103,7 +103,7 @@ async def test_message_service_rejects_visible_message_without_persisted_identit
 
 @pytest.mark.asyncio
 async def test_agent_context_state_applies_summarization_event(tmp_path):
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_compacted", "checkpoint_ns": ""}}
     checkpoint = {
         "channel_values": {
@@ -151,7 +151,7 @@ async def test_agent_context_state_applies_summarization_event(tmp_path):
 
 @pytest.mark.asyncio
 async def test_message_service_dedupes_visible_messages_by_message_id(tmp_path):
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_dedupe", "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content="请调用 test_tool_2",
@@ -190,7 +190,7 @@ async def test_message_service_dedupes_visible_messages_by_message_id(tmp_path):
 
 @pytest.mark.asyncio
 async def test_agent_state_dedupes_consecutive_duplicate_records(tmp_path):
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_state_dedupe", "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content="请调用 test_tool_2",
@@ -230,7 +230,7 @@ async def test_agent_state_dedupes_consecutive_duplicate_records(tmp_path):
 @pytest.mark.asyncio
 async def test_message_service_extracts_responses_api_reasoning_blocks(tmp_path):
     """验证 Responses API 路径下产生的 reasoning 块被正确提取到 metadata。"""
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_reasoning", "checkpoint_ns": ""}}
     reasoning_msg = AIMessage(
         content=[
@@ -282,7 +282,7 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(tmp_path)
 @pytest.mark.asyncio
 async def test_agent_state_renders_standard_reasoning_tool_call_message(tmp_path):
     """工具调用前的 reasoning 应来自标准 content block。"""
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_tool_reasoning", "checkpoint_ns": ""}}
     reasoning_text = "用户想查看当前系统时间。"
     tool_call = {
@@ -336,7 +336,7 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(tmp_path
 
 @pytest.mark.asyncio
 async def test_message_service_hides_empty_assistant_tool_call_messages(tmp_path):
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_tool_hidden", "checkpoint_ns": ""}}
     tool_call_message = AIMessage(
         content="",
@@ -392,7 +392,7 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(tmp_path
 @pytest.mark.asyncio
 async def test_message_service_preserves_image_blocks_in_agent_state(tmp_path):
     """多模态用户消息应在 Agent State 中保留 image_url 块。"""
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_image", "checkpoint_ns": ""}}
     image_block = {
         "type": "image_url",
@@ -444,7 +444,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(tmp_path):
 @pytest.mark.asyncio
 async def test_message_service_uses_display_content_for_user_message_text(tmp_path):
     """用户消息列表应显示原始输入，不把内部附件处理提示混成用户正文。"""
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_video_display", "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content=[
@@ -493,7 +493,7 @@ async def test_message_service_uses_display_content_for_user_message_text(tmp_pa
 @pytest.mark.asyncio
 async def test_message_service_refusal_block(tmp_path):
     """验证 refusal 块被识别并标记。"""
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = {"configurable": {"thread_id": "sess_refusal", "checkpoint_ns": ""}}
     msg = AIMessage(
         content=[{"type": "refusal", "refusal": "我拒绝回答"}],

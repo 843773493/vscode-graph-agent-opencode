@@ -36,6 +36,18 @@ interface AgentSessionsWorkspaceGroupsProps {
   ) => void;
 }
 
+export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
+  const lines = [workspace.name, `路径：${workspace.root_path}`];
+  if (workspace.connection_kind === 'ssh') {
+    const { host, port, username } = workspace.remote;
+    const sshTarget = host
+      ? `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}`
+      : '未提供主机信息';
+    lines.push(`SSH：${sshTarget}`);
+  }
+  return lines.join('\n');
+}
+
 export default function AgentSessionsWorkspaceGroups({
   gatewayWorkspaces,
   activeGatewayWorkspaceId,
@@ -71,6 +83,7 @@ export default function AgentSessionsWorkspaceGroups({
           sessionsByWorkspace.get(workspace.workspace_id) ?? [],
           sortMode,
         );
+        const hoverTitle = workspaceHoverTitle(workspace);
         return (
           <section
             className={[
@@ -84,7 +97,7 @@ export default function AgentSessionsWorkspaceGroups({
           >
             <div
               className={`agent-sessions-workspace-row${active ? ' active' : ''}${removing ? ' removing' : ''}`}
-              title={`${workspace.name}\n${workspace.root_path}`}
+              title={hoverTitle}
               aria-expanded={!collapsed}
               aria-grabbed={draggingWorkspaceId === workspace.workspace_id}
               draggable={!workspaceSwitching && !removing}
@@ -105,14 +118,18 @@ export default function AgentSessionsWorkspaceGroups({
               <button
                 type="button"
                 className="agent-sessions-workspace-title-button"
-                title={collapsed ? '展开工作区会话' : '折叠工作区会话'}
+                title={hoverTitle}
+                aria-label={`${collapsed ? '展开' : '折叠'}工作区 ${workspace.name}`}
                 aria-expanded={!collapsed}
                 disabled={removing}
                 onClick={() => onToggleWorkspaceSection(workspace.workspace_id)}
               >
                 <span className="agent-sessions-workspace-name">{workspace.name}</span>
                 {workspace.status === 'offline' ? (
-                  <span className="agent-sessions-workspace-status" title="工作区后端离线">
+                  <span
+                    className="agent-sessions-workspace-status"
+                    title={workspace.connection_error ?? '工作区后端离线'}
+                  >
                     离线
                   </span>
                 ) : null}

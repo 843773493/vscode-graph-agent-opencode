@@ -2,6 +2,8 @@
 """Session 生命周期端到端测试。"""
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -10,6 +12,51 @@ from tests.e2e.utils import (
     normalize_text,
     wait_for_job_done,
 )
+
+
+@pytest.mark.asyncio
+async def test_session_information_uses_backend_authoritative_paths(
+    client: httpx.AsyncClient,
+    e2e_workspace_root_path: str,
+):
+    create_response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Session Information Test"},
+    )
+    assert create_response.status_code == 200
+    session = create_response.json()["data"]
+
+    response = await client.get(
+        f"/api/v1/sessions/{session['session_id']}/information"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    information = payload["data"]
+
+    expected_root = str(Path(e2e_workspace_root_path).resolve())
+    assert payload["request_id"]
+    assert information["kind"] == "boxteam_session_information"
+    assert information["schema_version"] == 1
+    assert information["session"]["session_id"] == session["session_id"]
+    assert information["session"]["parent_session_id"] is None
+    assert information["workspace"]["root_path"] == expected_root
+    assert information["storage_path"] == str(
+        Path(expected_root) / ".boxteam" / "sessions" / session["session_id"]
+    )
+    assert information["execution"] == {
+        "job_id": None,
+        "status": "idle",
+        "current_tool": None,
+        "last_error": None,
+    }
+    assert information["trace"] == {
+        "event_count": 0,
+        "last_event_id": None,
+        "last_event_type": None,
+        "last_event_at": None,
+    }
+    assert information["resources"] == []
+    assert information["recent_errors"] == []
 
 
 @pytest.mark.asyncio

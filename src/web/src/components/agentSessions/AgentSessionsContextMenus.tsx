@@ -1,3 +1,9 @@
+import { extractSessionIdFromClipboardText } from "../../state/session/sessionInformation";
+import {
+  copyTextToClipboard,
+  readTextFromClipboard,
+} from "../../utils/clipboard";
+
 export interface SessionContextMenu {
   sessionId: string;
   workspaceId: string;
@@ -32,73 +38,12 @@ interface AgentSessionsContextMenusProps {
     workspaceId: string,
     sourceSessionId: string,
   ) => Promise<void>;
+  onCopySessionInformation: (
+    workspaceId: string,
+    sessionId: string,
+  ) => Promise<void>;
   onRemoveWorkspace: (workspaceId: string, name: string) => void;
   onStatusChange: (message: string) => void;
-}
-
-let lastCopiedSessionId: string | null = null;
-
-function fallbackCopyText(text: string): void {
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.top = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  // TODO: 兼容非安全上下文下 Clipboard API 不可用的浏览器，后续全站 HTTPS 后移除。
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) {
-    throw new Error("浏览器拒绝复制会话 ID");
-  }
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  let clipboardError: unknown = null;
-  if (navigator.clipboard) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch (error) {
-      clipboardError = error;
-    }
-  }
-
-  try {
-    fallbackCopyText(text);
-  } catch (fallbackError) {
-    if (clipboardError) {
-      const clipboardMessage = clipboardError instanceof Error ? clipboardError.message : String(clipboardError);
-      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-      throw new Error(`Clipboard API 失败：${clipboardMessage}；兼容复制失败：${fallbackMessage}`);
-    }
-    throw fallbackError;
-  }
-}
-
-async function readSessionIdFromClipboard(): Promise<string> {
-  let clipboardError: unknown = null;
-  if (navigator.clipboard?.readText) {
-    try {
-      const clipboardText = (await navigator.clipboard.readText()).trim();
-      if (clipboardText) {
-        return clipboardText;
-      }
-    } catch (error) {
-      clipboardError = error;
-    }
-  }
-  if (lastCopiedSessionId) {
-    return lastCopiedSessionId;
-  }
-  if (clipboardError) {
-    const message = clipboardError instanceof Error ? clipboardError.message : String(clipboardError);
-    throw new Error(`浏览器拒绝读取剪贴板，且应用内没有最近复制的会话 ID: ${message}`);
-  }
-  throw new Error("剪贴板中没有会话 ID，且应用内没有最近复制的会话 ID");
 }
 
 export default function AgentSessionsContextMenus({
@@ -111,6 +56,7 @@ export default function AgentSessionsContextMenus({
   onUnbindSession,
   onBindClipboardSession,
   onForkSessionContext,
+  onCopySessionInformation,
   onRemoveWorkspace,
   onStatusChange,
 }: AgentSessionsContextMenusProps) {
@@ -122,7 +68,6 @@ export default function AgentSessionsContextMenus({
     onCloseSessionMenu();
     void copyTextToClipboard(target.sessionId)
       .then(() => {
-        lastCopiedSessionId = target.sessionId;
         onStatusChange(`已复制会话 ID: ${target.sessionId}`);
       })
       .catch((error: unknown) => {
@@ -137,8 +82,9 @@ export default function AgentSessionsContextMenus({
     }
     const target = sessionMenu;
     onCloseSessionMenu();
-    void readSessionIdFromClipboard()
-      .then((childSessionId) => {
+    void readTextFromClipboard()
+      .then((clipboardText) => {
+        const childSessionId = extractSessionIdFromClipboardText(clipboardText);
         return onBindClipboardSession(
           childSessionId,
           target.sessionId,
@@ -151,6 +97,23 @@ export default function AgentSessionsContextMenus({
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         onStatusChange(`绑定剪贴板会话失败: ${message}`);
+      });
+  };
+
+  const handleCopySessionInformation = () => {
+    if (!sessionMenu) {
+      return;
+    }
+    const target = sessionMenu;
+    onCloseSessionMenu();
+    onStatusChange(`正在读取会话信息: ${target.sessionId}`);
+    void onCopySessionInformation(target.workspaceId, target.sessionId)
+      .then(() => {
+        onStatusChange(`已复制会话信息: ${target.sessionId}`);
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        onStatusChange(`复制会话信息失败: ${message}`);
       });
   };
 
@@ -181,7 +144,16 @@ export default function AgentSessionsContextMenus({
             <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">复制 ID</span>
           </button>
-          <button type="button" role="menuitem" title="将剪贴板中的会话 ID 绑定为当前会话的子会话" onClick={handleBindClipboardSession}>
+          <button
+            type="button"
+            role="menuitem"
+            title="复制可供 Agent 和软件解析的通用会话信息"
+            onClick={handleCopySessionInformation}
+          >
+            <span className="codicon codicon-info agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">复制会话信息</span>
+          </button>
+          <button type="button" role="menuitem" title="从剪贴板会话 ID 或通用会话信息中识别并绑定子会话" onClick={handleBindClipboardSession}>
             <span className="codicon codicon-clippy agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">粘贴为子会话</span>
           </button>

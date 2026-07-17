@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAda
 
 from app.agents.request_replay_middleware import read_prompt_replay_components
 from app.core.job_context import get_current_job_id
-from app.core.path_utils import get_logs_dir
+from app.core.path_utils import get_sessions_dir
 
 
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)
@@ -200,8 +200,8 @@ def _response_messages(
 class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     """把每次模型调用的完整请求和响应写入当前工作区。"""
 
-    def __init__(self, *, logs_dir: Path | None = None) -> None:
-        self._logs_dir = logs_dir
+    def __init__(self, *, sessions_dir: Path | None = None) -> None:
+        self._sessions_dir = sessions_dir
         self._prepared_session_dirs: set[str] = set()
 
     def _get_session_id(self, runtime: Runtime[Any]) -> str:
@@ -244,7 +244,12 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         return None
 
     def _ensure_session_dir(self, session_id: str) -> Path:
-        logs_dir = (self._logs_dir or get_logs_dir()) / "llm_requests" / session_id
+        logs_dir = (
+            (self._sessions_dir or get_sessions_dir())
+            / session_id
+            / "logs"
+            / "llm_requests"
+        )
         if session_id not in self._prepared_session_dirs:
             logs_dir.mkdir(exist_ok=True, parents=True)
             self._prepared_session_dirs.add(session_id)

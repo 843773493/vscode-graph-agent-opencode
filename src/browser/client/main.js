@@ -8,9 +8,16 @@ import {
   statusLabel,
 } from "./browserClientUtils.js";
 
-const backendBaseUrl = window.BOXTEAM_BROWSER_BACKEND_URL || "http://127.0.0.1:8015";
 const params = new URLSearchParams(window.location.search);
 const browserId = params.get("browserId");
+const workspaceId = params.get("workspaceId");
+const gatewayMode = Boolean(workspaceId);
+const backendBaseUrl = workspaceId
+  ? `${window.location.origin}/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/browser-manager`
+  : window.BOXTEAM_BROWSER_BACKEND_URL || "http://127.0.0.1:8015";
+const backendRequestHeaders = gatewayMode
+  ? { "X-Local-Token": "local-dev-token" }
+  : {};
 document.documentElement.classList.toggle("embedded-browser", params.get("embedded") === "1");
 
 const browserIdElement = document.querySelector("#browser-id");
@@ -174,7 +181,7 @@ async function loadSnapshot() {
   }
   const response = await fetch(
     `${backendBaseUrl}/api/browsers/${encodeURIComponent(browserId)}?missing_as_deleted=1`,
-    { cache: "no-store" },
+    { cache: "no-store", headers: backendRequestHeaders },
   );
   if (response.status === 404) {
     markDeleted("浏览器页面已删除或不存在");
@@ -264,7 +271,9 @@ function attach() {
     setStatus("正在连接浏览器...");
     return;
   }
-  socket = new WebSocket(backendWsUrl(backendBaseUrl));
+  socket = new WebSocket(
+    backendWsUrl(backendBaseUrl, gatewayMode ? "local-dev-token" : null),
+  );
   setAttachButtonMode("attaching");
   setStatus("正在连接浏览器...");
 
@@ -358,6 +367,7 @@ function scheduleViewport() {
 bindBrowserToolbarEvents({
   browserId,
   backendBaseUrl,
+  requestHeaders: backendRequestHeaders,
   attachToggle,
   refreshStateButton,
   backButton,

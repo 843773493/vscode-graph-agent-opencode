@@ -3,17 +3,16 @@ import os from "node:os";
 import { existsSync, mkdirSync } from "node:fs";
 
 const workspaceRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
+const boxteamHome = path.resolve(
+  process.env.BOXTEAM_HOME ?? path.join(os.homedir(), ".boxteams"),
+);
 const defaultUserWorkspaceRoot = path.resolve(
   process.env.BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT ??
-    path.join(os.homedir(), ".boxteams", "boxteam_workspace"),
+    path.join(boxteamHome, "boxteam_workspace"),
 );
 const runtimeWorkspaceRoot = process.env.WORKSPACE_ROOT
   ? path.resolve(process.env.WORKSPACE_ROOT)
   : defaultUserWorkspaceRoot;
-const gatewayConfigWorkspaceRoot = path.resolve(
-  process.env.BOXTEAM_GATEWAY_CONFIG_WORKSPACE_ROOT ??
-    path.join(workspaceRoot, "asset", "custom_tool_test_workspace"),
-);
 const webRoot = path.resolve(workspaceRoot, "src", "web");
 const terminalBackendRoot = path.resolve(workspaceRoot, "src", "terminal", "server");
 const terminalFrontendRoot = path.resolve(workspaceRoot, "src", "terminal", "client");
@@ -26,9 +25,11 @@ const bunBin = isWindows
   : (process.env.BUN_BIN ?? process.execPath);
 const nodeBin = process.env.NODE_BIN ?? (isWindows ? "node.exe" : "node");
 // TODO: 兼容 uv 在 Windows 与 Linux/macOS 下创建的虚拟环境脚本目录。
-const pythonBin = isWindows
-  ? path.resolve(workspaceRoot, ".venv", "Scripts", "python.exe")
-  : path.resolve(workspaceRoot, ".venv", "bin", "python");
+const pythonBin = process.env.BOXTEAM_PYTHON_BIN
+  ? path.resolve(process.env.BOXTEAM_PYTHON_BIN)
+  : isWindows
+    ? path.resolve(workspaceRoot, ".venv", "Scripts", "python.exe")
+    : path.resolve(workspaceRoot, ".venv", "bin", "python");
 const port = "8010";
 const frontendPort = "8011";
 const terminalBackendPort = "8012";
@@ -53,6 +54,26 @@ function requirePath(targetPath, label) {
   if (!existsSync(targetPath)) {
     throw new Error(`${label} 不存在: ${targetPath}`);
   }
+}
+
+function installUserConfiguration() {
+  const generatorPath = path.join(workspaceRoot, "configs", "boxteam.py");
+  requirePath(generatorPath, "用户配置生成器");
+  const result = Bun.spawnSync(
+    [pythonBin, "-m", "configs.boxteam", "--project-root", workspaceRoot],
+    {
+      cwd: workspaceRoot,
+      env: process.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  if (result.exitCode !== 0) {
+    const stderr = new TextDecoder().decode(result.stderr).trim();
+    throw new Error(`安装用户配置失败: ${stderr || `exit ${result.exitCode}`}`);
+  }
+  const output = new TextDecoder().decode(result.stdout).trim();
+  if (output) console.log(`[dev:config] ${output}`);
 }
 
 function spawnDetached(command, args, cwd, envOverrides = {}) {
@@ -234,6 +255,7 @@ function isPortListening(targetPort) {
 async function main() {
   requirePath(path.join(workspaceRoot, "package.json"), "项目 package.json");
   requirePath(path.join(workspaceRoot, "pyproject.toml"), "项目 pyproject.toml");
+  requirePath(pythonBin, "Python 解释器");
   requirePath(webRoot, "浏览器前端目录");
   requirePath(terminalBackendRoot, "终端后端目录");
   requirePath(terminalFrontendRoot, "终端前端目录");
@@ -241,9 +263,9 @@ async function main() {
   requirePath(browserFrontendRoot, "浏览器控制前端目录");
   mkdirSync(defaultUserWorkspaceRoot, { recursive: true });
   requirePath(runtimeWorkspaceRoot, "运行工作区目录");
-  requirePath(gatewayConfigWorkspaceRoot, "Gateway 配置工作区目录");
 
   await (isWindows ? killWindowsPort() : killUnixPort());
+  installUserConfiguration();
 
   const runtimeEnv = {
     WORKSPACE_ROOT: runtimeWorkspaceRoot,
@@ -252,6 +274,7 @@ async function main() {
     BOXTEAM_BROWSER_WORKSPACE_ROOT: runtimeWorkspaceRoot,
     BOXTEAM_BROWSER_BACKEND_URL: `http://${host}:${browserBackendPort}`,
     BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${browserFrontendPort}`,
+    BOXTEAM_GATEWAY_URL: `http://${host}:${gatewayPort}`,
   };
   const defaultBackendEnv = {
     ...runtimeEnv,
@@ -371,10 +394,9 @@ async function main() {
     workspaceRoot,
     {
       ...runtimeEnv,
-      BOXTEAM_GATEWAY_ROOT: path.join(defaultUserWorkspaceRoot, ".boxteam", "gateway"),
+      BOXTEAM_GATEWAY_ROOT: path.join(boxteamHome, "state", "gateway"),
       BOXTEAM_DEFAULT_BACKEND_URL: `http://${host}:${port}`,
       BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultUserWorkspaceRoot,
-      BOXTEAM_GATEWAY_CONFIG_WORKSPACE_ROOT: gatewayConfigWorkspaceRoot,
       BOXTEAM_BROWSER_BACKEND_URL: `http://${host}:${browserBackendPort}`,
       BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${browserFrontendPort}`,
     },

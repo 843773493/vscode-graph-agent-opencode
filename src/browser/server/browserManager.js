@@ -6,7 +6,7 @@ import { BrowserStateStore } from "./browserStateStore.js";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
 
 function browserId() {
-  return `browser_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  return `browser_${randomUUID().replaceAll("-", "")}`;
 }
 
 export function resolveWorkspaceRoot() {

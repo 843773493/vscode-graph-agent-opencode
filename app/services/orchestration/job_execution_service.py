@@ -55,6 +55,8 @@ class JobExecutionService:
             message_id=job.message_id,
             attachments=job.attachments,
             message_created_at=job.message_created_at,
+            message_role=job.message_role,
+            message_metadata=job.message_metadata,
         )
 
         result_text = result if isinstance(result, str) else str(result)

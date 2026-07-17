@@ -21,7 +21,7 @@ def _seed_checkpoint_messages(
     pair_count: int = 5,
 ) -> None:
     saver = FileSystemCheckpointSaver(
-        base_dir=Path(workspace_root) / ".boxteam" / "checkpoints"
+        sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
     )
     messages = []
     for index in range(pair_count):
@@ -59,7 +59,7 @@ def _append_checkpoint_messages(
 ) -> None:
     """保留中间件私有状态，仅向现有会话追加用于压缩的历史消息。"""
     saver = FileSystemCheckpointSaver(
-        base_dir=Path(workspace_root) / ".boxteam" / "checkpoints"
+        sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
     )
     checkpoint_tuple = saver.get_tuple(build_checkpoint_config(session_id))
     assert checkpoint_tuple is not None
@@ -180,13 +180,17 @@ async def test_session_context_compact_writes_summarization_event(
     assert result["summarized_message_count"] > 0
     assert result["retained_message_count"] > 0
     assert result["summary"]
-    assert result["history_file_path"] == f"/.boxteam/conversation_history/{session_id}.md"
+    assert result["history_file_path"] == (
+        f"/.boxteam/sessions/{session_id}/context/history.md"
+    )
 
     history_file = (
         Path(e2e_workspace_root_path)
         / ".boxteam"
-        / "conversation_history"
-        / f"{session_id}.md"
+        / "sessions"
+        / session_id
+        / "context"
+        / "history.md"
     )
     assert history_file.exists()
     history_content = history_file.read_text(encoding="utf-8")
@@ -194,7 +198,7 @@ async def test_session_context_compact_writes_summarization_event(
     assert "compact-e2e-0" in history_content
 
     saver = FileSystemCheckpointSaver(
-        base_dir=Path(e2e_workspace_root_path) / ".boxteam" / "checkpoints"
+        sessions_dir=Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
     )
     checkpoint = saver.get_tuple(build_checkpoint_config(session_id))
     assert checkpoint is not None

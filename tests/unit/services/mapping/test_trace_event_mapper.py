@@ -46,3 +46,22 @@ def test_mapper_rejects_naive_timestamp() -> None:
 
     with pytest.raises(ValueError, match="必须包含时区"):
         TraceEventMapper().map_one(event, session_id="ses_1")
+
+
+def test_mapper_marks_failed_tool_result_as_failed() -> None:
+    event = _event()
+    event["type"] = "tool_call_end"
+    event["part_id"] = "run_tool"
+    event["payload"] = {
+        "tool_name": "read_session_recent_text_messages",
+        "result": "Gateway 工作区不存在: gw_typo",
+        "status": "error",
+        "failed": True,
+    }
+
+    mapped = TraceEventMapper().map_one(event, session_id="ses_1")
+
+    assert mapped is not None
+    assert mapped.title == "工具失败"
+    assert mapped.status == "failed"
+    assert mapped.content == "Gateway 工作区不存在: gw_typo"

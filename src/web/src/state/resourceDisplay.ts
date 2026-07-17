@@ -4,7 +4,6 @@ import type {
   SessionResourceKind,
 } from "../types/backend";
 import { formatDateTime } from "../utils/format";
-import { toBrowserReachableAttachUrl } from "../utils/attachUrls";
 
 const ACTION_LABELS: Record<SessionResourceAction, string> = {
   pause: "暂停",
@@ -103,22 +102,6 @@ function metadataValueLabel(
   if (value === null || value === undefined || value === "") {
     return "无";
   }
-  if (
-    key === "attach_url" &&
-    (resource?.kind === "terminal" || resource?.kind === "browser") &&
-    resource.status !== "running" &&
-    typeof value === "string"
-  ) {
-    const displayUrl = toBrowserReachableAttachUrl(value);
-    return `${displayUrl}（当前不可连接）`;
-  }
-  if (
-    key === "attach_url" &&
-    typeof value === "string" &&
-    (resource?.kind === "terminal" || resource?.kind === "browser")
-  ) {
-    return toBrowserReachableAttachUrl(value);
-  }
   if (key.endsWith("_at") && typeof value === "string") {
     return formatDateTime(value) || value;
   }
@@ -160,11 +143,6 @@ export function metadataRows(resource: SessionResource): [string, string][] {
     process_group_id: "进程组",
     process_session_id: "进程会话",
     release_reason: "释放原因",
-    attach_url:
-      (resource.kind === "terminal" || resource.kind === "browser") &&
-      resource.status !== "running"
-        ? "历史打开地址"
-        : "打开地址",
     page_id: "页面 ID",
     url: "URL",
     title: "标题",
@@ -188,7 +166,7 @@ export function metadataRows(resource: SessionResource): [string, string][] {
     interval_seconds: "发送间隔秒数",
     result: "完成结果",
   };
-  return Object.entries(metadata).map(([key, value]) => [
+  return Object.entries(metadata).filter(([key]) => key !== "attach_url").map(([key, value]) => [
     labels[key] ?? key,
     metadataValueLabel(key, value, resource),
   ]);

@@ -27,13 +27,13 @@ class ForkServices:
 @pytest.fixture
 def fork_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ForkServices:
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    logs_dir = tmp_path / ".boxteam" / "logs"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
     checkpointer = FileSystemCheckpointSaver(
-        base_dir=tmp_path / ".boxteam" / "checkpoints"
+        sessions_dir=sessions_dir
     )
     session_service = SessionService(
         config_service=ConfigService(workspace_root=tmp_path),
-        trace_event_store=TraceEventStore(logs_dir=logs_dir),
+        trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
     )
     return ForkServices(
         session_service=session_service,

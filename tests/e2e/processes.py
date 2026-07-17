@@ -140,6 +140,7 @@ def start_backend_process(
     port: int,
     log_name: str,
     debugpy_port: int | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> E2EBackendProcess:
     kill_process_on_port(port)
     if debugpy_port is not None:
@@ -147,9 +148,18 @@ def start_backend_process(
 
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
+    workspace_config_path = Path(workspace_root) / ".boxteam" / "boxteam.jsonc"
+    if not workspace_config_path.is_file():
+        raise FileNotFoundError(
+            "启动 E2E 后端前必须先复制工作区配置: "
+            f"{workspace_config_path}"
+        )
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = workspace_root
+    env["BOXTEAM_USER_CONFIG_PATH"] = str(workspace_config_path)
     env["PYTHONUNBUFFERED"] = "1"
+    if env_overrides:
+        env.update(env_overrides)
 
     cmd = [str(python_executable)]
     if debugpy_port is not None:

@@ -8,9 +8,12 @@ import type {
   InterruptSessionResult,
   LLMRequestLogRecord,
   Message,
+  MessageReplayAccepted,
+  MessageReplayRequest,
   MessageRunAccepted,
   MessageRunRequest,
   Session,
+  SessionInformationSnapshot,
   SessionChangesSummary,
   SessionChangeset,
   SessionChangesetList,
@@ -104,8 +107,13 @@ export async function requestJson<T>(
       : await fetchPromise;
 
     if (!response.ok) {
+      const errorBody = await response.clone().json().catch(() => null) as {
+        detail?: string;
+        message?: string;
+      } | null;
+      const detail = errorBody?.detail ?? errorBody?.message;
       throw new Error(
-        `请求失败 ${response.status} ${response.statusText}: ${path}`,
+        `请求失败 ${response.status} ${response.statusText}: ${detail ?? path}`,
       );
     }
 
@@ -360,6 +368,20 @@ export async function getSession(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
+    ),
+  );
+}
+
+export async function getSessionInformation(
+  port: number,
+  sessionId: string,
+  workspaceId: string,
+): Promise<SessionInformationSnapshot> {
+  return unwrapApiData(
+    await requestJson<APIResponse<SessionInformationSnapshot>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/information`,
+      { headers: workspaceHeader(workspaceId) },
     ),
   );
 }
@@ -639,6 +661,26 @@ export async function sendUserMessage(
   };
 
   return sendMessage(port, sessionId, payload, workspaceId);
+}
+
+export async function replayMessageTurn(
+  port: number,
+  sessionId: string,
+  messageId: string,
+  payload: MessageReplayRequest,
+  workspaceId?: string | null,
+): Promise<MessageReplayAccepted> {
+  return unwrapApiData(
+    await requestJson<APIResponse<MessageReplayAccepted>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/replay`,
+      {
+        method: "POST",
+        headers: workspaceHeader(workspaceId),
+        body: JSON.stringify(payload),
+      },
+    ),
+  );
 }
 
 export async function interruptSession(

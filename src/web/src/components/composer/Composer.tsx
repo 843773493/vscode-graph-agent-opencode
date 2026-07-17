@@ -3,7 +3,7 @@ import { DEFAULT_BACKEND_PORT } from "../../api";
 import { useAppState } from "../../hooks";
 import { useComposerSlashCommands } from "../../hooks/useComposerSlashCommands";
 import { VIEW_OPTIONS } from "../../state/contentViews";
-import { sessionScopeKey } from "../../state/sessionScope";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   firstEnabledSlashCommandIndex,
   getSlashCommandArgs,
@@ -109,6 +109,12 @@ export default function Composer() {
     }
     return "Enter 发送 · Ctrl+Enter 换行";
   }, [queuedCount, showInterrupt]);
+
+  const activateNewSessionWorkspace = async (workspaceId: string) => {
+    await activateGatewayWorkspace(workspaceId);
+    // 工作区切换会刷新其既有会话；新会话选择器必须在刷新后恢复草稿态。
+    startNewSessionDraft(workspaceId);
+  };
   useEffect(() => {
     resizeTextarea(textareaRef.current);
   }, [input]);
@@ -457,7 +463,7 @@ export default function Composer() {
                 activeWorkspaceId={state.activeGatewayWorkspaceId}
                 recentLocalWorkspacePaths={state.uiSettings.recent_local_workspace_paths}
                 switching={state.workspaceSwitching}
-                onActivate={activateGatewayWorkspace}
+                onActivate={activateNewSessionWorkspace}
                 onAddLocal={addLocalGatewayWorkspace}
                 onAddSsh={addSshGatewayWorkspace}
               />

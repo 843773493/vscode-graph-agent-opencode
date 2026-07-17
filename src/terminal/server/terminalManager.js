@@ -13,7 +13,7 @@ import {
 import { TerminalStateStore } from "./terminalStateStore.js";
 
 function terminalId() {
-  return `term_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  return `term_${randomUUID().replaceAll("-", "")}`;
 }
 
 export function resolveWorkspaceRoot() {

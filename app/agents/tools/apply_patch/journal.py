@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import uuid
 
+from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_workspace_root
 
 
@@ -17,7 +17,7 @@ def write_apply_patch_journal(
 ) -> str:
     journal_root = _journal_root(workspace_root)
     journal_root.mkdir(parents=True, exist_ok=True)
-    journal_id = f"patch_{uuid.uuid4().hex[:16]}"
+    journal_id = create_prefixed_id("patch")
     journal_path = journal_root / f"{journal_id}.json"
     journal_path.write_text(
         json.dumps(

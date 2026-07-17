@@ -140,9 +140,10 @@ async def test_llm_request_log_round_trip(
     expected_log_dir = (
         Path(e2e_workspace_root_path).resolve()
         / ".boxteam"
+        / "sessions"
+        / session_id
         / "logs"
         / "llm_requests"
-        / session_id
     )
     log_path = Path(log["file_path"]).resolve()
     assert log_path.is_relative_to(expected_log_dir)

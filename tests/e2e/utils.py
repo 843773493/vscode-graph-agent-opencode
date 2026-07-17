@@ -3,9 +3,35 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
+from pathlib import Path
 
 import httpx
 import pytest
+
+
+def prepare_e2e_workspace(
+    *,
+    workspace_root: Path,
+    template_root: Path,
+    template_items: tuple[str, ...],
+) -> Path:
+    """从只读模板创建全新的隔离 E2E 工作区。"""
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    for relative_item in template_items:
+        source = template_root / relative_item
+        if not source.exists():
+            raise FileNotFoundError(f"E2E 模板缺少必要文件: {source}")
+        target = workspace_root / relative_item
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+    return workspace_root
 
 
 async def wait_for_job_done(client: httpx.AsyncClient, job_id: str, max_attempts: int = 60) -> dict:
@@ -117,5 +143,4 @@ def get_trace_payload(event: dict) -> dict:
     raw = event.get("raw") or {}
     payload = raw.get("payload") or {}
     return payload if isinstance(payload, dict) else {}
-
 

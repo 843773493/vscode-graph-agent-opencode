@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from cachetools import LRUCache
 from langchain_core.tools import BaseTool, tool
 
-from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.background_message_bus import (
+    BackgroundMessageBusProtocol,
+    BackgroundMessageKind,
+)
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.session_subagent import SessionStoreProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.identifier import create_uuid_hex
 from app.core.job_event_bus import EventType
-from app.schemas.background_message import BackgroundMessageKind
 
 
 def create_system_time_emitter_tool(
@@ -90,6 +93,7 @@ def create_monitor_session_agent_end_tool(
     background_message_bus: BackgroundMessageBusProtocol,
     job_event_bus: JobEventBusProtocol,
     job_service: JobServiceProtocol,
+    session_service: SessionStoreProtocol,
 ) -> BaseTool:
     """创建监控 session agent 结束事件的工具。"""
     @tool("monitor_session_agent_end")
@@ -99,7 +103,7 @@ def create_monitor_session_agent_end_tool(
         poll_interval_seconds: float = 1.0,
         max_events: int | None = None,
     ) -> dict[str, Any]:
-        """开启后台任务，持续监控 AGENT_END；timeout_seconds/max_events 为 0 表示不限制。"""
+        """仅监控普通独立 Session 的 AGENT_END；不得用于 delegated 或团队成员，团队完成通知由任务面板自动投递。"""
         if not target_session_id:
             raise ValueError("target_session_id 不能为空")
         if timeout_seconds is not None and timeout_seconds < 0:
@@ -109,11 +113,18 @@ def create_monitor_session_agent_end_tool(
         if max_events is not None and max_events < 0:
             raise ValueError("max_events 不能为负数")
 
+        target_session = await session_service.get(target_session_id)
+        if target_session.delegation is not None:
+            raise ValueError(
+                "monitor_session_agent_end 不会转发委派子会话的最终文本；"
+                "父子 Agent 必须通过 send_message_to_session 通信"
+            )
+
         resolved_timeout_seconds = timeout_seconds or None
         resolved_max_events = max_events or None
 
         submitted_at = datetime.now(timezone.utc)
-        monitor_source_id = f"monitor:{target_session_id}:{uuid.uuid4().hex[:12]}"
+        monitor_source_id = f"monitor:{target_session_id}:{create_uuid_hex()}"
 
         async def _monitor_background_task() -> dict[str, Any]:
             deadline = (

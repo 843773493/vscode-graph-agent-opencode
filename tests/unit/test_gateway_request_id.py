@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 import pytest
 from starlette.requests import Request
 
-from app.gateway.main import _proxy_headers, app, get_registry
+from app.gateway.main import app, get_registry
+from app.gateway.server.workspace_proxy import _proxy_headers
 
 
 class _GatewayRegistryStub:

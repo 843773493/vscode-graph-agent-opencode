@@ -27,6 +27,7 @@ dependencies = [
     "litellm>=1.90.2",
     "langchain-community>=0.4.2",
     "ddgs>=9.14.4",
+    "websockets>=16.0",
 ]
 
 [project.optional-dependencies]

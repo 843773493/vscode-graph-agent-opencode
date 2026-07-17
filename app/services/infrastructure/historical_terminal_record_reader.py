@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 
@@ -9,11 +9,9 @@ class HistoricalTerminalRecordReader:
     def __init__(
         self,
         *,
-        logs_dir: Path,
-        attach_url: Callable[[str], str],
+        sessions_dir: Path,
     ) -> None:
-        self._logs_dir = logs_dir
-        self._attach_url = attach_url
+        self._sessions_dir = sessions_dir
 
     def read_records(
         self,
@@ -49,7 +47,13 @@ class HistoricalTerminalRecordReader:
         session_id: str,
         terminal_id: str,
     ) -> str | None:
-        trace_file = self._logs_dir / "traces" / f"trace_message_{session_id}.jsonl"
+        trace_file = (
+            self._sessions_dir
+            / session_id
+            / "logs"
+            / "traces"
+            / "messages.jsonl"
+        )
         if not trace_file.exists():
             return None
         with trace_file.open("r", encoding="utf-8") as file:
@@ -125,9 +129,6 @@ class HistoricalTerminalRecordReader:
                 "created_at": created_at if isinstance(created_at, str) and created_at else fallback_time,
                 "updated_at": updated_at if isinstance(updated_at, str) and updated_at else fallback_time,
                 "ended_at": terminal.get("ended_at") or updated_at or created_at or fallback_time,
-                "attach_url": terminal.get("attach_url")
-                or payload.get("attach_url")
-                or self._attach_url(terminal_id),
                 "historical_only": True,
                 "historical_status": terminal.get("status") or payload.get("status"),
                 "last_command": terminal.get("last_command") or payload.get("command"),

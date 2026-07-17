@@ -10,8 +10,8 @@ from app.core.background_task_registry import BackgroundTaskHandle
 class BackgroundTaskHistoryStore:
     """在工作区 .boxteam 中保存后台任务生命周期留痕。"""
 
-    def __init__(self, *, boxteam_root: Path) -> None:
-        self._root = boxteam_root / "background_tasks"
+    def __init__(self, *, sessions_dir: Path) -> None:
+        self._sessions_dir = sessions_dir
 
     def upsert(self, handle: BackgroundTaskHandle) -> None:
         records = {
@@ -36,10 +36,10 @@ class BackgroundTaskHistoryStore:
         return records
 
     def mark_active_tasks_lost(self) -> None:
-        if not self._root.exists():
+        if not self._sessions_dir.exists():
             return
-        for path in self._root.glob("*.json"):
-            session_id = path.stem
+        for path in self._sessions_dir.glob("*/resources/background_tasks.json"):
+            session_id = path.parents[1].name
             records = self.list_session(session_id)
             changed = False
             for record in records:
@@ -60,15 +60,15 @@ class BackgroundTaskHistoryStore:
     def _session_file(self, session_id: str) -> Path:
         if not session_id or "/" in session_id or "\\" in session_id:
             raise ValueError(f"非法 session_id: {session_id!r}")
-        return self._root / f"{session_id}.json"
+        return self._sessions_dir / session_id / "resources" / "background_tasks.json"
 
     def _write_session(
         self,
         session_id: str,
         records: list[BackgroundTaskHandle],
     ) -> None:
-        self._root.mkdir(parents=True, exist_ok=True)
         path = self._session_file(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = path.with_suffix(".json.tmp")
         temporary_path.write_text(
             json.dumps(

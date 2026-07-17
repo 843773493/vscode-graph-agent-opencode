@@ -14,7 +14,9 @@ import {
   addLocalGatewayWorkspace as apiAddLocalGatewayWorkspace,
   addSshGatewayWorkspace as apiAddSshGatewayWorkspace,
   listGatewayWorkspaces as apiListGatewayWorkspaces,
+  reconnectGatewayWorkspace as apiReconnectGatewayWorkspace,
   removeGatewayWorkspace as apiRemoveGatewayWorkspace,
+  renameGatewayWorkspace as apiRenameGatewayWorkspace,
   reorderGatewayWorkspaces as apiReorderGatewayWorkspaces,
   updateGatewayUiSettings as apiUpdateGatewayUiSettings,
 } from "./gatewayApi";
@@ -22,6 +24,7 @@ import type {
   AddLocalGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
   AttachmentRef,
+  MessageReplayRequest,
   SessionResourceAction,
   SessionResourceKind,
   SessionFileChange,
@@ -38,13 +41,14 @@ import { useContentViewLoader } from "./hooks/useContentViewLoader";
 import { useContentViewEffects } from "./hooks/useContentViewEffects";
 import { useSessionHistoryLoader } from "./hooks/useSessionHistoryLoader";
 import { useSessionEventStream } from "./hooks/useSessionEventStream";
+import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
 import { useSessionActions } from "./hooks/useSessionActions";
 import { useWorkspaceBootstrap } from "./hooks/useWorkspaceBootstrap";
 import {
   readCachedUiSettings,
   writeCachedUiSettings,
 } from "./state/storage";
-import { sessionScopeKey } from "./state/sessionScope";
+import { sessionScopeKey } from "./state/session/sessionScope";
 import { applyGatewayWorkspaceListAfterRemoval } from "./state/gatewayWorkspaceState";
 
 export { getConversationsForSession } from "./state/conversations";
@@ -108,6 +112,13 @@ interface AppContextType {
   state: AppState;
   setStatus: (text: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => Promise<void>;
+  replayTurn: (
+    targetMessageId: string,
+    action: MessageReplayRequest["action"],
+    displayContent: string,
+    content?: string,
+    attachments?: AttachmentRef[],
+  ) => Promise<void>;
   compactSession: () => Promise<void>;
   switchAgent: (agentId: string) => Promise<void>;
   interruptSession: () => void;
@@ -147,6 +158,8 @@ interface AppContextType {
     workspaceId: string,
     preferredSessionId?: string | null,
   ) => Promise<void>;
+  refreshGatewayState: () => Promise<void>;
+  reconnectGatewayWorkspace: (workspaceId: string) => Promise<void>;
   addLocalGatewayWorkspace: (
     payload: AddLocalGatewayWorkspaceRequest,
   ) => Promise<void>;
@@ -154,7 +167,9 @@ interface AppContextType {
     payload: AddSshGatewayWorkspaceRequest,
   ) => Promise<void>;
   removeGatewayWorkspace: (workspaceId: string) => Promise<void>;
+  renameGatewayWorkspace: (workspaceId: string, name: string) => Promise<string>;
   reorderGatewayWorkspaces: (workspaceIds: string[]) => Promise<void>;
+  copySessionInformation: (workspaceId: string, sessionId: string) => Promise<void>;
   updateUiSettings: (payload: WebUiSettingsUpdate) => Promise<void>;
 }
 
@@ -203,6 +218,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     sessionCacheKey: currentSessionCacheKey,
     setState,
   });
+  const copySessionInformation = useSessionInformationClipboard(
+    state.apiPort ?? DEFAULT_BACKEND_PORT,
+  );
 
   const setStatus = useCallback((text: string) => {
     setState((prev) => ({ ...prev, status: text }));
@@ -239,6 +257,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     deleteSession,
     interruptSession: interruptSessionCallback,
     renameSession,
+    replayTurn,
     setSessionParent,
     selectSession,
     selectWorkspaceSession,
@@ -348,6 +367,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       state.apiPort,
     ],
   );
+
+  const refreshGatewayState = useCallback(async () => {
+    setState((prev) => ({
+      ...prev,
+      gatewayError: null,
+      status: "正在刷新 Gateway 状态",
+    }));
+    try {
+      await finishWorkspaceRefresh(currentSessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setState((prev) => ({
+        ...prev,
+        gatewayError: message,
+        error: message,
+        status: `刷新 Gateway 状态失败: ${message}`,
+      }));
+      throw error;
+    }
+  }, [currentSessionId, finishWorkspaceRefresh]);
+
+  const reconnectGatewayWorkspace = useCallback(async (workspaceId: string) => {
+    const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+    setState((prev) => ({
+      ...prev,
+      gatewayError: null,
+      status: "正在重新连接工作区",
+    }));
+    try {
+      await apiReconnectGatewayWorkspace(resolvedApiPort, workspaceId);
+      await finishWorkspaceRefresh(currentSessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setState((prev) => ({
+        ...prev,
+        gatewayError: message,
+        error: message,
+        status: `重新连接工作区失败: ${message}`,
+      }));
+      throw error;
+    }
+  }, [currentSessionId, finishWorkspaceRefresh, state.apiPort]);
 
   const addLocalGatewayWorkspace = useCallback(
     async (payload: AddLocalGatewayWorkspaceRequest) => {
@@ -566,11 +627,81 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [state.apiPort],
   );
 
+  const renameGatewayWorkspace = useCallback(
+    async (workspaceId: string, name: string) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      try {
+        const workspaceList = await apiRenameGatewayWorkspace(
+          resolvedApiPort,
+          workspaceId,
+          { name },
+        );
+        const renamedWorkspace = workspaceList.items.find(
+          (workspace) => workspace.workspace_id === workspaceId,
+        );
+        if (!renamedWorkspace) {
+          throw new Error(`Gateway 重命名响应缺少工作区: ${workspaceId}`);
+        }
+        setState((prev) => {
+          const activeWorkspace = workspaceList.items.find(
+            (workspace) =>
+              workspace.workspace_id === workspaceList.active_workspace_id,
+          );
+          return {
+            ...prev,
+            gatewayWorkspaces: workspaceList.items,
+            activeGatewayWorkspaceId: workspaceList.active_workspace_id,
+            workspaceRoot: activeWorkspace?.root_path ?? null,
+            workspaceName: activeWorkspace?.name ?? null,
+            gatewayError: null,
+            error: null,
+            status: `工作区已重命名为「${renamedWorkspace.name}」`,
+          };
+        });
+        return renamedWorkspace.name;
+      } catch (error) {
+        const operationMessage =
+          error instanceof Error ? error.message : String(error);
+        let message = operationMessage;
+        try {
+          const workspaceList = await apiListGatewayWorkspaces(resolvedApiPort);
+          setState((prev) => {
+            const activeWorkspace = workspaceList.items.find(
+              (workspace) =>
+                workspace.workspace_id === workspaceList.active_workspace_id,
+            );
+            return {
+              ...prev,
+              gatewayWorkspaces: workspaceList.items,
+              activeGatewayWorkspaceId: workspaceList.active_workspace_id,
+              workspaceRoot: activeWorkspace?.root_path ?? null,
+              workspaceName: activeWorkspace?.name ?? null,
+            };
+          });
+        } catch (reconciliationError) {
+          const reconciliationMessage = reconciliationError instanceof Error
+            ? reconciliationError.message
+            : String(reconciliationError);
+          message = `${operationMessage}；重新读取工作区列表也失败: ${reconciliationMessage}`;
+        }
+        setState((prev) => ({
+          ...prev,
+          gatewayError: message,
+          error: message,
+          status: `重命名工作区失败: ${message}`,
+        }));
+        throw new Error(message);
+      }
+    },
+    [state.apiPort],
+  );
+
   const value = useMemo(
     () => ({
       state,
       setStatus,
       sendMessage,
+      replayTurn,
       compactSession,
       switchAgent,
       interruptSession: interruptSessionCallback,
@@ -590,16 +721,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       toggleExpandDetails,
       switchContentView,
       activateGatewayWorkspace,
+      refreshGatewayState,
+      reconnectGatewayWorkspace,
       addLocalGatewayWorkspace,
       addSshGatewayWorkspace,
       removeGatewayWorkspace,
+      renameGatewayWorkspace,
       reorderGatewayWorkspaces,
+      copySessionInformation,
       updateUiSettings,
     }),
     [
       state,
       setStatus,
       sendMessage,
+      replayTurn,
       compactSession,
       switchAgent,
       interruptSessionCallback,
@@ -620,10 +756,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       refreshLLMRequestLogs,
       switchContentView,
       activateGatewayWorkspace,
+      refreshGatewayState,
+      reconnectGatewayWorkspace,
       addLocalGatewayWorkspace,
       addSshGatewayWorkspace,
       removeGatewayWorkspace,
+      renameGatewayWorkspace,
       reorderGatewayWorkspaces,
+      copySessionInformation,
       updateUiSettings,
     ],
   );

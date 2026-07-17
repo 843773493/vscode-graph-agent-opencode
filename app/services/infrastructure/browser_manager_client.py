@@ -13,7 +13,6 @@ from app.core.path_utils import get_boxteam_root
 
 
 DEFAULT_BROWSER_BACKEND_URL = "http://127.0.0.1:8015"
-DEFAULT_BROWSER_FRONTEND_URL = "http://127.0.0.1:8016"
 
 
 class BrowserManagerClient:
@@ -21,7 +20,6 @@ class BrowserManagerClient:
         self,
         *,
         backend_url: str | None = None,
-        frontend_url: str | None = None,
         state_file: Path | None = None,
     ) -> None:
         configured_backend_url = backend_url or os.environ.get("BOXTEAM_BROWSER_BACKEND_URL")
@@ -29,24 +27,12 @@ class BrowserManagerClient:
             configured_backend_url
             or DEFAULT_BROWSER_BACKEND_URL
         ).rstrip("/")
-        self._frontend_url = (
-            frontend_url
-            or os.environ.get("BOXTEAM_BROWSER_FRONTEND_URL")
-            or DEFAULT_BROWSER_FRONTEND_URL
-        ).rstrip("/")
         self._state_file = state_file or get_boxteam_root() / "browser-manager" / "browsers.json"
         self._prefer_backend_listing = configured_backend_url is not None and state_file is None
 
     @property
     def backend_url(self) -> str:
         return self._backend_url
-
-    @property
-    def frontend_url(self) -> str:
-        return self._frontend_url
-
-    def attach_url(self, browser_id: str) -> str:
-        return f"{self._frontend_url}/?browserId={browser_id}"
 
     def list_browsers_from_state(self, session_id: str) -> list[dict[str, Any]]:
         if self._prefer_backend_listing:
@@ -64,7 +50,7 @@ class BrowserManagerClient:
                 raise RuntimeError(f"浏览器状态文件包含非对象记录: {self._state_file}")
             if browser.get("session_id") == session_id:
                 normalized = dict(browser)
-                normalized["attach_url"] = self.attach_url(str(browser["browser_id"]))
+                normalized.pop("attach_url", None)
                 result.append(normalized)
         return sorted(
             result,
@@ -89,7 +75,7 @@ class BrowserManagerClient:
             browser_id = normalized.get("browser_id")
             if not isinstance(browser_id, str) or not browser_id:
                 raise RuntimeError(f"浏览器记录缺少 browser_id: {normalized}")
-            normalized["attach_url"] = normalized.get("attach_url") or self.attach_url(browser_id)
+            normalized.pop("attach_url", None)
             result.append(normalized)
         return sorted(
             result,
@@ -179,7 +165,9 @@ class BrowserManagerClient:
         data = response.get("data")
         if not isinstance(data, dict):
             raise RuntimeError(f"浏览器管理器返回格式错误: {response}")
-        return data
+        normalized = dict(data)
+        normalized.pop("attach_url", None)
+        return normalized
 
     async def _json_request(
         self,

@@ -16,7 +16,7 @@ import {
   DEFAULT_VIEWPORT,
   NAVIGATION_TIMEOUT_MS,
   TOOL_TIMEOUT_MS,
-  browserLaunchArgs,
+  browserLaunchOptions,
 } from "./browserRuntime.js";
 
 const BROWSER_MODAL_DETECTION_MS = 1000;
@@ -58,10 +58,7 @@ export class BrowserSession extends EventEmitter {
     if (this.browser) {
       return this.snapshot();
     }
-    this.browser = await chromium.launch({
-      headless: true,
-      args: browserLaunchArgs(),
-    });
+    this.browser = await chromium.launch(browserLaunchOptions());
     this.context = await this.browser.newContext({
       viewport: this.record.viewport || DEFAULT_VIEWPORT,
       deviceScaleFactor: 1,

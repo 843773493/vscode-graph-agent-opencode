@@ -9,6 +9,7 @@ from app.api.deps import (
     get_request_id,
     get_session_auto_continue_service,
     get_session_changes_service,
+    get_session_information_service,
     get_session_context_fork_service,
     get_session_interrupt_service,
     get_session_resource_service,
@@ -23,6 +24,7 @@ from app.schemas.public_v2.session import (
     SessionAutoContinueStatusDTO,
     SessionCreateRequest,
     SessionDTO,
+    SessionInformationSnapshotDTO,
     SessionCompactResultDTO,
     SessionInterruptResultDTO,
     SessionUpdateRequest,
@@ -44,6 +46,7 @@ from app.services.business.session_interrupt_service import SessionInterruptServ
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_information_service import SessionInformationService
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_service import SessionService
@@ -84,6 +87,23 @@ async def get_session(
     session_service: SessionService = Depends(get_session_service),
 ):
     result = await session_service.get(session_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{session_id}/information",
+    response_model=APIResponse[SessionInformationSnapshotDTO],
+    summary="获取通用会话信息",
+)
+async def get_session_information(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    information_service: SessionInformationService = Depends(
+        get_session_information_service
+    ),
+):
+    result = await information_service.get_information(session_id)
     return APIResponse(data=result, request_id=request_id)
 
 

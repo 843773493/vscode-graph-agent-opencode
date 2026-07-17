@@ -205,6 +205,16 @@
   font-weight: 600;
 }
 
+.workspace-dialog-heading {
+  align-items: flex-start;
+}
+
+.workspace-dialog-heading p {
+  margin: 4px 0 0;
+  color: #8a826f;
+  font-size: 12px;
+}
+
 .workspace-dialog-icon-button {
   width: 28px;
   height: 28px;
@@ -235,7 +245,8 @@
   font-size: 12px;
 }
 
-.workspace-dialog-grid input {
+.workspace-dialog-grid input,
+.workspace-dialog-grid select {
   width: 100%;
   height: 30px;
   min-width: 0;
@@ -247,9 +258,68 @@
   padding: 0 8px;
 }
 
-.workspace-dialog-grid input:focus {
+.workspace-dialog-grid input:focus,
+.workspace-dialog-grid select:focus {
   outline: 1px solid rgba(45, 112, 172, 0.7);
   outline-offset: 1px;
+}
+
+.workspace-remote-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.workspace-connection-field small {
+  overflow: hidden;
+  color: #8a826f;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-select-shell,
+.workspace-path-input-shell {
+  display: flex;
+  height: 34px;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid rgba(106, 98, 75, 0.24);
+  border-radius: 9px;
+  background: rgba(255, 251, 239, 0.72);
+}
+
+.workspace-select-shell:focus-within,
+.workspace-path-input-shell:focus-within {
+  border-color: rgba(45, 112, 172, 0.7);
+  outline: 1px solid rgba(45, 112, 172, 0.35);
+}
+
+.workspace-select-shell > .codicon:first-child,
+.workspace-path-input-shell > .codicon {
+  flex: 0 0 auto;
+  color: #4cae86;
+}
+
+.workspace-select-shell > .codicon:last-child {
+  color: #746d58;
+}
+
+.workspace-select-shell select,
+.workspace-path-input-shell input {
+  height: 100%;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  appearance: none;
+  background: transparent;
+}
+
+.workspace-select-shell select:focus,
+.workspace-path-input-shell input:focus {
+  outline: 0;
 }
 
 .workspace-dialog-wide {
@@ -287,7 +357,7 @@
   min-height: 0;
   flex-direction: column;
   gap: 7px;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid rgba(106, 98, 75, 0.18);
   border-radius: var(--vscode-cornerRadius-small);
   background: rgba(255, 251, 239, 0.42);
@@ -311,6 +381,7 @@
 }
 
 .workspace-directory-browser-actions button {
+  display: inline-flex;
   height: 24px;
   padding: 0 7px;
   border: 1px solid rgba(106, 98, 75, 0.18);
@@ -320,6 +391,8 @@
   cursor: pointer;
   font: inherit;
   font-size: 11px;
+  align-items: center;
+  gap: 4px;
 }
 
 .workspace-directory-browser-actions button:disabled {
@@ -346,8 +419,8 @@
 
 .workspace-directory-list {
   display: flex;
-  max-height: 210px;
-  min-height: 118px;
+  max-height: 232px;
+  min-height: 150px;
   flex-direction: column;
   overflow: auto;
   border: 1px solid rgba(106, 98, 75, 0.14);
@@ -376,10 +449,15 @@
   outline: 0;
 }
 
-.workspace-directory-row span:last-child {
+.workspace-directory-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-directory-row > .codicon-chevron-right {
+  margin-left: auto;
+  color: #9a917b;
 }
 
 .workspace-directory-empty,
@@ -397,6 +475,12 @@
   background: rgba(254, 242, 242, 0.85);
   color: #9f1c15;
   font-size: 12px;
+}
+
+.workspace-remote-dialog-hint {
+  padding: 0 16px 2px;
+  color: #918976;
+  font-size: 11px;
 }
 
 .workspace-dialog-actions {

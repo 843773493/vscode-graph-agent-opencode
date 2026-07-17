@@ -12,7 +12,7 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 @pytest.mark.asyncio
 async def test_recorder_persists_job_events(tmp_path: Path):
     bus = JobEventBus()
-    store = TraceEventStore(logs_dir=tmp_path)
+    store = TraceEventStore(sessions_dir=tmp_path)
     recorder = TraceEventRecorder(bus=bus, store=store)
     await recorder.start()
 
@@ -39,7 +39,7 @@ async def test_recorder_persists_job_events(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_recorder_rejects_event_without_resolvable_session_id(tmp_path: Path):
     bus = JobEventBus()
-    recorder = TraceEventRecorder(bus=bus, store=TraceEventStore(logs_dir=tmp_path))
+    recorder = TraceEventRecorder(bus=bus, store=TraceEventStore(sessions_dir=tmp_path))
     await recorder.start()
 
     try:
@@ -58,7 +58,7 @@ async def test_recorder_rejects_event_without_resolvable_session_id(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_recorder_does_not_treat_session_shaped_job_id_as_session_id(tmp_path: Path):
     bus = JobEventBus()
-    recorder = TraceEventRecorder(bus=bus, store=TraceEventStore(logs_dir=tmp_path))
+    recorder = TraceEventRecorder(bus=bus, store=TraceEventStore(sessions_dir=tmp_path))
     await recorder.start()
 
     try:

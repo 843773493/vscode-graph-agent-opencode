@@ -48,7 +48,7 @@ def test_llm_log_persists_prompt_replay_components_and_tool_stats(
         source="WorkspaceAgentsMiddleware",
         label="工作区 AGENTS.md",
     )
-    middleware = LLMLoggingMiddleware(logs_dir=tmp_path)
+    middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
 
     def after_default_capture(next_request: ModelRequest) -> ModelResponse:
         updated_request = next_request.override(
@@ -69,7 +69,9 @@ def test_llm_log_persists_prompt_replay_components_and_tool_stats(
 
     default_capture.wrap_model_call(request, after_default_capture)
 
-    log_file = next((tmp_path / "llm_requests" / "ses_replay").glob("*.json"))
+    log_file = next(
+        (tmp_path / "ses_replay" / "logs" / "llm_requests").glob("*.json")
+    )
     payload = json.loads(log_file.read_text(encoding="utf-8"))
     replay = payload["request"]["replay"]
     assert [item["label"] for item in replay["prompt_components"]] == [

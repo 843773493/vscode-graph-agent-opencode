@@ -3,19 +3,22 @@ import {
   DEFAULT_BACKEND_PORT,
   getWorkspace,
   listAgents as apiListAgents,
-  listSessions,
 } from "../api";
 import { getGatewayUiSettings, listGatewayWorkspaces } from "../gatewayApi";
 import { readLastSessionId, writeCachedUiSettings } from "../state/storage";
-import { sessionScopeKey } from "../state/sessionScope";
-import type { Session } from "../types/backend";
+import { sessionScopeKey } from "../state/session/sessionScope";
 import type { SetAppState } from "./contentViewLoaderTypes";
+import {
+  fetchWorkspaceSessionListSnapshot,
+  isCurrentWorkspaceSessionListSnapshot,
+  type WorkspaceSessionListSnapshot,
+} from "./workspaceSessionListRefresh";
 
 type WorkspaceBootstrapPayload = {
   gatewayWorkspaces: Awaited<ReturnType<typeof listGatewayWorkspaces>>;
   uiSettings: Awaited<ReturnType<typeof getGatewayUiSettings>>;
   workspace: Awaited<ReturnType<typeof getWorkspace>>;
-  workspaceSessionResults: PromiseSettledResult<readonly [string, Session[]]>[];
+  workspaceSessionResults: PromiseSettledResult<WorkspaceSessionListSnapshot>[];
   agents: Awaited<ReturnType<typeof apiListAgents>>;
 };
 
@@ -39,8 +42,7 @@ async function loadWorkspaceBootstrap(
     getWorkspace(apiPort, activeWorkspaceId),
     Promise.allSettled(
       workspaceIds.map(async (workspaceId) => {
-        const sessions = await listSessions(apiPort, workspaceId);
-        return [workspaceId, sessions.items] as const;
+        return fetchWorkspaceSessionListSnapshot(apiPort, workspaceId);
       }),
     ),
     apiListAgents(apiPort, activeWorkspaceId),
@@ -102,7 +104,7 @@ export function useWorkspaceBootstrap({
         (workspace) => workspace.workspace_id,
       );
       const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
-      const workspaceSessionEntries: Array<readonly [string, Session[]]> = [];
+      const workspaceSessionEntries: WorkspaceSessionListSnapshot[] = [];
       const workspaceSessionErrors = new Map<string, string>();
       for (const [index, result] of workspaceSessionResults.entries()) {
         if (result.status === "fulfilled") {
@@ -133,25 +135,28 @@ export function useWorkspaceBootstrap({
         failedWorkspaceNames.length > 0
           ? `部分工作区离线，未加载会话：${failedWorkspaceNames.join("、")}`
           : null;
-      const sessionsByWorkspace = new Map<string, Session[]>(
-        workspaceSessionEntries,
-      );
-      const sessionGatewayWorkspaceById = new Map<string, string>();
-      for (const [workspaceId, sessions] of workspaceSessionEntries) {
-        for (const session of sessions) {
-          sessionGatewayWorkspaceById.set(
-            sessionScopeKey(workspaceId, session.session_id),
-            workspaceId,
-          );
-        }
-      }
-      const activeSessions = activeWorkspaceId
-        ? sessionsByWorkspace.get(activeWorkspaceId) ?? []
-        : [];
       if (refreshGeneration !== refreshGenerationRef.current) {
         return false;
       }
       setState((prev) => {
+        const sessionsByWorkspace = new Map(prev.sessionsByWorkspace);
+        for (const snapshot of workspaceSessionEntries) {
+          if (isCurrentWorkspaceSessionListSnapshot(snapshot)) {
+            sessionsByWorkspace.set(snapshot.workspaceId, snapshot.sessions);
+          }
+        }
+        const sessionGatewayWorkspaceById = new Map<string, string>();
+        for (const [workspaceId, sessions] of sessionsByWorkspace) {
+          for (const session of sessions) {
+            sessionGatewayWorkspaceById.set(
+              sessionScopeKey(workspaceId, session.session_id),
+              workspaceId,
+            );
+          }
+        }
+        const activeSessions = activeWorkspaceId
+          ? sessionsByWorkspace.get(activeWorkspaceId) ?? []
+          : [];
         const targetSessionId =
           preferredSessionId ??
           prev.currentSession?.session_id ??

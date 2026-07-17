@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import re
 import shlex
-import uuid
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool, tool
 
+from app.core.identifier import create_uuid_hex
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 
@@ -63,7 +63,7 @@ def create_persistent_terminal_tool(
         timeout_seconds: int = 10,
         cwd: str | None = None,
     ) -> dict[str, Any]:
-        """管理一个可 attach 的持久终端。run_command 超时后不会杀进程，会返回后台终端 attach_url。"""
+        """管理一个可 attach 的持久终端。run_command 超时后不会杀进程，终端可从资源面板重新打开。"""
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds 必须大于 0")
 
@@ -114,7 +114,7 @@ def create_persistent_terminal_tool(
             terminal_id = str(terminal["terminal_id"])
 
         previous_buffer = str(terminal.get("buffer") or "")
-        run_id = uuid.uuid4().hex[:12]
+        run_id = create_uuid_hex()
         start_marker = f"__BOXTEAM_CMD_START_{run_id}__"
         done_marker = f"__BOXTEAM_CMD_DONE_{run_id}__"
         wrapped_command = (
@@ -142,7 +142,6 @@ def create_persistent_terminal_tool(
                 done_marker=done_marker,
             )
             if completed:
-                attach_url = terminal_client.attach_url(terminal_id)
                 return {
                     "status": "completed",
                     "terminal_id": terminal_id,
@@ -154,14 +153,11 @@ def create_persistent_terminal_tool(
                         f"终端 ID: {terminal_id}\n"
                         f"会话 ID: {session_id}\n"
                         f"命令状态: 已完成，退出码 {exit_code}\n"
-                        f"终端链接: {attach_url}\n"
-                        "使用方式: 打开终端网页后，可在页面底部输入框继续发送命令。"
+                        "使用方式: 从后台连接面板打开终端后，可继续发送命令。"
                     ),
                     "message": (
-                        "命令已完成，终端会话仍保留，可从后台连接面板打开，"
-                        f"也可访问 {attach_url}。打开终端网页后，可在页面底部输入框继续发送命令。"
+                        "命令已完成，终端会话仍保留，可从后台连接面板打开并继续发送命令。"
                     ),
-                    "attach_url": attach_url,
                 }
 
         completed, output, _ = _extract_command_output(
@@ -182,16 +178,12 @@ def create_persistent_terminal_tool(
                 f"终端 ID: {terminal_id}\n"
                 f"会话 ID: {session_id}\n"
                 "命令状态: 仍在后台运行\n"
-                f"终端链接: {terminal_client.attach_url(terminal_id)}\n"
-                "使用方式: 打开终端网页后，可在页面底部输入框继续发送命令。"
+                "使用方式: 从后台连接面板打开终端后，可继续发送命令。"
             ),
             "message": (
-                "命令仍在运行，已保留为可 attach 的后台终端，"
-                f"可访问 {terminal_client.attach_url(terminal_id)}。"
-                "打开终端网页后，可在页面底部输入框继续发送命令。"
+                "命令仍在运行，已保留为可 attach 的后台终端，可从后台连接面板打开。"
             ),
             "recent_output": output,
-            "attach_url": terminal_client.attach_url(terminal_id),
             "terminal": latest_terminal,
         }
 

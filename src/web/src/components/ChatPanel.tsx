@@ -1,5 +1,9 @@
 import React from "react";
-import type { SessionChangesSummary } from "../types/backend";
+import type {
+  AttachmentRef,
+  MessageReplayRequest,
+  SessionChangesSummary,
+} from "../types/backend";
 import type { ConversationView } from "../types/frontend";
 import ChatTurn from "./chat/ChatTurn";
 import ChatTurnErrorBoundary from "./chat/ChatTurnErrorBoundary";
@@ -26,6 +30,7 @@ export default function ChatPanel({
   sessionChangeSummary,
   sessionChangesLoading,
   onOpenChanges,
+  onReplayTurn,
 }: {
   conversations: ConversationView[];
   expandDetails: boolean;
@@ -33,11 +38,21 @@ export default function ChatPanel({
   sessionChangeSummary?: SessionChangesSummary | null;
   sessionChangesLoading?: boolean;
   onOpenChanges?: () => void;
+  onReplayTurn: (
+    targetMessageId: string,
+    action: MessageReplayRequest["action"],
+    displayContent: string,
+    content?: string,
+    attachments?: AttachmentRef[],
+  ) => Promise<void>;
 }): React.ReactNode {
   const streamRef = React.useRef<HTMLElement | null>(null);
   const followsLatestRef = React.useRef(true);
   const [showJumpToLatest, setShowJumpToLatest] = React.useState(false);
   const renderKey = conversations.map(conversationRenderKey).join("|");
+  const sessionBusy = conversations.some(
+    (conversation) => conversation.status === "running" || conversation.status === "queued",
+  );
 
   const scrollToLatest = React.useCallback((behavior: ScrollBehavior = "auto") => {
     const stream = streamRef.current;
@@ -101,7 +116,7 @@ export default function ChatPanel({
             <div className="chat-stream-blank" aria-hidden="true" />
           )
         ) : (
-          conversations.map((conversation) => (
+          conversations.map((conversation, index) => (
             <ChatTurnErrorBoundary
               key={conversation.conversationId}
               conversationId={conversation.conversationId}
@@ -109,6 +124,9 @@ export default function ChatPanel({
               <ChatTurn
                 conversation={conversation}
                 showRawDetails={expandDetails}
+                isLastTurn={index === conversations.length - 1}
+                sessionBusy={sessionBusy}
+                onReplayTurn={onReplayTurn}
               />
             </ChatTurnErrorBoundary>
           ))

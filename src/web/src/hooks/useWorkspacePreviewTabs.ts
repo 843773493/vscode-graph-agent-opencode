@@ -8,7 +8,7 @@ import type {
   WorkspaceFileNode,
 } from "../types/backend";
 import type { WorkspacePreviewTab } from "../components/workspace/WorkspaceFilePreviewArea";
-import { toEmbeddedAttachUrl } from "../utils/attachUrls";
+import { buildGatewayAttachUrl } from "../utils/attachUrls";
 import type {
   WorkspaceFileReference,
   WorkspaceFileSelection,
@@ -277,7 +277,10 @@ export function useWorkspacePreviewTabs({
     openWorkspaceFileContent(content, reference.selection);
   }, [openWorkspaceFileContent]);
 
-  const openTerminalPreview = (terminalId: string, attachUrl: string) => {
+  const openTerminalPreview = (terminalId: string) => {
+    if (!workspaceId) {
+      throw new Error("打开终端需要当前会话的 Gateway workspace_id");
+    }
     const tabPath = `terminal://${terminalId}`;
     setVisible(true);
     setActivePath(tabPath);
@@ -290,13 +293,16 @@ export function useWorkspacePreviewTabs({
         path: tabPath,
         name: `终端 ${terminalId.slice(0, 8)}`,
         terminalId,
-        attachUrl: toEmbeddedAttachUrl(attachUrl),
+        attachUrl: buildGatewayAttachUrl("terminal", workspaceId, terminalId, true),
       },
     ]);
     onStatusChange(`已在预览区连接终端: ${terminalId}`);
   };
 
-  const openBrowserPreview = (browserId: string, attachUrl: string) => {
+  const openBrowserPreview = (browserId: string) => {
+    if (!workspaceId) {
+      throw new Error("打开浏览器需要当前会话的 Gateway workspace_id");
+    }
     const tabPath = `browser://${browserId}`;
     setVisible(true);
     setActivePath(tabPath);
@@ -309,7 +315,7 @@ export function useWorkspacePreviewTabs({
         path: tabPath,
         name: `浏览器 ${browserId.slice(0, 8)}`,
         browserId,
-        attachUrl: toEmbeddedAttachUrl(attachUrl),
+        attachUrl: buildGatewayAttachUrl("browser", workspaceId, browserId, true),
       },
     ]);
     onStatusChange(`已在预览区连接浏览器: ${browserId}`);

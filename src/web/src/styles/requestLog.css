@@ -1,5 +1,6 @@
 .request-log-card,
 .request-log-key-flow {
+  flex: 0 0 auto;
   padding: 0 !important;
   overflow: hidden;
 }

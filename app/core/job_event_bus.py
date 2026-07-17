@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -15,6 +14,7 @@ from app.abstractions.job_event_bus import (
     EventSubscriberOverflowError,
     EventSubscriptionProtocol,
 )
+from app.core.identifier import create_prefixed_id
 from app.schemas.event import (
     Event,
     BaseEvent,
@@ -55,7 +55,7 @@ class EventSubscription(asyncio.Queue[Event]):
     ) -> None:
         super().__init__(maxsize=maxsize)
         self.job_id = job_id
-        self.subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
+        self.subscription_id = create_prefixed_id("sub")
         self.subscriber_kind = subscriber_kind
         self.metadata = MappingProxyType(dict(metadata or {}))
         self.created_at = datetime.now().astimezone()
@@ -148,7 +148,7 @@ class EventFactorySpec:
         event_payload = dict(payload)
         part_id = event_payload.pop("part_id", None)
         return self.event_class(
-            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            event_id=create_prefixed_id("evt"),
             part_id=part_id,
             job_id=job_id,
             step_id=step_id,

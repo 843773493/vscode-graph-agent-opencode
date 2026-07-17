@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { buildSessionTree, type SessionTreeNode } from "../../state/sessionTree";
+import { buildSessionTree, type SessionTreeNode } from "../../state/session/sessionTree";
 import type { Session } from "../../types/backend";
 import AgentSessionsSessionButton from "./AgentSessionsSessionButton";
 

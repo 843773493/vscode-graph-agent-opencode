@@ -27,8 +27,8 @@ def _custom_tool_context(tmp_path) -> CustomToolFactoryContext:
         background_message_bus=MagicMock(),
         job_event_bus=MagicMock(),
         job_service=MagicMock(),
-        message_service=MagicMock(),
-        session_service=MagicMock(),
+        session_context_query_service=MagicMock(),
+        workspace_session_context_client=MagicMock(),
         session_orchestrator=MagicMock(),
         config_service=MagicMock(),
         terminal_manager_client=MagicMock(),
@@ -142,7 +142,7 @@ def test_workspace_agents_middleware_reloads_latest_version_after_compaction(tmp
     state["_summarization_event"] = {
         "cutoff_index": 1,
         "summary_message": HumanMessage(content="已压缩历史"),
-        "file_path": "/.boxteam/conversation_history/ses_test.md",
+        "file_path": "/.boxteam/sessions/ses_test/context/history.md",
     }
 
     compact_update = middleware.before_model(state, MagicMock())

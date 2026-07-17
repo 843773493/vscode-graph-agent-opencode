@@ -42,7 +42,7 @@ def seed_historical_terminal_checkpoint(
     frontend_port: int,
 ) -> None:
     saver = FileSystemCheckpointSaver(
-        base_dir=Path(workspace_root) / ".boxteam" / "checkpoints"
+        sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
     )
     terminal_payload = {
         "status": "background",

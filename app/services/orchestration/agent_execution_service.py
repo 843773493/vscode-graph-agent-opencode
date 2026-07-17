@@ -4,13 +4,13 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any
-import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.identifier import create_prefixed_id
 from app.core.job_context import (
     reset_current_agent_id,
     reset_current_job_id,
@@ -24,9 +24,10 @@ from app.core.job_context import (
 from app.core.job_event_bus import EventType
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_interrupt_state import SessionInterruptState
+from app.schemas.public_v2.common import MessageRole
 from app.schemas.public_v2.message import AttachmentRef
 from app.schemas.event import ModelTokenUsagePayload
-from app.agents.agent_factory import resolve_agent_id
+from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
 from app.services.infrastructure.attachment_content_service import build_human_content
 from app.services.infrastructure.config_service import ConfigService
 from app.abstractions.job_step_executor import JobStepExecutor
@@ -47,6 +48,7 @@ from app.services.business.system_reminder_checkpoint_service import (
 from app.abstractions.session_changes import SessionChangesRecorderProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.services.orchestration.agent_event_stream_processor import (
+    SuccessfulToolCall,
     combine_model_token_usage,
     process_agent_event_stream,
 )
@@ -58,6 +60,7 @@ from app.services.orchestration.agent_stream_helpers import (
 
 EMPTY_RESPONSE_RETRY_LIMIT = 2
 CUSTOM_TOOL_RESPONSE_RETRY_LIMIT = 2
+DELEGATED_REPORT_RETRY_LIMIT = 2
 
 
 def _build_empty_response_retry_reminder(attempt: int) -> str:
@@ -69,6 +72,66 @@ def _build_empty_response_retry_reminder(attempt: int) -> str:
         "如果已经有足够信息，请输出用户可见的最终回复。"
         "不要只复述计划、步骤或内部思考。"
     )
+
+
+def _build_delegated_report_retry_reminder(
+    *,
+    parent_session_id: str,
+    attempt: int,
+    allow_progress: bool = False,
+) -> str:
+    progress_instruction = (
+        "如果本轮收到的是下级进度，可以用 kind=progress 原样中继；"
+        if allow_progress
+        else ""
+    )
+    return (
+        "这是委派子会话的首轮任务。你输出了普通最终文本，但父 Agent 不会自动收到它。"
+        "必须调用 send_message_to_session 把问题、失败说明或最终结果发送给父会话。"
+        f"target_session_id={parent_session_id}，simulate_user=false。"
+        f"{progress_instruction}"
+        f"这是第 {attempt} 次通信恢复；不要只再次输出普通最终文本。"
+    )
+
+
+def _has_valid_delegated_report(
+    successful_tool_calls: list[SuccessfulToolCall],
+    *,
+    parent_session_id: str,
+    allowed_kinds: frozenset[str] = frozenset({"question", "result"}),
+) -> bool:
+    for call in successful_tool_calls:
+        if call.tool_name != "send_message_to_session":
+            continue
+        if call.tool_args.get("target_session_id") != parent_session_id:
+            continue
+        if call.tool_args.get("simulate_user", False) is not False:
+            continue
+        if call.tool_args.get("kind", "result") not in allowed_kinds:
+            continue
+        return True
+    return False
+
+
+def _has_valid_session_question_reply(
+    successful_tool_calls: list[SuccessfulToolCall],
+    *,
+    sender_session_id: str,
+    communication_id: str,
+) -> bool:
+    for call in successful_tool_calls:
+        if call.tool_name != "send_message_to_session":
+            continue
+        if call.tool_args.get("target_session_id") != sender_session_id:
+            continue
+        if call.tool_args.get("simulate_user", False) is not False:
+            continue
+        if call.tool_args.get("kind", "result") != "reply":
+            continue
+        if call.tool_args.get("reply_to_communication_id") != communication_id:
+            continue
+        return True
+    return False
 
 
 def _custom_tools_requested_by_message(
@@ -172,6 +235,8 @@ class AgentExecutionService(JobStepExecutor):
         message_id: str,
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
+        message_role: MessageRole = MessageRole.user,
+        message_metadata: dict[str, object] | None = None,
     ) -> str:
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
@@ -201,7 +266,10 @@ class AgentExecutionService(JobStepExecutor):
         # 与 thread_id 重复、job_id 已经通过 set_current_job_id 维护在 contextvars。
         # 中间件通过 runtime.configurable 取不到这些键时，会回退到 contextvars
         # （见 LLMLoggingMiddleware._get_job_id 的优先级链）。
-        config = build_checkpoint_config(session_id)
+        config = {
+            **build_checkpoint_config(session_id),
+            "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
+        }
 
         job_token = set_current_job_id(effective_job_id)
         agent_token = set_current_agent_id(resolved_agent_id)
@@ -242,13 +310,61 @@ class AgentExecutionService(JobStepExecutor):
             config_service=self._config_service,
         )
         resolved_attachments = list(attachments or [])
+        resolved_message_metadata = dict(message_metadata or {})
         human_content = build_human_content(message, resolved_attachments)
         human_response_metadata = build_human_response_metadata(
             message_id=message_id,
             display_content=message,
             attachments=resolved_attachments,
             message_created_at=message_created_at,
+            message_role=message_role,
+            message_metadata=resolved_message_metadata,
         )
+        message_source = resolved_message_metadata.get("source")
+        message_kind = resolved_message_metadata.get("kind")
+        requires_delegated_report = message_source == "session_subagent_delegation"
+        parent_session_id = resolved_message_metadata.get("parent_session_id")
+        if (
+            message_source == "send_message_to_session"
+            and message_kind in {"reply", "progress", "result"}
+        ):
+            session_service = self._dependency_provider.get_session_service()
+            current_session = await session_service.get(session_id)
+            if current_session.delegation is not None:
+                requires_delegated_report = True
+                parent_session_id = (
+                    current_session.delegation.parent_session_id
+                )
+        if requires_delegated_report and not isinstance(parent_session_id, str):
+            raise RuntimeError(
+                "委派子会话首轮缺少 parent_session_id 元数据: "
+                f"session_id={session_id} job_id={effective_job_id}"
+            )
+        delegated_report_allowed_kinds = (
+            frozenset({"question", "progress", "result"})
+            if message_source == "send_message_to_session"
+            and message_kind == "progress"
+            else frozenset({"question", "result"})
+        )
+        requires_session_question_reply = (
+            resolved_message_metadata.get("source") == "send_message_to_session"
+            and resolved_message_metadata.get("kind") == "question"
+            and resolved_message_metadata.get("reply_required") is True
+        )
+        question_sender_session_id = resolved_message_metadata.get(
+            "sender_session_id"
+        )
+        question_communication_id = resolved_message_metadata.get(
+            "communication_id"
+        )
+        if requires_session_question_reply and (
+            not isinstance(question_sender_session_id, str)
+            or not isinstance(question_communication_id, str)
+        ):
+            raise RuntimeError(
+                "跨会话问题缺少可信回复路由元数据: "
+                f"session_id={session_id} job_id={effective_job_id}"
+            )
 
         try:
             await _publish(EventType.AGENT_START, {
@@ -278,6 +394,8 @@ class AgentExecutionService(JobStepExecutor):
             ]
             empty_response_retries = 0
             custom_tool_response_retries = 0
+            delegated_report_retries = 0
+            successful_tool_calls: list[SuccessfulToolCall] = []
             completed_custom_tool_names: set[str] = set()
             while True:
                 stream_result = await process_agent_event_stream(
@@ -294,6 +412,7 @@ class AgentExecutionService(JobStepExecutor):
                 )
                 turn_token_usage_parts.append(stream_result.token_usage)
                 final_text = stream_result.final_text
+                successful_tool_calls.extend(stream_result.successful_tool_calls)
                 completed_custom_tool_names.update(
                     stream_result.completed_custom_tool_names
                 )
@@ -319,7 +438,28 @@ class AgentExecutionService(JobStepExecutor):
                 missing_custom_tool_names = (
                     requested_custom_tool_names - completed_custom_tool_names
                 )
-                if final_text and not missing_custom_tool_names:
+                missing_delegated_report = (
+                    requires_delegated_report
+                    and not _has_valid_delegated_report(
+                        successful_tool_calls,
+                        parent_session_id=parent_session_id,
+                        allowed_kinds=delegated_report_allowed_kinds,
+                    )
+                )
+                missing_session_question_reply = (
+                    requires_session_question_reply
+                    and not _has_valid_session_question_reply(
+                        successful_tool_calls,
+                        sender_session_id=question_sender_session_id,
+                        communication_id=question_communication_id,
+                    )
+                )
+                if (
+                    final_text
+                    and not missing_custom_tool_names
+                    and not missing_delegated_report
+                    and not missing_session_question_reply
+                ):
                     break
                 if final_text and missing_custom_tool_names:
                     custom_tool_response_retries += 1
@@ -357,6 +497,88 @@ class AgentExecutionService(JobStepExecutor):
                                 "source": "missing_custom_tool_retry",
                                 "attempt": custom_tool_response_retries,
                                 "missing_tools": sorted(missing_custom_tool_names),
+                            },
+                        )
+                    ]
+                    continue
+
+                if final_text and missing_delegated_report:
+                    delegated_report_retries += 1
+                    if delegated_report_retries > DELEGATED_REPORT_RETRY_LIMIT:
+                        raise RuntimeError(
+                            "委派子 Agent 返回了普通最终文本，但没有通过 "
+                            "send_message_to_session 向父会话报告。"
+                            f" session_id={session_id} job_id={effective_job_id} "
+                            f"parent_session_id={parent_session_id} "
+                            f"retry_limit={DELEGATED_REPORT_RETRY_LIMIT}"
+                        )
+                    reminder = _build_delegated_report_retry_reminder(
+                        parent_session_id=parent_session_id,
+                        attempt=delegated_report_retries,
+                        allow_progress="progress"
+                        in delegated_report_allowed_kinds,
+                    )
+                    await _publish(
+                        EventType.AGENT_START,
+                        {
+                            "message": "委派子 Agent 未通过会话工具报告，继续请求真实工具调用",
+                            "agent_id": resolved_agent_id,
+                        },
+                    )
+                    next_input_messages = [
+                        HumanMessage(
+                            id=(
+                                f"{effective_job_id}:delegated_report_retry:"
+                                f"{delegated_report_retries}"
+                            ),
+                            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
+                            response_metadata={
+                                "source": "delegated_report_retry",
+                                "attempt": delegated_report_retries,
+                                "parent_session_id": parent_session_id,
+                            },
+                        )
+                    ]
+                    continue
+
+                if final_text and missing_session_question_reply:
+                    delegated_report_retries += 1
+                    if delegated_report_retries > DELEGATED_REPORT_RETRY_LIMIT:
+                        raise RuntimeError(
+                            "Agent 收到跨会话问题后返回了普通文本，但没有通过 "
+                            "send_message_to_session 定向回复。"
+                            f" session_id={session_id} job_id={effective_job_id} "
+                            f"sender_session_id={question_sender_session_id} "
+                            f"communication_id={question_communication_id} "
+                            f"retry_limit={DELEGATED_REPORT_RETRY_LIMIT}"
+                        )
+                    reminder = (
+                        "你正在回答另一个 Agent 的跨会话问题，普通最终文本不会送达提问方。"
+                        "必须调用 send_message_to_session："
+                        f"target_session_id={question_sender_session_id}，"
+                        "simulate_user=false，kind=reply，"
+                        f"reply_to_communication_id={question_communication_id}。"
+                        f"这是第 {delegated_report_retries} 次通信恢复。"
+                    )
+                    await _publish(
+                        EventType.AGENT_START,
+                        {
+                            "message": "跨会话问题未通过会话工具回复，继续请求真实工具调用",
+                            "agent_id": resolved_agent_id,
+                        },
+                    )
+                    next_input_messages = [
+                        HumanMessage(
+                            id=(
+                                f"{effective_job_id}:session_question_reply_retry:"
+                                f"{delegated_report_retries}"
+                            ),
+                            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
+                            response_metadata={
+                                "source": "session_question_reply_retry",
+                                "attempt": delegated_report_retries,
+                                "sender_session_id": question_sender_session_id,
+                                "communication_id": question_communication_id,
                             },
                         )
                     ]
@@ -407,7 +629,7 @@ class AgentExecutionService(JobStepExecutor):
             checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
             turn_token_usage = combine_model_token_usage(turn_token_usage_parts)
             if checkpointer is not None:
-                assistant_message_id = f"msg_{uuid.uuid4().hex[:12]}"
+                assistant_message_id = create_prefixed_id("msg")
                 assistant_message_created_at = datetime.now(timezone.utc)
                 persisted = persist_standard_assistant_checkpoint(
                     checkpointer=checkpointer,

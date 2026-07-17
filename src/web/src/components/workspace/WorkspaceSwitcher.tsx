@@ -104,6 +104,7 @@ export default function WorkspaceSwitcher({
                   type="button"
                   className={`workspace-switcher-item${workspace.workspace_id === activeWorkspaceId ? " active" : ""}`}
                   role="menuitem"
+                  title={workspace.connection_error ?? undefined}
                   onClick={() => {
                     setOpen(false);
                     if (workspace.workspace_id !== activeWorkspaceId) {
@@ -140,6 +141,7 @@ export default function WorkspaceSwitcher({
       />
       <WorkspaceSshDialog
         open={sshDialogOpen}
+        apiPort={apiPort}
         onClose={() => setSshDialogOpen(false)}
         onSubmit={onAddSsh}
       />

@@ -7,7 +7,8 @@ import AgentSessionsPanel from "./components/AgentSessionsPanel";
 import RequestLogPanel from "./components/RequestLogPanel";
 import ResourcePanel from "./components/ResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
-import Toolbar from "./components/Toolbar";
+import Toolbar, { type WorkbenchView } from "./components/Toolbar";
+import GatewayControlCenter from "./components/workspace/GatewayControlCenter";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
 import { WorkspaceFileReferenceProvider } from "./components/workspace/WorkspaceFileReferenceContext";
 import WorkspaceAuxiliaryPanel, {
@@ -37,7 +38,7 @@ import {
   type MainAreaKey,
   type LayoutResizeTarget,
 } from "./layout/workbenchLayout";
-import { sessionScopeKey } from "./state/sessionScope";
+import { sessionScopeKey } from "./state/session/sessionScope";
 import type {
   SessionChangesSummary,
   SessionFileChange,
@@ -62,12 +63,22 @@ export default function AppShell() {
     controlSessionResource,
     switchContentView,
     activateGatewayWorkspace,
+    refreshGatewayState,
+    reconnectGatewayWorkspace,
+    addLocalGatewayWorkspace,
+    addSshGatewayWorkspace,
     removeGatewayWorkspace,
+    renameGatewayWorkspace,
     reorderGatewayWorkspaces,
+    copySessionInformation,
     updateUiSettings,
     setStatus,
+    replayTurn,
   } = useAppState();
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
+  const [workbenchView, setWorkbenchView] = useState<WorkbenchView>(
+    () => state.uiSettings.layout.workbench_view ?? "sessions",
+  );
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
   const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>("changes");
@@ -127,6 +138,9 @@ export default function AppShell() {
 
   useEffect(() => {
     const layout = state.uiSettings.layout;
+    if (layout.workbench_view) {
+      setWorkbenchView(layout.workbench_view);
+    }
     if (typeof layout.auxiliary_visible === "boolean") {
       setAuxiliaryVisible(layout.auxiliary_visible);
     }
@@ -185,6 +199,13 @@ export default function AppShell() {
     [setStatus, updateUiSettings],
   );
   const agentSessionsVisible = state.agentSessionsPanelOpen;
+  const handleWorkbenchViewChange = useCallback(
+    (view: WorkbenchView) => {
+      setWorkbenchView(view);
+      persistLayoutSettings({ workbench_view: view });
+    },
+    [persistLayoutSettings],
+  );
   const workspacePreview = useWorkspacePreviewTabs({
     apiPort: resolvedApiPort,
     workspaceId: activeSessionWorkspaceId,
@@ -464,6 +485,12 @@ export default function AppShell() {
       // 失败状态由 removeGatewayWorkspace 写入全局状态。
     });
   };
+  const handleUseGatewayWorkspace = async (workspaceId: string) => {
+    if (workspaceId !== state.activeGatewayWorkspaceId) {
+      await activateGatewayWorkspace(workspaceId);
+    }
+    handleWorkbenchViewChange("sessions");
+  };
   const handleRenameSession = (sessionId: string, currentTitle: string) => {
     setNameDialog({
       sessionId,
@@ -603,6 +630,7 @@ export default function AppShell() {
           error={state.sessionResourcesError}
           loadedAt={state.sessionResourcesLoadedAt}
           sessionId={activeSession?.session_id ?? ""}
+          workspaceId={activeSessionWorkspaceId}
           onRefresh={() => {
             if (activeSession) {
               void refreshSessionResources(activeSession.session_id);
@@ -634,6 +662,7 @@ export default function AppShell() {
         onOpenChanges={() => {
           void switchContentView("changes");
         }}
+        onReplayTurn={replayTurn}
       />
     );
   };
@@ -651,11 +680,43 @@ export default function AppShell() {
       data-agent-sessions-open={String(agentSessionsVisible)}
     >
       <Toolbar
-        sessionTitle={state.currentSession?.title ?? null}
-        onCreateSession={handleCreateSession}
+        sessionTitle={
+          workbenchView === "gateway"
+            ? "Gateway 控制台"
+            : state.currentSession?.title ?? null
+        }
+        onCreateSession={() => {
+          if (workbenchView === "gateway") {
+            handleWorkbenchViewChange("sessions");
+          }
+          handleCreateSession();
+        }}
         auxiliaryVisible={auxiliaryVisible}
         onToggleAuxiliaryPanel={handleToggleAuxiliaryPanel}
+        workbenchView={workbenchView}
+        onWorkbenchViewChange={handleWorkbenchViewChange}
+        showAuxiliaryToggle={workbenchView === "sessions"}
       />
+      {workbenchView === "gateway" ? (
+        <GatewayControlCenter
+          apiPort={resolvedApiPort}
+          workspaces={state.gatewayWorkspaces}
+          activeWorkspaceId={state.activeGatewayWorkspaceId}
+          recentLocalWorkspacePaths={state.uiSettings.recent_local_workspace_paths}
+          switching={state.workspaceSwitching}
+          removingWorkspaceIds={state.removingGatewayWorkspaceIds}
+          gatewayError={state.gatewayError}
+          onActivate={activateGatewayWorkspace}
+          onAddLocal={addLocalGatewayWorkspace}
+          onAddSsh={addSshGatewayWorkspace}
+          onRemove={handleRemoveWorkspace}
+          onRename={renameGatewayWorkspace}
+          onReorder={reorderGatewayWorkspaces}
+          onRefresh={refreshGatewayState}
+          onReconnect={reconnectGatewayWorkspace}
+          onUseWorkspace={handleUseGatewayWorkspace}
+        />
+      ) : (
       <main className="content sessions-workbench-grid">
         <div
           className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${previewVisible ? "" : " preview-collapsed"}${previewMaximized ? " preview-maximized" : ""}`}
@@ -679,6 +740,7 @@ export default function AppShell() {
             onActivateWorkspace={activateGatewayWorkspace}
             onRemoveWorkspace={handleRemoveWorkspace}
             onReorderWorkspaces={reorderGatewayWorkspaces}
+            onCopySessionInformation={copySessionInformation}
             onSelectWorkspaceSession={handleSelectAgentSession}
             activeSession={activeSession}
             sessionAttachmentSummaries={state.sessionAttachmentSummaries}
@@ -811,6 +873,7 @@ export default function AppShell() {
           ) : null}
         </div>
       </main>
+      )}
       <SessionNameDialog
         open={nameDialog !== null}
         title="重命名会话"

@@ -12,6 +12,7 @@
 | 添加依赖 | `bun add <package>` |
 | 移除依赖 | `bun remove <package>` |
 | 安装所有依赖 | `bun install` |
+| 安装用户级配置 | `bun run install:config` |
 | 执行 package.json 脚本 | `bun run <script-name>` |
 
 ### Python — uv

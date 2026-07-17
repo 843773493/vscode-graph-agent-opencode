@@ -12,7 +12,6 @@ from app.core.path_utils import get_boxteam_root, get_workspace_root
 
 
 DEFAULT_TERMINAL_BACKEND_URL = "http://127.0.0.1:8012"
-DEFAULT_TERMINAL_FRONTEND_URL = "http://127.0.0.1:8013"
 
 
 class TerminalManagerClient:
@@ -20,7 +19,6 @@ class TerminalManagerClient:
         self,
         *,
         backend_url: str | None = None,
-        frontend_url: str | None = None,
         state_file: Path | None = None,
     ) -> None:
         self._backend_url = (
@@ -28,23 +26,11 @@ class TerminalManagerClient:
             or os.environ.get("BOXTEAM_TERMINAL_BACKEND_URL")
             or DEFAULT_TERMINAL_BACKEND_URL
         ).rstrip("/")
-        self._frontend_url = (
-            frontend_url
-            or os.environ.get("BOXTEAM_TERMINAL_FRONTEND_URL")
-            or DEFAULT_TERMINAL_FRONTEND_URL
-        ).rstrip("/")
         self._state_file = state_file or get_boxteam_root() / "terminal-manager" / "terminals.json"
 
     @property
     def backend_url(self) -> str:
         return self._backend_url
-
-    @property
-    def frontend_url(self) -> str:
-        return self._frontend_url
-
-    def attach_url(self, terminal_id: str) -> str:
-        return f"{self._frontend_url}/?terminalId={terminal_id}"
 
     def list_terminals_from_state(self, session_id: str) -> list[dict[str, Any]]:
         if not self._state_file.exists():
@@ -59,7 +45,7 @@ class TerminalManagerClient:
                 raise RuntimeError(f"终端状态文件包含非对象记录: {self._state_file}")
             if terminal.get("session_id") == session_id:
                 normalized = dict(terminal)
-                normalized["attach_url"] = self.attach_url(str(terminal["terminal_id"]))
+                normalized.pop("attach_url", None)
                 result.append(normalized)
         return sorted(
             result,
@@ -121,7 +107,9 @@ class TerminalManagerClient:
         data = response.get("data")
         if not isinstance(data, dict):
             raise RuntimeError(f"终端管理器返回格式错误: {response}")
-        return data
+        normalized = dict(data)
+        normalized.pop("attach_url", None)
+        return normalized
 
     async def _json_request(
         self,

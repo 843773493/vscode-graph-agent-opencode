@@ -10,6 +10,8 @@ allowed-tools: read_session_recent_text_messages, grep_session_context_jsonl, re
 
 当用户给出另一个 `session_id`，并要求查看最近 N 轮文本或像文件一样搜索、分段读取该会话当前模型上下文时，必须使用本 skill。
 
+目标在当前工作区时省略 `workspace_id`；目标在其他 Gateway 工作区时，三个工具都必须传入该工作区的 `workspace_id`。不要用工作区名称或路径代替 ID。
+
 ## 调用方式
 
 `read_session_recent_text_messages` 不会直接出现在模型 tools 列表中。必须发起真实工具调用，使用固定入口 `invoke_custom_tool`。
@@ -20,6 +22,7 @@ allowed-tools: read_session_recent_text_messages, grep_session_context_jsonl, re
 {
   "tool_name": "read_session_recent_text_messages",
   "arguments": {
+    "workspace_id": "跨工作区时填写 gw_...；当前工作区省略",
     "session_id": "目标 session_id",
     "rounds": 5
   }
@@ -28,6 +31,7 @@ allowed-tools: read_session_recent_text_messages, grep_session_context_jsonl, re
 
 字段说明：
 
+- `workspace_id`：跨工作区时必填，必须是 Gateway 返回的目标工作区 ID；当前工作区调用时省略。
 - `session_id`：必填，要读取的目标会话 ID。
 - `rounds`：选填，最近用户轮次数，默认 `5`。
 
@@ -39,6 +43,7 @@ allowed-tools: read_session_recent_text_messages, grep_session_context_jsonl, re
 {
   "tool_name": "grep_session_context_jsonl",
   "arguments": {
+    "workspace_id": "跨工作区时填写 gw_...；当前工作区省略",
     "session_id": "目标 session_id",
     "pattern": "正则表达式",
     "case_sensitive": false,
@@ -56,6 +61,7 @@ grep 返回匹配行号、匹配列、短预览和行哈希，不返回整条超
 {
   "tool_name": "read_session_context_jsonl",
   "arguments": {
+    "workspace_id": "跨工作区时填写 gw_...；当前工作区省略",
     "session_id": "目标 session_id",
     "line_start": 1,
     "line_count": 20,

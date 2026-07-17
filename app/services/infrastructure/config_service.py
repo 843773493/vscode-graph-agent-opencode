@@ -7,7 +7,7 @@ from typing import Any
 import commentjson
 import jsonschema
 
-from app.core.env import get_project_root
+from app.core.path_utils import get_user_config_path
 from app.schemas.public_v2.config import ConfigDTO, ConfigUpdateRequest
 
 _config_path_override: Path | None = None
@@ -30,7 +30,11 @@ class ConfigService:
         config_path: str | Path | None = None,
         workspace_root: str | Path | None = None,
     ) -> None:
-        resolved_config_dir = Path(config_dir).expanduser().resolve() if config_dir else get_project_root() / "configs"
+        resolved_config_dir = (
+            Path(config_dir).expanduser().resolve()
+            if config_dir
+            else get_user_config_path().parent
+        )
         self._config_dir = resolved_config_dir
         self._config_path = Path(config_path).expanduser().resolve() if config_path else None
         self._boxteam_config: dict[str, Any] | None = None
@@ -47,7 +51,23 @@ class ConfigService:
 
     def _load_schema(self) -> dict:
         if self._schema is None:
+            config_path = self._get_boxteam_config_path()
+            config_schema_path: Path | None = None
+            if config_path.is_file():
+                with config_path.open("r", encoding="utf-8") as config_stream:
+                    schema_reference = commentjson.load(config_stream).get("$schema")
+                if (
+                    isinstance(schema_reference, str)
+                    and schema_reference
+                    and "://" not in schema_reference
+                ):
+                    referenced_path = (config_path.parent / schema_reference).resolve()
+                    if referenced_path.is_file():
+                        config_schema_path = referenced_path
             schema_path = self._first_existing_file(
+                config_path.parent / "config.schema.jsonc",
+                *([config_schema_path] if config_schema_path is not None else []),
+                self._config_dir / "config.schema.jsonc",
                 self._config_dir / "config.jsonc",
                 self._config_dir / "config.json",
             )
@@ -60,10 +80,7 @@ class ConfigService:
             return self._config_path
         if _config_path_override is not None:
             return _config_path_override
-        jsonc_path = self._config_dir / "boxteam.jsonc"
-        if jsonc_path.exists():
-            return jsonc_path
-        return self._config_dir / "boxteam.json"
+        return get_user_config_path()
 
     def _load_boxteam_config(self) -> dict:
         config_path = self._get_boxteam_config_path()
@@ -292,6 +309,18 @@ class ConfigService:
         if not isinstance(gateway, dict):
             raise ValueError("gateway 配置必须是对象")
         return gateway
+
+    def development_test_tools_enabled(self) -> bool:
+        config = self._load_boxteam_config()
+        development = config.get("development", {})
+        if development is None:
+            return False
+        if not isinstance(development, dict):
+            raise ValueError("development 配置必须是对象")
+        enabled = development.get("test_tools", False)
+        if not isinstance(enabled, bool):
+            raise ValueError("development.test_tools 必须是布尔值")
+        return enabled
 
     def get_agent_runtime_config(self, agent_id: str | None = None) -> dict[str, Any]:
         config = self._load_boxteam_config()

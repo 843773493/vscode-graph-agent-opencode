@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
+import commentjson
 import pytest
 
 from tests.e2e.gateway.gateway_docker import (
     GatewaySshDockerTarget,
     docker_daemon_error,
     start_gateway_ssh_container,
+    install_gateway_ssh_assets_for_e2e,
     start_remote_backend_via_ssh,
     stop_gateway_ssh_container,
     stop_remote_backend,
@@ -58,7 +61,12 @@ async def test_gateway_loads_configured_ssh_workspace_through_docker(
     docker_target: GatewaySshDockerTarget | None = None
 
     try:
-        docker_target = start_gateway_ssh_container(ssh_port=ssh_port)
+        docker_target = start_gateway_ssh_container(
+            ssh_port=ssh_port,
+            known_hosts_path=(
+                local_workspace.parent / "artifacts" / "gateway_ssh_known_hosts"
+            ),
+        )
         remote_backend_pid = start_remote_backend_via_ssh(
             target=docker_target,
             remote_workspace_path=remote_workspace_path,
@@ -75,6 +83,7 @@ async def test_gateway_loads_configured_ssh_workspace_through_docker(
             username=docker_target.username,
             remote_backend_port=remote_backend_port,
             remote_workspace_path=remote_workspace_path,
+            private_key_path=install_gateway_ssh_assets_for_e2e(local_workspace),
         )
         gateway = start_gateway_process(
             workspace_root=local_workspace,
@@ -111,6 +120,34 @@ async def test_gateway_loads_configured_ssh_workspace_through_docker(
             assert tunnel_port is not None
             assert tunnel_port_range[0] <= tunnel_port <= tunnel_port_range[1]
             assert tunnel_port != remote_backend_port
+
+            ssh_connections_response = await client.get(
+                "/api/gateway/ssh-connections"
+            )
+            assert ssh_connections_response.status_code == 200, (
+                ssh_connections_response.text
+            )
+            configured_connection = next(
+                item
+                for item in ssh_connections_response.json()["data"]["items"]
+                if item["source"] == "boxteam"
+                and item["workspace_id"] == ssh_workspace_id
+            )
+            assert configured_connection["initial_path"] == remote_workspace_path
+            assert configured_connection["ssh_config_host"] is None
+
+            configured_directory_response = await client.get(
+                f"/api/gateway/ssh-connections/{configured_connection['connection_id']}/directories",
+                params={"path": remote_workspace_path},
+            )
+            assert configured_directory_response.status_code == 200, (
+                configured_directory_response.text
+            )
+            configured_directory = configured_directory_response.json()["data"]
+            assert configured_directory["path"] == remote_workspace_path
+            assert ".boxteam" in {
+                item["name"] for item in configured_directory["entries"]
+            }
 
             default_workspace_response = await client.get("/api/v1/workspace")
             assert Path(workspace_root_from_response(default_workspace_response)).resolve() == local_workspace
@@ -163,6 +200,43 @@ async def test_gateway_loads_configured_ssh_workspace_through_docker(
                 for item in sessions_response.json()["data"]["items"]
             ]
             assert "Docker SSH Routed Session" in session_titles
+
+            activate_response = await client.post(
+                f"/api/gateway/workspaces/{ssh_workspace_id}/activate"
+            )
+            assert activate_response.status_code == 200, activate_response.text
+
+        close_gateway_process(gateway)
+        gateway = None
+        config_path = local_workspace / ".boxteam" / "boxteam.jsonc"
+        config_payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
+        config_payload["gateway"] = {"workspaces": []}
+        config_path.write_text(
+            json.dumps(config_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        gateway = start_gateway_process(
+            workspace_root=local_workspace,
+            default_backend_url=f"http://127.0.0.1:{local_backend.port}",
+            port=gateway_port,
+            ssh_tunnel_port_range=tunnel_port_range,
+        )
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as restarted_client:
+            restored_response = await restarted_client.get("/api/gateway/workspaces")
+            assert restored_response.status_code == 200, restored_response.text
+            restored_list = restored_response.json()["data"]
+            restored_ssh = next(
+                item
+                for item in restored_list["items"]
+                if item["workspace_id"] == ssh_workspace_id
+            )
+            assert restored_ssh["status"] == "ready"
+            assert restored_ssh["connection_error"] is None
+            assert restored_list["active_workspace_id"] == ssh_workspace_id
     finally:
         if gateway is not None:
             close_gateway_process(gateway)

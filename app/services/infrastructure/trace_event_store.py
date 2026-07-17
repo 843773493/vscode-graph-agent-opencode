@@ -32,16 +32,16 @@ class TraceCursorGoneError(RuntimeError):
 
 
 class TraceEventStore:
-    def __init__(self, logs_dir: Path) -> None:
-        self._logs_dir = logs_dir
+    def __init__(self, sessions_dir: Path) -> None:
+        self._sessions_dir = sessions_dir
         self._conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
         self._append_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def _trace_file(self, session_id: str) -> Path:
-        return self._logs_dir / "traces" / f"trace_{session_id}.jsonl"
+        return self._sessions_dir / session_id / "logs" / "traces" / "events.jsonl"
 
     def _message_trace_file(self, session_id: str) -> Path:
-        return self._logs_dir / "traces" / f"trace_message_{session_id}.jsonl"
+        return self._sessions_dir / session_id / "logs" / "traces" / "messages.jsonl"
 
     async def _notify(self, session_id: str) -> None:
         condition = self._conditions.get(session_id)

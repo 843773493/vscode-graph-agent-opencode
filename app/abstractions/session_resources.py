@@ -14,8 +14,6 @@ from app.schemas.public_v2.session_resource import (
 
 @runtime_checkable
 class TerminalManagerClientProtocol(Protocol):
-    def attach_url(self, terminal_id: str) -> str: ...
-
     def list_terminals_from_state(self, session_id: str) -> list[dict[str, object]]: ...
 
     async def kill_terminal(self, terminal_id: str) -> dict[str, object]: ...
@@ -42,7 +40,6 @@ class BrowserRecord(TypedDict, total=False):
     ended_at: str | None
     client_count: int
     sequence: int
-    attach_url: str
     pending_dialog: object | None
     pending_file_chooser: bool
 
@@ -87,8 +84,6 @@ class BrowserActionPayload(TypedDict, total=False):
 
 @runtime_checkable
 class BrowserManagerClientProtocol(Protocol):
-    def attach_url(self, browser_id: str) -> str: ...
-
     def list_browsers_from_state(self, session_id: str) -> list[BrowserRecord]: ...
 
     async def create_browser(

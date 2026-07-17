@@ -18,6 +18,7 @@ export default function ResourcePanel({
   error,
   loadedAt,
   sessionId,
+  workspaceId,
   onRefresh,
   onControl,
   onOpenTerminalPreview,
@@ -29,14 +30,15 @@ export default function ResourcePanel({
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
+  workspaceId: string | null;
   onRefresh: () => void;
   onControl: (
     kind: SessionResourceKind,
     resourceId: string,
     action: SessionResourceAction,
   ) => Promise<void>;
-  onOpenTerminalPreview: (terminalId: string, attachUrl: string) => void;
-  onOpenBrowserPreview: (browserId: string, attachUrl: string) => void;
+  onOpenTerminalPreview: (terminalId: string) => void;
+  onOpenBrowserPreview: (browserId: string) => void;
   onShowConversation: (jobId?: string) => void;
 }) {
   const [busyResourceId, setBusyResourceId] = useState<string | null>(null);
@@ -158,14 +160,22 @@ export default function ResourcePanel({
     }
   };
 
-  const handleOpenTerminal = (resourceId: string, attachUrl: string) => {
+  const handleOpenTerminal = (resourceId: string) => {
+    if (!workspaceId) {
+      setNotice("打开终端失败：当前会话缺少 Gateway workspace_id");
+      return;
+    }
     setOpenedTerminalId(resourceId);
-    onOpenTerminalPreview(resourceId, attachUrl);
+    onOpenTerminalPreview(resourceId);
     setNotice(`已在预览区连接终端: ${resourceId}`);
   };
-  const handleOpenBrowser = (resourceId: string, attachUrl: string) => {
+  const handleOpenBrowser = (resourceId: string) => {
+    if (!workspaceId) {
+      setNotice("打开浏览器失败：当前会话缺少 Gateway workspace_id");
+      return;
+    }
     setOpenedBrowserId(resourceId);
-    onOpenBrowserPreview(resourceId, attachUrl);
+    onOpenBrowserPreview(resourceId);
     setNotice(`已在预览区连接浏览器: ${resourceId}`);
   };
   const historicalResourceCount = resources.filter(

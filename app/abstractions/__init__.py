@@ -12,10 +12,14 @@ from app.abstractions.session_resources import (
     TerminalManagerClientProtocol,
 )
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_subagent import SessionSubagentProtocol
+from app.abstractions.team import TeamCoordinationProtocol, TeamStoreProtocol
 from app.abstractions.custom_tool_context import (
     CustomToolConfigProtocol,
-    CustomToolMessageProtocol,
-    CustomToolSessionProtocol,
+)
+from app.abstractions.session_context import (
+    SessionContextQueryProtocol,
+    WorkspaceSessionContextClientProtocol,
 )
 
 __all__ = [
@@ -28,9 +32,12 @@ __all__ = [
     "JobServiceProtocol",
     "JobStepExecutor",
     "SessionOrchestratorProtocol",
+    "SessionSubagentProtocol",
+    "TeamCoordinationProtocol",
+    "TeamStoreProtocol",
     "SessionResourceMessageProtocol",
     "CustomToolConfigProtocol",
-    "CustomToolMessageProtocol",
-    "CustomToolSessionProtocol",
+    "SessionContextQueryProtocol",
+    "WorkspaceSessionContextClientProtocol",
     "TerminalManagerClientProtocol",
 ]

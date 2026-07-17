@@ -217,9 +217,7 @@ async def test_persistent_terminal_tool_is_visible_and_resource_can_be_attached(
     assert terminal_resource["status"] == "running"
     assert "cancel" in terminal_resource["available_actions"]
     assert "delete" in terminal_resource["available_actions"]
-    assert terminal_resource["metadata"]["attach_url"] == (
-        f"http://127.0.0.1:{frontend_port}/?terminalId={terminal_id}"
-    )
+    assert "attach_url" not in terminal_resource["metadata"]
     assert terminal_resource["metadata"]["command_status"] == "running"
     assert terminal_resource["metadata"]["command_exit_code"] is None
 
@@ -275,7 +273,10 @@ async def test_persistent_terminal_tool_is_visible_and_resource_can_be_attached(
         )
         assert detached_terminal["metadata"]["client_count"] == 0
 
-    with urlopen(terminal_resource["metadata"]["attach_url"], timeout=5) as response:
+    with urlopen(
+        f"http://127.0.0.1:{frontend_port}/?terminalId={terminal_id}",
+        timeout=5,
+    ) as response:
         html = response.read().decode("utf-8")
     assert response.status == 200
     assert "持久终端" in html
@@ -428,9 +429,7 @@ async def test_session_resources_restore_missing_terminal_refs_from_agent_state(
     assert "终端管理器中已无该终端" in historical_terminal["metadata"]["status_note"]
     assert historical_terminal["metadata"]["historical_status"] == "running"
     assert historical_terminal["metadata"]["command_status"] == "deleted"
-    assert historical_terminal["metadata"]["attach_url"] == (
-        f"http://127.0.0.1:{frontend_port}/?terminalId={terminal_id}"
-    )
+    assert "attach_url" not in historical_terminal["metadata"]
 
     with urlopen(
         f"http://127.0.0.1:{backend_port}/api/terminals/{terminal_id}?missing_as_deleted=1",

@@ -30,11 +30,11 @@ export function statusLabel(status) {
   return labels[status] || status || "未知";
 }
 
-export function backendWsUrl(backendBaseUrl) {
+export function backendWsUrl(backendBaseUrl, token = null) {
   const url = new URL(backendBaseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/browser";
-  url.search = "";
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/browser`;
+  url.search = token ? `?token=${encodeURIComponent(token)}` : "";
   return url.toString();
 }
 

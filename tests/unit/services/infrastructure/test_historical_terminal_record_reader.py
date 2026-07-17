@@ -12,8 +12,7 @@ def test_reader_ignores_terminal_results_copied_from_parent_context(
     tmp_path: Path,
 ) -> None:
     reader = HistoricalTerminalRecordReader(
-        logs_dir=tmp_path,
-        attach_url=lambda terminal_id: f"http://terminal/{terminal_id}",
+        sessions_dir=tmp_path,
     )
     copied_record = {
         "type": "tool",
@@ -42,8 +41,7 @@ def test_reader_keeps_terminal_results_created_in_current_context(
     tmp_path: Path,
 ) -> None:
     reader = HistoricalTerminalRecordReader(
-        logs_dir=tmp_path,
-        attach_url=lambda terminal_id: f"http://terminal/{terminal_id}",
+        sessions_dir=tmp_path,
     )
     native_record = {
         "type": "tool",

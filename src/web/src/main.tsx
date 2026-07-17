@@ -14,12 +14,9 @@ import './styles/agentSessionsPanel.css';
 import './styles/workbenchLayout.css';
 import './styles/toolControl.css';
 import './styles/chatMessages.css';
+import './styles/gatewayConsole.css';
 
 declare global {
-  interface ImportMeta {
-    hot?: { accept: () => void; dispose: (callback: () => void) => void };
-  }
-
   interface Window {
     __graphAgentRoot?: ReactDOM.Root;
   }

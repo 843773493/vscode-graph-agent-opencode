@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Protocol
 
-from app.schemas.public_v2.common import JobStatus
+from app.schemas.public_v2.common import JobStatus, MessageRole
 from app.schemas.public_v2.message import AttachmentRef
 
 
@@ -15,6 +15,8 @@ class JobRuntimeStateProtocol(Protocol):
     message_id: str
     attachments: list[AttachmentRef]
     message_created_at: str
+    message_role: MessageRole
+    message_metadata: dict[str, object]
     status: JobStatus
     progress: int
     error_message: Optional[str]

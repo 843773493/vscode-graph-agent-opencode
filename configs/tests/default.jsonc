@@ -74,7 +74,83 @@
       "tools": {
         "denylist": [
         ],
-        "confirmation_required": []
+        "confirmation_required": [],
+        "custom": [
+          {
+            "name": "test_tool_2",
+            "factory": "app.agents.tools.testing:create_test_tool_2"
+          },
+          {
+            "name": "large_test_output",
+            "factory": "app.agents.tools.testing:create_large_test_output_tool"
+          },
+          {
+            "name": "read_session_recent_text_messages",
+            "factory": "app.agents.tools.session_history:create_read_session_recent_text_messages_tool"
+          },
+          {
+            "name": "grep_session_context_jsonl",
+            "factory": "app.agents.tools.session_history:create_grep_session_context_jsonl_tool"
+          },
+          {
+            "name": "read_session_context_jsonl",
+            "factory": "app.agents.tools.session_history:create_read_session_context_jsonl_tool"
+          },
+          {
+            "name": "web_search",
+            "factory": "app.agents.tools.web:create_web_search_tool"
+          },
+          {
+            "name": "fetch_webpage",
+            "factory": "app.agents.tools.web:create_fetch_webpage_tool",
+            "options": {
+              "embedding": {
+                "provider_id": "backup_2",
+                "model": "openai/text-embedding-3-small"
+              }
+            }
+          },
+          {
+            "name": "openBrowserPage",
+            "factory": "app.agents.tools.browser:create_open_browser_page_tool"
+          },
+          {
+            "name": "readPage",
+            "factory": "app.agents.tools.browser:create_read_page_tool"
+          },
+          {
+            "name": "navigatePage",
+            "factory": "app.agents.tools.browser:create_navigate_page_tool"
+          },
+          {
+            "name": "clickElement",
+            "factory": "app.agents.tools.browser:create_click_element_tool"
+          },
+          {
+            "name": "typeInPage",
+            "factory": "app.agents.tools.browser:create_type_in_page_tool"
+          },
+          {
+            "name": "hoverElement",
+            "factory": "app.agents.tools.browser:create_hover_element_tool"
+          },
+          {
+            "name": "dragElement",
+            "factory": "app.agents.tools.browser:create_drag_element_tool"
+          },
+          {
+            "name": "handleDialog",
+            "factory": "app.agents.tools.browser:create_handle_dialog_tool"
+          },
+          {
+            "name": "screenshotPage",
+            "factory": "app.agents.tools.browser:create_screenshot_page_tool"
+          },
+          {
+            "name": "runPlaywrightCode",
+            "factory": "app.agents.tools.browser:create_run_playwright_code_tool"
+          }
+        ]
       },
       "knowledge": {
         "enabled": true,
@@ -376,5 +452,11 @@
         }
       }
     }
+  },
+  "development": {
+    "test_tools": true
+  },
+  "gateway": {
+    "workspaces": []
   }
 }

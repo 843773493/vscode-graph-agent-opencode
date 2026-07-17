@@ -64,6 +64,60 @@ export interface SessionDTO {
   title_source?: "default" | "user" | "auto";
   current_agent_id: string;
   parent_session_id?: string | null;
+  kind?: "normal" | "context_fork" | "delegated";
+  delegation?: SessionDelegationDTO | null;
+}
+export interface SessionDelegationDTO {
+  parent_session_id: string;
+  parent_job_id: string;
+  parent_tool_call_id: string;
+  subagent_type: string;
+  start_status?: "pending" | "running" | "failed";
+  start_error?: string | null;
+}
+export interface SessionInformationErrorDTO {
+  event_id: string;
+  job_id: string;
+  type: string;
+  message: string;
+  timestamp: string;
+}
+export interface SessionInformationExecutionDTO {
+  job_id?: string | null;
+  status?: string;
+  current_tool?: string | null;
+  last_error?: string | null;
+}
+export interface SessionInformationResourceDTO {
+  resource_id: string;
+  kind: "background_task" | "terminal" | "browser";
+  name: string;
+  status: string;
+  updated_at: string;
+}
+export interface SessionInformationSnapshotDTO {
+  kind?: "boxteam_session_information";
+  schema_version?: number;
+  generated_at: string;
+  session: SessionDTO;
+  child_session_ids?: string[];
+  workspace: SessionInformationWorkspaceDTO;
+  storage_path: string;
+  execution: SessionInformationExecutionDTO;
+  trace: SessionInformationTraceDTO;
+  resources?: SessionInformationResourceDTO[];
+  recent_errors?: SessionInformationErrorDTO[];
+}
+export interface SessionInformationWorkspaceDTO {
+  workspace_id: string;
+  name: string;
+  root_path: string;
+}
+export interface SessionInformationTraceDTO {
+  event_count?: number;
+  last_event_id?: string | null;
+  last_event_type?: string | null;
+  last_event_at?: string | null;
 }
 export interface SessionInterruptResultDTO {
   session_id: string;

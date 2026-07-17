@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -23,52 +22,29 @@ from tests.e2e.utils import (
     last_assistant_message,
     wait_for_job_done,
 )
+from tests.e2e.utils import prepare_e2e_workspace
 
 CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
     "AGENTS.md",
-    ".boxteam/boxteam.json",
     ".boxteam/skills",
 )
 
 
 @pytest.fixture(scope="module")
-def e2e_workspace_root_path(request: pytest.FixtureRequest, e2e_session_marker: str) -> str:
+def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     project_root = Path.cwd().resolve()
     tests_root = project_root / "tests" / "e2e"
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
-    workspace_root = project_root / "out" / "tests" / "e2e" / relative_test_path
+    workspace_root = (
+        project_root / "out" / "tests" / "temp" / "e2e" / relative_test_path / "workspace"
+    )
     template_root = project_root / "asset" / "custom_tool_test_workspace"
-    lock_file = workspace_root / ".e2e_session_lock"
-
-    same_session = lock_file.exists() and lock_file.read_text(encoding="utf-8").strip() == e2e_session_marker
-    if workspace_root.exists() and not same_session:
-        shutil.rmtree(workspace_root)
-    workspace_root.mkdir(parents=True, exist_ok=True)
-
-    for item in workspace_root.iterdir():
-        if item.resolve() == lock_file.resolve():
-            continue
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
-
-    for relative_item in CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS:
-        item = template_root / relative_item
-        if not item.exists():
-            raise FileNotFoundError(f"custom tool e2e 模板缺少必要文件: {item}")
-        target = workspace_root / item.name
-        if relative_item.startswith(".boxteam/"):
-            target = workspace_root / relative_item
-            target.parent.mkdir(parents=True, exist_ok=True)
-        if item.is_dir():
-            shutil.copytree(item, target)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, target)
-
-    lock_file.write_text(e2e_session_marker, encoding="utf-8")
+    prepare_e2e_workspace(
+        workspace_root=workspace_root,
+        template_root=template_root,
+        template_items=CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS,
+    )
     return str(workspace_root)
 
 
@@ -153,7 +129,7 @@ async def _write_source_session_checkpoint(
     source_marker: str,
 ) -> None:
     saver = FileSystemCheckpointSaver(
-        base_dir=Path(workspace_root) / ".boxteam" / "checkpoints"
+        sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
     )
     messages = [
         HumanMessage(
@@ -474,7 +450,7 @@ async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session
         f"再调用 grep_session_context_jsonl 搜索 {source_marker}，并把 snapshot_id 作为 expected_snapshot_id；"
         "最后调用 read_session_context_jsonl 读取 grep 命中的第一行，line_count=1，"
         "继续传同一个 expected_snapshot_id。"
-        "最终只回复一个 JSON 对象，键为 recent、grep、read，值分别是三次工具返回的 JSON 对象，不要解释。"
+        "三次工具调用完成后只回复完成，不要重新抄写工具返回的大段 JSON。"
     )
     reader_message_response = await client.post(
         f"/api/v1/sessions/{reader_session_id}/messages",
@@ -488,13 +464,25 @@ async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session
     reader_job_data = await wait_for_job_done(client, reader_job_id, max_attempts=120)
     assert reader_job_data["status"] in {"completed", "succeeded"}
 
-    messages_response = await client.get(f"/api/v1/sessions/{reader_session_id}/messages")
-    assert messages_response.status_code == 200
-    messages = messages_response.json()["data"]["items"]
-    result = _json_object_from_text(last_assistant_message(messages))
-    recent_result = result["recent"]
-    grep_result = result["grep"]
-    read_result = result["read"]
+    traces_response = await client.get(f"/api/v1/sessions/{reader_session_id}/traces")
+    assert traces_response.status_code == 200
+    traces = traces_response.json()["data"]
+    tool_results = {
+        get_trace_payload(trace).get("tool_name"): json.loads(
+            str(get_trace_payload(trace)["result"])
+        )
+        for trace in traces
+        if trace.get("type") == "tool_call_end"
+        and get_trace_payload(trace).get("tool_name")
+        in {
+            "read_session_recent_text_messages",
+            "grep_session_context_jsonl",
+            "read_session_context_jsonl",
+        }
+    }
+    recent_result = tool_results["read_session_recent_text_messages"]
+    grep_result = tool_results["grep_session_context_jsonl"]
+    read_result = tool_results["read_session_context_jsonl"]
     assert recent_result["session_id"] == source_session_id
     assert recent_result["rounds"] == 5
     assert recent_result["user_message_count"] >= 1
@@ -517,9 +505,6 @@ async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session
     assert read_result["context_snapshot"]["consistency"] == "matched"
     assert source_marker in read_result["lines"][0]["text"]
 
-    traces_response = await client.get(f"/api/v1/sessions/{reader_session_id}/traces")
-    assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]
     read_file_paths = [
         _read_file_path_from_trace(trace)
         for trace in traces

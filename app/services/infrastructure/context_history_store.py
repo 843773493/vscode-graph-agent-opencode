@@ -24,7 +24,7 @@ class ContextHistoryStore:
         messages: list[AnyMessage],
     ) -> str:
         artifacts_root = self._backend.artifacts_root.rstrip("/")
-        path = f"{artifacts_root}/conversation_history/{session_id}.md"
+        path = f"{artifacts_root}/sessions/{session_id}/context/history.md"
         timestamp = datetime.now(UTC).isoformat()
         new_section = (
             f"## Summarized at {timestamp}\n\n"

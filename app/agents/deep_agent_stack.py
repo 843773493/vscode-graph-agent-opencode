@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from deepagents.backends.protocol import BackendProtocol
-from deepagents.middleware.async_subagents import AsyncSubAgent
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
-from deepagents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
 from deepagents.middleware.summarization import (
     CompactConversationSchema,
     SummarizationToolMiddleware,
@@ -27,24 +25,20 @@ from app.agents.skill_runtime import (
     append_workspace_agents_middleware,
 )
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
+from app.agents.middleware_prompts import (
+    COMPACT_CONVERSATION_SYSTEM_PROMPT,
+    FILESYSTEM_SYSTEM_PROMPT,
+    FILESYSTEM_TOOL_DESCRIPTIONS,
+    MEMORY_SYSTEM_PROMPT,
+    SKILLS_SYSTEM_PROMPT,
+    TODO_SYSTEM_PROMPT,
+    TODO_TOOL_DESCRIPTION,
+)
 from app.agents.request_replay_middleware import PromptReplayCaptureMiddleware
 from app.agents.structured_tool_call_middleware import StructuredToolCallMiddleware
 from app.agents.tool_identity import tool_definition_name
+from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
-
-
-GENERAL_PURPOSE_SUBAGENT = {
-    "name": "general-purpose",
-    "description": "一个通用用途的子代理，可以处理各种任务。",
-    "system_prompt": """你是一个通用用途的子代理。
-
-你的能力：
-- 使用提供的工具完成各种任务
-- 文件读取、编辑和执行命令
-- 根据任务需求选择合适的工具
-
-请根据用户指令完成相应任务。""",
-}
 
 
 ToolDefinition = BaseTool | Callable[..., Any] | dict[str, Any]
@@ -54,7 +48,6 @@ _PROMPT_REPLAY_LABELS = {
     "TodoListMiddleware": "任务规划指令",
     "WorkspaceSkillsMiddleware": "Skills 索引",
     "FilesystemMiddleware": "文件系统与环境信息",
-    "SubAgentMiddleware": "子代理指令",
     "SummarizationMiddleware": "上下文压缩指令",
     "SummarizationToolMiddleware": "上下文压缩工具指令",
     "WorkspaceAgentsMiddleware": "工作区 AGENTS.md",
@@ -123,40 +116,20 @@ def _filter_middleware_tools(middleware: Any, denylist: set[str]) -> None:
     setattr(middleware, "tools", filtered_tools)
 
 
-def _filter_subagent_specs(
-    subagent_specs: list[Any],
-    denylist: set[str],
-) -> list[Any]:
-    if not denylist:
-        return subagent_specs
-
-    filtered_specs: list[Any] = []
-    for spec in subagent_specs:
-        processed_spec = dict(spec)
-        if processed_spec.get("tools") is not None:
-            processed_spec["tools"] = filter_tools_by_name(
-                list(processed_spec["tools"]),
-                denylist,
-            )
-
-        nested_subagents = processed_spec.get("subagents")
-        if isinstance(nested_subagents, list):
-            processed_spec["subagents"] = _filter_subagent_specs(
-                nested_subagents,
-                denylist,
-            )
-
-        filtered_specs.append(processed_spec)
-
-    return filtered_specs
-
-
 def _build_summarization_middleware(
     model: BaseChatModel,
     backend: BackendProtocol,
+    *,
+    compact_tool_enabled: bool,
 ) -> list[AgentMiddleware]:
     summarization = create_summarization_middleware(model, backend)
-    tool_middleware = SummarizationToolMiddleware(summarization)
+    if not compact_tool_enabled:
+        return [summarization]
+
+    tool_middleware = SummarizationToolMiddleware(
+        summarization,
+        system_prompt=COMPACT_CONVERSATION_SYSTEM_PROMPT,
+    )
     for tool in tool_middleware.tools:
         if getattr(tool, "name", "") == "compact_conversation":
             tool.args_schema = CompactConversationSchema
@@ -166,42 +139,6 @@ def _build_summarization_middleware(
     ]
 
 
-def _base_subagent_middleware(
-    *,
-    model: BaseChatModel,
-    backend: BackendProtocol,
-    workspace_root: Path,
-    permissions: list[FilesystemPermission] | None,
-    skills: list[Any] | None,
-    model_routing_middleware: AgentMiddleware | None,
-    tool_output_middleware: ToolOutputMiddleware,
-) -> list[AgentMiddleware]:
-    middleware = [
-        tool_output_middleware,
-        TodoListMiddleware(),
-        FilesystemMiddleware(
-            backend=backend,
-            _permissions=permissions,
-            tool_token_limit_before_evict=None,
-        ),
-        *_build_summarization_middleware(model, backend),
-        PatchToolCallsMiddleware(),
-        StructuredToolCallMiddleware(),
-    ]
-    if model_routing_middleware is not None:
-        middleware.append(model_routing_middleware)
-    append_workspace_agents_middleware(
-        middleware,
-        workspace_root=workspace_root,
-    )
-    append_skill_middlewares(
-        middleware,
-        backend=backend,
-        skills=skills,
-    )
-    return middleware
-
-
 def build_deep_agent_middleware(
     *,
     model: BaseChatModel,
@@ -209,86 +146,53 @@ def build_deep_agent_middleware(
     workspace_root: Path,
     permissions: list[FilesystemPermission] | None,
     resolved_skills: list[Any] | None,
-    resolved_tools: list[ToolDefinition],
-    subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None,
     resolved_tool_denylist: set[str],
     interrupt_on: dict[str, bool | InterruptOnConfig] | None,
     runtime_middleware: list[AgentMiddleware],
     model_routing_middleware: AgentMiddleware | None,
+    tool_invocation_context_middleware: ToolInvocationContextMiddleware,
     tool_output_middleware: ToolOutputMiddleware,
     memory: list[str] | None,
 ) -> list[AgentMiddleware]:
-    gp_middleware = _base_subagent_middleware(
-        model=model,
-        backend=backend,
-        workspace_root=workspace_root,
-        permissions=permissions,
-        skills=resolved_skills,
-        model_routing_middleware=model_routing_middleware,
-        tool_output_middleware=tool_output_middleware,
-    )
-    general_purpose_spec = {
-        **GENERAL_PURPOSE_SUBAGENT,
-        "model": model,
-        "tools": list(resolved_tools) if resolved_tools else [],
-        "middleware": gp_middleware,
-    }
-    if interrupt_on:
-        general_purpose_spec["interrupt_on"] = interrupt_on
-
-    inline_subagents: list[dict[str, Any]] = []
-    if subagents:
-        for spec in _filter_subagent_specs(list(subagents), resolved_tool_denylist):
-            subagent_interrupt_on = spec.get("interrupt_on", interrupt_on)
-            subagent_middleware = _base_subagent_middleware(
-                model=model,
-                backend=backend,
-                workspace_root=workspace_root,
-                permissions=spec.get("permissions"),
-                skills=spec.get("skills"),
-                model_routing_middleware=(
-                    model_routing_middleware if "model" not in spec else None
-                ),
-                tool_output_middleware=tool_output_middleware,
-            )
-            subagent_middleware.extend(spec.get("middleware", []))
-
-            processed_spec = {
-                **spec,
-                "model": spec.get("model", model),
-                "tools": spec.get(
-                    "tools",
-                    list(resolved_tools) if resolved_tools else [],
-                ),
-                "middleware": subagent_middleware,
-            }
-            if subagent_interrupt_on:
-                processed_spec["interrupt_on"] = subagent_interrupt_on
-            inline_subagents.append(processed_spec)
-
-    if not any(spec.get("name") == GENERAL_PURPOSE_SUBAGENT["name"] for spec in inline_subagents):
-        inline_subagents.insert(0, general_purpose_spec)
-
-    deepagent_middleware = [
+    deepagent_middleware: list[AgentMiddleware] = [
+        tool_invocation_context_middleware,
         tool_output_middleware,
-        TodoListMiddleware(),
     ]
+    if "write_todos" not in resolved_tool_denylist:
+        deepagent_middleware.append(
+            TodoListMiddleware(
+                system_prompt=TODO_SYSTEM_PROMPT,
+                tool_description=TODO_TOOL_DESCRIPTION,
+            )
+        )
     append_skill_middlewares(
         deepagent_middleware,
         backend=backend,
         skills=resolved_skills,
+        system_prompt=(
+            SKILLS_SYSTEM_PROMPT
+            if "read_file" not in resolved_tool_denylist
+            else None
+        ),
     )
+    filesystem_middleware = FilesystemMiddleware(
+        backend=backend,
+        system_prompt=FILESYSTEM_SYSTEM_PROMPT,
+        custom_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
+        _permissions=permissions,
+        tool_token_limit_before_evict=None,
+    )
+    _filter_middleware_tools(filesystem_middleware, resolved_tool_denylist)
+    if filesystem_middleware.tools:
+        deepagent_middleware.append(filesystem_middleware)
+
     deepagent_middleware.extend(
         [
-            FilesystemMiddleware(
-                backend=backend,
-                tool_token_limit_before_evict=None,
+            *_build_summarization_middleware(
+                model,
+                backend,
+                compact_tool_enabled="compact_conversation" not in resolved_tool_denylist,
             ),
-            SubAgentMiddleware(
-                backend=backend,
-                subagents=inline_subagents,
-            ),
-            *_build_summarization_middleware(model, backend),
             PatchToolCallsMiddleware(),
             StructuredToolCallMiddleware(),
         ]
@@ -309,7 +213,13 @@ def build_deep_agent_middleware(
         _filter_middleware_tools(middleware_item, resolved_tool_denylist)
 
     if memory:
-        deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
+        deepagent_middleware.append(
+            MemoryMiddleware(
+                backend=backend,
+                sources=memory,
+                system_prompt=MEMORY_SYSTEM_PROMPT,
+            )
+        )
 
     if interrupt_on:
         deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))

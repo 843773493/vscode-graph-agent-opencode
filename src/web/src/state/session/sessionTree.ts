@@ -1,4 +1,4 @@
-import type { Session } from "../types/backend";
+import type { Session } from "../../types/backend";
 
 export interface SessionTreeNode {
   session: Session;

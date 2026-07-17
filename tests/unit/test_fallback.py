@@ -6,8 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.services.orchestration.agent_execution_service import AgentExecutionService
-from app.services.orchestration.agent_event_stream_processor import AgentEventStreamResult
+from app.schemas.public_v2.common import MessageRole
+from app.services.orchestration.agent_execution_service import (
+    AgentExecutionService,
+    _has_valid_delegated_report,
+    _has_valid_session_question_reply,
+)
+from app.services.orchestration.agent_event_stream_processor import (
+    AgentEventStreamResult,
+    SuccessfulToolCall,
+)
 
 
 @pytest.fixture
@@ -86,6 +94,301 @@ def _make_service(deps):
         tool_selection_store=deps["tool_selection_store"],
         workspace_root=Path.cwd(),
     )
+
+
+def test_delegated_report_requires_successful_parent_directed_system_message():
+    parent = "ses_parent"
+    assert not _has_valid_delegated_report(
+        [SuccessfulToolCall("send_message_to_session", {"target_session_id": "ses_other"})],
+        parent_session_id=parent,
+    )
+    assert not _has_valid_delegated_report(
+        [
+            SuccessfulToolCall(
+                "send_message_to_session",
+                {
+                    "target_session_id": parent,
+                    "simulate_user": False,
+                    "kind": "progress",
+                },
+            )
+        ],
+        parent_session_id=parent,
+    )
+    assert not _has_valid_delegated_report(
+        [
+            SuccessfulToolCall(
+                "send_message_to_session",
+                {"target_session_id": parent, "simulate_user": True},
+            )
+        ],
+        parent_session_id=parent,
+    )
+    assert _has_valid_delegated_report(
+        [
+            SuccessfulToolCall(
+                "send_message_to_session",
+                {
+                    "target_session_id": parent,
+                    "simulate_user": False,
+                    "kind": "result",
+                },
+            )
+        ],
+        parent_session_id=parent,
+    )
+
+
+def test_session_question_reply_requires_matching_communication_id():
+    valid = SuccessfulToolCall(
+        "send_message_to_session",
+        {
+            "target_session_id": "ses_sender",
+            "simulate_user": False,
+            "kind": "reply",
+            "reply_to_communication_id": "comm_question",
+        },
+    )
+    assert _has_valid_session_question_reply(
+        [valid],
+        sender_session_id="ses_sender",
+        communication_id="comm_question",
+    )
+    assert not _has_valid_session_question_reply(
+        [valid],
+        sender_session_id="ses_sender",
+        communication_id="comm_other",
+    )
+
+
+@pytest.mark.asyncio
+async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+    stream_results = [
+        AgentEventStreamResult(
+            final_text=f"普通文本 {index}",
+            final_text_part_id=f"part_{index}",
+            latest_model_content_blocks=(),
+            last_tool_result_text="",
+        )
+        for index in range(3)
+    ]
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            new=AsyncMock(side_effect=stream_results),
+        ) as process,
+    ):
+        with pytest.raises(RuntimeError, match="没有通过 send_message_to_session"):
+            await service.run_step(
+                session_id="ses_child",
+                message="委派任务",
+                agent_id="test_agent",
+                job_id="job_child",
+                message_id="msg_child",
+                message_created_at="2026-07-16T00:00:00+00:00",
+                message_role=MessageRole.system,
+                message_metadata={
+                    "source": "session_subagent_delegation",
+                    "parent_session_id": "ses_parent",
+                },
+            )
+
+    assert process.await_count == 3
+    assert (
+        process.await_args_list[0].kwargs["config"]["recursion_limit"]
+        == 9999
+    )
+
+
+@pytest.mark.asyncio
+async def test_delegated_progress_only_cannot_replace_final_result(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+    progress_call = SuccessfulToolCall(
+        "send_message_to_session",
+        {
+            "target_session_id": "ses_parent",
+            "simulate_user": False,
+            "kind": "progress",
+        },
+    )
+    stream_results = [
+        AgentEventStreamResult(
+            final_text=f"普通结论 {index}",
+            final_text_part_id=f"part_progress_{index}",
+            latest_model_content_blocks=(),
+            last_tool_result_text="accepted",
+            successful_tool_calls=(progress_call,),
+        )
+        for index in range(3)
+    ]
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            new=AsyncMock(side_effect=stream_results),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="没有通过 send_message_to_session"):
+            await service.run_step(
+                session_id="ses_child",
+                message="委派任务",
+                agent_id="test_agent",
+                job_id="job_child",
+                message_id="msg_child",
+                message_created_at="2026-07-16T00:00:00+00:00",
+                message_role=MessageRole.system,
+                message_metadata={
+                    "source": "session_subagent_delegation",
+                    "parent_session_id": "ses_parent",
+                },
+            )
+
+
+@pytest.mark.asyncio
+async def test_cross_session_question_retries_until_correlated_tool_reply(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+    input_messages: list[object] = []
+    stream_results = [
+        AgentEventStreamResult(
+            final_text="普通回答",
+            final_text_part_id="part_plain",
+            latest_model_content_blocks=(),
+            last_tool_result_text="",
+        ),
+        AgentEventStreamResult(
+            final_text="已通过会话工具回复",
+            final_text_part_id="part_tool_reply",
+            latest_model_content_blocks=(),
+            last_tool_result_text="accepted",
+            successful_tool_calls=(
+                SuccessfulToolCall(
+                    "send_message_to_session",
+                    {
+                        "target_session_id": "ses_questioner",
+                        "simulate_user": False,
+                        "kind": "reply",
+                        "reply_to_communication_id": "comm_question",
+                    },
+                ),
+            ),
+        ),
+    ]
+
+    async def process_side_effect(*, input_payload, **_kwargs):
+        input_messages.append(input_payload["messages"][0])
+        return stream_results.pop(0)
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_side_effect,
+        ),
+    ):
+        result = await service.run_step(
+            session_id="ses_answerer",
+            message="跨会话问题",
+            agent_id="test_agent",
+            job_id="job_answer",
+            message_id="msg_question",
+            message_created_at="2026-07-16T00:00:00+00:00",
+            message_role=MessageRole.system,
+            message_metadata={
+                "source": "send_message_to_session",
+                "kind": "question",
+                "reply_required": True,
+                "sender_session_id": "ses_questioner",
+                "communication_id": "comm_question",
+            },
+        )
+
+    assert result == "已通过会话工具回复"
+    assert len(input_messages) == 2
+    assert (
+        input_messages[1].response_metadata["source"]
+        == "session_question_reply_retry"
+    )
+
+
+@pytest.mark.parametrize("incoming_kind", ["reply", "progress", "result"])
+@pytest.mark.asyncio
+async def test_delegated_child_relays_cross_session_updates_to_its_parent(
+    mock_dependencies,
+    incoming_kind,
+):
+    deps = mock_dependencies
+    delegated_session = MagicMock()
+    delegated_session.delegation.parent_session_id = "ses_parent"
+    session_service = MagicMock()
+    session_service.get = AsyncMock(return_value=delegated_session)
+    deps["dependency_provider"].get_session_service.return_value = session_service
+    service = _make_service(deps)
+    outgoing_kind = "progress" if incoming_kind == "progress" else "result"
+    stream_result = AgentEventStreamResult(
+        final_text="继续执行并完成",
+        final_text_part_id="part_result",
+        latest_model_content_blocks=(),
+        last_tool_result_text="accepted",
+        successful_tool_calls=(
+            SuccessfulToolCall(
+                "send_message_to_session",
+                {
+                    "target_session_id": "ses_parent",
+                    "simulate_user": False,
+                    "kind": outgoing_kind,
+                },
+            ),
+        ),
+    )
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            new=AsyncMock(return_value=stream_result),
+        ),
+    ):
+        result = await service.run_step(
+            session_id="ses_child",
+            message="父会话答复",
+            agent_id="test_agent",
+            job_id="job_continue",
+            message_id="msg_reply",
+            message_created_at="2026-07-16T00:00:00+00:00",
+            message_role=MessageRole.system,
+            message_metadata={
+                "source": "send_message_to_session",
+                "kind": incoming_kind,
+                "sender_session_id": "ses_parent",
+                "communication_id": "comm_reply",
+                "reply_to_communication_id": "comm_question",
+            },
+        )
+
+    assert result == "继续执行并完成"
+    session_service.get.assert_awaited_once_with("ses_child")
 
 
 @pytest.mark.asyncio
@@ -648,6 +951,8 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
             "tool_call_id": "call_1",
             "tool_name": "python_exec",
             "result": '{"stdout":"LC_BLOCK_OK_2\\n"}',
+            "status": "success",
+            "failed": False,
             "agent_id": "test_agent",
         }
     ]

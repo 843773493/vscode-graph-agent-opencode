@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections import deque
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -9,8 +8,9 @@ from typing import Optional, Dict
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobExecutorProtocol
+from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
-from app.schemas.public_v2.common import JobStatus, RunMode, ControlAction
+from app.schemas.public_v2.common import JobStatus, RunMode, ControlAction, MessageRole
 from app.schemas.public_v2.job import JobDTO, StepDTO, JobControlRequest, JobControlResponseDTO
 from app.schemas.public_v2.message import AttachmentRef
 from app.services.business.job_runtime_state import JobRuntimeState
@@ -25,6 +25,8 @@ class JobState:
     message_created_at: str
     agent_id: str
     status: JobStatus
+    message_role: MessageRole = MessageRole.user
+    message_metadata: dict[str, object] = field(default_factory=dict)
     attachments: list[AttachmentRef] = field(default_factory=list)
     progress: int = 0
     error_message: Optional[str] = None
@@ -57,6 +59,7 @@ class JobService:
             if session_id is None or job.session_id == session_id:
                 jobs.append(JobDTO(
                     job_id=job.job_id,
+                    message_id=job.message_id,
                     session_id=job.session_id,
                     mode=RunMode.single_agent,
                     status=job.status,
@@ -78,6 +81,7 @@ class JobService:
 
         return JobDTO(
             job_id=job.job_id,
+            message_id=job.message_id,
             session_id=job.session_id,
             mode=RunMode.single_agent,
             status=job.status,
@@ -165,6 +169,8 @@ class JobService:
         message_id: str,
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
+        message_role: MessageRole = MessageRole.user,
+        message_metadata: dict[str, object] | None = None,
     ) -> str:
         import logging
         logger = logging.getLogger(__name__)
@@ -179,7 +185,7 @@ class JobService:
             raise ValueError("创建 Job 时必须传入已持久化的用户 message_id")
         if not message_created_at:
             raise ValueError("创建 Job 时必须传入用户消息的 message_created_at")
-        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        job_id = create_prefixed_id("job")
         logger.info("[job_service] start_job assigned id: job_id=%s", job_id)
 
         job = JobState(
@@ -190,7 +196,9 @@ class JobService:
             attachments=list(attachments or []),
             message_created_at=message_created_at,
             agent_id=agent_id,
-            status=JobStatus.queued
+            status=JobStatus.queued,
+            message_role=message_role,
+            message_metadata=dict(message_metadata or {}),
         )
 
         self._jobs[job_id] = job
@@ -350,6 +358,8 @@ class JobService:
                 message_id=job.message_id,
                 attachments=list(job.attachments),
                 message_created_at=job.message_created_at,
+                message_role=job.message_role,
+                message_metadata=dict(job.message_metadata),
                 status=job.status,
                 progress=job.progress,
                 error_message=job.error_message,
@@ -364,7 +374,7 @@ class JobService:
             job.progress = 100
             job.ended_at = datetime.now()
             job.updated_at = datetime.now()
-        except asyncio.CancelledError as error:
+        except asyncio.CancelledError:
             if job.status == JobStatus.paused:
                 job.error_message = "任务已暂停"
                 job.updated_at = datetime.now()

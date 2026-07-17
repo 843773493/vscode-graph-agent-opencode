@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections import deque
 from datetime import datetime, timezone
 from typing import Deque, Dict, Set
 
-from app.schemas.background_message import (
+from app.abstractions.background_message_bus import (
     BackgroundMessageBatchDTO,
     BackgroundMessageDTO,
     BackgroundMessageKind,
 )
+from app.core.identifier import create_prefixed_id
 
 
 class BackgroundMessageBus:
@@ -76,10 +76,10 @@ class BackgroundMessageBus:
 
         normalized_kind = BackgroundMessageKind(kind)
         message = BackgroundMessageDTO(
-            message_id=message_id or f"bgm_{uuid.uuid4().hex[:12]}",
+            message_id=message_id or create_prefixed_id("bgm"),
             session_id=session_id,
             agent_id=agent_id,
-            source_id=source_id or f"src_{uuid.uuid4().hex[:12]}",
+            source_id=source_id or create_prefixed_id("src"),
             kind=normalized_kind,
             content=content,
             payload=payload or {},

@@ -2,9 +2,10 @@ import React from "react";
 import type { ConversationTokenUsage } from "../../types/frontend";
 
 const RESPONSE_ACTIONS = [
+  // TODO: 接入后端反馈接口后，实现点赞状态持久化与撤销。
   { label: "有帮助", icon: "thumbsup" },
+  // TODO: 接入后端反馈接口后，实现点踩原因收集与状态持久化。
   { label: "没有帮助", icon: "thumbsdown" },
-  { label: "重试", icon: "refresh" },
 ] as const;
 
 async function writeClipboardText(text: string): Promise<void> {
@@ -35,9 +36,13 @@ async function writeClipboardText(text: string): Promise<void> {
 export default function ResponseActionToolbar({
   responseText,
   tokenUsage,
+  canRegenerate,
+  onRegenerate,
 }: {
   responseText: string;
   tokenUsage: ConversationTokenUsage | null;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
 }): React.ReactNode {
   const [copyState, setCopyState] = React.useState<"idle" | "copied" | "error">("idle");
   const resetTimerRef = React.useRef<number | null>(null);
@@ -92,11 +97,13 @@ export default function ResponseActionToolbar({
 
   return (
     <div className="chat-response-actions" role="toolbar" aria-label="回复操作">
+      {/* TODO: 后续接入浏览器语音能力，并补齐播放、暂停和朗读进度状态。 */}
       <button
         type="button"
         className="chat-response-action-button"
-        title="朗读"
-        aria-label="朗读"
+        title="朗读（暂未开放）"
+        aria-label="朗读（暂未开放）"
+        disabled
       >
         <span className="codicon codicon-unmute" aria-hidden="true" />
       </button>
@@ -117,12 +124,25 @@ export default function ResponseActionToolbar({
           key={action.label}
           type="button"
           className="chat-response-action-button"
-          title={action.label}
-          aria-label={action.label}
+          title={`${action.label}（暂未开放）`}
+          aria-label={`${action.label}（暂未开放）`}
+          disabled
         >
           <span className={`codicon codicon-${action.icon}`} aria-hidden="true" />
         </button>
       ))}
+      {canRegenerate ? (
+        // TODO: 后续补齐可选模型、重试参数和多候选回复；当前只重新生成最后回复。
+        <button
+          type="button"
+          className="chat-response-action-button"
+          title="重新生成最后回复"
+          aria-label="重新生成最后回复"
+          onClick={onRegenerate}
+        >
+          <span className="codicon codicon-refresh" aria-hidden="true" />
+        </button>
+      ) : null}
       <span className="chat-response-action-status" aria-live="polite">
         {copyState === "idle" ? "" : copyLabel}
       </span>

@@ -5,12 +5,17 @@ from pathlib import Path
 import pytest
 from app.core.path_utils import (
     ensure_session_dir,
+    get_boxteam_home,
+    get_gateway_root,
     get_session_path,
+    get_user_config_root,
     get_user_workspace_root,
+    initialize_directories,
     safe_join,
     validate_workspace_path,
 )
 from app.core.exceptions import ForbiddenError
+from app.core.storage_migration import migrate_user_storage_layout
 
 
 class TestPathUtils:
@@ -120,7 +125,7 @@ class TestPathUtils:
             reload(app.core.path_utils)
             from app.core.path_utils import ensure_session_dir
             
-            session_id = f"ses_{uuid.uuid4().hex[:12]}"
+            session_id = f"ses_{uuid.uuid4().hex}"
             path = ensure_session_dir(session_id)
             assert path.exists()
             assert path.is_dir()
@@ -164,3 +169,67 @@ class TestPathUtils:
         root = get_user_workspace_root()
         assert root.name == "boxteam_workspace"
         assert root.parent == Path.home().resolve() / ".boxteams"
+
+    def test_global_paths_share_boxteam_home(self, tmp_path, monkeypatch):
+        boxteam_home = tmp_path / "boxteam-home"
+        monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+        monkeypatch.delenv("BOXTEAM_USER_WORKSPACE_ROOT", raising=False)
+        monkeypatch.delenv("BOXTEAM_GATEWAY_ROOT", raising=False)
+
+        assert get_boxteam_home() == boxteam_home.resolve()
+        assert get_user_config_root() == boxteam_home.resolve() / "config"
+        assert get_gateway_root() == boxteam_home.resolve() / "state" / "gateway"
+        assert get_user_workspace_root() == boxteam_home.resolve() / "boxteam_workspace"
+
+    def test_initialize_directories_migrates_session_related_files(self, tmp_path, monkeypatch):
+        workspace_root = tmp_path / "workspace"
+        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
+        session_id = "ses_migrate"
+        boxteam_root = workspace_root / ".boxteam"
+        session_root = boxteam_root / "sessions" / session_id
+        session_root.mkdir(parents=True)
+        (session_root / "session.json").write_text("{}", encoding="utf-8")
+        legacy_checkpoint = boxteam_root / "checkpoints" / session_id
+        legacy_checkpoint.mkdir(parents=True)
+        (legacy_checkpoint / "checkpoints.jsonl").write_text("{}\n", encoding="utf-8")
+        legacy_trace = boxteam_root / "logs" / "traces"
+        legacy_trace.mkdir(parents=True)
+        (legacy_trace / f"trace_{session_id}.jsonl").write_text("{}\n", encoding="utf-8")
+        orphaned_checkpoint = boxteam_root / "checkpoints" / "ses_orphaned"
+        orphaned_checkpoint.mkdir(parents=True)
+        (orphaned_checkpoint / "checkpoints.jsonl").write_text("{}\n", encoding="utf-8")
+
+        initialize_directories()
+
+        assert (session_root / "checkpoints" / "checkpoints.jsonl").is_file()
+        assert (session_root / "logs" / "traces" / "events.jsonl").is_file()
+        assert not legacy_checkpoint.exists()
+        assert (
+            boxteam_root
+            / "orphaned"
+            / "legacy-checkpoints"
+            / "ses_orphaned"
+            / "checkpoints.jsonl"
+        ).is_file()
+
+    def test_migrate_user_storage_layout_moves_global_data(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        boxteam_home = home / ".boxteams"
+        default_workspace = boxteam_home / "boxteam_workspace"
+        monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+        legacy_config = home / ".boxteam"
+        legacy_config.mkdir(parents=True)
+        (legacy_config / "boxteam.jsonc").write_text("{}", encoding="utf-8")
+        legacy_gateway = default_workspace / ".boxteam" / "gateway"
+        legacy_gateway.mkdir(parents=True)
+        (legacy_gateway / "workspaces.json").write_text("{}", encoding="utf-8")
+
+        migrate_user_storage_layout(
+            home=home,
+            boxteam_home=boxteam_home,
+            default_workspace_root=default_workspace,
+        )
+
+        assert (boxteam_home / "config" / "boxteam.jsonc").is_file()
+        assert (boxteam_home / "state" / "gateway" / "workspaces.json").is_file()
+        assert not legacy_gateway.exists()

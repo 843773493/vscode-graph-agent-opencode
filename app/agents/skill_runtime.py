@@ -3,7 +3,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, NotRequired, TypedDict
 
@@ -23,6 +23,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.runtime import Runtime
 
 from app.core.path_utils import get_workspace_root
+from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
 from app.agents.workspace_backend import build_workspace_backend
 
 WORKSPACE_AGENTS_FILE = "AGENTS.md"
@@ -235,6 +236,19 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
 class WorkspaceSkillsMiddleware(SkillsMiddleware):
     """加载 workspace skills，但初始提示不展开 allowed-tools。"""
 
+    def __init__(
+        self,
+        *,
+        backend: BackendProtocol,
+        sources: Sequence[str | tuple[str, str]],
+        system_prompt: str | None = SKILLS_SYSTEM_PROMPT,
+    ) -> None:
+        super().__init__(
+            backend=backend,
+            sources=sources,
+            system_prompt=system_prompt,
+        )
+
     def _format_skills_list(self, skills: list[SkillMetadata]) -> str:
         if not skills:
             paths = [f"{source_path}" for source_path in self.sources]
@@ -310,12 +324,19 @@ def append_skill_middlewares(
     *,
     backend: BackendProtocol | None,
     skills: list[Any] | None,
+    system_prompt: str | None = SKILLS_SYSTEM_PROMPT,
 ) -> None:
     """集中维护 workspace skill metadata middleware 顺序。"""
     if skills:
         if backend is None:
             raise RuntimeError("添加 SkillsMiddleware 时必须提供 backend")
-        middleware_stack.append(WorkspaceSkillsMiddleware(backend=backend, sources=skills))
+        middleware_stack.append(
+            WorkspaceSkillsMiddleware(
+                backend=backend,
+                sources=skills,
+                system_prompt=system_prompt,
+            )
+        )
 
 
 def append_workspace_agents_middleware(

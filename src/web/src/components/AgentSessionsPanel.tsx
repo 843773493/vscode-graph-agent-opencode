@@ -51,6 +51,10 @@ interface AgentSessionsPanelProps {
   onActivateWorkspace: (workspaceId: string) => Promise<void>;
   onRemoveWorkspace: (workspaceId: string, workspaceName: string) => void;
   onReorderWorkspaces: (workspaceIds: string[]) => Promise<void>;
+  onCopySessionInformation: (
+    workspaceId: string,
+    sessionId: string,
+  ) => Promise<void>;
   onSelectWorkspaceSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
   activeSession: Session | null;
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
@@ -86,6 +90,7 @@ export default function AgentSessionsPanel({
   onActivateWorkspace,
   onRemoveWorkspace,
   onReorderWorkspaces,
+  onCopySessionInformation,
   onSelectWorkspaceSession,
   activeSession,
   sessionAttachmentSummaries,
@@ -241,7 +246,7 @@ export default function AgentSessionsPanel({
     y: number,
   ) => {
     const menuWidth = 216;
-    const menuHeight = session.parent_session_id ? 196 : 168;
+    const menuHeight = session.parent_session_id ? 224 : 196;
     setWorkspaceContextMenu(null);
     setContextMenu({
       sessionId: session.session_id,
@@ -662,6 +667,7 @@ export default function AgentSessionsPanel({
             onSetSessionParent(workspaceId, sessionId, parentSessionId)
           }
           onForkSessionContext={onForkSessionContext}
+          onCopySessionInformation={onCopySessionInformation}
           onRemoveWorkspace={onRemoveWorkspace}
           onStatusChange={onStatusChange}
         />

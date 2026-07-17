@@ -14,6 +14,8 @@ function workspace(workspaceId: string, active: boolean): GatewayWorkspace {
     removable: true,
     system_default: false,
     remote: {},
+    services: {},
+    checked_at: "2026-07-16T00:00:00Z",
   };
 }
 

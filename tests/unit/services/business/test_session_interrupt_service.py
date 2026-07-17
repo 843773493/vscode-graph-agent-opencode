@@ -82,7 +82,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     session_id = f"ses_user_interrupt_{phase}"
     job_id = f"job_user_interrupt_{phase}"
     SessionInterruptState.clear(session_id)
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     message_service = MessageService(checkpointer=saver)
     config = build_checkpoint_config(session_id)
     await saver.aput(
@@ -109,6 +109,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     )
     job = JobDTO(
         job_id=job_id,
+        message_id="msg_interrupt",
         session_id=session_id,
         mode=RunMode.single_agent,
         status=JobStatus.streaming,
@@ -168,7 +169,7 @@ async def test_user_interrupt_fails_when_system_reminder_checkpoint_missing(tmp_
     job_id = "job_user_interrupt_missing_checkpoint"
     SessionInterruptState.clear(session_id)
 
-    saver = FileSystemCheckpointSaver(base_dir=tmp_path)
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     message_service = MessageService(checkpointer=saver)
     SessionInterruptState.set(
         session_id,
@@ -178,6 +179,7 @@ async def test_user_interrupt_fails_when_system_reminder_checkpoint_missing(tmp_
     )
     job = JobDTO(
         job_id=job_id,
+        message_id="msg_missing_checkpoint",
         session_id=session_id,
         mode=RunMode.single_agent,
         status=JobStatus.streaming,

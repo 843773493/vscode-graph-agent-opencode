@@ -137,6 +137,41 @@ def test_get_agent_tool_config_reads_custom_tools(tmp_path: Path):
     ]
 
 
+def test_workspace_config_overrides_user_global_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    global_config = _base_config()
+    global_config["logger"]["level"] = "warning"
+    global_path = tmp_path / "home" / ".boxteam" / "boxteam.jsonc"
+    global_path.parent.mkdir(parents=True)
+    global_path.write_text(json.dumps(global_config), encoding="utf-8")
+    monkeypatch.setenv("BOXTEAM_USER_CONFIG_PATH", str(global_path))
+
+    workspace_root = tmp_path / "workspace"
+    workspace_config = workspace_root / ".boxteam" / "boxteam.jsonc"
+    workspace_config.parent.mkdir(parents=True)
+    workspace_config.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "default": {
+                        "name": "Workspace Override",
+                    }
+                },
+                "development": {"test_tools": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=workspace_root)
+
+    assert service.list_agents()["default"]["name"] == "Workspace Override"
+    assert service.list_agents()["default"]["model"]["primary_provider"] == "primary"
+    assert service.development_test_tools_enabled() is True
+
+
 def test_custom_tool_options_schema_accepts_embedding_config(tmp_path: Path) -> None:
     config = _base_config()
     config["agents"]["default"]["tools"] = {
@@ -242,7 +277,7 @@ def test_gateway_config_schema_accepts_ssh_workspace(tmp_path: Path):
                 "host": "127.0.0.1",
                 "port": 22222,
                 "username": "root",
-                "private_key_path": "asset/gateway_ssh/id_ed25519",
+                "private_key_path": "~/.ssh/boxteam_gateway_e2e_ed25519",
                 "remote_backend_host": "127.0.0.1",
                 "remote_backend_port": 8010,
                 "remote_workspace_path": "/workspace/project",

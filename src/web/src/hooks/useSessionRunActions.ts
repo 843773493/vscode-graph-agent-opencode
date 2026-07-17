@@ -4,17 +4,27 @@ import {
   createSession as apiCreateSession,
   DEFAULT_SESSION_TITLE,
   interruptSession as apiInterruptSession,
+  replayMessageTurn as apiReplayMessageTurn,
   sendUserMessage as apiSendMessage,
 } from "../api";
-import type { AttachmentRef, MessageRunAccepted, Session } from "../types/backend";
+import type {
+  AttachmentRef,
+  MessageReplayRequest,
+  MessageRunAccepted,
+  Session,
+} from "../types/backend";
 import type { ConversationContentView, ConversationView } from "../types/frontend";
 import { cloneMaps } from "../state/appStateMaps";
 import { updateSessionAttachmentSummary } from "../state/attachments";
 import { writePendingList } from "../state/conversations";
-import { appendFrontendEvent } from "../state/traceEvents";
+import {
+  appendFrontendEvent,
+  traceJobId,
+  tracePayloadString,
+} from "../state/traceEvents";
 import { writeLastSessionId } from "../state/storage";
 import type { SetAppState } from "./contentViewLoaderTypes";
-import { sessionScopeKey } from "../state/sessionScope";
+import { sessionScopeKey } from "../state/session/sessionScope";
 
 export function useSessionRunActions({
   apiPort,
@@ -336,9 +346,121 @@ export function useSessionRunActions({
     setState((prev) => ({ ...prev, status: `已中断: ${result.phase}` }));
   }, [apiPort, currentSession, currentSessionGatewayWorkspaceId, setState]);
 
+  const replayTurn = useCallback(async (
+    targetMessageId: string,
+    action: MessageReplayRequest["action"],
+    displayContent: string,
+    content?: string,
+    attachments: AttachmentRef[] = [],
+  ) => {
+    const session = currentSession;
+    if (!session) {
+      throw new Error("当前没有可操作的会话");
+    }
+    const workspaceId = currentSessionGatewayWorkspaceId;
+    const sessionCacheKey = currentSessionCacheKey ?? session.session_id;
+    setState((prev) => ({
+      ...prev,
+      status: action === "edit_and_continue"
+        ? "正在编辑并从此处继续..."
+        : action === "regenerate"
+          ? "正在重新生成最后回复..."
+          : "正在重试失败轮次...",
+    }));
+
+    try {
+      const accepted = await apiReplayMessageTurn(
+        apiPort,
+        session.session_id,
+        targetMessageId,
+        {
+          action,
+          content: action === "edit_and_continue" ? content : undefined,
+          acknowledge_context_only: true,
+        },
+        workspaceId,
+      );
+      const submittedAt = new Date().toISOString();
+      const replacementContent = action === "edit_and_continue"
+        ? (content ?? "").trim()
+        : displayContent;
+      setState((prev) => {
+        const next = cloneMaps(prev);
+        const targetIndex = next.messages.findIndex(
+          (message) => message.message_id === targetMessageId,
+        );
+        if (targetIndex >= 0) {
+          const removedMessageIds = new Set(
+            next.messages
+              .slice(targetIndex)
+              .map((message) => message.message_id),
+          );
+          const removedJobIds = new Set(
+            next.traceEvents
+              .filter(
+                (event) =>
+                  event.type === "message_created"
+                  && removedMessageIds.has(tracePayloadString(event, "message_id")),
+              )
+              .map(traceJobId)
+              .filter(Boolean),
+          );
+          next.messages = next.messages.slice(0, targetIndex);
+          next.traceEvents = next.traceEvents.filter(
+            (event) => !removedJobIds.has(traceJobId(event)),
+          );
+        }
+        next.pendingConversations.set(sessionCacheKey, [{
+          conversationId: accepted.message_id,
+          sessionId: session.session_id,
+          userMessage: {
+            message_id: accepted.message_id,
+            session_id: session.session_id,
+            role: "user",
+            content: replacementContent,
+            attachments,
+            metadata: {
+              source: "optimistic_replay",
+              job_id: accepted.job_id,
+              replay_action: action,
+              replaced_message_id: targetMessageId,
+            },
+            created_at: submittedAt,
+            updated_at: submittedAt,
+          },
+          assistantMessages: [],
+          events: [],
+          status: "running",
+          jobId: accepted.job_id,
+          pending: true,
+          source: "pending",
+        }]);
+        next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+        next.status = `${accepted.notice} 正在生成新回复。`;
+        return next;
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setState((prev) => ({
+        ...prev,
+        sessionHistoryReloadNonce: prev.sessionHistoryReloadNonce + 1,
+        status: `轮次操作失败: ${message}`,
+        error: message,
+      }));
+      throw error;
+    }
+  }, [
+    apiPort,
+    currentSession,
+    currentSessionCacheKey,
+    currentSessionGatewayWorkspaceId,
+    setState,
+  ]);
+
   return {
     compactSession,
     interruptSession,
+    replayTurn,
     sendMessage,
   };
 }

@@ -32,14 +32,31 @@ import {
   terminalStatusForEvent,
   tracePayloadString,
 } from "../state/traceEvents";
-import { replaceSessionMetadata } from "../state/sessions";
+import { replaceSessionMetadata } from "../state/session/sessions";
+import { sessionScopeKey } from "../state/session/sessionScope";
 import type { AppState, ConversationView } from "../types/frontend";
+import {
+  fetchWorkspaceSessionListSnapshot,
+  isCurrentWorkspaceSessionListSnapshot,
+} from "./workspaceSessionListRefresh";
 import {
   recoverTraceSnapshot,
   waitForReconnect,
 } from "./sessionEventStreamRecovery";
 
 type SetAppState = Dispatch<SetStateAction<AppState>>;
+
+function sessionListsMatch(
+  left: AppState["sessions"],
+  right: AppState["sessions"],
+): boolean {
+  return left.length === right.length && left.every((session, index) => {
+    const candidate = right[index];
+    return candidate !== undefined
+      && session.session_id === candidate.session_id
+      && session.updated_at === candidate.updated_at;
+  });
+}
 
 async function refreshSessionMetadata(
   apiPort: number,
@@ -64,6 +81,46 @@ async function refreshSessionMetadata(
     }
     if (workspaceId) {
       next.sessionGatewayWorkspaceById.set(sessionCacheKey, workspaceId);
+    }
+    return next;
+  });
+}
+
+async function refreshWorkspaceSessionList(
+  apiPort: number,
+  workspaceId: string | null,
+  setState: SetAppState,
+) {
+  if (!workspaceId) {
+    throw new Error("刷新委派子会话时缺少 workspace_id");
+  }
+  const snapshot = await fetchWorkspaceSessionListSnapshot(apiPort, workspaceId);
+  if (!isCurrentWorkspaceSessionListSnapshot(snapshot)) {
+    return;
+  }
+  setState((previous) => {
+    if (!isCurrentWorkspaceSessionListSnapshot(snapshot)) {
+      return previous;
+    }
+    const previousWorkspaceSessions =
+      previous.sessionsByWorkspace.get(workspaceId) ?? [];
+    if (sessionListsMatch(previousWorkspaceSessions, snapshot.sessions)) {
+      return previous;
+    }
+    const next = cloneMaps(previous);
+    const resolvedWorkspaceId = workspaceId;
+    next.sessionsByWorkspace.set(resolvedWorkspaceId, snapshot.sessions);
+    for (const session of snapshot.sessions) {
+      next.sessionGatewayWorkspaceById.set(
+        sessionScopeKey(resolvedWorkspaceId, session.session_id),
+        resolvedWorkspaceId,
+      );
+    }
+    if (
+      previous.activeGatewayWorkspaceId === resolvedWorkspaceId ||
+      previous.currentSessionWorkspaceId === resolvedWorkspaceId
+    ) {
+      next.sessions = snapshot.sessions;
     }
     return next;
   });
@@ -139,6 +196,27 @@ export function useSessionEventStream({
     const targetWorkspaceId = workspaceId;
     const targetSessionCacheKey = sessionCacheKey ?? sessionId;
     lastEventIdRef.current = null;
+    const refreshWorkspaceSessionsForStream = () => {
+      if (!targetWorkspaceId) {
+        return;
+      }
+      void refreshWorkspaceSessionList(
+        apiPort,
+        targetWorkspaceId,
+        setState,
+      ).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((latest) => ({
+          ...latest,
+          status: `刷新工作区会话失败: ${message}`,
+        }));
+      });
+    };
+    refreshWorkspaceSessionsForStream();
+    const sessionListRefreshIntervalId = window.setInterval(
+      refreshWorkspaceSessionsForStream,
+      2_000,
+    );
     const pendingStreamEvents: SessionStreamEvent[] = [];
     let flushTimerId: number | null = null;
 
@@ -248,6 +326,24 @@ export function useSessionEventStream({
           setState((latest) => ({
             ...latest,
             status: `刷新会话标题失败: ${message}`,
+          }));
+        });
+      }
+      const delegatedSessionCreated = events.some(
+        (event, index) =>
+          event.type === "tool_call_end" &&
+          tracePayloadString(traceEvents[index], "tool_name") === "task",
+      );
+      if (delegatedSessionCreated) {
+        void refreshWorkspaceSessionList(
+          apiPort,
+          targetWorkspaceId,
+          setState,
+        ).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((latest) => ({
+            ...latest,
+            status: `刷新委派子会话失败: ${message}`,
           }));
         });
       }
@@ -374,6 +470,7 @@ export function useSessionEventStream({
 
     return () => {
       window.clearTimeout(connectTimerId);
+      window.clearInterval(sessionListRefreshIntervalId);
       if (flushTimerId !== null) {
         window.clearTimeout(flushTimerId);
       }

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional, Protocol
+
+from app.core.identifier import create_prefixed_id
 
 
 @dataclass(slots=True)
@@ -82,7 +83,7 @@ class BackgroundTaskRegistry:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> BackgroundTaskHandle:
-        task_id = f"bgt_{uuid.uuid4().hex[:12]}"
+        task_id = create_prefixed_id("bgt")
         handle = BackgroundTaskHandle(
             task_id=task_id,
             session_id=session_id,

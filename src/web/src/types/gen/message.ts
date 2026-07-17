@@ -41,6 +41,22 @@ export interface MessageDTO {
     [k: string]: unknown;
   };
 }
+export interface MessageReplayAccepted {
+  message_id: string;
+  job_id: string;
+  status: string;
+  session_id: string;
+  action: "retry_failed" | "regenerate" | "edit_and_continue";
+  replaced_message_id: string;
+  removed_message_count: number;
+  workspace_changes_reverted?: false;
+  notice: string;
+}
+export interface MessageReplayRequest {
+  action: "retry_failed" | "regenerate" | "edit_and_continue";
+  content?: string | null;
+  acknowledge_context_only?: boolean;
+}
 export interface MessageRunAccepted {
   message_id: string;
   job_id: string;

@@ -9,14 +9,15 @@ from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.session_subagent import SessionSubagentProtocol
+from app.abstractions.team import TeamCoordinationProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import (
-    get_checkpoints_dir,
-    get_logs_dir,
+    get_sessions_dir,
     get_workspace_root,
 )
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
@@ -27,7 +28,10 @@ from app.services.business.job_service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_context_fork_service import SessionContextForkService
+from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_information_service import SessionInformationService
+from app.services.business.session_context_query_service import SessionContextQueryService
 from app.services.business.session_resource_providers import (
     BackgroundTaskResourceProvider,
     BrowserResourceProvider,
@@ -48,6 +52,9 @@ from app.services.infrastructure.context_history_store import ContextHistoryStor
 from app.services.infrastructure.historical_terminal_record_reader import (
     HistoricalTerminalRecordReader,
 )
+from app.services.infrastructure.gateway_session_context_client import (
+    GatewaySessionContextClient,
+)
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.runtime_service import RuntimeService
@@ -67,6 +74,9 @@ from app.services.orchestration.session_auto_continue_service import (
     SessionAutoContinueService,
 )
 from app.services.orchestration.session_title_service import SessionTitleService
+from app.services.orchestration.session_subagent_service import SessionSubagentService
+from app.services.business.team.service import TeamCoordinationService
+from app.services.infrastructure.team.store import TeamStore
 from app.tool_testing import ToolTestRegistry, ToolTestService, ToolTestStore
 
 
@@ -79,14 +89,20 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         checkpointer: BaseCheckpointSaver,
         terminal_manager_client: TerminalManagerClient,
         browser_manager_client: BrowserManagerClient,
+        session_context_query_service: SessionContextQueryService,
+        workspace_session_context_client: GatewaySessionContextClient,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
         self._checkpointer = checkpointer
         self._terminal_manager_client = terminal_manager_client
         self._browser_manager_client = browser_manager_client
+        self._session_context_query_service = session_context_query_service
+        self._workspace_session_context_client = workspace_session_context_client
         self._job_service: JobServiceProtocol | None = None
         self._session_orchestrator: SessionOrchestrator | None = None
+        self._session_subagent_service: SessionSubagentProtocol | None = None
+        self._team_service: TeamCoordinationProtocol | None = None
 
     def get_message_service(self) -> MessageService:
         return self._message_service
@@ -102,6 +118,12 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 
     def get_browser_manager_client(self) -> BrowserManagerClient:
         return self._browser_manager_client
+
+    def get_session_context_query_service(self) -> SessionContextQueryService:
+        return self._session_context_query_service
+
+    def get_workspace_session_context_client(self) -> GatewaySessionContextClient:
+        return self._workspace_session_context_client
 
     def set_job_service(self, job_service: JobServiceProtocol) -> None:
         self._job_service = job_service
@@ -119,6 +141,25 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
             raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionOrchestrator")
         return self._session_orchestrator
 
+    def set_session_subagent_service(
+        self,
+        session_subagent_service: SessionSubagentProtocol,
+    ) -> None:
+        self._session_subagent_service = session_subagent_service
+
+    def get_session_subagent_service(self) -> SessionSubagentProtocol:
+        if self._session_subagent_service is None:
+            raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionSubagentService")
+        return self._session_subagent_service
+
+    def set_team_service(self, team_service: TeamCoordinationProtocol) -> None:
+        self._team_service = team_service
+
+    def get_team_service(self) -> TeamCoordinationProtocol:
+        if self._team_service is None:
+            raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 TeamCoordinationService")
+        return self._team_service
+
 @dataclass(slots=True)
 class AppContainer:
     config_service: ConfigService
@@ -131,11 +172,16 @@ class AppContainer:
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
     session_context_fork_service: SessionContextForkService
+    session_turn_replay_service: SessionTurnReplayService
     session_changes_service: SessionChangesService
+    session_information_service: SessionInformationService
+    session_context_query_service: SessionContextQueryService
     session_resource_service: SessionResourceService
     context_compaction_service: ContextCompactionService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
+    session_subagent_service: SessionSubagentService
+    team_service: TeamCoordinationService
     llm_request_log_service: LLMRequestLogService
     log_service: LogService
     tool_service: ToolService
@@ -162,22 +208,26 @@ def build_app_container(
     resolved_boxteam_root = resolved_workspace_root / ".boxteam"
     job_event_bus = JobEventBus()
     background_task_registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(boxteam_root=resolved_boxteam_root)
+        history_store=BackgroundTaskHistoryStore(sessions_dir=get_sessions_dir())
     )
     background_message_bus = BackgroundMessageBus()
-    trace_event_store = TraceEventStore(logs_dir=get_logs_dir())
+    trace_event_store = TraceEventStore(sessions_dir=get_sessions_dir())
     trace_event_recorder = TraceEventRecorder(bus=job_event_bus, store=trace_event_store)
     terminal_manager_client = TerminalManagerClient()
     browser_manager_client = BrowserManagerClient()
+    workspace_session_context_client = GatewaySessionContextClient()
 
-    checkpointer = FileSystemCheckpointSaver(base_dir=get_checkpoints_dir())
+    checkpointer = FileSystemCheckpointSaver(sessions_dir=get_sessions_dir())
 
     config_service = ConfigService(
-        config_dir=resolved_project_root / "configs",
         workspace_root=workspace_root,
     )
     message_service = MessageService(checkpointer=checkpointer)
     session_service = SessionService(config_service=config_service, trace_event_store=trace_event_store)
+    session_context_query_service = SessionContextQueryService(
+        message_source=message_service,
+        session_lookup=session_service,
+    )
     session_context_fork_service = SessionContextForkService(
         session_service=session_service,
         checkpointer=checkpointer,
@@ -194,6 +244,8 @@ def build_app_container(
         checkpointer=checkpointer,
         terminal_manager_client=terminal_manager_client,
         browser_manager_client=browser_manager_client,
+        session_context_query_service=session_context_query_service,
+        workspace_session_context_client=workspace_session_context_client,
     )
     agent_execution_service = AgentExecutionService(
         config_service=config_service,
@@ -225,6 +277,25 @@ def build_app_container(
         job_event_bus=job_event_bus,
     )
     dependency_provider.set_session_orchestrator(session_orchestrator)
+    session_subagent_service = SessionSubagentService(
+        session_service=session_service,
+        session_orchestrator=session_orchestrator,
+    )
+    dependency_provider.set_session_subagent_service(session_subagent_service)
+    team_service = TeamCoordinationService(
+        store=TeamStore(workspace_root=resolved_workspace_root),
+        session_service=session_service,
+        session_orchestrator=session_orchestrator,
+        session_subagent_service=session_subagent_service,
+    )
+    dependency_provider.set_team_service(team_service)
+    session_turn_replay_service = SessionTurnReplayService(
+        checkpointer=checkpointer,
+        message_service=message_service,
+        session_service=session_service,
+        job_service=job_service,
+        dispatcher=session_orchestrator,
+    )
 
     agent_service = AgentService(config_service=config_service)
     artifact_service = ArtifactService()
@@ -243,13 +314,9 @@ def build_app_container(
         message_service=message_service,
     )
     historical_terminal_reader = HistoricalTerminalRecordReader(
-        logs_dir=get_logs_dir(),
-        attach_url=terminal_manager_client.attach_url,
+        sessions_dir=get_sessions_dir(),
     )
-    session_resource_mapper = SessionResourceMapper(
-        terminal_attach_url=terminal_manager_client.attach_url,
-        browser_attach_url=browser_manager_client.attach_url,
-    )
+    session_resource_mapper = SessionResourceMapper()
     session_resource_provider_registry = SessionResourceProviderRegistry(
         [
             BackgroundTaskResourceProvider(
@@ -273,6 +340,12 @@ def build_app_container(
         session_service=session_service,
         job_service=job_service,
         provider_registry=session_resource_provider_registry,
+    )
+    workspace_service = WorkspaceService(config_service=config_service)
+    session_information_service = SessionInformationService(
+        session_service=session_service,
+        session_resource_service=session_resource_service,
+        workspace_service=workspace_service,
     )
     context_history_store = ContextHistoryStore()
     context_checkpoint_store = ContextCompactionCheckpointStore(
@@ -305,8 +378,6 @@ def build_app_container(
         selection_store=tool_selection_store,
         test_supported_tools=tool_test_service.supported_tools,
     )
-    workspace_service = WorkspaceService(config_service=config_service)
-
     return AppContainer(
         config_service=config_service,
         agent_service=agent_service,
@@ -318,11 +389,16 @@ def build_app_container(
         session_auto_continue_service=session_auto_continue_service,
         session_interrupt_service=session_interrupt_service,
         session_context_fork_service=session_context_fork_service,
+        session_turn_replay_service=session_turn_replay_service,
         session_changes_service=session_changes_service,
+        session_information_service=session_information_service,
+        session_context_query_service=session_context_query_service,
         session_resource_service=session_resource_service,
         context_compaction_service=context_compaction_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
+        session_subagent_service=session_subagent_service,
+        team_service=team_service,
         llm_request_log_service=llm_request_log_service,
         log_service=log_service,
         tool_service=tool_service,

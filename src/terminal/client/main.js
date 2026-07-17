@@ -1,6 +1,13 @@
-const backendBaseUrl = window.BOXTEAM_TERMINAL_BACKEND_URL || "http://127.0.0.1:8012";
 const params = new URLSearchParams(window.location.search);
 const terminalId = params.get("terminalId");
+const workspaceId = params.get("workspaceId");
+const gatewayMode = Boolean(workspaceId);
+const backendBaseUrl = workspaceId
+  ? `${window.location.origin}/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/terminal-manager`
+  : window.BOXTEAM_TERMINAL_BACKEND_URL || "http://127.0.0.1:8012";
+const backendRequestHeaders = gatewayMode
+  ? { "X-Local-Token": "local-dev-token" }
+  : {};
 document.documentElement.classList.toggle("embedded-terminal", params.get("embedded") === "1");
 
 const terminalIdElement = document.querySelector("#terminal-id");
@@ -59,8 +66,8 @@ function setAttachButtonMode(mode) {
 function backendWsUrl() {
   const url = new URL(backendBaseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/terminal";
-  url.search = "";
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/terminal`;
+  url.search = gatewayMode ? "?token=local-dev-token" : "";
   return url.toString();
 }
 
@@ -193,6 +200,7 @@ async function loadSnapshot() {
   }
   const response = await fetch(
     `${backendBaseUrl}/api/terminals/${encodeURIComponent(terminalId)}?missing_as_deleted=1`,
+    { headers: backendRequestHeaders },
   );
   if (response.status === 404) {
     markDeleted("终端已删除或不存在");
@@ -222,7 +230,7 @@ async function syncTerminalState() {
   }
   const response = await fetch(
     `${backendBaseUrl}/api/terminals/${encodeURIComponent(terminalId)}?missing_as_deleted=1`,
-    { cache: "no-store" },
+    { cache: "no-store", headers: backendRequestHeaders },
   );
   if (response.status === 404) {
     markDeleted("终端已删除或不存在");
@@ -423,6 +431,7 @@ terminateButton.addEventListener("click", async () => {
   }
   const response = await fetch(`${backendBaseUrl}/api/terminals/${encodeURIComponent(terminalId)}/kill`, {
     method: "POST",
+    headers: backendRequestHeaders,
   });
   if (!response.ok) {
     setStatus(`终止失败: ${response.status}`, true);
@@ -446,6 +455,7 @@ deleteButton.addEventListener("click", async () => {
   detach();
   const response = await fetch(`${backendBaseUrl}/api/terminals/${encodeURIComponent(terminalId)}`, {
     method: "DELETE",
+    headers: backendRequestHeaders,
   });
   if (!response.ok) {
     setStatus(`删除失败: ${response.status}`, true);

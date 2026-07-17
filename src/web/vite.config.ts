@@ -3,6 +3,7 @@ import path from "path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  cacheDir: process.env.BOXTEAM_VITE_CACHE_DIR ?? "node_modules/.vite",
   plugins: [
     react(),
     {
@@ -30,6 +31,7 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:8014",
         changeOrigin: true,
+        ws: true,
       },
     },
   },

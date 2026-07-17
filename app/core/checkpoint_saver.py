@@ -1,4 +1,4 @@
-"""基于文件系统的 LangGraph CheckpointSaver，checkpoint 写入 .boxteam/checkpoints/。"""
+"""基于文件系统的 LangGraph CheckpointSaver，checkpoint 随会话存储。"""
 from __future__ import annotations
 
 import asyncio
@@ -33,23 +33,23 @@ class FileSystemCheckpointSaver(
     """将 LangGraph checkpoint 持久化到文件系统。
 
     存储布局：
-        {base_dir}/{thread_id}/{checkpoint_ns}/checkpoints.jsonl
-        {base_dir}/{thread_id}/{checkpoint_ns}/writes.jsonl
-        {base_dir}/{thread_id}/{checkpoint_ns}/blobs/{channel}_{version}.bin
+        {sessions_dir}/{thread_id}/checkpoints/{checkpoint_ns}/checkpoints.jsonl
+        {sessions_dir}/{thread_id}/checkpoints/{checkpoint_ns}/writes.jsonl
+        {sessions_dir}/{thread_id}/checkpoints/{checkpoint_ns}/blobs/{channel}_{version}.bin
 
     当前实现每个 thread 只保存最新 checkpoint（保留 parent chain），
     因为项目使用 session_id 作为 thread_id 且每次运行需要快速恢复。
     """
 
-    def __init__(self, base_dir: str | Path, *, serde: Any | None = None) -> None:
+    def __init__(self, sessions_dir: str | Path, *, serde: Any | None = None) -> None:
         super().__init__(serde=serde)
-        self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.sessions_dir = Path(sessions_dir)
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self._serde = serde or JsonPlusSerializer()
         self._lock = threading.Lock()
 
     def _thread_dir(self, thread_id: str) -> Path:
-        return self.base_dir / thread_id
+        return self.sessions_dir / thread_id / "checkpoints"
 
     def _ns_dir(self, thread_id: str, checkpoint_ns: str) -> Path:
         return self._thread_dir(thread_id) / checkpoint_ns

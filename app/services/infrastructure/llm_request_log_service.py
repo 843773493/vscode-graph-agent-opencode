@@ -4,21 +4,21 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.core.path_utils import get_logs_dir, safe_join
+from app.core.path_utils import get_sessions_dir, safe_join
 from app.schemas.public_v2.llm_request_log import LLMRequestLogRecordDTO
 
 
 class LLMRequestLogService:
     """读取落盘的完整 LLM 请求/响应日志。"""
 
-    def __init__(self, logs_dir: Path | None = None) -> None:
-        self._logs_dir = logs_dir
+    def __init__(self, sessions_dir: Path | None = None) -> None:
+        self._sessions_dir = sessions_dir
 
     def _base_dir(self) -> Path:
-        return (self._logs_dir or get_logs_dir()) / "llm_requests"
+        return self._sessions_dir or get_sessions_dir()
 
     def list_session_logs(self, session_id: str) -> list[LLMRequestLogRecordDTO]:
-        session_dir = safe_join(self._base_dir(), session_id)
+        session_dir = safe_join(self._base_dir(), session_id) / "logs" / "llm_requests"
         if not session_dir.exists():
             return []
         if not session_dir.is_dir():
@@ -77,4 +77,3 @@ class LLMRequestLogService:
             return int(log_file.stem)
         except ValueError as exc:
             raise ValueError(f"LLM 请求日志文件名不是毫秒时间戳: {log_file}") from exc
-

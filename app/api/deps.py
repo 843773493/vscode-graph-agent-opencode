@@ -15,11 +15,14 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.event_service import EventService
 from app.services.business.message_service import MessageService
 from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_information_service import SessionInformationService
+from app.services.business.session_context_query_service import SessionContextQueryService
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_context_fork_service import SessionContextForkService
+from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
@@ -44,8 +47,11 @@ class _AppContainerProtocol:
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
     session_context_fork_service: SessionContextForkService
+    session_turn_replay_service: SessionTurnReplayService
     context_compaction_service: ContextCompactionService
     session_changes_service: SessionChangesService
+    session_information_service: SessionInformationService
+    session_context_query_service: SessionContextQueryService
     session_resource_service: SessionResourceService
     session_service: SessionService
     llm_request_log_service: LLMRequestLogService
@@ -164,6 +170,20 @@ def get_session_changes_service(request: Request) -> SessionChangesService:
     return service
 
 
+def get_session_information_service(request: Request) -> SessionInformationService:
+    service = getattr(_get_container(request), "session_information_service", None)
+    if not isinstance(service, SessionInformationService):
+        raise RuntimeError("SessionInformationService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_session_context_query_service(request: Request) -> SessionContextQueryService:
+    service = getattr(_get_container(request), "session_context_query_service", None)
+    if not isinstance(service, SessionContextQueryService):
+        raise RuntimeError("SessionContextQueryService 尚未在应用启动阶段初始化")
+    return service
+
+
 def get_context_compaction_service(request: Request) -> ContextCompactionService:
     service = getattr(_get_container(request), "context_compaction_service", None)
     if not isinstance(service, ContextCompactionService):
@@ -189,6 +209,13 @@ def get_session_context_fork_service(request: Request) -> SessionContextForkServ
     service = getattr(_get_container(request), "session_context_fork_service", None)
     if not isinstance(service, SessionContextForkService):
         raise RuntimeError("SessionContextForkService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_session_turn_replay_service(request: Request) -> SessionTurnReplayService:
+    service = getattr(_get_container(request), "session_turn_replay_service", None)
+    if not isinstance(service, SessionTurnReplayService):
+        raise RuntimeError("SessionTurnReplayService 尚未在应用启动阶段初始化")
     return service
 
 

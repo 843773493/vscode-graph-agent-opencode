@@ -14,11 +14,11 @@ import {
   clearLastSessionId,
   writeLastSessionId,
 } from "../state/storage";
-import { replaceSessionMetadata } from "../state/sessions";
+import { replaceSessionMetadata } from "../state/session/sessions";
 import { appendFrontendEvent } from "../state/traceEvents";
 import { resetAgentStateFields } from "./useAgentStateSnapshot";
 import type { SetAppState } from "./contentViewLoaderTypes";
-import { sessionScopeKey } from "../state/sessionScope";
+import { sessionScopeKey } from "../state/session/sessionScope";
 
 function normalizeSessionTitle(title: string): string {
   const trimmed = title.trim();
@@ -174,17 +174,18 @@ export function useSessionLifecycleActions({
     async (title: string = DEFAULT_SESSION_TITLE) => {
       invalidateAgentState();
       const normalizedTitle = normalizeSessionTitle(title);
+      const targetWorkspaceId =
+        activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
       try {
         const session = await apiCreateSession(
           apiPort,
           normalizedTitle,
-          defaultGatewayWorkspaceId,
+          targetWorkspaceId,
         );
         setState((prev) => {
           const next = cloneMaps(prev);
           const resolvedWorkspaceId =
-            defaultGatewayWorkspaceId ??
-            prev.activeGatewayWorkspaceId;
+            targetWorkspaceId ?? prev.activeGatewayWorkspaceId;
           const workspace = prev.gatewayWorkspaces.find(
             (item) => item.workspace_id === resolvedWorkspaceId,
           );
@@ -246,7 +247,13 @@ export function useSessionLifecycleActions({
         throw error;
       }
     },
-    [apiPort, defaultGatewayWorkspaceId, invalidateAgentState, setState],
+    [
+      activeGatewayWorkspaceId,
+      apiPort,
+      defaultGatewayWorkspaceId,
+      invalidateAgentState,
+      setState,
+    ],
   );
 
   const startNewSessionDraft = useCallback((workspaceId?: string | null) => {
@@ -255,7 +262,8 @@ export function useSessionLifecycleActions({
     clearLastSessionId();
     setState((prev) => {
       const next = cloneMaps(prev);
-      const targetWorkspaceId = workspaceId ?? defaultGatewayWorkspaceId;
+      const targetWorkspaceId =
+        workspaceId ?? prev.activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
       const targetWorkspace = prev.gatewayWorkspaces.find(
         (item) => item.workspace_id === targetWorkspaceId,
       );

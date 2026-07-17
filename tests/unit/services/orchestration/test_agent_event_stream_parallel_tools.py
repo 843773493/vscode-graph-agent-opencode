@@ -147,6 +147,129 @@ async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
 
 
 @pytest.mark.asyncio
+async def test_failed_tool_message_publishes_failed_tool_call_end(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_failed",
+            "name": "invoke_custom_tool",
+            "data": {
+                "input": {
+                    "tool_name": "read_session_recent_text_messages",
+                    "arguments": {
+                        "workspace_id": "gw_typo",
+                        "session_id": "ses_target",
+                    },
+                }
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_failed",
+            "name": "invoke_custom_tool",
+            "data": {
+                "output": ToolMessage(
+                    content="Gateway 工作区不存在: gw_typo；请修正 workspace_id 后重试",
+                    tool_call_id="call_failed",
+                    name="invoke_custom_tool",
+                    status="error",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_failed_tool",
+        turn_id="job_failed_tool",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+    )
+
+    assert [event_type for event_type, _payload in published] == [
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_END,
+    ]
+    end_payload = published[1][1]
+    assert end_payload["status"] == "error"
+    assert end_payload["failed"] is True
+    assert end_payload["result"] == result.last_tool_result_text
+    assert "修正 workspace_id" in end_payload["result"]
+    assert result.successful_tool_calls == ()
+
+
+@pytest.mark.asyncio
+async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_send",
+            "name": "send_message_to_session",
+            "data": {
+                "input": {
+                    "target_session_id": "ses_parent",
+                    "content": "完成",
+                    "simulate_user": False,
+                }
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_send",
+            "name": "send_message_to_session",
+            "data": {
+                "output": ToolMessage(
+                    content="accepted",
+                    tool_call_id="call_send",
+                    name="send_message_to_session",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+
+    async def publish(_event_type: str, _payload: dict[str, Any]) -> None:
+        return None
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_child",
+        turn_id="job_child",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+    )
+
+    assert len(result.successful_tool_calls) == 1
+    call = result.successful_tool_calls[0]
+    assert call.tool_name == "send_message_to_session"
+    assert call.tool_args["target_session_id"] == "ses_parent"
+    assert call.tool_args["simulate_user"] is False
+
+
+@pytest.mark.asyncio
 async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
     tmp_path: Path,
 ) -> None:
@@ -249,6 +372,83 @@ async def test_small_model_chunks_are_coalesced_before_publishing(
         EventType.TEXT_DELTA,
     ]
     assert published[1][1]["text"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_resumed_authoritative_text_part_is_started_once_and_keeps_all_text(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    def text_chunk(text: str, *, part_id: str, index: int) -> AIMessageChunk:
+        return AIMessageChunk(
+            content=[
+                {
+                    "type": "text",
+                    "text": text,
+                    "id": part_id,
+                    "index": index,
+                }
+            ]
+        )
+
+    events = [
+        {
+            "event": "on_chat_model_stream",
+            "name": "BoxteamLiteLLMChatModel",
+            "data": {"chunk": text_chunk("前半", part_id="part_shared", index=0)},
+            "metadata": {},
+        },
+        {
+            "event": "on_chat_model_stream",
+            "name": "BoxteamLiteLLMChatModel",
+            "data": {
+                "chunk": AIMessageChunk(
+                    content=[
+                        {
+                            "type": "reasoning",
+                            "reasoning": "思考",
+                            "id": "part_reasoning",
+                            "index": 1,
+                        }
+                    ]
+                )
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_chat_model_stream",
+            "name": "BoxteamLiteLLMChatModel",
+            "data": {"chunk": text_chunk("后半", part_id="part_shared", index=0)},
+            "metadata": {},
+        },
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_resumed_text_part",
+        turn_id="job_resumed_text_part",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+    )
+
+    shared_events = [
+        (event_type, payload)
+        for event_type, payload in published
+        if payload.get("part_id") == "part_shared"
+    ]
+    assert [event_type for event_type, _ in shared_events].count(EventType.TEXT_START) == 1
+    assert shared_events[-1][0] == EventType.TEXT_DELTA
+    assert shared_events[-1][1]["text"] == "后半"
+    assert result.final_text == "前半后半"
 
 
 @pytest.mark.asyncio

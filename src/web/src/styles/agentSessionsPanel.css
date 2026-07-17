@@ -47,13 +47,11 @@
 }
 
 .agent-sessions-workspace-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 1px;
+  position: relative;
+  display: block;
   width: 100%;
   min-height: 23px;
-  padding: 0 7px 0 0;
+  padding: 0;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -120,6 +118,7 @@
 
 .agent-sessions-workspace-title-button {
   display: flex;
+  width: 100%;
   min-width: 0;
   align-items: center;
   height: 23px;
@@ -147,21 +146,35 @@
 }
 
 .agent-sessions-workspace-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
   display: flex;
+  height: 23px;
   align-items: center;
   gap: 0;
+  padding-left: 10px;
+  background: linear-gradient(
+    90deg,
+    transparent 0,
+    var(--vscode-agentsPanel-background) 10px
+  );
   color: #6f684f;
   font-size: 13px;
   opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .agent-sessions-workspace-row:hover .agent-sessions-workspace-actions,
 .agent-sessions-workspace-row:focus-within .agent-sessions-workspace-actions {
   opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
 }
 
 .agent-sessions-workspace-session-list {
-  padding: 0 10px 0 0;
+  padding: 0;
 }
 
 .agent-sessions-workspace-session-list .session-item {
@@ -290,6 +303,41 @@
   flex-direction: row;
   align-items: center;
   gap: 8px;
+}
+
+.session-kind-icon {
+  flex: 0 0 14px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 13px;
+  text-align: center;
+}
+
+.session-kind-icon.failed {
+  color: var(--vscode-errorForeground);
+}
+
+/* 对齐 VS Code Sessions：滚动条按需显示，不为未出现的滚动条永久预留空间。 */
+.agent-sessions-panel-body {
+  scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+  scrollbar-gutter: auto;
+  scrollbar-width: thin;
+}
+
+.agent-sessions-panel-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.agent-sessions-panel-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.agent-sessions-panel-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--vscode-scrollbarSlider-background);
+}
+
+.agent-sessions-panel-body::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground);
 }
 
 .agent-sessions-panel .session-item:hover {

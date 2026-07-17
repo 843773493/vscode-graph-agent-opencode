@@ -81,7 +81,10 @@
 
 ### 工作区安全性
 
-1. 所有软件数据必须存储在独立的 `${workspace_abs_path}/.boxteam/` 目录中。
+1. 全局安装、配置和 Gateway 控制面数据统一存储在 `${BOXTEAM_HOME:-~/.boxteams}/`，禁止新增对旧目录 `~/.boxteam/` 的写入。
+2. 工作区业务数据必须存储在独立的 `${workspace_abs_path}/.boxteam/` 目录中；不得把会话、检查点、工具结果或 Agent 日志写入全局目录。
+3. Gateway 管理多个工作区的注册表、激活状态、SSH 重连信息和自身日志属于全局控制面数据，不得存放在默认工作区或任意工作区的 `.boxteam/` 中。
+4. 同一会话的检查点、LLM 请求日志、Trace、后台任务、上下文历史、变更和工具结果统一聚合到 `${workspace_abs_path}/.boxteam/sessions/{session_id}/`，避免删除、导出或迁移时遗留孤儿数据。
 
 ### 架构原则
 
@@ -135,6 +138,9 @@
 
 1. 对所有 JS/TS 相关工具使用 `bun`。
 2. 对所有 Python 相关工具使用 `uv`。
+3. 用户级配置位于 `${BOXTEAM_HOME:-~/.boxteams}/config/boxteam.jsonc`，配置 schema 与其同目录；使用 `python -m configs.boxteam` 生成或安装配置。
+4. 工作区级配置位于 `${workspace_abs_path}/.boxteam/boxteam.jsonc`，其有效配置覆盖用户级配置中的同名项。
+5. 工作区后端初始化只能创建当前显式工作区的 `.boxteam/` 数据目录，不得顺带创建用户默认工作区或修改 Gateway 全局状态。
 
 ## 代理协作
 

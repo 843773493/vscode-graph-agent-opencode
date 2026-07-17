@@ -1,6 +1,7 @@
 export function bindBrowserToolbarEvents({
   browserId,
   backendBaseUrl,
+  requestHeaders,
   attachToggle,
   refreshStateButton,
   backButton,
@@ -56,6 +57,7 @@ export function bindBrowserToolbarEvents({
     }
     const response = await fetch(`${backendBaseUrl}/api/browsers/${encodeURIComponent(browserId)}/close`, {
       method: "POST",
+      headers: requestHeaders,
     });
     if (!response.ok) {
       setStatus(`关闭失败: ${response.status}`, true);
@@ -76,6 +78,7 @@ export function bindBrowserToolbarEvents({
     detach();
     const response = await fetch(`${backendBaseUrl}/api/browsers/${encodeURIComponent(browserId)}`, {
       method: "DELETE",
+      headers: requestHeaders,
     });
     if (!response.ok) {
       setStatus(`删除失败: ${response.status}`, true);
