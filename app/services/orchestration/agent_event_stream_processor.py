@@ -40,6 +40,24 @@ from app.schemas.event import ModelTokenUsagePayload
 FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", APPLY_PATCH_TOOL_NAME}
 TEXT_DELTA_FLUSH_CHARS = 128
 TEXT_DELTA_FLUSH_SECONDS = 0.04
+STREAM_SESSION_ID_METADATA_KEY = "boxteam_session_id"
+STREAM_JOB_ID_METADATA_KEY = "boxteam_job_id"
+
+
+def _model_end_contains_tool_calls(value: object) -> bool:
+    """识别模型结束事件是否仍承诺了后续 ToolMessage。"""
+    tool_calls = getattr(value, "tool_calls", None)
+    if isinstance(tool_calls, list) and tool_calls:
+        return True
+    if isinstance(value, Mapping):
+        mapped_tool_calls = value.get("tool_calls")
+        if isinstance(mapped_tool_calls, list) and mapped_tool_calls:
+            return True
+        return any(_model_end_contains_tool_calls(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_model_end_contains_tool_calls(item) for item in value)
+    message = getattr(value, "message", None)
+    return message is not None and message is not value and _model_end_contains_tool_calls(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +77,7 @@ class AgentEventStreamResult:
     token_usage: ModelTokenUsagePayload = field(
         default_factory=ModelTokenUsagePayload
     )
+    yielded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +163,66 @@ def combine_model_token_usage(
 def _event_run_id(event: dict[str, Any]) -> str:
     run_id = event.get("run_id")
     return run_id if isinstance(run_id, str) else ""
+
+
+def _build_isolated_stream_config(
+    config: dict[str, Any],
+    *,
+    session_id: str,
+    job_id: str,
+) -> dict[str, Any]:
+    """构造独立 Agent 根事件流配置，阻止继承调用方的 LangChain callbacks。"""
+    stream_config = dict(config)
+    if stream_config.get("callbacks") is None:
+        stream_config["callbacks"] = []
+
+    raw_metadata = stream_config.get("metadata")
+    if raw_metadata is None:
+        metadata: dict[str, Any] = {}
+    elif isinstance(raw_metadata, Mapping):
+        metadata = dict(raw_metadata)
+    else:
+        raise TypeError(
+            f"Agent 事件流 config.metadata 必须是 mapping，实际类型: {type(raw_metadata).__name__}"
+        )
+
+    expected_identity = {
+        STREAM_SESSION_ID_METADATA_KEY: session_id,
+        STREAM_JOB_ID_METADATA_KEY: job_id,
+    }
+    for key, expected_value in expected_identity.items():
+        existing_value = metadata.get(key)
+        if existing_value is not None and existing_value != expected_value:
+            raise RuntimeError(
+                "Agent 事件流根配置身份冲突: "
+                f"{key}={existing_value!r} expected={expected_value!r}"
+            )
+        metadata[key] = expected_value
+    stream_config["metadata"] = metadata
+    return stream_config
+
+
+def _validate_stream_event_identity(
+    metadata: object,
+    *,
+    session_id: str,
+    job_id: str,
+    event_type: str,
+    name: str,
+) -> None:
+    if not isinstance(metadata, Mapping):
+        raise TypeError(
+            f"LangChain 事件 metadata 必须是 mapping，实际类型: {type(metadata).__name__}"
+        )
+    event_session_id = metadata.get(STREAM_SESSION_ID_METADATA_KEY)
+    event_job_id = metadata.get(STREAM_JOB_ID_METADATA_KEY)
+    if event_session_id != session_id or event_job_id != job_id:
+        raise RuntimeError(
+            "检测到跨 Agent job 的 LangChain 事件串入: "
+            f"event={event_type} name={name!r} "
+            f"expected_session_id={session_id!r} actual_session_id={event_session_id!r} "
+            f"expected_job_id={job_id!r} actual_job_id={event_job_id!r}"
+        )
 
 
 def _tool_output_succeeded(output: Any) -> bool:
@@ -243,6 +322,7 @@ async def process_agent_event_stream(
     publish: Callable[[str, dict[str, Any]], Awaitable[None]],
     session_changes_service: SessionChangesRecorderProtocol,
     workspace_root: Path,
+    yield_requested: Callable[[], bool] | None = None,
 ) -> AgentEventStreamResult:
     """消费 DeepAgent 事件流，并发布前端可观察的 trace 事件。"""
     collected_text_parts: list[str] = []
@@ -263,6 +343,12 @@ async def process_agent_event_stream(
     tracked_model_run_ids: set[str] = set()
     model_usage_by_run_id: dict[str, ModelTokenUsagePayload] = {}
     tool_output_store = ToolOutputStore(workspace_root=workspace_root)
+    stream_config = _build_isolated_stream_config(
+        config,
+        session_id=session_id,
+        job_id=turn_id,
+    )
+    yielded = False
 
     async def flush_text_delta() -> None:
         nonlocal pending_text_delta_chunks, last_text_delta_flush_at
@@ -313,6 +399,8 @@ async def process_agent_event_stream(
                 "id": part.part_id,
                 "index": part.index,
             }
+            if part.extras:
+                latest_model_parts[part.part_id]["extras"] = dict(part.extras)
             return
         if existing.get("type") != part.block_type or existing.get("index") != part.index:
             raise RuntimeError(
@@ -323,6 +411,13 @@ async def process_agent_event_stream(
         if not isinstance(current_text, str):
             raise RuntimeError(f"模型流 part 缺少 {text_key}: part_id={part.part_id}")
         existing[text_key] = current_text + part.text
+        if part.extras:
+            existing_extras = existing.get("extras")
+            merged_extras = (
+                dict(existing_extras) if isinstance(existing_extras, dict) else {}
+            )
+            merged_extras.update(part.extras)
+            existing["extras"] = merged_extras
 
     async def publish_text_delta(part: AgentStreamContentPart) -> None:
         nonlocal current_text_part_id, current_text_part_kind, last_text_delta_flush_at
@@ -364,11 +459,28 @@ async def process_agent_event_stream(
         ):
             await flush_text_delta()
 
-    async for event in agent.astream_events(input_payload, config=config, version="v2"):
+    async for event in agent.astream_events(
+        input_payload,
+        config=stream_config,
+        version="v2",
+    ):
         event_type = event.get("event")
         name = event.get("name", "")
         data = event.get("data", {})
         metadata = event.get("metadata", {})
+        is_model_event = (
+            isinstance(event_type, str)
+            and event_type.startswith("on_chat_model_")
+            and is_tracked_chat_model_event(name)
+        )
+        if is_model_event or event_type in {"on_tool_start", "on_tool_end"}:
+            _validate_stream_event_identity(
+                metadata,
+                session_id=session_id,
+                job_id=turn_id,
+                event_type=event_type,
+                name=name,
+            )
 
         if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
             await close_current_text_part()
@@ -407,6 +519,8 @@ async def process_agent_event_stream(
             for part in extract_agent_stream_content_parts(content):
                 if part.kind == "reasoning":
                     if not part.text.strip():
+                        if part.extras:
+                            record_latest_model_part(part)
                         continue
                     SessionInterruptState.set(
                         session_id,
@@ -422,6 +536,17 @@ async def process_agent_event_stream(
                     )
                     await publish_text_delta(part)
 
+            continue
+
+        if event_type == "on_chat_model_end" and is_tracked_chat_model_event(name):
+            if (
+                yield_requested is not None
+                and yield_requested()
+                and not _model_end_contains_tool_calls(data.get("output"))
+            ):
+                await close_current_text_part()
+                yielded = True
+                break
             continue
 
         if event_type == "on_tool_start":
@@ -584,6 +709,13 @@ async def process_agent_event_stream(
                 EventType.TOOL_CALL_END,
                 payload,
             )
+            if (
+                not interrupt_state.active_tools_by_run_id
+                and yield_requested is not None
+                and yield_requested()
+            ):
+                yielded = True
+                break
 
     final_text_part_id = (
         current_text_part_id if current_text_part_kind == "markdown" else None
@@ -608,4 +740,5 @@ async def process_agent_event_stream(
         successful_tool_calls=tuple(successful_tool_calls),
         completed_custom_tool_names=tuple(completed_custom_tool_names),
         token_usage=combine_model_token_usage(usage_parts),
+        yielded=yielded,
     )

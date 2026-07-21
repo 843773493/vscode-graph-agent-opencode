@@ -9,55 +9,50 @@ from app.services.infrastructure.config_service import ConfigService
 
 
 @dataclass(frozen=True, slots=True)
-class ConfiguredSshWorkspace:
+class ConfiguredRemoteGateway:
     host: str
     username: str
     private_key_path: str
-    remote_workspace_path: str
-    kind: Literal["ssh"] = "ssh"
+    kind: Literal["remote_gateway"] = "remote_gateway"
     name: str | None = None
     port: int = 22
-    remote_backend_host: str = "127.0.0.1"
-    remote_backend_port: int = 8010
-    remote_terminal_backend_host: str = "127.0.0.1"
-    remote_terminal_backend_port: int = 8012
-    remote_browser_backend_host: str = "127.0.0.1"
-    remote_browser_backend_port: int = 8015
+    remote_gateway_port: int = 8014
     activate: bool = False
     enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class GatewayConfig:
-    workspaces: tuple[ConfiguredSshWorkspace, ...] = ()
+    workspaces: tuple[ConfiguredRemoteGateway, ...] = ()
 
 
-def _workspace_from_validated_config(raw: dict[str, object]) -> ConfiguredSshWorkspace:
-    return ConfiguredSshWorkspace(
+def _workspace_from_validated_config(raw: dict[str, object]) -> ConfiguredRemoteGateway:
+    legacy_fields = sorted(
+        {
+            "remote_workspace_path",
+            "remote_backend_host",
+            "remote_backend_port",
+            "remote_terminal_backend_host",
+            "remote_terminal_backend_port",
+            "remote_browser_backend_host",
+            "remote_browser_backend_port",
+        }
+        & raw.keys()
+    )
+    if legacy_fields or raw.get("kind") == "ssh":
+        raise ValueError(
+            "Gateway 配置仍使用已移除的 SSH 直连后端字段: "
+            f"{', '.join(legacy_fields) or 'kind=ssh'}。"
+            "请改为 kind=remote_gateway，并只配置 remote_gateway_port；"
+            "远程工作区由远端 Gateway 自动发现。"
+        )
+    return ConfiguredRemoteGateway(
         name=cast(str | None, raw.get("name")),
         host=cast(str, raw["host"]),
         port=cast(int, raw.get("port", 22)),
         username=cast(str, raw["username"]),
         private_key_path=cast(str, raw["private_key_path"]),
-        remote_backend_host=cast(str, raw.get("remote_backend_host", "127.0.0.1")),
-        remote_backend_port=cast(int, raw.get("remote_backend_port", 8010)),
-        remote_terminal_backend_host=cast(
-            str,
-            raw.get("remote_terminal_backend_host", "127.0.0.1"),
-        ),
-        remote_terminal_backend_port=cast(
-            int,
-            raw.get("remote_terminal_backend_port", 8012),
-        ),
-        remote_browser_backend_host=cast(
-            str,
-            raw.get("remote_browser_backend_host", "127.0.0.1"),
-        ),
-        remote_browser_backend_port=cast(
-            int,
-            raw.get("remote_browser_backend_port", 8015),
-        ),
-        remote_workspace_path=cast(str, raw["remote_workspace_path"]),
+        remote_gateway_port=cast(int, raw.get("remote_gateway_port", 8014)),
         activate=cast(bool, raw.get("activate", False)),
         enabled=cast(bool, raw.get("enabled", True)),
     )
@@ -76,6 +71,7 @@ def load_gateway_config(workspace_root: Path | None) -> GatewayConfig:
         workspaces=tuple(
             workspace
             for item in validated_workspaces
+            if cast(bool, item.get("enabled", True))
             if (workspace := _workspace_from_validated_config(item)).enabled
         )
     )

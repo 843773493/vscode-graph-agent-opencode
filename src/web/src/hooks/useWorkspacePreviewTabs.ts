@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DEFAULT_BACKEND_PORT, getWorkspaceFileContent } from "../api";
+import {
+  DEFAULT_BACKEND_PORT,
+  getWorkspaceFileContent,
+  updateWorkspaceFileContent,
+} from "../api";
 import type {
   SessionChangeset,
   SessionFileChange,
@@ -52,6 +56,9 @@ export function useWorkspacePreviewTabs({
   const [activePath, setActivePath] = useState<string | null>(null);
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingPath, setEditingPath] = useState<string | null>(null);
+  const [draftContent, setDraftContent] = useState("");
+  const [savingPath, setSavingPath] = useState<string | null>(null);
   const [persistenceReady, setPersistenceReady] = useState(false);
   const persistLayoutRef = useRef(onPersistLayout);
   const persistedPreviewLayoutKeyRef = useRef(previewLayoutKey(restoredLayout));
@@ -68,6 +75,9 @@ export function useWorkspacePreviewTabs({
     setActivePath(null);
     setLoadingPath(null);
     setError(null);
+    setEditingPath(null);
+    setDraftContent("");
+    setSavingPath(null);
     setVisible(restoredLayout.workspace_preview_visible ?? false);
     setMaximized(restoredLayout.workspace_preview_maximized ?? false);
 
@@ -160,6 +170,25 @@ export function useWorkspacePreviewTabs({
     workspace_preview_active_file_path: activeFilePath,
   };
   const currentPreviewLayoutKey = previewLayoutKey(currentPreviewLayout);
+  const editingTab = editingPath
+    ? tabs.find(
+        (tab) => tab.path === editingPath && tab.previewType === "file",
+      )
+    : null;
+  const hasUnsavedEdit = Boolean(
+    editingTab?.previewType === "file" && draftContent !== editingTab.content,
+  );
+
+  useEffect(() => {
+    if (!hasUnsavedEdit) {
+      return;
+    }
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedEdit]);
 
   useEffect(() => {
     if (
@@ -345,7 +374,89 @@ export function useWorkspacePreviewTabs({
     [onStatusChange],
   );
 
+  const beginWorkspaceFileEdit = (path: string) => {
+    const tab = tabs.find((item) => item.path === path);
+    if (!tab || tab.previewType !== "file") {
+      throw new Error(`只有已加载的文本文件可以编辑: ${path}`);
+    }
+    if (
+      editingPath &&
+      editingPath !== path &&
+      hasUnsavedEdit &&
+      !window.confirm("当前文件有未保存修改，放弃修改并编辑另一个文件？")
+    ) {
+      return;
+    }
+    setEditingPath(path);
+    setDraftContent(tab.content);
+    setError(null);
+    onStatusChange(`正在编辑: ${path}`);
+  };
+
+  const cancelWorkspaceFileEdit = () => {
+    if (
+      hasUnsavedEdit &&
+      !window.confirm("放弃当前文件的未保存修改？")
+    ) {
+      return;
+    }
+    setEditingPath(null);
+    setDraftContent("");
+    setError(null);
+    onStatusChange("已退出文件编辑");
+  };
+
+  const saveWorkspaceFileEdit = async () => {
+    if (!editingPath || !editingTab || editingTab.previewType !== "file") {
+      throw new Error("当前没有可保存的文件编辑");
+    }
+    setSavingPath(editingPath);
+    setError(null);
+    try {
+      const saved = await updateWorkspaceFileContent(
+        apiPort ?? DEFAULT_BACKEND_PORT,
+        editingPath,
+        {
+          content: draftContent,
+          expected_revision: editingTab.revision,
+        },
+        workspaceId,
+      );
+      setTabs((current) => current.map((tab) =>
+        tab.path === saved.path && tab.previewType === "file"
+          ? {
+              ...saved,
+              previewType: "file",
+              selection: tab.selection,
+            }
+          : tab,
+      ));
+      setEditingPath(saved.path);
+      setDraftContent(saved.content);
+      onStatusChange(`已保存文件: ${saved.path}`);
+    } catch (saveError) {
+      const message = saveError instanceof Error
+        ? saveError.message
+        : String(saveError);
+      setError(message);
+      onStatusChange(`保存文件失败: ${message}`);
+    } finally {
+      setSavingPath(null);
+    }
+  };
+
   const closeWorkspaceFilePreview = (path: string) => {
+    if (
+      path === editingPath &&
+      hasUnsavedEdit &&
+      !window.confirm("该文件有未保存修改，仍要关闭标签吗？")
+    ) {
+      return;
+    }
+    if (path === editingPath) {
+      setEditingPath(null);
+      setDraftContent("");
+    }
     setTabs((prev) => {
       const closedIndex = prev.findIndex((tab) => tab.path === path);
       const nextTabs = prev.filter((tab) => tab.path !== path);
@@ -364,6 +475,10 @@ export function useWorkspacePreviewTabs({
     activePath,
     loadingPath,
     error,
+    editingPath,
+    draftContent,
+    savingPath,
+    hasUnsavedEdit,
     setVisible,
     setMaximized,
     setActivePath,
@@ -374,6 +489,10 @@ export function useWorkspacePreviewTabs({
     openTerminalPreview,
     openBrowserPreview,
     openSessionChangePreview,
+    beginWorkspaceFileEdit,
+    setDraftContent,
+    cancelWorkspaceFileEdit,
+    saveWorkspaceFileEdit,
     closeWorkspaceFilePreview,
   };
 }

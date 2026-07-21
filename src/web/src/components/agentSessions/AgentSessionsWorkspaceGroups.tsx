@@ -2,7 +2,11 @@ import type { ReactNode } from 'react';
 import type React from 'react';
 import type { GatewayWorkspace, Session } from '../../types/backend';
 import AgentSessionsSessionTree from './AgentSessionsSessionTree';
-import { sortSessions, type SessionSortMode } from './agentSessionsUtils';
+import {
+  buildVisibleWorkspaceTree,
+  sortSessions,
+  type SessionSortMode,
+} from './agentSessionsUtils';
 
 interface WorkspaceDropTarget {
   workspaceId: string;
@@ -15,12 +19,16 @@ interface AgentSessionsWorkspaceGroupsProps {
   sessionsByWorkspace: Map<string, Session[]>;
   sortMode: SessionSortMode;
   collapsedWorkspaceIds: Set<string>;
+  collapsedSessionIds: Set<string>;
+  expandedRootTreeIds: Set<string>;
   draggingWorkspaceId: string | null;
   workspaceDropTarget: WorkspaceDropTarget | null;
   workspaceSwitching: boolean;
   removingGatewayWorkspaceIds: Set<string>;
   currentSessionId: string;
   onToggleWorkspaceSection: (workspaceId: string) => void;
+  onToggleSession: (sessionId: string) => void;
+  onToggleShowAllRoots: (treeId: string) => void;
   onWorkspaceDragStart: (event: React.DragEvent<HTMLElement>, workspaceId: string) => void;
   onWorkspaceDragOver: (event: React.DragEvent<HTMLElement>, workspaceId: string) => void;
   onWorkspaceDrop: (event: React.DragEvent<HTMLElement>, workspaceId: string) => void;
@@ -38,12 +46,8 @@ interface AgentSessionsWorkspaceGroupsProps {
 
 export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
   const lines = [workspace.name, `路径：${workspace.root_path}`];
-  if (workspace.connection_kind === 'ssh') {
-    const { host, port, username } = workspace.remote;
-    const sshTarget = host
-      ? `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}`
-      : '未提供主机信息';
-    lines.push(`SSH：${sshTarget}`);
+  if (workspace.connection_kind === 'remote_gateway') {
+    lines.push(`远程 Gateway：${workspace.remote?.gateway_id ?? '未连接'}`);
   }
   return lines.join('\n');
 }
@@ -54,12 +58,16 @@ export default function AgentSessionsWorkspaceGroups({
   sessionsByWorkspace,
   sortMode,
   collapsedWorkspaceIds,
+  collapsedSessionIds,
+  expandedRootTreeIds,
   draggingWorkspaceId,
   workspaceDropTarget,
   workspaceSwitching,
   removingGatewayWorkspaceIds,
   currentSessionId,
   onToggleWorkspaceSection,
+  onToggleSession,
+  onToggleShowAllRoots,
   onWorkspaceDragStart,
   onWorkspaceDragOver,
   onWorkspaceDrop,
@@ -72,10 +80,14 @@ export default function AgentSessionsWorkspaceGroups({
   if (gatewayWorkspaces.length === 0) {
     return null;
   }
+  const visibleWorkspaceNodes = buildVisibleWorkspaceTree(
+    gatewayWorkspaces,
+    collapsedWorkspaceIds,
+  );
 
   return (
     <section className="agent-sessions-workspace-groups" aria-label="工作区">
-      {gatewayWorkspaces.map((workspace) => {
+      {visibleWorkspaceNodes.map(({ workspace, depth }) => {
         const active = workspace.workspace_id === activeGatewayWorkspaceId;
         const removing = removingGatewayWorkspaceIds.has(workspace.workspace_id);
         const collapsed = collapsedWorkspaceIds.has(workspace.workspace_id);
@@ -94,6 +106,7 @@ export default function AgentSessionsWorkspaceGroups({
                 : '',
             ].join('')}
             key={workspace.workspace_id}
+            style={{ paddingLeft: `${depth * 12}px` }}
           >
             <div
               className={`agent-sessions-workspace-row${active ? ' active' : ''}${removing ? ' removing' : ''}`}
@@ -182,9 +195,16 @@ export default function AgentSessionsWorkspaceGroups({
                     sortMode={sortMode}
                     currentSessionId={currentSessionId}
                     active={active}
+                    treeId={`workspace:${workspace.workspace_id}`}
+                    collapsedSessionIds={collapsedSessionIds}
+                    showAllRoots={expandedRootTreeIds.has(
+                      `workspace:${workspace.workspace_id}`,
+                    )}
                     onSelectSession={(sessionId) =>
                       onSelectWorkspaceSession(workspace.workspace_id, sessionId)
                     }
+                    onToggleSession={onToggleSession}
+                    onToggleShowAllRoots={onToggleShowAllRoots}
                     onOpenMenu={(session, x, y) =>
                       onOpenSessionMenu(session, workspace.workspace_id, x, y)
                     }

@@ -1,10 +1,81 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from langchain_core.messages import HumanMessage
 
 from app.agents.agent_factory import build_model_from_provider
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+
+
+class AsyncChunkStream:
+    def __init__(
+        self,
+        chunks: list[dict[str, Any]],
+        *,
+        received_finish_reason: str | None,
+    ) -> None:
+        self._chunks = iter(chunks)
+        self.received_finish_reason = received_finish_reason
+        self.intermittent_finish_reason = None
+
+    def __aiter__(self) -> AsyncChunkStream:
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        try:
+            return next(self._chunks)
+        except StopIteration as error:
+            raise StopAsyncIteration from error
+
+
+def _text_chunk(text: str) -> dict[str, Any]:
+    return {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": text},
+                "finish_reason": None,
+            }
+        ]
+    }
+
+
+def _synthetic_finish_chunk() -> dict[str, Any]:
+    return {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+
+
+def _tool_chunk(arguments: str) -> dict[str, Any]:
+    return {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_partial",
+                            "type": "function",
+                            "function": {
+                                "name": "get_team_board",
+                                "arguments": arguments,
+                            },
+                        }
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ]
+    }
 
 
 def test_build_model_omits_unspecified_generation_parameters():
@@ -36,6 +107,9 @@ async def test_minimal_model_does_not_send_unspecified_generation_parameters(
     captured: dict[str, object] = {}
 
     class EmptyStream:
+        received_finish_reason = "stop"
+        intermittent_finish_reason = None
+
         def __aiter__(self):
             return self
 
@@ -174,6 +248,9 @@ async def test_litellm_stream_sends_extra_body(monkeypatch):
     captured: dict[str, object] = {}
 
     class EmptyStream:
+        received_finish_reason = "stop"
+        intermittent_finish_reason = None
+
         def __aiter__(self):
             return self
 
@@ -215,3 +292,95 @@ async def test_litellm_stream_sends_extra_body(monkeypatch):
     assert chunks == []
     assert captured["temperature"] == 1
     assert captured["extra_body"] == {"reasoning_effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_incomplete_stream_is_discarded_and_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """提前 EOF 的文本不得发布，下一次完整请求才可向上游产出。"""
+    streams = [
+        AsyncChunkStream(
+            [_text_chunk("半截文本"), _synthetic_finish_chunk()],
+            received_finish_reason=None,
+        ),
+        AsyncChunkStream(
+            [_text_chunk("完整文本"), _synthetic_finish_chunk()],
+            received_finish_reason="stop",
+        ),
+    ]
+    request_count = 0
+
+    async def fake_acompletion_with_retry(self, **kwargs):
+        nonlocal request_count
+        stream = streams[request_count]
+        request_count += 1
+        return stream
+
+    monkeypatch.setattr(
+        BoxteamLiteLLMChatModel,
+        "acompletion_with_retry",
+        fake_acompletion_with_retry,
+    )
+    model = BoxteamLiteLLMChatModel(
+        model="test-model",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        max_retries=1,
+        streaming=True,
+    )
+
+    chunks = [chunk async for chunk in model._astream([HumanMessage(content="hi")])]
+    text = "".join(
+        block["text"]
+        for chunk in chunks
+        for block in chunk.message.content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+    assert request_count == 2
+    assert text == "完整文本"
+
+
+@pytest.mark.asyncio
+async def test_synthetic_finish_reason_does_not_commit_partial_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LiteLLM 合成的 stop 不得让半截工具 JSON 进入 LangChain。"""
+    request_count = 0
+
+    async def fake_acompletion_with_retry(self, **kwargs):
+        nonlocal request_count
+        request_count += 1
+        return AsyncChunkStream(
+            [
+                _tool_chunk('{"team_id":"team_partial'),
+                _synthetic_finish_chunk(),
+            ],
+            received_finish_reason=None,
+        )
+
+    monkeypatch.setattr(
+        BoxteamLiteLLMChatModel,
+        "acompletion_with_retry",
+        fake_acompletion_with_retry,
+    )
+    model = BoxteamLiteLLMChatModel(
+        model="test-model",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        provider_id="test-provider",
+        max_retries=2,
+        streaming=True,
+    )
+    published_chunks = []
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"真实 finish_reason 前提前结束.*已尝试 3 次.*未提交工具调用",
+    ):
+        async for chunk in model._astream([HumanMessage(content="hi")]):
+            published_chunks.append(chunk)
+
+    assert request_count == 3
+    assert published_chunks == []

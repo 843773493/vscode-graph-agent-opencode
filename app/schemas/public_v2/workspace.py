@@ -63,3 +63,13 @@ class WorkspaceFileContentDTO(BaseModel):
     language: str
     size: int
     modified_at: str | None = None
+    revision: str
+
+
+class WorkspaceFileUpdateRequest(BaseModel):
+    content: str
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )

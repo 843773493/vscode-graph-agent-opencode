@@ -1,0 +1,38 @@
+name: package-linux-x64
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: bun install --frozen-lockfile
+      - run: uv sync --locked
+      - run: bun run package:linux-x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boxteam-linux-x64-unsigned
+          path: |
+            out/packaging/linux-x64/tarballs/*.tgz
+            out/packaging/linux-x64/build-result.json
+            out/packaging/linux-x64/size-report.json
+          if-no-files-found: error
+          compression-level: 0

@@ -4,6 +4,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ConversationView } from "../../types/frontend";
 import ChatTurn from "./ChatTurn";
 
+const pendingActionProps = {
+  onUpdatePending: async () => {},
+  onRemovePending: async () => {},
+  onSendPendingImmediately: async () => {},
+  onChangePendingKind: async () => {},
+};
+
+const mediaProps = {
+  apiPort: 8014,
+  workspaceId: "gw_test",
+};
 
 function conversation(
   status: ConversationView["status"],
@@ -54,11 +65,13 @@ describe("ChatTurn 轮次动作", () => {
   test("最后一个完成轮次展示内联编辑和重新生成入口", () => {
     const html = renderToStaticMarkup(
       <ChatTurn
+        {...mediaProps}
         conversation={conversation("done")}
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
         onReplayTurn={async () => {}}
+        {...pendingActionProps}
       />,
     );
 
@@ -69,11 +82,13 @@ describe("ChatTurn 轮次动作", () => {
   test("会话有运行中任务时禁用历史轮次编辑且不展示重新生成", () => {
     const html = renderToStaticMarkup(
       <ChatTurn
+        {...mediaProps}
         conversation={conversation("done")}
         showRawDetails={false}
         isLastTurn
         sessionBusy
         onReplayTurn={async () => {}}
+        {...pendingActionProps}
       />,
     );
 
@@ -84,11 +99,13 @@ describe("ChatTurn 轮次动作", () => {
   test("最后一个失败轮次展示真实重试入口", () => {
     const html = renderToStaticMarkup(
       <ChatTurn
+        {...mediaProps}
         conversation={conversation("error", "job_failed")}
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
         onReplayTurn={async () => {}}
+        {...pendingActionProps}
       />,
     );
 
@@ -99,13 +116,13 @@ describe("ChatTurn 轮次动作", () => {
     const value = conversation("done");
     value.assistantMessages = [
       {
-        ...value.assistantMessages[0],
+        ...value.assistantMessages![0],
         message_id: "msg_complete",
         content: "完整团队汇报：团队、成员、任务状态、子会话和审查结论均已确认。",
         metadata: { phase: "final_answer" },
       },
       {
-        ...value.assistantMessages[0],
+        ...value.assistantMessages![0],
         message_id: "msg_short_notification",
         content: "已查看团队面板。",
         metadata: { phase: "final_answer" },
@@ -114,15 +131,43 @@ describe("ChatTurn 轮次动作", () => {
 
     const html = renderToStaticMarkup(
       <ChatTurn
+        {...mediaProps}
         conversation={value}
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
         onReplayTurn={async () => {}}
+        {...pendingActionProps}
       />,
     );
 
     expect(html).toContain("完整团队汇报");
     expect(html).not.toContain("已查看团队面板");
+  });
+
+  test("待处理消息展示类型、编辑、立即发送和撤回操作", () => {
+    const value = conversation("queued");
+    value.pending = true;
+    value.pendingKind = "steering";
+    value.source = "pending";
+    value.assistantMessages = [];
+    value.events = [];
+
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        {...mediaProps}
+        conversation={value}
+        showRawDetails={false}
+        isLastTurn
+        sessionBusy
+        onReplayTurn={async () => {}}
+        {...pendingActionProps}
+      />,
+    );
+
+    expect(html).toContain("引导");
+    expect(html).toContain('title="编辑"');
+    expect(html).toContain('title="立即发送"');
+    expect(html).toContain('title="从队列撤回"');
   });
 });

@@ -47,6 +47,11 @@ let statusPollTimer = null;
 let resizeFrame = null;
 let lastSentCols = null;
 let lastSentRows = null;
+let desiredAttached = false;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+const sequenceStorageKey = `boxteam-terminal-sequence:${terminalId || "missing"}`;
+let lastSequence = Number(window.sessionStorage.getItem(sequenceStorageKey) || 0);
 
 function setAttachButtonMode(mode) {
   const labels = {
@@ -118,6 +123,7 @@ function updateTerminalTitle(snapshot) {
 
 function markDeleted(message = "终端已删除或不存在", snapshot = null) {
   deleted = true;
+  desiredAttached = false;
   attached = false;
   currentTerminalStatus = "deleted";
   socket?.close();
@@ -161,6 +167,21 @@ function sanitizeTerminalDisplay(value) {
 
 function snapshotDisplayBuffer(snapshot) {
   return snapshot.display_buffer ?? sanitizeTerminalDisplay(snapshot.buffer || "");
+}
+
+function rememberSequence(sequence) {
+  if (!Number.isInteger(sequence) || sequence < lastSequence) {
+    return;
+  }
+  lastSequence = sequence;
+  window.sessionStorage.setItem(sequenceStorageKey, String(sequence));
+}
+
+function acknowledgeOutput(sequence) {
+  rememberSequence(sequence);
+  if (socket?.readyState === WebSocket.OPEN) {
+    send({ type: "ack", sequence });
+  }
 }
 
 function send(message) {
@@ -216,6 +237,7 @@ async function loadSnapshot() {
     return;
   }
   currentTerminalStatus = snapshot.status;
+  rememberSequence(snapshot.sequence || 0);
   updateTerminalTitle(snapshot);
   setStatus(describeSnapshot(snapshot));
   terminal.clear();
@@ -249,6 +271,7 @@ async function syncTerminalState() {
   currentTerminalStatus = snapshot.status;
   updateTerminalTitle(snapshot);
   if (snapshot.status !== "running") {
+    desiredAttached = false;
     attached = false;
     socket?.close();
     socket = null;
@@ -274,6 +297,11 @@ function startStatusPolling() {
 }
 
 function detach() {
+  desiredAttached = false;
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (socket && socket.readyState === WebSocket.OPEN) {
     send({ type: "detach", terminalId });
   }
@@ -299,7 +327,9 @@ function attach() {
     setStatus("正在连接终端...");
     return;
   }
-  socket = new WebSocket(backendWsUrl());
+  desiredAttached = true;
+  const currentSocket = new WebSocket(backendWsUrl());
+  socket = currentSocket;
   setAttachButtonMode("attaching");
   setStatus("正在连接终端...");
 
@@ -310,6 +340,7 @@ function attach() {
       terminalId,
       cols: terminal.cols,
       rows: terminal.rows,
+      afterSequence: lastSequence,
     });
     lastSentCols = terminal.cols;
     lastSentRows = terminal.rows;
@@ -319,10 +350,16 @@ function attach() {
     const message = JSON.parse(event.data);
     if (message.type === "attached") {
       attached = true;
+      reconnectAttempts = 0;
       currentTerminalStatus = message.snapshot?.status || currentTerminalStatus;
       setAttachButtonMode("attached");
-      terminal.clear();
-      terminal.write(message.snapshot ? snapshotDisplayBuffer(message.snapshot) : "");
+      if (message.replayMode !== "incremental") {
+        terminal.clear();
+        terminal.write(
+          message.snapshot ? snapshotDisplayBuffer(message.snapshot) : "",
+          () => acknowledgeOutput(message.snapshot?.sequence || 0),
+        );
+      }
       setStatus(message.snapshot ? `已 attach · ${describeSnapshot(message.snapshot)}` : "已 attach");
       if (currentTerminalStatus !== "running") {
         attached = false;
@@ -340,10 +377,24 @@ function attach() {
       return;
     }
     if (message.type === "output") {
-      terminal.write(sanitizeTerminalDisplay(message.data));
+      if (message.sequence <= lastSequence) {
+        acknowledgeOutput(message.sequence);
+        return;
+      }
+      terminal.write(sanitizeTerminalDisplay(message.data), () => {
+        acknowledgeOutput(message.sequence);
+      });
+      return;
+    }
+    if (message.type === "resync") {
+      terminal.clear();
+      terminal.write(snapshotDisplayBuffer(message.snapshot), () => {
+        acknowledgeOutput(message.snapshot.sequence || 0);
+      });
       return;
     }
     if (message.type === "exit") {
+      desiredAttached = false;
       currentTerminalStatus = "terminated";
       setStatus(`终端已退出: ${message.exitCode ?? ""} ${message.signal ?? ""}`);
       updateControls();
@@ -358,15 +409,28 @@ function attach() {
     }
   });
 
-  socket.addEventListener("close", () => {
+  currentSocket.addEventListener("close", () => {
+    if (socket !== currentSocket) {
+      return;
+    }
     attached = false;
+    socket = null;
     lastSentCols = null;
     lastSentRows = null;
     setAttachButtonMode("detached");
+    if (desiredAttached && !deleted && currentTerminalStatus === "running") {
+      reconnectAttempts += 1;
+      const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), 5000);
+      setStatus(`连接已断开，${delay}ms 后自动重连...`);
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        attach();
+      }, delay);
+    }
     updateControls();
   });
 
-  socket.addEventListener("error", () => {
+  currentSocket.addEventListener("error", () => {
     setStatus("WebSocket 连接失败", true);
   });
 }
@@ -385,6 +449,9 @@ window.addEventListener("beforeunload", () => {
   }
   if (statusPollTimer !== null) {
     window.clearInterval(statusPollTimer);
+  }
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
   }
 });
 

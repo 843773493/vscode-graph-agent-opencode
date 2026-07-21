@@ -40,6 +40,13 @@ class TraceEventStore:
     def _trace_file(self, session_id: str) -> Path:
         return self._sessions_dir / session_id / "logs" / "traces" / "events.jsonl"
 
+    def list_session_ids(self) -> list[str]:
+        if not self._sessions_dir.exists():
+            return []
+        return sorted(
+            path.name for path in self._sessions_dir.iterdir() if path.is_dir()
+        )
+
     def _message_trace_file(self, session_id: str) -> Path:
         return self._sessions_dir / session_id / "logs" / "traces" / "messages.jsonl"
 

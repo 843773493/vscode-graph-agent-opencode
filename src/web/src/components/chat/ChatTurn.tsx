@@ -3,15 +3,17 @@ import { conversationTokenUsage } from "../../state/tokenUsage";
 import { aggregateConversationEvents, buildPendingStatusItem } from "../../state/trace/traceAggregation";
 import type { TimelineItem } from "../../state/timelineTypes";
 import type { ConversationView } from "../../types/frontend";
+import { fileToSelectedAttachment } from "../../utils/mediaAttachments";
 import type {
   AttachmentRef,
   MessageReplayRequest,
 } from "../../types/backend";
-import AttachmentList from "../AttachmentList";
+import MessageAttachments from "./MessageAttachments";
 import MarkdownContent from "./MarkdownContent";
 import ResponseActionToolbar from "./ResponseActionToolbar";
 import ThinkingSection from "./ThinkingSection";
 import ToolRow from "./ToolRow";
+import PendingRequestActions from "./PendingRequestActions";
 
 function assistantFallback(conversation: ConversationView): string {
   const messages = conversation.assistantMessages ?? [];
@@ -125,12 +127,20 @@ function buildRenderGroups(items: TimelineItem[]): RenderGroup[] {
 }
 
 export default function ChatTurn({
+  apiPort,
+  workspaceId,
   conversation,
   showRawDetails,
   isLastTurn,
   sessionBusy,
   onReplayTurn,
+  onUpdatePending,
+  onRemovePending,
+  onSendPendingImmediately,
+  onChangePendingKind,
 }: {
+  apiPort: number;
+  workspaceId?: string | null;
   conversation: ConversationView;
   showRawDetails: boolean;
   isLastTurn: boolean;
@@ -142,14 +152,27 @@ export default function ChatTurn({
     content?: string,
     attachments?: AttachmentRef[],
   ) => Promise<void>;
+  onUpdatePending: (
+    messageId: string,
+    content: string,
+    attachments?: AttachmentRef[],
+  ) => Promise<void>;
+  onRemovePending: (messageId: string) => Promise<void>;
+  onSendPendingImmediately: (messageId: string) => Promise<void>;
+  onChangePendingKind: (
+    messageId: string,
+    kind: "queued" | "steering",
+  ) => Promise<void>;
 }): React.ReactNode {
   const [editing, setEditing] = React.useState(false);
   const [editContent, setEditContent] = React.useState("");
+  const [editAttachments, setEditAttachments] = React.useState<AttachmentRef[]>([]);
   const [confirmAction, setConfirmAction] = React.useState<
     "retry_failed" | "regenerate" | null
   >(null);
   const [actionRunning, setActionRunning] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
+  const editAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
   const parts = React.useMemo(
     () => aggregateConversationEvents(
       conversation.events,
@@ -206,14 +229,15 @@ export default function ChatTurn({
     );
 
   const startEditing = React.useCallback(() => {
-    if (!userMessage || sessionBusy) {
+    if (!userMessage || (sessionBusy && !conversation.pending)) {
       return;
     }
     setEditContent(userMessage.content);
+    setEditAttachments(userAttachments);
     setActionError(null);
     setConfirmAction(null);
     setEditing(true);
-  }, [sessionBusy, userMessage]);
+  }, [conversation.pending, sessionBusy, userAttachments, userMessage]);
 
   const executeReplay = React.useCallback(async (
     action: MessageReplayRequest["action"],
@@ -241,6 +265,50 @@ export default function ChatTurn({
     }
   }, [actionRunning, onReplayTurn, sessionBusy, userAttachments, userMessage]);
 
+  const executePendingEdit = React.useCallback(async () => {
+    if (!userMessage || actionRunning || !conversation.pending) {
+      return;
+    }
+    setActionRunning(true);
+    setActionError(null);
+    try {
+      await onUpdatePending(
+        userMessage.message_id,
+        editContent.trim(),
+        editAttachments,
+      );
+      setEditing(false);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionRunning(false);
+    }
+  }, [
+    actionRunning,
+    conversation.pending,
+    editContent,
+    onUpdatePending,
+    editAttachments,
+    userMessage,
+  ]);
+
+  const executePendingAction = React.useCallback(async (
+    action: () => Promise<void>,
+  ) => {
+    if (actionRunning) {
+      return;
+    }
+    setActionRunning(true);
+    setActionError(null);
+    try {
+      await action();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionRunning(false);
+    }
+  }, [actionRunning]);
+
   return (
     <article className="chat-turn" data-conversation-id={conversation.conversationId}>
       {userMessage ? (
@@ -251,7 +319,11 @@ export default function ChatTurn({
                 className="chat-request-edit-form"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void executeReplay("edit_and_continue", editContent.trim());
+                  if (conversation.pending) {
+                    void executePendingEdit();
+                  } else {
+                    void executeReplay("edit_and_continue", editContent.trim());
+                  }
                 }}
               >
                 <textarea
@@ -268,12 +340,67 @@ export default function ChatTurn({
                     }
                   }}
                 />
-                {userAttachments.length > 0 ? (
-                  <AttachmentList attachments={userAttachments} />
+                {editAttachments.length > 0 ? (
+                  <div className="chat-request-edit-attachments">
+                    {editAttachments.map((attachment) => (
+                      <span key={attachment.file_id} className="chat-request-edit-attachment">
+                        {attachment.name ?? attachment.file_id}
+                        <button
+                          type="button"
+                          disabled={actionRunning}
+                          aria-label={`移除附件 ${attachment.name ?? attachment.file_id}`}
+                          onClick={() => setEditAttachments((current) =>
+                            current.filter((item) => item.file_id !== attachment.file_id)
+                          )}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
                 ) : null}
-                <div className="chat-turn-action-warning">
-                  将移除此消息之后的会话上下文，但不会撤销已产生的文件修改。
-                </div>
+                {conversation.pending ? (
+                  <>
+                    <input
+                      ref={editAttachmentInputRef}
+                      type="file"
+                      multiple
+                      className="visually-hidden"
+                      onChange={(event) => {
+                        const files = Array.from(event.target.files ?? []);
+                        event.target.value = "";
+                        void Promise.all(
+                          files.map((file, index) =>
+                            fileToSelectedAttachment(
+                              file,
+                              editAttachments.length + index,
+                            ),
+                          ),
+                        ).then((added) => {
+                          setEditAttachments((current) => [...current, ...added]);
+                        }).catch((error: unknown) => {
+                          setActionError(
+                            error instanceof Error ? error.message : String(error),
+                          );
+                        });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="chat-request-edit-add-attachment"
+                      disabled={actionRunning}
+                      onClick={() => editAttachmentInputRef.current?.click()}
+                    >
+                      <span className="codicon codicon-attach" aria-hidden="true" />
+                      添加附件
+                    </button>
+                  </>
+                ) : null}
+                {!conversation.pending ? (
+                  <div className="chat-turn-action-warning">
+                    将移除此消息之后的会话上下文，但不会撤销已产生的文件修改。
+                  </div>
+                ) : null}
                 <div className="chat-request-edit-actions">
                   <button
                     type="button"
@@ -288,30 +415,66 @@ export default function ChatTurn({
                   <button
                     type="submit"
                     className="primary"
-                    disabled={actionRunning || !editContent.trim()}
+                    disabled={
+                      actionRunning
+                      || (!editContent.trim() && editAttachments.length === 0)
+                    }
                   >
-                    {actionRunning ? "正在继续..." : "编辑并从此处继续"}
+                    {actionRunning
+                      ? "正在保存..."
+                      : conversation.pending
+                        ? "保存"
+                        : "编辑并从此处继续"}
                   </button>
                 </div>
               </form>
             ) : (
               <>
-                <button
-                  type="button"
-                  className="chat-request-edit-button"
-                  title="编辑并从此处继续"
-                  aria-label="编辑并从此处继续"
-                  disabled={sessionBusy}
-                  onClick={startEditing}
-                >
-                  <span className="codicon codicon-edit" aria-hidden="true" />
-                </button>
+                {!conversation.pending ? (
+                  <button
+                    type="button"
+                    className="chat-request-edit-button"
+                    title="编辑并从此处继续"
+                    aria-label="编辑并从此处继续"
+                    disabled={sessionBusy}
+                    onClick={startEditing}
+                  >
+                    <span className="codicon codicon-edit" aria-hidden="true" />
+                  </button>
+                ) : null}
                 {userMessage.content ? <div className="chat-user-text">{userMessage.content}</div> : null}
                 {userAttachments.length > 0 ? (
-                  <AttachmentList attachments={userAttachments} />
+                  <MessageAttachments
+                    apiPort={apiPort}
+                    workspaceId={workspaceId}
+                    sessionId={conversation.sessionId}
+                    attachments={userAttachments}
+                  />
                 ) : null}
               </>
             )}
+            {conversation.pending && userMessage && conversation.pendingKind ? (
+              <PendingRequestActions
+                kind={conversation.pendingKind}
+                disabled={actionRunning}
+                onEdit={startEditing}
+                onSendImmediately={() => {
+                  void executePendingAction(
+                    () => onSendPendingImmediately(userMessage.message_id),
+                  );
+                }}
+                onRemove={() => {
+                  void executePendingAction(
+                    () => onRemovePending(userMessage.message_id),
+                  );
+                }}
+                onChangeKind={(kind) => {
+                  void executePendingAction(
+                    () => onChangePendingKind(userMessage.message_id, kind),
+                  );
+                }}
+              />
+            ) : null}
           </div>
         </div>
       ) : null}

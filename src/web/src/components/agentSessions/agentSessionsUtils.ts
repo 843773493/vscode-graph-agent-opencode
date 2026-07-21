@@ -1,4 +1,4 @@
-import type { Session } from '../../types/backend';
+import type { GatewayWorkspace, Session } from '../../types/backend';
 
 export type SessionFilterMode = 'all' | 'current' | 'attachments' | 'agent' | 'named';
 export type SessionSortMode = 'created' | 'updated';
@@ -10,6 +10,11 @@ export interface SessionSection {
   sessions: Session[];
   totalCount: number;
   showMoreCount: number;
+}
+
+export interface VisibleWorkspaceNode {
+  workspace: GatewayWorkspace;
+  depth: number;
 }
 
 export const WORKSPACE_SECTION_RECENT_LIMIT = 10;
@@ -117,4 +122,62 @@ export function reorderWorkspaceIds(
     sourceWorkspaceId,
     ...remainingIds.slice(insertIndex),
   ];
+}
+
+export function buildVisibleWorkspaceTree(
+  workspaces: GatewayWorkspace[],
+  collapsedWorkspaceIds: Set<string>,
+): VisibleWorkspaceNode[] {
+  const workspaceIds = new Set(
+    workspaces.map((workspace) => workspace.workspace_id),
+  );
+  const childrenByParent = new Map<string, GatewayWorkspace[]>();
+  const roots: GatewayWorkspace[] = [];
+  for (const workspace of workspaces) {
+    const parentWorkspaceId = workspace.parent_workspace_id ?? null;
+    if (!parentWorkspaceId || !workspaceIds.has(parentWorkspaceId)) {
+      roots.push(workspace);
+      continue;
+    }
+    childrenByParent.set(parentWorkspaceId, [
+      ...(childrenByParent.get(parentWorkspaceId) ?? []),
+      workspace,
+    ]);
+  }
+
+  const result: VisibleWorkspaceNode[] = [];
+  const visited = new Set<string>();
+  const visit = (
+    workspace: GatewayWorkspace,
+    depth: number,
+    visible: boolean,
+  ) => {
+    if (visited.has(workspace.workspace_id)) {
+      throw new Error(
+        `工作区父子关系形成循环: ${workspace.workspace_id}`,
+      );
+    }
+    visited.add(workspace.workspace_id);
+    if (visible) {
+      result.push({ workspace, depth });
+    }
+    const childrenVisible =
+      visible && !collapsedWorkspaceIds.has(workspace.workspace_id);
+    for (const child of childrenByParent.get(workspace.workspace_id) ?? []) {
+      visit(child, depth + 1, childrenVisible);
+    }
+  };
+
+  for (const root of roots) {
+    visit(root, 0, true);
+  }
+  if (visited.size !== workspaces.length) {
+    const unresolved = workspaces.find(
+      (workspace) => !visited.has(workspace.workspace_id),
+    );
+    throw new Error(
+      `工作区父子关系无法解析: ${unresolved?.workspace_id ?? "unknown"}`,
+    );
+  }
+  return result;
 }

@@ -10,6 +10,8 @@ const testFiles = [
   "./src/state/tests/sessionTree.test.ts",
   "./src/state/tests/workspaceFileReferences.test.ts",
   "./src/state/tests/gatewayWorkspaceState.test.ts",
+  "./src/state/tests/workspaceInformation.test.ts",
+  "./src/state/tests/workspaceTree.test.ts",
 ];
 
 for (const testFile of testFiles) {

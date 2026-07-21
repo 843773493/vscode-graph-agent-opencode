@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from .attachment import AttachmentRef
 from .common import MessageRole, RunMode, TimestampedDTO
-
-
-class AttachmentRef(BaseModel):
-    file_id: str
-    name: Optional[str] = None
-    content_type: Optional[str] = None
-    data_url: Optional[str] = None
+from .job import (
+    JobDispatchSnapshotDTO,
+    JobDispatchStatus,
+)
+from .pending_request import PendingRequestKind
 
 
 class MessageCreateRequest(BaseModel):
@@ -30,6 +28,7 @@ class RunOptions(BaseModel):
     max_steps: int = 20
     timeout_seconds: int = 600
     context: dict[str, object] = Field(default_factory=dict)
+    queue: PendingRequestKind | None = None
 
 
 class MessageRunRequest(BaseModel):
@@ -40,7 +39,8 @@ class MessageRunRequest(BaseModel):
 class MessageRunAccepted(BaseModel):
     message_id: str
     job_id: str
-    status: str
+    status: JobDispatchStatus
+    dispatch: JobDispatchSnapshotDTO
 
 
 TurnReplayAction = Literal["retry_failed", "regenerate", "edit_and_continue"]

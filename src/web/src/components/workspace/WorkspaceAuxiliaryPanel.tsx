@@ -10,6 +10,7 @@ import WorkspaceFileTree from "./WorkspaceFileTree";
 export type WorkspaceAuxiliaryTab = "changes" | "files";
 
 interface WorkspaceAuxiliaryPanelProps {
+  visible: boolean;
   flexRatio: number;
   tab: WorkspaceAuxiliaryTab;
   apiPort: number;
@@ -40,6 +41,7 @@ interface WorkspaceAuxiliaryPanelProps {
 }
 
 export default function WorkspaceAuxiliaryPanel({
+  visible,
   flexRatio,
   tab,
   apiPort,
@@ -67,7 +69,8 @@ export default function WorkspaceAuxiliaryPanel({
 }: WorkspaceAuxiliaryPanelProps) {
   return (
     <aside
-      className="auxiliary-panel"
+      className={`auxiliary-panel${visible ? "" : " preserve-mounted-hidden"}`}
+      hidden={!visible}
       style={{ flexBasis: 0, flexGrow: flexRatio }}
     >
       <header className="auxiliary-titlebar">
@@ -108,8 +111,12 @@ export default function WorkspaceAuxiliaryPanel({
           </button>
         </div>
       </header>
-      {tab === "changes" ? (
-        <div className="auxiliary-view-body auxiliary-changes-body">
+      <div
+        className={`auxiliary-view-body auxiliary-changes-body${
+          tab === "changes" ? "" : " preserve-mounted-hidden"
+        }`}
+        hidden={tab !== "changes"}
+      >
           <SessionChangesTree
             changesets={sessionChangesets}
             selectedChangesetId={selectedChangesetId}
@@ -136,9 +143,13 @@ export default function WorkspaceAuxiliaryPanel({
               <span>暂无可展示文件</span>
             </div>
           </section>
-        </div>
-      ) : (
-        <div className="auxiliary-view-body auxiliary-files-body">
+      </div>
+      <div
+        className={`auxiliary-view-body auxiliary-files-body${
+          tab === "files" ? "" : " preserve-mounted-hidden"
+        }`}
+        hidden={tab !== "files"}
+      >
           <WorkspaceFileTree
             apiPort={apiPort}
             workspaceId={workspaceId}
@@ -150,8 +161,7 @@ export default function WorkspaceAuxiliaryPanel({
             onOpenFile={onOpenFile}
             onStatusChange={onStatusChange}
           />
-        </div>
-      )}
+      </div>
     </aside>
   );
 }

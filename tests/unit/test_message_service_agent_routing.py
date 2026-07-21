@@ -7,6 +7,19 @@ import pytest
 from app.core.job_event_bus import JobEventBus
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.public_v2.common import MessageRole
+from app.schemas.public_v2.job import JobDispatchSnapshotDTO
+
+
+def _running_dispatch(session_id: str, job_id: str) -> JobDispatchSnapshotDTO:
+    return JobDispatchSnapshotDTO(
+        session_id=session_id,
+        job_id=job_id,
+        job_status="running",
+        active_job_id=job_id,
+        queued_jobs_ahead=0,
+        queued_job_count=0,
+        pending_job_count=1,
+    )
 
 
 class _FakeSession:
@@ -63,11 +76,11 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
     captured: dict[str, str] = {}
 
     class _FakeJobService:
-        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs) -> str:
+        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs):
             captured["session_id"] = session_id
             captured["message"] = message
             captured["agent_id"] = agent_id
-            return "job_test_001"
+            return _running_dispatch(session_id, "job_test_001")
 
     orchestrator = SessionOrchestrator(
         message_service=_FakeMessageService(),
@@ -85,10 +98,10 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_preserves_system_reminder_role_and_metadata():
+async def test_orchestrator_preserves_reminder_metadata_without_changing_user_role():
     class _FakeJobService:
-        async def start_job(self, *args, **kwargs) -> str:
-            return "job_system_reminder"
+        async def start_job(self, session_id, *args, **kwargs):
+            return _running_dispatch(session_id, "job_system_reminder")
 
     message_service = _FakeMessageService()
     orchestrator = SessionOrchestrator(
@@ -102,12 +115,11 @@ async def test_orchestrator_preserves_system_reminder_role_and_metadata():
     await orchestrator.create_and_run(
         "ses_target",
         "<system_reminder>提醒</system_reminder>",
-        message_role=MessageRole.system,
         metadata={"simulate_user": False, "sender_session_id": "ses_sender"},
     )
 
     created = message_service.created_messages[0]
-    assert created.role == MessageRole.system
+    assert created.role == MessageRole.user
     assert created.metadata == {
         "simulate_user": False,
         "sender_session_id": "ses_sender",
@@ -121,9 +133,9 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
     captured: dict[str, str] = {}
 
     class _FakeJobService:
-        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs) -> str:
+        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs):
             captured["agent_id"] = agent_id
-            return "job_test_002"
+            return _running_dispatch(session_id, "job_test_002")
 
     orchestrator = SessionOrchestrator(
         message_service=_FakeMessageService(),

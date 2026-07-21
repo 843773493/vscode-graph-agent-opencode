@@ -1,4 +1,9 @@
-import type { AttachmentRef, Message, TraceEvent } from "../types/backend";
+import type {
+  AttachmentRef,
+  Message,
+  PendingRequestList,
+  TraceEvent,
+} from "../types/backend";
 import type { AppState, ConversationView } from "../types/frontend";
 import {
   dedupeTraceEvents,
@@ -143,6 +148,23 @@ function conversationStartTime(conversation: ConversationView): number {
   }
   const firstEvent = conversation.events[0];
   return firstEvent ? new Date(firstEvent.timestamp).getTime() : 0;
+}
+
+export function sortConversationViews(
+  conversations: ConversationView[],
+): ConversationView[] {
+  return [...conversations].sort((left, right) => {
+    if (left.pending !== right.pending) {
+      return left.pending ? 1 : -1;
+    }
+    if (left.pending && right.pending) {
+      return (
+        (left.pendingPosition ?? Number.MAX_SAFE_INTEGER)
+        - (right.pendingPosition ?? Number.MAX_SAFE_INTEGER)
+      );
+    }
+    return conversationStartTime(left) - conversationStartTime(right);
+  });
 }
 
 function conversationIdentityKey(conversation: ConversationView): string | null {
@@ -309,6 +331,56 @@ export function writePendingList(
   map.set(mapKey, list);
 }
 
+export function writePendingSnapshot(
+  pendingMap: Map<string, ConversationView[]>,
+  activeJobMap: Map<string, string>,
+  snapshot: PendingRequestList,
+  mapKey: string = snapshot.session_id,
+) {
+  writePendingList(
+    pendingMap,
+    snapshot.session_id,
+    pendingSnapshotToConversations(snapshot),
+    mapKey,
+  );
+  if (snapshot.active_job_id) {
+    activeJobMap.set(mapKey, snapshot.active_job_id);
+  } else {
+    activeJobMap.delete(mapKey);
+  }
+}
+
+export function pendingSnapshotToConversations(
+  snapshot: PendingRequestList,
+): ConversationView[] {
+  return (snapshot.requests ?? []).map((request) => ({
+    conversationId: request.message_id,
+    sessionId: request.session_id,
+    userMessage: {
+      message_id: request.message_id,
+      session_id: request.session_id,
+      role: "user",
+      content: request.content,
+      attachments: request.attachments ?? [],
+      metadata: {
+        source: "pending",
+        job_id: request.job_id,
+        pending_kind: request.kind,
+      },
+      created_at: request.created_at,
+      updated_at: request.updated_at,
+    },
+    assistantMessages: [],
+    events: [],
+    status: "queued",
+    jobId: request.job_id,
+    pending: true,
+    pendingKind: request.kind,
+    pendingPosition: request.position,
+    source: "pending",
+  }));
+}
+
 export function removePendingForTraceEvent(
   map: Map<string, ConversationView[]>,
   sessionId: string,
@@ -440,7 +512,5 @@ export function getConversationsForSession(
     merged[matchedIndex] = mergeConversation(merged[matchedIndex], pending);
   }
 
-  return dedupeConversationViews(merged).sort(
-    (a, b) => conversationStartTime(a) - conversationStartTime(b),
-  );
+  return sortConversationViews(dedupeConversationViews(merged));
 }

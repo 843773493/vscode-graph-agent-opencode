@@ -5,12 +5,12 @@ import type {
 
 export interface WorkspaceSshFormState {
   name: string;
-  remoteWorkspacePath: string;
+  remoteGatewayPort: string;
 }
 
 export const INITIAL_SSH_WORKSPACE_FORM: WorkspaceSshFormState = {
   name: "",
-  remoteWorkspacePath: "",
+  remoteGatewayPort: "8014",
 };
 
 function required(value: string, label: string): string {
@@ -27,11 +27,18 @@ export function buildSshWorkspaceRequest(
 ): AddSshGatewayWorkspaceRequest {
   const base = {
     name: form.name.trim() || null,
-    remote_workspace_path: required(
-      form.remoteWorkspacePath,
-      "远程工作区路径",
+    remote_gateway_port: Number.parseInt(
+      required(form.remoteGatewayPort, "远程 Gateway 端口"),
+      10,
     ),
   };
+  if (
+    !Number.isInteger(base.remote_gateway_port) ||
+    base.remote_gateway_port < 1 ||
+    base.remote_gateway_port > 65535
+  ) {
+    throw new Error("远程 Gateway 端口必须是 1-65535");
+  }
   if (selectedConnection?.source === "boxteam" && selectedConnection.workspace_id) {
     return {
       ...base,
@@ -47,5 +54,5 @@ export function buildSshWorkspaceRequest(
       ssh_config_host: selectedConnection.ssh_config_host,
     };
   }
-  throw new Error("请选择 BoxTeam SSH 配置或 ~/.ssh/config Host");
+  throw new Error("请选择已连接的远程 Gateway 或 ~/.ssh/config Host");
 }

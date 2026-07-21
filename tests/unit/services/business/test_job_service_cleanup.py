@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 
 import pytest
 
 from app.schemas.public_v2.common import JobStatus
-from app.services.business.job_service import JobService, JobState
+from app.services.business.job.service import JobService, JobState
 
 
 class FakeJobEventBus:
@@ -50,6 +49,7 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs():
         message_created_at="2026-07-14T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        pending_kind="queued",
     )
     other_job = JobState(
         job_id="job_other",
@@ -64,7 +64,7 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs():
     service._jobs[queued_job.job_id] = queued_job
     service._jobs[other_job.job_id] = other_job
     service._session_current_job[session_id] = running_job.job_id
-    service._session_waiting_jobs[session_id] = deque([queued_job.job_id])
+    service._pending_queue.append(session_id, queued_job.job_id, "queued")
 
     deleted_count = await service.delete_session_jobs(session_id)
 
@@ -74,4 +74,4 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs():
     assert queued_job.job_id not in service._jobs
     assert other_job.job_id in service._jobs
     assert session_id not in service._session_current_job
-    assert session_id not in service._session_waiting_jobs
+    assert service._pending_queue.ids(session_id) == ()

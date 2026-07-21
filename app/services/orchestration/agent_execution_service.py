@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Dict, Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -24,7 +25,6 @@ from app.core.job_context import (
 from app.core.job_event_bus import EventType
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_interrupt_state import SessionInterruptState
-from app.schemas.public_v2.common import MessageRole
 from app.schemas.public_v2.message import AttachmentRef
 from app.schemas.event import ModelTokenUsagePayload
 from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
@@ -189,22 +189,33 @@ class AgentExecutionService(JobStepExecutor):
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
 
-        resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
-        cache_key = f"{session_id}::{resolved_agent_id}"
-        if cache_key in self._agent_cache:
-            return self._agent_cache[cache_key]
+        config_snapshot = self._config_service.get_snapshot()
+        with self._config_service.use_snapshot(config_snapshot):
+            resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
+            config_revision = self._config_service.get_revision()
+            cache_key = (session_id, resolved_agent_id, config_revision)
+            if cache_key in self._agent_cache:
+                return self._agent_cache[cache_key]
 
-        agent = build_session_agent_runtime(
-            session_id=session_id,
-            agent_id=agent_id or resolved_agent_id,
-            config_service=self._config_service,
-            background_task_registry=self._background_task_registry,
-            background_message_bus=self._background_message_bus,
-            job_event_bus=self._bus,
-            dependency_provider=self._dependency_provider,
-        )
+            agent = build_session_agent_runtime(
+                session_id=session_id,
+                agent_id=agent_id or resolved_agent_id,
+                config_service=self._config_service,
+                background_task_registry=self._background_task_registry,
+                background_message_bus=self._background_message_bus,
+                job_event_bus=self._bus,
+                dependency_provider=self._dependency_provider,
+            )
 
         self._agent_cache[cache_key] = agent
+        stale_keys = [
+            key
+            for key in self._agent_cache
+            if key[:2] == cache_key[:2] and key != cache_key
+        ]
+        for stale_key in stale_keys:
+            # 正在执行的 Job 已持有 Agent 局部引用；移除旧缓存不会中途改变该轮执行。
+            del self._agent_cache[stale_key]
         return agent
 
     def _extract_final_text(self, result: Dict[str, Any]) -> str:
@@ -235,8 +246,35 @@ class AgentExecutionService(JobStepExecutor):
         message_id: str,
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
-        message_role: MessageRole = MessageRole.user,
         message_metadata: dict[str, object] | None = None,
+        yield_requested: Callable[[], bool] | None = None,
+    ) -> str:
+        config_snapshot = self._config_service.get_snapshot()
+        with self._config_service.use_snapshot(config_snapshot):
+            return await self._run_step_with_snapshot(
+                session_id,
+                message,
+                agent_id=agent_id,
+                job_id=job_id,
+                message_id=message_id,
+                attachments=attachments,
+                message_created_at=message_created_at,
+                message_metadata=message_metadata,
+                yield_requested=yield_requested,
+            )
+
+    async def _run_step_with_snapshot(
+        self,
+        session_id: str,
+        message: str,
+        *,
+        agent_id: str | None = None,
+        job_id: str,
+        message_id: str,
+        attachments: list[AttachmentRef] | None = None,
+        message_created_at: str,
+        message_metadata: dict[str, object] | None = None,
+        yield_requested: Callable[[], bool] | None = None,
     ) -> str:
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
@@ -244,7 +282,9 @@ class AgentExecutionService(JobStepExecutor):
             raise RuntimeError("AgentExecutionService 未绑定 BackgroundTaskRegistry")
         if self._background_message_bus is None:
             raise RuntimeError("AgentExecutionService 未绑定 BackgroundMessageBus")
-        resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
+        config_snapshot = self._config_service.get_snapshot()
+        with self._config_service.use_snapshot(config_snapshot):
+            resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
         if self._bus is None:
             raise RuntimeError("AgentExecutionService 未绑定 JobEventBus")
         bus = self._bus
@@ -293,10 +333,15 @@ class AgentExecutionService(JobStepExecutor):
         final_text = ""
         latest_model_content_blocks: tuple[dict[str, object], ...] = ()
         turn_token_usage_parts: list[ModelTokenUsagePayload] = []
-        configured_custom_tool_names = get_configured_custom_tool_names(
-            agent_id=resolved_agent_id,
-            config_service=self._config_service,
-        )
+        with self._config_service.use_snapshot(config_snapshot):
+            configured_custom_tool_names = get_configured_custom_tool_names(
+                agent_id=resolved_agent_id,
+                config_service=self._config_service,
+            )
+            custom_tool_skill_sources = get_workspace_custom_tool_skill_sources(
+                agent_id=resolved_agent_id,
+                config_service=self._config_service,
+            )
         disabled_tool_names = self._tool_selection_store.disabled_tools(
             resolved_agent_id
         )
@@ -304,10 +349,6 @@ class AgentExecutionService(JobStepExecutor):
         requested_custom_tool_names = _custom_tools_requested_by_message(
             message,
             configured_custom_tool_names,
-        )
-        custom_tool_skill_sources = get_workspace_custom_tool_skill_sources(
-            agent_id=resolved_agent_id,
-            config_service=self._config_service,
         )
         resolved_attachments = list(attachments or [])
         resolved_message_metadata = dict(message_metadata or {})
@@ -317,7 +358,6 @@ class AgentExecutionService(JobStepExecutor):
             display_content=message,
             attachments=resolved_attachments,
             message_created_at=message_created_at,
-            message_role=message_role,
             message_metadata=resolved_message_metadata,
         )
         message_source = resolved_message_metadata.get("source")
@@ -374,16 +414,17 @@ class AgentExecutionService(JobStepExecutor):
 
             logger.info("[agent_execution_service] agent.astream_events begin: job_id=%s", effective_job_id)
 
-            agent = build_session_agent_runtime(
-                session_id=session_id,
-                agent_id=resolved_agent_id,
-                config_service=self._config_service,
-                background_task_registry=self._background_task_registry,
-                background_message_bus=self._background_message_bus,
-                job_event_bus=self._bus,
-                dependency_provider=self._dependency_provider,
-                tool_denylist=disabled_tool_names,
-            )
+            with self._config_service.use_snapshot(config_snapshot):
+                agent = build_session_agent_runtime(
+                    session_id=session_id,
+                    agent_id=resolved_agent_id,
+                    config_service=self._config_service,
+                    background_task_registry=self._background_task_registry,
+                    background_message_bus=self._background_message_bus,
+                    job_event_bus=self._bus,
+                    dependency_provider=self._dependency_provider,
+                    tool_denylist=disabled_tool_names,
+                )
 
             next_input_messages = [
                 HumanMessage(
@@ -409,6 +450,7 @@ class AgentExecutionService(JobStepExecutor):
                     publish=_publish,
                     session_changes_service=self._session_changes_service,
                     workspace_root=self._workspace_root,
+                    yield_requested=yield_requested,
                 )
                 turn_token_usage_parts.append(stream_result.token_usage)
                 final_text = stream_result.final_text
@@ -435,6 +477,16 @@ class AgentExecutionService(JobStepExecutor):
                         },
                     )
                 latest_model_content_blocks = stream_result.latest_model_content_blocks
+                if stream_result.yielded:
+                    await _publish(
+                        EventType.STATUS_CHANGE,
+                        {
+                            "status": "completed",
+                            "reason": "steering_yield",
+                            "message": "当前请求已在安全边界让出执行权",
+                        },
+                    )
+                    break
                 missing_custom_tool_names = (
                     requested_custom_tool_names - completed_custom_tool_names
                 )
@@ -657,7 +709,26 @@ class AgentExecutionService(JobStepExecutor):
 
         except asyncio.CancelledError:
             state = SessionInterruptState.get(session_id)
-            if state.user_interrupt_reminder_injected:
+            if state.cancellation_reason == "pending_request_send_immediately":
+                if state.current_text:
+                    persist_standard_assistant_checkpoint(
+                        checkpointer=getattr(
+                            self._dependency_provider,
+                            "get_checkpointer",
+                            lambda: None,
+                        )(),
+                        session_id=session_id,
+                        content_blocks=(),
+                        final_text=state.current_text,
+                        message_id=create_prefixed_id("msg"),
+                        message_created_at=datetime.now(timezone.utc),
+                        token_usage=ModelTokenUsagePayload(),
+                    )
+                logger.info(
+                    "[agent_execution_service] job yielded to immediately sent pending request: job_id=%s",
+                    effective_job_id,
+                )
+            elif state.user_interrupt_reminder_injected:
                 logger.info(
                     "[agent_execution_service] job cancelled after user interrupt reminder persisted: job_id=%s",
                     effective_job_id,
@@ -687,6 +758,5 @@ class AgentExecutionService(JobStepExecutor):
 
     def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]:
         session_id = "tools_inspection_session"
-        resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
-        agent = self._get_or_create_agent(session_id, resolved_agent_id)
+        agent = self._get_or_create_agent(session_id, agent_id)
         return build_agent_tool_definitions(agent)

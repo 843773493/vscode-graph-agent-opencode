@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.runnables.config import ensure_config, var_child_runnable_config
 
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
@@ -18,6 +19,7 @@ from app.services.orchestration.agent_event_stream_processor import (
 class FakeAgent:
     def __init__(self, events: list[dict[str, Any]]) -> None:
         self._events = events
+        self.received_configs: list[dict[str, Any]] = []
 
     async def astream_events(
         self,
@@ -26,9 +28,41 @@ class FakeAgent:
         config: dict[str, Any],
         version: str,
     ) -> AsyncIterator[dict[str, Any]]:
-        del input_payload, config, version
+        del input_payload, version
+        self.received_configs.append(config)
+        config_metadata = config.get("metadata")
+        if not isinstance(config_metadata, dict):
+            raise TypeError("测试 Agent 必须收到 dict 类型 metadata")
         for event in self._events:
-            yield event
+            event_metadata = event.get("metadata", {})
+            if not isinstance(event_metadata, dict):
+                raise TypeError("测试事件 metadata 必须为 dict")
+            yield {
+                **event,
+                "metadata": {
+                    **config_metadata,
+                    **event_metadata,
+                },
+            }
+
+
+class ResolvingConfigAgent(FakeAgent):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.resolved_configs: list[dict[str, Any]] = []
+
+    async def astream_events(
+        self,
+        input_payload: dict[str, Any],
+        *,
+        config: dict[str, Any],
+        version: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        del input_payload, version
+        self.received_configs.append(config)
+        self.resolved_configs.append(ensure_config(config))
+        if False:
+            yield {}
 
 
 class FakeSessionChangesService:
@@ -48,6 +82,157 @@ class RecordingSessionChangesService:
 
     async def record_tool_file_edit(self, **kwargs: Any) -> None:
         self.recorded.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_steering_yields_only_after_all_parallel_tools_finish(
+    tmp_path: Path,
+) -> None:
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_a",
+            "name": "read_file",
+            "data": {"input": {"file_path": "a.txt"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_start",
+            "run_id": "run_b",
+            "name": "grep",
+            "data": {"input": {"query": "needle"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_a",
+            "name": "read_file",
+            "data": {
+                "output": ToolMessage(
+                    content="a",
+                    tool_call_id="call_a",
+                    name="read_file",
+                )
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_b",
+            "name": "grep",
+            "data": {
+                "output": ToolMessage(
+                    content="b",
+                    tool_call_id="call_b",
+                    name="grep",
+                )
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_start",
+            "run_id": "must_not_run",
+            "name": "write_file",
+            "data": {"input": {"file_path": "unexpected.txt", "content": "x"}},
+            "metadata": {},
+        },
+    ]
+    published: list[str] = []
+
+    async def publish(event_type: str, _payload: dict[str, Any]) -> None:
+        published.append(event_type)
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_steering_parallel",
+        turn_id="job_steering_parallel",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=RecordingSessionChangesService(),
+        workspace_root=tmp_path,
+        yield_requested=lambda: True,
+    )
+
+    assert result.yielded is True
+    assert published == [
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_END,
+        EventType.TOOL_CALL_END,
+    ]
+    SessionInterruptState.clear("ses_steering_parallel")
+
+
+@pytest.mark.asyncio
+async def test_steering_does_not_yield_between_tool_call_and_tool_result(
+    tmp_path: Path,
+) -> None:
+    events = [
+        {
+            "event": "on_chat_model_end",
+            "run_id": "model_with_tool",
+            "name": "ChatOpenAI",
+            "data": {
+                "output": AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_read",
+                            "name": "read_file",
+                            "args": {"file_path": "a.txt"},
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_start",
+            "run_id": "run_read",
+            "name": "read_file",
+            "data": {"input": {"file_path": "a.txt"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_read",
+            "name": "read_file",
+            "data": {
+                "output": ToolMessage(
+                    content="result",
+                    tool_call_id="call_read",
+                    name="read_file",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+    published: list[str] = []
+
+    async def publish(event_type: str, _payload: dict[str, Any]) -> None:
+        published.append(event_type)
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_tool_boundary",
+        turn_id="job_tool_boundary",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=RecordingSessionChangesService(),
+        workspace_root=tmp_path,
+        yield_requested=lambda: True,
+    )
+
+    assert result.yielded is True
+    assert published == [EventType.TOOL_CALL_START, EventType.TOOL_CALL_END]
+    SessionInterruptState.clear("ses_tool_boundary")
 
 
 @pytest.fixture
@@ -99,6 +284,99 @@ def parallel_tool_events() -> list[dict[str, Any]]:
 @pytest.fixture
 def session_changes_service() -> FakeSessionChangesService:
     return FakeSessionChangesService()
+
+
+@pytest.mark.asyncio
+async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    agent = FakeAgent([])
+
+    await process_agent_event_stream(
+        agent=agent,
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_isolated",
+        turn_id="job_isolated",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+    )
+
+    assert len(agent.received_configs) == 1
+    stream_config = agent.received_configs[0]
+    assert stream_config["callbacks"] == []
+    assert stream_config["metadata"]["boxteam_session_id"] == "ses_isolated"
+    assert stream_config["metadata"]["boxteam_job_id"] == "job_isolated"
+
+
+@pytest.mark.asyncio
+async def test_agent_stream_does_not_inherit_sender_callback_context(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    inherited_callback = object()
+    context_token = var_child_runnable_config.set(
+        {"callbacks": [inherited_callback]}
+    )
+    agent = ResolvingConfigAgent()
+    try:
+        await process_agent_event_stream(
+            agent=agent,
+            input_payload={"messages": []},
+            config={},
+            session_id="ses_target",
+            turn_id="job_target",
+            agent_id="default",
+            custom_tool_skill_sources={},
+            publish=lambda *_args, **_kwargs: _async_noop(),
+            session_changes_service=session_changes_service,
+            workspace_root=tmp_path,
+        )
+    finally:
+        var_child_runnable_config.reset(context_token)
+
+    assert len(agent.resolved_configs) == 1
+    assert agent.resolved_configs[0]["callbacks"] == []
+
+
+@pytest.mark.asyncio
+async def test_agent_stream_rejects_model_event_from_another_job(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    agent = FakeAgent(
+        [
+            {
+                "event": "on_chat_model_start",
+                "run_id": "model_run_other_job",
+                "name": "BoxteamLiteLLMChatModel",
+                "data": {},
+                "metadata": {
+                    "ls_model_name": "primary",
+                    "boxteam_session_id": "ses_target",
+                    "boxteam_job_id": "job_target",
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="跨 Agent job 的 LangChain 事件串入"):
+        await process_agent_event_stream(
+            agent=agent,
+            input_payload={"messages": []},
+            config={},
+            session_id="ses_sender",
+            turn_id="job_sender",
+            agent_id="default",
+            custom_tool_skill_sources={},
+            publish=lambda *_args, **_kwargs: _async_noop(),
+            session_changes_service=session_changes_service,
+            workspace_root=tmp_path,
+        )
 
 
 @pytest.mark.asyncio
@@ -535,6 +813,73 @@ async def test_model_stream_usage_is_aggregated_across_calls(
         "cache_read_input_tokens": 180,
         "model_calls": 2,
         "reported_model_calls": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_empty_reasoning_done_preserves_encrypted_response_item(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    response_item = {
+        "type": "reasoning",
+        "encrypted_content": "encrypted-reasoning",
+        "summary": [],
+    }
+    events = [
+        {
+            "event": "on_chat_model_stream",
+            "name": "BoxteamOpenAIResponsesModel",
+            "data": {
+                "chunk": AIMessageChunk(
+                    content=[
+                        {
+                            "type": "reasoning",
+                            "reasoning": "",
+                            "id": "part_reasoning",
+                            "index": 0,
+                            "extras": {"response_item": response_item},
+                        }
+                    ]
+                )
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_chat_model_stream",
+            "name": "BoxteamOpenAIResponsesModel",
+            "data": {
+                "chunk": AIMessageChunk(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": "完成",
+                            "id": "part_text",
+                            "index": 1,
+                        }
+                    ]
+                )
+            },
+            "metadata": {},
+        },
+    ]
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_encrypted_reasoning",
+        turn_id="job_encrypted_reasoning",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+    )
+
+    assert result.final_text == "完成"
+    assert result.latest_model_content_blocks[0]["extras"] == {
+        "response_item": response_item
     }
 
 

@@ -4,6 +4,7 @@ import { prettyJson } from "../utils/jsonDisplay";
 import {
   buildRequestLogDisplay,
   buildRequestLogKeyFlow,
+  buildUpstreamAttemptDisplay,
   buildRequestReplayDisplay,
   normalizeRequestLogJsonForDisplay,
   requestPromptComponentText,
@@ -11,6 +12,7 @@ import {
   type RequestLogKeyFlow,
   type RequestReplayDisplay,
   type RequestToolDefinitionDisplay,
+  type UpstreamAttemptDisplay,
 } from "../state/requestLogDisplay";
 import type { LLMRequestLogRecord } from "../types/backend";
 
@@ -264,6 +266,81 @@ function LazyFullLogJson({ log }: { log: LLMRequestLogRecord }) {
   );
 }
 
+function UpstreamAttemptCard({
+  attempt,
+  index,
+}: {
+  attempt: UpstreamAttemptDisplay;
+  index: number;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className={`request-log-upstream-attempt${open ? " is-open" : ""}`}>
+      <button
+        type="button"
+        className="request-log-collapse-summary"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="request-replay-component-title">上游尝试 {index + 1}</span>
+        <span>{attempt.callType}</span>
+        <span>{attempt.provider}</span>
+        <code>{attempt.model}</code>
+        {attempt.error ? <span className="request-log-upstream-error">失败</span> : null}
+      </button>
+      {open ? (
+        <div className="request-log-upstream-payloads">
+          {attempt.apiBase ? <div className="panel-meta">endpoint: {attempt.apiBase}</div> : null}
+          <section>
+            <strong>最终上游请求（认证信息已脱敏）</strong>
+            <pre>{prettyJson(attempt.request)}</pre>
+          </section>
+          <section>
+            <strong>上游原始响应</strong>
+            <pre>{prettyJson(attempt.response)}</pre>
+          </section>
+          {attempt.error ? (
+            <section className="request-log-upstream-error">
+              <strong>上游错误</strong>
+              <pre>{prettyJson(attempt.error)}</pre>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function UpstreamExchangeCard({ log }: { log: LLMRequestLogRecord }) {
+  const [open, setOpen] = useState(false);
+  const attempts = buildUpstreamAttemptDisplay(log);
+  return (
+    <section className={`request-log-upstream${open ? " is-open" : ""}`}>
+      <button
+        type="button"
+        className="request-log-collapse-summary"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="request-log-summary-title">上游实际请求 / 响应</span>
+        <span>{attempts.length} 次尝试</span>
+        {attempts.length === 0 ? <span className="request-log-legacy">旧日志未采集</span> : null}
+      </button>
+      {open ? (
+        <div className="request-log-upstream-list">
+          {attempts.map((attempt, index) => (
+            <UpstreamAttemptCard
+              key={`${attempt.callType}-${attempt.model}-${index}`}
+              attempt={attempt}
+              index={index}
+            />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function RequestLogCard({
   log,
   chronologicalIndex,
@@ -324,6 +401,7 @@ function RequestLogCard({
 
           <RequestCalledToolSummary toolNames={display.calledToolNames} />
           <RequestReplayCard replay={replay} />
+          <UpstreamExchangeCard log={log} />
           <LazyFullLogJson log={log} />
         </div>
       ) : null}
@@ -373,7 +451,7 @@ export default function RequestLogPanel({
       {loading ? <div className="empty-state">正在读取 LLM 请求响应日志...</div> : null}
       {error ? <div className="empty-state">LLM 请求响应日志加载失败：{error}</div> : null}
 
-      {!loading && !error && displayLogs.length > 0 ? (
+      {!error && displayLogs.length > 0 ? (
         <div className="panel-list">
           <RequestLogKeyFlowSummary {...keyFlow} />
           {displayLogs.map((log, index) => (

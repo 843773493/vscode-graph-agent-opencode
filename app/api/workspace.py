@@ -9,10 +9,14 @@ from app.schemas.public_v2.workspace import (
     WorkspaceDTO,
     WorkspaceFileContentDTO,
     WorkspaceFileListDTO,
+    WorkspaceFileUpdateRequest,
     WorkspaceIndexRebuildDTO,
     WorkspaceIndexStatusDTO,
 )
-from app.services.infrastructure.workspace_service import WorkspaceService
+from app.services.infrastructure.workspace_service import (
+    WorkspaceFileConflictError,
+    WorkspaceService,
+)
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
@@ -93,6 +97,33 @@ async def get_workspace_file_content(
         result = await workspace_service.get_file_content(path=path)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except (IsADirectoryError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.put(
+    "/files/content",
+    response_model=APIResponse[WorkspaceFileContentDTO],
+    summary="保存工作区文本文件",
+)
+async def update_workspace_file_content(
+    payload: WorkspaceFileUpdateRequest,
+    path: str = Query(description="相对工作区根目录的文件路径"),
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
+):
+    try:
+        result = await workspace_service.update_file_content(
+            path=path,
+            content=payload.content,
+            expected_revision=payload.expected_revision,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except WorkspaceFileConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except (IsADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

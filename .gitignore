@@ -19,7 +19,6 @@ pip-wheel-metadata/
 
 # Virtual environments
 .venv/
-.venv_docker_*/
 venv/
 env/
 ENV/

@@ -7,21 +7,28 @@
         "endpoint": "https://opencode.ai/zen/v1",
         "model": "big-pickle",
         "api_key": "${OPENCODE_ZEN_API_KEY}",
-        "custom_llm_provider": "openai"
+        "custom_llm_provider": "openai",
+        "api_mode": "chat_completions",
+        "capabilities": [
+          "reasoning_content_replay",
+          "prompt_cache_key"
+        ]
       },
       {
         "id": "backup_1",
         "endpoint": "https://api.kilo.ai/api/gateway",
         "model": "openrouter/free",
         "api_key": "${KILO_API_KEY}",
-        "custom_llm_provider": "openai"
+        "custom_llm_provider": "openai",
+        "api_mode": "chat_completions"
       },
       {
         "id": "backup_2",
         "endpoint": "https://openrouter.ai/api/v1",
         "model": "openrouter/free",
         "api_key": "${OPENROUTER_API_KEY}",
-        "custom_llm_provider": "openrouter"
+        "custom_llm_provider": "openrouter",
+        "api_mode": "chat_completions"
       },
       {
         "id": "backup_3",
@@ -29,14 +36,15 @@
         "model": "gpt-5.6-luna",
         "api_key": "${CCTQ_API_KEY}",
         "custom_llm_provider": "openai",
+        "api_mode": "responses",
         "capabilities": [
           "image_input"
         ],
         "request_options": {
           "overrides": {
-            "temperature": 1,
-            "extra_body": {
-              "reasoning_effort": "low"
+            "reasoning": {
+              "effort": "high",
+              "summary": "auto"
             }
           }
         }
@@ -232,6 +240,8 @@
       },
       "tools": {
         "denylist": [
+          "task",
+          "create_team_member",
           "send_message_to_session",
           "edit_file"
         ],
@@ -316,9 +326,11 @@
         "timeout_ms": 15000,
         "allowlist": [
           "read_file",
-          "search_code",
-          "grep_workspace",
-          "list_symbols"
+          "grep",
+          "glob"
+        ],
+        "denylist": [
+          "all"
         ],
         "confirmation_required": []
       },
@@ -398,9 +410,11 @@
         "tool_choice": "auto",
         "timeout_ms": 15000,
         "allowlist": [
-          "search_docs",
           "read_file",
-          "grep_workspace"
+          "grep"
+        ],
+        "denylist": [
+          "all"
         ],
         "confirmation_required": []
       },

@@ -1,11 +1,29 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
 from .common import ControlAction, ControlScope, JobStatus, RunMode, StepStatus, TimestampedDTO
+from .pending_request import PendingRequestKind
+
+
+JobDispatchStatus = Literal["queued", "running"]
+
+
+class JobDispatchSnapshotDTO(BaseModel):
+    """JobService 在调度锁内生成的目标会话队列快照。"""
+
+    session_id: str
+    job_id: str
+    job_status: JobDispatchStatus
+    active_job_id: str
+    blocked_by_job_id: Optional[str] = None
+    queued_jobs_ahead: int = Field(ge=0)
+    queued_job_count: int = Field(ge=0)
+    pending_job_count: int = Field(ge=1)
+    pending_kind: PendingRequestKind | None = None
 
 
 class JobDTO(TimestampedDTO):

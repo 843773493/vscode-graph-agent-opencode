@@ -6,6 +6,8 @@ from typing import Protocol
 
 from langchain_core.tools import BaseTool
 
+from app.agents.model_tool_schema import export_model_tool_json_schema
+
 
 @dataclass(frozen=True, slots=True)
 class PreparedToolTest:
@@ -39,3 +41,6 @@ class ToolTestCase(Protocol):
         attempt_root: Path,
         tool_result: object,
     ) -> ToolTestEvaluation: ...
+
+
+get_model_tool_parameters = export_model_tool_json_schema

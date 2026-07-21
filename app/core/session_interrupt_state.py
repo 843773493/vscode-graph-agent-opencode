@@ -15,6 +15,7 @@ class InterruptibleState:
     tool_name: str | None = None
     current_text: str = ""
     user_interrupt_reminder_injected: bool = False
+    cancellation_reason: str | None = None
     active_tools_by_run_id: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -41,6 +42,7 @@ class SessionInterruptState:
         tool_name: str | None | object = _UNSET,
         current_text: str | None | object = _UNSET,
         user_interrupt_reminder_injected: bool | object = _UNSET,
+        cancellation_reason: str | None | object = _UNSET,
         clear_active_tools: bool = False,
     ) -> None:
         state = cls._states.get(session_id, InterruptibleState())
@@ -60,6 +62,8 @@ class SessionInterruptState:
             state.current_text = "" if current_text is None else current_text
         if user_interrupt_reminder_injected is not _UNSET:
             state.user_interrupt_reminder_injected = bool(user_interrupt_reminder_injected)
+        if cancellation_reason is not _UNSET:
+            state.cancellation_reason = cancellation_reason
         cls._states[session_id] = state
 
     @classmethod

@@ -45,6 +45,11 @@ class LLMRequestLogService:
 
         request = self._record_field(raw, "request", log_file)
         response = self._record_field(raw, "response", log_file)
+        upstream = raw.get("upstream")
+        if upstream is None:
+            upstream = {"attempts": []}
+        if not isinstance(upstream, dict):
+            raise ValueError(f"LLM 请求日志 upstream 必须是 object: {log_file}")
         raw_session_id = raw.get("session_id")
         raw_job_id = raw.get("job_id")
 
@@ -56,6 +61,7 @@ class LLMRequestLogService:
             file_path=str(log_file),
             request=request,
             response=response,
+            upstream=upstream,
         )
 
     def _record_field(

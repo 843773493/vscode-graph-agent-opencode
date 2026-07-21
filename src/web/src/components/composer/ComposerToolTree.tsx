@@ -1,9 +1,14 @@
 import React from "react";
-import type { ToolCatalogItem, ToolTestRun } from "../../types/toolTesting";
+import type {
+  ToolCatalogItem,
+  ToolKind,
+  ToolTestRun,
+} from "../../types/toolTesting";
 
 export interface ToolGroup {
   id: string;
   name: string;
+  kind: ToolKind;
   items: ToolCatalogItem[];
 }
 

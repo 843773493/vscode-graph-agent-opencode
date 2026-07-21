@@ -32,7 +32,7 @@ function workspaceKindLabel(workspace: GatewayWorkspace | undefined): string {
   if (workspace.connection_kind === "local") {
     return "本地";
   }
-  return workspace.name.toLocaleLowerCase().includes("container") ? "容器" : "SSH";
+  return "远程 Gateway";
 }
 
 export default function WorkspaceSwitcher({
@@ -125,7 +125,7 @@ export default function WorkspaceSwitcher({
             </div>
             <div className="workspace-switcher-menu-actions">
               <button type="button" onClick={handleAddLocal}>添加本机工作区</button>
-              <button type="button" onClick={handleAddSsh}>添加 SSH 工作区</button>
+              <button type="button" onClick={handleAddSsh}>连接远程 Gateway</button>
             </div>
           </div>
         ) : null}

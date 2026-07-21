@@ -1,0 +1,7 @@
+{
+  // 源码开发专属 overlay。Launcher 通过 BOXTEAM_CONFIG_OVERLAY_PATHS 显式加载，
+  // 不得把这些设置写入正式用户配置。
+  "development": {
+    "test_tools": true
+  }
+}

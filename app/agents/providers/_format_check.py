@@ -504,7 +504,10 @@ def check_history_messages_accepted(
             name="历史消息 content blocks 必须适配 Chat Completions",
             passed=False,
             detail=f"以下历史消息仍含不可直传块: {invalid_content_blocks}",
-            remediation="剥离 reasoning，把 output_text 转为 text。",
+            remediation=(
+                "从 content 剥离 reasoning；provider 支持时提升为顶层 "
+                "reasoning_content，并把 output_text 转为 text。"
+            ),
         )
     return FormatCheckItem(
         name="历史消息 role/content blocks 必须适配 Chat Completions",

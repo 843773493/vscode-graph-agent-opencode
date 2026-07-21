@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from app.gateway.registry import GatewayWorkspaceRegistry, SshWorkspaceConnection
-from app.gateway.remote_files import _run_remote_directory_query
+from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.schemas import AddSshWorkspaceRequest
 from app.gateway.ssh_command import build_ssh_command
 from app.gateway.ssh_config import list_user_ssh_hosts, resolve_user_ssh_host
-from app.gateway.ssh_workspace import register_ssh_workspace
 
 
 @pytest.fixture
@@ -95,7 +92,7 @@ def test_ssh_command_preserves_config_alias_and_explicit_connection(
 
     assert alias_command[-2:] == ["dev", "pwd"]
     assert "-i" not in alias_command
-    assert not any("StrictHostKeyChecking" in argument for argument in alias_command)
+    assert "StrictHostKeyChecking=accept-new" in alias_command
     assert "BatchMode=yes" in alias_command
     assert f"UserKnownHostsFile={known_hosts_path}" in alias_command
     assert explicit_command[-1] == "ops@remote.example.com"
@@ -103,124 +100,25 @@ def test_ssh_command_preserves_config_alias_and_explicit_connection(
     assert "-p" in explicit_command
 
 
-def test_remote_directory_query_uses_selected_ssh_config_host(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    captured_command: list[str] = []
-    payload = {
-        "path": "/home/dev/project",
-        "parent_path": "/home/dev",
-        "home_path": "/home/dev",
-        "entries": [{"name": "src", "path": "/home/dev/project/src"}],
-        "truncated": False,
-        "limit": 120,
-    }
-
-    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        captured_command.extend(command)
-        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
-
-    monkeypatch.setattr("app.gateway.remote_files.subprocess.run", run)
-    result = _run_remote_directory_query(
-        SshWorkspaceConnection(
-            host="resolved.example.com",
-            port=2222,
-            username="developer",
-            private_key_path=None,
-            remote_backend_host="127.0.0.1",
-            remote_backend_port=8010,
-            ssh_config_host="dev",
-        ),
-        "/home/dev/project",
-        120,
-    )
-
-    assert "dev" in captured_command
-    assert "-i" not in captured_command
-    assert result.entries[0].name == "src"
-
-
 def test_add_ssh_request_requires_exactly_one_configured_connection_source():
     selected = AddSshWorkspaceRequest(
         ssh_config_host="dev",
-        remote_workspace_path="/home/dev/project",
+        remote_gateway_port=8014,
     )
     assert selected.ssh_config_host == "dev"
 
     with pytest.raises(ValidationError, match="必须且只能选择"):
-        AddSshWorkspaceRequest(remote_workspace_path="/home/dev/project")
+        AddSshWorkspaceRequest(remote_gateway_port=8014)
     with pytest.raises(ValidationError, match="必须且只能选择"):
         AddSshWorkspaceRequest(
             connection_workspace_id="gw_test",
             ssh_config_host="dev",
-            remote_workspace_path="/home/dev/project",
+            remote_gateway_port=8014,
         )
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         AddSshWorkspaceRequest(
             host="dev.example.com",
             username="developer",
             private_key_path="~/.ssh/id_ed25519",
-            remote_workspace_path="/home/dev/project",
+            remote_gateway_port=8014,
         )
-
-
-@pytest.mark.asyncio
-async def test_register_ssh_workspace_rejects_backend_for_another_directory(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    class FakeTunnel:
-        def __init__(self) -> None:
-            self.process = object()
-            self.closed = False
-
-        def close(self) -> None:
-            self.closed = True
-
-    private_key = tmp_path / "id_ed25519"
-    private_key.write_text("test", encoding="utf-8")
-    tunnel = FakeTunnel()
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
-    allocated_ports = iter([41000, 41001, 41002])
-    monkeypatch.setattr(
-        "app.gateway.ssh_workspace.allocate_ssh_tunnel_port",
-        lambda: next(allocated_ports),
-    )
-    monkeypatch.setattr(
-        "app.gateway.ssh_workspace.start_ssh_tunnel_process",
-        lambda **_: tunnel,
-    )
-
-    async def wait_for_http_ok(*_: object) -> None:
-        return None
-
-    async def read_workspace_root(_: str) -> str:
-        return "/srv/actual"
-
-    monkeypatch.setattr(
-        "app.gateway.ssh_workspace.wait_for_http_ok",
-        wait_for_http_ok,
-    )
-    monkeypatch.setattr(
-        "app.gateway.ssh_workspace.read_workspace_root",
-        read_workspace_root,
-    )
-
-    with pytest.raises(ValueError, match="实际工作区与所选目录不一致"):
-        await register_ssh_workspace(
-            registry=registry,
-            log_dir=tmp_path / "logs",
-            name=None,
-            host="remote.example.com",
-            port=22,
-            username="developer",
-            private_key_path=str(private_key),
-            ssh_config_host=None,
-            remote_backend_host="127.0.0.1",
-            remote_backend_port=8010,
-            remote_workspace_path="/srv/selected",
-            activate=False,
-        )
-
-    assert tunnel.closed is True
-    assert registry.targets() == ()

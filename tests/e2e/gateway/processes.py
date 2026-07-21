@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -73,10 +74,20 @@ def start_gateway_process(
     env["BOXTEAM_USER_CONFIG_PATH"] = str(
         workspace_root / ".boxteam" / "boxteam.jsonc"
     )
-    env["BOXTEAM_DEFAULT_BACKEND_URL"] = default_backend_url
     env["BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
     env["PYTHONUNBUFFERED"] = "1"
+    env["BOXTEAM_PYTHON_BIN"] = str(python_executable)
+    node_executable = shutil.which("node")
+    if node_executable is None:
+        raise RuntimeError("Gateway E2E 需要 PATH 中存在 node")
+    env["BOXTEAM_NODE_BIN"] = node_executable
+    credential_path = (
+        workspace_root / ".boxteam" / "gateway" / "credentials" / "local-token"
+    )
+    credential_path.parent.mkdir(parents=True, exist_ok=True)
+    credential_path.write_text("local-dev-token\n", encoding="utf-8")
+    credential_path.chmod(0o600)
     if ssh_tunnel_port_range is not None:
         env["BOXTEAM_GATEWAY_SSH_TUNNEL_PORT_MIN"] = str(ssh_tunnel_port_range[0])
         env["BOXTEAM_GATEWAY_SSH_TUNNEL_PORT_MAX"] = str(ssh_tunnel_port_range[1])
@@ -128,13 +139,12 @@ def workspace_root_from_response(response: httpx.Response) -> str:
     return str(response.json()["data"]["root_path"])
 
 
-def write_gateway_ssh_workspace_config(
+def write_gateway_remote_gateway_config(
     *,
     workspace_root: Path,
     ssh_port: int,
     username: str,
-    remote_backend_port: int,
-    remote_workspace_path: str,
+    remote_gateway_port: int,
     private_key_path: Path,
 ) -> None:
     boxteam_dir = workspace_root / ".boxteam"
@@ -146,15 +156,13 @@ def write_gateway_ssh_workspace_config(
     payload["gateway"] = {
         "workspaces": [
             {
-                "kind": "ssh",
-                "name": "remote docker",
+                "kind": "remote_gateway",
+                "name": "remote docker gateway",
                 "host": "127.0.0.1",
                 "port": ssh_port,
                 "username": username,
                 "private_key_path": str(private_key_path.resolve()),
-                "remote_backend_host": "127.0.0.1",
-                "remote_backend_port": remote_backend_port,
-                "remote_workspace_path": remote_workspace_path,
+                "remote_gateway_port": remote_gateway_port,
                 "activate": False,
             }
         ]

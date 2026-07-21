@@ -14,6 +14,7 @@ from langchain_core.messages import (
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.abstractions.session_context import AgentContextState
+from app.agents.cache_preserving_summarization import apply_summarization_event
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
 from app.schemas.public_v2.common import CursorPage, MessageRole
@@ -24,14 +25,20 @@ from app.schemas.public_v2.message import (
     MessageDTO,
 )
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.business.system_reminder_checkpoint_service import (
     append_system_reminder_checkpoint,
 )
 
 
 class MessageService:
-    def __init__(self, checkpointer: BaseCheckpointSaver | None = None) -> None:
+    def __init__(
+        self,
+        checkpointer: BaseCheckpointSaver | None = None,
+        attachment_store: SessionAttachmentStore | None = None,
+    ) -> None:
         self._checkpointer = checkpointer
+        self._attachment_store = attachment_store
 
     @staticmethod
     def _message_to_dto(
@@ -63,7 +70,20 @@ class MessageService:
             metadata["content_blocks"] = extracted["content_blocks"]
         if extracted["reasoning_id"] is not None:
             metadata["reasoning_id"] = extracted["reasoning_id"]
-        metadata.update(response_metadata)
+        message_metadata = response_metadata.get("message_metadata")
+        if message_metadata is not None:
+            if not isinstance(message_metadata, Mapping):
+                raise TypeError("checkpoint message_metadata 必须是对象")
+            metadata.update(
+                {str(key): value for key, value in message_metadata.items()}
+            )
+        metadata.update(
+            {
+                key: value
+                for key, value in response_metadata.items()
+                if key not in {"message_metadata", "message_role"}
+            }
+        )
         return MessageDTO(
             message_id=message_id,
             session_id=session_id,
@@ -100,13 +120,8 @@ class MessageService:
 
     @staticmethod
     def _persisted_role(message: BaseMessage) -> MessageRole:
-        response_metadata = message.response_metadata or {}
-        persisted_role = response_metadata.get("message_role")
-        if persisted_role is None:
-            return MessageService._detect_role(message)
-        if not isinstance(persisted_role, str):
-            raise TypeError("checkpoint message_role 必须是字符串")
-        return MessageRole(persisted_role)
+        """模型消息类型决定 role，业务来源只保存在 response_metadata。"""
+        return MessageService._detect_role(message)
 
     @staticmethod
     def _json_safe(value: object) -> object:
@@ -421,13 +436,21 @@ class MessageService:
         注意：实际的持久化由 LangGraph checkpoint 负责；此方法只生成 message_id
         并返回 DTO，供 API 响应和事件发布使用。
         """
+        if message_create.role != MessageRole.user:
+            raise ValueError(
+                "创建并执行新一轮消息时 role 必须为 user；"
+                "委派、跨会话和团队消息的来源请写入 metadata"
+            )
+        attachments = message_create.attachments
+        if self._attachment_store is not None:
+            attachments = self._attachment_store.persist_inline(session_id, attachments)
         now = datetime.now(timezone.utc)
         return MessageDTO(
             message_id=create_prefixed_id("msg"),
             session_id=session_id,
             role=message_create.role,
             content=message_create.content,
-            attachments=message_create.attachments,
+            attachments=attachments,
             metadata=message_create.metadata,
             created_at=now,
             updated_at=now,
@@ -511,7 +534,7 @@ class MessageService:
             ):
                 raise TypeError("_summarization_event.file_path 应为字符串或 null")
             history_file_path = raw_history_file_path
-            effective_messages = [summary_message, *raw_messages[compaction_cutoff:]]
+            effective_messages = apply_summarization_event(raw_messages, event)
 
         records: list[dict[str, object]] = []
         for message in effective_messages:

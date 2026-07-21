@@ -5,11 +5,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.gateway.config import ConfiguredSshWorkspace, GatewayConfig
+from app.gateway.auth import get_gateway_local_token
+from app.gateway.config import GatewayConfig
 from app.gateway.main import app, get_registry
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import bootstrap
-from app.gateway.workspace_ids import build_ssh_workspace_id, build_workspace_id
+from app.gateway.workspace_ids import (
+    build_managed_local_workspace_id,
+)
 
 
 def _local_target(workspace_id: str = "workspace-local") -> WorkspaceTarget:
@@ -50,7 +54,7 @@ async def test_rename_workspace_endpoint_returns_complete_workspace_list(
         ) as client:
             response = await client.patch(
                 "/api/gateway/workspaces/workspace-local",
-                headers={"X-Local-Token": "local-dev-token"},
+                headers={"X-Local-Token": get_gateway_local_token()},
                 json={"name": "Renamed workspace"},
             )
     finally:
@@ -77,7 +81,7 @@ async def test_rename_workspace_endpoint_rejects_empty_name(
         ) as client:
             response = await client.patch(
                 "/api/gateway/workspaces/workspace-local",
-                headers={"X-Local-Token": "local-dev-token"},
+                headers={"X-Local-Token": get_gateway_local_token()},
                 json={"name": name},
             )
     finally:
@@ -100,7 +104,7 @@ async def test_rename_workspace_endpoint_returns_not_found_for_unknown_workspace
         ) as client:
             response = await client.patch(
                 "/api/gateway/workspaces/unknown-workspace",
-                headers={"X-Local-Token": "local-dev-token"},
+                headers={"X-Local-Token": get_gateway_local_token()},
                 json={"name": "Renamed workspace"},
             )
     finally:
@@ -124,7 +128,7 @@ async def test_rename_workspace_endpoint_rejects_extra_fields(
         ) as client:
             response = await client.patch(
                 "/api/gateway/workspaces/workspace-local",
-                headers={"X-Local-Token": "local-dev-token"},
+                headers={"X-Local-Token": get_gateway_local_token()},
                 json={
                     "name": "Renamed workspace",
                     "root_path": "/workspace/other",
@@ -146,17 +150,14 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
     default_root = tmp_path / "default-workspace"
     default_root.mkdir()
     backend_url = "http://127.0.0.1:18010"
-    default_workspace_id = build_workspace_id(
-        "local",
-        str(default_root),
-        backend_url,
-    )
+    old_default_workspace_id = "gw_old_default"
+    default_workspace_id = build_managed_local_workspace_id(str(default_root))
     persisted = GatewayWorkspaceRegistry(
         storage_path=gateway_root / "workspaces.json"
     )
     persisted.upsert(
         WorkspaceTarget(
-            workspace_id=default_workspace_id,
+            workspace_id=old_default_workspace_id,
             name="boxteam_workspace",
             root_path=str(default_root),
             backend_url=backend_url,
@@ -166,85 +167,33 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
         )
     )
     persisted.close()
-    monkeypatch.setenv("BOXTEAM_DEFAULT_BACKEND_URL", backend_url)
     monkeypatch.delenv("BOXTEAM_DEFAULT_WORKSPACE_NAME", raising=False)
     monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
     monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
     monkeypatch.setattr(bootstrap, "load_gateway_config", lambda _root: GatewayConfig())
 
+    async def start_default_runtime(**_: object) -> WorkspaceRuntime:
+        return WorkspaceRuntime(
+            service_urls={
+                "workspace_api": backend_url,
+                "terminal_manager": "http://127.0.0.1:18012",
+                "browser_manager": "http://127.0.0.1:18015",
+            }
+        )
+
+    monkeypatch.setattr(
+        bootstrap,
+        "start_managed_local_workspace_runtime",
+        start_default_runtime,
+    )
+
     initial = await bootstrap.create_registry()
     assert initial.active_workspace_id == default_workspace_id
     assert initial.resolve(default_workspace_id).name == "home"
+    assert initial.resolve(default_workspace_id).managed is True
     initial.rename(default_workspace_id, "My home")
     initial.close()
 
     restored = await bootstrap.create_registry()
     assert restored.resolve(default_workspace_id).name == "My home"
-    restored.close()
-
-
-@pytest.mark.asyncio
-async def test_configured_workspace_keeps_renamed_value_after_bootstrap(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway_root = tmp_path / "gateway"
-    default_root = tmp_path / "default-workspace"
-    default_root.mkdir()
-    configured = ConfiguredSshWorkspace(
-        name="Configured name",
-        host="remote.example.com",
-        port=2222,
-        username="developer",
-        private_key_path="/tmp/id_ed25519",
-        remote_workspace_path="/workspace/remote",
-    )
-    workspace_id = build_ssh_workspace_id(
-        root_path=configured.remote_workspace_path,
-        host=configured.host,
-        port=configured.port,
-        username=configured.username,
-        remote_backend_host=configured.remote_backend_host,
-        remote_backend_port=configured.remote_backend_port,
-    )
-    monkeypatch.delenv("BOXTEAM_DEFAULT_BACKEND_URL", raising=False)
-    monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
-    monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
-    monkeypatch.setattr(
-        bootstrap,
-        "load_gateway_config",
-        lambda _root: GatewayConfig(workspaces=(configured,)),
-    )
-
-    async def register_configured_workspace(**kwargs: object) -> WorkspaceTarget:
-        registry = kwargs["registry"]
-        assert isinstance(registry, GatewayWorkspaceRegistry)
-        name = kwargs["name"]
-        assert isinstance(name, str)
-        return registry.upsert(
-            WorkspaceTarget(
-                workspace_id=workspace_id,
-                name=name,
-                name_customized=bool(kwargs["name_customized"]),
-                root_path=configured.remote_workspace_path,
-                backend_url="http://127.0.0.1:41000",
-                connection_kind="ssh",
-            ),
-            activate=bool(kwargs["activate"]),
-        )
-
-    monkeypatch.setattr(
-        bootstrap,
-        "register_ssh_workspace",
-        register_configured_workspace,
-    )
-
-    initial = await bootstrap.create_registry()
-    assert initial.resolve(workspace_id).name == "Configured name"
-    initial.rename(workspace_id, "User renamed")
-    initial.close()
-
-    restored = await bootstrap.create_registry()
-    assert restored.resolve(workspace_id).name == "User renamed"
-    assert restored.resolve(workspace_id).name_customized is True
     restored.close()

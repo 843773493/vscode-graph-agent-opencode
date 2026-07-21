@@ -93,9 +93,24 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
             serialized_summary = dict(summary_message)
         else:
             raise TypeError("_summarization_event.summary_message 必须是消息对象")
+        raw_cache_prefix = event.get("cache_prefix_messages", [])
+        if not isinstance(raw_cache_prefix, list):
+            raise TypeError("_summarization_event.cache_prefix_messages 必须是列表")
+        serialized_cache_prefix: list[object] = []
+        for message in raw_cache_prefix:
+            if isinstance(message, BaseMessage):
+                serialized_cache_prefix.append(message.model_dump(mode="json"))
+            elif isinstance(message, Mapping):
+                serialized_cache_prefix.append(dict(message))
+            else:
+                raise TypeError(
+                    "_summarization_event.cache_prefix_messages 必须只包含消息对象"
+                )
         marker_source = json.dumps(
             {
+                "strategy": event.get("strategy"),
                 "cutoff_index": cutoff_index,
+                "cache_prefix_messages": serialized_cache_prefix,
                 "file_path": event.get("file_path"),
                 "summary_message": serialized_summary,
             },

@@ -19,7 +19,7 @@ from app.schemas.public_v2.tool_test import (
     ToolTestStartRequest,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.tool_testing.definitions import ToolTestCase
+from app.tool_testing.definitions import ToolTestCase, get_model_tool_parameters
 from app.tool_testing.model_invocation import (
     ToolCallProbeInvocationError,
     probe_tool_call_with_transient_retries,
@@ -259,7 +259,7 @@ class ToolTestService:
                     "tool": {
                         "name": prepared.tool.name,
                         "description": prepared.tool.description,
-                        "parameters": prepared.tool.args_schema.model_json_schema(),
+                        "parameters": get_model_tool_parameters(prepared.tool),
                     },
                 }
             )
@@ -283,6 +283,8 @@ class ToolTestService:
             arguments = tool_call.get("args")
             if not isinstance(arguments, dict):
                 raise TypeError(f"工具参数不是对象: {arguments!r}")
+            # arguments 只来自模型可见的 tool_call_schema；运行时对象等后端参数
+            # 由测试用例在执行边界注入，不能写进模型请求或请求回放。
             tool_result = await prepared.tool.ainvoke(
                 {**arguments, **prepared.injected_arguments}
             )

@@ -16,10 +16,17 @@ import {
 } from "../../api";
 import type {
   ToolCatalogItem,
+  ToolKind,
   ToolSelectionChange,
   ToolTestRun,
 } from "../../types/toolTesting";
 import ComposerToolTree, { type ToolGroup } from "./ComposerToolTree";
+
+const TOOL_GROUP_KIND_ORDER: Record<ToolKind, number> = {
+  default: 0,
+  collaboration: 1,
+  extension: 2,
+};
 
 function latestRunsByTool(runs: ToolTestRun[]): Map<string, ToolTestRun> {
   const result = new Map<string, ToolTestRun>();
@@ -171,6 +178,7 @@ export default function ComposerToolControl({
         byId.set(tool.group_id, {
           id: tool.group_id,
           name: tool.group_name,
+          kind: tool.kind,
           items: [tool],
         });
       }
@@ -178,6 +186,9 @@ export default function ComposerToolControl({
     return [...byId.values()].sort((left, right) => {
       if (left.id === "default") return -1;
       if (right.id === "default") return 1;
+      const kindOrder = TOOL_GROUP_KIND_ORDER[left.kind]
+        - TOOL_GROUP_KIND_ORDER[right.kind];
+      if (kindOrder !== 0) return kindOrder;
       return left.name.localeCompare(right.name);
     });
   }, [tools]);

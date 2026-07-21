@@ -50,7 +50,7 @@ function information(): SessionInformationSnapshot {
 }
 
 function gatewayWorkspace(
-  connectionKind: "local" | "ssh",
+  connectionKind: "local" | "remote_gateway",
 ): GatewayWorkspace {
   return {
     workspace_id: "gateway_workspace",
@@ -63,16 +63,30 @@ function gatewayWorkspace(
     managed: true,
     removable: true,
     system_default: false,
+    runtime_action:
+      connectionKind === "remote_gateway"
+        ? "reconnect_remote_gateway"
+        : "safe_restart_managed_backend",
+    config_reload: {
+      available: true,
+      healthy: true,
+      restart_required: false,
+      changed_sections: [],
+    },
     remote:
-      connectionKind === "ssh"
+      connectionKind === "remote_gateway"
         ? {
-            host: "100.64.0.20",
+            gateway_connection_id: "remote_gateway_dev",
+            gateway_id: "gateway_dev",
+            remote_workspace_id: "workspace_dev",
+            name: "开发服务器",
+            host: "192.0.2.10",
             port: 22,
-            username: "hyf",
-            remote_backend_host: "127.0.0.1",
-            remote_backend_port: 8010,
+            username: "developer",
+            ssh_config_host: "dev-server",
+            remote_gateway_port: 8014,
           }
-      : {},
+      : null,
     services: {},
     connection_error: null,
     checked_at: "2026-07-16T00:00:00Z",
@@ -92,27 +106,27 @@ describe("通用会话信息", () => {
     expect(text).toContain('"connection_error": null');
   });
 
-  test("SSH 工作区输出连接和本地隧道信息", () => {
+  test("远程 Gateway 工作区输出联邦连接信息", () => {
     const dump = buildSessionInformationDump(
       information(),
-      gatewayWorkspace("ssh"),
+      gatewayWorkspace("remote_gateway"),
     );
-    expect(dump.workspace.connection.kind).toBe("ssh");
-    if (dump.workspace.connection.kind !== "ssh") {
-      throw new Error("SSH 工作区没有生成 ssh connection");
+    expect(dump.workspace.connection.kind).toBe("remote_gateway");
+    if (dump.workspace.connection.kind !== "remote_gateway") {
+      throw new Error("远程工作区没有生成 remote_gateway connection");
     }
-    expect(dump.workspace.connection.host).toBe("100.64.0.20");
-    expect(dump.workspace.connection.tunnel_backend_url).toBe(
+    expect(dump.workspace.connection.gateway_id).toBe("gateway_dev");
+    expect(dump.workspace.connection.gateway_proxy_url).toBe(
       "http://127.0.0.1:41001",
     );
   });
 
-  test("SSH 权威字段缺失时明确失败", () => {
-    const invalidWorkspace = gatewayWorkspace("ssh");
-    invalidWorkspace.remote = {};
+  test("远程 Gateway 权威字段缺失时明确失败", () => {
+    const invalidWorkspace = gatewayWorkspace("remote_gateway");
+    invalidWorkspace.remote = null;
     expect(() =>
       buildSessionInformationDump(information(), invalidWorkspace),
-    ).toThrow("SSH 工作区信息缺少 host");
+    ).toThrow("远程 Gateway 工作区信息缺少连接摘要");
   });
 
   test("粘贴纯会话 ID 时直接返回 ID", () => {

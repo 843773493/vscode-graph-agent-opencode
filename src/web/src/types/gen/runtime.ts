@@ -6,11 +6,27 @@
 /* Do not modify it by hand - just update the pydantic models and then re-run the script
 */
 
+export interface RuntimeDrainBlockerDTO {
+  kind: "job" | "tool" | "background_task";
+  resource_id: string;
+  session_id: string;
+  status: string;
+  detail?: string | null;
+}
+export interface RuntimeDrainResultDTO {
+  lifecycle_state: "ready" | "draining" | "stopping";
+  accepting_jobs: boolean;
+  blockers?: RuntimeDrainBlockerDTO[];
+  interrupted_resources?: number;
+}
 export interface RuntimeInfoDTO {
   pid: number;
   uptime_seconds: number;
   workspace_id: string;
   active_jobs: number;
+  lifecycle_state: "ready" | "draining" | "stopping";
+  accepting_jobs: boolean;
+  blockers: RuntimeDrainBlockerDTO[];
   loaded_agents: string[];
   storage: RuntimeStorageDTO;
 }
@@ -33,6 +49,9 @@ export interface RuntimeStatusDTO {
   uptime_seconds: number;
   workspace_id: string;
   active_jobs: number;
+  lifecycle_state: "ready" | "draining" | "stopping";
+  accepting_jobs: boolean;
+  blockers?: RuntimeDrainBlockerDTO[];
   loaded_agents?: string[];
   storage: RuntimeStorageDTO;
 }

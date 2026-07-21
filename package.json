@@ -11,8 +11,10 @@
     "dev": "bun run scripts/dev.mjs",
     "dev:web": "bun run scripts/dev.mjs",
     "install:config": "uv run python -m configs.boxteam --project-root .",
+    "package:linux-x64": "bun run packaging/runtime/package-linux-x64.mjs",
     "build:webview-ui": "bun --cwd=src/webview-ui run build",
-    "gen:public-types": "bun run ./scripts/generate_public_types.mjs"
+    "gen:public-types": "bun run ./scripts/generate_public_types.mjs",
+    "gen:openapi": "uv run python -m scripts.export_openapi_snapshot"
   },
   "engines": {
     "vscode": "^1.93.0"
@@ -287,7 +289,9 @@
     "@vscode/vsce": "^3.6.2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
+    "ajv": "^8.20.0",
     "json-schema-to-typescript": "^15.0.4",
+    "jsonc-parser": "^3.3.1",
     "mocha": "^11.7.1",
     "node-pty": "^1.1.0",
     "openapi-typescript": "^7.13.0",

@@ -160,7 +160,7 @@ class SessionInterruptResultDTO(BaseModel):
 
 class SessionCompactResultDTO(BaseModel):
     session_id: str
-    status: Literal["compacted", "skipped"]
+    status: Literal["scheduled", "compacted", "skipped"]
     message: str
     before_message_count: int
     effective_message_count_before: int
@@ -169,4 +169,5 @@ class SessionCompactResultDTO(BaseModel):
     retained_message_count: int
     summary: Optional[str] = None
     history_file_path: Optional[str] = None
+    strategy: Optional[Literal["cache_preserving", "cache_replacement"]] = None
     compacted_at: datetime = Field(default_factory=lambda: datetime.now())

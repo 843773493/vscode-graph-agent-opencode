@@ -14,6 +14,7 @@ from app.agents.skill_runtime import (
     discover_workspace_skill_sources,
 )
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
 
 
@@ -33,6 +34,7 @@ def _custom_tool_context(tmp_path) -> CustomToolFactoryContext:
         config_service=MagicMock(),
         terminal_manager_client=MagicMock(),
         browser_manager_client=MagicMock(),
+        invocation_context=ToolInvocationContext(),
     )
 
 
@@ -246,3 +248,31 @@ async def test_custom_tool_invoker_dispatches_configured_tool_without_skill_acti
     assert invoker.name == CUSTOM_TOOL_INVOKER_NAME
     assert set(invoker.args) == {"tool_name", "arguments"}
     assert result == "4568"
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_invoker_preserves_container_injected_invocation_context(
+    tmp_path,
+) -> None:
+    from langchain_core.tools import tool
+
+    context = _custom_tool_context(tmp_path)
+
+    @tool
+    def context_aware() -> str:
+        """读取由统一执行中间件注入到容器的调用 ID。"""
+        return context.invocation_context.require_tool_call_id()
+
+    invoker = create_custom_tool_invoker_tool([context_aware])
+    token = context.invocation_context.set_tool_call_id("call_from_outer_invoker")
+    try:
+        result = await invoker.ainvoke(
+            {
+                "tool_name": "context_aware",
+                "arguments": {},
+            }
+        )
+    finally:
+        context.invocation_context.reset_tool_call_id(token)
+
+    assert result == "call_from_outer_invoker"

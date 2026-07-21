@@ -5,11 +5,11 @@ from typing import Any
 
 from app.agents.tool_result_text import serialize_tool_value
 from app.schemas.public_v2.message import AttachmentRef
-from app.schemas.public_v2.common import MessageRole
 
 CHAT_MODEL_EVENT_NAMES = {
     "ChatOpenAI",
     "BoxteamLiteLLMChatModel",
+    "BoxteamOpenAIResponsesModel",
     "ChatLiteLLM",
     "ChatLiteLLMRouter",
 }
@@ -65,7 +65,6 @@ def build_human_response_metadata(
     display_content: str,
     attachments: list[AttachmentRef],
     message_created_at: str,
-    message_role: MessageRole,
     message_metadata: dict[str, object],
 ) -> dict[str, object]:
     metadata: dict[str, object] = {
@@ -73,7 +72,6 @@ def build_human_response_metadata(
         "message_id": message_id,
         "created_at": message_created_at,
         "updated_at": message_created_at,
-        "message_role": message_role.value,
         "message_metadata": dict(message_metadata),
     }
     if attachments:

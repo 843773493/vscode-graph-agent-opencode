@@ -41,6 +41,7 @@ export interface WorkspaceFileContentDTO {
   language: string;
   size: number;
   modified_at?: string | null;
+  revision: string;
 }
 export interface WorkspaceFileListDTO {
   root_path: string;
@@ -56,6 +57,10 @@ export interface WorkspaceFileNodeDTO {
   has_children?: boolean;
   size?: number | null;
   modified_at?: string | null;
+}
+export interface WorkspaceFileUpdateRequest {
+  content: string;
+  expected_revision: string;
 }
 export interface WorkspaceIndexRebuildDTO {
   status: string;

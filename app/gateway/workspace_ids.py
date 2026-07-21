@@ -21,24 +21,10 @@ def build_workspace_id(
     return f"gw_{digest[:_WORKSPACE_ID_HEX_LENGTH]}"
 
 
-def build_ssh_workspace_id(
-    *,
-    root_path: str,
-    host: str,
-    port: int,
-    username: str,
-    remote_backend_host: str,
-    remote_backend_port: int,
-) -> str:
-    signature = "\n".join(
-        [
-            "ssh",
-            root_path,
-            f"{username}@{host}:{port}",
-            f"{remote_backend_host}:{remote_backend_port}",
-        ]
-    )
-    digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+def build_managed_local_workspace_id(root_path: str) -> str:
+    digest = hashlib.sha256(
+        f"local-managed\n{root_path}".encode("utf-8")
+    ).hexdigest()
     return f"gw_{digest[:_WORKSPACE_ID_HEX_LENGTH]}"
 
 

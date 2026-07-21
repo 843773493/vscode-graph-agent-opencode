@@ -2,7 +2,7 @@
 
 重点验证：
 - `_convert_messages_to_dicts` 把 AIMessage.content 中的结构化 reasoning 块
-  从 Chat Completions 历史消息中剥离，避免把 reasoning 混入普通 assistant 正文。
+  从 Chat Completions 正文中剥离；启用 capability 时提升为 reasoning_content。
 - 不带 reasoning 块的 AIMessage 行为不变。
 """
 from __future__ import annotations
@@ -26,6 +26,17 @@ def model() -> BoxteamLiteLLMChatModel:
         model="openai/big-pickle",
         api_key="test-key",
         api_base="https://example.com/v1",
+    )
+
+
+@pytest.fixture
+def reasoning_replay_model() -> BoxteamLiteLLMChatModel:
+    """构造启用 Chat Completions reasoning_content 回放的模型。"""
+    return BoxteamLiteLLMChatModel(
+        model="openai/big-pickle",
+        api_key="test-key",
+        api_base="https://example.com/v1",
+        reasoning_content_replay=True,
     )
 
 
@@ -89,6 +100,46 @@ def test_convert_messages_to_dicts_strips_multiple_reasoning_summaries(
     content = dicts[0]["content"]
     text_block = next(b for b in content if b.get("type") == "text")
     assert text_block["text"] == "回答"
+
+
+def test_convert_messages_to_dicts_replays_reasoning_content_when_enabled(
+    reasoning_replay_model: BoxteamLiteLLMChatModel,
+):
+    ai = AIMessage(
+        content=[
+            {"type": "reasoning", "reasoning": "先分析问题。"},
+            {"type": "text", "text": "最终回答"},
+        ]
+    )
+
+    message = reasoning_replay_model._convert_messages_to_dicts([ai])[0]
+
+    assert message == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "最终回答"}],
+        "reasoning_content": "先分析问题。",
+    }
+
+
+def test_convert_messages_to_dicts_replays_reasoning_summary_when_enabled(
+    reasoning_replay_model: BoxteamLiteLLMChatModel,
+):
+    ai = AIMessage(
+        content=[
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "片段A"},
+                    {"type": "summary_text", "text": "片段B"},
+                ],
+            },
+            {"type": "text", "text": "回答"},
+        ]
+    )
+
+    message = reasoning_replay_model._convert_messages_to_dicts([ai])[0]
+
+    assert message["reasoning_content"] == "片段A片段B"
 
 
 def test_convert_messages_to_dicts_returns_empty_content_when_only_reasoning(

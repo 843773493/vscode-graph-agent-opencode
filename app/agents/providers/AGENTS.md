@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-`app/agents/providers/` 存放 LangChain `BaseChatModel` 包装层。当前统一走 `BoxteamLiteLLMChatModel`，由 LiteLLM 负责 provider 调用差异，本目录负责把 LiteLLM/各模型的输出统一成 **LangChain 标准 content blocks**，供 `app/services/orchestration/agent_execution_service` 通过 SSE 推送给前端、并写入 LangGraph checkpoint 用于多轮对话。
+`app/agents/providers/` 存放 LangChain `BaseChatModel` 包装层。Chat Completions 走 LiteLLM `completion/acompletion`，OpenAI Responses API 走 LiteLLM `responses/aresponses`；本目录负责把各模型输出统一成 **LangChain 标准 content blocks**，供 `app/services/orchestration/agent_execution_service` 通过 SSE 推送给前端、并写入 LangGraph checkpoint 用于多轮对话。
 
 本目录是"接入新模型"的入口：所有 provider 实现 + 它们的格式自检工具都在这里。
 
@@ -54,7 +54,7 @@ provider 历史消息从 LangGraph checkpoint 读出后，**必须**经过本方
 每次修改本目录的 .py 文件后，跑一次 `ast.parse` 验证语法（项目 venv 中未安装 ruff）：
 
 ```bash
-.venv/bin/python -c "import ast; [ast.parse(open(f, encoding='utf-8').read(), filename=f) for f in ['app/agents/providers/_format_check.py', 'app/agents/providers/litellm_chat.py']]"
+.venv/bin/python -c "import ast; [ast.parse(open(f, encoding='utf-8').read(), filename=f) for f in ['app/agents/providers/_format_check.py', 'app/agents/providers/litellm_chat.py', 'app/agents/providers/openai_responses.py']]"
 ```
 
 ### 6. 测试位置

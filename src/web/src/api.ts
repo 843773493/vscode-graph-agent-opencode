@@ -11,6 +11,7 @@ import type {
   MessageReplayAccepted,
   MessageReplayRequest,
   MessageRunAccepted,
+  PendingRequestKind,
   MessageRunRequest,
   Session,
   SessionInformationSnapshot,
@@ -29,6 +30,7 @@ import type {
   WorkspaceFileContent,
   WorkspaceFileList,
   WorkspaceInfo,
+  WorkspaceFileUpdateRequest,
 } from "./types/backend";
 import type {
   ToolCatalogItem,
@@ -39,7 +41,6 @@ import type {
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
-export const DEFAULT_BACKEND_TOKEN = "local-dev-token";
 export const DEFAULT_AGENT_ID = "default";
 export const DEFAULT_SESSION_TITLE = "新会话";
 const AGENT_STATE_TIMEOUT_MS = 10000;
@@ -62,7 +63,7 @@ function normalizeHeaders(headers: HeadersInit | undefined): Record<string, stri
   return headers;
 }
 
-function workspaceHeader(workspaceId?: string | null): Record<string, string> {
+export function workspaceHeader(workspaceId?: string | null): Record<string, string> {
   return workspaceId ? { "X-BoxTeam-Workspace-Id": workspaceId } : {};
 }
 
@@ -72,6 +73,35 @@ function getBaseUrl(port: number): string {
   }
 
   return `http://${DEFAULT_BACKEND_HOST}:${port}`;
+}
+
+const gatewayTokenByPort = new Map<number, Promise<string>>();
+
+function gatewayToken(port: number): Promise<string> {
+  const existing = gatewayTokenByPort.get(port);
+  if (existing) {
+    return existing;
+  }
+  const pending = fetch(
+    `${getBaseUrl(port)}/api/gateway/auth/local-credential`,
+  )
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`获取 Gateway 本地凭据失败: HTTP ${response.status}`);
+      }
+      const payload = await response.json() as APIResponse<{ token: string }>;
+      const token = payload.data?.token;
+      if (!token) {
+        throw new Error("Gateway 本地凭据响应缺少 token");
+      }
+      return token;
+    })
+    .catch((error) => {
+      gatewayTokenByPort.delete(port);
+      throw error;
+    });
+  gatewayTokenByPort.set(port, pending);
+  return pending;
 }
 
 export async function requestJson<T>(
@@ -93,11 +123,12 @@ export async function requestJson<T>(
     : null;
 
   try {
+    const localToken = await gatewayToken(port);
     const fetchPromise = fetch(`${getBaseUrl(port)}${path}`, {
       ...fetchInit,
       headers: {
         "Content-Type": "application/json",
-        "X-Local-Token": DEFAULT_BACKEND_TOKEN,
+        "X-Local-Token": localToken,
         ...normalizeHeaders(headers),
       },
       signal: signal ?? controller?.signal,
@@ -131,6 +162,34 @@ export async function requestJson<T>(
       window.clearTimeout(timeoutId);
     }
   }
+}
+
+export async function getSessionAttachmentBlob(
+  port: number,
+  sessionId: string,
+  fileId: string,
+  workspaceId?: string | null,
+): Promise<Blob> {
+  const localToken = await gatewayToken(port);
+  const query = new URLSearchParams({ file_id: fileId });
+  const response = await fetch(
+    `${getBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/content?${query}`,
+    {
+      headers: {
+        "X-Local-Token": localToken,
+        ...workspaceHeader(workspaceId),
+      },
+    },
+  );
+  if (!response.ok) {
+    const payload = await response.clone().json().catch(() => null) as {
+      detail?: string;
+    } | null;
+    throw new Error(
+      `读取消息附件失败: ${payload?.detail ?? `HTTP ${response.status}`}`,
+    );
+  }
+  return response.blob();
 }
 
 export async function getToolCatalog(
@@ -338,6 +397,26 @@ export async function getWorkspaceFileContent(
       port,
       `/api/v1/workspace/files/content?${query.toString()}`,
       workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
+    ),
+  );
+}
+
+export async function updateWorkspaceFileContent(
+  port: number,
+  path: string,
+  payload: WorkspaceFileUpdateRequest,
+  workspaceId?: string | null,
+): Promise<WorkspaceFileContent> {
+  const query = new URLSearchParams({ path });
+  return unwrapApiData(
+    await requestJson<APIResponse<WorkspaceFileContent>>(
+      port,
+      `/api/v1/workspace/files/content?${query.toString()}`,
+      {
+        method: "PUT",
+        headers: workspaceHeader(workspaceId),
+        body: JSON.stringify(payload),
+      },
     ),
   );
 }
@@ -644,6 +723,7 @@ export async function sendUserMessage(
   agentId: string = DEFAULT_AGENT_ID,
   attachments: AttachmentRef[] = [],
   workspaceId?: string | null,
+  queue?: PendingRequestKind | null,
 ): Promise<MessageRunAccepted> {
   const payload: MessageRunRequest = {
     message: {
@@ -657,6 +737,7 @@ export async function sendUserMessage(
       agent_id: agentId,
       response_mode: "stream",
       async: true,
+      queue: queue ?? undefined,
     },
   };
 
@@ -820,11 +901,12 @@ export async function streamSessionEvents(
   },
 ): Promise<void> {
   const url = `${getBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/traces/stream`;
+  const localToken = await gatewayToken(port);
   const response = await fetch(url, {
     signal: options?.signal,
     headers: {
       accept: "text/event-stream",
-      "X-Local-Token": DEFAULT_BACKEND_TOKEN,
+      "X-Local-Token": localToken,
       ...workspaceHeader(options?.workspaceId),
       ...(options?.afterEventId
         ? { "Last-Event-ID": options.afterEventId }

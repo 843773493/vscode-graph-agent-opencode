@@ -655,10 +655,6 @@ data: {"job_id":"job_001","status":"succeeded"}
 
 **GET** `/tools/{tool_id}`
 
-## 16.3 调试工具调用
-
-**POST** `/tools/{tool_id}/invoke`
-
 ---
 
 ## 17. Artifact 接口
@@ -1368,7 +1364,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
 from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.tool import ToolDTO, ToolInvokeRequest
+from app.schemas.public_v2.tool import ToolDTO
 from app.services.tool_service import ToolService
 
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -1392,16 +1388,6 @@ async def get_tool(
     result = await ToolService().get(tool_id)
     return APIResponse(data=result, request_id=request_id)
 
-
-@router.post("/{tool_id}/invoke", response_model=APIResponse[dict], summary="调用 Tool")
-async def invoke_tool(
-    tool_id: str,
-    payload: ToolInvokeRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
-):
-    result = await ToolService().invoke(tool_id, payload)
-    return APIResponse(data=result, request_id=request_id)
 ```
 
 ## 21.10 app/api/artifacts.py
@@ -1579,7 +1565,6 @@ app.include_router(config_router, prefix="/api/v1")
 - `GET /agents/{agent_id}`
 - `GET /tools`
 - `GET /tools/{tool_id}`
-- `POST /tools/{tool_id}/invoke`
 - `GET /artifacts/{artifact_id}`
 - `GET /config`
 - `PATCH /config`

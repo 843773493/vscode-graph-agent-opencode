@@ -65,15 +65,25 @@ export default function AppShell() {
     activateGatewayWorkspace,
     refreshGatewayState,
     reconnectGatewayWorkspace,
+    safeRestartManagedGatewayWorkspaceBackend,
+    forceRestartManagedGatewayWorkspaceBackend,
+    probeExternalGatewayWorkspace,
     addLocalGatewayWorkspace,
     addSshGatewayWorkspace,
     removeGatewayWorkspace,
     renameGatewayWorkspace,
+    setGatewayWorkspaceParent,
     reorderGatewayWorkspaces,
     copySessionInformation,
+    copyWorkspaceInformation,
     updateUiSettings,
     setStatus,
     replayTurn,
+    updatePendingRequest,
+    removePendingRequest,
+    clearPendingRequests,
+    reorderPendingRequests,
+    sendPendingRequestImmediately,
   } = useAppState();
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
   const [workbenchView, setWorkbenchView] = useState<WorkbenchView>(
@@ -588,8 +598,29 @@ export default function AppShell() {
       return <BootstrapState />;
     }
 
-    if (state.contentView === "agent") {
-      return (
+    const contentView = state.contentView;
+    const conversationVisible = ![
+      "agent",
+      "events",
+      "requests",
+      "resources",
+    ].includes(contentView);
+    const activeSessionChangeHint =
+      defaultViewChangesHint &&
+      defaultViewChangesHint.sessionId === activeSession?.session_id
+        ? defaultViewChangesHint.summary
+        : contentView === "changes" && state.activeChangeset
+          ? state.activeChangeset.summary
+          : null;
+
+    return (
+      <>
+        <div
+          className={`content-view-slot${
+            contentView === "agent" ? "" : " preserve-mounted-hidden"
+          }`}
+          hidden={contentView !== "agent"}
+        >
         <AgentStatePanel
           jsonl={state.agentStateJsonl}
           messageCount={state.agentStateMessageCount}
@@ -597,21 +628,25 @@ export default function AppShell() {
           loading={state.agentStateLoading}
           error={state.agentStateError}
         />
-      );
-    }
-
-    if (state.contentView === "events") {
-      return (
+        </div>
+        <div
+          className={`content-view-slot${
+            contentView === "events" ? "" : " preserve-mounted-hidden"
+          }`}
+          hidden={contentView !== "events"}
+        >
         <EventQueuePanel
           items={receivedEvents}
           limit={FRONTEND_EVENT_QUEUE_LIMIT}
           sessionId={activeSession?.session_id ?? ""}
         />
-      );
-    }
-
-    if (state.contentView === "requests") {
-      return (
+        </div>
+        <div
+          className={`content-view-slot${
+            contentView === "requests" ? "" : " preserve-mounted-hidden"
+          }`}
+          hidden={contentView !== "requests"}
+        >
         <RequestLogPanel
           logs={state.llmRequestLogs}
           loading={state.llmRequestLogsLoading}
@@ -619,11 +654,13 @@ export default function AppShell() {
           loadedAt={state.llmRequestLogsLoadedAt}
           sessionId={activeSession?.session_id ?? ""}
         />
-      );
-    }
-
-    if (state.contentView === "resources") {
-      return (
+        </div>
+        <div
+          className={`content-view-slot${
+            contentView === "resources" ? "" : " preserve-mounted-hidden"
+          }`}
+          hidden={contentView !== "resources"}
+        >
         <ResourcePanel
           resources={state.sessionResources}
           loading={state.sessionResourcesLoading}
@@ -641,35 +678,38 @@ export default function AppShell() {
           onOpenBrowserPreview={workspacePreview.openBrowserPreview}
           onShowConversation={showConversation}
         />
-      );
-    }
-
-    const activeSessionChangeHint =
-      defaultViewChangesHint &&
-      defaultViewChangesHint.sessionId === activeSession?.session_id
-        ? defaultViewChangesHint.summary
-        : state.contentView === "changes" && state.activeChangeset
-          ? state.activeChangeset.summary
-        : null;
-
-    return (
-      <ChatPanel
-        conversations={conversations}
-        expandDetails={state.expandDetails}
-        hasActiveSession={Boolean(activeSession)}
-        sessionChangeSummary={activeSessionChangeHint}
-        sessionChangesLoading={defaultViewChangesLoading}
-        onOpenChanges={() => {
-          void switchContentView("changes");
-        }}
-        onReplayTurn={replayTurn}
-      />
+        </div>
+        <div
+          className={`content-view-slot${
+            conversationVisible ? "" : " preserve-mounted-hidden"
+          }`}
+          hidden={!conversationVisible}
+        >
+          <ChatPanel
+            apiPort={resolvedApiPort}
+            workspaceId={activeSessionWorkspaceId}
+            conversations={conversations}
+            expandDetails={state.expandDetails}
+            hasActiveSession={Boolean(activeSession)}
+            sessionChangeSummary={activeSessionChangeHint}
+            sessionChangesLoading={defaultViewChangesLoading}
+            onOpenChanges={() => {
+              void switchContentView("changes");
+            }}
+            onReplayTurn={replayTurn}
+            onUpdatePending={updatePendingRequest}
+            onRemovePending={removePendingRequest}
+            onClearPending={clearPendingRequests}
+            onReorderPending={reorderPendingRequests}
+            onSendPendingImmediately={sendPendingRequestImmediately}
+          />
+        </div>
+      </>
     );
   };
 
   return (
     <WorkspaceFileReferenceProvider
-      key={activeSessionCacheKey ?? "no-session"}
       apiPort={resolvedApiPort}
       workspaceId={activeSessionWorkspaceId}
       workspaceRoot={state.workspaceRoot ?? ""}
@@ -697,7 +737,12 @@ export default function AppShell() {
         onWorkbenchViewChange={handleWorkbenchViewChange}
         showAuxiliaryToggle={workbenchView === "sessions"}
       />
-      {workbenchView === "gateway" ? (
+      <div
+        className={`gateway-view-slot${
+          workbenchView === "gateway" ? "" : " preserve-mounted-hidden"
+        }`}
+        hidden={workbenchView !== "gateway"}
+      >
         <GatewayControlCenter
           apiPort={resolvedApiPort}
           workspaces={state.gatewayWorkspaces}
@@ -714,10 +759,18 @@ export default function AppShell() {
           onReorder={reorderGatewayWorkspaces}
           onRefresh={refreshGatewayState}
           onReconnect={reconnectGatewayWorkspace}
+          onSafeRestartManagedBackend={safeRestartManagedGatewayWorkspaceBackend}
+          onForceRestartManagedBackend={forceRestartManagedGatewayWorkspaceBackend}
+          onProbeExternalBackend={probeExternalGatewayWorkspace}
           onUseWorkspace={handleUseGatewayWorkspace}
         />
-      ) : (
-      <main className="content sessions-workbench-grid">
+      </div>
+      <main
+        className={`content sessions-workbench-grid${
+          workbenchView === "sessions" ? "" : " preserve-mounted-hidden"
+        }`}
+        hidden={workbenchView !== "sessions"}
+      >
         <div
           className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${previewVisible ? "" : " preview-collapsed"}${previewMaximized ? " preview-maximized" : ""}`}
         >
@@ -739,8 +792,11 @@ export default function AppShell() {
             removingGatewayWorkspaceIds={state.removingGatewayWorkspaceIds}
             onActivateWorkspace={activateGatewayWorkspace}
             onRemoveWorkspace={handleRemoveWorkspace}
+            onRenameWorkspace={renameGatewayWorkspace}
+            onSetWorkspaceParent={setGatewayWorkspaceParent}
             onReorderWorkspaces={reorderGatewayWorkspaces}
             onCopySessionInformation={copySessionInformation}
+            onCopyWorkspaceInformation={copyWorkspaceInformation}
             onSelectWorkspaceSession={handleSelectAgentSession}
             activeSession={activeSession}
             sessionAttachmentSummaries={state.sessionAttachmentSummaries}
@@ -779,101 +835,106 @@ export default function AppShell() {
             </div>
           </section>
           {previewVisible ? (
-            <>
-              <button
-                type="button"
-                className="layout-sash layout-sash-preview-left"
-                title="拖拽调整文件预览区宽度，双击还原"
-                aria-label="调整文件预览区宽度"
-                onPointerDown={(event) => startLayoutResize("preview-left", event)}
-                onDoubleClick={resetMainAreaRatios}
-              />
-              <WorkspaceFilePreviewArea
-                flexRatio={
-                  previewMaximized
-                    ? mainAreaRatios.agent_sessions +
-                      mainAreaRatios.chat +
-                      mainAreaRatios.workspace_preview
-                    : mainAreaRatios.workspace_preview
-                }
-                maximized={previewMaximized}
-                tabs={previewTabs}
-                activePath={activePreviewPath}
-                loadingPath={previewLoadingPath}
-                error={previewError}
-                onSelectTab={(path) => {
-                  workspacePreview.selectWorkspacePreviewTab(path);
-                  workspacePreview.setError(null);
-                }}
-                onCloseTab={workspacePreview.closeWorkspaceFilePreview}
-                onToggleMaximized={() => {
-                  workspacePreview.setMaximized((maximized) => !maximized);
-                }}
-                onClosePanel={() => {
-                  workspacePreview.setMaximized(false);
-                  workspacePreview.setVisible(false);
-                }}
-              />
-            </>
+            <button
+              type="button"
+              className="layout-sash layout-sash-preview-left"
+              title="拖拽调整文件预览区宽度，双击还原"
+              aria-label="调整文件预览区宽度"
+              onPointerDown={(event) => startLayoutResize("preview-left", event)}
+              onDoubleClick={resetMainAreaRatios}
+            />
           ) : null}
+          <WorkspaceFilePreviewArea
+            visible={previewVisible}
+            flexRatio={
+              previewMaximized
+                ? mainAreaRatios.agent_sessions +
+                  mainAreaRatios.chat +
+                  mainAreaRatios.workspace_preview
+                : mainAreaRatios.workspace_preview
+            }
+            maximized={previewMaximized}
+            tabs={previewTabs}
+            activePath={activePreviewPath}
+            loadingPath={previewLoadingPath}
+            error={previewError}
+            editingPath={workspacePreview.editingPath}
+            draftContent={workspacePreview.draftContent}
+            savingPath={workspacePreview.savingPath}
+            hasUnsavedEdit={workspacePreview.hasUnsavedEdit}
+            onSelectTab={(path) => {
+              workspacePreview.selectWorkspacePreviewTab(path);
+              workspacePreview.setError(null);
+            }}
+            onCloseTab={workspacePreview.closeWorkspaceFilePreview}
+            onToggleMaximized={() => {
+              workspacePreview.setMaximized((maximized) => !maximized);
+            }}
+            onClosePanel={() => {
+              workspacePreview.setMaximized(false);
+              workspacePreview.setVisible(false);
+            }}
+            onBeginEdit={workspacePreview.beginWorkspaceFileEdit}
+            onDraftChange={workspacePreview.setDraftContent}
+            onCancelEdit={workspacePreview.cancelWorkspaceFileEdit}
+            onSaveEdit={workspacePreview.saveWorkspaceFileEdit}
+          />
           {auxiliaryVisible ? (
-            <>
-              <button
-                type="button"
-                className="layout-sash layout-sash-auxiliary-left"
-                title="拖拽调整右侧栏宽度，双击还原"
-                aria-label="调整右侧栏宽度"
-                onPointerDown={(event) => startLayoutResize("auxiliary-left", event)}
-                onDoubleClick={resetMainAreaRatios}
-              />
-              <WorkspaceAuxiliaryPanel
-                flexRatio={mainAreaRatios.auxiliary}
-                tab={auxiliaryTab}
-                apiPort={resolvedApiPort}
-                workspaceId={activeSessionWorkspaceId}
-                workspaceName={state.workspaceName ?? ""}
-                workspaceRoot={state.workspaceRoot ?? ""}
-                activeFilePath={activePreviewPath}
-                sessionChangesets={state.sessionChangesets}
-                selectedChangesetId={state.selectedChangesetId}
-                activeChangeset={state.activeChangeset}
-                sessionChangesLoading={state.sessionChangesLoading}
-                sessionChangesError={state.sessionChangesError}
-                sessionChangesLoadedAt={state.sessionChangesLoadedAt}
-                searchOpen={fileTreeSearchOpen}
-                collapseVersion={fileTreeCollapseVersion}
-                onTabChange={setAuxiliaryTab}
-                onToggleSearch={() => {
-                  setAuxiliaryTab("files");
-                  setFileTreeSearchOpen((open) => !open);
-                }}
-                onCollapseAll={() => {
-                  setAuxiliaryTab("files");
-                  setFileTreeCollapseVersion((version) => version + 1);
-                }}
-                onSelectSessionChangeset={(changesetId) => {
-                  if (activeSession) {
-                    void refreshSessionChanges(activeSession.session_id, changesetId);
-                  }
-                }}
-                onRefreshSessionChanges={() => {
-                  if (activeSession) {
-                    void refreshSessionChanges(
-                      activeSession.session_id,
-                      state.selectedChangesetId,
-                    );
-                  }
-                }}
-                onOpenSessionChangeFile={openSessionChangeInPreview}
-                onReviewSessionChangeFile={reviewSessionChangeFile}
-                onOpenFile={workspacePreview.openWorkspaceFilePreview}
-                onStatusChange={setStatus}
-              />
-            </>
+            <button
+              type="button"
+              className="layout-sash layout-sash-auxiliary-left"
+              title="拖拽调整右侧栏宽度，双击还原"
+              aria-label="调整右侧栏宽度"
+              onPointerDown={(event) => startLayoutResize("auxiliary-left", event)}
+              onDoubleClick={resetMainAreaRatios}
+            />
           ) : null}
+          <WorkspaceAuxiliaryPanel
+            visible={auxiliaryVisible}
+            flexRatio={mainAreaRatios.auxiliary}
+            tab={auxiliaryTab}
+            apiPort={resolvedApiPort}
+            workspaceId={activeSessionWorkspaceId}
+            workspaceName={state.workspaceName ?? ""}
+            workspaceRoot={state.workspaceRoot ?? ""}
+            activeFilePath={activePreviewPath}
+            sessionChangesets={state.sessionChangesets}
+            selectedChangesetId={state.selectedChangesetId}
+            activeChangeset={state.activeChangeset}
+            sessionChangesLoading={state.sessionChangesLoading}
+            sessionChangesError={state.sessionChangesError}
+            sessionChangesLoadedAt={state.sessionChangesLoadedAt}
+            searchOpen={fileTreeSearchOpen}
+            collapseVersion={fileTreeCollapseVersion}
+            onTabChange={setAuxiliaryTab}
+            onToggleSearch={() => {
+              setAuxiliaryTab("files");
+              setFileTreeSearchOpen((open) => !open);
+            }}
+            onCollapseAll={() => {
+              setAuxiliaryTab("files");
+              setFileTreeCollapseVersion((version) => version + 1);
+            }}
+            onSelectSessionChangeset={(changesetId) => {
+              if (activeSession) {
+                void refreshSessionChanges(activeSession.session_id, changesetId);
+              }
+            }}
+            onRefreshSessionChanges={() => {
+              if (activeSession) {
+                void refreshSessionChanges(
+                  activeSession.session_id,
+                  state.selectedChangesetId,
+                );
+              }
+            }}
+            onOpenSessionChangeFile={openSessionChangeInPreview}
+            onReviewSessionChangeFile={reviewSessionChangeFile}
+            onOpenFile={workspacePreview.openWorkspaceFilePreview}
+            onStatusChange={setStatus}
+          />
         </div>
       </main>
-      )}
       <SessionNameDialog
         open={nameDialog !== null}
         title="重命名会话"

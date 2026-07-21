@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boxteam.dev/schemas/runtime-manifest-v1.json",
+  "title": "BoxTeam Runtime Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "distribution",
+    "version",
+    "python_executable",
+    "application_root",
+    "node"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "distribution": {
+      "enum": [
+        "source-development",
+        "source-installed",
+        "npm"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "python_executable": {
+      "type": "string",
+      "minLength": 1
+    },
+    "application_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "web_assets": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "chromium_executable": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "executable"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "launcher",
+            "bundled"
+          ]
+        },
+        "executable": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

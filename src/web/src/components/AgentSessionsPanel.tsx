@@ -14,6 +14,8 @@ import AgentSessionsContextMenus, {
 import AgentSessionsFilterMenu from './agentSessions/AgentSessionsFilterMenu';
 import AgentSessionsSessionTree from './agentSessions/AgentSessionsSessionTree';
 import AgentSessionsWorkspaceGroups from './agentSessions/AgentSessionsWorkspaceGroups';
+import { useAgentSessionsTreeState } from './agentSessions/useAgentSessionsTreeState';
+import WorkspaceRenameDialog from './workspace/WorkspaceRenameDialog';
 import {
   WORKSPACE_SECTION_RECENT_LIMIT,
   buildTimeSections,
@@ -50,11 +52,17 @@ interface AgentSessionsPanelProps {
   removingGatewayWorkspaceIds: Set<string>;
   onActivateWorkspace: (workspaceId: string) => Promise<void>;
   onRemoveWorkspace: (workspaceId: string, workspaceName: string) => void;
+  onRenameWorkspace: (workspaceId: string, name: string) => Promise<string>;
+  onSetWorkspaceParent: (
+    workspaceId: string,
+    parentWorkspaceId: string | null,
+  ) => Promise<void>;
   onReorderWorkspaces: (workspaceIds: string[]) => Promise<void>;
   onCopySessionInformation: (
     workspaceId: string,
     sessionId: string,
   ) => Promise<void>;
+  onCopyWorkspaceInformation: (workspaceId: string) => Promise<void>;
   onSelectWorkspaceSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
   activeSession: Session | null;
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
@@ -89,8 +97,11 @@ export default function AgentSessionsPanel({
   removingGatewayWorkspaceIds,
   onActivateWorkspace,
   onRemoveWorkspace,
+  onRenameWorkspace,
+  onSetWorkspaceParent,
   onReorderWorkspaces,
   onCopySessionInformation,
+  onCopyWorkspaceInformation,
   onSelectWorkspaceSession,
   activeSession,
   sessionAttachmentSummaries,
@@ -104,6 +115,8 @@ export default function AgentSessionsPanel({
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
   const [workspaceContextMenu, setWorkspaceContextMenu] =
     useState<WorkspaceContextMenu | null>(null);
+  const [renamingWorkspace, setRenamingWorkspace] =
+    useState<GatewayWorkspace | null>(null);
   const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | null>(null);
   const [workspaceDropTarget, setWorkspaceDropTarget] =
     useState<WorkspaceDropTarget | null>(null);
@@ -115,7 +128,15 @@ export default function AgentSessionsPanel({
   const [groupingMode, setGroupingMode] = useState<SessionGroupingMode>('workspace');
   const [workspaceGroupCapped, setWorkspaceGroupCapped] = useState(true);
   const [collapsedSectionIds, setCollapsedSectionIds] = useState<Set<string>>(() => new Set());
-  const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = useState<Set<string>>(() => new Set());
+  const {
+    collapsedWorkspaceIds,
+    collapsedSessionIds,
+    expandedRootTreeIds,
+    toggleWorkspace,
+    expandWorkspace,
+    toggleSession,
+    toggleRootList,
+  } = useAgentSessionsTreeState();
   const [customizationNotice, setCustomizationNotice] = useState('');
   const filterControlRef = useRef<HTMLElement | null>(null);
   const cleanupCustomizationsResizeRef = useRef<(() => void) | null>(null);
@@ -236,9 +257,6 @@ export default function AgentSessionsPanel({
     return () => window.removeEventListener('pointerdown', handlePointerDown);
   }, [filterMenuOpen]);
 
-  if (!isOpen) {
-    return null;
-  }
   const openSessionMenu = (
     session: Session,
     workspaceId: string,
@@ -258,12 +276,15 @@ export default function AgentSessionsPanel({
     });
   };
   const openWorkspaceMenu = (workspace: GatewayWorkspace, x: number, y: number) => {
-    const menuWidth = 176;
-    const menuHeight = workspace.removable ? 40 : 58;
+    const menuWidth = 216;
+    const menuHeight =
+      120 + (workspace.parent_workspace_id ? 28 : 0) +
+      (workspace.removable ? 40 : 58);
     setContextMenu(null);
     setWorkspaceContextMenu({
       workspaceId: workspace.workspace_id,
       name: workspace.name,
+      parentWorkspaceId: workspace.parent_workspace_id ?? null,
       removable: workspace.removable,
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8)),
@@ -301,15 +322,7 @@ export default function AgentSessionsPanel({
     });
   };
   const toggleWorkspaceSection = (workspaceId: string) => {
-    setCollapsedWorkspaceIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(workspaceId)) {
-        next.delete(workspaceId);
-      } else {
-        next.add(workspaceId);
-      }
-      return next;
-    });
+    toggleWorkspace(workspaceId);
   };
   const handleActivateWorkspace = (workspace: GatewayWorkspace) => {
     if (workspace.workspace_id === activeGatewayWorkspaceId || workspaceSwitching) {
@@ -331,11 +344,7 @@ export default function AgentSessionsPanel({
       onStatusChange('工作区正在切换，请稍后再新建会话');
       return;
     }
-    setCollapsedWorkspaceIds((prev) => {
-      const next = new Set(prev);
-      next.delete(workspace.workspace_id);
-      return next;
-    });
+    expandWorkspace(workspace.workspace_id);
     void (async () => {
       if (workspace.workspace_id !== activeGatewayWorkspaceId) {
         await onActivateWorkspace(workspace.workspace_id);
@@ -450,7 +459,8 @@ export default function AgentSessionsPanel({
 
   return (
     <aside
-      className="agent-sessions-panel"
+      className={`agent-sessions-panel${isOpen ? '' : ' preserve-mounted-hidden'}`}
+      hidden={!isOpen}
       style={{ flexBasis: 0, flexGrow: flexRatio }}
     >
       <div className="agent-sessions-panel-shell">
@@ -542,12 +552,16 @@ export default function AgentSessionsPanel({
             sessionsByWorkspace={sessionsByWorkspace}
             sortMode={sortMode}
             collapsedWorkspaceIds={collapsedWorkspaceIds}
+            collapsedSessionIds={collapsedSessionIds}
+            expandedRootTreeIds={expandedRootTreeIds}
             draggingWorkspaceId={draggingWorkspaceId}
             workspaceDropTarget={workspaceDropTarget}
             workspaceSwitching={workspaceSwitching}
             removingGatewayWorkspaceIds={removingGatewayWorkspaceIds}
             currentSessionId={currentSessionId}
             onToggleWorkspaceSection={toggleWorkspaceSection}
+            onToggleSession={toggleSession}
+            onToggleShowAllRoots={toggleRootList}
             onWorkspaceDragStart={handleWorkspaceDragStart}
             onWorkspaceDragOver={updateWorkspaceDropTarget}
             onWorkspaceDrop={handleWorkspaceDrop}
@@ -586,7 +600,14 @@ export default function AgentSessionsPanel({
                             sortMode={sortMode}
                             currentSessionId={currentSessionId}
                             active
+                            treeId={`section:${section.id}`}
+                            collapsedSessionIds={collapsedSessionIds}
+                            showAllRoots={expandedRootTreeIds.has(
+                              `section:${section.id}`,
+                            )}
                             onSelectSession={onSelectSession}
+                            onToggleSession={toggleSession}
+                            onToggleShowAllRoots={toggleRootList}
                             onOpenMenu={(session, x, y) =>
                               openSessionMenu(
                                 session,
@@ -668,8 +689,30 @@ export default function AgentSessionsPanel({
           }
           onForkSessionContext={onForkSessionContext}
           onCopySessionInformation={onCopySessionInformation}
+          onRenameWorkspace={(workspaceId) => {
+            const workspace = gatewayWorkspaces.find(
+              (candidate) => candidate.workspace_id === workspaceId,
+            );
+            if (!workspace) {
+              onStatusChange(`无法重命名未知工作区: ${workspaceId}`);
+              return;
+            }
+            setRenamingWorkspace(workspace);
+          }}
+          onUnbindWorkspace={(workspaceId) =>
+            onSetWorkspaceParent(workspaceId, null)
+          }
+          onBindClipboardWorkspace={(workspaceId, parentWorkspaceId) =>
+            onSetWorkspaceParent(workspaceId, parentWorkspaceId)
+          }
+          onCopyWorkspaceInformation={onCopyWorkspaceInformation}
           onRemoveWorkspace={onRemoveWorkspace}
           onStatusChange={onStatusChange}
+        />
+        <WorkspaceRenameDialog
+          workspace={renamingWorkspace}
+          onClose={() => setRenamingWorkspace(null)}
+          onSubmit={onRenameWorkspace}
         />
       </div>
     </aside>

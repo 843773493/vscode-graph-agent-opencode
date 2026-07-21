@@ -29,6 +29,7 @@
         "model": "gpt-5.6-luna",
         "api_key": "${CCTQ_API_KEY}",
         "custom_llm_provider": "openai",
+        "api_mode": "responses",
         "capabilities": [
           "image_input"
         ]

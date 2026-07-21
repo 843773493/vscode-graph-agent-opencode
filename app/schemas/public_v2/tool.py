@@ -35,14 +35,3 @@ class ToolSelectionPatchRequest(BaseModel):
         if len(tool_ids) != len(set(tool_ids)):
             raise ValueError("工具开关变更不能包含重复 tool_id")
         return changes
-
-
-class ToolInvokeRequest(BaseModel):
-    parameters: dict[str, object] = Field(default_factory=dict)
-
-
-class ToolInvokeResultDTO(BaseModel):
-    tool_id: str
-    status: str
-    result: str
-    parameters: dict[str, object] = Field(default_factory=dict)

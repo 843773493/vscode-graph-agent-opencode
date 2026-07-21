@@ -1,13 +1,12 @@
-import { createRequire } from "node:module";
 import {
-  readLinuxProcStat,
+  readProcessStat,
   terminateTerminalProcessTree,
 } from "./terminalProcessUtils.js";
-
-const require = createRequire(import.meta.url);
-const pty = require("node-pty");
+import { IsolatedPtyProcess } from "./isolatedPtyProcess.js";
+import { TerminalOutputMultiplexer } from "./terminalOutputMultiplexer.js";
 
 const MAX_BUFFER_BYTES = 256 * 1024;
+const MAX_OUTPUT_EVENT_BYTES = 64 * 1024;
 
 export function nowIso() {
   return new Date().toISOString();
@@ -33,6 +32,26 @@ function trimBuffer(value) {
     return value;
   }
   return buffer.subarray(buffer.length - MAX_BUFFER_BYTES).toString("utf8");
+}
+
+function splitUtf8Chunks(value, maxBytes = MAX_OUTPUT_EVENT_BYTES) {
+  const chunks = [];
+  let chunk = "";
+  let chunkBytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (chunk && chunkBytes + characterBytes > maxBytes) {
+      chunks.push(chunk);
+      chunk = "";
+      chunkBytes = 0;
+    }
+    chunk += character;
+    chunkBytes += characterBytes;
+  }
+  if (chunk) {
+    chunks.push(chunk);
+  }
+  return chunks;
 }
 
 function normalizeTerminalLines(value) {
@@ -150,8 +169,13 @@ export class TerminalSession {
     this.lastInput = inferredLastInput || null;
     this.lastInputSource = record.last_input_source || (inferredLastInput ? "interactive" : null);
     this.lastInputAt = record.last_input_at || (inferredLastInput ? this.updatedAt : null);
-    this.clients = new Set();
     this.ptyProcess = null;
+    this.releasePromise = null;
+    this.outputMultiplexer = new TerminalOutputMultiplexer({
+      terminalId: this.id,
+      getSequence: () => this.sequence,
+      getSnapshot: () => this.snapshot(),
+    });
     if (this.lastCommand && this.lastCommandStatus === null) {
       const exitCode = latestCommandExitCode(this.buffer, this.lastCommandDoneMarker);
       if (exitCode !== null) {
@@ -161,25 +185,86 @@ export class TerminalSession {
     }
   }
 
-  start() {
+  async start() {
     if (this.ptyProcess) {
       return;
     }
 
-    this.ptyProcess = pty.spawn(this.command, this.args, {
-      name: "xterm-256color",
-      cwd: this.cwd,
-      cols: this.cols,
-      rows: this.rows,
-      env: {
-        ...process.env,
-        TERM: "xterm-256color",
+    const isolatedPty = new IsolatedPtyProcess();
+    this.ptyProcess = isolatedPty;
+    isolatedPty.onData((data) => {
+      this.buffer = trimBuffer(this.buffer + data);
+      const timestamp = nowIso();
+      for (const chunk of splitUtf8Chunks(data)) {
+        this.sequence += 1;
+        this.outputMultiplexer.recordAndBroadcast({
+          type: "output",
+          terminalId: this.id,
+          sequence: this.sequence,
+          data: chunk,
+          timestamp,
+        });
+      }
+      const exitCode = latestCommandExitCode(this.buffer, this.lastCommandDoneMarker);
+      if (exitCode !== null && this.lastCommandStatus === "running") {
+        this.lastCommandStatus = "completed";
+        this.lastCommandExitCode = exitCode;
+        this.lastCommandCompletedAt = nowIso();
+      }
+      this.touch();
+      void this.manager.persist();
+    });
+    isolatedPty.onExit((event) => {
+      void this.handlePtyExit(event).catch((error) => {
+        this.status = "exited";
+        this.endedAt = nowIso();
+        this.ptyProcess = null;
+        this.releaseReason = `pty_exit_cleanup_failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        if (this.lastCommandStatus === "running") {
+          this.lastCommandStatus = "exited";
+          this.lastCommandCompletedAt = this.endedAt;
+        }
+        this.touch();
+        console.error(
+          `[terminal-session] PTY 退出清理失败: terminal_id=${this.id}`,
+          error,
+        );
+        this.broadcast({
+          type: "exit",
+          terminalId: this.id,
+          exitCode: event.exitCode,
+          signal: event.signal,
+          error: this.releaseReason,
+          timestamp: this.endedAt,
+        });
+        void this.manager.persist().catch((persistError) => {
+          console.error(
+            `[terminal-session] PTY 退出失败状态持久化失败: terminal_id=${this.id}`,
+            persistError,
+          );
+        });
+      });
+    });
+    const ready = await isolatedPty.start({
+      command: this.command,
+      args: this.args,
+      options: {
+        name: "xterm-256color",
+        cwd: this.cwd,
+        cols: this.cols,
+        rows: this.rows,
+        env: {
+          ...process.env,
+          TERM: "xterm-256color",
+        },
       },
     });
     this.status = "running";
     this.startedAt = this.startedAt || nowIso();
-    this.osPid = this.ptyProcess.pid;
-    void readLinuxProcStat(this.osPid).then((stat) => {
+    this.osPid = ready.pid;
+    void readProcessStat(this.osPid).then((stat) => {
       if (!stat) {
         this.processGroupId = this.processGroupId || this.osPid;
         this.processSessionId = this.processSessionId || null;
@@ -192,73 +277,89 @@ export class TerminalSession {
       void this.manager.persist();
     });
     this.touch();
-
-    this.ptyProcess.onData((data) => {
-      this.sequence += 1;
-      this.buffer = trimBuffer(this.buffer + data);
-      const exitCode = latestCommandExitCode(this.buffer, this.lastCommandDoneMarker);
-      if (exitCode !== null && this.lastCommandStatus === "running") {
-        this.lastCommandStatus = "completed";
-        this.lastCommandExitCode = exitCode;
-        this.lastCommandCompletedAt = nowIso();
-      }
-      this.touch();
-      this.broadcast({
-        type: "output",
-        terminalId: this.id,
-        sequence: this.sequence,
-        data,
-        timestamp: this.updatedAt,
-      });
-      void this.manager.persist();
-    });
-
-    this.ptyProcess.onExit(({ exitCode, signal }) => {
-      if (this.status !== "terminated" && this.status !== "deleted") {
-        this.status = "exited";
-      }
-      this.exitCode = exitCode;
-      this.signal = signal;
-      this.endedAt = nowIso();
-      if (this.lastCommandStatus === "running") {
-        this.lastCommandStatus = this.status === "terminated" ? "terminated" : "exited";
-        this.lastCommandCompletedAt = this.endedAt;
-      }
-      this.touch();
-      this.broadcast({
-        type: "exit",
-        terminalId: this.id,
-        exitCode,
-        signal,
-        timestamp: this.endedAt,
-      });
-      void this.manager.persist();
-    });
   }
 
-  async attach(client) {
-    this.clients.add(client);
+  async handlePtyExit({
+    exitCode,
+    signal,
+    workerExit,
+    cleanupResult = null,
+    error,
+  }) {
+    if (this.releasePromise) {
+      this.exitCode = exitCode;
+      this.signal = signal;
+      return;
+    }
+    const wasRunning = this.status === "running";
+    if (this.status !== "terminated" && this.status !== "deleted") {
+      this.status = "exited";
+    }
+    this.exitCode = exitCode;
+    this.signal = signal;
+    this.endedAt = nowIso();
+    if (workerExit || cleanupResult === "still_running" || cleanupResult === "cleanup_failed") {
+      this.releaseReason = error
+        ? `pty_worker_error: ${error.message}`
+        : workerExit
+          ? "pty_worker_exit"
+          : `pty_cleanup_${cleanupResult}`;
+      if (wasRunning && this.osPid) {
+        const managerCleanupResult = await terminateTerminalProcessTree({
+          pid: this.osPid,
+          processSessionId: this.processSessionId,
+          processStartTime: this.processStartTime,
+        });
+        if (managerCleanupResult === "still_running") {
+          throw new Error(
+            `PTY Worker 退出后进程树仍在运行: terminal_id=${this.id}, pid=${this.osPid}`,
+          );
+        }
+      }
+    }
+    this.ptyProcess = null;
+    if (this.lastCommandStatus === "running") {
+      this.lastCommandStatus = this.status === "terminated" ? "terminated" : "exited";
+      this.lastCommandCompletedAt = this.endedAt;
+    }
     this.touch();
-    await this.manager.persist();
-    client.sendJson({
-      type: "attached",
+    this.broadcast({
+      type: "exit",
       terminalId: this.id,
-      snapshot: this.snapshot(),
+      exitCode,
+      signal,
+      timestamp: this.endedAt,
     });
+    await this.manager.persist();
+  }
+
+  async attach(client, { afterSequence = null } = {}) {
+    this.touch();
+    try {
+      await this.outputMultiplexer.attach(client, {
+        afterSequence,
+        beforeNotify: () => this.manager.persist(),
+      });
+    } catch (error) {
+      this.touch();
+      await this.manager.persist();
+      throw error;
+    }
   }
 
   async detach(client) {
-    this.clients.delete(client);
     this.touch();
-    await this.manager.persist();
-    client.sendJson({
-      type: "detached",
-      terminalId: this.id,
+    await this.outputMultiplexer.detach(client, {
+      beforeNotify: () => this.manager.persist(),
     });
   }
 
+  acknowledge(client, sequence) {
+    this.outputMultiplexer.acknowledge(client, sequence);
+  }
+
   write(data, { source = "user", command = null } = {}) {
-    if (!this.ptyProcess || this.status !== "running") {
+    if (!this.ptyProcess || this.status !== "running" || this.releasePromise) {
       throw new Error(`终端未运行: terminal_id=${this.id}, status=${this.status}`);
     }
     if (command) {
@@ -296,7 +397,7 @@ export class TerminalSession {
     }
     this.cols = cols;
     this.rows = rows;
-    if (this.ptyProcess && this.status === "running") {
+    if (this.ptyProcess && this.status === "running" && !this.releasePromise) {
       this.ptyProcess.resize(cols, rows);
     }
     this.touch();
@@ -304,16 +405,42 @@ export class TerminalSession {
   }
 
   async terminateForRelease({ status, commandStatus, reason }) {
+    if (this.releasePromise) {
+      return await this.releasePromise;
+    }
     if (this.status !== "running") {
       return false;
     }
+    const releasePromise = this._terminateForRelease({
+      status,
+      commandStatus,
+      reason,
+    });
+    this.releasePromise = releasePromise;
+    try {
+      return await releasePromise;
+    } finally {
+      if (this.releasePromise === releasePromise) {
+        this.releasePromise = null;
+      }
+    }
+  }
+
+  async _terminateForRelease({ status, commandStatus, reason }) {
     const pid = this.osPid || this.ptyProcess?.pid;
+    const isolatedPty = this.ptyProcess;
     const result = await terminateTerminalProcessTree({
       pid,
       processSessionId: this.processSessionId,
       processStartTime: this.processStartTime,
     });
+    if (result === "still_running") {
+      throw new Error(
+        `终端进程树清理失败: terminal_id=${this.id}, pid=${pid}`,
+      );
+    }
     this.ptyProcess = null;
+    await isolatedPty?.shutdown({ terminatePty: false });
     this.status = status;
     this.endedAt = nowIso();
     this.signal = result === "force_killed" ? "SIGKILL" : "SIGTERM";
@@ -335,6 +462,16 @@ export class TerminalSession {
     return result !== "missing";
   }
 
+  async dispose() {
+    if (this.releasePromise) {
+      await this.releasePromise;
+    }
+    const isolatedPty = this.ptyProcess;
+    this.ptyProcess = null;
+    this.outputMultiplexer.dispose();
+    await isolatedPty?.shutdown();
+  }
+
   async kill() {
     return await this.terminateForRelease({
       status: "terminated",
@@ -347,13 +484,18 @@ export class TerminalSession {
     if (this.status === "deleted") {
       return;
     }
+    if (this.releasePromise) {
+      await this.releasePromise;
+    }
     if (this.status === "running") {
       await this.terminateForRelease({
         status: "deleted",
         commandStatus: "deleted",
         reason: "terminal_delete",
       });
-      return;
+      if (this.status === "deleted") {
+        return;
+      }
     }
     this.status = "deleted";
     this.endedAt = nowIso();
@@ -376,10 +518,7 @@ export class TerminalSession {
   }
 
   broadcast(message) {
-    const encoded = JSON.stringify(message);
-    for (const client of this.clients) {
-      client.sendRaw(encoded);
-    }
+    this.outputMultiplexer.broadcast(message);
   }
 
   snapshot() {
@@ -404,6 +543,7 @@ export class TerminalSession {
       process_start_time: this.processStartTime,
       release_reason: this.releaseReason,
       os_pid: this.osPid,
+      pty_worker_pid: this.ptyProcess?.workerPid ?? null,
       sequence: this.sequence,
       buffer: this.buffer,
       display_buffer: displayBuffer(this.buffer),
@@ -417,7 +557,7 @@ export class TerminalSession {
       last_input: this.lastInput,
       last_input_source: this.lastInputSource,
       last_input_at: this.lastInputAt,
-      client_count: this.clients.size,
+      client_count: this.outputMultiplexer.clientCount,
       attach_url: this.manager.attachUrl(this.id),
     };
   }

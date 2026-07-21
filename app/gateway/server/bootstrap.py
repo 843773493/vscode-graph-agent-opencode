@@ -7,15 +7,33 @@ from pathlib import Path
 from app.core.env import get_project_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.gateway.config import load_gateway_config
-from app.gateway.local_workspace import start_managed_local_workspace_runtime
+from app.gateway.runtime.local_workspace import start_managed_local_workspace_runtime
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.service_runtime import WorkspaceRuntime
-from app.gateway.service_types import RemoteServiceSpec
-from app.gateway.ssh_workspace import register_ssh_workspace
-from app.gateway.workspace_ids import build_ssh_workspace_id, build_workspace_id
+from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.federation import build_remote_gateway_connection_id
+from app.gateway.remote_gateway import (
+    reconnect_remote_gateway,
+    register_remote_gateway,
+)
+from app.gateway.workspace_ids import (
+    build_managed_local_workspace_id,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+def _default_backend_debug_port() -> int | None:
+    raw_value = os.environ.get("BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT")
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    value = int(raw_value)
+    if value < 1 or value > 65535:
+        raise ValueError(
+            "BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT 必须是 1-65535: "
+            f"{raw_value}"
+        )
+    return value
 
 
 def _default_workspace_root() -> Path:
@@ -81,118 +99,77 @@ async def create_registry() -> GatewayWorkspaceRegistry:
     }
     persisted_active_workspace_id = registry.active_workspace_id
     default_root_path = _default_workspace_root()
-    default_backend_url = os.environ.get("BOXTEAM_DEFAULT_BACKEND_URL")
-    default_workspace_id: str | None = None
-    if default_backend_url:
-        root_path = str(default_root_path)
-        backend_url = default_backend_url.rstrip("/")
-        default_workspace_id = build_workspace_id("local", root_path, backend_url)
-        persisted_default = persisted_targets_by_id.get(default_workspace_id)
-        registry.upsert(
-            WorkspaceTarget(
-                workspace_id=default_workspace_id,
-                name=(
-                    persisted_default.name
-                    if (
-                        persisted_default is not None
-                        and persisted_default.name_customized
-                    )
-                    else os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or "home"
-                ),
-                name_customized=(
-                    persisted_default.name_customized
-                    if persisted_default is not None
-                    else False
-                ),
-                root_path=root_path,
-                backend_url=backend_url,
-                connection_kind="local",
-                managed=False,
-                removable=False,
-                system_default=True,
+    root_path = str(default_root_path)
+    default_workspace_id = build_managed_local_workspace_id(root_path)
+    persisted_default = persisted_targets_by_id.get(default_workspace_id)
+    if persisted_default is None:
+        persisted_default = next(
+            (
+                target
+                for target in persisted_targets
+                if target.system_default and target.root_path == root_path
             ),
-            runtime=WorkspaceRuntime(
-                service_urls={
-                    "workspace_api": backend_url,
-                    "terminal_manager": os.environ.get(
-                        "BOXTEAM_TERMINAL_BACKEND_URL",
-                        "http://127.0.0.1:8012",
-                    ).rstrip("/"),
-                    "browser_manager": os.environ.get(
-                        "BOXTEAM_BROWSER_BACKEND_URL",
-                        "http://127.0.0.1:8015",
-                    ).rstrip("/"),
-                }
-            ),
-            activate=persisted_active_workspace_id is None,
+            None,
         )
-        registry.remove_backend_aliases(
+    default_runtime = await start_managed_local_workspace_runtime(
+        project_root=get_project_root(),
+        workspace_root=default_root_path,
+        log_dir=gateway_root / "logs",
+        backend_debug_port=_default_backend_debug_port(),
+    )
+    backend_url = default_runtime.service_urls["workspace_api"]
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id=default_workspace_id,
+            name=(
+                persisted_default.name
+                if (
+                    persisted_default is not None
+                    and persisted_default.name_customized
+                )
+                else os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or "home"
+            ),
+            name_customized=(
+                persisted_default.name_customized
+                if persisted_default is not None
+                else False
+            ),
+            root_path=root_path,
             backend_url=backend_url,
-            keep_workspace_id=default_workspace_id,
-        )
+            connection_kind="local",
+            managed=True,
+            removable=False,
+            system_default=True,
+        ),
+        runtime=default_runtime,
+        activate=persisted_active_workspace_id is None,
+    )
+    registry.remove_system_default_aliases(
+        keep_workspace_id=default_workspace_id,
+    )
 
+    # TODO: Gateway 配置热重载需要先为 registry 目标增加 config/manual/system
+    # 来源归属、原子 batch commit 与代理 runtime lease。否则删除配置可能误删手动
+    # 目标，或在 HTTP/SSE/WebSocket 仍使用旧 SSH 隧道时提前关闭它。
     gateway_config = load_gateway_config(
         _gateway_config_workspace_root(default_root_path)
     )
-    configured_workspace_ids: set[str] = set()
     configured_active_workspace_id: str | None = None
     for configured_workspace in gateway_config.workspaces:
-        workspace_id = build_ssh_workspace_id(
-            root_path=configured_workspace.remote_workspace_path,
-            host=configured_workspace.host,
-            port=configured_workspace.port,
-            username=configured_workspace.username,
-            remote_backend_host=configured_workspace.remote_backend_host,
-            remote_backend_port=configured_workspace.remote_backend_port,
-        )
-        configured_workspace_ids.add(workspace_id)
-        persisted_configured_workspace = persisted_targets_by_id.get(workspace_id)
-        await register_ssh_workspace(
+        projected = await register_remote_gateway(
             registry=registry,
             log_dir=gateway_root / "logs",
-            name=(
-                persisted_configured_workspace.name
-                if (
-                    persisted_configured_workspace is not None
-                    and persisted_configured_workspace.name_customized
-                )
-                else configured_workspace.name
-            ),
+            name=configured_workspace.name,
             host=configured_workspace.host,
             port=configured_workspace.port,
             username=configured_workspace.username,
             private_key_path=configured_workspace.private_key_path,
             ssh_config_host=None,
-            remote_backend_host=configured_workspace.remote_backend_host,
-            remote_backend_port=configured_workspace.remote_backend_port,
-            remote_services=(
-                RemoteServiceSpec(
-                    name="workspace_api",
-                    host=configured_workspace.remote_backend_host,
-                    port=configured_workspace.remote_backend_port,
-                    required=True,
-                ),
-                RemoteServiceSpec(
-                    name="terminal_manager",
-                    host=configured_workspace.remote_terminal_backend_host,
-                    port=configured_workspace.remote_terminal_backend_port,
-                ),
-                RemoteServiceSpec(
-                    name="browser_manager",
-                    host=configured_workspace.remote_browser_backend_host,
-                    port=configured_workspace.remote_browser_backend_port,
-                ),
-            ),
-            remote_workspace_path=configured_workspace.remote_workspace_path,
+            remote_gateway_port=configured_workspace.remote_gateway_port,
             activate=configured_workspace.activate,
-            name_customized=(
-                persisted_configured_workspace.name_customized
-                if persisted_configured_workspace is not None
-                else False
-            ),
         )
-        if configured_workspace.activate:
-            configured_active_workspace_id = workspace_id
+        if configured_workspace.activate and projected:
+            configured_active_workspace_id = projected[0].workspace_id
 
     for target in persisted_targets:
         if target.connection_kind != "local" or not target.managed or target.system_default:
@@ -206,36 +183,32 @@ async def create_registry() -> GatewayWorkspaceRegistry:
             registry.mark_connection_error(target.workspace_id, message)
             logger.exception(message)
 
-    for target in persisted_targets:
-        if target.connection_kind != "ssh" or target.workspace_id in configured_workspace_ids:
-            continue
-        connection = target.ssh_connection
-        if connection is None:
-            registry.mark_connection_error(
-                target.workspace_id,
-                "持久化记录缺少 SSH 重连信息，无法恢复 SSH 隧道，请删除后重新添加",
-            )
+    configured_connection_ids = {
+        build_remote_gateway_connection_id(
+            host=item.host,
+            port=item.port,
+            username=item.username,
+            remote_gateway_port=item.remote_gateway_port,
+        )
+        for item in gateway_config.workspaces
+    }
+    for connection in registry.remote_gateway_connections():
+        if connection.connection_id in configured_connection_ids:
             continue
         try:
-            await register_ssh_workspace(
+            await reconnect_remote_gateway(
                 registry=registry,
+                connection_id=connection.connection_id,
                 log_dir=gateway_root / "logs",
-                name=target.name,
-                host=connection.host,
-                port=connection.port,
-                username=connection.username,
-                private_key_path=connection.private_key_path,
-                ssh_config_host=connection.ssh_config_host,
-                remote_backend_host=connection.remote_backend_host,
-                remote_backend_port=connection.remote_backend_port,
-                remote_services=connection.remote_services,
-                remote_workspace_path=target.root_path,
-                activate=False,
-                name_customized=target.name_customized,
             )
         except Exception as error:
-            message = f"恢复 SSH 工作区失败: workspace_id={target.workspace_id}: {error}"
-            registry.mark_connection_error(target.workspace_id, message)
+            message = (
+                "恢复远程 Gateway 失败: "
+                f"connection_id={connection.connection_id}: {error}"
+            )
+            for target in registry.targets():
+                if target.remote_gateway_connection_id == connection.connection_id:
+                    registry.mark_connection_error(target.workspace_id, message)
             logger.exception(message)
 
     requested_active_workspace_id = (

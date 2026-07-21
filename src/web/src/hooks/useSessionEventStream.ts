@@ -12,6 +12,7 @@ import {
   TraceCursorGoneError,
   type SessionStreamEvent,
 } from "../api";
+import { listPendingRequests } from "../pendingRequestsApi";
 import { cloneMaps } from "../state/appStateMaps";
 import {
   updateAttachmentSummariesFromMessages,
@@ -19,6 +20,7 @@ import {
 } from "../state/attachments";
 import {
   conversationMatchesTraceEvent,
+  writePendingSnapshot,
   removePendingForTraceEvent,
   writePendingList,
 } from "../state/conversations";
@@ -134,9 +136,10 @@ async function refreshTerminalSession(
   terminalTraceEvent: ReturnType<typeof buildTraceEvent>,
   setState: SetAppState,
 ) {
-  const [messages, updatedSession] = await Promise.all([
+  const [messages, updatedSession, pendingSnapshot] = await Promise.all([
     listMessages(apiPort, sessionId, workspaceId),
     getSession(apiPort, sessionId, workspaceId),
+    listPendingRequests(apiPort, sessionId, workspaceId),
   ]);
   setState((latest) => {
     if (workspaceId && latest.currentSessionWorkspaceId !== workspaceId) {
@@ -149,6 +152,12 @@ async function refreshTerminalSession(
       latestNext.pendingConversations,
       sessionCacheKey,
       terminalTraceEvent,
+    );
+    writePendingSnapshot(
+      latestNext.pendingConversations,
+      latestNext.activeJobIdsBySession,
+      pendingSnapshot,
+      sessionCacheKey,
     );
     if (latest.currentSession?.session_id !== sessionId) {
       return latestNext;
@@ -344,6 +353,37 @@ export function useSessionEventStream({
           setState((latest) => ({
             ...latest,
             status: `刷新委派子会话失败: ${message}`,
+          }));
+        });
+      }
+      const pendingQueueChanged = events.some(
+        (event, index) =>
+          event.type === "status_change"
+          && tracePayloadString(traceEvents[index], "reason").startsWith(
+            "pending_request",
+          ),
+      );
+      if (pendingQueueChanged) {
+        void listPendingRequests(
+          apiPort,
+          sessionId,
+          targetWorkspaceId,
+        ).then((snapshot) => {
+          setState((latest) => {
+            const next = cloneMaps(latest);
+            writePendingSnapshot(
+              next.pendingConversations,
+              next.activeJobIdsBySession,
+              snapshot,
+              targetSessionCacheKey,
+            );
+            return next;
+          });
+        }).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((latest) => ({
+            ...latest,
+            status: `刷新待处理消息失败: ${message}`,
           }));
         });
       }

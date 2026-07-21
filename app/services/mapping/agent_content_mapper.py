@@ -11,6 +11,7 @@ class AgentStreamContentPart:
     kind: Literal["reasoning", "markdown"]
     block_type: Literal["reasoning", "text", "refusal"]
     text: str
+    extras: dict[str, Any] | None = None
 
 
 def extract_reasoning_summary(summary: Any) -> str:
@@ -137,6 +138,11 @@ def extract_agent_stream_content_parts(content: Any) -> list[AgentStreamContentP
                 kind=kind,
                 block_type=block_type,
                 text=text,
+                extras=(
+                    dict(block["extras"])
+                    if isinstance(block.get("extras"), dict)
+                    else None
+                ),
             )
         )
     return result

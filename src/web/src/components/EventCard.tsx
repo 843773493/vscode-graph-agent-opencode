@@ -2,9 +2,12 @@ import React from "react";
 import type { AttachmentRef } from "../types/backend";
 import { escapeHtml } from "../utils/format";
 import { renderMarkdown } from "../utils/markdown";
-import AttachmentList from "./AttachmentList";
+import MessageAttachments from "./chat/MessageAttachments";
 
 export interface EventCardProps {
+  apiPort: number;
+  sessionId: string;
+  workspaceId?: string | null;
   title: string;
   kind:
     | "message"
@@ -28,6 +31,9 @@ export interface EventCardProps {
 }
 
 export default function EventCard({
+  apiPort,
+  sessionId,
+  workspaceId,
   title,
   kind,
   tone,
@@ -83,7 +89,12 @@ export default function EventCard({
             dangerouslySetInnerHTML={{ __html: renderMarkdown(collapsedText) }}
           />
           {attachments.length > 0 && (
-            <AttachmentList attachments={attachments} />
+            <MessageAttachments
+              apiPort={apiPort}
+              sessionId={sessionId}
+              workspaceId={workspaceId}
+              attachments={attachments}
+            />
           )}
         </>
       ) : (
@@ -101,7 +112,12 @@ export default function EventCard({
             <div className="event-card-empty">（无可读内容）</div>
           ) : null}
           {attachments.length > 0 && (
-            <AttachmentList attachments={attachments} />
+            <MessageAttachments
+              apiPort={apiPort}
+              sessionId={sessionId}
+              workspaceId={workspaceId}
+              attachments={attachments}
+            />
           )}
           {showRawDetails ? (
             <details className="event-card-details">

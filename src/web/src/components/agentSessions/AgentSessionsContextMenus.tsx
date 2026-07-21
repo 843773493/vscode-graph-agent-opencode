@@ -3,6 +3,7 @@ import {
   copyTextToClipboard,
   readTextFromClipboard,
 } from "../../utils/clipboard";
+import { extractWorkspaceIdFromClipboardText } from "../../state/workspaceInformation";
 
 export interface SessionContextMenu {
   sessionId: string;
@@ -16,6 +17,7 @@ export interface SessionContextMenu {
 export interface WorkspaceContextMenu {
   workspaceId: string;
   name: string;
+  parentWorkspaceId: string | null;
   removable: boolean;
   x: number;
   y: number;
@@ -42,6 +44,13 @@ interface AgentSessionsContextMenusProps {
     workspaceId: string,
     sessionId: string,
   ) => Promise<void>;
+  onRenameWorkspace: (workspaceId: string) => void;
+  onUnbindWorkspace: (workspaceId: string) => Promise<void>;
+  onBindClipboardWorkspace: (
+    workspaceId: string,
+    parentWorkspaceId: string,
+  ) => Promise<void>;
+  onCopyWorkspaceInformation: (workspaceId: string) => Promise<void>;
   onRemoveWorkspace: (workspaceId: string, name: string) => void;
   onStatusChange: (message: string) => void;
 }
@@ -57,6 +66,10 @@ export default function AgentSessionsContextMenus({
   onBindClipboardSession,
   onForkSessionContext,
   onCopySessionInformation,
+  onRenameWorkspace,
+  onUnbindWorkspace,
+  onBindClipboardWorkspace,
+  onCopyWorkspaceInformation,
   onRemoveWorkspace,
   onStatusChange,
 }: AgentSessionsContextMenusProps) {
@@ -129,6 +142,49 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`从上下文创建子会话失败: ${message}`);
       },
     );
+  };
+
+  const handleCopyWorkspaceInformation = () => {
+    if (!workspaceMenu) {
+      return;
+    }
+    const target = workspaceMenu;
+    onCloseWorkspaceMenu();
+    onStatusChange(`正在读取工作区信息: ${target.workspaceId}`);
+    void onCopyWorkspaceInformation(target.workspaceId)
+      .then(() => {
+        onStatusChange(`已复制工作区信息: ${target.workspaceId}`);
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        onStatusChange(`复制工作区信息失败: ${message}`);
+      });
+  };
+
+  const handleBindClipboardWorkspace = () => {
+    if (!workspaceMenu) {
+      return;
+    }
+    const target = workspaceMenu;
+    onCloseWorkspaceMenu();
+    void readTextFromClipboard()
+      .then((clipboardText) =>
+        extractWorkspaceIdFromClipboardText(clipboardText),
+      )
+      .then((childWorkspaceId) =>
+        onBindClipboardWorkspace(childWorkspaceId, target.workspaceId).then(
+          () => childWorkspaceId,
+        ),
+      )
+      .then((childWorkspaceId) => {
+        onStatusChange(
+          `已将 ${childWorkspaceId} 绑定到 ${target.workspaceId}`,
+        );
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        onStatusChange(`绑定剪贴板工作区失败: ${message}`);
+      });
   };
 
   return (
@@ -214,11 +270,61 @@ export default function AgentSessionsContextMenus({
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const target = workspaceMenu;
+              onCloseWorkspaceMenu();
+              onRenameWorkspace(target.workspaceId);
+            }}
+          >
+            <span className="codicon codicon-edit agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">重命名</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            title="复制可供 Agent 和软件解析的通用工作区信息"
+            onClick={handleCopyWorkspaceInformation}
+          >
+            <span className="codicon codicon-info agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">复制工作区信息</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            title="从剪贴板工作区 ID 或通用工作区信息中识别并绑定子工作区"
+            onClick={handleBindClipboardWorkspace}
+          >
+            <span className="codicon codicon-clippy agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">粘贴为子工作区</span>
+          </button>
+          {workspaceMenu.parentWorkspaceId ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const target = workspaceMenu;
+                onCloseWorkspaceMenu();
+                void onUnbindWorkspace(target.workspaceId).catch(
+                  (error: unknown) => {
+                    const message =
+                      error instanceof Error ? error.message : String(error);
+                    onStatusChange(`移出父工作区失败: ${message}`);
+                  },
+                );
+              }}
+            >
+              <span className="codicon codicon-debug-disconnect agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">移出父工作区</span>
+            </button>
+          ) : null}
           {workspaceMenu.removable ? (
             <button
               type="button"
               role="menuitem"
-              className="danger"
+              className="danger agent-sessions-menu-item-separated"
               onClick={() => {
                 const target = workspaceMenu;
                 onCloseWorkspaceMenu();

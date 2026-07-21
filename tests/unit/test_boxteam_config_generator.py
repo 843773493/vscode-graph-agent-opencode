@@ -9,7 +9,9 @@ from configs.boxteam import (
     SSH_BLOCK_BEGIN,
     SSH_BLOCK_END,
     SSH_KEY_NAME,
+    SSH_KNOWN_HOSTS_NAME,
     build_boxteam_config,
+    initialize_boxteam_config,
     install_config_schema,
     install_development_ssh_assets,
     write_boxteam_config,
@@ -22,8 +24,20 @@ def test_build_boxteam_config_only_enables_development_features_when_requested()
 
     assert production["development"] == {"test_tools": False}
     assert production["gateway"] == {"workspaces": []}
+    assert "mcp" not in production
     assert development["development"] == {"test_tools": True}
     assert development["gateway"]["workspaces"][0]["enabled"] is False
+    assert development["gateway"]["workspaces"][0]["username"] == "boxteam"
+    assert development["mcp"] == {
+        "servers": {
+            "tui-mcp": {
+                "enabled": True,
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["--yes", "tui-mcp"],
+            }
+        }
+    }
     custom_names = {
         item["name"]
         for item in development["agents"]["default"]["tools"]["custom"]
@@ -88,6 +102,52 @@ def test_install_config_schema_copies_runtime_resource(tmp_path: Path) -> None:
     assert target.stat().st_mode & 0o777 == 0o600
 
 
+def test_initialize_boxteam_config_preserves_existing_file(tmp_path: Path) -> None:
+    config_path = tmp_path / "config" / "boxteam.jsonc"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('{"custom": true}\n', encoding="utf-8")
+
+    created = initialize_boxteam_config(
+        config_path,
+        development_assets=False,
+        project_root=Path.cwd(),
+    )
+
+    assert created is False
+    assert config_path.read_text(encoding="utf-8") == '{"custom": true}\n'
+    assert (config_path.parent / "config.schema.jsonc").is_file()
+
+
+def test_initialize_boxteam_config_force_rebuilds_existing_file(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config" / "boxteam.jsonc"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('{"custom": true}\n', encoding="utf-8")
+
+    created = initialize_boxteam_config(
+        config_path,
+        development_assets=False,
+        project_root=Path.cwd(),
+        force=True,
+    )
+
+    assert created is True
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["default_agent"] == "default"
+    assert "custom" not in payload
+
+
+def test_install_config_schema_uses_packaged_resource_without_project_root(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config" / "boxteam.jsonc"
+
+    target = install_config_schema(config_path=config_path)
+
+    assert target.read_bytes() == (Path.cwd() / "configs" / "config.jsonc").read_bytes()
+
+
 def test_install_development_ssh_assets_is_idempotent(tmp_path: Path) -> None:
     project_root = Path.cwd().resolve()
     home = tmp_path / "home"
@@ -105,3 +165,32 @@ def test_install_development_ssh_assets_is_idempotent(tmp_path: Path) -> None:
     ).read_bytes()
     assert (home / ".ssh" / SSH_KEY_NAME).stat().st_mode & 0o777 == 0o600
     assert (home / ".ssh" / "config").stat().st_mode & 0o777 == 0o600
+
+
+def test_install_development_ssh_assets_copies_docker_target_host_key(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    source_root = project_root / "asset" / "gateway_ssh"
+    source_root.mkdir(parents=True)
+    source_root.joinpath(SSH_KEY_NAME).write_text("private", encoding="utf-8")
+    source_root.joinpath(f"{SSH_KEY_NAME}.pub").write_text(
+        "public",
+        encoding="utf-8",
+    )
+    target_known_hosts = (
+        project_root
+        / "out/cross-platform-dev-targets/docker-debian/ssh/known_hosts"
+    )
+    target_known_hosts.parent.mkdir(parents=True)
+    target_known_hosts.write_text("[127.0.0.1]:22222 ssh-ed25519 test\n", encoding="utf-8")
+
+    home = tmp_path / "home"
+    install_development_ssh_assets(project_root=project_root, home=home)
+
+    assert (home / ".ssh" / SSH_KNOWN_HOSTS_NAME).read_bytes() == (
+        target_known_hosts.read_bytes()
+    )
+    ssh_config = (home / ".ssh" / "config").read_text(encoding="utf-8")
+    assert "User boxteam" in ssh_config
+    assert "StrictHostKeyChecking yes" in ssh_config

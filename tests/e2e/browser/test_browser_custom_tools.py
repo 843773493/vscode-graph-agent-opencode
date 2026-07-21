@@ -140,7 +140,7 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
     workspace_root = (
-        project_root / "out" / "tests" / "temp" / "e2e" / relative_test_path / "workspace"
+        project_root / "out" / "tests" / "e2e" / relative_test_path / "workspace"
     )
     template_root = project_root / "asset" / "custom_tool_test_workspace"
     prepare_e2e_workspace(

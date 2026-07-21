@@ -36,6 +36,7 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContextMiddleware,
 )
 from app.agents.tool_output_middleware import ToolOutputMiddleware
+from app.agents.policy import validate_tool_dependencies
 from app.agents.workspace_backend import build_workspace_backend
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
@@ -76,7 +77,12 @@ def _team_aware_system_prompt(
     return append_to_system_message(base_message, TEAM_COORDINATION_SYSTEM_PROMPT)
 
 
-def build_model_from_provider(provider: dict[str, Any], runtime_config: dict[str, Any]) -> Any:
+def build_model_from_provider(
+    provider: dict[str, Any],
+    runtime_config: dict[str, Any],
+    *,
+    prompt_cache_key: str | None = None,
+) -> Any:
     """从单个 provider 配置构建模型实例。"""
     custom_llm_provider = provider.get("custom_llm_provider")
     if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
@@ -86,12 +92,26 @@ def build_model_from_provider(provider: dict[str, Any], runtime_config: dict[str
         )
 
     request_options = _get_provider_request_options(provider)
+    api_mode = provider.get("api_mode", "chat_completions")
+    if api_mode == "responses":
+        from app.agents.providers.openai_responses import build_openai_responses_model
+
+        return build_openai_responses_model(
+            provider=provider,
+            runtime_config=runtime_config,
+            request_options=request_options,
+            prompt_cache_key=prompt_cache_key,
+        )
+    if api_mode != "chat_completions":
+        raise ValueError(f"provider.api_mode 不受支持: {api_mode!r}")
+
     from app.agents.providers.litellm_chat import build_litellm_chat_model
 
     return build_litellm_chat_model(
         provider=provider,
         runtime_config=runtime_config,
         request_options=request_options,
+        prompt_cache_key=prompt_cache_key,
     )
 
 
@@ -117,7 +137,12 @@ def _get_provider_request_options(provider: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_runtime_for_agent(agent_id: str, config_service: ConfigService | None = None) -> dict[str, Any]:
+def build_runtime_for_agent(
+    agent_id: str,
+    config_service: ConfigService | None = None,
+    *,
+    prompt_cache_key: str | None = None,
+) -> dict[str, Any]:
     if config_service is None:
         raise RuntimeError("build_runtime_for_agent 需要显式传入 ConfigService")
     service = config_service
@@ -126,7 +151,11 @@ def build_runtime_for_agent(agent_id: str, config_service: ConfigService | None 
 
     candidates = []
     for provider in providers:
-        model = build_model_from_provider(provider, runtime_config)
+        model = build_model_from_provider(
+            provider,
+            runtime_config,
+            prompt_cache_key=prompt_cache_key,
+        )
         candidates.append(
             build_provider_model_candidate(provider=provider, model=model)
         )
@@ -183,6 +212,7 @@ def create_my_deep_agent(
     browser_manager_client: BrowserManagerClient | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
+    mcp_tools: Sequence[BaseTool] | None = None,
 ) -> Any:
     if checkpointer is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
@@ -258,15 +288,15 @@ def create_my_deep_agent(
             config_service=config_service,
             terminal_manager_client=terminal_manager_client,
             browser_manager_client=browser_manager_client,
+            invocation_context=tool_invocation_context,
         )
         custom_tools = filter_tools_by_name(
             custom_tool_bundle.tools,
             resolved_tool_denylist,
         )
-        resolved_tools = [
-            *visible_tools,
-            create_custom_tool_invoker_tool(custom_tools),
-        ]
+        resolved_tools = [*visible_tools, *(mcp_tools or [])]
+        if custom_tools:
+            resolved_tools.append(create_custom_tool_invoker_tool(custom_tools))
     resolved_tools = filter_tools_by_name(resolved_tools, resolved_tool_denylist)
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
@@ -274,15 +304,10 @@ def create_my_deep_agent(
         getattr(tool, "name", "")
         for tool in resolved_tools
     }
-    session_delegation_tools = {"task", "create_team_member"}
-    if (
-        session_delegation_tools & resolved_tool_names
-        and "send_message_to_session" not in resolved_tool_names
-    ):
-        raise ValueError(
-            "task/create_team_member 依赖 send_message_to_session 完成 Agent 通信；"
-            "不能启用委派工具时单独禁用 send_message_to_session"
-        )
+    validate_tool_dependencies(
+        resolved_tool_names,
+        context=f"agent {agent_id} 的运行时工具策略",
+    )
     resolved_system_prompt = _team_aware_system_prompt(
         system_prompt,
         enabled="create_team" in resolved_tool_names,
@@ -377,6 +402,7 @@ def create_runtime_deep_agent_for_session(
     browser_manager_client: BrowserManagerClient | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
+    mcp_tools: Sequence[BaseTool] | None = None,
     name: str | None = None,
     override_model: Any = None,
     model_routing_enabled: bool = True,
@@ -384,8 +410,17 @@ def create_runtime_deep_agent_for_session(
     if config_service is None:
         raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
     service = config_service
-    runtime = build_runtime_for_agent(agent_id=agent_id, config_service=service)
+    runtime = build_runtime_for_agent(
+        agent_id=agent_id,
+        config_service=service,
+        prompt_cache_key=session_id,
+    )
     tool_config = service.get_agent_tool_config(agent_id)
+    tool_policy = service.resolve_agent_tool_policy(agent_id)
+    confirmation_tool_names = (
+        service.resolve_agent_confirmation_tool_names(agent_id)
+        & tool_policy.enabled_names
+    )
     custom_tool_specs = list(tool_config.get("custom", []))
 
     model = override_model if override_model is not None else runtime["model"]
@@ -402,7 +437,7 @@ def create_runtime_deep_agent_for_session(
         sender_agent_id=sender_agent_id,
         enabled_tool_names=enabled_tool_names,
         enabled_runtime_middleware_names=enabled_runtime_middleware_names,
-        tool_denylist=set(tool_config.get("denylist", [])) | set(tool_denylist or set()),
+        tool_denylist=set(tool_policy.disabled_names) | set(tool_denylist or set()),
         custom_tool_specs=custom_tool_specs,
         name=name or agent_id,
         background_task_registry=background_task_registry,
@@ -418,5 +453,7 @@ def create_runtime_deep_agent_for_session(
         browser_manager_client=browser_manager_client,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
+        mcp_tools=mcp_tools,
+        interrupt_on={tool_name: True for tool_name in confirmation_tool_names},
         config_service=service,
     )

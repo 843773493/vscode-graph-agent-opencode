@@ -1,7 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
+import { promisify } from "node:util";
 
 const TERMINATION_GRACE_MS = 1500;
+const execFileAsync = promisify(execFile);
 
 export function parseLinuxProcStat(raw) {
   const endOfCommand = raw.lastIndexOf(")");
@@ -19,9 +21,84 @@ export function parseLinuxProcStat(raw) {
   };
 }
 
-export async function readLinuxProcStat(pid) {
-  if (process.platform !== "linux" || !Number.isInteger(pid) || pid <= 0) {
+export function parsePosixPsStat(raw, { numericSession = true } = {}) {
+  const fields = raw.trim().split(/\s+/);
+  if (fields.length < 9) {
     return null;
+  }
+  return {
+    pid: Number(fields[0]),
+    ppid: Number(fields[1]),
+    processGroupId: Number(fields[2]),
+    processSessionId: numericSession ? Number(fields[3]) : fields[3],
+    processStartTime: fields.slice(4).join(" "),
+  };
+}
+
+export function parsePosixSessionProcesses(raw, processSessionId) {
+  return raw
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .filter(([rawPid, rawSessionId]) => (
+      Number.isInteger(Number(rawPid))
+      && Number(rawPid) !== process.pid
+      && (
+        typeof processSessionId === "number"
+          ? Number(rawSessionId) === processSessionId
+          : rawSessionId === processSessionId
+      )
+    ))
+    .map(([rawPid]) => Number(rawPid))
+    .sort((left, right) => right - left);
+}
+
+function isValidSessionId(processSessionId) {
+  return (
+    (Number.isInteger(processSessionId) && processSessionId > 0)
+    || (
+      typeof processSessionId === "string"
+      && processSessionId.length > 0
+    )
+  );
+}
+
+async function readPosixProcessStat(pid) {
+  // TODO: 平台兼容：Darwin 的 ps 使用 sess 指针标识 session，其他 POSIX 使用 sid。
+  const sessionField = process.platform === "darwin" ? "sess=" : "sid=";
+  try {
+    const { stdout } = await execFileAsync(
+      "ps",
+      [
+        "-o", "pid=",
+        "-o", "ppid=",
+        "-o", "pgid=",
+        "-o", sessionField,
+        "-o", "lstart=",
+        "-p", String(pid),
+      ],
+      { encoding: "utf8" },
+    );
+    return parsePosixPsStat(stdout, {
+      numericSession: process.platform !== "darwin",
+    });
+  } catch (error) {
+    if (!processExists(pid)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function readProcessStat(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return null;
+  }
+  if (process.platform === "win32") {
+    return null;
+  }
+  if (process.platform !== "linux") {
+    return await readPosixProcessStat(pid);
   }
   try {
     return parseLinuxProcStat(await readFile(`/proc/${pid}/stat`, "utf8"));
@@ -72,16 +149,26 @@ function taskkill(pid) {
 }
 
 async function currentProcessSessionId() {
-  return (await readLinuxProcStat(process.pid))?.processSessionId ?? null;
+  return (await readProcessStat(process.pid))?.processSessionId ?? null;
 }
 
 async function processIdsInSession(processSessionId) {
-  if (process.platform !== "linux" || !Number.isInteger(processSessionId) || processSessionId <= 0) {
+  if (!isValidSessionId(processSessionId)) {
     return [];
   }
   const currentSessionId = await currentProcessSessionId();
   if (currentSessionId === processSessionId) {
     return [];
+  }
+  if (process.platform !== "linux") {
+    // TODO: 平台兼容：保持与单进程元数据查询相同的 Darwin sess / POSIX sid 语义。
+    const sessionField = process.platform === "darwin" ? "sess=" : "sid=";
+    const { stdout } = await execFileAsync(
+      "ps",
+      ["-ax", "-o", "pid=", "-o", sessionField],
+      { encoding: "utf8" },
+    );
+    return parsePosixSessionProcesses(stdout, processSessionId);
   }
   const entries = await readdir("/proc", { withFileTypes: true });
   const pids = [];
@@ -93,7 +180,7 @@ async function processIdsInSession(processSessionId) {
     if (pid === process.pid) {
       continue;
     }
-    const stat = await readLinuxProcStat(pid);
+    const stat = await readProcessStat(pid);
     if (stat?.processSessionId === processSessionId) {
       pids.push(pid);
     }
@@ -117,7 +204,7 @@ async function terminalProcessIds({
   processSessionId = null,
   processStartTime = null,
 }) {
-  const stat = await readLinuxProcStat(pid);
+  const stat = await readProcessStat(pid);
   if (processStartTime && stat?.processStartTime && stat.processStartTime !== processStartTime) {
     return [];
   }

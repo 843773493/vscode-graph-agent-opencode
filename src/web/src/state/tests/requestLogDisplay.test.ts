@@ -1,10 +1,41 @@
 import type { LLMRequestLogRecord } from "../../types/backend";
 import {
+  buildUpstreamAttemptDisplay,
   buildRequestLogDisplay,
   buildRequestLogKeyFlow,
   buildRequestReplayDisplay,
   normalizeRequestLogJsonForDisplay,
 } from "../requestLogDisplay";
+
+test("buildUpstreamAttemptDisplay exposes merged upstream payloads", () => {
+  const log = {
+    upstream: {
+      attempts: [
+        {
+          call_type: "aresponses",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          api_base: "https://example.com/v1",
+          request: { input: "hello" },
+          response: { status: "completed" },
+          error: null,
+        },
+      ],
+    },
+  } as LLMRequestLogRecord;
+
+  expect(buildUpstreamAttemptDisplay(log)).toEqual([
+    {
+      callType: "aresponses",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      apiBase: "https://example.com/v1",
+      request: { input: "hello" },
+      response: { status: "completed" },
+      error: null,
+    },
+  ]);
+});
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {

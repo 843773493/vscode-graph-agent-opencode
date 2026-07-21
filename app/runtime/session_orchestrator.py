@@ -11,6 +11,7 @@ from app.schemas.public_v2.message import (
     MessageRunRequest,
     RunOptions,
 )
+from app.schemas.public_v2.pending_request import PendingRequestKind
 from app.services.infrastructure.config_service import ConfigService
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
@@ -37,13 +38,12 @@ class SessionOrchestrator:
         session_id: str,
         content: str,
         *,
-        message_role: MessageRole = MessageRole.user,
         metadata: dict[str, object] | None = None,
     ) -> MessageRunAccepted:
         session = await self._session_service.get(session_id)
         run_request = MessageRunRequest(
             message=MessageCreateRequest(
-                role=message_role,
+                role=MessageRole.user,
                 content=content,
                 metadata=metadata or {},
             ),
@@ -55,12 +55,14 @@ class SessionOrchestrator:
         import logging
         logger = logging.getLogger(__name__)
         logger.info("[session_orchestrator] create_message begin: session_id=%s", session_id)
+        self._job_service.assert_accepting_jobs()
         requested_agent_id = payload.run.agent_id if payload.run else None
         message = await self._message_service.create(session_id, payload.message)
         return await self.dispatch_prepared_message(
             session_id,
             message,
             requested_agent_id=requested_agent_id,
+            pending_kind=payload.run.queue or "queued",
         )
 
     async def dispatch_prepared_message(
@@ -69,6 +71,7 @@ class SessionOrchestrator:
         message: MessageDTO,
         *,
         requested_agent_id: str | None,
+        pending_kind: PendingRequestKind = "queued",
     ) -> MessageRunAccepted:
         """调度一条已生成稳定 message_id 的用户消息。"""
         import logging
@@ -83,16 +86,17 @@ class SessionOrchestrator:
             effective_agent_id = self._config_service.get_default_agent_id()
 
         logger.info("[session_orchestrator] message created: session_id=%s message_id=%s", session_id, message.message_id)
-        job_id = await self._job_service.start_job(
+        dispatch = await self._job_service.start_job(
             session_id,
             message.content,
             agent_id=effective_agent_id,
             message_id=message.message_id,
             attachments=message.attachments,
             message_created_at=message.created_at.isoformat(),
-            message_role=message.role,
             message_metadata=message.metadata,
+            pending_kind=pending_kind,
         )
+        job_id = dispatch.job_id
         logger.info("[session_orchestrator] start_job returned: session_id=%s job_id=%s", session_id, job_id)
         await self._job_event_bus.publish(
             job_id=job_id,
@@ -112,4 +116,9 @@ class SessionOrchestrator:
             agent_id=effective_agent_id,
         )
         logger.info("[session_orchestrator] message_created event published: session_id=%s message_id=%s job_id=%s", session_id, message.message_id, job_id)
-        return MessageRunAccepted(message_id=message.message_id, job_id=job_id, status="accepted")
+        return MessageRunAccepted(
+            message_id=message.message_id,
+            job_id=job_id,
+            status=dispatch.job_status,
+            dispatch=dispatch,
+        )

@@ -9,6 +9,8 @@ TEXT_INPUT = "text_input"
 IMAGE_INPUT = "image_input"
 VIDEO_INPUT = "video_input"
 AUDIO_INPUT = "audio_input"
+REASONING_CONTENT_REPLAY = "reasoning_content_replay"
+PROMPT_CACHE_KEY = "prompt_cache_key"
 
 SUPPORTED_PROVIDER_CAPABILITIES: frozenset[ProviderCapability] = frozenset(
     {
@@ -16,6 +18,8 @@ SUPPORTED_PROVIDER_CAPABILITIES: frozenset[ProviderCapability] = frozenset(
         IMAGE_INPUT,
         VIDEO_INPUT,
         AUDIO_INPUT,
+        REASONING_CONTENT_REPLAY,
+        PROMPT_CACHE_KEY,
     }
 )
 

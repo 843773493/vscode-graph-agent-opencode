@@ -23,13 +23,19 @@ from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_litellm import ChatLiteLLM
 
-from app.core.identifier import create_prefixed_id
+from app.agents.provider_capabilities import (
+    PROMPT_CACHE_KEY,
+    REASONING_CONTENT_REPLAY,
+    parse_provider_capabilities,
+)
 from app.agents.providers._format_check import (
     FormatCheckItem,
     FormatCheckResult,
     check_history_messages_accepted,
     validate_provider_format,
 )
+from app.agents.upstream_request_trace import attach_upstream_trace_callback
+from app.core.identifier import create_prefixed_id
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
 
@@ -183,6 +189,72 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
     """LiteLLM 模型包装层，统一输出 LangChain 标准 content blocks。"""
 
     provider_id: str | None = None
+    reasoning_content_replay: bool = False
+
+    def _stream_attempt_count(self) -> int:
+        """返回包含首次请求在内的流式请求总尝试次数。"""
+        return int(self.max_retries or 0) + 1
+
+    @staticmethod
+    def _has_real_stream_termination(raw_stream: Any) -> bool:
+        """判断 LiteLLM 是否从真实上游收到终止原因。
+
+        LiteLLM 会在底层迭代器直接 EOF 时合成一个 finish_reason="stop" chunk，
+        因此不能检查转换后的 chunk；只有 wrapper 记录的终止原因能区分真实终止
+        与合成终止。
+        """
+        # TODO: LiteLLM 提供公开的“真实终止”标记后，替换对 wrapper 状态字段的读取。
+        return bool(
+            getattr(raw_stream, "received_finish_reason", None)
+            or getattr(raw_stream, "intermittent_finish_reason", None)
+        )
+
+    def _incomplete_stream_error(self, attempts: int) -> RuntimeError:
+        provider = self.provider_id or self.custom_llm_provider or "<unknown>"
+        model = self.model_name or self.model
+        return RuntimeError(
+            "模型流在上游返回真实 finish_reason 前提前结束；"
+            f"provider={provider}，model={model}，已尝试 {attempts} 次。"
+            "所有半截内容均已丢弃，未提交工具调用。"
+        )
+
+    def _collect_complete_stream(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        run_manager: CallbackManagerForLLMRun | None,
+        params: dict[str, Any],
+    ) -> list[Any]:
+        attempts = self._stream_attempt_count()
+        for _attempt in range(1, attempts + 1):
+            raw_stream = self.completion_with_retry(
+                messages=messages,
+                run_manager=run_manager,
+                **params,
+            )
+            raw_chunks = list(raw_stream)
+            if self._has_real_stream_termination(raw_stream):
+                return raw_chunks
+        raise self._incomplete_stream_error(attempts)
+
+    async def _collect_complete_astream(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        run_manager: AsyncCallbackManagerForLLMRun | None,
+        params: dict[str, Any],
+    ) -> list[Any]:
+        attempts = self._stream_attempt_count()
+        for _attempt in range(1, attempts + 1):
+            raw_stream = await self.acompletion_with_retry(
+                messages=messages,
+                run_manager=run_manager,
+                **params,
+            )
+            raw_chunks = [raw_chunk async for raw_chunk in raw_stream]
+            if self._has_real_stream_termination(raw_stream):
+                return raw_chunks
+        raise self._incomplete_stream_error(attempts)
 
     @staticmethod
     def normalize_history_content(content: Any) -> Any:
@@ -304,6 +376,47 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
     def _normalize_history_content(self, content: Any) -> Any:
         return self.normalize_history_content(content)
 
+    @staticmethod
+    def _history_reasoning_content(content: Any) -> str | None:
+        """从 LangChain 标准 content blocks 提取可回放的思考文本。"""
+        if not isinstance(content, list):
+            return None
+
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "reasoning":
+                reasoning = block.get("reasoning")
+                if not isinstance(reasoning, str):
+                    reasoning = extract_reasoning_summary(block.get("summary"))
+            elif block_type in {"thinking", "redacted_thinking"}:
+                reasoning = block.get("thinking") or block.get("text")
+            else:
+                continue
+            if isinstance(reasoning, str) and reasoning:
+                parts.append(reasoning)
+        return "\n".join(parts) or None
+
+    def _apply_reasoning_content_replay(
+        self,
+        message_dict: dict[str, Any],
+        *,
+        content: Any,
+        explicit_reasoning: Any = None,
+    ) -> None:
+        if not self.reasoning_content_replay:
+            message_dict.pop("reasoning_content", None)
+            return
+        reasoning = (
+            explicit_reasoning
+            if isinstance(explicit_reasoning, str) and explicit_reasoning
+            else self._history_reasoning_content(content)
+        )
+        if reasoning:
+            message_dict["reasoning_content"] = reasoning
+
     def _convert_messages_to_dicts(self, messages: Sequence[BaseMessage | dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for message in messages:
@@ -314,7 +427,14 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                     item["role"] = "user"
                 elif role == "ai":
                     item["role"] = "assistant"
-                item["content"] = self.normalize_history_content(item.get("content"))
+                original_content = item.get("content")
+                item["content"] = self.normalize_history_content(original_content)
+                if item.get("role") == "assistant":
+                    self._apply_reasoning_content_replay(
+                        item,
+                        content=original_content,
+                        explicit_reasoning=item.get("reasoning_content"),
+                    )
                 result.append(item)
                 continue
 
@@ -336,8 +456,11 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                     message_dict["tool_calls"] = message.additional_kwargs["tool_calls"]
                 if "function_call" in message.additional_kwargs:
                     message_dict["function_call"] = message.additional_kwargs["function_call"]
-                if "reasoning_content" in message.additional_kwargs:
-                    message_dict["reasoning_content"] = message.additional_kwargs["reasoning_content"]
+                self._apply_reasoning_content_replay(
+                    message_dict,
+                    content=message.content,
+                    explicit_reasoning=message.additional_kwargs.get("reasoning_content"),
+                )
             elif isinstance(message, SystemMessage):
                 message_dict["role"] = "system"
             elif isinstance(message, FunctionMessage):
@@ -478,15 +601,17 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
     ) -> Iterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
+        params = attach_upstream_trace_callback(params)
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
         first_chunk_yielded = False
         part_state = _StreamPartState()
-        for raw_chunk in self.completion_with_retry(
+        raw_chunks = self._collect_complete_stream(
             messages=message_dicts,
             run_manager=run_manager,
-            **params,
-        ):
+            params=params,
+        )
+        for raw_chunk in raw_chunks:
             for cg_chunk in self._convert_stream_response_chunk(
                 raw_chunk,
                 first_chunk_yielded=first_chunk_yielded,
@@ -509,15 +634,17 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
     ) -> AsyncIterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
+        params = attach_upstream_trace_callback(params)
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
         first_chunk_yielded = False
         part_state = _StreamPartState()
-        async for raw_chunk in await self.acompletion_with_retry(
+        raw_chunks = await self._collect_complete_astream(
             messages=message_dicts,
             run_manager=run_manager,
-            **params,
-        ):
+            params=params,
+        )
+        for raw_chunk in raw_chunks:
             for cg_chunk in self._convert_stream_response_chunk(
                 raw_chunk,
                 first_chunk_yielded=first_chunk_yielded,
@@ -722,6 +849,7 @@ def build_litellm_chat_model(
     provider: dict[str, Any],
     runtime_config: dict[str, Any],
     request_options: dict[str, Any],
+    prompt_cache_key: str | None = None,
 ) -> BoxteamLiteLLMChatModel:
     model_name = provider["model"]
 
@@ -735,6 +863,15 @@ def build_litellm_chat_model(
         if runtime_name in runtime_config:
             request_parameters[request_name] = runtime_config[runtime_name]
     request_parameters.update(request_options.get("overrides") or {})
+    capabilities = parse_provider_capabilities(provider)
+    if prompt_cache_key is not None and PROMPT_CACHE_KEY in capabilities:
+        extra_body = request_parameters.get("extra_body") or {}
+        if not isinstance(extra_body, dict):
+            raise TypeError("Chat Completions request_options.overrides.extra_body 必须是对象")
+        request_parameters["extra_body"] = {
+            **extra_body,
+            "prompt_cache_key": prompt_cache_key,
+        }
 
     kwargs: dict[str, Any] = {
         "model": model_name,
@@ -744,6 +881,7 @@ def build_litellm_chat_model(
         "streaming": True,
         "model_kwargs": request_parameters,
         "provider_id": provider.get("id"),
+        "reasoning_content_replay": REASONING_CONTENT_REPLAY in capabilities,
     }
 
     if provider.get("endpoint"):

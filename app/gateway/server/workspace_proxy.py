@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.core.trace_middleware import get_request_id
-from app.gateway.auth import LOCAL_TOKEN, verify_gateway_token
-from app.gateway.registry import GatewayWorkspaceRegistry
+from app.core.path_utils import get_gateway_root
+from app.gateway.auth import GatewayAuthContext, LOCAL_TOKEN, verify_gateway_access
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 
 
 router = APIRouter()
@@ -39,14 +41,35 @@ def _http_client(request: Request) -> httpx.AsyncClient:
     return client
 
 
-def _proxy_headers(request: Request) -> dict[str, str]:
+def _proxy_headers(
+    request: Request,
+    target: WorkspaceTarget | None = None,
+) -> dict[str, str]:
     headers = {
         key: value
         for key, value in request.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "host"
+        if key.lower() not in HOP_BY_HOP_HEADERS
+        and key.lower()
+        not in {
+            "host",
+            "x-local-token",
+            "x-boxteam-federation-token",
+            "x-boxteam-workspace-id",
+        }
     }
-    headers["X-Local-Token"] = LOCAL_TOKEN
     headers["X-Request-ID"] = get_request_id(request)
+    if target is not None and target.connection_kind == "remote_gateway":
+        connection_id = target.remote_gateway_connection_id
+        remote_workspace_id = target.remote_workspace_id
+        if connection_id is None or remote_workspace_id is None:
+            raise RuntimeError("远程投影工作区缺少 Gateway 连接信息")
+        credential = FederationCredentialStore(
+            storage_path=get_gateway_root() / "credentials" / "federation.json"
+        ).get(connection_id)
+        headers["X-BoxTeam-Federation-Token"] = credential.token
+        headers["X-BoxTeam-Workspace-Id"] = remote_workspace_id
+    else:
+        headers["X-Local-Token"] = LOCAL_TOKEN
     return headers
 
 
@@ -71,7 +94,7 @@ async def _stream_proxy_response(response: httpx.Response) -> AsyncIterator[byte
 async def proxy_workspace_api(
     path: str,
     request: Request,
-    _: str = Depends(verify_gateway_token),
+    auth: GatewayAuthContext = Depends(verify_gateway_access),
 ):
     registry = _registry(request)
     workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
@@ -79,15 +102,27 @@ async def proxy_workspace_api(
         target = registry.resolve(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    if auth.kind == "federation" and target.connection_kind != "local":
+        raise HTTPException(
+            status_code=400,
+            detail="bounded federation 禁止通过远程 Gateway 继续代理嵌套工作区",
+        )
 
-    target_url = f"{target.backend_url.rstrip('/')}/api/v1/{path}"
+    target_url = (
+        f"{registry.remote_gateway_url(target.remote_gateway_connection_id)}/api/v1/{path}"
+        if (
+            target.connection_kind == "remote_gateway"
+            and target.remote_gateway_connection_id is not None
+        )
+        else f"{target.backend_url.rstrip('/')}/api/v1/{path}"
+    )
     client = _http_client(request)
     forwarded = client.build_request(
         request.method,
         target_url,
         params=request.query_params,
         content=await request.body(),
-        headers=_proxy_headers(request),
+        headers=_proxy_headers(request, target),
     )
     try:
         response = await client.send(forwarded, stream=True)

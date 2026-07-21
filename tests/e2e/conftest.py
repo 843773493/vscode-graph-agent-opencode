@@ -9,7 +9,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-import debugpy
 
 from tests.e2e.ports import e2e_port_block_for_file
 from tests.e2e.processes import close_backend_process, start_backend_process
@@ -35,9 +34,7 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     tests_root = project_root / "tests" / "e2e"
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
-    workspace_root = (
-        project_root / "out" / "tests" / "temp" / "e2e" / relative_test_path / "workspace"
-    )
+    workspace_root = project_root / "out" / "tests" / "e2e" / relative_test_path / "workspace"
 
     default_workspace_root = project_root / "asset" / "default_test_workspace"
     if workspace_root.exists():

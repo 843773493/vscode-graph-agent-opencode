@@ -18,4 +18,7 @@ export interface LLMRequestLogRecordDTO {
   response?: {
     [k: string]: unknown;
   };
+  upstream?: {
+    [k: string]: unknown;
+  };
 }

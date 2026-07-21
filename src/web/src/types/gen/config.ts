@@ -17,6 +17,16 @@ export interface ConfigDTO {
     [k: string]: unknown;
   };
 }
+export interface ConfigReloadStatusDTO {
+  healthy: boolean;
+  revision: string;
+  restart_required?: boolean;
+  reason?: ("invalid_config" | "restart_required" | "apply_failed") | null;
+  changed_sections?: string[];
+  last_success_at: string;
+  last_attempt_at: string;
+  last_error?: string | null;
+}
 export interface ConfigUpdateRequest {
   default_model?: string | null;
   default_orchestration?: string | null;

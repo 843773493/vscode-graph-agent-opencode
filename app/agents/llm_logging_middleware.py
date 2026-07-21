@@ -14,6 +14,10 @@ from langgraph.runtime import Runtime
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter
 
 from app.agents.request_replay_middleware import read_prompt_replay_components
+from app.agents.upstream_request_trace import (
+    begin_upstream_capture,
+    end_upstream_capture,
+)
 from app.core.job_context import get_current_job_id
 from app.core.path_utils import get_sessions_dir
 
@@ -77,6 +81,7 @@ class _LLMRequestLog(BaseModel):
 class _LLMResponseLog(BaseModel):
     result: list[_MessageLog]
     structured_response: JsonValue = None
+    error: JsonValue = None
 
 
 class _LLMFullLog(BaseModel):
@@ -85,6 +90,7 @@ class _LLMFullLog(BaseModel):
     job_id: str | None = None
     request: _LLMRequestLog
     response: _LLMResponseLog
+    upstream: dict[str, JsonValue]
 
 
 def _json_value(value: object) -> JsonValue:
@@ -259,7 +265,9 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         self,
         session_id: str,
         request: ModelRequest[Any],
-        response: ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any],
+        response: ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any] | None,
+        upstream_attempts: list[dict[str, Any]],
+        error: BaseException | None = None,
     ) -> None:
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法关联 LLM 日志")
@@ -287,14 +295,13 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             ),
             replay=_build_request_replay(request, serialized_tools),
         )
+        response_messages = _response_messages(response) if response is not None else []
         response_log = _LLMResponseLog(
-            result=[
-                _serialize_message(message)
-                for message in _response_messages(response)
-            ],
+            result=[_serialize_message(message) for message in response_messages],
             structured_response=_json_value(
-                getattr(response, "structured_response", None)
+                getattr(response, "structured_response", None) if response is not None else None
             ),
+            error=str(error) if error is not None else None,
         )
         full_log = _LLMFullLog(
             timestamp=timestamp,
@@ -302,6 +309,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             job_id=request_log.job_id,
             request=request_log,
             response=response_log,
+            upstream={"attempts": _json_value(upstream_attempts)},
         )
 
         log_file = self._ensure_session_dir(session_id) / f"{time.time_ns()}.json"
@@ -315,8 +323,21 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
         session_id = self._get_session_id(request.runtime)
-        response = handler(request)
-        self._save_log(session_id, request, response)
+        capture_token = begin_upstream_capture()
+        try:
+            response = handler(request)
+            upstream_attempts = end_upstream_capture(capture_token)
+        except BaseException as error:
+            upstream_attempts = end_upstream_capture(capture_token)
+            self._save_log(
+                session_id,
+                request,
+                None,
+                upstream_attempts,
+                error,
+            )
+            raise
+        self._save_log(session_id, request, response, upstream_attempts)
         return response
 
     async def awrap_model_call(
@@ -327,6 +348,19 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
         session_id = self._get_session_id(request.runtime)
-        response = await handler(request)
-        self._save_log(session_id, request, response)
+        capture_token = begin_upstream_capture()
+        try:
+            response = await handler(request)
+            upstream_attempts = end_upstream_capture(capture_token)
+        except BaseException as error:
+            upstream_attempts = end_upstream_capture(capture_token)
+            self._save_log(
+                session_id,
+                request,
+                None,
+                upstream_attempts,
+                error,
+            )
+            raise
+        self._save_log(session_id, request, response, upstream_attempts)
         return response

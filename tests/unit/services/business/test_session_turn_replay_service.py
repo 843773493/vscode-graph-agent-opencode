@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from app.schemas.public_v2.common import JobStatus, RunMode
-from app.schemas.public_v2.job import JobDTO
+from app.schemas.public_v2.job import JobDispatchSnapshotDTO, JobDTO
 from app.schemas.public_v2.message import MessageReplayRequest, MessageRunAccepted
 from app.services.business.message_service import MessageService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
@@ -100,7 +100,16 @@ class RecordingDispatcher:
         return MessageRunAccepted(
             message_id=message.message_id,
             job_id="job_replayed",
-            status="accepted",
+            status="running",
+            dispatch=JobDispatchSnapshotDTO(
+                session_id=session_id,
+                job_id="job_replayed",
+                job_status="running",
+                active_job_id="job_replayed",
+                queued_jobs_ahead=0,
+                queued_job_count=0,
+                pending_job_count=1,
+            ),
         )
 
 

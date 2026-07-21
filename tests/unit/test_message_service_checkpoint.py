@@ -66,6 +66,73 @@ async def test_message_service_loads_history_from_checkpoint(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_human_message_role_and_source_survive_legacy_system_metadata(tmp_path):
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
+    config = {"configurable": {"thread_id": "sess_delegated", "checkpoint_ns": ""}}
+    checkpoint = {
+        "channel_values": {
+            "messages": [
+                HumanMessage(
+                    content=(
+                        "<system_reminder>可信委派信息</system_reminder>\n"
+                        "<delegated_task>审查 README</delegated_task>"
+                    ),
+                    response_metadata=_visible_metadata(
+                        "msg_delegated",
+                        message_role="system",
+                        message_metadata={
+                            "source": "session_subagent_delegation",
+                            "parent_session_id": "ses_parent",
+                        },
+                    ),
+                ),
+                AIMessage(
+                    content="审查完成",
+                    response_metadata=_visible_metadata("msg_result"),
+                ),
+            ],
+        },
+        "channel_versions": {"messages": 1},
+        "updated_channels": ["messages"],
+        "id": "ckpt-delegated",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
+
+    messages = await MessageService(checkpointer=saver).list(
+        session_id="sess_delegated",
+        limit=10,
+    )
+
+    delegated = messages.items[0]
+    assert delegated.role.value == "user"
+    assert delegated.metadata["source"] == "session_subagent_delegation"
+    assert delegated.metadata["parent_session_id"] == "ses_parent"
+    assert "message_metadata" not in delegated.metadata
+    assert "message_role" not in delegated.metadata
+
+
+@pytest.mark.asyncio
+async def test_message_service_rejects_non_user_new_turn():
+    from app.schemas.public_v2.common import MessageRole
+    from app.schemas.public_v2.message import MessageCreateRequest
+
+    service = MessageService()
+    with pytest.raises(ValueError, match="role 必须为 user"):
+        await service.create(
+            "sess_invalid_role",
+            MessageCreateRequest(
+                role=MessageRole.system,
+                content="<system_reminder>提醒</system_reminder>",
+            ),
+        )
+
+
+@pytest.mark.asyncio
 async def test_message_service_returns_empty_when_no_checkpoint(tmp_path):
     saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     service = MessageService(checkpointer=saver)
@@ -146,6 +213,58 @@ async def test_agent_context_state_applies_summarization_event(tmp_path):
         "旧上下文摘要",
         "保留问题",
         "保留回答",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_context_state_applies_cache_preserving_event(tmp_path):
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
+    config = {
+        "configurable": {"thread_id": "sess_cache_compacted", "checkpoint_ns": ""}
+    }
+    prefix = [HumanMessage(content="稳定问题"), AIMessage(content="稳定回答")]
+    messages = [
+        *prefix,
+        HumanMessage(content="被压缩问题"),
+        AIMessage(content="被压缩回答"),
+        HumanMessage(content="近期问题"),
+    ]
+    checkpoint = {
+        "channel_values": {
+            "messages": messages,
+            "_summarization_event": {
+                "strategy": "cache_preserving",
+                "cutoff_index": 4,
+                "cache_prefix_messages": prefix,
+                "summary_message": HumanMessage(
+                    content="中段上下文摘要",
+                    additional_kwargs={"lc_source": "summarization"},
+                ),
+                "file_path": "/conversation_history/sess_cache_compacted.md",
+            },
+        },
+        "channel_versions": {"messages": 1, "_summarization_event": 1},
+        "updated_channels": ["_summarization_event"],
+        "id": "ckpt-cache-compacted",
+    }
+    await saver.aput(
+        config,
+        checkpoint,
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1, "_summarization_event": 1},
+    )
+
+    state = await MessageService(checkpointer=saver).get_agent_context_state(
+        "sess_cache_compacted"
+    )
+
+    assert state["compacted"] is True
+    assert state["compaction_cutoff"] == 4
+    assert [record["content"] for record in state["records"]] == [
+        "稳定问题",
+        "稳定回答",
+        "中段上下文摘要",
+        "近期问题",
     ]
 
 

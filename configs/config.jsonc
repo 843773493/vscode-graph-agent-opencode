@@ -7,6 +7,17 @@
   //
   // 文件位置: configs/config.jsonc
   // 参考标准: https://json-schema.org/
+  //
+  // 配置生效规则:
+  // - llm、agents、development 支持热重载；有效配置变化后从下一轮 Job 开始生效，
+  //   已经运行中的 Job 会继续使用启动时的配置快照。
+  // - default_agent 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。
+  // - ui 配置支持热重载，后续配置读取使用新值。
+  // - logger 当前不会动态调整运行中的日志系统，需要重启工作区后端。
+  // - mcp 当前不支持进程内热切换；修改会拒绝整个候选配置，需要重启工作区后端。
+  // - gateway 当前不支持热重载，需要重启 Gateway。
+  // - 用户级配置与工作区级配置深度合并；被高优先级值遮蔽的低优先级变化
+  //   不会触发有效配置 revision 变化。
   // ============================================================
 
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -23,6 +34,7 @@
   "properties": {
     "llm": {
       "type": "object",
+      "description": "LLM Provider 配置。支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。",
       "additionalProperties": false,
       "required": [
         "providers"
@@ -38,16 +50,36 @@
       }
     },
     "logger": {
-      "type": "object"
+      "type": "object",
+      "description": "日志配置。修改后需要重启工作区后端。",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ],
+          "default": "info"
+        },
+        "pretty": {
+          "type": "boolean",
+          "description": "是否使用便于本地阅读的日志格式。修改后需要重启工作区后端。",
+          "default": true
+        }
+      }
     },
     "default_agent": {
       "type": "string",
-      "description": "Default agent key in the agents object",
+      "description": "Default agent key in the agents object. 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。",
       "pattern": "^[a-zA-Z0-9._-]{2,64}$"
     },
     "agents": {
       "type": "object",
-      "description": "Workspace agent registry, keyed by agent name",
+      "description": "Workspace agent registry, keyed by agent name. 支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。",
       "minProperties": 1,
       "additionalProperties": {
         "$ref": "#/$defs/agentConfig"
@@ -59,14 +91,116 @@
     "gateway": {
       "$ref": "#/$defs/gatewayConfig"
     },
+    "mcp": {
+      "$ref": "#/$defs/mcpConfig"
+    },
     "development": {
       "$ref": "#/$defs/developmentConfig"
     }
   },
   "$defs": {
+    "mcpConfig": {
+      "type": "object",
+      "description": "当前工作区后端连接的 MCP Server。当前不支持进程内热切换；修改会拒绝整个候选配置，需要重启工作区后端。",
+      "additionalProperties": false,
+      "properties": {
+        "servers": {
+          "type": "object",
+          "default": {},
+          "propertyNames": {
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/mcpServer"
+          }
+        }
+      }
+    },
+
+    "mcpServer": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/mcpStdioServer"
+        },
+        {
+          "$ref": "#/$defs/mcpStreamableHttpServer"
+        }
+      ]
+    },
+
+    "mcpStdioServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "command"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "transport": {
+          "const": "stdio"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+
+    "mcpStreamableHttpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "url"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "transport": {
+          "const": "streamable_http"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      }
+    },
+
     "developmentConfig": {
       "type": "object",
-      "description": "仅由开发安装生成器写入的功能开关。",
+      "description": "仅由开发安装生成器写入的功能开关。支持热重载，从下一轮 Job 开始生效。",
       "additionalProperties": false,
       "properties": {
         "test_tools": {
@@ -78,29 +212,28 @@
 
     "gatewayConfig": {
       "type": "object",
-      "description": "Gateway 管理的跨端工作区配置。",
+      "description": "Gateway 管理的跨端工作区配置。当前不支持热重载，修改后需要重启 Gateway。",
       "additionalProperties": false,
       "properties": {
         "workspaces": {
           "type": "array",
-          "description": "Gateway 启动时通过 SSH 连接的远程工作区。",
+          "description": "Gateway 启动时通过 SSH 连接的远程 Gateway；工作区由对端 Gateway 统一发现和管理。",
           "items": {
-            "$ref": "#/$defs/gatewaySshWorkspace"
+            "$ref": "#/$defs/gatewayRemoteGateway"
           },
           "default": []
         }
       }
     },
 
-    "gatewaySshWorkspace": {
+    "gatewayRemoteGateway": {
       "type": "object",
-      "description": "通过 SSH 隧道连接远端 BoxTeam 后端的工作区。",
+      "description": "通过单条 SSH 隧道连接远端 BoxTeam Gateway。禁止绕过远端 Gateway 直连其工作区后端。",
       "additionalProperties": false,
       "required": [
         "host",
         "username",
-        "private_key_path",
-        "remote_workspace_path"
+        "private_key_path"
       ],
       "properties": {
         "enabled": {
@@ -110,8 +243,8 @@
         },
         "kind": {
           "type": "string",
-          "const": "ssh",
-          "default": "ssh"
+          "const": "remote_gateway",
+          "default": "remote_gateway"
         },
         "name": {
           "type": [
@@ -139,42 +272,12 @@
           "type": "string",
           "minLength": 1
         },
-        "remote_backend_host": {
-          "type": "string",
-          "minLength": 1,
-          "default": "127.0.0.1"
-        },
-        "remote_backend_port": {
+        "remote_gateway_port": {
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "default": 8010
-        },
-        "remote_terminal_backend_host": {
-          "type": "string",
-          "minLength": 1,
-          "default": "127.0.0.1"
-        },
-        "remote_terminal_backend_port": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535,
-          "default": 8012
-        },
-        "remote_browser_backend_host": {
-          "type": "string",
-          "minLength": 1,
-          "default": "127.0.0.1"
-        },
-        "remote_browser_backend_port": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535,
-          "default": 8015
-        },
-        "remote_workspace_path": {
-          "type": "string",
-          "minLength": 1
+          "description": "远端 Gateway 的 loopback 监听端口，经 SSH 隧道访问。",
+          "default": 8014
         },
         "activate": {
           "type": "boolean",
@@ -220,16 +323,27 @@
           "minLength": 1,
           "description": "LiteLLM custom_llm_provider 参数，例如 openai、openrouter、anthropic。"
         },
+        "api_mode": {
+          "type": "string",
+          "enum": [
+            "chat_completions",
+            "responses"
+          ],
+          "default": "chat_completions",
+          "description": "模型请求协议。仅明确配置为 responses 时使用 OpenAI Responses API。"
+        },
         "capabilities": {
           "type": "array",
-          "description": "Provider capabilities used by request routing. Supported values are text_input, image_input, video_input and audio_input.",
+          "description": "Provider capabilities used by request routing and protocol adaptation. reasoning_content_replay promotes historical LangChain reasoning blocks to Chat Completions assistant.reasoning_content.",
           "items": {
             "type": "string",
             "enum": [
               "text_input",
               "image_input",
               "video_input",
-              "audio_input"
+              "audio_input",
+              "reasoning_content_replay",
+              "prompt_cache_key"
             ]
           },
           "uniqueItems": true
@@ -456,7 +570,7 @@
         },
         "allowlist": {
           "type": "array",
-          "description": "Only these tools are allowed",
+          "description": "恢复列表。工具全集为 U：先把 denylist 展开为禁用集合 D，再把 allowlist 展开为恢复集合 A；最终禁用 D-A，最终可用 U-(D-A)。默认所有工具可用。保留值 all 表示所有工具，extensions 表示所有扩展子工具。",
           "items": {
             "type": "string",
             "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
@@ -466,7 +580,7 @@
         },
         "denylist": {
           "type": "array",
-          "description": "These tools are forbidden; all others are allowed unless restricted elsewhere",
+          "description": "禁用列表。工具全集为 U：先把 denylist 展开为禁用集合 D，再把 allowlist 展开为恢复集合 A；最终禁用 D-A，最终可用 U-(D-A)。扩展子工具直接按其 name 禁用。保留值 all 表示所有工具，extensions 表示所有扩展子工具。",
           "items": {
             "type": "string",
             "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
@@ -503,20 +617,18 @@
                 "type": "object",
                 "description": "传给该工具 factory 的专属配置。",
                 "additionalProperties": true
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "description": "工具目录中展示的扩展工具说明。"
               }
             }
           },
           "uniqueItems": true,
           "maxItems": 100
         }
-      },
-      "allOf": [
-        {
-          "not": {
-            "required": ["allowlist", "denylist"]
-          }
-        }
-      ]
+      }
     },
     "agentKnowledge": {
       "type": "object",

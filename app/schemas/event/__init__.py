@@ -85,6 +85,9 @@ class StatusChangePayload(BaseModel):
     session_id: Optional[str] = None
     title: Optional[str] = None
     blocked_by_job_id: Optional[str] = None
+    queued_jobs_ahead: Optional[int] = Field(default=None, ge=0)
+    queued_job_count: Optional[int] = Field(default=None, ge=0)
+    pending_job_count: Optional[int] = Field(default=None, ge=1)
 
 
 class AgentStartPayload(BaseModel):

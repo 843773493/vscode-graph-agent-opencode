@@ -34,7 +34,13 @@ def test_provider_capabilities_accept_only_canonical_names() -> None:
     capabilities = parse_provider_capabilities(
         {
             "id": "canonical-provider",
-            "capabilities": ["image_input", "video_input", "audio_input"],
+            "capabilities": [
+                "image_input",
+                "video_input",
+                "audio_input",
+                "reasoning_content_replay",
+                "prompt_cache_key",
+            ],
         }
     )
 
@@ -43,6 +49,8 @@ def test_provider_capabilities_accept_only_canonical_names() -> None:
         "image_input",
         "video_input",
         "audio_input",
+        "reasoning_content_replay",
+        "prompt_cache_key",
     }
 
 

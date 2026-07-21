@@ -17,6 +17,7 @@ from app.agents.tools.background import (
     create_system_time_emitter_tool,
 )
 from app.agents.tools.apply_patch import create_apply_patch_tool
+from app.agents.tools.collaboration import build_agent_collaboration_tools
 from app.agents.tools.python_execution import (
     create_python_execution_tool,
     get_python_executable,
@@ -77,15 +78,6 @@ def build_default_tools(
             background_task_registry=background_task_registry,
             background_message_bus=background_message_bus,
         ),
-        create_monitor_session_agent_end_tool(
-            session_id=session_id,
-            agent_id=agent_id,
-            background_task_registry=background_task_registry,
-            background_message_bus=background_message_bus,
-            job_event_bus=job_event_bus,
-            job_service=job_service,
-            session_service=session_service,
-        ),
         create_background_message_collection_tool(
             session_id=session_id,
             agent_id=agent_id,
@@ -96,20 +88,17 @@ def build_default_tools(
             agent_id=agent_id,
             terminal_client=terminal_manager_client,
         ),
-        create_send_message_to_session_tool(
-            sender_session_id=session_id,
-            sender_agent_id=sender_agent_id,
-            session_orchestrator=session_orchestrator,
-        ),
-        create_session_subagent_tool(
-            parent_session_id=session_id,
-            parent_agent_id=agent_id,
-            session_subagent_service=session_subagent_service,
-            invocation_context=invocation_context,
-        ),
-        *create_team_tools(
+        *build_agent_collaboration_tools(
             session_id=session_id,
             agent_id=agent_id,
+            sender_agent_id=sender_agent_id,
+            background_task_registry=background_task_registry,
+            background_message_bus=background_message_bus,
+            job_event_bus=job_event_bus,
+            job_service=job_service,
+            session_service=session_service,
+            session_orchestrator=session_orchestrator,
+            session_subagent_service=session_subagent_service,
             team_service=team_service,
             invocation_context=invocation_context,
         ),
@@ -121,6 +110,7 @@ def build_default_tools(
 
 __all__ = [
     "build_default_tools",
+    "build_agent_collaboration_tools",
     "create_apply_patch_tool",
     "create_background_message_collection_tool",
     "create_monitor_session_agent_end_tool",

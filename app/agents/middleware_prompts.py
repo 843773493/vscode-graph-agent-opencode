@@ -20,13 +20,17 @@ When the user's request matches a skill, read that skill's `SKILL.md` with `read
 
 FILESYSTEM_SYSTEM_PROMPT = (
     "Use the available filesystem tools according to their schemas. Read existing files before "
-    "editing them, preserve the repository's conventions, and inspect large results in bounded chunks."
+    "editing them, preserve the repository's conventions, and inspect large results in bounded chunks. "
+    "Filesystem paths may be workspace-relative or virtual absolute paths rooted at `/`; "
+    "for example, `README.md` and `/README.md` refer to the same workspace file."
 )
 
 FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": "List entries in an absolute directory path.",
     "read_file": (
-        "Read a file by absolute path. Use offset and limit for large text files. "
+        "Read a file by a workspace-relative path or a virtual absolute path rooted at `/`. "
+        "For example, `README.md` and `/README.md` refer to the same workspace file. "
+        "Use offset and limit for large text files. "
         "Images, audio, video, and PDFs return multimodal content; do not paginate those files."
     ),
     "write_file": "Create a new text file at an absolute path with the provided content.",

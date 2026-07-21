@@ -6,6 +6,7 @@ import { TerminalManager, resolveWorkspaceRoot } from "./terminalManager.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8012;
+const WEBSOCKET_HIGH_WATERMARK_BYTES = 512 * 1024;
 
 function parseArgs(argv) {
   const args = new Map();
@@ -71,6 +72,7 @@ function missingTerminalSnapshot(manager, terminalId) {
     exit_code: null,
     signal: null,
     os_pid: null,
+    pty_worker_pid: null,
     sequence: 0,
     buffer: "",
     display_buffer: "",
@@ -114,12 +116,20 @@ function resolveRequiredWorkspaceRoot(args) {
 function wsClient(socket) {
   return {
     sendRaw(message) {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(message);
+      if (socket.readyState !== WebSocket.OPEN) {
+        return false;
       }
+      if (socket.bufferedAmount > WEBSOCKET_HIGH_WATERMARK_BYTES) {
+        return false;
+      }
+      socket.send(message);
+      return true;
     },
     sendJson(message) {
-      this.sendRaw(JSON.stringify(message));
+      return this.sendRaw(JSON.stringify(message));
+    },
+    close(code, reason) {
+      socket.close(code, reason);
     },
   };
 }
@@ -269,74 +279,93 @@ async function main() {
   wss.on("connection", (socket) => {
     const client = wsClient(socket);
     let attachedTerminal = null;
+    let messageQueue = Promise.resolve();
 
     const detachCurrent = async () => {
-      if (attachedTerminal) {
-        await attachedTerminal.detach(client);
-        attachedTerminal = null;
+      const currentTerminal = attachedTerminal;
+      attachedTerminal = null;
+      if (currentTerminal) {
+        await currentTerminal.detach(client);
       }
     };
 
-    socket.on("message", async (raw) => {
-      try {
-        const message = JSON.parse(raw.toString("utf8"));
-        if (!message || typeof message !== "object") {
-          throw new Error("WebSocket 消息必须是 JSON object");
-        }
+    const processMessage = async (raw) => {
+      const message = JSON.parse(raw.toString("utf8"));
+      if (!message || typeof message !== "object") {
+        throw new Error("WebSocket 消息必须是 JSON object");
+      }
 
-        if (message.type === "attach") {
-          await detachCurrent();
-          attachedTerminal = manager.get(message.terminalId);
-          if (message.cols && message.rows) {
-            await manager.resize(
-              message.terminalId,
-              parsePositiveInt(message.cols, "cols"),
-              parsePositiveInt(message.rows, "rows"),
-            );
-          }
-          await attachedTerminal.attach(client);
-          return;
-        }
-
-        if (message.type === "detach") {
-          await detachCurrent();
-          return;
-        }
-
-        if (!attachedTerminal) {
-          throw new Error("尚未 attach 到终端");
-        }
-
-        if (message.type === "input" || message.type === "agentInput") {
-          if (typeof message.data !== "string") {
-            throw new Error("input.data 必须是字符串");
-          }
-          await manager.write(attachedTerminal.id, message.data, {
-            source: message.type === "agentInput" ? "agent" : "user",
-          });
-          return;
-        }
-
-        if (message.type === "resize") {
+      if (message.type === "attach") {
+        await detachCurrent();
+        const targetTerminal = manager.get(message.terminalId);
+        if (message.cols && message.rows) {
           await manager.resize(
-            attachedTerminal.id,
+            targetTerminal.id,
             parsePositiveInt(message.cols, "cols"),
             parsePositiveInt(message.rows, "rows"),
           );
-          return;
         }
+        await targetTerminal.attach(client, {
+          afterSequence: message.afterSequence,
+        });
+        attachedTerminal = targetTerminal;
+        return;
+      }
 
-        throw new Error(`未知 WebSocket 消息类型: ${message.type}`);
-      } catch (error) {
+      if (message.type === "detach") {
+        await detachCurrent();
+        return;
+      }
+
+      const currentTerminal = attachedTerminal;
+      if (!currentTerminal) {
+        throw new Error("尚未 attach 到终端");
+      }
+
+      if (message.type === "input" || message.type === "agentInput") {
+        if (typeof message.data !== "string") {
+          throw new Error("input.data 必须是字符串");
+        }
+        await manager.write(currentTerminal.id, message.data, {
+          source: message.type === "agentInput" ? "agent" : "user",
+        });
+        return;
+      }
+
+      if (message.type === "resize") {
+        await manager.resize(
+          currentTerminal.id,
+          parsePositiveInt(message.cols, "cols"),
+          parsePositiveInt(message.rows, "rows"),
+        );
+        return;
+      }
+
+      if (message.type === "ack") {
+        currentTerminal.acknowledge(client, message.sequence);
+        return;
+      }
+
+      throw new Error(`未知 WebSocket 消息类型: ${message.type}`);
+    };
+
+    socket.on("message", (raw) => {
+      messageQueue = messageQueue
+        .then(() => processMessage(raw))
+        .catch((error) => {
         client.sendJson({
           type: "error",
           message: error instanceof Error ? error.message : String(error),
         });
-      }
+        });
     });
 
     socket.on("close", () => {
-      void detachCurrent();
+      messageQueue = messageQueue
+        .then(() => detachCurrent())
+        .catch((error) => {
+          console.error("[terminal-backend] WebSocket 关闭时 detach 失败", error);
+        });
     });
   });
 
@@ -357,10 +386,23 @@ async function main() {
     for (const client of wss.clients) {
       client.close(1001, "terminal manager shutting down");
     }
-    await manager.shutdown(reason);
-    wss.close();
-    await closeHttpServer(server);
-    process.exit(exitCode);
+    let finalExitCode = exitCode;
+    try {
+      await manager.shutdown(reason);
+    } catch (shutdownError) {
+      finalExitCode = 1;
+      console.error("[terminal-backend] Terminal Manager 清理失败", shutdownError);
+    } finally {
+      try {
+        wss.close();
+        await closeHttpServer(server);
+      } catch (transportError) {
+        finalExitCode = 1;
+        console.error("[terminal-backend] transport 关闭失败", transportError);
+      } finally {
+        process.exit(finalExitCode);
+      }
+    }
   };
 
   process.once("SIGINT", () => void shutdown("terminal_manager_sigint", 130));

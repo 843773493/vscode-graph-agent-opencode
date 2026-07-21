@@ -13,7 +13,14 @@ function workspace(workspaceId: string, active: boolean): GatewayWorkspace {
     managed: false,
     removable: true,
     system_default: false,
-    remote: {},
+    runtime_action: "probe_external_backend",
+    config_reload: {
+      available: true,
+      healthy: true,
+      restart_required: false,
+      changed_sections: [],
+    },
+    remote: null,
     services: {},
     checked_at: "2026-07-16T00:00:00Z",
   };

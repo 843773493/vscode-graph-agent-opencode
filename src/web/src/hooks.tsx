@@ -14,17 +14,23 @@ import {
   addLocalGatewayWorkspace as apiAddLocalGatewayWorkspace,
   addSshGatewayWorkspace as apiAddSshGatewayWorkspace,
   listGatewayWorkspaces as apiListGatewayWorkspaces,
+  probeExternalGatewayWorkspace as apiProbeExternalGatewayWorkspace,
   reconnectGatewayWorkspace as apiReconnectGatewayWorkspace,
   removeGatewayWorkspace as apiRemoveGatewayWorkspace,
   renameGatewayWorkspace as apiRenameGatewayWorkspace,
   reorderGatewayWorkspaces as apiReorderGatewayWorkspaces,
+  forceRestartManagedGatewayWorkspaceBackend as apiForceRestartManagedGatewayWorkspaceBackend,
+  safeRestartManagedGatewayWorkspaceBackend as apiSafeRestartManagedGatewayWorkspaceBackend,
   updateGatewayUiSettings as apiUpdateGatewayUiSettings,
 } from "./gatewayApi";
 import type {
   AddLocalGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
+  GatewayRuntimeRestartResult,
   AttachmentRef,
   MessageReplayRequest,
+  PendingRequestKind,
+  PendingRequestOrderItem,
   SessionResourceAction,
   SessionResourceKind,
   SessionFileChange,
@@ -44,6 +50,8 @@ import { useSessionEventStream } from "./hooks/useSessionEventStream";
 import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
 import { useSessionActions } from "./hooks/useSessionActions";
 import { useWorkspaceBootstrap } from "./hooks/useWorkspaceBootstrap";
+import { useWorkspaceInformationClipboard } from "./hooks/useWorkspaceInformationClipboard";
+import { useGatewayWorkspaceHierarchy } from "./hooks/useGatewayWorkspaceHierarchy";
 import {
   readCachedUiSettings,
   writeCachedUiSettings,
@@ -93,6 +101,7 @@ const INITIAL_STATE: AppState = {
   sessionResourcesError: null,
   eventQueuesBySession: new Map(),
   pendingConversations: new Map(),
+  activeJobIdsBySession: new Map(),
   status: "准备就绪",
   error: null,
   isBootstrapping: true,
@@ -111,7 +120,22 @@ const INITIAL_STATE: AppState = {
 interface AppContextType {
   state: AppState;
   setStatus: (text: string) => void;
-  sendMessage: (content: string, attachments?: AttachmentRef[]) => Promise<void>;
+  sendMessage: (
+    content: string,
+    attachments?: AttachmentRef[],
+    queue?: PendingRequestKind | null,
+  ) => Promise<void>;
+  updatePendingRequest: (
+    messageId: string,
+    content: string,
+    attachments?: AttachmentRef[],
+  ) => Promise<void>;
+  removePendingRequest: (messageId: string) => Promise<void>;
+  clearPendingRequests: () => Promise<void>;
+  reorderPendingRequests: (
+    requests: PendingRequestOrderItem[],
+  ) => Promise<void>;
+  sendPendingRequestImmediately: (messageId: string) => Promise<void>;
   replayTurn: (
     targetMessageId: string,
     action: MessageReplayRequest["action"],
@@ -160,6 +184,13 @@ interface AppContextType {
   ) => Promise<void>;
   refreshGatewayState: () => Promise<void>;
   reconnectGatewayWorkspace: (workspaceId: string) => Promise<void>;
+  safeRestartManagedGatewayWorkspaceBackend: (
+    workspaceId: string,
+  ) => Promise<GatewayRuntimeRestartResult>;
+  forceRestartManagedGatewayWorkspaceBackend: (
+    workspaceId: string,
+  ) => Promise<GatewayRuntimeRestartResult>;
+  probeExternalGatewayWorkspace: (workspaceId: string) => Promise<void>;
   addLocalGatewayWorkspace: (
     payload: AddLocalGatewayWorkspaceRequest,
   ) => Promise<void>;
@@ -168,8 +199,13 @@ interface AppContextType {
   ) => Promise<void>;
   removeGatewayWorkspace: (workspaceId: string) => Promise<void>;
   renameGatewayWorkspace: (workspaceId: string, name: string) => Promise<string>;
+  setGatewayWorkspaceParent: (
+    workspaceId: string,
+    parentWorkspaceId: string | null,
+  ) => Promise<void>;
   reorderGatewayWorkspaces: (workspaceIds: string[]) => Promise<void>;
   copySessionInformation: (workspaceId: string, sessionId: string) => Promise<void>;
+  copyWorkspaceInformation: (workspaceId: string) => Promise<void>;
   updateUiSettings: (payload: WebUiSettingsUpdate) => Promise<void>;
 }
 
@@ -221,6 +257,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const copySessionInformation = useSessionInformationClipboard(
     state.apiPort ?? DEFAULT_BACKEND_PORT,
   );
+  const copyWorkspaceInformation = useWorkspaceInformationClipboard(
+    state.gatewayWorkspaces,
+  );
+  const setGatewayWorkspaceParent = useGatewayWorkspaceHierarchy(
+    state.apiPort ?? DEFAULT_BACKEND_PORT,
+    setState,
+  );
 
   const setStatus = useCallback((text: string) => {
     setState((prev) => ({ ...prev, status: text }));
@@ -258,6 +301,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     interruptSession: interruptSessionCallback,
     renameSession,
     replayTurn,
+    updatePendingRequest,
+    removePendingRequest,
+    clearPendingRequests,
+    reorderPendingRequests,
+    sendPendingRequestImmediately,
     setSessionParent,
     selectSession,
     selectWorkspaceSession,
@@ -410,6 +458,89 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentSessionId, finishWorkspaceRefresh, state.apiPort]);
 
+  const safeRestartManagedGatewayWorkspaceBackend = useCallback(
+    async (workspaceId: string) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      setState((prev) => ({
+        ...prev,
+        gatewayError: null,
+        status: "正在安全排空并重启 Workspace 后端",
+      }));
+      try {
+        const result = await apiSafeRestartManagedGatewayWorkspaceBackend(
+          resolvedApiPort,
+          workspaceId,
+        );
+        await finishWorkspaceRefresh(currentSessionId);
+        return result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({
+          ...prev,
+          gatewayError: message,
+          error: message,
+          status: `安全重启 Workspace 后端失败: ${message}`,
+        }));
+        throw error;
+      }
+    },
+    [currentSessionId, finishWorkspaceRefresh, state.apiPort],
+  );
+
+  const forceRestartManagedGatewayWorkspaceBackend = useCallback(
+    async (workspaceId: string) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      setState((prev) => ({
+        ...prev,
+        gatewayError: null,
+        status: "正在中断活动任务并强制重启 Workspace 后端",
+      }));
+      try {
+        const result = await apiForceRestartManagedGatewayWorkspaceBackend(
+          resolvedApiPort,
+          workspaceId,
+        );
+        await finishWorkspaceRefresh(currentSessionId);
+        return result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({
+          ...prev,
+          gatewayError: message,
+          error: message,
+          status: `强制重启 Workspace 后端失败: ${message}`,
+        }));
+        throw error;
+      }
+    },
+    [currentSessionId, finishWorkspaceRefresh, state.apiPort],
+  );
+
+  const probeExternalGatewayWorkspace = useCallback(
+    async (workspaceId: string) => {
+      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      setState((prev) => ({
+        ...prev,
+        gatewayError: null,
+        status: "正在重新探测外部后端",
+      }));
+      try {
+        await apiProbeExternalGatewayWorkspace(resolvedApiPort, workspaceId);
+        await finishWorkspaceRefresh(currentSessionId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((prev) => ({
+          ...prev,
+          gatewayError: message,
+          error: message,
+          status: `重新探测外部后端失败: ${message}`,
+        }));
+        throw error;
+      }
+    },
+    [currentSessionId, finishWorkspaceRefresh, state.apiPort],
+  );
+
   const addLocalGatewayWorkspace = useCallback(
     async (payload: AddLocalGatewayWorkspaceRequest) => {
       const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
@@ -461,7 +592,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           workspaceSwitching: false,
           gatewayError: message,
           error: message,
-          status: "添加 SSH 工作区失败",
+          status: "连接远程 Gateway 失败",
           isBootstrapping: false,
         }));
         throw error;
@@ -702,6 +833,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setStatus,
       sendMessage,
       replayTurn,
+      updatePendingRequest,
+      removePendingRequest,
+      clearPendingRequests,
+      reorderPendingRequests,
+      sendPendingRequestImmediately,
       compactSession,
       switchAgent,
       interruptSession: interruptSessionCallback,
@@ -723,12 +859,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       activateGatewayWorkspace,
       refreshGatewayState,
       reconnectGatewayWorkspace,
+      safeRestartManagedGatewayWorkspaceBackend,
+      forceRestartManagedGatewayWorkspaceBackend,
+      probeExternalGatewayWorkspace,
       addLocalGatewayWorkspace,
       addSshGatewayWorkspace,
       removeGatewayWorkspace,
       renameGatewayWorkspace,
+      setGatewayWorkspaceParent,
       reorderGatewayWorkspaces,
       copySessionInformation,
+      copyWorkspaceInformation,
       updateUiSettings,
     }),
     [
@@ -736,6 +877,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setStatus,
       sendMessage,
       replayTurn,
+      updatePendingRequest,
+      removePendingRequest,
+      clearPendingRequests,
+      reorderPendingRequests,
+      sendPendingRequestImmediately,
       compactSession,
       switchAgent,
       interruptSessionCallback,
@@ -758,12 +904,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       activateGatewayWorkspace,
       refreshGatewayState,
       reconnectGatewayWorkspace,
+      safeRestartManagedGatewayWorkspaceBackend,
+      forceRestartManagedGatewayWorkspaceBackend,
+      probeExternalGatewayWorkspace,
       addLocalGatewayWorkspace,
       addSshGatewayWorkspace,
       removeGatewayWorkspace,
       renameGatewayWorkspace,
+      setGatewayWorkspaceParent,
       reorderGatewayWorkspaces,
       copySessionInformation,
+      copyWorkspaceInformation,
       updateUiSettings,
     ],
   );

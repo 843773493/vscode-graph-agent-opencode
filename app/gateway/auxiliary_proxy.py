@@ -12,8 +12,15 @@ from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-from app.gateway.auth import LOCAL_TOKEN, verify_gateway_token
-from app.gateway.registry import GatewayWorkspaceRegistry
+from app.core.path_utils import get_gateway_root
+from app.core.trace_middleware import get_request_id
+from app.gateway.auth import (
+    GatewayAuthContext,
+    get_gateway_local_token,
+    verify_gateway_access,
+)
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.service_types import GatewayServiceName
 
 
@@ -65,13 +72,34 @@ def _service_name(service_path: str) -> GatewayServiceName:
     return service
 
 
-def _proxy_request_headers(request: Request) -> dict[str, str]:
-    return {
+def _proxy_request_headers(
+    request: Request,
+    target: WorkspaceTarget | None = None,
+) -> dict[str, str]:
+    headers = {
         key: value
         for key, value in request.headers.items()
         if key.lower() not in HOP_BY_HOP_HEADERS
-        and key.lower() not in {"host", "x-local-token"}
+        and key.lower()
+        not in {
+            "host",
+            "x-local-token",
+            "x-boxteam-federation-token",
+            "x-boxteam-workspace-id",
+        }
     }
+    headers["X-Request-ID"] = get_request_id(request)
+    if target is not None and target.connection_kind == "remote_gateway":
+        connection_id = target.remote_gateway_connection_id
+        remote_workspace_id = target.remote_workspace_id
+        if connection_id is None or remote_workspace_id is None:
+            raise RuntimeError("远程投影工作区缺少 Gateway 连接信息")
+        credential = FederationCredentialStore(
+            storage_path=get_gateway_root() / "credentials" / "federation.json"
+        ).get(connection_id)
+        headers["X-BoxTeam-Federation-Token"] = credential.token
+        headers["X-BoxTeam-Workspace-Id"] = remote_workspace_id
+    return headers
 
 
 def _proxy_response_headers(response: httpx.Response) -> dict[str, str]:
@@ -97,10 +125,19 @@ async def proxy_auxiliary_http(
     service_path: str,
     path: str,
     request: Request,
-    _: str = Depends(verify_gateway_token),
+    auth: GatewayAuthContext = Depends(verify_gateway_access),
 ):
     service = _service_name(service_path)
     registry = _registry(request.app)
+    try:
+        target = registry.resolve(workspace_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    if auth.kind == "federation" and target.connection_kind != "local":
+        raise HTTPException(
+            status_code=400,
+            detail="bounded federation 禁止代理嵌套远程辅助服务",
+        )
     try:
         service_url = registry.resolve_service_url(workspace_id, service)
     except (LookupError, ValueError) as error:
@@ -112,7 +149,7 @@ async def proxy_auxiliary_http(
         target_url,
         params=request.query_params,
         content=await request.body(),
-        headers=_proxy_request_headers(request),
+        headers=_proxy_request_headers(request, target),
     )
     try:
         response = await client.send(forwarded, stream=True)
@@ -186,19 +223,42 @@ async def _proxy_auxiliary_websocket(
     service: GatewayServiceName,
     socket_path: str,
 ) -> None:
-    if websocket.query_params.get("token") != LOCAL_TOKEN:
-        await websocket.close(code=1008, reason="invalid local token")
-        return
     registry = _registry(websocket.app)
     try:
+        target = registry.resolve(workspace_id)
+        federation_token = websocket.headers.get("x-boxteam-federation-token")
+        if federation_token is not None:
+            FederationCredentialStore(
+                storage_path=get_gateway_root() / "credentials" / "federation.json"
+            ).verify(federation_token)
+            if target.connection_kind != "local":
+                raise PermissionError("bounded federation 禁止代理嵌套远程辅助服务")
+        elif websocket.query_params.get("token") != get_gateway_local_token():
+            raise PermissionError("invalid local token")
         service_url = registry.resolve_service_url(workspace_id, service)
-    except (LookupError, ValueError) as error:
+    except (LookupError, PermissionError, ValueError) as error:
+        await websocket.close(code=1008, reason=str(error)[:120])
+        return
+    except RuntimeError as error:
         await websocket.close(code=1011, reason=str(error)[:120])
         return
     await websocket.accept()
     target_url = _websocket_target(service_url, socket_path)
+    upstream_headers: dict[str, str] = {}
+    if target.connection_kind == "remote_gateway":
+        connection_id = target.remote_gateway_connection_id
+        if connection_id is None:
+            await websocket.close(code=1011, reason="远程投影工作区缺少连接")
+            return
+        credential = FederationCredentialStore(
+            storage_path=get_gateway_root() / "credentials" / "federation.json"
+        ).get(connection_id)
+        upstream_headers["X-BoxTeam-Federation-Token"] = credential.token
     try:
-        async with connect(target_url) as upstream:
+        async with connect(
+            target_url,
+            additional_headers=upstream_headers or None,
+        ) as upstream:
             tasks = {
                 asyncio.create_task(_relay_client_to_upstream(websocket, upstream)),
                 asyncio.create_task(_relay_upstream_to_client(websocket, upstream)),

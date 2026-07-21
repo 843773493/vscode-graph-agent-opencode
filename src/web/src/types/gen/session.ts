@@ -34,7 +34,7 @@ export interface SessionAutoContinueStatusDTO {
 }
 export interface SessionCompactResultDTO {
   session_id: string;
-  status: "compacted" | "skipped";
+  status: "scheduled" | "compacted" | "skipped";
   message: string;
   before_message_count: number;
   effective_message_count_before: number;
@@ -43,6 +43,7 @@ export interface SessionCompactResultDTO {
   retained_message_count: number;
   summary?: string | null;
   history_file_path?: string | null;
+  strategy?: ("cache_preserving" | "cache_replacement") | null;
   compacted_at?: string;
 }
 export interface SessionControlResultDTO {

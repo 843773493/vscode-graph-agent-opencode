@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
+from app.agents.model_tool_schema import validate_model_tool_arguments
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
 
 
@@ -35,11 +36,7 @@ def _validate_target_arguments(
     arguments: dict[str, Any] | None,
 ) -> dict[str, Any]:
     normalized_arguments = _normalize_arguments(arguments)
-    args_schema = getattr(target_tool, "args_schema", None)
-    if isinstance(args_schema, type) and issubclass(args_schema, BaseModel):
-        parsed = args_schema.model_validate(normalized_arguments)
-        return parsed.model_dump()
-    return normalized_arguments
+    return validate_model_tool_arguments(target_tool, normalized_arguments)
 
 
 async def _invoke_target_tool_without_nested_callbacks(

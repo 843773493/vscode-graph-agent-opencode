@@ -72,6 +72,27 @@ def test_extract_agent_stream_parts_preserves_authoritative_identity():
     ]
 
 
+def test_extract_agent_stream_parts_preserves_response_item_extras():
+    response_item = {
+        "type": "reasoning",
+        "encrypted_content": "encrypted-reasoning",
+        "summary": [],
+    }
+    parts = extract_agent_stream_content_parts(
+        [
+            {
+                "type": "reasoning",
+                "reasoning": "",
+                "id": "part_reasoning",
+                "index": 0,
+                "extras": {"response_item": response_item},
+            }
+        ]
+    )
+
+    assert parts[0].extras == {"response_item": response_item}
+
+
 def test_extract_agent_stream_parts_rejects_text_without_part_identity():
     with pytest.raises(ValueError, match="缺少权威 part id"):
         extract_agent_stream_content_parts([{"type": "text", "text": "回答"}])

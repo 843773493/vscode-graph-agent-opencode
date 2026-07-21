@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from contextlib import contextmanager, nullcontext
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.schemas.public_v2.common import MessageRole
 from app.services.orchestration.agent_execution_service import (
     AgentExecutionService,
     _has_valid_delegated_report,
@@ -22,6 +23,8 @@ from app.services.orchestration.agent_event_stream_processor import (
 def mock_dependencies():
     """创建一组共用的 mock 依赖。"""
     config_service = MagicMock()
+    config_service.get_snapshot.return_value = object()
+    config_service.use_snapshot.side_effect = lambda _snapshot: nullcontext()
     config_service.resolve_agent_id.return_value = "test_agent"
     config_service.get_agent_runtime_config.return_value = {
         "providers": [
@@ -94,6 +97,73 @@ def _make_service(deps):
         tool_selection_store=deps["tool_selection_store"],
         workspace_root=Path.cwd(),
     )
+
+
+def test_agent_cache_rebuilds_after_config_revision_changes(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+    mock_dependencies["config_service"].get_revision.side_effect = [
+        "revision-a",
+        "revision-a",
+        "revision-b",
+    ]
+    first_agent = object()
+    second_agent = object()
+
+    with patch(
+        "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+        side_effect=[first_agent, second_agent],
+    ) as build_runtime:
+        assert service._get_or_create_agent("ses_test", "test_agent") is first_agent
+        assert service._get_or_create_agent("ses_test", "test_agent") is first_agent
+        assert service._get_or_create_agent("ses_test", "test_agent") is second_agent
+
+    assert build_runtime.call_count == 2
+    assert list(service._agent_cache) == [
+        ("ses_test", "test_agent", "revision-b"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_step_pins_snapshot_through_async_tool_stage(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+    snapshot = object()
+    active_snapshots: list[object] = []
+    mock_dependencies["config_service"].get_snapshot.return_value = snapshot
+
+    @contextmanager
+    def use_snapshot(candidate):
+        active_snapshots.append(candidate)
+        try:
+            yield
+        finally:
+            active_snapshots.pop()
+
+    mock_dependencies["config_service"].use_snapshot.side_effect = use_snapshot
+
+    async def fake_run_step_with_snapshot(*_args, **_kwargs):
+        assert active_snapshots == [snapshot]
+        await asyncio.sleep(0)
+        # 模拟模型返回后进入异步工具阶段，snapshot 仍必须固定。
+        assert active_snapshots == [snapshot]
+        return "ok"
+
+    service._run_step_with_snapshot = fake_run_step_with_snapshot
+
+    result = await service.run_step(
+        session_id="ses_test",
+        message="test",
+        agent_id="test_agent",
+        job_id="job_test",
+        message_id="msg_test",
+        message_created_at="2026-07-19T00:00:00+00:00",
+    )
+
+    assert result == "ok"
+    assert active_snapshots == []
 
 
 def test_delegated_report_requires_successful_parent_directed_system_message():
@@ -194,7 +264,6 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
                 job_id="job_child",
                 message_id="msg_child",
                 message_created_at="2026-07-16T00:00:00+00:00",
-                message_role=MessageRole.system,
                 message_metadata={
                     "source": "session_subagent_delegation",
                     "parent_session_id": "ses_parent",
@@ -250,7 +319,6 @@ async def test_delegated_progress_only_cannot_replace_final_result(
                 job_id="job_child",
                 message_id="msg_child",
                 message_created_at="2026-07-16T00:00:00+00:00",
-                message_role=MessageRole.system,
                 message_metadata={
                     "source": "session_subagent_delegation",
                     "parent_session_id": "ses_parent",
@@ -311,7 +379,6 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
             job_id="job_answer",
             message_id="msg_question",
             message_created_at="2026-07-16T00:00:00+00:00",
-            message_role=MessageRole.system,
             message_metadata={
                 "source": "send_message_to_session",
                 "kind": "question",
@@ -377,7 +444,6 @@ async def test_delegated_child_relays_cross_session_updates_to_its_parent(
             job_id="job_continue",
             message_id="msg_reply",
             message_created_at="2026-07-16T00:00:00+00:00",
-            message_role=MessageRole.system,
             message_metadata={
                 "source": "send_message_to_session",
                 "kind": incoming_kind,

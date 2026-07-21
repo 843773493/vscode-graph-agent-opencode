@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 import { listMessages } from "../api";
+import { listPendingRequests } from "../pendingRequestsApi";
 import { cloneMaps } from "../state/appStateMaps";
 import { updateAttachmentSummariesFromMessages } from "../state/attachments";
 import { appendFrontendEvent } from "../state/traceEvents";
+import { writePendingSnapshot } from "../state/conversations";
 import type { SetAppState } from "./contentViewLoaderTypes";
 
 export function useSessionHistoryLoader({
@@ -43,7 +45,10 @@ export function useSessionHistoryLoader({
 
     const timerId = window.setTimeout(() => void (async () => {
       try {
-        const messages = await listMessages(apiPort, sessionId, targetWorkspaceId);
+        const [messages, pendingSnapshot] = await Promise.all([
+          listMessages(apiPort, sessionId, targetWorkspaceId),
+          listPendingRequests(apiPort, sessionId, targetWorkspaceId),
+        ]);
         if (cancelled) return;
         setState((prev) => {
           if (prev.currentSession?.session_id !== sessionId) return prev;
@@ -55,6 +60,12 @@ export function useSessionHistoryLoader({
           }
           const next = cloneMaps(prev);
           next.messages = messages.items ?? [];
+          writePendingSnapshot(
+            next.pendingConversations,
+            next.activeJobIdsBySession,
+            pendingSnapshot,
+            targetSessionCacheKey,
+          );
           updateAttachmentSummariesFromMessages(
             next.sessionAttachmentSummaries,
             next.messages,

@@ -113,6 +113,8 @@ async def test_delegated_reviewer_uses_shared_board_and_reports_to_parent(tmp_pa
     )
     assert assigned.dispatched_job_id == "job_1"
     assert orchestrator.calls[0]["session_id"] == reviewer_id
+    assert "message_role" not in orchestrator.calls[0]
+    assert orchestrator.calls[0]["metadata"]["source"] == "team_task_assignment"
 
     completed = await service.update_task(
         requester_session_id=reviewer_id,
@@ -125,6 +127,8 @@ async def test_delegated_reviewer_uses_shared_board_and_reports_to_parent(tmp_pa
     assert completed.task.status == "completed"
     assert completed.dispatched_job_id == "job_2"
     assert orchestrator.calls[1]["session_id"] == parent.session_id
+    assert "message_role" not in orchestrator.calls[1]
+    assert orchestrator.calls[1]["metadata"]["source"] == "team_task_update"
     assert '"board_update_persisted": true' in orchestrator.calls[1]["content"]
     assert "不得声称面板尚未同步" in orchestrator.calls[1]["content"]
     reviewer_board = await service.get_board(

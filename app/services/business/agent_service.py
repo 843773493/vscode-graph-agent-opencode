@@ -15,17 +15,18 @@ class AgentService:
         agents_config = config_service.list_agents()
 
         if agents_config:
-            return [
-                AgentDTO(
+            agents: list[AgentDTO] = []
+            for agent_id, info in agents_config.items():
+                policy = config_service.resolve_agent_tool_policy(agent_id)
+                agents.append(AgentDTO(
                     agent_id=agent_id,
                     name=info.get("name", agent_id),
                     description=info.get("description", ""),
                     model=info.get("model", {}).get("primary_provider", "unknown"),
-                    tools=info.get("tools", {}).get("allowlist", []) or list(info.get("tools", {}).get("denylist", [])) or [],
+                    tools=sorted(policy.enabled_names),
                     capabilities=list(info.get("tags", []))
-                )
-                for agent_id, info in agents_config.items()
-            ]
+                ))
+            return agents
 
         raise RuntimeError(
             "Agent配置加载失败，没有找到有效的agent定义。\n"

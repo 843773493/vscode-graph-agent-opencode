@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { buildSessionTree, type SessionTreeNode } from "../../state/session/sessionTree";
 import type { Session } from "../../types/backend";
 import AgentSessionsSessionButton from "./AgentSessionsSessionButton";
@@ -17,8 +17,13 @@ interface AgentSessionsSessionTreeProps {
   sortMode: "created" | "updated";
   currentSessionId: string;
   active: boolean;
+  treeId: string;
+  collapsedSessionIds: Set<string>;
+  showAllRoots: boolean;
   onSelectSession: (sessionId: string) => void;
   onOpenMenu: (session: Session, x: number, y: number) => void;
+  onToggleSession: (sessionId: string) => void;
+  onToggleShowAllRoots: (treeId: string) => void;
 }
 
 export default function AgentSessionsSessionTree({
@@ -26,13 +31,14 @@ export default function AgentSessionsSessionTree({
   sortMode,
   currentSessionId,
   active,
+  treeId,
+  collapsedSessionIds,
+  showAllRoots,
   onSelectSession,
   onOpenMenu,
+  onToggleSession,
+  onToggleShowAllRoots,
 }: AgentSessionsSessionTreeProps): ReactNode {
-  const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [showAllRoots, setShowAllRoots] = useState(false);
   const tree = buildSessionTree(sessions, sortMode);
   const visibleRoots = showAllRoots
     ? tree
@@ -40,18 +46,6 @@ export default function AgentSessionsSessionTree({
   const hiddenSessionCount = tree
     .slice(DEFAULT_VISIBLE_ROOT_COUNT)
     .reduce((total, node) => total + countTreeSessions(node), 0);
-
-  const toggleNode = (node: SessionTreeNode) => {
-    setCollapsedSessionIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(node.session.session_id)) {
-        next.delete(node.session.session_id);
-      } else {
-        next.add(node.session.session_id);
-      }
-      return next;
-    });
-  };
 
   const renderNode = (node: SessionTreeNode): ReactNode => {
     const sessionId = node.session.session_id;
@@ -67,7 +61,7 @@ export default function AgentSessionsSessionTree({
             onOpenMenu={onOpenMenu}
             expanded={expanded}
             showToggle={node.children.length > 0}
-            onToggle={() => toggleNode(node)}
+            onToggle={() => onToggleSession(sessionId)}
           />
         </div>
         {expanded && node.children.length > 0 ? (
@@ -86,7 +80,7 @@ export default function AgentSessionsSessionTree({
         <button
           type="button"
           className="session-show-more-button"
-          onClick={() => setShowAllRoots((previous) => !previous)}
+          onClick={() => onToggleShowAllRoots(treeId)}
         >
           {showAllRoots ? "收起其余会话" : `显示剩余 ${hiddenSessionCount} 个会话`}
         </button>

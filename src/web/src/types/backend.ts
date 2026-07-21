@@ -3,9 +3,10 @@
 
 export type { AgentDTO as Agent } from "./gen/agent";
 import type { LLMRequestLogRecordDTO } from "./gen/llm_request_log";
+import type { PendingRequestOrderItem as PendingRequestOrderItemType } from "./gen/pending_request";
+export type { AttachmentRef } from "./gen/attachment";
 export type {
   AgentStateMessagesDTO as AgentStateMessages,
-  AttachmentRef,
   MessageDTO as Message,
   MessageReplayAccepted,
   MessageReplayRequest,
@@ -13,6 +14,14 @@ export type {
   MessageRunRequest,
   RunOptions,
 } from "./gen/message";
+export type {
+  PendingRequestDTO as PendingRequest,
+  PendingRequestListDTO as PendingRequestList,
+  PendingRequestOrderItem,
+  PendingRequestReorderRequest,
+  PendingRequestUpdateRequest,
+} from "./gen/pending_request";
+export type PendingRequestKind = PendingRequestOrderItemType["kind"];
 export type {
   DeleteSessionResultDTO as DeleteSessionResult,
   SessionCompactResultDTO as SessionCompactResult,
@@ -40,14 +49,16 @@ export type {
   WorkspaceFileContentDTO as WorkspaceFileContent,
   WorkspaceFileListDTO as WorkspaceFileList,
   WorkspaceFileNodeDTO as WorkspaceFileNode,
+  WorkspaceFileUpdateRequest,
 } from "./gen/workspace";
 
 export type LLMRequestLogRecord = Omit<
   LLMRequestLogRecordDTO,
-  "request" | "response"
+  "request" | "response" | "upstream"
 > & {
   request: Record<string, unknown>;
   response: Record<string, unknown>;
+  upstream: Record<string, unknown>;
 };
 
 export type SessionResource = Omit<
@@ -144,28 +155,49 @@ export interface CursorPage<T> {
 
 export interface GatewayWorkspace {
   workspace_id: string;
+  parent_workspace_id?: string | null;
   name: string;
   root_path: string;
   backend_url: string;
-  connection_kind: "local" | "ssh";
+  connection_kind: "local" | "remote_gateway";
   status: "ready" | "offline";
   active: boolean;
   managed: boolean;
   removable: boolean;
   system_default: boolean;
-  remote: GatewaySshRemoteDetails;
+  runtime_action?:
+    | "safe_restart_managed_backend"
+    | "force_restart_managed_backend"
+    | "reconnect_remote_gateway"
+    | "probe_external_backend";
+  config_reload?: GatewayConfigReloadStatus;
+  remote: GatewayRemoteConnectionSummary | null;
   services: Record<string, GatewayServiceStatus>;
   connection_error?: string | null;
   checked_at: string;
 }
 
-export interface GatewaySshRemoteDetails {
-  [key: string]: unknown;
-  host?: string;
-  port?: number;
-  username?: string;
-  remote_backend_host?: string;
-  remote_backend_port?: number;
+export interface GatewayConfigReloadStatus {
+  available: boolean;
+  healthy?: boolean | null;
+  revision?: string | null;
+  restart_required: boolean;
+  reason?: "invalid_config" | "restart_required" | "apply_failed" | null;
+  changed_sections: string[];
+  last_error?: string | null;
+  error?: string | null;
+}
+
+export interface GatewayRemoteConnectionSummary {
+  gateway_connection_id: string;
+  remote_workspace_id: string;
+  gateway_id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  ssh_config_host?: string | null;
+  remote_gateway_port: number;
 }
 
 export interface GatewayServiceStatus {
@@ -183,6 +215,43 @@ export interface GatewayWorkspaceList {
   items: GatewayWorkspace[];
 }
 
+export interface GatewayInboundPeer {
+  connection_id: string;
+  peer_gateway_id: string;
+  credential_expires_at: string;
+}
+
+export interface GatewayInboundWorkspace {
+  workspace_id: string;
+  name: string;
+  root_path: string;
+  status: "ready" | "offline";
+  managed: boolean;
+  system_default: boolean;
+}
+
+export interface GatewayInboundAccessList {
+  gateway_id: string;
+  peers: GatewayInboundPeer[];
+  items: GatewayInboundWorkspace[];
+}
+
+export interface GatewayRuntimeBlocker {
+  kind: "job" | "tool" | "background_task";
+  resource_id: string;
+  session_id: string;
+  status: string;
+  detail?: string | null;
+}
+
+export interface GatewayRuntimeRestartResult {
+  workspace_id: string;
+  status: "restarted" | "blocked";
+  forced: boolean;
+  blockers: GatewayRuntimeBlocker[];
+  workspaces: GatewayWorkspaceList;
+}
+
 export interface GatewayHealth {
   status: "ok";
   active_workspace_id: string | null;
@@ -196,7 +265,7 @@ export interface AddLocalGatewayWorkspaceRequest {
 
 interface AddSshGatewayWorkspaceRequestBase {
   name?: string | null;
-  remote_workspace_path: string;
+  remote_gateway_port: number;
 }
 
 export interface AddSshGatewayWorkspaceFromWorkspaceRequest
@@ -213,8 +282,9 @@ export type AddSshGatewayWorkspaceRequest =
   | AddSshGatewayWorkspaceFromWorkspaceRequest
   | AddSshGatewayWorkspaceFromConfigRequest;
 
-export interface RenameGatewayWorkspaceRequest {
-  name: string;
+export interface UpdateGatewayWorkspaceRequest {
+  name?: string;
+  parent_workspace_id?: string | null;
 }
 
 export interface ReorderGatewayWorkspacesRequest {
@@ -247,6 +317,7 @@ export interface WebUiLayoutSettings {
     | "resources"
     | "agent"
     | null;
+  pending_message_default_action?: "steering" | "queued" | null;
 }
 
 export interface WebUiSettings {

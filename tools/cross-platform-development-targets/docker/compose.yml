@@ -1,0 +1,25 @@
+services:
+  boxteam-development-target:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BOXTEAM_TARGET_UID: "${BOXTEAM_TARGET_UID}"
+        BOXTEAM_TARGET_GID: "${BOXTEAM_TARGET_GID}"
+    image: "${BOXTEAM_TARGET_IMAGE}"
+    ports:
+      - "${BOXTEAM_TARGET_SSH_PORT}:22"
+      - "${BOXTEAM_TARGET_WEB_PORT:-18011}:8011"
+      - "${BOXTEAM_TARGET_TERMINAL_PORT:-18013}:8013"
+      - "${BOXTEAM_TARGET_BROWSER_PORT:-18016}:8016"
+    environment:
+      BOXTEAM_TARGET_UID: "${BOXTEAM_TARGET_UID}"
+      BOXTEAM_TARGET_GID: "${BOXTEAM_TARGET_GID}"
+    volumes:
+      - "${BOXTEAM_TARGET_REPOSITORY}:/opt/boxteam-dev/repository"
+      - "${BOXTEAM_TARGET_HOME}:/home/boxteam"
+      - "${BOXTEAM_TARGET_CACHES}:/home/boxteam/.cache"
+      - "${BOXTEAM_TARGET_SSH}:/opt/boxteam-dev/ssh"
+      - "${BOXTEAM_TARGET_ARTIFACTS}:/opt/boxteam-dev/artifacts"
+      - "${BOXTEAM_TARGET_AUTHORIZED_KEY}:/run/boxteam-target/authorized_key.pub:ro"
+    working_dir: /opt/boxteam-dev/repository

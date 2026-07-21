@@ -2,10 +2,12 @@ import type {
   AddLocalGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
   APIResponse,
+  GatewayInboundAccessList,
   GatewayWorkspaceList,
+  GatewayRuntimeRestartResult,
   GatewayHealth,
   GatewayDirectoryList,
-  RenameGatewayWorkspaceRequest,
+  UpdateGatewayWorkspaceRequest,
   ReorderGatewayWorkspacesRequest,
   SshConnectionOptionList,
   WebUiSettings,
@@ -29,6 +31,17 @@ export async function listGatewayWorkspaces(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
       port,
       "/api/gateway/workspaces",
+    ),
+  );
+}
+
+export async function listGatewayInboundAccess(
+  port: number,
+): Promise<GatewayInboundAccessList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayInboundAccessList>>(
+      port,
+      "/api/gateway/inbound-access",
     ),
   );
 }
@@ -70,7 +83,7 @@ export async function addSshGatewayWorkspace(
   return unwrapApiData(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
       port,
-      "/api/gateway/workspaces/ssh",
+      "/api/gateway/remote-gateways",
       {
         method: "POST",
         body: JSON.stringify(payload),
@@ -95,7 +108,15 @@ export async function removeGatewayWorkspace(
 export async function renameGatewayWorkspace(
   port: number,
   workspaceId: string,
-  payload: RenameGatewayWorkspaceRequest,
+  payload: UpdateGatewayWorkspaceRequest,
+): Promise<GatewayWorkspaceList> {
+  return updateGatewayWorkspace(port, workspaceId, payload);
+}
+
+export async function updateGatewayWorkspace(
+  port: number,
+  workspaceId: string,
+  payload: UpdateGatewayWorkspaceRequest,
 ): Promise<GatewayWorkspaceList> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
@@ -117,6 +138,45 @@ export async function reconnectGatewayWorkspace(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/reconnect`,
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function safeRestartManagedGatewayWorkspaceBackend(
+  port: number,
+  workspaceId: string,
+): Promise<GatewayRuntimeRestartResult> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayRuntimeRestartResult>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/restart-safe`,
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function forceRestartManagedGatewayWorkspaceBackend(
+  port: number,
+  workspaceId: string,
+): Promise<GatewayRuntimeRestartResult> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayRuntimeRestartResult>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/restart-force`,
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function probeExternalGatewayWorkspace(
+  port: number,
+  workspaceId: string,
+): Promise<GatewayWorkspaceList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayWorkspaceList>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/probe`,
       { method: "POST" },
     ),
   );
@@ -187,24 +247,6 @@ export async function listGatewaySshConnections(
     await requestJson<APIResponse<SshConnectionOptionList>>(
       port,
       "/api/gateway/ssh-connections",
-    ),
-  );
-}
-
-export async function browseGatewayRemoteDirectories(
-  port: number,
-  connectionId: string,
-  path?: string | null,
-): Promise<GatewayDirectoryList> {
-  const query = new URLSearchParams();
-  if (path?.trim()) {
-    query.set("path", path.trim());
-  }
-  const suffix = query.toString();
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayDirectoryList>>(
-      port,
-      `/api/gateway/ssh-connections/${encodeURIComponent(connectionId)}/directories${suffix ? `?${suffix}` : ""}`,
     ),
   );
 }

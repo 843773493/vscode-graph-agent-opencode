@@ -1,0 +1,24 @@
+{
+  "name": "@boxteam/runtime-linux-x64",
+  "version": "0.1.0",
+  "description": "BoxTeam self-contained runtime for Linux x64 GNU",
+  "license": "UNLICENSED",
+  "type": "module",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "exports": {
+    "./runtime-manifest.json": "./runtime-manifest.json"
+  },
+  "files": [
+    "runtime-manifest.json",
+    "python",
+    "application",
+    "web",
+    "chromium",
+    "THIRD_PARTY_LICENSES.json"
+  ]
+}

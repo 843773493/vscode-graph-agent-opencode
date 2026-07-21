@@ -1,11 +1,36 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+from app.agents.policy import DIRECT_AGENT_COLLABORATION_TOOL_NAMES
+from app.agents.tools.collaboration import build_agent_collaboration_tools
 from app.agents.tools.team import create_team_tools
 from app.agents.tool_invocation_context import ToolInvocationContext
 
 
 class _UnusedTeamService:
     pass
+
+
+def test_agent_collaboration_group_collects_cross_session_tools():
+    tools = build_agent_collaboration_tools(
+        session_id="ses_current",
+        agent_id="default",
+        sender_agent_id="default",
+        background_task_registry=MagicMock(),
+        background_message_bus=MagicMock(),
+        job_event_bus=MagicMock(),
+        job_service=MagicMock(),
+        session_service=MagicMock(),
+        session_orchestrator=MagicMock(),
+        session_subagent_service=MagicMock(),
+        team_service=MagicMock(),
+        invocation_context=ToolInvocationContext(),
+    )
+
+    assert {tool.name for tool in tools} == set(
+        DIRECT_AGENT_COLLABORATION_TOOL_NAMES
+    )
 
 
 def test_default_team_tool_group_exposes_board_and_session_reuse_operations():

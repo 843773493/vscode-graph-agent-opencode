@@ -12,19 +12,19 @@ interface LocalSessionConnection {
   connection_error: string | null;
 }
 
-interface SshSessionConnection {
-  kind: "ssh";
-  host: string;
-  port: number;
-  username: string;
-  remote_backend_host: string;
-  remote_backend_port: number;
-  tunnel_backend_url: string;
+interface RemoteGatewaySessionConnection {
+  kind: "remote_gateway";
+  gateway_connection_id: string;
+  gateway_id: string;
+  remote_workspace_id: string;
+  gateway_proxy_url: string;
   managed: boolean;
   connection_error: string | null;
 }
 
-type SessionConnection = LocalSessionConnection | SshSessionConnection;
+type SessionConnection =
+  | LocalSessionConnection
+  | RemoteGatewaySessionConnection;
 
 export interface SessionInformationDump {
   kind: typeof SESSION_INFORMATION_KIND;
@@ -64,28 +64,6 @@ function normalizedPath(path: string): string {
   return trimmed.replace(/[\\/]+$/, "");
 }
 
-function requiredRemoteString(
-  remote: Record<string, unknown>,
-  field: string,
-): string {
-  const value = remote[field];
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`SSH 工作区信息缺少 ${field}`);
-  }
-  return value;
-}
-
-function requiredRemotePort(
-  remote: Record<string, unknown>,
-  field: string,
-): number {
-  const value = remote[field];
-  if (!Number.isInteger(value) || typeof value !== "number" || value <= 0) {
-    throw new Error(`SSH 工作区信息缺少有效 ${field}`);
-  }
-  return value;
-}
-
 function buildConnection(workspace: GatewayWorkspace): SessionConnection {
   const common = {
     managed: workspace.managed,
@@ -98,21 +76,16 @@ function buildConnection(workspace: GatewayWorkspace): SessionConnection {
       ...common,
     };
   }
+  if (!workspace.remote) {
+    throw new Error("远程 Gateway 工作区信息缺少连接摘要");
+  }
 
   return {
-    kind: "ssh",
-    host: requiredRemoteString(workspace.remote, "host"),
-    port: requiredRemotePort(workspace.remote, "port"),
-    username: requiredRemoteString(workspace.remote, "username"),
-    remote_backend_host: requiredRemoteString(
-      workspace.remote,
-      "remote_backend_host",
-    ),
-    remote_backend_port: requiredRemotePort(
-      workspace.remote,
-      "remote_backend_port",
-    ),
-    tunnel_backend_url: workspace.backend_url,
+    kind: "remote_gateway",
+    gateway_connection_id: workspace.remote.gateway_connection_id,
+    gateway_id: workspace.remote.gateway_id,
+    remote_workspace_id: workspace.remote.remote_workspace_id,
+    gateway_proxy_url: workspace.backend_url,
     ...common,
   };
 }

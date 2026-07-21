@@ -4,12 +4,18 @@ import type {
   AddLocalGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
   GatewayHealth,
-  GatewayServiceStatus,
+  GatewayRuntimeBlocker,
+  GatewayRuntimeRestartResult,
   GatewayWorkspace,
 } from "../../types/backend";
+import GatewayInboundAccessPanel from "./GatewayInboundAccessPanel";
+import GatewayRoutingOverview from "./GatewayRoutingOverview";
 import WorkspaceLocalDialog from "./WorkspaceLocalDialog";
 import WorkspaceRenameDialog from "./WorkspaceRenameDialog";
 import WorkspaceSshDialog from "./WorkspaceSshDialog";
+import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
+
+export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
 interface GatewayControlCenterProps {
   apiPort: number;
@@ -26,54 +32,18 @@ interface GatewayControlCenterProps {
   onReorder: (workspaceIds: string[]) => Promise<void>;
   onRefresh: () => Promise<void>;
   onReconnect: (workspaceId: string) => Promise<void>;
+  onSafeRestartManagedBackend: (
+    workspaceId: string,
+  ) => Promise<GatewayRuntimeRestartResult>;
+  onForceRestartManagedBackend: (
+    workspaceId: string,
+  ) => Promise<GatewayRuntimeRestartResult>;
+  onProbeExternalBackend: (workspaceId: string) => Promise<void>;
   onRename: (workspaceId: string, name: string) => Promise<string>;
   onUseWorkspace: (workspaceId: string) => Promise<void>;
 }
 
-function workspaceKindLabel(workspace: GatewayWorkspace): string {
-  if (workspace.connection_kind === "local") {
-    return workspace.managed ? "本机 · Gateway 托管" : "本机 · 外部后端";
-  }
-  return "SSH 远程";
-}
-
-function serviceEntries(workspace: GatewayWorkspace) {
-  const order = ["workspace_api", "terminal_manager", "browser_manager"];
-  return Object.entries(workspace.services).sort(
-    ([left], [right]) => order.indexOf(left) - order.indexOf(right),
-  );
-}
-
-function serviceLabel(name: string): string {
-  const labels: Record<string, string> = {
-    workspace_api: "Workspace API",
-    terminal_api: "Terminal API",
-    terminal_ui: "Terminal UI",
-    browser_api: "Browser API",
-    browser_ui: "Browser UI",
-  };
-  return labels[name] ?? name;
-}
-
-function serviceRouteLabel(service: GatewayServiceStatus): string {
-  const local = service.local_port != null ? `:${service.local_port}` : null;
-  const remote = service.remote_port != null
-    ? `${service.remote_host ?? "remote"}:${service.remote_port}`
-    : null;
-  if (local && remote) {
-    return `${local} → ${remote}`;
-  }
-  return local ?? remote ?? "未分配端口";
-}
-
-function serviceStatusLabel(status: GatewayServiceStatus["status"]): string {
-  const labels: Record<GatewayServiceStatus["status"], string> = {
-    ready: "正常",
-    offline: "离线",
-    unavailable: "未提供",
-  };
-  return labels[status];
-}
+type GatewayConsoleView = "routing" | "managed";
 
 export default function GatewayControlCenter({
   apiPort,
@@ -90,19 +60,27 @@ export default function GatewayControlCenter({
   onReorder,
   onRefresh,
   onReconnect,
+  onSafeRestartManagedBackend,
+  onForceRestartManagedBackend,
+  onProbeExternalBackend,
   onRename,
   onUseWorkspace,
 }: GatewayControlCenterProps) {
   const [localDialogOpen, setLocalDialogOpen] = useState(false);
   const [sshDialogOpen, setSshDialogOpen] = useState(false);
-  const [renamingWorkspace, setRenamingWorkspace] = useState<GatewayWorkspace | null>(null);
+  const [consoleView, setConsoleView] = useState<GatewayConsoleView>("routing");
+  const [renamingWorkspace, setRenamingWorkspace] =
+    useState<GatewayWorkspace | null>(null);
   const [health, setHealth] = useState<GatewayHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [busyWorkspaceId, setBusyWorkspaceId] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [operationNotice, setOperationNotice] = useState<string | null>(null);
-  const [reconnectingWorkspaceId, setReconnectingWorkspaceId] = useState<string | null>(null);
+  const [restartBlockers, setRestartBlockers] = useState<GatewayRuntimeBlocker[]>([]);
+  const [restartMode, setRestartMode] = useState<"safe" | "force" | null>(null);
+  const [reconnectingWorkspaceId, setReconnectingWorkspaceId] =
+    useState<string | null>(null);
 
   const loadHealth = useCallback(async () => {
     try {
@@ -120,17 +98,30 @@ export default function GatewayControlCenter({
   }, [loadHealth]);
 
   const stats = useMemo(() => {
-    const ready = workspaces.filter((workspace) => workspace.status === "ready").length;
-    const offline = workspaces.length - ready;
-    const local = workspaces.filter((workspace) => workspace.connection_kind === "local").length;
-    const ssh = workspaces.length - local;
+    const ready = workspaces.filter(
+      (workspace) => workspace.status === "ready",
+    ).length;
+    const remoteGatewayConnections = new Set(
+      workspaces.flatMap((workspace) =>
+        workspace.connection_kind === "remote_gateway" && workspace.remote
+          ? [workspace.remote.gateway_connection_id]
+          : [],
+      ),
+    ).size;
+    const localWorkspaces = workspaces.filter(
+      (workspace) => workspace.connection_kind === "local",
+    ).length;
     const serviceStates = workspaces.flatMap((workspace) =>
       Object.values(workspace.services).map((service) => service.status),
     );
-    const serviceReady = serviceStates.filter((status) => status === "ready").length;
-    const serviceOffline = serviceStates.filter((status) => status === "offline").length;
-    const serviceUnavailable = serviceStates.filter((status) => status === "unavailable").length;
-    return { ready, offline, local, ssh, serviceReady, serviceOffline, serviceUnavailable };
+    return {
+      ready,
+      offline: workspaces.length - ready,
+      remoteGatewayConnections,
+      localWorkspaces,
+      serviceReady: serviceStates.filter((status) => status === "ready").length,
+      serviceProblems: serviceStates.filter((status) => status !== "ready").length,
+    };
   }, [workspaces]);
 
   const checkedAt = useMemo(() => {
@@ -140,8 +131,16 @@ export default function GatewayControlCenter({
     return timestamps.length > 0 ? new Date(Math.max(...timestamps)) : null;
   }, [workspaces]);
 
+  const workspaceGroups = useMemo(
+    () => groupGatewayWorkspaces(workspaces),
+    [workspaces],
+  );
   const activeWorkspace = workspaces.find(
     (workspace) => workspace.workspace_id === activeWorkspaceId,
+  );
+  const gatewayAvailable = health?.status === "ok";
+  const gatewayRuntimeContractOutdated = workspaces.some(
+    (workspace) => !workspace.runtime_action,
   );
 
   const handleRefresh = async () => {
@@ -160,7 +159,7 @@ export default function GatewayControlCenter({
 
   const runWorkspaceAction = async (
     workspaceId: string,
-    action: () => Promise<void>,
+    action: () => Promise<unknown>,
   ): Promise<boolean> => {
     setBusyWorkspaceId(workspaceId);
     setOperationError(null);
@@ -177,9 +176,47 @@ export default function GatewayControlCenter({
     }
   };
 
-  const handleReconnect = async (workspace: GatewayWorkspace) => {
+  const handleRuntimeAction = async (workspace: GatewayWorkspace) => {
+    if (!workspace.runtime_action) {
+      setOperationError(
+        "当前 Gateway 版本未声明运行时控制能力，请重启 Gateway 后重试。",
+      );
+      return;
+    }
+    let action: () => Promise<void>;
+    let completedNotice: string;
+    if (workspace.runtime_action === "reconnect_remote_gateway") {
+      const confirmed = window.confirm(
+        `重新连接「${workspace.name}」所属的远程 Gateway？\n\n该操作只重建单个 Gateway SSH 隧道，不会直接连接或重启 Workspace 后端。正在使用该远程 Gateway 的请求会短暂中断。`,
+      );
+      if (!confirmed) {
+        return;
+      }
+      action = () => onReconnect(workspace.workspace_id);
+      completedNotice = `「${workspace.name}」所属的远程 Gateway 已重新连接。`;
+    } else {
+      action = () => onProbeExternalBackend(workspace.workspace_id);
+      completedNotice = `「${workspace.name}」外部后端已重新探测。`;
+    }
+    setReconnectingWorkspaceId(workspace.workspace_id);
+    const succeeded = await runWorkspaceAction(workspace.workspace_id, action);
+    setReconnectingWorkspaceId(null);
+    if (succeeded) {
+      setOperationNotice(completedNotice);
+    }
+  };
+
+  const handleRemoteGatewayReconnect = async (workspace: GatewayWorkspace) => {
+    if (workspace.connection_kind !== "remote_gateway" || !workspace.remote) {
+      setOperationError(`工作区 ${workspace.workspace_id} 不属于远程 Gateway`);
+      return;
+    }
+    const group = workspaceGroups.find(
+      (item) =>
+        item.key === `remote:${workspace.remote?.gateway_connection_id}`,
+    );
     const confirmed = window.confirm(
-      `重新连接「${workspace.name}」？\n\n该操作会关闭现有的 Gateway 托管进程或 SSH 隧道，然后按保存的连接信息重新建立服务。正在使用这些连接的终端、浏览器或请求可能会短暂中断。`,
+      `重新连接「${workspace.remote.ssh_config_host ?? workspace.remote.host}」？\n\n该连接下的 ${group?.workspaces.length ?? 1} 个工作区会短暂中断。`,
     );
     if (!confirmed) {
       return;
@@ -191,7 +228,65 @@ export default function GatewayControlCenter({
     );
     setReconnectingWorkspaceId(null);
     if (succeeded) {
-      setOperationNotice(`「${workspace.name}」重连流程已结束，服务状态已重新探测。`);
+      setOperationNotice(
+        `远程 Gateway「${workspace.remote.ssh_config_host ?? workspace.remote.host}」已重新连接。`,
+      );
+    }
+  };
+
+  const handleSafeRestart = async (workspace: GatewayWorkspace) => {
+    const confirmed = window.confirm(
+      `安全重启「${workspace.name}」的 Workspace 后端？\n\nGateway 会先停止接收新任务，最多等待 30 秒让 Agent、工具和后台任务结束。若仍有活动任务，将取消本次重启并恢复服务。Terminal 和 Browser 服务不会重启。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setBusyWorkspaceId(workspace.workspace_id);
+    setRestartMode("safe");
+    setRestartBlockers([]);
+    setOperationError(null);
+    setOperationNotice(null);
+    try {
+      const result = await onSafeRestartManagedBackend(workspace.workspace_id);
+      setRestartBlockers(result.blockers);
+      setOperationNotice(
+        result.status === "restarted"
+          ? `「${workspace.name}」Workspace 后端已安全重启。`
+          : `「${workspace.name}」仍有活动任务，安全重启已取消。`,
+      );
+      await loadHealth();
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRestartMode(null);
+      setBusyWorkspaceId(null);
+    }
+  };
+
+  const handleForceRestart = async (workspace: GatewayWorkspace) => {
+    const confirmed = window.confirm(
+      `强制重启「${workspace.name}」的 Workspace 后端？\n\n正在运行的 Agent、工具和后台任务会被明确标记为中断并取消，可能留下尚未完成的外部副作用。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setBusyWorkspaceId(workspace.workspace_id);
+    setRestartMode("force");
+    setRestartBlockers([]);
+    setOperationError(null);
+    setOperationNotice(null);
+    try {
+      const result = await onForceRestartManagedBackend(workspace.workspace_id);
+      setRestartBlockers(result.blockers);
+      setOperationNotice(
+        `「${workspace.name}」Workspace 后端已强制重启，${result.blockers.length} 个活动资源已记录为中断。`,
+      );
+      await loadHealth();
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRestartMode(null);
+      setBusyWorkspaceId(null);
     }
   };
 
@@ -203,12 +298,23 @@ export default function GatewayControlCenter({
     return authoritativeName;
   };
 
-  const moveWorkspace = async (index: number, direction: -1 | 1) => {
-    const targetIndex = index + direction;
-    if (targetIndex < 0 || targetIndex >= workspaces.length) {
+  const moveWorkspace = async (
+    workspaceId: string,
+    siblingIds: string[],
+    direction: -1 | 1,
+  ) => {
+    const siblingIndex = siblingIds.indexOf(workspaceId);
+    const targetSiblingIndex = siblingIndex + direction;
+    if (
+      siblingIndex < 0 ||
+      targetSiblingIndex < 0 ||
+      targetSiblingIndex >= siblingIds.length
+    ) {
       return;
     }
     const workspaceIds = workspaces.map((workspace) => workspace.workspace_id);
+    const index = workspaceIds.indexOf(workspaceId);
+    const targetIndex = workspaceIds.indexOf(siblingIds[targetSiblingIndex]);
     [workspaceIds[index], workspaceIds[targetIndex]] = [
       workspaceIds[targetIndex],
       workspaceIds[index],
@@ -221,272 +327,217 @@ export default function GatewayControlCenter({
     }
   };
 
-  const gatewayAvailable = health?.status === "ok";
-
   return (
-    <main className="gateway-console-host">
-      <section className="gateway-console" aria-labelledby="gateway-console-title">
-        <header className="gateway-console-header">
-          <div>
-            <div className="gateway-console-eyebrow">本地控制面</div>
-            <h1 id="gateway-console-title">Gateway 控制台</h1>
-            <p>管理工作区后端、SSH 连接和浏览器请求的活动路由目标。</p>
-          </div>
-          <div className="gateway-console-header-actions">
-            <span className={`gateway-health-pill ${gatewayAvailable ? "ready" : "offline"}`}>
-              <span className="codicon codicon-pulse" aria-hidden="true" />
-              {gatewayAvailable ? "Gateway 正常" : "Gateway 状态异常"}
-            </span>
-            <button type="button" onClick={() => setLocalDialogOpen(true)}>
-              <span className="codicon codicon-folder-opened" aria-hidden="true" />
-              添加本机工作区
-            </button>
-            <button type="button" onClick={() => setSshDialogOpen(true)}>
-              <span className="codicon codicon-remote" aria-hidden="true" />
-              添加 SSH 工作区
-            </button>
-            <button type="button" onClick={() => void handleRefresh()} disabled={refreshing}>
-              <span className={`codicon codicon-refresh${refreshing ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
-              {refreshing ? "刷新中" : "刷新"}
-            </button>
-          </div>
-        </header>
-
-        {gatewayError || healthError || operationError ? (
-          <div className="gateway-console-alert" role="alert">
-            <span className="codicon codicon-error" aria-hidden="true" />
-            <div>
-              <strong>Gateway 状态读取失败</strong>
-              <span>{gatewayError ?? healthError ?? operationError}</span>
-            </div>
-          </div>
-        ) : null}
-
-        {operationNotice ? (
-          <div className="gateway-console-notice" role="status">
-            <span className="codicon codicon-pass-filled" aria-hidden="true" />
-            {operationNotice}
-          </div>
-        ) : null}
-
-        <div className="gateway-summary-grid" aria-label="Gateway 状态摘要">
-          <article>
-            <span>已注册工作区</span>
-            <strong>{workspaces.length}</strong>
-            <small>{activeWorkspace ? `当前：${activeWorkspace.name}` : "尚未激活工作区"}</small>
-          </article>
-          <article>
-            <span>Workspace API</span>
-            <strong>{stats.ready}</strong>
-            <small>{stats.offline > 0 ? `${stats.offline} 个离线` : "全部 API 已就绪"}</small>
-          </article>
-          <article>
-            <span>服务探测</span>
-            <strong>{stats.serviceReady}</strong>
-            <small>
-              {stats.serviceOffline > 0 || stats.serviceUnavailable > 0
-                ? `${stats.serviceOffline} 离线 · ${stats.serviceUnavailable} 未提供`
-                : "全部探测正常"}
-            </small>
-          </article>
-          <article>
-            <span>连接类型</span>
-            <strong>{stats.local + stats.ssh}</strong>
-            <small>{stats.local} 本机 · {stats.ssh} SSH</small>
-          </article>
+    <main className="gateway-control-shell">
+      <aside className="gateway-control-sidebar">
+        <div className="gateway-control-brand">
+          <span className="codicon codicon-server-process" aria-hidden="true" />
+          <div><strong>BoxTeam</strong><small>Local Control UI</small></div>
         </div>
+        <nav aria-label="Gateway 控制面导航">
+          <section>
+            <p>控制面</p>
+            <button type="button" disabled>
+              <span className="codicon codicon-dashboard" aria-hidden="true" />概览
+            </button>
+            <button
+              type="button"
+              className={consoleView === "routing" ? "active" : undefined}
+              onClick={() => setConsoleView("routing")}
+            >
+              <span className="codicon codicon-git-merge" aria-hidden="true" />
+              工作区与路由
+              <small>{workspaces.length}</small>
+            </button>
+            <button
+              type="button"
+              className={consoleView === "managed" ? "active" : undefined}
+              onClick={() => setConsoleView("managed")}
+            >
+              <span className="codicon codicon-remote" aria-hidden="true" />
+              外部接入
+            </button>
+          </section>
+          <section>
+            <p>系统</p>
+            <button type="button" disabled>
+              <span className="codicon codicon-pulse" aria-hidden="true" />服务运行时
+            </button>
+            <button type="button" disabled>
+              <span className="codicon codicon-shield" aria-hidden="true" />连接与凭据
+            </button>
+            <button type="button" disabled>
+              <span className="codicon codicon-output" aria-hidden="true" />日志与诊断
+            </button>
+          </section>
+        </nav>
+        <div className="gateway-control-sidebar-status">
+          <strong><span />{gatewayAvailable ? "Gateway 正常" : "Gateway 异常"}</strong>
+          <code>127.0.0.1:{apiPort}</code>
+          <small>{checkedAt ? `检查于 ${checkedAt.toLocaleTimeString()}` : "等待首次探测"}</small>
+        </div>
+      </aside>
 
-        <div className="gateway-console-grid">
-          <section className="gateway-workspace-section" aria-labelledby="gateway-workspaces-title">
-            <div className="gateway-section-heading">
+      <section className="gateway-control-main" aria-labelledby="gateway-control-title">
+        <div className="gateway-control-content">
+          <header className="gateway-control-header">
+            <div>
+              <span>本地控制面</span>
+              <h1 id="gateway-control-title">
+                {consoleView === "routing" ? "工作区与路由" : "外部 Gateway 接入"}
+              </h1>
+              <p>
+                {consoleView === "routing"
+                  ? "查看本机工作区、远程 Gateway 投影与当前请求路由。当前 Gateway 负责选择目标和透明转发。"
+                  : "查看哪些其他 Gateway 已接入本机，并能访问本机直接工作区。"}
+              </p>
+            </div>
+            <div className="gateway-control-actions">
+              <button type="button" onClick={() => setLocalDialogOpen(true)}>
+                <span className="codicon codicon-folder-opened" aria-hidden="true" />
+                添加本机工作区
+              </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => setSshDialogOpen(true)}
+              >
+                <span className="codicon codicon-remote" aria-hidden="true" />
+                连接远程 Gateway
+              </button>
+              <button
+                type="button"
+                className="icon-only"
+                aria-label="刷新 Gateway"
+                title="刷新 Gateway"
+                disabled={refreshing}
+                onClick={() => void handleRefresh()}
+              >
+                <span
+                  className={`codicon codicon-refresh${
+                    refreshing ? " codicon-modifier-spin" : ""
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
+          </header>
+
+          {gatewayError || healthError || operationError ? (
+            <div className="gateway-console-alert" role="alert">
+              <span className="codicon codicon-error" aria-hidden="true" />
+              <div><strong>Gateway 操作失败</strong><span>{gatewayError ?? healthError ?? operationError}</span></div>
+            </div>
+          ) : null}
+          {operationNotice ? (
+            <div className="gateway-console-notice" role="status">
+              <span className="codicon codicon-pass-filled" aria-hidden="true" />
+              {operationNotice}
+            </div>
+          ) : null}
+          {restartBlockers.length > 0 ? (
+            <div className="gateway-console-blockers" role="status">
+              <span className="codicon codicon-warning" aria-hidden="true" />
               <div>
-                <h2 id="gateway-workspaces-title">工作区路由</h2>
-                <p>活动工作区接收未指定工作区 ID 的同源 `/api/v1/*` 请求。</p>
+                <strong>重启涉及的活动资源</strong>
+                <ul>
+                  {restartBlockers.map((blocker) => (
+                    <li key={`${blocker.kind}:${blocker.resource_id}`}>
+                      <code>{blocker.kind}</code>
+                      <span>{blocker.detail ?? blocker.resource_id}</span>
+                      <small>会话 {blocker.session_id} · {blocker.status}</small>
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <span>
-                {workspaces.length} 个目标
-                {checkedAt ? ` · 检查于 ${checkedAt.toLocaleTimeString()}` : ""}
-              </span>
             </div>
+          ) : null}
+          {gatewayRuntimeContractOutdated ? (
+            <div className="gateway-console-version-notice" role="status">
+              <span className="codicon codicon-warning" aria-hidden="true" />
+              当前 Gateway 进程版本较旧，运行时控制暂不可用；重启 Gateway 后启用。
+            </div>
+          ) : null}
 
-            <div className="gateway-workspace-list">
-              {workspaces.length === 0 ? (
-                <div className="gateway-console-empty">
-                  <span className="codicon codicon-server-environment" aria-hidden="true" />
-                  <strong>尚未注册工作区</strong>
-                  <p>添加本机或 SSH 工作区后，Gateway 才能路由会话和工具请求。</p>
-                </div>
-              ) : workspaces.map((workspace, index) => {
-                const active = workspace.workspace_id === activeWorkspaceId;
-                const busy = busyWorkspaceId === workspace.workspace_id ||
-                  removingWorkspaceIds.has(workspace.workspace_id);
-                const services = serviceEntries(workspace);
-                return (
-                  <article
-                    key={workspace.workspace_id}
-                    className={`gateway-workspace-row${active ? " active" : ""}${workspace.status === "offline" ? " offline" : ""}`}
-                  >
-                    <div className="gateway-workspace-main">
-                      <div className="gateway-workspace-title-row">
-                        <span className={`gateway-workspace-status ${workspace.status}`} aria-hidden="true" />
-                        <h3>{workspace.name}</h3>
-                        {active ? <span className="gateway-active-badge">活动路由</span> : null}
-                        {workspace.system_default ? <span className="gateway-meta-badge">系统默认</span> : null}
-                      </div>
-                      <div className="gateway-workspace-kind">{workspaceKindLabel(workspace)}</div>
-                      <dl className="gateway-workspace-properties">
-                        <div>
-                          <dt>目录</dt>
-                          <dd title={workspace.root_path}>{workspace.root_path}</dd>
-                        </div>
-                        <div>
-                          <dt>后端</dt>
-                          <dd title={workspace.backend_url}>{workspace.backend_url}</dd>
-                        </div>
-                        <div>
-                          <dt>ID</dt>
-                          <dd title={workspace.workspace_id}>{workspace.workspace_id}</dd>
-                        </div>
-                      </dl>
-                      {services.length > 0 ? (
-                        <div className="gateway-service-list" aria-label={`${workspace.name} 服务状态`}>
-                          {services.map(([name, service]) => (
-                            <details
-                              key={name}
-                              className={`gateway-service-detail${service.status === "ready" ? "" : " problem"}`}
-                            >
-                              <summary className={`gateway-service-pill ${service.status}`}>
-                                <span aria-hidden="true" />
-                                {serviceLabel(name)} · {serviceStatusLabel(service.status)}
-                                <code>{serviceRouteLabel(service)}</code>
-                                <b>{service.status === "ready" ? "查看端点" : "查看诊断"}</b>
-                              </summary>
-                              <div>
-                                <strong>{serviceLabel(name)} 服务详情</strong>
-                                {service.status !== "ready" ? (
-                                  <span>{service.error ?? "该工作区没有提供此服务，或服务尚未建立连接。"}</span>
-                                ) : null}
-                                <dl>
-                                  <div><dt>Gateway 端点</dt><dd>{service.local_url ?? "尚未建立"}</dd></div>
-                                  <div><dt>本地端口</dt><dd>{service.local_port ?? "未分配"}</dd></div>
-                                  <div><dt>远端目标</dt><dd>{service.remote_port != null ? `${service.remote_host ?? "remote"}:${service.remote_port}` : "本机服务"}</dd></div>
-                                  <div><dt>健康检查</dt><dd>{service.health_path}</dd></div>
-                                  <div><dt>探测时间</dt><dd>{new Date(workspace.checked_at).toLocaleString()}</dd></div>
-                                </dl>
-                              </div>
-                            </details>
-                          ))}
-                        </div>
-                      ) : null}
-                      {workspace.connection_error ? (
-                        <div className="gateway-workspace-error" role="status">
-                          <span className="codicon codicon-warning" aria-hidden="true" />
-                          {workspace.connection_error}
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="gateway-workspace-actions">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => setRenamingWorkspace(workspace)}
-                      >
-                        <span className="codicon codicon-edit" aria-hidden="true" />
-                        重命名
-                      </button>
-                      <button
-                        type="button"
-                        title="上移工作区"
-                        aria-label={`上移 ${workspace.name}`}
-                        disabled={index === 0 || busy}
-                        onClick={() => void moveWorkspace(index, -1)}
-                      >
-                        <span className="codicon codicon-arrow-up" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        title="下移工作区"
-                        aria-label={`下移 ${workspace.name}`}
-                        disabled={index === workspaces.length - 1 || busy}
-                        onClick={() => void moveWorkspace(index, 1)}
-                      >
-                        <span className="codicon codicon-arrow-down" aria-hidden="true" />
-                      </button>
-                      {!active ? (
-                        <button
-                          type="button"
-                          disabled={busy || switching || workspace.status !== "ready"}
-                          onClick={() => void runWorkspaceAction(
-                            workspace.workspace_id,
-                            () => onActivate(workspace.workspace_id),
-                          )}
-                        >
-                          设为默认路由
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="gateway-use-button"
-                        disabled={busy || workspace.status !== "ready"}
-                        onClick={() => void runWorkspaceAction(
-                          workspace.workspace_id,
-                          () => onUseWorkspace(workspace.workspace_id),
-                        )}
-                      >
-                        {active ? "打开会话工作台" : "设为默认路由并打开"}
-                      </button>
-                      {(workspace.status !== "ready" || services.some(([, service]) => service.status !== "ready")) ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void handleReconnect(workspace)}
-                        >
-                          <span className={`codicon codicon-debug-restart${reconnectingWorkspaceId === workspace.workspace_id ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
-                          {reconnectingWorkspaceId === workspace.workspace_id ? "正在重连" : "重新连接"}
-                        </button>
-                      ) : null}
-                      {workspace.removable ? (
-                        <button
-                          type="button"
-                          className="gateway-danger-button"
-                          disabled={busy}
-                          onClick={() => onRemove(workspace.workspace_id, workspace.name)}
-                        >
-                          {removingWorkspaceIds.has(workspace.workspace_id) ? "移除中" : "移除"}
-                        </button>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })}
+          <section className="gateway-overview-strip" aria-label="Gateway 状态摘要">
+            <div className="gateway-overview-primary">
+              <span className="codicon codicon-pulse" aria-hidden="true" />
+              <div>
+                <strong>
+                  {gatewayAvailable
+                    ? stats.offline === 0 && stats.serviceProblems === 0
+                      ? "控制面在线，所有关键链路正常"
+                      : "控制面在线，部分工作区需要处理"
+                    : "控制面状态异常"}
+                </strong>
+                <small>
+                  {checkedAt
+                    ? `最后探测 ${checkedAt.toLocaleTimeString()}`
+                    : "正在等待工作区探测"}
+                </small>
+              </div>
             </div>
+            <article><span>工作区</span><strong>{workspaces.length}</strong><small>{stats.localWorkspaces} 本机 · {workspaces.length - stats.localWorkspaces} 远程</small></article>
+            <article><span>远程 Gateway</span><strong>{stats.remoteGatewayConnections}</strong><small>{stats.remoteGatewayConnections > 0 ? "SSH 隧道已连接" : "尚未连接"}</small></article>
+            <article><span>服务端点</span><strong>{stats.serviceReady}</strong><small>{stats.serviceProblems > 0 ? `${stats.serviceProblems} 个异常` : "全部探测正常"}</small></article>
           </section>
 
-          <aside className="gateway-routing-section" aria-labelledby="gateway-routing-title">
-            <div className="gateway-section-heading">
-              <div>
-                <h2 id="gateway-routing-title">当前路由</h2>
-                <p>浏览器始终访问同源 Gateway，由控制面选择工作区后端。</p>
-              </div>
-            </div>
-            <div className="gateway-route-flow" aria-label="Gateway 请求链路">
-              <div><span className="codicon codicon-browser" aria-hidden="true" /><strong>Web UI</strong><small>同源 /api</small></div>
-              <span className="codicon codicon-arrow-right" aria-hidden="true" />
-              <div><span className="codicon codicon-server-process" aria-hidden="true" /><strong>Gateway</strong><small>控制面与代理</small></div>
-              <span className="codicon codicon-arrow-right" aria-hidden="true" />
-              <div><span className="codicon codicon-root-folder" aria-hidden="true" /><strong>{activeWorkspace?.name ?? "未选择"}</strong><small>Workspace API</small></div>
-            </div>
-            <dl className="gateway-route-details">
-              <div><dt>控制面状态</dt><dd>{gatewayAvailable ? "正常" : "不可确认"}</dd></div>
-              <div><dt>活动工作区</dt><dd>{activeWorkspace?.workspace_id ?? "无"}</dd></div>
-              <div><dt>连接类型</dt><dd>{activeWorkspace ? workspaceKindLabel(activeWorkspace) : "无"}</dd></div>
-              <div><dt>目标后端</dt><dd>{activeWorkspace?.backend_url ?? "无"}</dd></div>
-            </dl>
-            <div className="gateway-routing-note">
-              <span className="codicon codicon-info" aria-hidden="true" />
-              显式携带工作区 ID 的请求可路由到非活动工作区；普通页面请求使用当前活动目标。
-            </div>
-          </aside>
+          <div className="gateway-view-tabs" role="tablist" aria-label="Gateway 控制面视图">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={consoleView === "routing"}
+              className={consoleView === "routing" ? "active" : undefined}
+              onClick={() => setConsoleView("routing")}
+            >
+              路由总览
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={consoleView === "managed"}
+              className={consoleView === "managed" ? "active" : undefined}
+              onClick={() => setConsoleView("managed")}
+            >
+              外部接入
+            </button>
+          </div>
+
+          {consoleView === "routing" ? (
+            <GatewayRoutingOverview
+              groups={workspaceGroups}
+              activeWorkspace={activeWorkspace}
+              activeWorkspaceId={activeWorkspaceId}
+              checkedAt={checkedAt}
+              gatewayAvailable={gatewayAvailable}
+              switching={switching}
+              busyWorkspaceId={busyWorkspaceId}
+              removingWorkspaceIds={removingWorkspaceIds}
+              reconnectingWorkspaceId={reconnectingWorkspaceId}
+              restartMode={restartMode}
+              onActivate={async (workspace) => {
+                await runWorkspaceAction(
+                  workspace.workspace_id,
+                  () => onActivate(workspace.workspace_id),
+                );
+              }}
+              onUseWorkspace={async (workspace) => {
+                await runWorkspaceAction(
+                  workspace.workspace_id,
+                  () => onUseWorkspace(workspace.workspace_id),
+                );
+              }}
+              onRename={setRenamingWorkspace}
+              onMove={moveWorkspace}
+              onRuntimeAction={handleRuntimeAction}
+              onSafeRestart={handleSafeRestart}
+              onForceRestart={handleForceRestart}
+              onReconnectGateway={handleRemoteGatewayReconnect}
+              onRemove={onRemove}
+            />
+          ) : (
+            <GatewayInboundAccessPanel apiPort={apiPort} />
+          )}
         </div>
       </section>
 

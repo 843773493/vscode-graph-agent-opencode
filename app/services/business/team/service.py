@@ -3,7 +3,6 @@ from __future__ import annotations
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionStoreProtocol, SessionSubagentProtocol
 from app.abstractions.team import TeamStoreProtocol
-from app.schemas.public_v2.common import MessageRole
 from app.schemas.public_v2.session import SessionDTO
 from app.schemas.public_v2.team import (
     TeamBoardDTO,
@@ -188,7 +187,6 @@ class TeamCoordinationService:
                 accepted = await self._session_orchestrator.create_and_run(
                     target_session_id,
                     membership_message(board=board, member=member),
-                    message_role=MessageRole.system,
                     metadata={
                         "source": "team_membership_attached",
                         "team_id": team_id,
@@ -260,7 +258,6 @@ class TeamCoordinationService:
                 accepted = await self._session_orchestrator.create_and_run(
                     assignee_session_id,
                     task_assignment_message(board=board, task=task),
-                    message_role=MessageRole.system,
                     metadata={
                         "source": "team_task_assignment",
                         "team_id": team_id,
@@ -316,7 +313,6 @@ class TeamCoordinationService:
                 notification = await self._session_orchestrator.create_and_run(
                     board.coordinator_session_id,
                     task_update_message(board=board, task=task),
-                    message_role=MessageRole.system,
                     metadata={
                         "source": "team_task_update",
                         "team_id": team_id,

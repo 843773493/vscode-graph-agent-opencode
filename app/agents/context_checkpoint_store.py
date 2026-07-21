@@ -48,20 +48,28 @@ class ContextCompactionCheckpointStore:
             _channel_values=channel_values,
         )
 
-    async def save_summarization_event(
+    async def save_compaction_request(
         self,
         *,
         checkpoint: ContextCompactionCheckpoint,
-        cutoff_index: int,
-        summary_message: object,
-        history_file_path: str,
+    ) -> None:
+        await self._save_channel_value(
+            checkpoint=checkpoint,
+            channel="_force_cache_compaction",
+            value=True,
+            source="manual_compact_request",
+        )
+
+    async def _save_channel_value(
+        self,
+        *,
+        checkpoint: ContextCompactionCheckpoint,
+        channel: str,
+        value: object,
+        source: str,
     ) -> None:
         channel_values = dict(checkpoint._channel_values)
-        channel_values["_summarization_event"] = {
-            "cutoff_index": cutoff_index,
-            "summary_message": summary_message,
-            "file_path": history_file_path,
-        }
+        channel_values[channel] = value
 
         next_checkpoint = checkpoint._checkpoint.copy()
         next_checkpoint["channel_values"] = channel_values
@@ -74,16 +82,16 @@ class ContextCompactionCheckpointStore:
                 f"实际类型: {type(raw_channel_versions).__name__}"
             )
         channel_versions = dict(raw_channel_versions)
-        event_version = self._checkpointer.get_next_version(
-            channel_versions.get("_summarization_event"),
+        value_version = self._checkpointer.get_next_version(
+            channel_versions.get(channel),
             None,
         )
-        channel_versions["_summarization_event"] = event_version
+        channel_versions[channel] = value_version
         next_checkpoint["channel_versions"] = channel_versions
 
         await self._checkpointer.aput(
             config=checkpoint._tuple.config,
             checkpoint=next_checkpoint,
-            metadata={"source": "manual_compact", "step": -1, "writes": {}},
-            new_versions={"_summarization_event": event_version},
+            metadata={"source": source, "step": -1, "writes": {}},
+            new_versions={channel: value_version},
         )

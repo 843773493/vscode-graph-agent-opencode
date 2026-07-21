@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import (
     get_request_id,
@@ -11,8 +11,6 @@ from app.api.deps import (
 from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.tool import (
     ToolDTO,
-    ToolInvokeRequest,
-    ToolInvokeResultDTO,
     ToolSelectionPatchRequest,
 )
 from app.schemas.public_v2.tool_test import (
@@ -20,7 +18,11 @@ from app.schemas.public_v2.tool_test import (
     ToolTestRunListDTO,
     ToolTestStartRequest,
 )
-from app.services.infrastructure.tool_service import ToolService
+from app.services.infrastructure.tool_service import (
+    ToolNotFoundError,
+    ToolSelectionError,
+    ToolService,
+)
 from app.tool_testing.service import ToolTestService
 
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -48,7 +50,10 @@ async def update_tool_selection(
     request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),
 ):
-    result = await tool_service.update_selection(payload)
+    try:
+        result = await tool_service.update_selection(payload)
+    except ToolSelectionError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -106,17 +111,8 @@ async def get_tool(
     request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),
 ):
-    result = await tool_service.get(tool_id, agent_id)
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.post("/{tool_id}/invoke", response_model=APIResponse[ToolInvokeResultDTO], summary="调用 Tool")
-async def invoke_tool(
-    tool_id: str,
-    payload: ToolInvokeRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    tool_service: ToolService = Depends(get_tool_service),
-):
-    result = await tool_service.invoke(tool_id, payload)
+    try:
+        result = await tool_service.get(tool_id, agent_id)
+    except ToolNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

@@ -11,13 +11,15 @@ from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
+from app.agents.model_tool_schema import export_model_tool_json_schema
+from app.agents.policy import catalog_group_for_tool, custom_tool_spec_names
 from app.agents.skill_runtime import discover_workspace_custom_tool_skill_map
-from app.agents.custom_tools import custom_tool_spec_names
 from app.services.infrastructure.config_service import ConfigService
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from langchain_core.tools import BaseTool
 from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
@@ -52,6 +54,8 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_workspace_session_context_client(
         self,
     ) -> WorkspaceSessionContextClientProtocol: ...
+
+    def get_mcp_tools(self) -> list[BaseTool]: ...
 
 
 def build_session_agent_runtime(
@@ -93,6 +97,7 @@ def build_session_agent_runtime(
         workspace_session_context_client=(
             dependency_provider.get_workspace_session_context_client()
         ),
+        mcp_tools=dependency_provider.get_mcp_tools(),
         checkpointer=checkpointer,
         name=name or resolved_agent_id,
         override_model=override_model,
@@ -118,9 +123,14 @@ def get_configured_custom_tool_names(
     agent_id: str,
     config_service: ConfigService,
 ) -> set[str]:
-    """返回当前 agent 配置的自定义扩展工具名。"""
+    """返回当前 agent 策略最终启用的自定义扩展工具名。"""
     tool_config = config_service.get_agent_tool_config(agent_id)
-    return custom_tool_spec_names(tool_config.get("custom", []))
+    custom_tool_names = custom_tool_spec_names(
+        tool_config.get("custom", []),
+        context=f"agent {agent_id} 的 tools.custom",
+    )
+    policy = config_service.resolve_agent_tool_policy(agent_id)
+    return set(custom_tool_names & policy.enabled_names)
 
 
 def build_agent_tool_definitions(agent: Any) -> list[dict[str, Any]]:
@@ -135,22 +145,29 @@ def build_agent_tool_definitions(agent: Any) -> list[dict[str, Any]]:
 
     tools: list[dict[str, Any]] = []
     for tool_name, tool in tool_map.items():
-        tool_call_schema = getattr(tool, "tool_call_schema", None)
-        if not hasattr(tool_call_schema, "model_json_schema"):
-            raise TypeError(
-                "Agent 工具缺少可供模型调用的 JSON Schema: "
-                f"tool_name={tool_name} tool_type={type(tool).__name__}"
-            )
         # tool_call_schema 是 LangChain 面向模型公开的权威参数模型；args_schema
         # 还包含 ToolRuntime 等运行时注入字段，不能用于工具目录或模型请求。
-        parameters = tool_call_schema.model_json_schema()
+        parameters = export_model_tool_json_schema(tool)
+        metadata = dict(getattr(tool, "metadata", None) or {})
+        mcp_server_id = metadata.get("mcp_server_id")
+        group = catalog_group_for_tool(tool_name)
+        group_fields = (
+            {
+                "group_id": f"mcp:{mcp_server_id}",
+                "group_name": f"MCP · {mcp_server_id}",
+                "kind": "mcp",
+            }
+            if isinstance(mcp_server_id, str) and mcp_server_id
+            else group.as_catalog_fields()
+        )
         tools.append(
             {
                 "id": tool_name,
                 "name": tool_name,
                 "description": getattr(tool, "description", ""),
                 "parameters": parameters,
-                "category": "general",
+                "category": group_fields["kind"],
+                **group_fields,
             }
         )
     return tools

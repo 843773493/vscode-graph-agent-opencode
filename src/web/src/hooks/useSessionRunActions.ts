@@ -11,6 +11,7 @@ import type {
   AttachmentRef,
   MessageReplayRequest,
   MessageRunAccepted,
+  PendingRequestKind,
   Session,
 } from "../types/backend";
 import type { ConversationContentView, ConversationView } from "../types/frontend";
@@ -25,6 +26,7 @@ import {
 import { writeLastSessionId } from "../state/storage";
 import type { SetAppState } from "./contentViewLoaderTypes";
 import { sessionScopeKey } from "../state/session/sessionScope";
+import { usePendingRequestActions } from "./usePendingRequestActions";
 
 export function useSessionRunActions({
   apiPort,
@@ -47,8 +49,19 @@ export function useSessionRunActions({
   setState: SetAppState;
   refreshAgentStateSnapshot: (sessionId: string) => Promise<void>;
 }) {
+  const pendingRequestActions = usePendingRequestActions({
+    apiPort,
+    currentSession,
+    currentSessionGatewayWorkspaceId,
+    currentSessionCacheKey,
+    setState,
+  });
   const sendMessage = useCallback(
-    async (content: string, attachments: AttachmentRef[] = []) => {
+    async (
+      content: string,
+      attachments: AttachmentRef[] = [],
+      queue?: PendingRequestKind | null,
+    ) => {
       let session = currentSession;
       if (!session) {
         const targetWorkspaceId = activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
@@ -163,6 +176,7 @@ export function useSessionRunActions({
           pending: true,
           pendingSubmissionId,
           source: "pending",
+          pendingKind: queue ?? undefined,
         };
         updateSessionAttachmentSummary(
           next.sessionAttachmentSummaries,
@@ -190,6 +204,7 @@ export function useSessionRunActions({
           activeSession.current_agent_id,
           attachments,
           activeSessionGatewayWorkspaceId,
+          queue,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -239,6 +254,8 @@ export function useSessionRunActions({
           pending: true,
           pendingSubmissionId,
           source: "pending",
+          pendingKind: accepted.dispatch.pending_kind ?? undefined,
+          pendingPosition: accepted.dispatch.queued_jobs_ahead,
         };
         const pendingList = next.pendingConversations.get(activeSessionCacheKey) ?? [];
         next.pendingConversations.set(activeSessionCacheKey, [
@@ -247,6 +264,12 @@ export function useSessionRunActions({
           ),
           conversation,
         ]);
+        if (accepted.dispatch.active_job_id) {
+          next.activeJobIdsBySession.set(
+            activeSessionCacheKey,
+            accepted.dispatch.active_job_id,
+          );
+        }
         next.status =
           accepted.status === "queued" ? "已排队，等待当前任务结束" : "已发送，等待生成";
         next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
@@ -286,15 +309,20 @@ export function useSessionRunActions({
         const next = cloneMaps(prev);
         next.compactLoading = false;
         next.lastCompactResult = result;
-        next.status =
-          result.status === "compacted"
+        next.status = result.status === "scheduled"
+          ? "已安排上下文压缩，将在下一条消息发送前执行"
+          : result.status === "compacted"
             ? `已压缩上下文: ${result.summarized_message_count} 条`
             : `上下文未压缩: ${result.message}`;
         appendFrontendEvent(
           next.eventQueuesBySession,
           result.session_id,
           "context_compacted",
-          result.status === "compacted" ? "上下文已压缩" : "上下文未压缩",
+          result.status === "scheduled"
+            ? "上下文压缩已安排"
+            : result.status === "compacted"
+              ? "上下文已压缩"
+              : "上下文未压缩",
           {
             session_id: result.session_id,
             status: result.status,
@@ -460,6 +488,7 @@ export function useSessionRunActions({
   return {
     compactSession,
     interruptSession,
+    ...pendingRequestActions,
     replayTurn,
     sendMessage,
   };

@@ -41,6 +41,8 @@ def build_ssh_command(
                     "UserKnownHostsFile="
                     f"{Path(known_hosts_file).expanduser().resolve()}"
                 ),
+                "-o",
+                "StrictHostKeyChecking=accept-new",
             ]
         )
     command.append(destination)

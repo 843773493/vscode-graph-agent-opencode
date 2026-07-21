@@ -10,6 +10,7 @@ import {
   nextEnabledSlashCommandIndex,
 } from "../../state/slashCommands";
 import type { ConversationContentView } from "../../types/frontend";
+import type { PendingRequestKind } from "../../types/backend";
 import {
   fileToSelectedAttachment,
   MEDIA_ONLY_PROMPT,
@@ -53,6 +54,7 @@ export default function Composer() {
     activateGatewayWorkspace,
     addLocalGatewayWorkspace,
     addSshGatewayWorkspace,
+    updateUiSettings,
   } =
     useAppState();
   const [input, setInput] = useState("");
@@ -84,6 +86,8 @@ export default function Composer() {
     (agent) => agent.agent_id === currentAgent,
   );
   const currentModel = currentAgentConfig?.model || "model";
+  const defaultPendingKind =
+    state.uiSettings.layout.pending_message_default_action ?? "steering";
   const currentView =
     VIEW_OPTIONS.find((option) => option.id === state.contentView) ??
     VIEW_OPTIONS[0];
@@ -95,8 +99,9 @@ export default function Composer() {
     (state.messages.length > 0 ||
       pendingConversations.length > 0 ||
       state.currentSession?.title_source !== "default");
-  const showInterrupt = pendingConversations.some(
-    (conversation) => conversation.pending,
+  const showInterrupt = Boolean(
+    currentSessionCacheKey
+      && state.activeJobIdsBySession.get(currentSessionCacheKey),
   );
   const queuedCount = pendingConversations.filter(
     (conversation) => conversation.pending && conversation.status === "queued",
@@ -264,7 +269,7 @@ export default function Composer() {
     setSlashCommandIndex(firstEnabledSlashCommandIndex(matchingSlashCommands));
   }, [matchingSlashCommands]);
 
-  const handleSend = () => {
+  const handleSend = (queue?: PendingRequestKind | null) => {
     if (submitSlashInput(slashCommandIndex)) {
       return;
     }
@@ -288,6 +293,7 @@ export default function Composer() {
         content_type: attachment.content_type,
         data_url: attachment.data_url,
       })),
+      queue,
     ).catch((error: unknown) => {
       setInput(content);
       setAttachments(sentAttachments);
@@ -445,7 +451,11 @@ export default function Composer() {
     }
 
     e.preventDefault();
-    handleSend();
+    if (e.altKey && showInterrupt) {
+      handleSend(defaultPendingKind === "steering" ? "queued" : "steering");
+      return;
+    }
+    handleSend(showInterrupt ? defaultPendingKind : null);
   };
 
   return (
@@ -578,7 +588,25 @@ export default function Composer() {
                     showInterrupt={showInterrupt}
                     onClear={handleClear}
                     onInterrupt={handleInterrupt}
-                    onSend={handleSend}
+                    onSend={() => handleSend(showInterrupt ? defaultPendingKind : null)}
+                    onAlternate={() => handleSend(
+                      defaultPendingKind === "steering" ? "queued" : "steering",
+                    )}
+                    defaultPendingKind={defaultPendingKind}
+                    onToggleDefault={() => {
+                      const pendingMessageDefaultAction =
+                        defaultPendingKind === "steering" ? "queued" : "steering";
+                      void updateUiSettings({
+                        layout: {
+                          pending_message_default_action:
+                            pendingMessageDefaultAction,
+                        },
+                      }).catch((error: unknown) => {
+                        setStatus(
+                          `保存默认发送方式失败: ${error instanceof Error ? error.message : String(error)}`,
+                        );
+                      });
+                    }}
                   />
                 </div>
               </div>

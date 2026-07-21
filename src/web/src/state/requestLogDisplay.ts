@@ -62,6 +62,33 @@ export interface RequestLogKeyFlow {
   finalText: string;
 }
 
+export interface UpstreamAttemptDisplay {
+  callType: string;
+  provider: string;
+  model: string;
+  apiBase: string;
+  request: unknown;
+  response: unknown;
+  error: unknown;
+}
+
+export function buildUpstreamAttemptDisplay(
+  log: LLMRequestLogRecord,
+): UpstreamAttemptDisplay[] {
+  const attempts = isRecord(log.upstream) && Array.isArray(log.upstream.attempts)
+    ? log.upstream.attempts
+    : [];
+  return attempts.filter(isRecord).map((attempt) => ({
+    callType: typeof attempt.call_type === "string" ? attempt.call_type : "unknown",
+    provider: typeof attempt.provider === "string" ? attempt.provider : "unknown",
+    model: typeof attempt.model === "string" ? attempt.model : "unknown",
+    apiBase: typeof attempt.api_base === "string" ? attempt.api_base : "",
+    request: attempt.request ?? null,
+    response: attempt.response ?? null,
+    error: attempt.error ?? null,
+  }));
+}
+
 function recordString(value: unknown, key: string): string {
   if (!isRecord(value)) {
     return "";

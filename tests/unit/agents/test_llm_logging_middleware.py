@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.runtime import ExecutionInfo, Runtime
@@ -12,6 +13,7 @@ from app.agents.request_replay_middleware import (
     PromptReplayCaptureMiddleware,
     read_prompt_replay_components,
 )
+from app.agents.upstream_request_trace import UpstreamRequestTraceCallback
 
 
 def test_llm_log_persists_prompt_replay_components_and_tool_stats(
@@ -121,3 +123,113 @@ def test_prompt_replay_records_non_append_system_prompt_replacement() -> None:
     assert components[-1]["operation"] == "replace"
     assert components[-1]["label"] == "Agent 记忆"
     assert request.state == initial_state, "替换 Prompt 的审计信息也不得污染 Agent 上下文"
+
+
+def test_llm_log_merges_redacted_upstream_request_and_response(tmp_path: Path) -> None:
+    runtime = Runtime(
+        execution_info=ExecutionInfo(
+            checkpoint_id="checkpoint",
+            checkpoint_ns="",
+            task_id="task",
+            thread_id="ses_upstream",
+        )
+    )
+    request = ModelRequest(
+        model=None,
+        messages=[HumanMessage(content="hello")],
+        runtime=runtime,
+    )
+    middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
+
+    def invoke(_: ModelRequest) -> ModelResponse:
+        callback = UpstreamRequestTraceCallback()
+        callback.log_pre_api_call(
+            "big-pickle",
+            [{"role": "user", "content": "hello"}],
+            {
+                "litellm_call_id": "call-1",
+                "call_type": "acompletion",
+                "custom_llm_provider": "openai",
+                "api_key": "secret",
+                "additional_args": {
+                    "api_base": "https://example.com/v1",
+                    "headers": {"Authorization": "Bearer secret"},
+                    "complete_input_dict": {
+                        "model": "big-pickle",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "api_key": "secret",
+                    },
+                },
+            },
+        )
+        callback.log_success_event(
+            {"litellm_call_id": "call-1"},
+            {"choices": [{"message": {"content": "done"}}]},
+            None,
+            None,
+        )
+        return ModelResponse(result=[AIMessage(content="done")])
+
+    middleware.wrap_model_call(request, invoke)
+
+    log_file = next(
+        (tmp_path / "ses_upstream" / "logs" / "llm_requests").glob("*.json")
+    )
+    payload = json.loads(log_file.read_text(encoding="utf-8"))
+    attempts = payload["upstream"]["attempts"]
+    assert len(attempts) == 1
+    assert attempts[0]["request"]["messages"][0]["role"] == "user"
+    assert attempts[0]["request"]["api_key"] == "[REDACTED]"
+    assert attempts[0]["response"]["choices"][0]["message"]["content"] == "done"
+
+
+def test_llm_log_persists_failed_upstream_attempt(tmp_path: Path) -> None:
+    runtime = Runtime(
+        execution_info=ExecutionInfo(
+            checkpoint_id="checkpoint",
+            checkpoint_ns="",
+            task_id="task",
+            thread_id="ses_failed_upstream",
+        )
+    )
+    request = ModelRequest(
+        model=None,
+        messages=[HumanMessage(content="hello")],
+        runtime=runtime,
+    )
+    middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
+
+    def invoke(_: ModelRequest) -> ModelResponse:
+        callback = UpstreamRequestTraceCallback()
+        callback.log_pre_api_call(
+            "failed-model",
+            [{"role": "user", "content": "hello"}],
+            {
+                "litellm_call_id": "failed-call",
+                "call_type": "acompletion",
+                "custom_llm_provider": "openai",
+                "additional_args": {
+                    "complete_input_dict": {
+                        "model": "failed-model",
+                        "messages": [{"role": "user", "content": "hello"}],
+                    }
+                },
+            },
+        )
+        callback.log_failure_event(
+            {"litellm_call_id": "failed-call"},
+            RuntimeError("upstream unavailable"),
+            None,
+            None,
+        )
+        raise RuntimeError("model call failed")
+
+    with pytest.raises(RuntimeError, match="model call failed"):
+        middleware.wrap_model_call(request, invoke)
+
+    log_file = next(
+        (tmp_path / "ses_failed_upstream" / "logs" / "llm_requests").glob("*.json")
+    )
+    payload = json.loads(log_file.read_text(encoding="utf-8"))
+    assert payload["response"]["error"] == "model call failed"
+    assert "upstream unavailable" in payload["upstream"]["attempts"][0]["error"]

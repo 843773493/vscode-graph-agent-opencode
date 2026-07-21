@@ -139,6 +139,53 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
 
 
 @pytest.mark.asyncio
+async def test_persist_checkpoint_keeps_encrypted_response_reasoning(tmp_path):
+    session_id = "sess_encrypted_reasoning"
+    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
+    config = build_checkpoint_config(session_id)
+    await saver.aput(
+        config,
+        {
+            "channel_values": {
+                "messages": [HumanMessage(content="问题"), AIMessage(content="回答")]
+            },
+            "channel_versions": {"messages": 1},
+            "updated_channels": ["messages"],
+            "id": "ckpt-encrypted",
+        },
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1},
+    )
+    reasoning_item = {
+        "type": "reasoning",
+        "encrypted_content": "encrypted-reasoning",
+        "summary": [],
+    }
+
+    assert persist_standard_assistant_checkpoint(
+        checkpointer=saver,
+        session_id=session_id,
+        content_blocks=(
+            {
+                "type": "reasoning",
+                "reasoning": "",
+                "id": "part_reasoning",
+                "index": 0,
+                "extras": {"response_item": reasoning_item},
+            },
+            {"type": "text", "text": "回答", "id": "part_text", "index": 1},
+        ),
+        final_text="回答",
+        message_id="msg_assistant",
+        message_created_at=MESSAGE_TIME,
+    )
+    latest = await saver.aget_tuple(config)
+    assert latest is not None
+    assistant = latest.checkpoint["channel_values"]["messages"][-1]
+    assert assistant.content[0]["extras"]["response_item"] == reasoning_item
+
+
+@pytest.mark.asyncio
 async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_state(tmp_path):
     session_id = "sess_system_reminder_state"
     first_reasoning = "先调用工具。"

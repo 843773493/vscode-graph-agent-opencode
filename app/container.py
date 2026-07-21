@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
@@ -24,7 +25,7 @@ from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
 from app.services.business.context_compaction_service import ContextCompactionService
-from app.services.business.job_service import JobService
+from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_context_fork_service import SessionContextForkService
@@ -59,9 +60,12 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
+from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.tool_catalog_service import ToolCatalogService
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.infrastructure.pending_request_store import PendingRequestStore
+from app.services.infrastructure.mcp import McpRuntimeManager
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -91,6 +95,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         browser_manager_client: BrowserManagerClient,
         session_context_query_service: SessionContextQueryService,
         workspace_session_context_client: GatewaySessionContextClient,
+        mcp_runtime_manager: McpRuntimeManager,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
@@ -99,6 +104,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._browser_manager_client = browser_manager_client
         self._session_context_query_service = session_context_query_service
         self._workspace_session_context_client = workspace_session_context_client
+        self._mcp_runtime_manager = mcp_runtime_manager
         self._job_service: JobServiceProtocol | None = None
         self._session_orchestrator: SessionOrchestrator | None = None
         self._session_subagent_service: SessionSubagentProtocol | None = None
@@ -124,6 +130,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 
     def get_workspace_session_context_client(self) -> GatewaySessionContextClient:
         return self._workspace_session_context_client
+
+    def get_mcp_tools(self) -> list[BaseTool]:
+        return self._mcp_runtime_manager.get_tools()
 
     def set_job_service(self, job_service: JobServiceProtocol) -> None:
         self._job_service = job_service
@@ -168,6 +177,7 @@ class AppContainer:
     event_service: EventService
     job_service: JobServiceProtocol
     message_service: MessageService
+    session_attachment_store: SessionAttachmentStore
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
@@ -194,6 +204,7 @@ class AppContainer:
     background_message_bus: BackgroundMessageBus
     trace_event_store: TraceEventStore
     trace_event_recorder: TraceEventRecorder
+    mcp_runtime_manager: McpRuntimeManager
 
 
 def build_app_container(
@@ -220,9 +231,17 @@ def build_app_container(
     checkpointer = FileSystemCheckpointSaver(sessions_dir=get_sessions_dir())
 
     config_service = ConfigService(
-        workspace_root=workspace_root,
+        workspace_root=resolved_workspace_root,
     )
-    message_service = MessageService(checkpointer=checkpointer)
+    mcp_runtime_manager = McpRuntimeManager(
+        raw_config=config_service.get_mcp_config(),
+        workspace_root=resolved_workspace_root,
+    )
+    session_attachment_store = SessionAttachmentStore(resolved_workspace_root)
+    message_service = MessageService(
+        checkpointer=checkpointer,
+        attachment_store=session_attachment_store,
+    )
     session_service = SessionService(config_service=config_service, trace_event_store=trace_event_store)
     session_context_query_service = SessionContextQueryService(
         message_source=message_service,
@@ -246,6 +265,7 @@ def build_app_container(
         browser_manager_client=browser_manager_client,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
+        mcp_runtime_manager=mcp_runtime_manager,
     )
     agent_execution_service = AgentExecutionService(
         config_service=config_service,
@@ -267,7 +287,11 @@ def build_app_container(
         job_event_bus=job_event_bus,
         session_title_service=session_title_service,
     )
-    job_service = JobService(job_event_bus=job_event_bus, job_executor=job_executor)
+    job_service = JobService(
+        job_event_bus=job_event_bus,
+        job_executor=job_executor,
+        pending_request_store=PendingRequestStore(sessions_dir=get_sessions_dir()),
+    )
     dependency_provider.set_job_service(job_service)
     session_orchestrator = SessionOrchestrator(
         message_service=message_service,
@@ -300,7 +324,11 @@ def build_app_container(
     agent_service = AgentService(config_service=config_service)
     artifact_service = ArtifactService()
     event_service = EventService(bus=job_event_bus)
-    runtime_service = RuntimeService(job_service=job_service)
+    runtime_service = RuntimeService(
+        job_service=job_service,
+        background_task_registry=background_task_registry,
+        trace_event_store=trace_event_store,
+    )
     session_auto_continue_service = SessionAutoContinueService(
         background_task_registry=background_task_registry,
         job_event_bus=job_event_bus,
@@ -357,6 +385,7 @@ def build_app_container(
     )
     context_compaction_service = ContextCompactionService(
         checkpoint_store=context_checkpoint_store,
+        job_service=job_service,
         session_service=session_service,
         summarization_compactor=summarization_compactor,
     )
@@ -385,6 +414,7 @@ def build_app_container(
         event_service=event_service,
         job_service=job_service,
         message_service=message_service,
+        session_attachment_store=session_attachment_store,
         runtime_service=runtime_service,
         session_auto_continue_service=session_auto_continue_service,
         session_interrupt_service=session_interrupt_service,
@@ -411,4 +441,5 @@ def build_app_container(
         background_message_bus=background_message_bus,
         trace_event_store=trace_event_store,
         trace_event_recorder=trace_event_recorder,
+        mcp_runtime_manager=mcp_runtime_manager,
     )

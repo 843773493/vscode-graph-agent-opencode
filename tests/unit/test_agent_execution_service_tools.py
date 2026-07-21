@@ -12,6 +12,7 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType
 from app.schemas.event import AgentEndEvent, AgentEndPayload
+from app.schemas.public_v2.job import JobDispatchSnapshotDTO
 from app.agents.agent_tools import (
     create_background_message_collection_tool,
     create_system_time_emitter_tool,
@@ -208,8 +209,9 @@ class _FakeMessageService:
 
 
 class _FakeSessionOrchestrator:
-    def __init__(self) -> None:
+    def __init__(self, result=None) -> None:
         self.calls: list[dict[str, object]] = []
+        self.result = result or _FakeResult()
 
     async def create_and_run(
         self,
@@ -224,7 +226,7 @@ class _FakeSessionOrchestrator:
                 **kwargs,
             }
         )
-        return _FakeResult()
+        return self.result
 
 
 class _FakeSessionSubagentService:
@@ -243,14 +245,40 @@ class _FakeTerminalManagerClient:
 class _FakeResult:
     message_id = "msg_test"
     job_id = "job_test"
-    status = "accepted"
+    status = "running"
+    dispatch = JobDispatchSnapshotDTO(
+        session_id="ses_target",
+        job_id=job_id,
+        job_status="running",
+        active_job_id=job_id,
+        queued_jobs_ahead=0,
+        queued_job_count=0,
+        pending_job_count=1,
+    )
 
     def model_dump(self, mode="json"):
         return {
             "message_id": self.message_id,
             "job_id": self.job_id,
             "status": self.status,
+            "dispatch": self.dispatch.model_dump(mode="json"),
         }
+
+
+class _FakeQueuedResult:
+    message_id = "msg_queued"
+    job_id = "job_queued"
+    status = "queued"
+    dispatch = JobDispatchSnapshotDTO(
+        session_id="ses_target",
+        job_id=job_id,
+        job_status="queued",
+        active_job_id="job_running",
+        blocked_by_job_id="job_running",
+        queued_jobs_ahead=2,
+        queued_job_count=3,
+        pending_job_count=4,
+    )
 
 
 def test_tool_catalog_uses_model_visible_schema_without_runtime_fields():
@@ -384,9 +412,9 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         "apply_patch",
         "python_exec",
         "emit_system_time_messages",
-        "monitor_session_agent_end",
         "collect_background_messages",
         "persistent_terminal",
+        "monitor_session_agent_end",
         "send_message_to_session",
         "task",
         "create_team",
@@ -593,7 +621,7 @@ async def test_monitor_rejects_delegated_session_final_text_forwarding():
 
 
 @pytest.mark.asyncio
-async def test_send_message_to_session_defaults_to_system_injected_sender(
+async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
     monkeypatch,
     tmp_path,
 ):
@@ -610,7 +638,17 @@ async def test_send_message_to_session_defaults_to_system_injected_sender(
 
     assert result["job_id"] == "job_test"
     assert result["message_id"] == "msg_test"
-    assert result["status"] == "accepted"
+    assert result["status"] == "running"
+    assert result["target_session_state"] == {
+        "session_id": "ses_target",
+        "job_id": "job_test",
+        "job_status": "running",
+        "active_job_id": "job_test",
+        "blocked_by_job_id": None,
+        "queued_jobs_ahead": 0,
+        "queued_job_count": 0,
+        "pending_job_count": 1,
+    }
     assert result["simulate_user"] is False
     assert result["sender_session_id"] == "ses_sender"
     assert result["kind"] == "result"
@@ -629,7 +667,7 @@ async def test_send_message_to_session_defaults_to_system_injected_sender(
     assert '"sender_agent_id": "deep_agent"' in submitted_content
     assert '"target_session_id": "ses_target"' in submitted_content
     assert '"message": "请再次只重复前面的话"' in submitted_content
-    assert orchestrator.calls[0]["message_role"] == "system"
+    assert "message_role" not in orchestrator.calls[0]
     metadata = orchestrator.calls[0]["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["source"] == "send_message_to_session"
@@ -660,6 +698,33 @@ async def test_send_message_to_session_question_requires_directional_reply():
     metadata = orchestrator.calls[0]["metadata"]
     assert metadata["communication_id"] == result["communication_id"]
     assert metadata["reply_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_session_returns_atomic_target_queue_snapshot():
+    tool = create_send_message_to_session_tool(
+        sender_session_id="ses_sender",
+        session_orchestrator=_FakeSessionOrchestrator(_FakeQueuedResult()),
+    )
+
+    result = await tool.ainvoke(
+        {
+            "target_session_id": "ses_target",
+            "content": "排队处理",
+        }
+    )
+
+    assert result["status"] == "queued"
+    assert result["target_session_state"] == {
+        "session_id": "ses_target",
+        "job_id": "job_queued",
+        "job_status": "queued",
+        "active_job_id": "job_running",
+        "blocked_by_job_id": "job_running",
+        "queued_jobs_ahead": 2,
+        "queued_job_count": 3,
+        "pending_job_count": 4,
+    }
 
 
 @pytest.mark.asyncio

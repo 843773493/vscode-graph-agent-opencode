@@ -9,17 +9,17 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
-from deepagents.middleware.summarization import (
-    CompactConversationSchema,
-    SummarizationToolMiddleware,
-    create_summarization_middleware,
-)
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
+from app.agents.cache_preserving_summarization import (
+    CachePreservingSummarizationToolMiddleware,
+    CompactConversationSchema,
+    create_cache_preserving_summarization_middleware,
+)
 from app.agents.skill_runtime import (
     append_skill_middlewares,
     append_workspace_agents_middleware,
@@ -50,6 +50,8 @@ _PROMPT_REPLAY_LABELS = {
     "FilesystemMiddleware": "文件系统与环境信息",
     "SummarizationMiddleware": "上下文压缩指令",
     "SummarizationToolMiddleware": "上下文压缩工具指令",
+    "CachePreservingSummarizationMiddleware": "上下文压缩指令",
+    "CachePreservingSummarizationToolMiddleware": "上下文压缩工具指令",
     "WorkspaceAgentsMiddleware": "工作区 AGENTS.md",
     "MemoryMiddleware": "Agent 记忆",
 }
@@ -122,11 +124,11 @@ def _build_summarization_middleware(
     *,
     compact_tool_enabled: bool,
 ) -> list[AgentMiddleware]:
-    summarization = create_summarization_middleware(model, backend)
+    summarization = create_cache_preserving_summarization_middleware(model, backend)
     if not compact_tool_enabled:
         return [summarization]
 
-    tool_middleware = SummarizationToolMiddleware(
+    tool_middleware = CachePreservingSummarizationToolMiddleware(
         summarization,
         system_prompt=COMPACT_CONVERSATION_SYSTEM_PROMPT,
     )

@@ -17,24 +17,23 @@ from tests.e2e.gateway.browser_manager import (
     start_browser_frontend_process,
 )
 from tests.e2e.gateway.gateway_docker import (
-    GatewaySshDockerTarget,
-    RemoteAuxiliaryProcesses,
     docker_daemon_error,
+    ensure_gateway_ssh_container,
+)
+from tests.e2e.gateway.gateway_target import (
+    GatewayTargetE2EPaths,
+    GatewaySshTarget,
+    build_remote_pair_command,
     install_gateway_ssh_assets_for_e2e,
-    start_gateway_ssh_container,
-    start_remote_auxiliary_services_via_ssh,
-    start_remote_backend_via_ssh,
-    stop_gateway_ssh_container,
-    stop_remote_auxiliary_services,
+    start_remote_gateway_via_ssh,
     stop_remote_backend,
-    wait_for_remote_backend_ready,
 )
 from tests.e2e.gateway.processes import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
     close_gateway_process,
     start_gateway_process,
-    write_gateway_ssh_workspace_config,
+    write_gateway_remote_gateway_config,
 )
 from tests.e2e.gateway.terminal_manager import (
     TerminalFrontendProcess,
@@ -42,7 +41,6 @@ from tests.e2e.gateway.terminal_manager import (
     start_terminal_frontend_process,
 )
 from tests.e2e.ports import e2e_port_block_for_file
-from tests.e2e.processes import close_backend_process, start_backend_process
 
 
 async def _receive_websocket_type(websocket, expected_type: str) -> dict[str, object]:
@@ -71,7 +69,7 @@ async def _receive_terminal_output(websocket, expected_text: str) -> None:
     raise TimeoutError(f"终端 WebSocket 未输出: {expected_text}")
 
 
-def _remove_declared_ssh_workspace(workspace_root: Path) -> None:
+def _remove_declared_remote_gateway(workspace_root: Path) -> None:
     config_path = workspace_root / ".boxteam" / "boxteam.jsonc"
     payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
     payload["gateway"] = {"workspaces": []}
@@ -85,6 +83,7 @@ def _remove_declared_ssh_workspace(workspace_root: Path) -> None:
 async def test_gateway_routes_remote_browser_and_terminal_services(
     request: pytest.FixtureRequest,
     e2e_workspace_root_path: str,
+    docker_e2e_paths: GatewayTargetE2EPaths,
 ):
     if os.getenv("BOXTEAM_RUN_DOCKER_GATEWAY_E2E") != "1":
         pytest.skip("设置 BOXTEAM_RUN_DOCKER_GATEWAY_E2E=1 后运行 Docker SSH 辅助服务 e2e")
@@ -94,58 +93,38 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
     port_block = e2e_port_block_for_file(Path(request.node.fspath))
     local_workspace = Path(e2e_workspace_root_path).resolve()
-    local_backend_port = port_block.port(40)
     gateway_port = port_block.port(41)
     ssh_port = port_block.port(42)
-    remote_backend_port = local_backend_port
+    remote_gateway_port = port_block.port(43)
     terminal_frontend_port = port_block.port(50)
     browser_frontend_port = port_block.port(51)
     tunnel_port_range = (port_block.port(60), port_block.port(75))
-    remote_workspace_path = f"/tmp/boxteam-gateway-services-workspace-{ssh_port}"
+    remote_workspace_path = docker_e2e_paths.remote_workspace
+    remote_boxteam_home = docker_e2e_paths.remote_boxteam_home
 
-    local_backend = start_backend_process(
-        workspace_root=str(local_workspace),
-        port=local_backend_port,
-        log_name="gateway-services-local-backend",
-    )
     gateway: GatewayProcess | None = None
     terminal_frontend: TerminalFrontendProcess | None = None
     browser_frontend: BrowserFrontendProcess | None = None
-    remote_backend_pid: str | None = None
-    remote_auxiliary: RemoteAuxiliaryProcesses | None = None
-    docker_target: GatewaySshDockerTarget | None = None
+    remote_gateway_pid: str | None = None
+    docker_target: GatewaySshTarget | None = None
 
     try:
-        docker_target = start_gateway_ssh_container(
-            ssh_port=ssh_port,
+        docker_target = ensure_gateway_ssh_container(
             known_hosts_path=(
                 local_workspace.parent / "artifacts" / "gateway_ssh_known_hosts"
             ),
         )
-        remote_auxiliary = start_remote_auxiliary_services_via_ssh(
+        remote_gateway_pid = start_remote_gateway_via_ssh(
             target=docker_target,
             remote_workspace_path=remote_workspace_path,
+            remote_gateway_port=remote_gateway_port,
+            remote_boxteam_home=remote_boxteam_home,
         )
-        remote_backend_pid = start_remote_backend_via_ssh(
-            target=docker_target,
-            remote_workspace_path=remote_workspace_path,
-            remote_backend_port=remote_backend_port,
-            extra_env={
-                "BOXTEAM_TERMINAL_BACKEND_URL": "http://127.0.0.1:8012",
-                "BOXTEAM_BROWSER_BACKEND_URL": "http://127.0.0.1:8015",
-            },
-        )
-        wait_for_remote_backend_ready(
-            target=docker_target,
-            remote_backend_port=remote_backend_port,
-            remote_backend_pid=remote_backend_pid,
-        )
-        write_gateway_ssh_workspace_config(
+        write_gateway_remote_gateway_config(
             workspace_root=local_workspace,
-            ssh_port=ssh_port,
+            ssh_port=docker_target.ssh_port,
             username=docker_target.username,
-            remote_backend_port=remote_backend_port,
-            remote_workspace_path=remote_workspace_path,
+            remote_gateway_port=remote_gateway_port,
             private_key_path=install_gateway_ssh_assets_for_e2e(local_workspace),
         )
         terminal_frontend = start_terminal_frontend_process(
@@ -162,10 +141,14 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             "BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(
                 docker_target.known_hosts_path
             ),
+            "BOXTEAM_REMOTE_PAIR_COMMAND": build_remote_pair_command(
+                docker_target,
+                remote_boxteam_home=remote_boxteam_home,
+            ),
         }
         gateway = start_gateway_process(
             workspace_root=local_workspace,
-            default_backend_url=f"http://127.0.0.1:{local_backend.port}",
+            default_backend_url="managed-by-gateway",
             port=gateway_port,
             ssh_tunnel_port_range=tunnel_port_range,
             extra_env=gateway_env,
@@ -177,16 +160,16 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             timeout=60,
         ) as client:
             workspace_list = (await client.get("/api/gateway/workspaces")).json()["data"]
-            ssh_workspace = next(
+            remote_workspace = next(
                 item
                 for item in workspace_list["items"]
-                if item["connection_kind"] == "ssh"
+                if item["connection_kind"] == "remote_gateway"
                 and item["root_path"] == remote_workspace_path
             )
-            assert ssh_workspace["status"] == "ready"
-            assert ssh_workspace["services"]["terminal_manager"]["status"] == "ready"
-            assert ssh_workspace["services"]["browser_manager"]["status"] == "ready"
-            workspace_id = ssh_workspace["workspace_id"]
+            assert remote_workspace["status"] == "ready"
+            assert remote_workspace["services"]["terminal_manager"]["status"] == "ready"
+            assert remote_workspace["services"]["browser_manager"]["status"] == "ready"
+            workspace_id = remote_workspace["workspace_id"]
 
             session_response = await client.post(
                 "/api/v1/sessions",
@@ -291,10 +274,10 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
         close_gateway_process(gateway)
         gateway = None
-        _remove_declared_ssh_workspace(local_workspace)
+        _remove_declared_remote_gateway(local_workspace)
         gateway = start_gateway_process(
             workspace_root=local_workspace,
-            default_backend_url=f"http://127.0.0.1:{local_backend.port}",
+            default_backend_url="managed-by-gateway",
             port=gateway_port,
             ssh_tunnel_port_range=tunnel_port_range,
             extra_env=gateway_env,
@@ -312,14 +295,9 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
     finally:
         if gateway is not None:
             close_gateway_process(gateway)
-        if remote_backend_pid is not None and docker_target is not None:
-            stop_remote_backend(docker_target, remote_backend_pid)
-        if remote_auxiliary is not None and docker_target is not None:
-            stop_remote_auxiliary_services(docker_target, remote_auxiliary)
+        if remote_gateway_pid is not None and docker_target is not None:
+            stop_remote_backend(docker_target, remote_gateway_pid)
         if browser_frontend is not None:
             close_browser_frontend_process(browser_frontend)
         if terminal_frontend is not None:
             close_terminal_frontend_process(terminal_frontend)
-        if docker_target is not None:
-            stop_gateway_ssh_container(docker_target)
-        close_backend_process(local_backend)

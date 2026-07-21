@@ -9,7 +9,7 @@ import type {
   ToolTestRunListDTO,
 } from "./gen/tool_test";
 
-export type ToolKind = "default" | "extension";
+export type ToolKind = "default" | "collaboration" | "extension";
 export type ToolTestStatus = ToolTestRunDTO["status"];
 
 export type ToolCatalogItem = Omit<

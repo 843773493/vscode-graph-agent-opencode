@@ -20,19 +20,6 @@ export interface ToolDTO {
   enabled?: boolean;
   test_supported?: boolean;
 }
-export interface ToolInvokeRequest {
-  parameters?: {
-    [k: string]: unknown;
-  };
-}
-export interface ToolInvokeResultDTO {
-  tool_id: string;
-  status: string;
-  result: string;
-  parameters?: {
-    [k: string]: unknown;
-  };
-}
 export interface ToolSelectionChange {
   tool_id: string;
   enabled: boolean;

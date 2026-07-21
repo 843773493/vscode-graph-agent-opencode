@@ -145,6 +145,25 @@ class BackgroundTaskRegistry:
             if handle.status not in {"pending", "running"}
         ]
 
+    def list_active_handles(self) -> list[BackgroundTaskHandle]:
+        return [
+            record.handle
+            for session_tasks in self._tasks.values()
+            for record in session_tasks.values()
+            if record.handle.status in {"pending", "running"}
+        ]
+
+    async def cancel_all_active(self, *, reason: str) -> int:
+        active = [
+            (handle.session_id, handle.task_id)
+            for handle in self.list_active_handles()
+        ]
+        for session_id, task_id in active:
+            handle = await self.cancel(session_id, task_id)
+            handle.metadata["cancel_reason"] = reason
+            self._history_store.upsert(handle)
+        return len(active)
+
     async def cancel(self, session_id: str, task_id: str) -> BackgroundTaskHandle:
         record = self._tasks.get(session_id, {}).get(task_id)
         if record is None:

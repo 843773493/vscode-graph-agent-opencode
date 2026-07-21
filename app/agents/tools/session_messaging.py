@@ -9,7 +9,6 @@ from pydantic import Field, StrictBool, create_model
 
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.identifier import create_prefixed_id
-from app.schemas.public_v2.common import MessageRole
 
 
 def create_send_message_to_session_tool(
@@ -54,7 +53,11 @@ def create_send_message_to_session_tool(
         reply_to_communication_id: str | None = None,
         simulate_user: bool = False,
     ) -> dict[str, Any]:
-        """向目标 session 发送消息并启动任务；默认发送带可信来源的跨会话提醒。"""
+        """向目标 session 发送消息并启动任务。
+
+        默认发送带可信来源的跨会话提醒。返回 target_session_state 原子调度快照，
+        包含目标 job 是运行还是排队、当前活跃 job、阻塞关系和队列数量。
+        """
         if not target_session_id:
             raise ValueError("target_session_id 不能为空")
         if not content.strip():
@@ -101,7 +104,6 @@ def create_send_message_to_session_tool(
             result = await session_orchestrator.create_and_run(
                 target_session_id,
                 submitted_content,
-                message_role=MessageRole.system,
                 metadata={
                     "source": "send_message_to_session",
                     "simulate_user": False,
@@ -116,6 +118,7 @@ def create_send_message_to_session_tool(
             "target_session_id": target_session_id,
             "message_id": result.message_id,
             "status": result.status,
+            "target_session_state": result.dispatch.model_dump(mode="json"),
             "sent_at": sent_at,
             "communication_id": communication_id,
             "kind": kind,

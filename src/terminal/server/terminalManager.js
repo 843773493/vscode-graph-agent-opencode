@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
-  readLinuxProcStat,
+  readProcessStat,
   terminateTerminalProcessTree,
 } from "./terminalProcessUtils.js";
 import {
@@ -40,7 +40,8 @@ export class TerminalManager {
     this.stateFile = this.stateStore.stateFile;
     this.terminalFrontendBaseUrl = terminalFrontendBaseUrl.replace(/\/$/, "");
     this.sessions = new Map();
-    this.persistQueue = Promise.resolve();
+    this.persistRequested = false;
+    this.persistPromise = null;
   }
 
   async init() {
@@ -65,7 +66,7 @@ export class TerminalManager {
 
     const restoredAt = nowIso();
     const pid = Number(record.os_pid);
-    const stat = await readLinuxProcStat(pid);
+    const stat = await readProcessStat(pid);
     const processSessionId = record.process_session_id ?? stat?.processSessionId ?? null;
     const processStartTime = record.process_start_time ?? stat?.processStartTime ?? null;
     const cleanupResult = await terminateTerminalProcessTree({
@@ -103,14 +104,26 @@ export class TerminalManager {
   }
 
   async persist() {
-    this.persistQueue = this.persistQueue.then(async () => {
-      await this.stateStore.write({
-        workspace_root: this.workspaceRoot,
-        updated_at: nowIso(),
-        terminals: [...this.sessions.values()].map((session) => session.toRecord()),
-      });
-    });
-    await this.persistQueue;
+    this.persistRequested = true;
+    if (!this.persistPromise) {
+      this.persistPromise = this.drainPersistRequests();
+    }
+    await this.persistPromise;
+  }
+
+  async drainPersistRequests() {
+    try {
+      while (this.persistRequested) {
+        this.persistRequested = false;
+        await this.stateStore.write({
+          workspace_root: this.workspaceRoot,
+          updated_at: nowIso(),
+          terminals: [...this.sessions.values()].map((session) => session.toRecord()),
+        });
+      }
+    } finally {
+      this.persistPromise = null;
+    }
   }
 
   list({ sessionId = null } = {}) {
@@ -159,7 +172,14 @@ export class TerminalManager {
       },
     });
     this.sessions.set(id, session);
-    session.start();
+    try {
+      await session.start();
+    } catch (error) {
+      this.sessions.delete(id);
+      await session.dispose();
+      await this.persist();
+      throw error;
+    }
     await this.persist();
     return session.snapshot();
   }
@@ -195,16 +215,17 @@ export class TerminalManager {
   }
 
   async shutdown(reason = "terminal_manager_shutdown") {
-    for (const session of this.sessions.values()) {
-      if (session.status !== "running") {
-        continue;
+    await Promise.all([...this.sessions.values()].map(async (session) => {
+      if (session.status === "running") {
+        await session.terminateForRelease({
+          status: "terminated",
+          commandStatus: "terminated",
+          reason,
+        });
+        return;
       }
-      await session.terminateForRelease({
-        status: "terminated",
-        commandStatus: "terminated",
-        reason,
-      });
-    }
+      await session.dispose();
+    }));
     await this.persist();
   }
 }

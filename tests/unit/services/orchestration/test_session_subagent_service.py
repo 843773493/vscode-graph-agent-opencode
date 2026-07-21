@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.schemas.public_v2.message import MessageRunAccepted
+from app.schemas.public_v2.job import JobDispatchSnapshotDTO
 from app.schemas.public_v2.session import SessionDTO, SessionDelegationDTO
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
@@ -77,7 +78,16 @@ class _SessionOrchestrator:
         return MessageRunAccepted(
             message_id="msg_child",
             job_id="job_child",
-            status="accepted",
+            status="running",
+            dispatch=JobDispatchSnapshotDTO(
+                session_id=session_id,
+                job_id="job_child",
+                job_status="running",
+                active_job_id="job_child",
+                queued_jobs_ahead=0,
+                queued_job_count=0,
+                pending_job_count=1,
+            ),
         )
 
 
@@ -125,7 +135,11 @@ async def test_delegate_creates_fresh_child_session_and_starts_independent_job()
     assert '"target_session_id": "ses_parent"' in delegation_content
     assert "不要假设本会话的普通最终回复会自动返回父 Agent" in delegation_content
     assert "检查认证模块" in delegation_content
-    assert orchestrator.calls[0][2]["message_role"] == "system"
+    assert "message_role" not in orchestrator.calls[0][2]
+    assert (
+        orchestrator.calls[0][2]["metadata"]["source"]
+        == "session_subagent_delegation"
+    )
 
 
 @pytest.mark.asyncio

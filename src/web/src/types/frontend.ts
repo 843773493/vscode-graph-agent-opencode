@@ -11,6 +11,7 @@ import type {
   SessionResource,
   TraceEvent,
   WebUiSettings,
+  PendingRequestKind,
 } from "./backend";
 
 export type ConversationContentView =
@@ -72,6 +73,8 @@ export interface ConversationView {
   jobId: string | null;
   pending: boolean;
   pendingSubmissionId?: string;
+  pendingKind?: PendingRequestKind;
+  pendingPosition?: number;
   source: "messages" | "pending";
 }
 
@@ -127,6 +130,7 @@ export interface AppState {
   sessionResourcesError: string | null;
   eventQueuesBySession: Map<string, FrontendReceivedEvent[]>;
   pendingConversations: Map<string, ConversationView[]>;
+  activeJobIdsBySession: Map<string, string>;
   status: string;
   error: string | null;
   isBootstrapping: boolean;

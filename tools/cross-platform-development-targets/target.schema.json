@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BoxTeam 跨平台开发目标配置",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "targets"],
+  "properties": {
+    "version": { "const": 1 },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/target" }
+    }
+  },
+  "definitions": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "platform", "provisioner", "ssh", "paths"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "platform": { "enum": ["linux", "windows"] },
+        "provisioner": { "enum": ["docker", "external"] },
+        "maxSnapshotBytes": {
+          "type": "integer",
+          "minimum": 1048576
+        },
+        "ssh": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host", "port", "user", "identityFile", "knownHostsFile"],
+          "properties": {
+            "host": { "$ref": "#/definitions/nonEmptyString" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "user": { "$ref": "#/definitions/nonEmptyString" },
+            "identityFile": { "$ref": "#/definitions/nonEmptyString" },
+            "knownHostsFile": { "$ref": "#/definitions/nonEmptyString" }
+          }
+        },
+        "paths": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["home", "repository", "artifacts"],
+          "properties": {
+            "home": { "$ref": "#/definitions/nonEmptyString" },
+            "repository": { "$ref": "#/definitions/nonEmptyString" },
+            "artifacts": { "$ref": "#/definitions/nonEmptyString" }
+          }
+        },
+        "docker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["persistentRoot", "composeProject", "serviceName", "image"],
+          "properties": {
+            "persistentRoot": { "$ref": "#/definitions/nonEmptyString" },
+            "composeProject": { "$ref": "#/definitions/nonEmptyString" },
+            "serviceName": { "$ref": "#/definitions/nonEmptyString" },
+            "image": { "$ref": "#/definitions/nonEmptyString" },
+            "hostUid": { "type": "integer", "minimum": 1 },
+            "hostGid": { "type": "integer", "minimum": 1 },
+            "playwrightCacheSource": { "$ref": "#/definitions/nonEmptyString" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "provisioner": { "const": "docker" } },
+            "required": ["provisioner"]
+          },
+          "then": {
+            "properties": { "docker": {} },
+            "required": ["docker"]
+          }
+        }
+      ]
+    }
+  }
+}

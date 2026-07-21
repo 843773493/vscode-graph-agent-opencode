@@ -9,7 +9,6 @@ from app.abstractions.session_subagent import (
     SessionStoreProtocol,
     SessionSubagentAccepted,
 )
-from app.schemas.public_v2.common import MessageRole
 
 
 class SessionSubagentService:
@@ -92,7 +91,6 @@ class SessionSubagentService:
             accepted = await self._session_orchestrator.create_and_run(
                 child_session.session_id,
                 delegation_content,
-                message_role=MessageRole.system,
                 metadata={
                     "source": "session_subagent_delegation",
                     "parent_session_id": parent_session_id,

@@ -1,0 +1,48 @@
+{
+  // 复制到 ~/.boxteams-dev/config/cross-platform-development-targets.jsonc 后按需修改。
+  "version": 1,
+  "targets": [
+    {
+      "id": "docker-debian",
+      "platform": "linux",
+      "provisioner": "docker",
+      "maxSnapshotBytes": 536870912,
+      "ssh": {
+        "host": "127.0.0.1",
+        "port": 22222,
+        "user": "boxteam",
+        "identityFile": "${PROJECT_ROOT}/asset/gateway_ssh/boxteam_gateway_e2e_ed25519",
+        "knownHostsFile": "${PROJECT_ROOT}/out/cross-platform-dev-targets/docker-debian/ssh/known_hosts"
+      },
+      "paths": {
+        "home": "/home/boxteam",
+        "repository": "/opt/boxteam-dev/repository",
+        "artifacts": "/opt/boxteam-dev/artifacts"
+      },
+      "docker": {
+        "persistentRoot": "${PROJECT_ROOT}/out/cross-platform-dev-targets/docker-debian",
+        "composeProject": "boxteam-development-target-docker-debian",
+        "serviceName": "boxteam-development-target",
+        "image": "boxteam-development-target:debian13-v1",
+        "playwrightCacheSource": "${HOME}/.cache/ms-playwright"
+      }
+    },
+    {
+      "id": "windows-vmware-example",
+      "platform": "windows",
+      "provisioner": "external",
+      "ssh": {
+        "host": "windows-vm.example.internal",
+        "port": 22,
+        "user": "boxteam",
+        "identityFile": "${HOME}/.ssh/boxteam_windows_ed25519",
+        "knownHostsFile": "${HOME}/.ssh/known_hosts"
+      },
+      "paths": {
+        "home": "C:\\Users\\boxteam",
+        "repository": "C:\\BoxTeam\\repository",
+        "artifacts": "C:\\BoxTeam\\artifacts"
+      }
+    }
+  ]
+}

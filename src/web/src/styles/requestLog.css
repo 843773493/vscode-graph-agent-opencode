@@ -38,6 +38,8 @@
 .request-log-key-flow > .request-log-collapse-summary,
 .request-log-called-tools > .request-log-collapse-summary,
 .request-log-replay > .request-log-collapse-summary,
+.request-log-upstream > .request-log-collapse-summary,
+.request-log-upstream-attempt > .request-log-collapse-summary,
 .request-replay-component > .request-log-collapse-summary,
 .request-replay-tools > .request-log-collapse-summary,
 .request-replay-tool > .request-log-collapse-summary {
@@ -66,6 +68,7 @@
 .request-log-key-flow > .request-log-collapse-summary .panel-pill,
 .request-log-called-tools > .request-log-collapse-summary > span:last-child,
 .request-log-replay > .request-log-collapse-summary > span:not(:first-child),
+.request-log-upstream > .request-log-collapse-summary > span:not(:first-child),
 .request-replay-component > .request-log-collapse-summary > span:not(:first-child),
 .request-replay-tools > .request-log-collapse-summary > span:not(:first-child),
 .request-replay-tool > .request-log-collapse-summary > span {
@@ -90,7 +93,8 @@
 
 .request-log-key-flow > .request-log-collapse-summary,
 .request-log-called-tools > .request-log-collapse-summary,
-.request-log-replay > .request-log-collapse-summary {
+.request-log-replay > .request-log-collapse-summary,
+.request-log-upstream > .request-log-collapse-summary {
   padding: 8px;
 }
 
@@ -184,7 +188,8 @@
 }
 
 .request-log-called-tools,
-.request-log-replay {
+.request-log-replay,
+.request-log-upstream {
   min-width: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
@@ -194,6 +199,8 @@
 
 .request-log-called-tools > .request-log-collapse-summary,
 .request-log-replay > .request-log-collapse-summary,
+.request-log-upstream > .request-log-collapse-summary,
+.request-log-upstream-attempt > .request-log-collapse-summary,
 .request-replay-component > .request-log-collapse-summary,
 .request-replay-tools > .request-log-collapse-summary,
 .request-replay-tool > .request-log-collapse-summary {
@@ -238,6 +245,59 @@
 
 .request-log-replay > .request-log-collapse-summary > .request-log-summary-title {
   margin-right: auto;
+}
+
+.request-log-upstream > .request-log-collapse-summary > .request-log-summary-title {
+  margin-right: auto;
+}
+
+.request-log-upstream-list,
+.request-log-upstream-payloads {
+  display: grid;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+
+.request-log-upstream-attempt {
+  min-width: 0;
+  overflow: hidden;
+  border: var(--surface-border);
+  border-radius: 6px;
+  background: var(--vscode-editor-background);
+}
+
+.request-log-upstream-attempt > .request-log-collapse-summary {
+  padding: 7px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
+.request-log-upstream-attempt > .request-log-collapse-summary > :not(:first-child) {
+  border: var(--surface-border);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.request-log-upstream-payloads > section {
+  min-width: 0;
+}
+
+.request-log-upstream-payloads strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.request-log-upstream-payloads pre {
+  max-height: min(56vh, 640px);
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.request-log-upstream-error {
+  color: var(--vscode-errorForeground);
 }
 
 .request-log-legacy {

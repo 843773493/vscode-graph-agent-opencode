@@ -110,19 +110,21 @@
 
 ### 测试工作区隔离
 
-1. Web UI、E2E 或 subagent 进行真实操作测试时，只能使用当前用户的默认工作区，或使用 `out/tests/temp/<task_name>/workspace/` 下的临时隔离工作区。
-2. 测试需要独立工作区时，从 `asset/` 选择合适的测试工作区复制到 `out/tests/temp/<task_name>/workspace/`，再使用复制后的目录；不要直接修改或注册 `asset/` 中的模板目录。
-3. 禁止把本项目根目录注册为测试工作区，也禁止为了测试在项目根目录产生 `.boxteam/`、会话、运行时状态或其他测试数据。
-4. 向 subagent 委派 Web 或 E2E 测试时，任务说明必须明确指定 `out/tests/temp/<task_name>/` 下的工作区和产物目录，不能让 subagent 自行选择目录，也不能新增项目根目录工作区。
+1. 仓库正式测试脚本的运行工作区必须写入 `out/tests/<与 tests/ 下测试文件相同的路径（去掉 .py 后缀）>/workspace/`。例如 `tests/e2e/mcp/test_mini_mcp.py` 对应 `out/tests/e2e/mcp/test_mini_mcp/workspace/`。
+2. Codex/Agent 为当前开发任务执行的临时 Web UI、浏览器、E2E 探索或 subagent 真实操作不属于仓库正式测试脚本；这类临时操作只能使用当前用户明确允许的默认工作区，或使用 `out/tests/temp/<task_name>/workspace/` 下的临时隔离工作区。
+3. 测试需要独立工作区时，从 `asset/` 选择合适的测试工作区复制到上述对应的 `workspace/`，再使用复制后的目录；不要直接修改或注册 `asset/` 中的模板目录。
+4. 禁止把本项目根目录注册为测试工作区，也禁止为了测试在项目根目录产生 `.boxteam/`、会话、运行时状态或其他测试数据。
+5. 向 subagent 委派临时 Web 或 E2E 操作时，任务说明必须明确指定 `out/tests/temp/<task_name>/` 下的工作区和产物目录，不能让 subagent 自行选择目录，也不能新增项目根目录工作区；让 subagent 运行仓库正式测试脚本时，沿用该脚本在 `out/tests/` 下的正式输出路径。
 
 ### 测试产物管理
 
-1. 所有临时测试文件统一放在 `out/tests/temp/<task_name>/`。其中隔离工作区使用 `workspace/` 子目录，截图、录屏、HTML 快照、浏览器下载、Playwright trace、审查报告和临时日志使用 `artifacts/` 子目录。
-2. **严禁在项目根目录生成或保存任何测试图片、截图、录屏或其他临时测试文件。** 同样不得把临时产物直接放在 `out/tests/` 顶层、`src/`、`app/`、`asset/` 或 `reference_repo/` 中。
-3. `asset/` 是只读测试模板目录，不是测试输出目录。既有其它 `out/tests/` 子目录不能作为新增临时产物的默认位置；新任务统一使用 `out/tests/temp/`。
-4. 调用截图、浏览器或审查工具前必须显式设置 `out/tests/temp/<task_name>/artifacts/`，不能依赖工具的默认当前目录。工具不支持指定目录时，应在调用前切换到该目录，不得先在仓库根目录生成再移动或遗留。
-5. 测试结束时必须列出本次生成的产物。纯临时产物应主动删除；用户需要查看的产物可以暂时保留，但必须报告其路径，并继续放在对应的 `out/tests/temp/<task_name>/` 中。
-6. 测试生成的二进制文件默认不得加入 Git。只有用户明确要求将其作为长期测试基线或产品资源时，才允许提交，并应放入语义明确的专用目录而不是仓库根目录或 `out/tests/temp/`。
+1. 仓库正式测试脚本产生的工作区、日志和可复查产物，统一放在 `out/tests/<同名测试路径>/`；目录结构必须镜像 `tests/` 下的测试文件路径并去掉 `.py` 后缀。
+2. Codex/Agent 在开发过程中自行创建的一次性诊断、截图、录屏、HTML 快照、浏览器下载、Playwright trace、审查报告、临时日志和临时工作区，统一放在 `out/tests/temp/<task_name>/`；其中隔离工作区使用 `workspace/`，其余产物使用 `artifacts/`。
+3. **严禁在项目根目录生成或保存任何测试图片、截图、录屏或其他测试文件。** 同样不得把临时产物直接放在 `out/tests/` 顶层、`src/`、`app/`、`asset/` 或 `reference_repo/` 中。
+4. `asset/` 是只读测试模板目录，不是测试输出目录。正式测试只能写入自己的 `out/tests/<同名测试路径>/`；Agent 临时任务只能写入 `out/tests/temp/<task_name>/`，二者不得混用。
+5. Agent 调用截图、浏览器或审查工具前必须显式设置 `out/tests/temp/<task_name>/artifacts/`；仓库正式测试脚本则必须显式设置自己的 `out/tests/<同名测试路径>/artifacts/`。不得依赖工具默认当前目录。
+6. Agent 临时任务结束时必须列出本次生成的产物；纯临时产物应主动删除，用户需要查看的临时产物可以保留在对应的 `out/tests/temp/<task_name>/`。仓库正式测试脚本的输出默认保留，以便复查，不得按 Agent 临时产物规则自动删除。
+7. 测试生成的二进制文件默认不得加入 Git。只有用户明确要求将其作为长期测试基线或产品资源时，才允许提交，并应放入语义明确的专用目录而不是 `out/tests/` 运行输出目录。
 
 ### 运行时说明
 

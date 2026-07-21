@@ -64,6 +64,20 @@ export interface JobDTO {
   };
   ended_at?: string | null;
 }
+/**
+ * JobService 在调度锁内生成的目标会话队列快照。
+ */
+export interface JobDispatchSnapshotDTO {
+  session_id: string;
+  job_id: string;
+  job_status: "queued" | "running";
+  active_job_id: string;
+  blocked_by_job_id?: string | null;
+  queued_jobs_ahead: number;
+  queued_job_count: number;
+  pending_job_count: number;
+  pending_kind?: ("queued" | "steering") | null;
+}
 export interface StepDTO {
   created_at: string;
   updated_at: string;

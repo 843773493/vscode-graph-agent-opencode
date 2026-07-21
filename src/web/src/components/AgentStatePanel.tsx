@@ -3,40 +3,7 @@ import {
   buildAgentStateSummary,
   formatAgentStateJsonlForDisplay,
   parseAgentStateRecords,
-  type AgentStateSummary,
 } from "../state/agentStateDisplay";
-
-function AgentStateKeyFlow({
-  skills,
-  customTools,
-  customToolResults,
-  finalText,
-}: AgentStateSummary) {
-  if (
-    skills.length === 0 &&
-    customTools.length === 0 &&
-    customToolResults.length === 0 &&
-    !finalText
-  ) {
-    return null;
-  }
-
-  return (
-    <div className="agent-state-key-flow" aria-label="Agent State 关键链路">
-      <div className="agent-state-key-flow-title">关键链路</div>
-      <ol>
-        {skills.length > 0 ? <li>读取 skill：{skills.join("、")}</li> : null}
-        {customTools.length > 0 ? <li>目标扩展工具：{customTools.join("、")}</li> : null}
-        {customToolResults.map((result) => (
-          <li key={`${result.toolName}:result`}>
-            扩展工具返回：{result.invocationToolName} -&gt; {result.toolName} -&gt; {result.resultText}
-          </li>
-        ))}
-        {finalText ? <li>最终回复正文：{finalText}</li> : null}
-      </ol>
-    </div>
-  );
-}
 
 export default function AgentStatePanel({
   jsonl,
@@ -81,21 +48,8 @@ export default function AgentStatePanel({
             <span>扩展工具</span>
             <strong>{summary.customTools.join("、") || "未检测到扩展工具调用"}</strong>
           </div>
-          <div>
-            <span>最终文本</span>
-            <strong
-              aria-label={
-                summary.finalText
-                  ? `最终文本：${summary.finalText}`
-                  : "最终文本：暂无最终回复"
-              }
-            >
-              {summary.finalText || "暂无最终回复"}
-            </strong>
-          </div>
         </div>
       ) : null}
-      {displayJsonl ? <AgentStateKeyFlow {...summary} /> : null}
       {loading ? (
         <div className="empty-state">正在读取 Agent State...</div>
       ) : error ? (

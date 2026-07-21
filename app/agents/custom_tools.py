@@ -24,9 +24,9 @@ from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
-
-
-CustomToolSpec = Mapping[str, object]
+from app.agents.model_tool_schema import get_model_tool_schema
+from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.policy import parse_custom_tool_specs
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +45,7 @@ class CustomToolFactoryContext:
     config_service: CustomToolConfigProtocol
     terminal_manager_client: TerminalManagerClientProtocol
     browser_manager_client: BrowserManagerClientProtocol
+    invocation_context: ToolInvocationContext
     tool_options: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -77,46 +78,6 @@ def _load_factory(factory_path: str) -> CustomToolFactory:
     return target
 
 
-def _spec_name(spec: object) -> str:
-    if isinstance(spec, str):
-        raise ValueError(
-            "tools.custom 不支持只写工具名。"
-            "请配置为 {\"name\": \"tool_name\", \"factory\": \"module.path:create_tool\"}"
-        )
-    if not isinstance(spec, Mapping):
-        raise TypeError(f"tools.custom 条目必须是对象，实际类型: {type(spec).__name__}")
-
-    name = spec.get("name")
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError(f"tools.custom 条目缺少 name: {spec}")
-    return name
-
-
-def _normalize_spec(
-    spec: object,
-) -> tuple[str, CustomToolFactory, Mapping[str, object]]:
-    name = _spec_name(spec)
-    if not isinstance(spec, Mapping):
-        raise TypeError(f"tools.custom 条目必须是对象，实际类型: {type(spec).__name__}")
-
-    factory_path = spec.get("factory")
-    if not isinstance(factory_path, str) or not factory_path.strip():
-        raise ValueError(f"tools.custom 条目缺少 factory: {spec}")
-
-    options = spec.get("options", {})
-    if not isinstance(options, Mapping):
-        raise TypeError(f"tools.custom[{name}].options 必须是对象")
-
-    return name, _load_factory(factory_path), dict(options)
-
-
-def custom_tool_spec_names(specs: Iterable[object]) -> set[str]:
-    names: set[str] = set()
-    for spec in specs:
-        names.add(_spec_name(spec))
-    return names
-
-
 def build_custom_tools(
     specs: Iterable[object],
     *,
@@ -124,22 +85,29 @@ def build_custom_tools(
 ) -> list[BaseTool]:
     """构建可由固定扩展入口调用的自定义工具集。"""
     tools: list[BaseTool] = []
-    seen_names: set[str] = set()
-    for spec in specs:
-        name, factory, options = _normalize_spec(spec)
-        if name in seen_names:
-            raise ValueError(f"重复的自定义扩展工具: {name}")
-        seen_names.add(name)
-
-        tool = factory(replace(context, tool_options=options))
+    for spec in parse_custom_tool_specs(specs):
+        factory = _load_factory(spec.factory_path)
+        tool = factory(replace(context, tool_options=spec.options))
         if not isinstance(tool, BaseTool):
             raise TypeError(
-                f"自定义扩展工具 factory 必须返回 BaseTool: name={name}, "
+                f"自定义扩展工具 factory 必须返回 BaseTool: name={spec.name}, "
                 f"actual={type(tool).__name__}"
             )
-        if tool.name != name:
+        if tool.name != spec.name:
             raise ValueError(
-                f"自定义扩展工具声明名与实际工具名不一致: declared={name}, actual={tool.name}"
+                "自定义扩展工具声明名与实际工具名不一致: "
+                f"declared={spec.name}, actual={tool.name}"
+            )
+        internal_schema = tool.get_input_schema()
+        public_schema = get_model_tool_schema(tool)
+        internal_fields = set(internal_schema.model_fields)
+        public_fields = set(public_schema.model_fields)
+        hidden_fields = internal_fields - public_fields
+        if hidden_fields:
+            raise TypeError(
+                "扩展工具不得通过 ToolRuntime/InjectedToolArg 声明隐藏注入参数；"
+                "扩展工具的后端依赖必须由 CustomToolFactoryContext 容器注入并由闭包读取。"
+                f" tool_name={spec.name} hidden_fields={sorted(hidden_fields)}"
             )
         tools.append(tool)
 
@@ -163,6 +131,7 @@ def build_custom_tool_bundle(
     config_service: CustomToolConfigProtocol,
     terminal_manager_client: TerminalManagerClientProtocol,
     browser_manager_client: BrowserManagerClientProtocol,
+    invocation_context: ToolInvocationContext,
 ) -> CustomToolBundle:
     context = CustomToolFactoryContext(
         session_id=session_id,
@@ -179,6 +148,7 @@ def build_custom_tool_bundle(
         config_service=config_service,
         terminal_manager_client=terminal_manager_client,
         browser_manager_client=browser_manager_client,
+        invocation_context=invocation_context,
     )
     tools = build_custom_tools(specs, context=context)
     return CustomToolBundle(tools=tools)

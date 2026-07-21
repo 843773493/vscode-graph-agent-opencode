@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Annotated, Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import InjectedToolArg, tool
+from langgraph.prebuilt.tool_node import ToolRuntime
+from pydantic.errors import PydanticInvalidForJsonSchema
 import pytest
 
 from app.agents.tools.apply_patch import create_apply_patch_tool
 from app.schemas.public_v2.tool_test import ToolTestStartRequest
 from app.tool_testing.cases.apply_patch_case import create_apply_patch_cases
+from app.tool_testing.definitions import (
+    PreparedToolTest,
+    ToolTestEvaluation,
+    get_model_tool_parameters,
+)
 from app.tool_testing.model_invocation import (
     MAX_MODEL_CALLS_PER_ATTEMPT,
     MAX_TRANSIENT_RETRIES,
@@ -113,6 +122,171 @@ class _Model:
     def bind_tools(self, tools: list[object]) -> _BoundModel:
         assert len(tools) == 1
         return _BoundModel(self._provider_id, self._concurrency)
+
+
+@dataclass(frozen=True, slots=True)
+class _InjectedArgumentCase:
+    case_id: str = "runtime_injected_argument"
+    tool_name: str = "runtime_aware"
+    title: str = "隐藏运行时参数"
+
+    def prepare(
+        self,
+        *,
+        workspace_root: Path,
+        attempt_root: Path,
+        asset_root: Path,
+    ) -> PreparedToolTest:
+        del workspace_root, asset_root
+        attempt_root.mkdir(parents=True)
+
+        @tool
+        def runtime_aware(
+            value: str,
+            callback: Annotated[Callable[[], str], InjectedToolArg],
+        ) -> str:
+            """调用由后端注入的回调并拼接模型提供的公开参数。"""
+            return f"{callback()}:{value}"
+
+        return PreparedToolTest(
+            prompt="调用 runtime_aware，并将 value 设为 public。",
+            tool=runtime_aware,
+            injected_arguments={"callback": lambda: "injected"},
+        )
+
+    def evaluate(
+        self,
+        *,
+        attempt_root: Path,
+        tool_result: object,
+    ) -> ToolTestEvaluation:
+        del attempt_root
+        return ToolTestEvaluation(
+            passed=tool_result == "injected:public",
+            detail=f"tool_result={tool_result!r}",
+        )
+
+
+class _InjectedArgumentBoundModel:
+    async def ainvoke(self, messages: list[object]) -> AIMessage:
+        del messages
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "runtime_aware",
+                    "args": {"value": "public"},
+                    "id": "call-runtime-aware",
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+
+class _InjectedArgumentModel:
+    def __init__(self) -> None:
+        self.bound_parameters: dict[str, Any] | None = None
+
+    def bind_tools(self, tools: list[object]) -> _InjectedArgumentBoundModel:
+        assert len(tools) == 1
+        candidate = tools[0]
+        self.bound_parameters = get_model_tool_parameters(candidate)  # type: ignore[arg-type]
+        return _InjectedArgumentBoundModel()
+
+
+class _SingleProviderConfigService:
+    def get_agent_runtime_config(self, agent_id: str) -> dict[str, Any]:
+        assert agent_id == "default"
+        return {
+            "providers": [
+                {"id": "provider_only", "model": "model-only", "api_key": "secret"}
+            ]
+        }
+
+
+@pytest.mark.asyncio
+async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_execution(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    store = ToolTestStore(root=workspace_root / ".boxteam" / "tool_tests")
+    model = _InjectedArgumentModel()
+    case = _InjectedArgumentCase()
+    prepared = case.prepare(
+        workspace_root=workspace_root,
+        attempt_root=tmp_path / "schema-check",
+        asset_root=tmp_path / "assets",
+    )
+    with pytest.raises(PydanticInvalidForJsonSchema):
+        prepared.tool.args_schema.model_json_schema()
+
+    service = ToolTestService(
+        config_service=_SingleProviderConfigService(),  # type: ignore[arg-type]
+        registry=ToolTestRegistry(cases=[case]),
+        store=store,
+        workspace_root=workspace_root,
+        asset_root=tmp_path / "assets",
+        model_builder=lambda **_: model,
+    )
+    started = await service.start(
+        tool_name=case.tool_name,
+        request=ToolTestStartRequest(),
+    )
+    for _ in range(100):
+        result = service.get(started.run_id)
+        if result.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise TimeoutError("隐藏参数工具测试没有在预期时间内结束")
+
+    assert result.status == "completed"
+    assert result.attempts[0].passed is True
+    expected_parameters = {
+        "value": {"title": "Value", "type": "string"},
+    }
+    assert model.bound_parameters is not None
+    assert model.bound_parameters["properties"] == expected_parameters
+    request_path = (
+        store.case_dir(case.tool_name, "provider_only", case.case_id) / "request.json"
+    )
+    request_payload = json.loads(request_path.read_text(encoding="utf-8"))
+    assert request_payload["tool"]["parameters"]["properties"] == expected_parameters
+    assert "callback" not in request_path.read_text(encoding="utf-8")
+
+
+def test_model_tool_parameters_reports_missing_public_schema() -> None:
+    class _ToolWithoutPublicSchema:
+        name = "missing_schema"
+        tool_call_schema = None
+
+    with pytest.raises(
+        TypeError,
+        match=(
+            "tool_name=missing_schema "
+            "tool_type=_ToolWithoutPublicSchema"
+        ),
+    ):
+        get_model_tool_parameters(_ToolWithoutPublicSchema())  # type: ignore[arg-type]
+
+
+def test_model_tool_parameters_excludes_tool_runtime() -> None:
+    @tool
+    def runtime_tool(value: str, runtime: ToolRuntime) -> str:
+        """返回公开值，运行时对象只由 LangGraph 注入。"""
+        del runtime
+        return value
+
+    with pytest.raises(PydanticInvalidForJsonSchema):
+        runtime_tool.args_schema.model_json_schema()
+
+    parameters = get_model_tool_parameters(runtime_tool)
+
+    assert parameters["properties"] == {
+        "value": {"title": "Value", "type": "string"},
+    }
+    assert parameters["required"] == ["value"]
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  browseGatewayRemoteDirectories,
-  listGatewaySshConnections,
-} from "../../gatewayApi";
+import { listGatewaySshConnections } from "../../gatewayApi";
 import type {
   AddSshGatewayWorkspaceRequest,
-  GatewayDirectoryList,
   SshConnectionOption,
 } from "../../types/backend";
 import {
@@ -14,7 +10,6 @@ import {
   INITIAL_SSH_WORKSPACE_FORM,
   type WorkspaceSshFormState,
 } from "../../utils/workspaceSshRequest";
-import WorkspaceDirectoryBrowser from "./WorkspaceDirectoryBrowser";
 
 interface WorkspaceSshDialogProps {
   open: boolean;
@@ -40,9 +35,6 @@ export default function WorkspaceSshDialog({
   const [connectionsLoading, setConnectionsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [browserListing, setBrowserListing] = useState<GatewayDirectoryList | null>(null);
-  const [browserLoading, setBrowserLoading] = useState(false);
-  const [browserError, setBrowserError] = useState<string | null>(null);
   const selectedConnection = useMemo(
     () => connections.find((connection) => connection.connection_id === connectionId),
     [connectionId, connections],
@@ -52,32 +44,6 @@ export default function WorkspaceSshDialog({
     setForm((current) => ({ ...current, [key]: value }));
   };
 
-  const loadDirectory = useCallback(
-    async (targetConnectionId: string, path: string | null) => {
-      setBrowserLoading(true);
-      setBrowserError(null);
-      try {
-        const listing = await browseGatewayRemoteDirectories(
-          apiPort,
-          targetConnectionId,
-          path,
-        );
-        setBrowserListing(listing);
-        setForm((current) => ({
-          ...current,
-          remoteWorkspacePath: listing.path,
-        }));
-      } catch (loadError) {
-        setBrowserError(
-          loadError instanceof Error ? loadError.message : String(loadError),
-        );
-      } finally {
-        setBrowserLoading(false);
-      }
-    },
-    [apiPort],
-  );
-
   useEffect(() => {
     if (!open) {
       return;
@@ -86,7 +52,6 @@ export default function WorkspaceSshDialog({
     setError(null);
     setSubmitting(false);
     setConnectionsLoading(true);
-    setBrowserError(null);
     void listGatewaySshConnections(apiPort)
       .then((result) => {
         if (cancelled) {
@@ -96,19 +61,12 @@ export default function WorkspaceSshDialog({
         const initialConnection = result.items[0];
         if (!initialConnection) {
           setConnectionId("");
-          setBrowserListing(null);
           setError(
-            "没有可用的 SSH Host。请先在 ~/.ssh/config 中添加具体 Host，或在 BoxTeam 配置中注册 SSH 工作区。",
+            "没有可用的 SSH Host。请先在 ~/.ssh/config 中添加远程 BoxTeam 主机。",
           );
           return;
         }
         setConnectionId(initialConnection.connection_id);
-        const initialPath = initialConnection.initial_path ?? "";
-        setForm((current) => ({
-          ...current,
-          remoteWorkspacePath: initialPath,
-        }));
-        void loadDirectory(initialConnection.connection_id, initialPath || null);
       })
       .catch((loadError: unknown) => {
         if (!cancelled) {
@@ -127,7 +85,7 @@ export default function WorkspaceSshDialog({
     return () => {
       cancelled = true;
     };
-  }, [apiPort, loadDirectory, open]);
+  }, [apiPort, open]);
 
   if (!open) {
     return null;
@@ -135,14 +93,6 @@ export default function WorkspaceSshDialog({
 
   const handleConnectionChange = (nextConnectionId: string) => {
     setConnectionId(nextConnectionId);
-    setBrowserListing(null);
-    setBrowserError(null);
-    const connection = connections.find(
-      (candidate) => candidate.connection_id === nextConnectionId,
-    );
-    const initialPath = connection?.initial_path ?? "";
-    update("remoteWorkspacePath", initialPath);
-    void loadDirectory(nextConnectionId, initialPath || null);
   };
 
   const handleSubmit = async () => {
@@ -181,8 +131,8 @@ export default function WorkspaceSshDialog({
       >
         <header className="workspace-dialog-header workspace-dialog-heading">
           <div>
-            <h2 id="workspace-ssh-dialog-title">添加远程工作区</h2>
-            <p>选择已配置的远程主机，然后浏览并选择项目目录。</p>
+            <h2 id="workspace-ssh-dialog-title">连接远程 Gateway</h2>
+            <p>通过单个 SSH 隧道连接远端 BoxTeam，由远端 Gateway 发现并管理工作区。</p>
           </div>
           <button
             type="button"
@@ -196,7 +146,7 @@ export default function WorkspaceSshDialog({
         </header>
         <div className="workspace-dialog-grid">
           <label className="workspace-dialog-wide workspace-connection-field">
-            <span>远程主机</span>
+            <span>远程 BoxTeam 主机</span>
             <span className="workspace-select-shell">
               <span className="codicon codicon-globe" aria-hidden="true" />
               <select
@@ -216,34 +166,25 @@ export default function WorkspaceSshDialog({
             {selectedConnection ? (
               <small>{connectionDescription(selectedConnection)}</small>
             ) : (
-              <small>SSH 主机来源：BoxTeam 配置与当前用户 ~/.ssh/config。</small>
+              <small>SSH 主机来源：已连接 Gateway 与当前用户 ~/.ssh/config。</small>
             )}
           </label>
 
           <label className="workspace-dialog-wide">
-            <span>文件夹路径</span>
+            <span>远程 Gateway 端口</span>
             <span className="workspace-path-input-shell">
-              <span className="codicon codicon-folder" aria-hidden="true" />
+              <span className="codicon codicon-server" aria-hidden="true" />
               <input
-                value={form.remoteWorkspacePath}
-                onChange={(event) => update("remoteWorkspacePath", event.target.value)}
-                placeholder="选择目录或输入绝对路径"
+                value={form.remoteGatewayPort}
+                onChange={(event) => update("remoteGatewayPort", event.target.value)}
+                inputMode="numeric"
+                placeholder="8014"
               />
             </span>
           </label>
 
-          {selectedConnection ? (
-            <WorkspaceDirectoryBrowser
-              listing={browserListing}
-              currentPath={form.remoteWorkspacePath}
-              loading={browserLoading}
-              error={browserError}
-              onNavigate={(path) => void loadDirectory(connectionId, path)}
-            />
-          ) : null}
-
           <label>
-            <span>工作区名称</span>
+            <span>连接名称</span>
             <input
               value={form.name}
               onChange={(event) => update("name", event.target.value)}
@@ -253,7 +194,7 @@ export default function WorkspaceSshDialog({
         </div>
         {error ? <div className="workspace-dialog-error">{error}</div> : null}
         <div className="workspace-remote-dialog-hint">
-          选择的目录需要有可访问的 BoxTeam 工作区后端；连接失败会直接显示详细错误。
+          只转发远端 Gateway 的 loopback 端口；不会直接连接远程 Workspace API、Terminal 或 Browser 服务。
         </div>
         <footer className="workspace-dialog-actions">
           <button type="button" onClick={onClose} disabled={submitting}>
@@ -265,7 +206,7 @@ export default function WorkspaceSshDialog({
             onClick={handleSubmit}
             disabled={submitting || connectionsLoading || !selectedConnection}
           >
-            {submitting ? "添加中" : "添加项目"}
+            {submitting ? "连接中" : "连接 Gateway"}
           </button>
         </footer>
       </section>

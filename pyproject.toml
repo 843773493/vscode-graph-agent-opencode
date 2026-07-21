@@ -26,8 +26,11 @@ dependencies = [
     "langchain-litellm==0.7.0",
     "litellm>=1.90.2",
     "langchain-community>=0.4.2",
+    "langchain-mcp-adapters==0.3.0",
+    "mcp>=1.27,<2",
     "ddgs>=9.14.4",
     "websockets>=16.0",
+    "watchfiles>=1.0.0",
 ]
 
 [project.optional-dependencies]

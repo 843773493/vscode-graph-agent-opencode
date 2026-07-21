@@ -6,7 +6,7 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.trace_middleware import get_request_id
+from app.core.trace_middleware import get_request_id  # noqa: F401
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.business.agent_service import AgentService
 from app.services.business.context_compaction_service import ContextCompactionService
@@ -19,6 +19,7 @@ from app.services.business.session_information_service import SessionInformation
 from app.services.business.session_context_query_service import SessionContextQueryService
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.infrastructure.runtime_service import RuntimeService
+from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_context_fork_service import SessionContextForkService
@@ -28,6 +29,7 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.infrastructure.mcp import McpRuntimeManager
 from app.tool_testing.service import ToolTestService
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.runtime.session_orchestrator import SessionOrchestrator
@@ -43,6 +45,7 @@ class _AppContainerProtocol:
     job_event_bus: JobEventBusProtocol
     job_service: JobServiceProtocol
     message_service: MessageService
+    session_attachment_store: SessionAttachmentStore
     runtime_service: RuntimeService
     session_auto_continue_service: SessionAutoContinueService
     session_interrupt_service: SessionInterruptService
@@ -62,6 +65,7 @@ class _AppContainerProtocol:
     workspace_service: WorkspaceService
     agent_execution_service: AgentExecutionService
     session_orchestrator: SessionOrchestrator
+    mcp_runtime_manager: McpRuntimeManager
 
 
 def verify_local_token(x_local_token: str | None = Header(default=None)) -> str:
@@ -139,6 +143,13 @@ def get_message_service(request: Request) -> MessageService:
     service = getattr(_get_container(request), "message_service", None)
     if not isinstance(service, MessageService):
         raise RuntimeError("MessageService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_session_attachment_store(request: Request) -> SessionAttachmentStore:
+    service = getattr(_get_container(request), "session_attachment_store", None)
+    if not isinstance(service, SessionAttachmentStore):
+        raise RuntimeError("SessionAttachmentStore 尚未在应用启动阶段初始化")
     return service
 
 
@@ -251,6 +262,13 @@ def get_tool_selection_store(request: Request) -> ToolSelectionStore:
     service = getattr(_get_container(request), "tool_selection_store", None)
     if not isinstance(service, ToolSelectionStore):
         raise RuntimeError("ToolSelectionStore 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_mcp_runtime_manager(request: Request) -> McpRuntimeManager:
+    service = getattr(_get_container(request), "mcp_runtime_manager", None)
+    if not isinstance(service, McpRuntimeManager):
+        raise RuntimeError("McpRuntimeManager 尚未在应用启动阶段初始化")
     return service
 
 

@@ -19,6 +19,7 @@ async def test_multiple_same_session_jobs_are_queued(client: httpx.AsyncClient):
     session_id = create_session_response.json()["data"]["session_id"]
 
     job_ids: list[str] = []
+    dispatches: list[dict[str, object]] = []
     for i in range(3):
         response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
@@ -28,14 +29,138 @@ async def test_multiple_same_session_jobs_are_queued(client: httpx.AsyncClient):
             },
         )
         assert response.status_code == 200
-        job_ids.append(response.json()["data"]["job_id"])
+        response_data = response.json()["data"]
+        job_ids.append(response_data["job_id"])
+        dispatch = response_data["dispatch"]
+        dispatches.append(dispatch)
+        assert response_data["status"] == dispatch["job_status"]
+        assert dispatch["session_id"] == session_id
+        assert dispatch["job_id"] == response_data["job_id"]
+        assert dispatch["pending_job_count"] == dispatch["queued_job_count"] + 1
         print(f"Started queued job {i}: {job_ids[i]}")
+
+    assert [dispatch["job_status"] for dispatch in dispatches] == [
+        "running",
+        "queued",
+        "queued",
+    ]
+    assert dispatches[0]["active_job_id"] == job_ids[0]
+    assert dispatches[1]["blocked_by_job_id"] == job_ids[0]
+    assert dispatches[1]["queued_jobs_ahead"] == 0
+    assert dispatches[2]["blocked_by_job_id"] == job_ids[0]
+    assert dispatches[2]["queued_jobs_ahead"] == 1
+    assert dispatches[2]["pending_job_count"] == 3
 
     for job_id in job_ids:
         result = await wait_for_job_done(client, job_id, max_attempts=90)
         assert result["status"] in {"completed", "succeeded"}
 
     print(f"All {len(job_ids)} queued jobs completed successfully!")
+
+
+@pytest.mark.asyncio
+async def test_pending_request_controls_match_vscode_queue_workflow(
+    client: httpx.AsyncClient,
+):
+    create_response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Pending Request Controls E2E"},
+    )
+    assert create_response.status_code == 200
+    session_id = create_response.json()["data"]["session_id"]
+
+    active_response = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "message": {
+                "content": "请认真分析 1 到 1000 的整数和，并说明计算过程。"
+            },
+            "run": {"mode": "single_agent", "agent_id": "default"},
+        },
+    )
+    assert active_response.status_code == 200
+    assert active_response.json()["data"]["status"] == "running"
+
+    queued_response = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "message": {"content": "普通排队消息"},
+            "run": {
+                "mode": "single_agent",
+                "agent_id": "default",
+                "queue": "queued",
+            },
+        },
+    )
+    steering_response = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "message": {"content": "引导消息"},
+            "run": {
+                "mode": "single_agent",
+                "agent_id": "default",
+                "queue": "steering",
+            },
+        },
+    )
+    assert queued_response.status_code == 200
+    assert steering_response.status_code == 200
+    queued_message_id = queued_response.json()["data"]["message_id"]
+    steering_message_id = steering_response.json()["data"]["message_id"]
+
+    pending_response = await client.get(
+        f"/api/v1/sessions/{session_id}/pending-requests"
+    )
+    assert pending_response.status_code == 200
+    pending = pending_response.json()["data"]
+    assert pending["yield_requested"] is True
+    assert [item["message_id"] for item in pending["requests"]] == [
+        steering_message_id,
+        queued_message_id,
+    ]
+
+    edit_response = await client.patch(
+        f"/api/v1/sessions/{session_id}/pending-requests/{queued_message_id}",
+        json={"content": "编辑后的普通排队消息", "attachments": []},
+    )
+    assert edit_response.status_code == 200
+    edited_requests = edit_response.json()["data"]["requests"]
+    assert next(
+        item
+        for item in edited_requests
+        if item["message_id"] == queued_message_id
+    )["content"] == "编辑后的普通排队消息"
+
+    reorder_response = await client.put(
+        f"/api/v1/sessions/{session_id}/pending-requests/order",
+        json={
+            "requests": [
+                {"message_id": queued_message_id, "kind": "steering"},
+                {"message_id": steering_message_id, "kind": "queued"},
+            ]
+        },
+    )
+    assert reorder_response.status_code == 200
+    assert [
+        (item["message_id"], item["kind"])
+        for item in reorder_response.json()["data"]["requests"]
+    ] == [
+        (queued_message_id, "steering"),
+        (steering_message_id, "queued"),
+    ]
+
+    remove_response = await client.delete(
+        f"/api/v1/sessions/{session_id}/pending-requests/{steering_message_id}"
+    )
+    assert remove_response.status_code == 200
+    assert [
+        item["message_id"] for item in remove_response.json()["data"]["requests"]
+    ] == [queued_message_id]
+
+    immediate_response = await client.post(
+        f"/api/v1/sessions/{session_id}/pending-requests/{queued_message_id}/send-immediately"
+    )
+    assert immediate_response.status_code == 200
 
 
 @pytest.mark.asyncio
