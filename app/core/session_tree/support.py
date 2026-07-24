@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import tempfile
+import unicodedata
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+FOLDER_MANIFEST_NAME = ".boxteam-folder.json"
+SESSION_MANIFEST_NAME = "session.json"
+SESSION_CHILDREN_DIR_NAME = "children"
+SESSION_ALLOCATION_MARKER_NAME = ".boxteam-session-allocating.json"
+SESSION_ALLOCATION_TEMP_PREFIX = ".boxteam-session-allocating-"
+PHYSICAL_LAYOUT_VERSION = 1
+_INVALID_SEGMENT_CHARS = re.compile(r"[<>:\"/\\|?*\x00-\x1f]")
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class SessionPhysicalNode:
+    node_id: str
+    kind: str
+    path: Path
+    parent_node_id: str | None
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+def physical_segment(name: str, stable_id: str) -> str:
+    normalized = physical_display_segment(name)
+    return f"{normalized}--{stable_id[-8:]}"
+
+def physical_display_segment(name: str) -> str:
+    """返回物理路径段的显示名部分，预留固定稳定 ID 后缀空间。"""
+    normalized = unicodedata.normalize("NFKC", name).strip().rstrip(". ")
+    normalized = _INVALID_SEGMENT_CHARS.sub("_", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip().rstrip(". ")
+    if not normalized:
+        normalized = "未命名"
+    if normalized.upper() in _WINDOWS_RESERVED_NAMES:
+        normalized = f"_{normalized}"
+    max_name_length = 96 - len("--12345678")
+    normalized = normalized[:max_name_length].rstrip(". ") or "未命名"
+    return normalized
+
+def validate_generator_physical_segment(value: str) -> None:
+    """校验生成器路径模板渲染值；与物理路径规范化共用平台规则。"""
+    if not value or value in {".", ".."}:
+        raise ValueError(f"命名路径段非法: {value!r}")
+    if _INVALID_SEGMENT_CHARS.search(value):
+        raise ValueError(f"命名路径段包含跨平台非法字符: {value!r}")
+    if Path(value).is_absolute():
+        raise ValueError(f"命名路径段不能是绝对路径: {value!r}")
+    stem = value.split(".", maxsplit=1)[0].upper()
+    if stem in _WINDOWS_RESERVED_NAMES:
+        raise ValueError(f"命名路径段是平台保留名称: {value!r}")
+    if value.endswith((" ", ".")):
+        raise ValueError(f"命名路径段不能以空格或点结尾: {value!r}")
+
+def display_name_from_segment(segment: str, stable_id: str) -> str:
+    for suffix in (f"--{stable_id}", f"--{stable_id[-8:]}"):
+        if segment.endswith(suffix):
+            return segment[: -len(suffix)] or "未命名"
+    return segment
+
+def _process_identity(pid: int) -> str | None:
+    """在支持 `/proc` 的系统上读取可抵御 PID 重用的进程启动标识。"""
+    stat_path = Path("/proc") / str(pid) / "stat"
+    try:
+        raw = stat_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    closing_parenthesis = raw.rfind(")")
+    if closing_parenthesis < 0:
+        raise RuntimeError(f"无法解析进程 stat: {stat_path}")
+    fields_after_name = raw[closing_parenthesis + 2 :].split()
+    if len(fields_after_name) <= 19:
+        raise RuntimeError(f"进程 stat 缺少启动时间字段: {stat_path}")
+    return fields_after_name[19]
+
+def _process_matches_identity(pid: int, expected_identity: object) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    if not isinstance(expected_identity, str) or not expected_identity:
+        return True
+    actual_identity = _process_identity(pid)
+    return actual_identity is None or actual_identity == expected_identity
+
+def _navigation_signature(path: Path) -> tuple[int, int, int]:
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+
+def _read_json_object(path: Path) -> dict[str, object]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"JSON 文件必须是 object: {path}")
+    return {str(key): value for key, value in raw.items()}
+
+def _parse_datetime(value: object, path: Path) -> datetime:
+    parsed = _parse_optional_datetime(value)
+    if parsed is None:
+        raise RuntimeError(f"manifest 缺少合法时间字段: {path}")
+    return parsed
+
+def _parse_optional_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+def _rewrite_legacy_locator_value(
+    value: object,
+    session_id: str,
+    *,
+    field_name: str | None = None,
+    attachment_locators: dict[str, str] | None = None,
+) -> tuple[object, bool]:
+    if isinstance(value, str):
+        if field_name not in {"file_id", "read_path", "artifact_path"}:
+            return value, False
+        if field_name == "file_id" and value.startswith("inline:"):
+            if attachment_locators is None:
+                return value, False
+            locator = attachment_locators.get(value)
+            if locator is None:
+                raise RuntimeError(
+                    "旧会话数据引用了无法从请求日志恢复的 inline 附件: "
+                    f"session_id={session_id}, file_id={value!r}"
+                )
+            return locator, True
+        return _rewrite_legacy_locator_string(
+            value,
+            session_id,
+            field_name=field_name,
+        )
+    if isinstance(value, list):
+        changed = False
+        items: list[object] = []
+        for item in value:
+            rewritten, item_changed = _rewrite_legacy_locator_value(
+                item,
+                session_id,
+                field_name=field_name,
+                attachment_locators=attachment_locators,
+            )
+            items.append(rewritten)
+            changed = changed or item_changed
+        return items, changed
+    if isinstance(value, tuple):
+        rewritten, changed = _rewrite_legacy_locator_value(
+            list(value),
+            session_id,
+            attachment_locators=attachment_locators,
+        )
+        if not isinstance(rewritten, list):
+            raise TypeError("tuple 定位符迁移结果必须是 list")
+        return tuple(rewritten), changed
+    if isinstance(value, dict):
+        changed = False
+        result: dict[object, object] = {}
+        for key, item in value.items():
+            rewritten, item_changed = _rewrite_legacy_locator_value(
+                item,
+                session_id,
+                field_name=key if isinstance(key, str) else None,
+                attachment_locators=attachment_locators,
+            )
+            result[key] = rewritten
+            changed = changed or item_changed
+        return result, changed
+    if hasattr(value, "model_fields") and hasattr(value, "model_copy"):
+        changed = False
+        updates: dict[str, object] = {}
+        for name in value.__class__.model_fields:
+            rewritten, field_changed = _rewrite_legacy_locator_value(
+                getattr(value, name),
+                session_id,
+                field_name=name,
+                attachment_locators=attachment_locators,
+            )
+            if field_changed:
+                updates[name] = rewritten
+                changed = True
+        return value.model_copy(update=updates), changed
+    return value, False
+
+def _rewrite_legacy_locator_string(
+    value: str,
+    session_id: str,
+    *,
+    field_name: str | None,
+) -> tuple[str, bool]:
+    escaped_session_id = re.escape(session_id)
+    absolute_pattern = re.compile(
+        rf"(?:[A-Za-z]:)?(?:[/\\][^/\\\s\"'<>]+)*"
+        rf"[/\\]\.boxteam[/\\]sessions[/\\]{escaped_session_id}[/\\]"
+    )
+    relative_pattern = re.compile(
+        rf"(?<![\w.-])\.boxteam[/\\]sessions[/\\]{escaped_session_id}[/\\]"
+    )
+    replacement = (
+        f"boxteam-session://{session_id}/"
+        if field_name == "file_id"
+        else f"/session-artifacts/{session_id}/"
+    )
+    updated = absolute_pattern.sub(replacement, value)
+    updated = relative_pattern.sub(replacement, updated)
+    return updated, updated != value
+
+def _rewrite_checkpoint_blob(
+    path: Path,
+    session_id: str,
+    *,
+    attachment_locators: dict[str, str] | None = None,
+) -> bool:
+    raw = path.read_bytes()
+    if not raw:
+        return False
+    try:
+        value = json.loads(raw.decode("utf-8"))
+        serialization = "json"
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+        serializer = JsonPlusSerializer()
+        value = serializer.loads_typed(("msgpack", raw))
+        serialization = "msgpack"
+    rewritten, changed = _rewrite_legacy_locator_value(
+        value,
+        session_id,
+        attachment_locators=attachment_locators,
+    )
+    if not changed:
+        return False
+    if serialization == "json":
+        encoded = json.dumps(
+            rewritten,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    else:
+        serializer = JsonPlusSerializer()
+        type_tag, encoded = serializer.dumps_typed(rewritten)
+        if type_tag != "msgpack":
+            raise RuntimeError(
+                f"checkpoint blob 重写后序列化类型变化: path={path}, type={type_tag}"
+            )
+    _atomic_write_bytes(path, encoded)
+    return True
+
+def _atomic_write_json_value(path: Path, value: object) -> None:
+    _atomic_write_text(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    _atomic_write_bytes(path, value.encode("utf-8"))
+
+def _atomic_write_bytes(path: Path, value: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as file:
+            file.write(value)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+def _atomic_write_json(path: Path, value: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            json.dump(value, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
