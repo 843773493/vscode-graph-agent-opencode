@@ -176,6 +176,8 @@ function Invoke-TargetAction([string[]]$Arguments) {
                     BOXTEAM_HOME = $BoxTeamHome
                     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT = $Workspace
                     BOXTEAM_PYTHON_BIN = $Python
+                    # TODO: 在真实 Windows VMware 目标验证统一服务日志的 detached 文件句柄生命周期。
+                    BOXTEAM_SERVICE_LOG_PATH = $Log
                     UV_PROJECT_ENVIRONMENT = (Join-Path $Repository ".venv")
                     BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE = "0"
                 }
@@ -184,6 +186,9 @@ function Invoke-TargetAction([string[]]$Arguments) {
             } else {
                 $env:BOXTEAM_HOME = $BoxTeamHome
                 $env:BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT = $Workspace
+                # TODO: 在真实 Windows VMware 目标验证 Launcher 被外层重定向时不会重复写入日志。
+                $env:BOXTEAM_SERVICE_LOG_PATH = $Log
+                $env:BOXTEAM_SERVICE_LOG_CAPTURED = "1"
                 Start-Process -FilePath "boxteam.cmd" -ArgumentList @("start", "--no-open") -RedirectStandardOutput $Log -RedirectStandardError "$Log.stderr" -WindowStyle Hidden
             }
             Write-Output (@{ profile = $Profile; boxteam_home = $BoxTeamHome; workspace = $Workspace } | ConvertTo-Json -Compress)

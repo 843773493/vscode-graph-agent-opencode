@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 
 import {
+  forwardGatewayOutput,
   gatewayEnvironment,
   installSignalForwarding,
   superviseGateway,
@@ -54,6 +55,27 @@ describe("gateway supervisor", () => {
     expect(child.killedWith).toEqual(["SIGTERM"]);
   });
 
+  test("将 Gateway 输出转发到 Launcher 输出流", () => {
+    const child = fakeChild();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    const stdout = [];
+    const stderr = [];
+    const remove = forwardGatewayOutput(
+      child,
+      { write: (value) => stdout.push(String(value)) },
+      { write: (value) => stderr.push(String(value)) },
+    );
+
+    child.stdout.emit("data", "gateway stdout\n");
+    child.stderr.emit("data", "gateway stderr\n");
+    remove();
+    child.stdout.emit("data", "ignored\n");
+
+    expect(stdout).toEqual(["gateway stdout\n"]);
+    expect(stderr).toEqual(["gateway stderr\n"]);
+  });
+
   test("Gateway 就绪后以前台退出码结束", async () => {
     const child = fakeChild();
     const processObject = new EventEmitter();
@@ -66,6 +88,7 @@ describe("gateway supervisor", () => {
         setTimeout(() => {
           child.exitCode = 0;
           child.emit("exit", 0, null);
+          child.emit("close", 0, null);
         }, 20);
         return child;
       },

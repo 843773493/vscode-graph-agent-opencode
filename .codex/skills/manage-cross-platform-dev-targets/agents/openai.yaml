@@ -1,0 +1,4 @@
+interface:
+  display_name: "管理跨平台开发目标"
+  short_description: "通过安全快照和 SSH 管理 Linux、Windows 与 Docker 开发目标"
+  default_prompt: "使用 $manage-cross-platform-dev-targets 同步、启动并验证一个已配置的跨平台开发目标。"

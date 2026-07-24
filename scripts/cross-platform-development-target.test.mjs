@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -90,7 +92,9 @@ describe("跨平台开发目标配置", () => {
   });
 
   test("命令参数要求显式 target 并验证 profile", () => {
-    expect(parseTargetCliArgs(["sync", "docker-debian", "--activate"])).toMatchObject({
+    expect(
+      parseTargetCliArgs(["sync", "docker-debian", "--activate"]),
+    ).toMatchObject({
       command: "sync",
       targetId: "docker-debian",
       options: { activate: true, profile: "development" },
@@ -116,12 +120,19 @@ describe("Git 脏工作区快照", () => {
 
     expect(command(root, ["git", "status", "--porcelain"])).toBe(statusBefore);
     expect(command(root, ["git", "diff", "--cached"])).toBe(cachedBefore);
-    expect(command(root, ["git", "show", `${snapshot.commit}:tracked.txt`])).toBe("after");
-    expect(command(root, ["git", "show", `${snapshot.commit}:new.txt`])).toBe("new");
     expect(
-      Bun.spawnSync(["git", "cat-file", "-e", `${snapshot.commit}:deleted.txt`], {
-        cwd: root,
-      }).exitCode,
+      command(root, ["git", "show", `${snapshot.commit}:tracked.txt`]),
+    ).toBe("after");
+    expect(command(root, ["git", "show", `${snapshot.commit}:new.txt`])).toBe(
+      "new",
+    );
+    expect(
+      Bun.spawnSync(
+        ["git", "cat-file", "-e", `${snapshot.commit}:deleted.txt`],
+        {
+          cwd: root,
+        },
+      ).exitCode,
     ).not.toBe(0);
     expect(snapshot.files).not.toContain(".env");
   });
@@ -142,7 +153,11 @@ describe("Git 脏工作区快照", () => {
       "vendor/child",
     ]);
     command(parent, ["git", "commit", "-qam", "add submodule"]);
-    writeFileSync(path.join(parent, "vendor/child/tracked.txt"), "dirty\n", "utf8");
+    writeFileSync(
+      path.join(parent, "vendor/child/tracked.txt"),
+      "dirty\n",
+      "utf8",
+    );
     expect(() => assertCleanInitializedSubmodules(parent)).toThrow(/子模块/);
   });
 });
@@ -165,6 +180,29 @@ describe("平台 adapter 边界", () => {
     const result = sshCommand(target, "echo ready");
     expect(result).toContain("StrictHostKeyChecking=yes");
     expect(result.join(" ")).not.toContain("PRIVATE KEY");
+  });
+
+  test("SSH transport 在首次使用前收紧 identity 文件权限", () => {
+    if (process.platform === "win32") return;
+    const root = temporaryRoot();
+    const identityFile = path.join(root, "id_ed25519");
+    writeFileSync(identityFile, "private-key", "utf8");
+    chmodSync(identityFile, 0o660);
+    const target = {
+      id: "linux-permissions",
+      ssh: {
+        host: "127.0.0.1",
+        port: 22222,
+        user: "boxteam",
+        identityFile,
+        knownHostsFile: path.join(root, "known_hosts"),
+      },
+    };
+
+    const result = sshCommand(target, "echo ready");
+
+    expect(result).toContain(identityFile);
+    expect(statSync(identityFile).mode & 0o777).toBe(0o600);
   });
 
   test(".env 哈希不一致时快速失败", () => {
@@ -191,6 +229,8 @@ describe("平台 adapter 边界", () => {
     expect(script).toContain(".boxteams");
     expect(script).toContain("开发服务端口已被占用");
     expect(script).toContain("bun install --force --frozen-lockfile");
+    expect(script).toContain("BOXTEAM_SERVICE_LOG_PATH");
+    expect(script).toContain("BOXTEAM_SERVICE_LOG_CAPTURED");
   });
 
   test("Linux adapter 快速暴露冲突并按环境版本重建目标 .venv", () => {
@@ -201,13 +241,15 @@ describe("平台 adapter 边界", () => {
       ),
       "utf8",
     );
-    expect(script).toContain('set -eu');
+    expect(script).toContain("set -eu");
     expect(script).toContain("开发服务端口已被占用");
     expect(script).toContain('"$venv_version" != "$system_version"');
     expect(script).toContain('rm -rf -- "$repository/.venv"');
-    expect(script).toContain('bun install --force --frozen-lockfile');
-    expect(script).toContain('$target_home/.boxteams-dev');
-    expect(script).toContain('$target_home/.boxteams');
+    expect(script).toContain("bun install --force --frozen-lockfile");
+    expect(script).toContain('BOXTEAM_SERVICE_LOG_PATH="$log_file"');
+    expect(script).toContain("BOXTEAM_SERVICE_LOG_CAPTURED=1");
+    expect(script).toContain("$target_home/.boxteams-dev");
+    expect(script).toContain("$target_home/.boxteams");
     expect(script).not.toContain('kill "$(cat');
   });
 });

@@ -4,8 +4,19 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
+import { once } from "node:events";
+
+import {
+  spawnDetachedProcess,
+  terminateDetachedProcess,
+} from "../packages/launcher/src/detached-process.mjs";
+import {
+  resolveServiceLogPath,
+  SERVICE_LOG_CAPTURED_ENV,
+} from "../packages/launcher/src/service-log.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
@@ -18,7 +29,12 @@ const defaultWorkspaceRoot = path.resolve(
     path.join(boxteamHome, "boxteam_workspace"),
 );
 const webRoot = path.join(projectRoot, "src", "web");
-const terminalFrontendRoot = path.join(projectRoot, "src", "terminal", "client");
+const terminalFrontendRoot = path.join(
+  projectRoot,
+  "src",
+  "terminal",
+  "client",
+);
 const browserFrontendRoot = path.join(projectRoot, "src", "browser", "client");
 const launcherEntry = path.join(
   projectRoot,
@@ -38,6 +54,7 @@ const pythonBin = path.resolve(
 const nodeBin =
   process.env.NODE_BIN ?? (process.platform === "win32" ? "node.exe" : "node");
 const onlyLaunch = process.argv.slice(2).includes("--only-launch");
+const detachedReadyFile = process.env.BOXTEAM_DEV_READY_FILE ?? null;
 const host = "127.0.0.1";
 const ports = {
   frontend: 8011,
@@ -93,7 +110,8 @@ function writeDevelopmentManifest() {
 }
 
 async function waitForHttpOk(url, label) {
-  const deadline = Date.now() + 45_000;
+  const timeoutMs = 90_000;
+  const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
@@ -109,9 +127,73 @@ async function waitForHttpOk(url, label) {
     await Bun.sleep(250);
   }
   throw new Error(
-    `${label}在 45 秒内未就绪: ${url}: ${
+    `${label}在 ${timeoutMs}ms 内未就绪: ${url}: ${
       lastError instanceof Error ? lastError.message : String(lastError)
     }`,
+  );
+}
+
+async function waitForDetachedReady(child, readyFile, logPath) {
+  const timeoutMs = 120_000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `detached dev manager 就绪前退出: exit=${String(child.exitCode)} ` +
+          `signal=${String(child.signalCode)}，日志: ${logPath}`,
+      );
+    }
+    if (existsSync(readyFile)) {
+      try {
+        const payload = JSON.parse(readFileSync(readyFile, "utf8"));
+        if (payload.pid === child.pid) return;
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+      }
+    }
+    await Bun.sleep(250);
+  }
+  throw new Error(
+    `detached dev manager 在 ${timeoutMs}ms 内未就绪，日志: ${logPath}`,
+  );
+}
+
+async function launchDetachedManager() {
+  const runtimeRoot = path.join(projectRoot, "out", "development-runtime");
+  mkdirSync(runtimeRoot, { recursive: true });
+  const readyFile = path.join(runtimeRoot, "detached-ready.json");
+  const logPath = resolveServiceLogPath(boxteamHome, process.env);
+  rmSync(readyFile, { force: true });
+
+  const child = spawnDetachedProcess({
+    command: process.execPath,
+    args: [path.join(projectRoot, "scripts", "dev.mjs")],
+    cwd: projectRoot,
+    environment: {
+      ...process.env,
+      BOXTEAM_DEV_READY_FILE: readyFile,
+    },
+    logPath,
+  });
+  if (!Number.isInteger(child.pid)) {
+    throw new Error(`无法取得 detached dev manager pid，日志: ${logPath}`);
+  }
+
+  const spawnError = once(child, "error").then(([error]) => {
+    throw error;
+  });
+  try {
+    await Promise.race([
+      waitForDetachedReady(child, readyFile, logPath),
+      spawnError,
+    ]);
+  } catch (error) {
+    terminateDetachedProcess(child.pid);
+    throw error;
+  }
+  child.unref();
+  process.stdout.write(
+    `[dev] detached services ready: pid=${child.pid}, log=${logPath}\n`,
   );
 }
 
@@ -141,7 +223,9 @@ async function cleanDevelopmentPorts() {
     }
     const targetPorts = new Set(Object.values(ports).map(String));
     const pids = new Set();
-    for (const line of new TextDecoder().decode(netstat.stdout).split(/\r?\n/)) {
+    for (const line of new TextDecoder()
+      .decode(netstat.stdout)
+      .split(/\r?\n/)) {
       const columns = line.trim().split(/\s+/);
       if (!/LISTENING/i.test(line)) continue;
       if (!targetPorts.has(columns[1]?.split(":").at(-1))) continue;
@@ -248,6 +332,7 @@ async function main() {
     BOXTEAM_TERMINAL_FRONTEND_URL: `http://${host}:${ports.terminalFrontend}`,
     BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${ports.browserFrontend}`,
     BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),
+    ...(detachedReadyFile === null ? {} : { [SERVICE_LOG_CAPTURED_ENV]: "1" }),
   };
   const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
   const terminalFrontend = spawnProcess(
@@ -298,19 +383,11 @@ async function main() {
     projectRoot,
     environment,
   );
-  const processes = [
-    frontend,
-    terminalFrontend,
-    browserFrontend,
-    launcher,
-  ];
+  const processes = [frontend, terminalFrontend, browserFrontend, launcher];
 
   try {
     await Promise.all([
-      waitForHttpOk(
-        `http://${host}:${ports.frontend}/health`,
-        "frontend",
-      ),
+      waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend"),
       waitForHttpOk(
         `http://${host}:${ports.gateway}/api/gateway/health`,
         "gateway",
@@ -324,6 +401,13 @@ async function main() {
         "browser frontend",
       ),
     ]);
+    if (detachedReadyFile !== null) {
+      writeFileSync(
+        detachedReadyFile,
+        `${JSON.stringify({ pid: process.pid, ready_at: new Date().toISOString() })}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+    }
   } catch (error) {
     for (const child of processes) {
       try {
@@ -334,11 +418,6 @@ async function main() {
     }
     await Promise.allSettled(processes.map((child) => child.exited));
     throw error;
-  }
-
-  if (onlyLaunch) {
-    for (const child of processes) child.unref();
-    return;
   }
 
   let stopping = false;
@@ -372,4 +451,8 @@ async function main() {
   await Promise.race(processes.map((child) => child.exited));
 }
 
-await main();
+if (onlyLaunch) {
+  await launchDetachedManager();
+} else {
+  await main();
+}

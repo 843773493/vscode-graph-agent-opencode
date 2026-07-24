@@ -23,6 +23,8 @@ test "$actual_gid" = "$target_gid" || {
 
 mkdir -p "$repository" "$artifacts" "$ssh_root" "$target_home" "$cache_root" /run/sshd
 chown -R "$target_uid:$target_gid" "$repository" "$artifacts" "$target_home" "$cache_root"
+# OpenSSH StrictModes 会拒绝组可写的 AuthorizedKeysFile 父目录。
+chmod 755 "$ssh_root"
 
 if test ! -f "$ssh_root/authorized_keys"; then
   test -f "$bootstrap_key" || {

@@ -1,16 +1,46 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { runChecked, runCheckedWithInput, shellQuote } from "./process.mjs";
 
-function sshOptions(target) {
-  if (!existsSync(target.ssh.identityFile)) {
-    throw new Error(`目标 ${target.id} 的 SSH identity 不存在: ${target.ssh.identityFile}`);
+function secureIdentityFile(target) {
+  const identityFile = target.ssh.identityFile;
+  if (!existsSync(identityFile)) {
+    throw new Error(`目标 ${target.id} 的 SSH identity 不存在: ${identityFile}`);
   }
+  const initial = statSync(identityFile);
+  if (!initial.isFile()) {
+    throw new Error(`目标 ${target.id} 的 SSH identity 不是普通文件: ${identityFile}`);
+  }
+  // TODO: Windows OpenSSH 需要使用 DACL 判断 identity 是否只对当前用户开放。
+  if (process.platform === "win32") return identityFile;
+
+  const initialMode = initial.mode & 0o777;
+  if ((initialMode & 0o077) !== 0) {
+    chmodSync(identityFile, initialMode & 0o700);
+  }
+  const securedMode = statSync(identityFile).mode & 0o777;
+  if ((securedMode & 0o077) !== 0) {
+    throw new Error(
+      `目标 ${target.id} 的 SSH identity 权限无法收紧: ` +
+        `path=${identityFile}, mode=${securedMode.toString(8).padStart(3, "0")}`,
+    );
+  }
+  if ((securedMode & 0o400) === 0) {
+    throw new Error(
+      `目标 ${target.id} 的 SSH identity 当前用户不可读: ` +
+        `path=${identityFile}, mode=${securedMode.toString(8).padStart(3, "0")}`,
+    );
+  }
+  return identityFile;
+}
+
+function sshOptions(target) {
+  const identityFile = secureIdentityFile(target);
   return [
     "-i",
-    target.ssh.identityFile,
+    identityFile,
     "-p",
     String(target.ssh.port),
     "-o",

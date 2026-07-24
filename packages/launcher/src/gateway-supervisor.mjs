@@ -4,6 +4,7 @@ import { once } from "node:events";
 const GATEWAY_HOST = "127.0.0.1";
 const GATEWAY_PORT = 8014;
 const GATEWAY_URL = `http://${GATEWAY_HOST}:${GATEWAY_PORT}`;
+const GATEWAY_READY_TIMEOUT_MS = 90_000;
 const FORWARDED_SIGNALS =
   process.platform === "win32"
     ? ["SIGINT", "SIGTERM", "SIGBREAK"]
@@ -12,7 +13,7 @@ const FORWARDED_SIGNALS =
 export async function waitForGateway({
   fetchImpl = fetch,
   url = `${GATEWAY_URL}/api/gateway/health`,
-  timeoutMs = 45_000,
+  timeoutMs = GATEWAY_READY_TIMEOUT_MS,
   intervalMs = 250,
 }) {
   const deadline = Date.now() + timeoutMs;
@@ -49,17 +50,12 @@ export function gatewayEnvironment(runtime, baseEnvironment) {
     ...(runtime.chromiumExecutable === null
       ? {}
       : {
-          PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:
-            runtime.chromiumExecutable,
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: runtime.chromiumExecutable,
         }),
   };
 }
 
-export function spawnGateway({
-  runtime,
-  environment,
-  spawnImpl = spawn,
-}) {
+export function spawnGateway({ runtime, environment, spawnImpl = spawn }) {
   return spawnImpl(
     runtime.pythonExecutable,
     [
@@ -74,9 +70,20 @@ export function spawnGateway({
     {
       cwd: runtime.applicationRoot,
       env: gatewayEnvironment(runtime, environment),
-      stdio: "inherit",
+      stdio: ["inherit", "pipe", "pipe"],
     },
   );
+}
+
+export function forwardGatewayOutput(child, stdout, stderr) {
+  const stdoutListener = (chunk) => stdout.write(chunk);
+  const stderrListener = (chunk) => stderr.write(chunk);
+  child.stdout?.on("data", stdoutListener);
+  child.stderr?.on("data", stderrListener);
+  return () => {
+    child.stdout?.off("data", stdoutListener);
+    child.stderr?.off("data", stderrListener);
+  };
 }
 
 export function installSignalForwarding(child, processObject = process) {
@@ -140,11 +147,14 @@ export async function superviseGateway({
   stdout.write(`Node: ${runtime.nodeExecutable}\n`);
 
   const child = spawnGateway({ runtime, environment, spawnImpl });
+  const removeOutputForwarding = forwardGatewayOutput(child, stdout, stderr);
   const removeSignalHandlers = installSignalForwarding(child, processObject);
+  const exitResult = once(child, "exit");
+  const closeResult = once(child, "close");
   try {
     await Promise.race([
       waitForGateway({ fetchImpl }),
-      once(child, "exit").then(([code, signal]) => {
+      exitResult.then(([code, signal]) => {
         throw new Error(
           `Gateway 就绪前退出: exit=${String(code)} signal=${String(signal)}`,
         );
@@ -154,7 +164,7 @@ export async function superviseGateway({
     if (openBrowser) {
       void openGatewayBrowser({ spawnImpl, stderr });
     }
-    const [code, signal] = await once(child, "exit");
+    const [code, signal] = await closeResult;
     if (signal) {
       return 128;
     }
@@ -165,6 +175,7 @@ export async function superviseGateway({
     }
     throw error;
   } finally {
+    removeOutputForwarding();
     removeSignalHandlers();
   }
 }

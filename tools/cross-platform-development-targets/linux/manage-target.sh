@@ -220,6 +220,7 @@ case "$action" in
           BOXTEAM_HOME="$boxteam_home" \
           BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT="$workspace" \
           BOXTEAM_PYTHON_BIN="$repository/.venv/bin/python" \
+          BOXTEAM_SERVICE_LOG_PATH="$log_file" \
           UV_PROJECT_ENVIRONMENT="$repository/.venv" \
           PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
           BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE=0 \
@@ -232,6 +233,7 @@ case "$action" in
     else
       command -v boxteam >/dev/null 2>&1 || fail "目标尚未安装 boxteam 命令"
       nohup env BOXTEAM_HOME="$boxteam_home" BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT="$workspace" \
+        BOXTEAM_SERVICE_LOG_PATH="$log_file" BOXTEAM_SERVICE_LOG_CAPTURED=1 \
         boxteam start --no-open >"$log_file" 2>&1 </dev/null &
       start_pid=$!
       printf '%s\n' "$start_pid" > "$artifacts/runtime/$profile/start.pid"

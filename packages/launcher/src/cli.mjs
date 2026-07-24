@@ -7,6 +7,7 @@ import { issueFederationToken } from "./federation-token.mjs";
 import { superviseGateway } from "./gateway-supervisor.mjs";
 import { acquireLauncherLock } from "./instance-lock.mjs";
 import { discoverRuntime } from "./runtime-discovery.mjs";
+import { openServiceLog } from "./service-log.mjs";
 
 const packageMetadata = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -46,17 +47,14 @@ export async function main(args) {
     if (invalidDoctorArgs.length > 0) {
       throw new Error(`未知 doctor 参数: ${invalidDoctorArgs.join(", ")}`);
     }
-    printDoctorReport(
-      buildDoctorReport({ runtime, boxteamHome }),
-      { json: effectiveArgs.includes("--json") },
-    );
+    printDoctorReport(buildDoctorReport({ runtime, boxteamHome }), {
+      json: effectiveArgs.includes("--json"),
+    });
     return;
   }
   if (command === "gateway") {
     if (effectiveArgs[0] !== "issue-federation-token") {
-      throw new Error(
-        "未知 gateway 子命令；当前支持 issue-federation-token",
-      );
+      throw new Error("未知 gateway 子命令；当前支持 issue-federation-token");
     }
     const output = issueFederationToken({
       runtime,
@@ -99,7 +97,10 @@ export async function main(args) {
     boxteamHome,
     runtime,
   });
+  let serviceLog = null;
   try {
+    serviceLog = openServiceLog({ boxteamHome, environment });
+    serviceLog.stdout.write(`日志: ${serviceLog.path}\n`);
     const bootstrap = initializeUserConfiguration({
       runtime,
       environment: {
@@ -108,15 +109,28 @@ export async function main(args) {
       },
     });
     if (bootstrap.output) {
-      process.stdout.write(`配置: ${bootstrap.output}\n`);
+      serviceLog.stdout.write(`配置: ${bootstrap.output}\n`);
     }
     const exitCode = await superviseGateway({
       runtime,
       environment: bootstrap.environment,
       openBrowser: !effectiveArgs.includes("--no-open"),
+      stdout: serviceLog.stdout,
+      stderr: serviceLog.stderr,
     });
     process.exitCode = exitCode;
+  } catch (error) {
+    serviceLog?.stderr.write(
+      `Launcher 启动失败: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }\n`,
+    );
+    throw error;
   } finally {
-    lock.release();
+    try {
+      serviceLog?.close();
+    } finally {
+      lock.release();
+    }
   }
 }
