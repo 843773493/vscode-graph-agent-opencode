@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from contextlib import contextmanager, nullcontext
-import pytest
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.services.orchestration.agent_event_stream_processor import (
+    STREAM_JOB_ID_METADATA_KEY,
+    STREAM_SESSION_ID_METADATA_KEY,
+    AgentEventStreamResult,
+    SuccessfulToolCall,
+)
 from app.services.orchestration.agent_execution_service import (
     AgentExecutionService,
     _has_valid_delegated_report,
     _has_valid_session_question_reply,
-)
-from app.services.orchestration.agent_event_stream_processor import (
-    AgentEventStreamResult,
-    SuccessfulToolCall,
 )
 
 
@@ -37,6 +39,9 @@ def mock_dependencies():
         "system_prompt": "test",
     }
     config_service.get_agent_tool_config.return_value = {"denylist": []}
+    config_service.resolve_agent_tool_policy.return_value.enabled_names = frozenset(
+        {"test_tool_2"}
+    )
 
     registry = MagicMock()
     msg_bus = MagicMock()
@@ -83,6 +88,18 @@ def create_chunk(
     chunk.usage_metadata = None
     chunk.id = "test-id"
     return chunk
+
+
+def stream_metadata(
+    *,
+    session_id: str = "test",
+    job_id: str = "job_test",
+) -> dict[str, str]:
+    """构造通过事件归属校验的 LangChain 测试 metadata。"""
+    return {
+        STREAM_SESSION_ID_METADATA_KEY: session_id,
+        STREAM_JOB_ID_METADATA_KEY: job_id,
+    }
 
 
 def _make_service(deps):
@@ -481,7 +498,7 @@ async def test_primary_success_no_fallback(mock_dependencies):
                             index=0,
                         )
                     },
-                    "metadata": {},
+                    "metadata": stream_metadata(),
                 }
 
         mock_agent = MagicMock()
@@ -544,7 +561,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
                         ],
                     )
                 },
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
             yield {
                 "event": "on_chat_model_stream",
@@ -561,7 +578,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
                         ]
                     )
                 },
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
 
         mock_agent = MagicMock()
@@ -613,7 +630,7 @@ async def test_text_deltas_share_stable_part_id(mock_dependencies):
                         index=0,
                     )
                 },
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
             yield {
                 "event": "on_chat_model_stream",
@@ -625,7 +642,7 @@ async def test_text_deltas_share_stable_part_id(mock_dependencies):
                         index=0,
                     )
                 },
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
 
         mock_agent = MagicMock()
@@ -700,7 +717,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
                             ],
                         )
                     },
-                    "metadata": {},
+                    "metadata": stream_metadata(),
                 }
                 return
             assert "<system_reminder>" in input_payload["messages"][0].content
@@ -719,7 +736,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
                         ]
                     )
                 },
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
 
         mock_agent = MagicMock()
@@ -870,7 +887,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(mock_depe
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
                 "data": {"chunk": create_chunk(content_blocks)},
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
 
         mock_agent = MagicMock()
@@ -942,14 +959,14 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
                         ],
                     )
                 },
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
             yield {
                 "event": "on_tool_start",
                 "run_id": "run_python_exec",
                 "name": "python_exec",
                 "data": {"input": {"code": "print('LC_BLOCK_OK_2')"}},
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
             yield {
                 "event": "on_tool_end",
@@ -962,7 +979,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
                         name="python_exec",
                     )
                 },
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
             yield {
                 "event": "on_chat_model_stream",
@@ -974,7 +991,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
                         index=0,
                     )
                 },
-                "metadata": {},
+                "metadata": stream_metadata(),
             }
 
         mock_agent = MagicMock()
@@ -1069,7 +1086,7 @@ async def test_execution_delegates_model_fallback_to_single_agent(mock_dependenc
                                 index=0,
                             )
                         },
-                        "metadata": {},
+                        "metadata": stream_metadata(),
                     }
 
                 mock_agent.astream_events = mock_events
@@ -1138,7 +1155,7 @@ async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
                                 index=0,
                             )
                         },
-                        "metadata": {},
+                        "metadata": stream_metadata(),
                     }
 
                 mock_agent.astream_events = mock_events

@@ -23,11 +23,11 @@ import pytest
 from app.agents.agent_factory import build_runtime_for_agent
 from app.services.infrastructure.config_service import ConfigService
 
-
-# 标记：需要真实 API 调用的测试，默认跳过（CI 环境）
+# 标记：真实 API 测试必须显式开启，避免本机残留凭据让单元测试访问网络。
 pytestmark = pytest.mark.skipif(
-    os.environ.get("OPENCODE_ZEN_API_KEY") is None,
-    reason="需要 OPENCODE_ZEN_API_KEY 环境变量才能运行真实 API 测试",
+    os.environ.get("BOXTEAM_RUN_LIVE_MODEL_TESTS") != "1"
+    or os.environ.get("OPENCODE_ZEN_API_KEY") is None,
+    reason="需要 BOXTEAM_RUN_LIVE_MODEL_TESTS=1 和 OPENCODE_ZEN_API_KEY",
 )
 
 

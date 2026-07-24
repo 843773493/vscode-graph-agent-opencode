@@ -20,7 +20,6 @@ from langchain_core.messages import (
 from app.agents.agent_factory import build_model_from_provider
 from app.services.infrastructure.config_service import ConfigService
 
-
 CONVERSATION_ROUNDS = 3
 
 
@@ -135,8 +134,9 @@ def config_service() -> ConfigService:
 
 
 @pytest.mark.skipif(
-    os.environ.get("CCTQ_API_KEY") is None,
-    reason="需要 CCTQ_API_KEY 才能运行 Luna 真实缓存测试",
+    os.environ.get("BOXTEAM_RUN_LIVE_MODEL_TESTS") != "1"
+    or os.environ.get("CCTQ_API_KEY") is None,
+    reason="需要 BOXTEAM_RUN_LIVE_MODEL_TESTS=1 和 CCTQ_API_KEY",
 )
 @pytest.mark.asyncio
 async def test_luna_responses_multiturn_prompt_cache_hit_rate(
@@ -166,8 +166,9 @@ async def test_luna_responses_multiturn_prompt_cache_hit_rate(
 
 
 @pytest.mark.skipif(
-    os.environ.get("OPENCODE_ZEN_API_KEY") is None,
-    reason="需要 OPENCODE_ZEN_API_KEY 才能运行 big-pickle 真实缓存测试",
+    os.environ.get("BOXTEAM_RUN_LIVE_MODEL_TESTS") != "1"
+    or os.environ.get("OPENCODE_ZEN_API_KEY") is None,
+    reason="需要 BOXTEAM_RUN_LIVE_MODEL_TESTS=1 和 OPENCODE_ZEN_API_KEY",
 )
 @pytest.mark.asyncio
 async def test_big_pickle_chat_completions_multiturn_prompt_cache_hit_rate(
