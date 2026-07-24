@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import {
   DEFAULT_BACKEND_PORT,
+  listSessions as apiListSessions,
 } from "./api";
 import {
   activateGatewayWorkspace as apiActivateGatewayWorkspace,
@@ -21,7 +22,6 @@ import {
   reorderGatewayWorkspaces as apiReorderGatewayWorkspaces,
   forceRestartManagedGatewayWorkspaceBackend as apiForceRestartManagedGatewayWorkspaceBackend,
   safeRestartManagedGatewayWorkspaceBackend as apiSafeRestartManagedGatewayWorkspaceBackend,
-  updateGatewayUiSettings as apiUpdateGatewayUiSettings,
 } from "./gatewayApi";
 import type {
   AddLocalGatewayWorkspaceRequest,
@@ -34,6 +34,8 @@ import type {
   SessionResourceAction,
   SessionResourceKind,
   SessionFileChange,
+  Session,
+  WebUiSettings,
   WebUiSettingsUpdate,
 } from "./types/backend";
 import type {
@@ -52,12 +54,13 @@ import { useSessionActions } from "./hooks/useSessionActions";
 import { useWorkspaceBootstrap } from "./hooks/useWorkspaceBootstrap";
 import { useWorkspaceInformationClipboard } from "./hooks/useWorkspaceInformationClipboard";
 import { useGatewayWorkspaceHierarchy } from "./hooks/useGatewayWorkspaceHierarchy";
+import { useUiSettingsController } from "./hooks/useUiSettingsController";
 import {
   readCachedUiSettings,
-  writeCachedUiSettings,
 } from "./state/storage";
 import { sessionScopeKey } from "./state/session/sessionScope";
 import { applyGatewayWorkspaceListAfterRemoval } from "./state/gatewayWorkspaceState";
+import { cloneMaps } from "./state/appStateMaps";
 
 export { getConversationsForSession } from "./state/conversations";
 export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
@@ -84,6 +87,10 @@ const INITIAL_STATE: AppState = {
   currentSession: null,
   currentSessionWorkspaceId: null,
   messages: [],
+  messageHistoryNextCursor: null,
+  messageHistoryHasMore: false,
+  messageHistoryLoadingOlder: false,
+  messageHistoryError: null,
   traceEvents: [],
   llmRequestLogs: [],
   llmRequestLogsLoadedAt: null,
@@ -136,6 +143,7 @@ interface AppContextType {
     requests: PendingRequestOrderItem[],
   ) => Promise<void>;
   sendPendingRequestImmediately: (messageId: string) => Promise<void>;
+  loadOlderMessages: () => Promise<void>;
   replayTurn: (
     targetMessageId: string,
     action: MessageReplayRequest["action"],
@@ -145,17 +153,34 @@ interface AppContextType {
   ) => Promise<void>;
   compactSession: () => Promise<void>;
   switchAgent: (agentId: string) => Promise<void>;
+  switchModel: (providerId: string) => Promise<void>;
+  setWorkspaceDefaultAgent: (agentId: string) => Promise<void>;
+  setWorkspaceDefaultProvider: (
+    agentId: string,
+    providerId: string,
+  ) => Promise<void>;
   interruptSession: () => void;
   selectSession: (sessionId: string) => void;
   selectWorkspaceSession: (workspaceId: string, sessionId: string) => void;
-  createSession: (title?: string) => Promise<void>;
+  createSession: (
+    title?: string,
+    workspaceId?: string | null,
+    folderId?: string | null,
+  ) => Promise<Session>;
   forkSessionContext: (
     workspaceId: string,
     sourceSessionId: string,
   ) => Promise<void>;
   startNewSessionDraft: (workspaceId?: string | null) => void;
-  renameSession: (sessionId: string, title: string) => Promise<void>;
-  deleteSession: (sessionId: string) => Promise<void>;
+  renameSession: (
+    sessionId: string,
+    title: string,
+    workspaceId?: string | null,
+  ) => Promise<void>;
+  deleteSession: (
+    sessionId: string,
+    workspaceId?: string | null,
+  ) => Promise<void>;
   setSessionParent: (
     workspaceId: string,
     sessionId: string,
@@ -203,10 +228,13 @@ interface AppContextType {
     workspaceId: string,
     parentWorkspaceId: string | null,
   ) => Promise<void>;
+  refreshGatewayWorkspaceSessions: (workspaceId: string) => Promise<void>;
   reorderGatewayWorkspaces: (workspaceIds: string[]) => Promise<void>;
   copySessionInformation: (workspaceId: string, sessionId: string) => Promise<void>;
   copyWorkspaceInformation: (workspaceId: string) => Promise<void>;
-  updateUiSettings: (payload: WebUiSettingsUpdate) => Promise<void>;
+  updateUiSettings: (
+    input: WebUiSettingsUpdate | ((current: WebUiSettings) => WebUiSettingsUpdate),
+  ) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -232,6 +260,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     currentSessionId && currentSessionGatewayWorkspaceId
       ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSessionId)
       : currentSessionId;
+  const currentActiveJobId = currentSessionCacheKey
+    ? state.activeJobIdsBySession.get(currentSessionCacheKey) ?? null
+    : null;
   const {
     invalidateAgentState,
     refreshSessionResources,
@@ -252,6 +283,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     sessionId: currentSessionId,
     workspaceId: currentSessionGatewayWorkspaceId,
     sessionCacheKey: currentSessionCacheKey,
+    activeJobId: currentActiveJobId,
     setState,
   });
   const copySessionInformation = useSessionInformationClipboard(
@@ -269,19 +301,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({ ...prev, status: text }));
   }, []);
 
-  const updateUiSettings = useCallback(
-    async (payload: WebUiSettingsUpdate) => {
-      const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
-      const settings = await apiUpdateGatewayUiSettings(resolvedApiPort, payload);
-      writeCachedUiSettings(settings);
-      setState((prev) => ({
-        ...prev,
-        uiSettings: settings,
-        uiSettingsLoaded: true,
-      }));
-    },
-    [state.apiPort],
-  );
+  const refreshGatewayWorkspaceSessions = useCallback(async (workspaceId: string) => {
+    const page = await apiListSessions(
+      state.apiPort ?? DEFAULT_BACKEND_PORT,
+      workspaceId,
+    );
+    setState((previous) => {
+      const next = cloneMaps(previous);
+      next.sessionsByWorkspace.set(workspaceId, page.items);
+      for (const session of page.items) {
+        next.sessionGatewayWorkspaceById.set(
+          sessionScopeKey(workspaceId, session.session_id),
+          workspaceId,
+        );
+      }
+      if (
+        previous.activeGatewayWorkspaceId === workspaceId ||
+        previous.currentSessionWorkspaceId === workspaceId
+      ) {
+        next.sessions = page.items;
+        const currentSessionId = previous.currentSession?.session_id;
+        next.currentSession = currentSessionId
+          ? page.items.find((session) => session.session_id === currentSessionId) ?? null
+          : null;
+      }
+      return next;
+    });
+  }, [state.apiPort]);
+
+  const updateUiSettings = useUiSettingsController({
+    apiPort: state.apiPort,
+    setState,
+    settings: state.uiSettings,
+  });
 
   useEffect(() => {
     if (
@@ -312,6 +364,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     sendMessage,
     startNewSessionDraft,
     switchAgent,
+    switchModel,
+    setWorkspaceDefaultAgent,
+    setWorkspaceDefaultProvider,
   } = useSessionActions({
     apiPort: state.apiPort ?? DEFAULT_BACKEND_PORT,
     currentSession: state.currentSession,
@@ -351,7 +406,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     apiPort: state.apiPort,
     setState,
   });
-  useSessionHistoryLoader({
+  const { loadOlderMessages } = useSessionHistoryLoader({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
     workspaceId: currentSessionGatewayWorkspaceId,
@@ -556,10 +611,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             (path, index, paths) =>
               path.trim() && paths.findIndex((item) => item === path) === index,
           );
-          const settings = await apiUpdateGatewayUiSettings(resolvedApiPort, {
+          await updateUiSettings({
             recent_local_workspace_paths: recentPaths,
           });
-          writeCachedUiSettings(settings);
         }
         await finishWorkspaceRefresh();
       } catch (error) {
@@ -575,7 +629,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
     },
-    [finishWorkspaceRefresh, resetWorkspaceScopedState, state.apiPort],
+    [finishWorkspaceRefresh, resetWorkspaceScopedState, state.apiPort, state.uiSettings.recent_local_workspace_paths, updateUiSettings],
   );
 
   const addSshGatewayWorkspace = useCallback(
@@ -662,6 +716,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             agentStateMessageCount: 0,
           };
         });
+        await updateUiSettings((current) => {
+          const expandedPathsByWorkspace = {
+            ...current.workspace_file_tree.expanded_paths_by_workspace,
+          };
+          delete expandedPathsByWorkspace[workspaceId];
+          return {
+            session_sidebar: {
+              collapsed_workspace_ids:
+                current.session_sidebar.collapsed_workspace_ids.filter(
+                  (collapsedId) => collapsedId !== workspaceId,
+                ),
+              expanded_root_tree_ids:
+                current.session_sidebar.expanded_root_tree_ids.filter(
+                  (treeId) => treeId !== `workspace:${workspaceId}`,
+                ),
+            },
+            workspace_file_tree: {
+              expanded_paths_by_workspace: expandedPathsByWorkspace,
+            },
+          };
+        });
         if (removedActiveWorkspace || activeWorkspaceChanged) {
           await finishWorkspaceRefresh();
         }
@@ -719,6 +794,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       invalidateWorkspaceRefreshes,
       state.activeGatewayWorkspaceId,
       state.apiPort,
+      updateUiSettings,
     ],
   );
 
@@ -838,8 +914,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clearPendingRequests,
       reorderPendingRequests,
       sendPendingRequestImmediately,
+      loadOlderMessages,
       compactSession,
       switchAgent,
+      switchModel,
+      setWorkspaceDefaultAgent,
+      setWorkspaceDefaultProvider,
       interruptSession: interruptSessionCallback,
       selectSession,
       selectWorkspaceSession,
@@ -867,6 +947,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       removeGatewayWorkspace,
       renameGatewayWorkspace,
       setGatewayWorkspaceParent,
+      refreshGatewayWorkspaceSessions,
       reorderGatewayWorkspaces,
       copySessionInformation,
       copyWorkspaceInformation,
@@ -882,8 +963,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clearPendingRequests,
       reorderPendingRequests,
       sendPendingRequestImmediately,
+      loadOlderMessages,
       compactSession,
       switchAgent,
+      switchModel,
+      setWorkspaceDefaultAgent,
+      setWorkspaceDefaultProvider,
       interruptSessionCallback,
       selectSession,
       selectWorkspaceSession,
@@ -912,6 +997,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       removeGatewayWorkspace,
       renameGatewayWorkspace,
       setGatewayWorkspaceParent,
+      refreshGatewayWorkspaceSessions,
       reorderGatewayWorkspaces,
       copySessionInformation,
       copyWorkspaceInformation,

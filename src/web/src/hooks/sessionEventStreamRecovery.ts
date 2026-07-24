@@ -10,7 +10,13 @@ import {
   appendReceivedEvents,
   dedupeTraceEvents,
 } from "../state/traceEvents";
+import type { TraceEvent } from "../types/backend";
 import type { SetAppState } from "./contentViewLoaderTypes";
+
+export interface RecoveredTraceSnapshot {
+  lastEventId: string | null;
+  traceEvents: TraceEvent[];
+}
 
 export async function recoverTraceSnapshot(
   apiPort: number,
@@ -19,10 +25,11 @@ export async function recoverTraceSnapshot(
   sessionCacheKey: string,
   setState: SetAppState,
   statusText: string,
-): Promise<string | null> {
+): Promise<RecoveredTraceSnapshot> {
   const traceEvents = await getSessionTraces(apiPort, sessionId, workspaceId);
-  const lastEventId = traceEvents[traceEvents.length - 1]?.event_id ?? null;
   const recoveredTraceEvents = dedupeTraceEvents(traceEvents);
+  const lastEventId =
+    recoveredTraceEvents[recoveredTraceEvents.length - 1]?.event_id ?? null;
 
   setState((prev) => {
     if (prev.currentSession?.session_id !== sessionId) {
@@ -62,7 +69,10 @@ export async function recoverTraceSnapshot(
     return next;
   });
 
-  return lastEventId;
+  return {
+    lastEventId,
+    traceEvents: recoveredTraceEvents,
+  };
 }
 
 export function waitForReconnect(

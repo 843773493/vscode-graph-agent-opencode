@@ -7,6 +7,7 @@ import AgentSessionsPanel from "./components/AgentSessionsPanel";
 import RequestLogPanel from "./components/RequestLogPanel";
 import ResourcePanel from "./components/ResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
+import { useWarmConfirm } from "./components/WarmConfirmProvider";
 import Toolbar, { type WorkbenchView } from "./components/Toolbar";
 import GatewayControlCenter from "./components/workspace/GatewayControlCenter";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
@@ -22,7 +23,12 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { DEFAULT_BACKEND_PORT, getSessionChangesets } from "./api";
+import {
+  DEFAULT_BACKEND_PORT,
+  DEFAULT_SESSION_TITLE,
+  createSessionCatalogFolder,
+  getSessionChangesets,
+} from "./api";
 import {
   FRONTEND_EVENT_QUEUE_LIMIT,
   getConversationsForSession,
@@ -39,19 +45,27 @@ import {
   type LayoutResizeTarget,
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
+import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences";
 import type {
   SessionChangesSummary,
   SessionFileChange,
   WebUiMainAreaRatios,
+  WebUiSettings,
+  WebUiSettingsUpdate,
 } from "./types/backend";
 
-type SessionNameDialogState = { sessionId: string; initialTitle: string };
+type SessionNameDialogState = {
+  sessionId: string;
+  workspaceId: string;
+  initialTitle: string;
+};
 
 export default function AppShell() {
+  const confirm = useWarmConfirm();
   const {
     state,
+    createSession,
     selectSession,
-    selectWorkspaceSession,
     startNewSessionDraft,
     forkSessionContext,
     renameSession,
@@ -73,6 +87,7 @@ export default function AppShell() {
     removeGatewayWorkspace,
     renameGatewayWorkspace,
     setGatewayWorkspaceParent,
+    refreshGatewayWorkspaceSessions,
     reorderGatewayWorkspaces,
     copySessionInformation,
     copyWorkspaceInformation,
@@ -84,14 +99,18 @@ export default function AppShell() {
     clearPendingRequests,
     reorderPendingRequests,
     sendPendingRequestImmediately,
+    loadOlderMessages,
   } = useAppState();
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
+  const [sessionCatalogRefreshVersion, setSessionCatalogRefreshVersion] = useState(0);
   const [workbenchView, setWorkbenchView] = useState<WorkbenchView>(
     () => state.uiSettings.layout.workbench_view ?? "sessions",
   );
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
-  const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>("changes");
+  const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>(
+    () => state.uiSettings.layout.auxiliary_tab ?? "changes",
+  );
   const [auxiliaryVisible, setAuxiliaryVisible] = useState(
     () => state.uiSettings.layout.auxiliary_visible ?? defaultAuxiliaryVisible(),
   );
@@ -126,6 +145,18 @@ export default function AppShell() {
     activeSession && activeSessionWorkspaceId
       ? sessionScopeKey(activeSessionWorkspaceId, activeSession.session_id)
       : activeSession?.session_id ?? null;
+  const agentSessionsPreferences = useMemo(
+    () => resolveAgentSessionsPreferences(state.uiSettings),
+    [state.uiSettings],
+  );
+  const expandedFileTreePaths = useMemo(() => {
+    if (!activeSessionWorkspaceId) {
+      return [""];
+    }
+    return state.uiSettings.workspace_file_tree.expanded_paths_by_workspace[
+      activeSessionWorkspaceId
+    ] ?? [""];
+  }, [activeSessionWorkspaceId, state.uiSettings.workspace_file_tree]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -153,6 +184,9 @@ export default function AppShell() {
     }
     if (typeof layout.auxiliary_visible === "boolean") {
       setAuxiliaryVisible(layout.auxiliary_visible);
+    }
+    if (layout.auxiliary_tab) {
+      setAuxiliaryTab(layout.auxiliary_tab);
     }
     setMainAreaRatios(resolveMainAreaRatios(layout.main_area_ratios));
     if (typeof layout.customizations_collapsed === "boolean") {
@@ -199,14 +233,23 @@ export default function AppShell() {
     ),
     [state.sessions],
   );
-  const persistLayoutSettings = useCallback(
-    (layout: Parameters<typeof updateUiSettings>[0]["layout"]) => {
-      void updateUiSettings({ layout }).catch((error: unknown) => {
+  const persistUiSettings = useCallback(
+    (
+      input: WebUiSettingsUpdate
+        | ((current: WebUiSettings) => WebUiSettingsUpdate),
+    ) => {
+      void updateUiSettings(input).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         setStatus(`保存页面设置失败: ${message}`);
       });
     },
     [setStatus, updateUiSettings],
+  );
+  const persistLayoutSettings = useCallback(
+    (layout: WebUiSettingsUpdate["layout"]) => {
+      persistUiSettings({ layout });
+    },
+    [persistUiSettings],
   );
   const agentSessionsVisible = state.agentSessionsPanelOpen;
   const handleWorkbenchViewChange = useCallback(
@@ -225,8 +268,9 @@ export default function AppShell() {
     onPersistLayout: persistLayoutSettings,
     onStatusChange: setStatus,
   });
-  const previewVisible = workspacePreview.visible;
-  const previewMaximized = workspacePreview.maximized;
+  const initializationFailed = Boolean(state.error && !state.isBootstrapping);
+  const previewVisible = !initializationFailed && workspacePreview.visible;
+  const previewMaximized = previewVisible && workspacePreview.maximized;
   const previewTabs = workspacePreview.tabs;
   const activePreviewPath = workspacePreview.activePath;
   const previewLoadingPath = workspacePreview.loadingPath;
@@ -315,9 +359,12 @@ export default function AppShell() {
       return;
     }
 
-    setAuxiliaryVisible(true);
-    setAuxiliaryTab("changes");
-  }, [state.contentView]);
+    // 刷新恢复页面设置时，显式隐藏右侧栏的选择必须优先于上次内容视图。
+    // 用户重新打开右侧栏后，updateUiSettings 返回的新设置会移除此条件。
+    if (state.uiSettings.layout.auxiliary_visible !== false) {
+      setAuxiliaryVisible(true);
+    }
+  }, [state.contentView, state.uiSettings.layout.auxiliary_visible]);
 
   useEffect(() => {
     if (state.contentView !== "changes") {
@@ -381,6 +428,16 @@ export default function AppShell() {
     setAuxiliaryVisible(nextVisible);
     persistLayoutSettings({ auxiliary_visible: nextVisible });
     setStatus(nextVisible ? "已显示右侧侧边栏" : "已隐藏右侧侧边栏");
+  };
+  const handleAuxiliaryTabChange = (tab: WorkspaceAuxiliaryTab) => {
+    setAuxiliaryTab(tab);
+    persistLayoutSettings({ auxiliary_tab: tab });
+  };
+  const handleOpenChangesView = () => {
+    setAuxiliaryVisible(true);
+    setAuxiliaryTab("changes");
+    persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "changes" });
+    void switchContentView("changes");
   };
   const startLayoutResize = (
     target: LayoutResizeTarget,
@@ -481,18 +538,63 @@ export default function AppShell() {
     setNameDialogError(null);
     startNewSessionDraft(workspaceId);
   };
-  const handleSelectAgentSession = (workspaceId: string, sessionId: string) => {
-    selectWorkspaceSession(workspaceId, sessionId);
+  const handleCreateSessionInFolder = async (
+    workspaceId: string,
+    folderId: string,
+  ) => {
+    if (workspaceId !== state.activeGatewayWorkspaceId) {
+      await activateGatewayWorkspace(workspaceId);
+    }
+    await createSession(DEFAULT_SESSION_TITLE, workspaceId, folderId);
   };
-  const handleRemoveWorkspace = (workspaceId: string, workspaceName: string) => {
-    const confirmed = window.confirm(
-      `删除工作区「${workspaceName || workspaceId}」？会话文件不会被删除，只会从 Web Gateway 列表移除。`,
+  const handleCreateSessionFolder = async (
+    workspaceId: string,
+    parentNodeId: string | null,
+    name: string,
+  ) => {
+    await createSessionCatalogFolder(
+      resolvedApiPort,
+      workspaceId,
+      name,
+      parentNodeId,
     );
-    if (!confirmed) {
+    setSessionCatalogRefreshVersion((version) => version + 1);
+  };
+  const handleSessionFolderDeleted = async (
+    workspaceId: string,
+    deletedCurrentSession: boolean,
+  ) => {
+    if (workspaceId !== state.activeGatewayWorkspaceId) {
       return;
     }
-    void removeGatewayWorkspace(workspaceId).catch(() => {
-      // 失败状态由 removeGatewayWorkspace 写入全局状态。
+    await activateGatewayWorkspace(
+      workspaceId,
+      deletedCurrentSession ? null : activeSession?.session_id ?? null,
+    );
+  };
+  const handleSelectAgentSession = async (
+    workspaceId: string,
+    sessionId: string,
+  ) => {
+    if (workspaceId !== state.activeGatewayWorkspaceId) {
+      await activateGatewayWorkspace(workspaceId, sessionId);
+      return;
+    }
+    selectSession(sessionId);
+  };
+  const handleRemoveWorkspace = (workspaceId: string, workspaceName: string) => {
+    const label = workspaceName || workspaceId;
+    void confirm({
+      title: "删除工作区",
+      message: `从 Web Gateway 列表移除工作区“${label}”。会话文件不会被删除。`,
+      confirmText: "删除",
+      danger: true,
+    }).then(async (confirmed) => {
+      if (confirmed) {
+        await removeGatewayWorkspace(workspaceId);
+      }
+    }).catch((error: unknown) => {
+      setStatus(`删除工作区失败: ${error instanceof Error ? error.message : String(error)}`);
     });
   };
   const handleUseGatewayWorkspace = async (workspaceId: string) => {
@@ -501,24 +603,53 @@ export default function AppShell() {
     }
     handleWorkbenchViewChange("sessions");
   };
-  const handleRenameSession = (sessionId: string, currentTitle: string) => {
+  const handleRenameSession = (
+    sessionId: string,
+    currentTitle: string,
+    workspaceId: string,
+  ) => {
     setNameDialog({
       sessionId,
+      workspaceId,
       initialTitle: currentTitle || "新会话",
     });
     setNameDialogError(null);
   };
-  const handleDeleteSession = (sessionId: string, title: string) => {
+  const handleDeleteSession = (
+    sessionId: string,
+    title: string,
+    workspaceId: string,
+  ) => {
     const label = title || sessionId;
-    const confirmed = window.confirm(
-      `删除会话「${label}」？相关后台任务会一并清理。`,
-    );
-    if (!confirmed) {
-      return;
-    }
-    void deleteSession(sessionId).catch(() => {
-      // 删除失败时由 deleteSession 写入全局状态，这里只避免未处理 Promise。
+    void confirm({
+      title: "永久删除会话",
+      message: `永久删除会话“${label}”。如果它包含子会话，将级联删除整棵子会话树及其消息、检查点、日志、附件和运行资源。此操作无法撤销。`,
+      confirmText: "删除",
+      danger: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) {
+        return;
+      }
+      await deleteSession(sessionId, workspaceId);
+      setSessionCatalogRefreshVersion((version) => version + 1);
+    }).catch((error: unknown) => {
+      setStatus(`删除会话失败: ${error instanceof Error ? error.message : String(error)}`);
     });
+  };
+  const handleSetSessionParent = async (
+    workspaceId: string,
+    sessionId: string,
+    parentSessionId: string | null,
+  ) => {
+    await setSessionParent(workspaceId, sessionId, parentSessionId);
+    setSessionCatalogRefreshVersion((version) => version + 1);
+  };
+  const handleForkSessionContext = async (
+    workspaceId: string,
+    sourceSessionId: string,
+  ) => {
+    await forkSessionContext(workspaceId, sourceSessionId);
+    setSessionCatalogRefreshVersion((version) => version + 1);
   };
   const closeNameDialog = () => {
     if (nameDialogSubmitting) {
@@ -534,10 +665,15 @@ export default function AppShell() {
 
     setNameDialogSubmitting(true);
     setNameDialogError(null);
-    const action = renameSession(nameDialog.sessionId, title);
+    const action = renameSession(
+      nameDialog.sessionId,
+      title,
+      nameDialog.workspaceId,
+    );
 
     void action
       .then(() => {
+        setSessionCatalogRefreshVersion((version) => version + 1);
         setNameDialog(null);
       })
       .catch((error: unknown) => {
@@ -691,11 +827,13 @@ export default function AppShell() {
             conversations={conversations}
             expandDetails={state.expandDetails}
             hasActiveSession={Boolean(activeSession)}
+            hasOlderMessages={state.messageHistoryHasMore}
+            loadingOlderMessages={state.messageHistoryLoadingOlder}
+            historyError={state.messageHistoryError}
+            onLoadOlderMessages={loadOlderMessages}
             sessionChangeSummary={activeSessionChangeHint}
             sessionChangesLoading={defaultViewChangesLoading}
-            onOpenChanges={() => {
-              void switchContentView("changes");
-            }}
+            onOpenChanges={handleOpenChangesView}
             onReplayTurn={replayTurn}
             onUpdatePending={updatePendingRequest}
             onRemovePending={removePendingRequest}
@@ -763,6 +901,10 @@ export default function AppShell() {
           onForceRestartManagedBackend={forceRestartManagedGatewayWorkspaceBackend}
           onProbeExternalBackend={probeExternalGatewayWorkspace}
           onUseWorkspace={handleUseGatewayWorkspace}
+          consoleView={state.uiSettings.gateway_console.view}
+          onConsoleViewChange={(view) => {
+            persistUiSettings({ gateway_console: { view } });
+          }}
         />
       </div>
       <main
@@ -775,33 +917,42 @@ export default function AppShell() {
           className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${previewVisible ? "" : " preview-collapsed"}${previewMaximized ? " preview-maximized" : ""}`}
         >
           <AgentSessionsPanel
+            apiPort={resolvedApiPort}
             sessions={sortedSessions}
             currentSessionId={activeSession?.session_id ?? ""}
             onSelectSession={selectSession}
             onRenameSession={handleRenameSession}
             onDeleteSession={handleDeleteSession}
-            onSetSessionParent={setSessionParent}
-            onForkSessionContext={forkSessionContext}
+            onSetSessionParent={handleSetSessionParent}
+            onForkSessionContext={handleForkSessionContext}
             onStatusChange={setStatus}
             isOpen={agentSessionsVisible}
             workspaceName={state.workspaceName ?? ""}
             gatewayWorkspaces={state.gatewayWorkspaces}
             activeGatewayWorkspaceId={state.activeGatewayWorkspaceId}
-            sessionsByWorkspace={state.sessionsByWorkspace}
             workspaceSwitching={state.workspaceSwitching}
-            removingGatewayWorkspaceIds={state.removingGatewayWorkspaceIds}
             onActivateWorkspace={activateGatewayWorkspace}
+            onSetWorkspaceParent={setGatewayWorkspaceParent}
+            onRefreshWorkspaceSessions={refreshGatewayWorkspaceSessions}
             onRemoveWorkspace={handleRemoveWorkspace}
             onRenameWorkspace={renameGatewayWorkspace}
-            onSetWorkspaceParent={setGatewayWorkspaceParent}
-            onReorderWorkspaces={reorderGatewayWorkspaces}
             onCopySessionInformation={copySessionInformation}
             onCopyWorkspaceInformation={copyWorkspaceInformation}
             onSelectWorkspaceSession={handleSelectAgentSession}
             activeSession={activeSession}
             sessionAttachmentSummaries={state.sessionAttachmentSummaries}
             onCreateSession={handleCreateSession}
+            onCreateSessionInFolder={handleCreateSessionInFolder}
+            onCreateSessionFolder={handleCreateSessionFolder}
+            onSessionFolderDeleted={handleSessionFolderDeleted}
+            catalogRefreshVersion={sessionCatalogRefreshVersion}
             flexRatio={mainAreaRatios.agent_sessions}
+            preferences={agentSessionsPreferences}
+            onPreferencesChange={(updater) => {
+              persistUiSettings((current) => ({
+                session_sidebar: updater(current.session_sidebar),
+              }));
+            }}
             customizationsCollapsed={customizationsCollapsed}
             customizationsHeight={customizationsHeight}
             onCustomizationsCollapsedChange={(collapsed) => {
@@ -906,13 +1057,27 @@ export default function AppShell() {
             sessionChangesLoadedAt={state.sessionChangesLoadedAt}
             searchOpen={fileTreeSearchOpen}
             collapseVersion={fileTreeCollapseVersion}
-            onTabChange={setAuxiliaryTab}
+            expandedFileTreePaths={expandedFileTreePaths}
+            onExpandedFileTreePathsChange={(paths) => {
+              if (!activeSessionWorkspaceId) {
+                return;
+              }
+              persistUiSettings((current) => ({
+                workspace_file_tree: {
+                  expanded_paths_by_workspace: {
+                    ...current.workspace_file_tree.expanded_paths_by_workspace,
+                    [activeSessionWorkspaceId]: paths,
+                  },
+                },
+              }));
+            }}
+            onTabChange={handleAuxiliaryTabChange}
             onToggleSearch={() => {
-              setAuxiliaryTab("files");
+              handleAuxiliaryTabChange("files");
               setFileTreeSearchOpen((open) => !open);
             }}
             onCollapseAll={() => {
-              setAuxiliaryTab("files");
+              handleAuxiliaryTabChange("files");
               setFileTreeCollapseVersion((version) => version + 1);
             }}
             onSelectSessionChangeset={(changesetId) => {

@@ -6,77 +6,90 @@
 /* Do not modify it by hand - just update the pydantic models and then re-run the script
 */
 
-export interface SessionContextGrepRequest {
-  /**
-   * Python 正则表达式
-   */
-  pattern: string;
-  case_sensitive?: boolean;
-  max_matches?: number;
-  expected_snapshot_id?: string | null;
+export interface SessionContextItemDTO {
+  kind: string;
+  locator: string;
+  role?: string | null;
+  record_index?: number | null;
+  text?: string | null;
+  reasoning?: string | null;
+  tool_summary?: string[];
+  tool_calls?: {
+    [k: string]: unknown;
+  }[];
+  tool_results?: {
+    [k: string]: unknown;
+  }[];
+  data?: {
+    [k: string]: unknown;
+  } | null;
+  raw_record?: {
+    [k: string]: unknown;
+  } | null;
+  truncated?: boolean;
 }
-export interface SessionContextGrepResultDTO {
-  session_id: string;
-  pattern: string;
-  case_sensitive: boolean;
-  context_snapshot: SessionContextSnapshotMetadataDTO;
-  total_matching_lines: number;
-  returned_match_count: number;
-  matches_truncated: boolean;
-  matches?: SessionContextMatchDTO[];
+export interface SessionContextPartialErrorDTO {
+  resource: string;
+  error: string;
 }
-export interface SessionContextSnapshotMetadataDTO {
-  snapshot_id: string;
-  content_sha256: string;
-  generated_at: string;
-  line_count: number;
-  raw_message_count: number;
-  byte_count: number;
-  compacted: boolean;
-  compaction_cutoff?: number | null;
-  history_file_path?: string | null;
-  expected_snapshot_id?: string | null;
-  consistency: "not_checked" | "matched" | "changed";
-  warning?: string | null;
-}
-export interface SessionContextMatchDTO {
-  line_number: number;
-  match_start: number;
-  match_end: number;
-  preview: string;
-  preview_truncated_left: boolean;
-  preview_truncated_right: boolean;
-  line_sha256: string;
-}
-export interface SessionContextLineDTO {
-  line_number: number;
-  text: string;
-  original_chars: number;
-  truncated: boolean;
-  line_sha256: string;
+export interface SessionContextReadRequest {
+  resource: string;
+  view?: "overview" | "messages" | "records" | "information" | "inventory";
+  include?: ("visible_text" | "reasoning" | "tool_summary" | "tool_calls" | "tool_results" | "system" | "raw_record")[];
+  recent_rounds?: number;
+  include_initial_goal?: boolean;
+  cursor?: string | null;
+  limit?: number;
+  max_chars?: number;
+  expected_revision?: string | null;
 }
 export interface SessionContextReadResultDTO {
-  session_id: string;
-  context_snapshot: SessionContextSnapshotMetadataDTO;
-  line_start: number;
-  line_end: number;
-  has_more: boolean;
-  next_line_start?: number | null;
-  lines?: SessionContextLineDTO[];
+  resource: string;
+  view: "overview" | "messages" | "records" | "information" | "inventory";
+  revision: string;
+  compacted?: boolean;
+  compaction_cutoff?: number | null;
+  raw_message_count?: number;
+  effective_record_count?: number;
+  returned_chars?: number;
+  truncated?: boolean;
+  has_more?: boolean;
+  next_cursor?: string | null;
+  items?: SessionContextItemDTO[];
+  partial_errors?: SessionContextPartialErrorDTO[];
+  omitted_partial_error_count?: number;
 }
-export interface SessionRecentAssistantTextMessageDTO {
-  role?: "assistant";
-  type?: "text";
-  text: string;
+export interface SessionContextSearchMatchDTO {
+  locator: string;
+  preview: string;
+  source: "effective_context" | "session_catalog" | "session_information";
+  revision: string;
+  record_index?: number | null;
+  match_start: number;
+  match_end: number;
 }
-export interface SessionRecentTextMessagesDTO {
-  session_id: string;
-  rounds: number;
-  user_message_count: number;
-  context_snapshot: SessionContextSnapshotMetadataDTO;
-  messages?: (SessionRecentUserTextMessageDTO | SessionRecentAssistantTextMessageDTO)[];
+export interface SessionContextSearchRequest {
+  resource: string;
+  query: string;
+  sources?: ("effective_context" | "session_catalog" | "session_information")[];
+  match_mode?: "literal" | "regex";
+  case_sensitive?: boolean;
+  max_results?: number;
+  max_chars?: number;
+  cursor?: string | null;
+  expected_revision?: string | null;
 }
-export interface SessionRecentUserTextMessageDTO {
-  role?: "user";
-  text: string;
+export interface SessionContextSearchResultDTO {
+  resource: string;
+  query: string;
+  match_mode: "literal" | "regex";
+  revision: string;
+  returned_chars?: number;
+  truncated?: boolean;
+  has_more?: boolean;
+  next_cursor?: string | null;
+  total_matches?: number;
+  matches?: SessionContextSearchMatchDTO[];
+  partial_errors?: SessionContextPartialErrorDTO[];
+  omitted_partial_error_count?: number;
 }

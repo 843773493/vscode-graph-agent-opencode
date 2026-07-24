@@ -17,6 +17,8 @@ interface WorkspaceFileTreeProps {
   activeFilePath: string | null;
   searchOpen: boolean;
   collapseVersion: number;
+  expandedPaths: string[];
+  onExpandedPathsChange: (paths: string[]) => void;
   onOpenFile: (node: WorkspaceFileNode) => void;
   onStatusChange: (text: string) => void;
 }
@@ -58,6 +60,8 @@ export default function WorkspaceFileTree({
   activeFilePath,
   searchOpen,
   collapseVersion,
+  expandedPaths: restoredExpandedPaths,
+  onExpandedPathsChange,
   onOpenFile,
   onStatusChange,
 }: WorkspaceFileTreeProps) {
@@ -67,7 +71,7 @@ export default function WorkspaceFileTree({
     [workspaceName, workspaceRoot],
   );
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
-    () => new Set([ROOT_PATH]),
+    () => new Set(restoredExpandedPaths),
   );
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -116,19 +120,26 @@ export default function WorkspaceFileTree({
   );
 
   useEffect(() => {
-    setExpandedPaths(new Set([ROOT_PATH]));
+    const restoredPaths = new Set(restoredExpandedPaths);
+    setExpandedPaths(restoredPaths);
     setDirectories({});
-    void loadDirectory(ROOT_PATH);
-  }, [loadDirectory, workspaceId, workspaceRoot]);
+    for (const path of [...restoredPaths].sort(
+      (left, right) => left.split("/").length - right.split("/").length,
+    )) {
+      void loadDirectory(path);
+    }
+  }, [loadDirectory, restoredExpandedPaths, workspaceId, workspaceRoot]);
 
   useEffect(() => {
     if (lastCollapseVersionRef.current === collapseVersion) {
       return;
     }
     lastCollapseVersionRef.current = collapseVersion;
-    setExpandedPaths(new Set([ROOT_PATH]));
+    const collapsedPaths = [ROOT_PATH];
+    setExpandedPaths(new Set(collapsedPaths));
+    onExpandedPathsChange(collapsedPaths);
     onStatusChange("文件树已全部折叠");
-  }, [collapseVersion, onStatusChange]);
+  }, [collapseVersion, onExpandedPathsChange, onStatusChange]);
 
   useEffect(() => {
     if (!searchOpen) {
@@ -147,6 +158,7 @@ export default function WorkspaceFileTree({
           void loadDirectory(ROOT_PATH);
         }
       }
+      onExpandedPathsChange([...next].sort());
       return next;
     });
     onStatusChange(`工作区根目录: ${workspaceRoot || rootLabel}`);
@@ -170,6 +182,7 @@ export default function WorkspaceFileTree({
           void loadDirectory(node.path);
         }
       }
+      onExpandedPathsChange([...next].sort());
       return next;
     });
   };

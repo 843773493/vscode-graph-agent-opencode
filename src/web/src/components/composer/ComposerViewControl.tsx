@@ -4,6 +4,7 @@ import {
   type ViewOption,
 } from "../../state/contentViews";
 import type { ConversationContentView } from "../../types/frontend";
+import AnchoredOverlay from "../AnchoredOverlay";
 
 export default function ComposerViewControl({
   controlRef,
@@ -11,6 +12,7 @@ export default function ComposerViewControl({
   selectedView,
   open,
   onToggle,
+  onClose,
   onSelect,
   onKeyDown,
 }: {
@@ -19,6 +21,7 @@ export default function ComposerViewControl({
   selectedView: ConversationContentView;
   open: boolean;
   onToggle: () => void;
+  onClose: () => void;
   onSelect: (view: ConversationContentView) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void;
 }): React.ReactNode {
@@ -49,7 +52,12 @@ export default function ComposerViewControl({
           />
         </svg>
       </button>
-      {open && (
+      <AnchoredOverlay
+        open={open}
+        anchorRef={controlRef}
+        placement="top-start"
+        onClose={onClose}
+      >
         <div className="composer-view-menu" role="menu">
           {COMPOSER_VIEW_OPTIONS.map((option) => (
             <button
@@ -70,7 +78,7 @@ export default function ComposerViewControl({
             </button>
           ))}
         </div>
-      )}
+      </AnchoredOverlay>
     </div>
   );
 }

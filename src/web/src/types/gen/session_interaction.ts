@@ -137,9 +137,12 @@ export interface SessionDTO {
   title: string;
   title_source?: "default" | "user" | "auto";
   current_agent_id: string;
+  current_provider_id?: string | null;
   parent_session_id?: string | null;
+  context_source_session_id?: string | null;
   kind?: "normal" | "context_fork" | "delegated";
   delegation?: SessionDelegationDTO | null;
+  generation_origin?: SessionGenerationOriginDTO | null;
 }
 export interface SessionDelegationDTO {
   parent_session_id: string;
@@ -148,6 +151,17 @@ export interface SessionDelegationDTO {
   subagent_type: string;
   start_status?: "pending" | "running" | "failed";
   start_error?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * 会话由通用生成器创建时的不可变来源。
+ */
+export interface SessionGenerationOriginDTO {
+  generator_id: string;
+  run_id: string;
+  idempotency_key: string;
+  generator_type_id: string;
+  generator_type_version: string;
   [k: string]: unknown;
 }
 export interface SessionExecutionEventDTO {

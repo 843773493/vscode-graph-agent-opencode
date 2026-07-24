@@ -9,7 +9,9 @@ export type MainAreaKey = keyof WebUiMainAreaRatios;
 
 export const DEFAULT_MAIN_AREA_RATIOS: WebUiMainAreaRatios = {
   agent_sessions: 1,
-  chat: 1,
+  // OpenClaw 桌面布局使用 258px 侧栏，其余宽度交给会话区；折算为常用
+  // 1024px 工作台宽度后约为 1:3，同时保留当前可拖拽、可持久化的比例模型。
+  chat: 3,
   workspace_preview: 1,
   auxiliary: 1,
 };

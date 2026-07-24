@@ -1,13 +1,14 @@
 import type { WebUiSettings } from "../types/backend";
+import {
+  createDefaultWebUiSettings,
+  normalizeWebUiSettings,
+} from "./uiSettings/preferences";
 
 const LAST_SESSION_STORAGE_KEY = "boxteam.web.currentSessionId";
 const UI_SETTINGS_CACHE_KEY = "boxteam.web.uiSettings";
 
 function emptyUiSettings(): WebUiSettings {
-  return {
-    layout: {},
-    recent_local_workspace_paths: [],
-  };
+  return createDefaultWebUiSettings();
 }
 
 export function readLastSessionId(): string | null {
@@ -40,12 +41,7 @@ export function readCachedUiSettings(): WebUiSettings {
     return emptyUiSettings();
   }
   const parsed = JSON.parse(raw) as Partial<WebUiSettings>;
-  return {
-    layout: parsed.layout ?? {},
-    recent_local_workspace_paths: Array.isArray(parsed.recent_local_workspace_paths)
-      ? parsed.recent_local_workspace_paths
-      : [],
-  };
+  return normalizeWebUiSettings(parsed);
 }
 
 export function writeCachedUiSettings(settings: WebUiSettings): void {

@@ -7,7 +7,7 @@ import {
 } from "react";
 import {
   getSession,
-  listMessages,
+  SessionStreamIdleTimeoutError,
   streamSessionEvents,
   TraceCursorGoneError,
   type SessionStreamEvent,
@@ -15,13 +15,11 @@ import {
 import { listPendingRequests } from "../pendingRequestsApi";
 import { cloneMaps } from "../state/appStateMaps";
 import {
-  updateAttachmentSummariesFromMessages,
   updateAttachmentSummariesFromTraces,
 } from "../state/attachments";
 import {
   conversationMatchesTraceEvent,
   writePendingSnapshot,
-  removePendingForTraceEvent,
   writePendingList,
 } from "../state/conversations";
 import {
@@ -30,13 +28,18 @@ import {
   dedupeTraceEvents,
   isJobTerminalTraceType,
   isTerminalTraceType,
-  terminalStatusTextForEvent,
   terminalStatusForEvent,
   tracePayloadString,
 } from "../state/traceEvents";
 import { replaceSessionMetadata } from "../state/session/sessions";
 import { sessionScopeKey } from "../state/session/sessionScope";
 import type { AppState, ConversationView } from "../types/frontend";
+import {
+  ACTIVE_JOB_RECONCILE_INTERVAL_MS,
+  SESSION_STREAM_IDLE_TIMEOUT_MS,
+  WORKSPACE_SESSION_FALLBACK_REFRESH_MS,
+  sessionStreamReconnectDelay,
+} from "./sessionEventStreamPolicy";
 import {
   fetchWorkspaceSessionListSnapshot,
   isCurrentWorkspaceSessionListSnapshot,
@@ -45,6 +48,10 @@ import {
   recoverTraceSnapshot,
   waitForReconnect,
 } from "./sessionEventStreamRecovery";
+import {
+  reconcileActiveJob,
+  refreshTerminalSession,
+} from "./sessionJobReconciliation";
 
 type SetAppState = Dispatch<SetStateAction<AppState>>;
 
@@ -128,61 +135,19 @@ async function refreshWorkspaceSessionList(
   });
 }
 
-async function refreshTerminalSession(
-  apiPort: number,
-  sessionId: string,
-  workspaceId: string | null,
-  sessionCacheKey: string,
-  terminalTraceEvent: ReturnType<typeof buildTraceEvent>,
-  setState: SetAppState,
-) {
-  const [messages, updatedSession, pendingSnapshot] = await Promise.all([
-    listMessages(apiPort, sessionId, workspaceId),
-    getSession(apiPort, sessionId, workspaceId),
-    listPendingRequests(apiPort, sessionId, workspaceId),
-  ]);
-  setState((latest) => {
-    if (workspaceId && latest.currentSessionWorkspaceId !== workspaceId) {
-      return latest;
-    }
-    const latestNext = replaceSessionMetadata(latest, updatedSession, workspaceId);
-    latestNext.currentSessionWorkspaceId =
-      workspaceId ?? latestNext.currentSessionWorkspaceId;
-    removePendingForTraceEvent(
-      latestNext.pendingConversations,
-      sessionCacheKey,
-      terminalTraceEvent,
-    );
-    writePendingSnapshot(
-      latestNext.pendingConversations,
-      latestNext.activeJobIdsBySession,
-      pendingSnapshot,
-      sessionCacheKey,
-    );
-    if (latest.currentSession?.session_id !== sessionId) {
-      return latestNext;
-    }
-    latestNext.messages = messages.items;
-    updateAttachmentSummariesFromMessages(
-      latestNext.sessionAttachmentSummaries,
-      latestNext.messages,
-    );
-    latestNext.status = terminalStatusTextForEvent(terminalTraceEvent.type);
-    return latestNext;
-  });
-}
-
 export function useSessionEventStream({
   apiPort,
   sessionId,
   workspaceId,
   sessionCacheKey,
+  activeJobId,
   setState,
 }: {
   apiPort: number | null;
   sessionId: string | null;
   workspaceId: string | null;
   sessionCacheKey: string | null;
+  activeJobId: string | null;
   setState: SetAppState;
 }) {
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -205,10 +170,16 @@ export function useSessionEventStream({
     const targetWorkspaceId = workspaceId;
     const targetSessionCacheKey = sessionCacheKey ?? sessionId;
     lastEventIdRef.current = null;
-    const refreshWorkspaceSessionsForStream = () => {
-      if (!targetWorkspaceId) {
+    let sessionListRefreshInFlight = false;
+    const refreshWorkspaceSessionsForStream = (force: boolean = false) => {
+      if (
+        !targetWorkspaceId
+        || sessionListRefreshInFlight
+        || (!force && document.visibilityState === "hidden")
+      ) {
         return;
       }
+      sessionListRefreshInFlight = true;
       void refreshWorkspaceSessionList(
         apiPort,
         targetWorkspaceId,
@@ -219,13 +190,27 @@ export function useSessionEventStream({
           ...latest,
           status: `刷新工作区会话失败: ${message}`,
         }));
+      }).finally(() => {
+        sessionListRefreshInFlight = false;
       });
     };
-    refreshWorkspaceSessionsForStream();
+    refreshWorkspaceSessionsForStream(true);
+    // TODO: 工作区摘要事件流落地后删除这一低频完整快照兜底。
     const sessionListRefreshIntervalId = window.setInterval(
       refreshWorkspaceSessionsForStream,
-      2_000,
+      WORKSPACE_SESSION_FALLBACK_REFRESH_MS,
     );
+    const refreshVisibleWorkspaceSessions = () => {
+      if (document.visibilityState !== "hidden") {
+        refreshWorkspaceSessionsForStream();
+      }
+    };
+    document.addEventListener(
+      "visibilitychange",
+      refreshVisibleWorkspaceSessions,
+    );
+    window.addEventListener("focus", refreshVisibleWorkspaceSessions);
+    window.addEventListener("online", refreshVisibleWorkspaceSessions);
     const pendingStreamEvents: SessionStreamEvent[] = [];
     let flushTimerId: number | null = null;
 
@@ -400,7 +385,7 @@ export function useSessionEventStream({
           sessionId,
           targetWorkspaceId,
           targetSessionCacheKey,
-          traceEvents[terminalEventIndex],
+          traceEvents[terminalEventIndex] ?? null,
           setState,
         ).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
@@ -428,9 +413,10 @@ export function useSessionEventStream({
 
     const connect = async () => {
       let snapshotLoaded = false;
+      let reconnectAttempt = 0;
       while (!controller.signal.aborted && !snapshotLoaded) {
         try {
-          lastEventIdRef.current = await recoverTraceSnapshot(
+          const recovered = await recoverTraceSnapshot(
             apiPort,
             sessionId,
             targetWorkspaceId,
@@ -438,6 +424,7 @@ export function useSessionEventStream({
             setState,
             "事件历史加载完成",
           );
+          lastEventIdRef.current = recovered.lastEventId;
           await refreshSessionMetadata(
             apiPort,
             sessionId,
@@ -447,13 +434,18 @@ export function useSessionEventStream({
             false,
           );
           snapshotLoaded = true;
+          reconnectAttempt = 0;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           setState((prev) => ({
             ...prev,
             status: `加载事件历史失败，正在重试: ${message}`,
           }));
-          await waitForReconnect(controller.signal, 500);
+          await waitForReconnect(
+            controller.signal,
+            sessionStreamReconnectDelay(reconnectAttempt),
+          );
+          reconnectAttempt += 1;
         }
       }
 
@@ -464,6 +456,10 @@ export function useSessionEventStream({
             afterEventId: lastEventIdRef.current,
             signal: controller.signal,
             onEvent: enqueueStreamEvent,
+            onActivity: () => {
+              reconnectAttempt = 0;
+            },
+            idleTimeoutMs: SESSION_STREAM_IDLE_TIMEOUT_MS,
           });
         } catch (error) {
           if (controller.signal.aborted) {
@@ -471,7 +467,7 @@ export function useSessionEventStream({
           }
           if (error instanceof TraceCursorGoneError) {
             try {
-              lastEventIdRef.current = await recoverTraceSnapshot(
+              const recovered = await recoverTraceSnapshot(
                 apiPort,
                 sessionId,
                 targetWorkspaceId,
@@ -479,6 +475,8 @@ export function useSessionEventStream({
                 setState,
                 "事件游标已恢复，正在继续接收",
               );
+              lastEventIdRef.current = recovered.lastEventId;
+              reconnectAttempt = 0;
             } catch (recoveryError) {
               const message =
                 recoveryError instanceof Error
@@ -493,13 +491,19 @@ export function useSessionEventStream({
             const message = error instanceof Error ? error.message : String(error);
             setState((prev) => ({
               ...prev,
-              status: `事件流断开，正在重连: ${message}`,
+              status: error instanceof SessionStreamIdleTimeoutError
+                ? `事件流心跳超时，正在重连: ${message}`
+                : `事件流断开，正在重连: ${message}`,
             }));
           }
         }
 
         if (!controller.signal.aborted) {
-          await waitForReconnect(controller.signal, 500);
+          await waitForReconnect(
+            controller.signal,
+            sessionStreamReconnectDelay(reconnectAttempt),
+          );
+          reconnectAttempt += 1;
         }
       }
     };
@@ -511,6 +515,12 @@ export function useSessionEventStream({
     return () => {
       window.clearTimeout(connectTimerId);
       window.clearInterval(sessionListRefreshIntervalId);
+      document.removeEventListener(
+        "visibilitychange",
+        refreshVisibleWorkspaceSessions,
+      );
+      window.removeEventListener("focus", refreshVisibleWorkspaceSessions);
+      window.removeEventListener("online", refreshVisibleWorkspaceSessions);
       if (flushTimerId !== null) {
         window.clearTimeout(flushTimerId);
       }
@@ -518,6 +528,68 @@ export function useSessionEventStream({
     };
   }, [
     abortCurrentStream,
+    apiPort,
+    sessionCacheKey,
+    sessionId,
+    setState,
+    workspaceId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !apiPort
+      || !sessionId
+      || !sessionCacheKey
+      || !activeJobId
+    ) {
+      return;
+    }
+
+    let reconciliationInFlight = false;
+    const reconcile = () => {
+      if (
+        reconciliationInFlight
+        || document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+      reconciliationInFlight = true;
+      void reconcileActiveJob(
+        apiPort,
+        sessionId,
+        workspaceId,
+        sessionCacheKey,
+        activeJobId,
+        setState,
+      ).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setState((latest) => ({
+          ...latest,
+          status: `对账运行中任务失败: ${message}`,
+        }));
+      }).finally(() => {
+        reconciliationInFlight = false;
+      });
+    };
+    const reconcileWhenVisible = () => {
+      if (document.visibilityState !== "hidden") {
+        reconcile();
+      }
+    };
+    const intervalId = window.setInterval(
+      reconcile,
+      ACTIVE_JOB_RECONCILE_INTERVAL_MS,
+    );
+    document.addEventListener("visibilitychange", reconcileWhenVisible);
+    window.addEventListener("online", reconcileWhenVisible);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", reconcileWhenVisible);
+      window.removeEventListener("online", reconcileWhenVisible);
+    };
+  }, [
+    activeJobId,
     apiPort,
     sessionCacheKey,
     sessionId,

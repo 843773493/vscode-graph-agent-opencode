@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AppProvider } from './hooks';
+import WarmConfirmProvider from './components/WarmConfirmProvider';
 import '@vscode/codicons/dist/codicon.css';
 import './index.css';
 import './styles/panelShared.css';
@@ -11,6 +12,7 @@ import './styles/requestLog.css';
 import './styles/resourcePanel.css';
 import './styles/workspace.css';
 import './styles/agentSessionsPanel.css';
+import './styles/sessionResourceExplorer.css';
 import './styles/workbenchLayout.css';
 import './styles/toolControl.css';
 import './styles/chatMessages.css';
@@ -34,7 +36,9 @@ window.__graphAgentRoot = root;
 root.render(
   <React.StrictMode>
     <AppProvider>
-      <App />
+      <WarmConfirmProvider>
+        <App />
+      </WarmConfirmProvider>
     </AppProvider>
   </React.StrictMode>,
 );

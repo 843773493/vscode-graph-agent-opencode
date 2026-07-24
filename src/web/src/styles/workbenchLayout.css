@@ -728,8 +728,8 @@ button.files-tree-item:hover {
   margin-top: 10px;
 }
 
-.chat-stream[data-expand-details="false"] .event-card-thought,
-.chat-stream[data-expand-details="false"] .event-card-tool_call {
+.chat-stream-virtual-shell[data-expand-details="false"] .event-card-thought,
+.chat-stream-virtual-shell[data-expand-details="false"] .event-card-tool_call {
   display: none;
 }
 

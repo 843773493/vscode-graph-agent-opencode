@@ -6,7 +6,7 @@ import {
 
 const defaults = resolveMainAreaRatios(null);
 if (JSON.stringify(defaults) !== JSON.stringify(DEFAULT_MAIN_AREA_RATIOS)) {
-  throw new Error("主页四区默认比例不是 1:1:1:1");
+  throw new Error("主页四区默认比例不是 1:3:1:1");
 }
 
 const resized = resizeAdjacentMainAreas({
@@ -17,7 +17,7 @@ const resized = resizeAdjacentMainAreas({
   rightWidth: 400,
   deltaX: 100,
 });
-if (resized.chat !== 1.25 || resized.workspace_preview !== 0.75) {
+if (resized.chat !== 2.5 || resized.workspace_preview !== 1.5) {
   throw new Error(`相邻区域比例调整错误: ${JSON.stringify(resized)}`);
 }
 if (resized.agent_sessions !== 1 || resized.auxiliary !== 1) {

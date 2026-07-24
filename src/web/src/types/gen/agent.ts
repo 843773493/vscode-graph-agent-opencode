@@ -13,4 +13,18 @@ export interface AgentDTO {
   model: string;
   tools: string[];
   capabilities: string[];
+  providers: AgentProviderDTO[];
+  workspace_default?: boolean;
+}
+export interface AgentProviderDTO {
+  provider_id: string;
+  model: string;
+  custom_llm_provider: string;
+  workspace_default?: boolean;
+}
+export interface WorkspaceDefaultAgentUpdateRequest {
+  agent_id: string;
+}
+export interface WorkspaceDefaultProviderUpdateRequest {
+  provider_id: string;
 }

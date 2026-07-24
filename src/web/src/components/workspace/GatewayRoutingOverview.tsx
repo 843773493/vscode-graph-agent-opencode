@@ -1,9 +1,11 @@
+import React, { useRef, useState } from "react";
 import type {
   GatewayServiceStatus,
   GatewayWorkspace,
 } from "../../types/backend";
 import type { GatewayWorkspaceGroup } from "./gatewayWorkspacePresentation";
 import { workspaceKindLabel } from "./gatewayWorkspacePresentation";
+import AnchoredOverlay from "../AnchoredOverlay";
 
 interface GatewayRoutingOverviewProps {
   groups: GatewayWorkspaceGroup[];
@@ -66,6 +68,63 @@ function serviceEntries(workspace: GatewayWorkspace) {
 
 function workspaceRemoteId(workspace: GatewayWorkspace): string | null {
   return workspace.remote?.remote_workspace_id ?? null;
+}
+
+function GatewayAnchoredPopover({
+  className,
+  triggerClassName,
+  contentClassName,
+  ariaLabel,
+  popupRole = "menu",
+  placement,
+  trigger,
+  children,
+}: {
+  className: string;
+  triggerClassName: string;
+  contentClassName: string;
+  ariaLabel: string;
+  popupRole?: "menu" | "dialog";
+  placement: "bottom-start" | "bottom-end";
+  trigger: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  return (
+    <div className={className}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={triggerClassName}
+        aria-label={ariaLabel}
+        aria-haspopup={popupRole}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {trigger}
+      </button>
+      <AnchoredOverlay
+        open={open}
+        anchorRef={triggerRef}
+        placement={placement}
+        onClose={() => setOpen(false)}
+      >
+        <div
+          className={contentClassName}
+          role={popupRole}
+          onClick={(event) => {
+            const target = event.target;
+            if (target instanceof Element && target.closest("button:not(:disabled)")) {
+              setOpen(false);
+            }
+          }}
+        >
+          {children}
+        </div>
+      </AnchoredOverlay>
+    </div>
+  );
 }
 
 export default function GatewayRoutingOverview({
@@ -231,21 +290,26 @@ export default function GatewayRoutingOverview({
                           {services.length > 0 ? (
                             <div className="gateway-route-services">
                               {services.map(([name, service]) => (
-                                <details
+                                <GatewayAnchoredPopover
                                   key={name}
                                   className={`gateway-route-service ${service.status}`}
+                                  triggerClassName="gateway-route-service-trigger"
+                                  contentClassName="gateway-route-service-content"
+                                  ariaLabel={`${serviceLabel(name)} 服务详情`}
+                                  popupRole="dialog"
+                                  placement="bottom-start"
+                                  trigger={(
+                                    <>
+                                      <span />
+                                      {serviceLabel(name)}
+                                      <code>{serviceRouteLabel(service)}</code>
+                                    </>
+                                  )}
                                 >
-                                  <summary>
-                                    <span />
-                                    {serviceLabel(name)}
-                                    <code>{serviceRouteLabel(service)}</code>
-                                  </summary>
-                                  <div>
-                                    <span>健康检查：{service.health_path}</span>
-                                    <span>Gateway 端点：{service.local_url ?? "未建立"}</span>
-                                    {service.error ? <strong>{service.error}</strong> : null}
-                                  </div>
-                                </details>
+                                  <span>健康检查：{service.health_path}</span>
+                                  <span>Gateway 端点：{service.local_url ?? "未建立"}</span>
+                                  {service.error ? <strong>{service.error}</strong> : null}
+                                </GatewayAnchoredPopover>
                               ))}
                             </div>
                           ) : null}
@@ -283,11 +347,16 @@ export default function GatewayRoutingOverview({
                           >
                             打开工作台
                           </button>
-                          <details className="gateway-workspace-menu">
-                            <summary aria-label={`${workspace.name} 更多操作`}>
+                          <GatewayAnchoredPopover
+                            className="gateway-workspace-menu"
+                            triggerClassName="gateway-workspace-menu-trigger"
+                            contentClassName="gateway-workspace-menu-content"
+                            ariaLabel={`${workspace.name} 更多操作`}
+                            placement="bottom-end"
+                            trigger={(
                               <span className="codicon codicon-ellipsis" aria-hidden="true" />
-                            </summary>
-                            <div>
+                            )}
+                          >
                               <button
                                 type="button"
                                 disabled={busy}
@@ -372,8 +441,7 @@ export default function GatewayRoutingOverview({
                                     : "移除"}
                                 </button>
                               ) : null}
-                            </div>
-                          </details>
+                          </GatewayAnchoredPopover>
                         </div>
                       </article>
                     );

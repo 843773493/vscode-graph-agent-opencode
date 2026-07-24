@@ -1,12 +1,10 @@
 import React, {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import {
   getToolCatalog,
   getToolTestRun,
@@ -21,6 +19,7 @@ import type {
   ToolTestRun,
 } from "../../types/toolTesting";
 import ComposerToolTree, { type ToolGroup } from "./ComposerToolTree";
+import AnchoredOverlay from "../AnchoredOverlay";
 
 const TOOL_GROUP_KIND_ORDER: Record<ToolKind, number> = {
   default: 0,
@@ -59,8 +58,6 @@ export default function ComposerToolControl({
   const [error, setError] = useState<string | null>(null);
   const controlRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const menuRef = useRef<HTMLElement | null>(null);
-  const [menuPosition, setMenuPosition] = useState({ left: 8, bottom: 8, width: 460 });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,54 +86,6 @@ export default function ComposerToolControl({
       onStatus("工具列表加载失败");
     });
   }, [load, onStatus, open]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node) {
-        if (controlRef.current?.contains(event.target) || menuRef.current?.contains(event.target)) {
-          return;
-        }
-      }
-      setOpen(false);
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
-
-  const updateMenuPosition = useCallback(() => {
-    const button = buttonRef.current;
-    if (!button) {
-      return;
-    }
-    const rect = button.getBoundingClientRect();
-    const viewportPadding = 8;
-    const width = Math.min(460, window.innerWidth - viewportPadding * 2);
-    const left = Math.min(
-      Math.max(viewportPadding, rect.right - width),
-      window.innerWidth - width - viewportPadding,
-    );
-    setMenuPosition({
-      left,
-      bottom: window.innerHeight - rect.top + 8,
-      width,
-    });
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!open) {
-      return;
-    }
-    updateMenuPosition();
-    window.addEventListener("resize", updateMenuPosition);
-    window.addEventListener("scroll", updateMenuPosition, true);
-    return () => {
-      window.removeEventListener("resize", updateMenuPosition);
-      window.removeEventListener("scroll", updateMenuPosition, true);
-    };
-  }, [open, updateMenuPosition]);
 
   useEffect(() => {
     if (testingTools.size === 0) {
@@ -306,12 +255,15 @@ export default function ComposerToolControl({
       >
         <span className="codicon codicon-settings" aria-hidden="true" />
       </button>
-      {open && typeof document !== "undefined" ? createPortal(
+      <AnchoredOverlay
+        open={open}
+        anchorRef={buttonRef}
+        placement="top-end"
+        onClose={() => setOpen(false)}
+      >
         <section
-          ref={menuRef}
           className="composer-tool-menu"
           aria-label="工具选择与测试"
-          style={menuPosition}
         >
           <header className="composer-tool-menu-header">
             <div>
@@ -358,9 +310,8 @@ export default function ComposerToolControl({
             onToggleTool={toggleTool}
             onRunTest={runTest}
           />
-        </section>,
-        document.body,
-      ) : null}
+        </section>
+      </AnchoredOverlay>
     </div>
   );
 }

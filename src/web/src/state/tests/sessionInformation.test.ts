@@ -31,7 +31,7 @@ function information(): SessionInformationSnapshot {
       name: "project",
       root_path: "/workspace/project",
     },
-    storage_path: "/workspace/project/.boxteam/sessions/ses_test",
+    storage_path: "/workspace/project/.boxteam/sessions/项目--12345678/会话--87654321",
     execution: {
       job_id: null,
       status: "idle",

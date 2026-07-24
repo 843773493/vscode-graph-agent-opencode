@@ -1,15 +1,18 @@
 import React from "react";
 import type { SlashCommandOption } from "../../state/slashCommands";
+import AnchoredOverlay from "../AnchoredOverlay";
 
 export default function ComposerSlashCommandMenu({
   query,
   commands,
   activeIndex,
+  anchorRef,
   onSelect,
 }: {
   query: string | null;
   commands: SlashCommandOption[];
   activeIndex: number;
+  anchorRef: React.RefObject<HTMLTextAreaElement | null>;
   onSelect: (command: SlashCommandOption) => void;
 }): React.ReactNode {
   if (query === null) {
@@ -17,6 +20,13 @@ export default function ComposerSlashCommandMenu({
   }
 
   return (
+    <AnchoredOverlay
+      open
+      anchorRef={anchorRef}
+      placement="top-start"
+      dismissible={false}
+      onClose={() => undefined}
+    >
     <div
       className="composer-slash-menu"
       role="listbox"
@@ -72,5 +82,6 @@ export default function ComposerSlashCommandMenu({
         </div>
       )}
     </div>
+    </AnchoredOverlay>
   );
 }

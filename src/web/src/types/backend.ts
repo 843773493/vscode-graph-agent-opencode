@@ -2,6 +2,7 @@
 // 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
 
 export type { AgentDTO as Agent } from "./gen/agent";
+export type { JobDTO as Job, JobStatus } from "./gen/job";
 import type { LLMRequestLogRecordDTO } from "./gen/llm_request_log";
 import type { PendingRequestOrderItem as PendingRequestOrderItemType } from "./gen/pending_request";
 export type { AttachmentRef } from "./gen/attachment";
@@ -302,6 +303,7 @@ export interface WebUiLayoutSettings {
   workbench_view?: "sessions" | "gateway" | null;
   agent_sessions_panel_open?: boolean | null;
   auxiliary_visible?: boolean | null;
+  auxiliary_tab?: "changes" | "files" | null;
   main_area_ratios?: WebUiMainAreaRatios | null;
   workspace_preview_visible?: boolean | null;
   workspace_preview_maximized?: boolean | null;
@@ -320,13 +322,38 @@ export interface WebUiLayoutSettings {
   pending_message_default_action?: "steering" | "queued" | null;
 }
 
+export interface WebUiSessionSidebarSettings {
+  filter_mode: "all" | "current" | "attachments" | "agent" | "named";
+  sort_mode: "created" | "updated";
+  grouping_mode: "workspace" | "time";
+  workspace_group_capped: boolean;
+  collapsed_workspace_ids: string[];
+  collapsed_session_ids: string[];
+  expanded_root_tree_ids: string[];
+  collapsed_section_ids: string[];
+}
+
+export interface WebUiWorkspaceFileTreeSettings {
+  expanded_paths_by_workspace: Record<string, string[]>;
+}
+
+export interface WebUiGatewayConsoleSettings {
+  view: "routing" | "managed";
+}
+
 export interface WebUiSettings {
   layout: WebUiLayoutSettings;
+  session_sidebar: WebUiSessionSidebarSettings;
+  workspace_file_tree: WebUiWorkspaceFileTreeSettings;
+  gateway_console: WebUiGatewayConsoleSettings;
   recent_local_workspace_paths: string[];
 }
 
 export interface WebUiSettingsUpdate {
   layout?: WebUiLayoutSettings | null;
+  session_sidebar?: Partial<WebUiSessionSidebarSettings> | null;
+  workspace_file_tree?: Partial<WebUiWorkspaceFileTreeSettings> | null;
+  gateway_console?: Partial<WebUiGatewayConsoleSettings> | null;
   recent_local_workspace_paths?: string[] | null;
 }
 
@@ -342,6 +369,135 @@ export interface GatewayDirectoryList {
   entries: GatewayDirectoryEntry[];
   truncated: boolean;
   limit: number;
+}
+
+export interface WorkspaceNavigationNode {
+  node_id: string;
+  kind: "workspace_folder" | "workspace_ref";
+  name: string;
+  parent_node_id?: string | null;
+  workspace_id?: string | null;
+  position: number;
+}
+
+export interface WorkspaceNavigationTree {
+  revision: string;
+  nodes: WorkspaceNavigationNode[];
+}
+
+export interface SessionCatalogNode {
+  node_id: string;
+  kind: "folder" | "session";
+  name: string;
+  parent_node_id?: string | null;
+  session_id?: string | null;
+  folder_id?: string | null;
+  has_children: boolean;
+  storage_relative_path?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface SessionCatalogPage {
+  revision: string;
+  parent_node_id?: string | null;
+  items: SessionCatalogNode[];
+  cursor?: string | null;
+  total: number;
+}
+
+export interface GatewaySessionSearchMatch {
+  workspace_id: string;
+  workspace_name: string;
+  node_id: string;
+  node_kind: "workspace_folder" | "workspace" | "folder" | "session";
+  name: string;
+  session_id?: string | null;
+  relative_path: string;
+  storage_relative_path?: string | null;
+  breadcrumb_names: string[];
+  breadcrumb_node_ids: string[];
+}
+
+export interface GatewaySessionSearchWorkspaceStatus {
+  workspace_id: string;
+  workspace_name: string;
+  status: "available" | "stale" | "unavailable";
+  error?: string | null;
+}
+
+export interface GatewaySessionSearchResults {
+  items: GatewaySessionSearchMatch[];
+  workspaces: GatewaySessionSearchWorkspaceStatus[];
+  total: number;
+}
+
+export type GeneratorSessionStrategyMode =
+  | "new_per_run"
+  | "continue_existing"
+  | "fork_new_and_report_back";
+
+export interface SessionGeneratorDefinition {
+  generator_id: string;
+  name: string;
+  enabled: boolean;
+  status: "ready" | "paused" | "blocked";
+  status_reason?: string | null;
+  revision: number;
+  placement: {
+    kind: "workspace" | "session" | "session_folder";
+    workspace_id: string;
+    session_id?: string | null;
+    folder_id?: string | null;
+  };
+  execution_workspace_id: string;
+  session_strategy: {
+    mode: GeneratorSessionStrategyMode;
+    target?: { workspace_id: string; session_id: string } | null;
+    concurrency: "queue";
+    report_back: "none" | "link" | "summary" | "summary_and_link" | "full" | "continue_agent";
+  };
+  naming: { title_template: string; path_template: string[] };
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SessionGeneratorList {
+  revision: string;
+  items: SessionGeneratorDefinition[];
+}
+
+export interface GenerationRun {
+  run_id: string;
+  generator_id: string;
+  idempotency_key: string;
+  status: "planned" | "dispatching" | "running" | "reporting" | "completed" | "partial" | "failed" | "cancelled" | "skipped";
+  outputs: Array<{
+    kind: "session";
+    workspace_id: string;
+    session_id: string;
+    title?: string | null;
+    navigation_path: string[];
+    storage_relative_path?: string | null;
+  }>;
+  execution_workspace_id?: string | null;
+  message_id?: string | null;
+  job_id?: string | null;
+  report_back_job_id?: string | null;
+  error?: string | null;
+}
+
+export interface GenerationRunList {
+  items: GenerationRun[];
+}
+
+export interface GeneratorPlacementPreview {
+  preview_kind: "logical_physical_path_template";
+  title: string;
+  path_segments: string[];
+  session_path_segment: string;
+  relative_path: string;
 }
 
 export interface SshConnectionOption {

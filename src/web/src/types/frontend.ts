@@ -48,6 +48,7 @@ export interface FrontendReceivedLifecycleEvent
     | "session_context_forked"
     | "session_renamed"
     | "agent_switched"
+    | "model_switched"
     | "context_compacted"
     | "session_load_started"
     | "session_load_completed"
@@ -113,6 +114,10 @@ export interface AppState {
   currentSession: Session | null;
   currentSessionWorkspaceId: string | null;
   messages: Message[];
+  messageHistoryNextCursor: string | null;
+  messageHistoryHasMore: boolean;
+  messageHistoryLoadingOlder: boolean;
+  messageHistoryError: string | null;
   traceEvents: TraceEvent[];
   llmRequestLogs: LLMRequestLogRecord[];
   llmRequestLogsLoadedAt: string | null;

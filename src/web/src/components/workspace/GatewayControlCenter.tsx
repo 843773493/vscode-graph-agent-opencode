@@ -13,6 +13,7 @@ import GatewayRoutingOverview from "./GatewayRoutingOverview";
 import WorkspaceLocalDialog from "./WorkspaceLocalDialog";
 import WorkspaceRenameDialog from "./WorkspaceRenameDialog";
 import WorkspaceSshDialog from "./WorkspaceSshDialog";
+import { useWarmConfirm } from "../WarmConfirmProvider";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
 export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
@@ -41,9 +42,11 @@ interface GatewayControlCenterProps {
   onProbeExternalBackend: (workspaceId: string) => Promise<void>;
   onRename: (workspaceId: string, name: string) => Promise<string>;
   onUseWorkspace: (workspaceId: string) => Promise<void>;
+  consoleView: GatewayConsoleView;
+  onConsoleViewChange: (view: GatewayConsoleView) => void;
 }
 
-type GatewayConsoleView = "routing" | "managed";
+export type GatewayConsoleView = "routing" | "managed";
 
 export default function GatewayControlCenter({
   apiPort,
@@ -65,10 +68,12 @@ export default function GatewayControlCenter({
   onProbeExternalBackend,
   onRename,
   onUseWorkspace,
+  consoleView,
+  onConsoleViewChange,
 }: GatewayControlCenterProps) {
+  const confirm = useWarmConfirm();
   const [localDialogOpen, setLocalDialogOpen] = useState(false);
   const [sshDialogOpen, setSshDialogOpen] = useState(false);
-  const [consoleView, setConsoleView] = useState<GatewayConsoleView>("routing");
   const [renamingWorkspace, setRenamingWorkspace] =
     useState<GatewayWorkspace | null>(null);
   const [health, setHealth] = useState<GatewayHealth | null>(null);
@@ -186,9 +191,11 @@ export default function GatewayControlCenter({
     let action: () => Promise<void>;
     let completedNotice: string;
     if (workspace.runtime_action === "reconnect_remote_gateway") {
-      const confirmed = window.confirm(
-        `重新连接「${workspace.name}」所属的远程 Gateway？\n\n该操作只重建单个 Gateway SSH 隧道，不会直接连接或重启 Workspace 后端。正在使用该远程 Gateway 的请求会短暂中断。`,
-      );
+      const confirmed = await confirm({
+        title: "重新连接远程 Gateway",
+        message: `重新连接“${workspace.name}”所属的远程 Gateway？\n\n该操作只重建单个 Gateway SSH 隧道，不会直接连接或重启 Workspace 后端。正在使用该远程 Gateway 的请求会短暂中断。`,
+        confirmText: "重新连接",
+      });
       if (!confirmed) {
         return;
       }
@@ -215,9 +222,11 @@ export default function GatewayControlCenter({
       (item) =>
         item.key === `remote:${workspace.remote?.gateway_connection_id}`,
     );
-    const confirmed = window.confirm(
-      `重新连接「${workspace.remote.ssh_config_host ?? workspace.remote.host}」？\n\n该连接下的 ${group?.workspaces.length ?? 1} 个工作区会短暂中断。`,
-    );
+    const confirmed = await confirm({
+      title: "重新连接远程 Gateway",
+      message: `重新连接“${workspace.remote.ssh_config_host ?? workspace.remote.host}”？\n\n该连接下的 ${group?.workspaces.length ?? 1} 个工作区会短暂中断。`,
+      confirmText: "重新连接",
+    });
     if (!confirmed) {
       return;
     }
@@ -235,9 +244,11 @@ export default function GatewayControlCenter({
   };
 
   const handleSafeRestart = async (workspace: GatewayWorkspace) => {
-    const confirmed = window.confirm(
-      `安全重启「${workspace.name}」的 Workspace 后端？\n\nGateway 会先停止接收新任务，最多等待 30 秒让 Agent、工具和后台任务结束。若仍有活动任务，将取消本次重启并恢复服务。Terminal 和 Browser 服务不会重启。`,
-    );
+    const confirmed = await confirm({
+      title: "安全重启 Workspace 后端",
+      message: `安全重启“${workspace.name}”的 Workspace 后端？\n\nGateway 会先停止接收新任务，最多等待 30 秒让 Agent、工具和后台任务结束。若仍有活动任务，将取消本次重启并恢复服务。Terminal 和 Browser 服务不会重启。`,
+      confirmText: "安全重启",
+    });
     if (!confirmed) {
       return;
     }
@@ -264,9 +275,12 @@ export default function GatewayControlCenter({
   };
 
   const handleForceRestart = async (workspace: GatewayWorkspace) => {
-    const confirmed = window.confirm(
-      `强制重启「${workspace.name}」的 Workspace 后端？\n\n正在运行的 Agent、工具和后台任务会被明确标记为中断并取消，可能留下尚未完成的外部副作用。`,
-    );
+    const confirmed = await confirm({
+      title: "强制重启 Workspace 后端",
+      message: `强制重启“${workspace.name}”的 Workspace 后端？\n\n正在运行的 Agent、工具和后台任务会被明确标记为中断并取消，可能留下尚未完成的外部副作用。`,
+      confirmText: "强制重启",
+      danger: true,
+    });
     if (!confirmed) {
       return;
     }
@@ -343,7 +357,7 @@ export default function GatewayControlCenter({
             <button
               type="button"
               className={consoleView === "routing" ? "active" : undefined}
-              onClick={() => setConsoleView("routing")}
+              onClick={() => onConsoleViewChange("routing")}
             >
               <span className="codicon codicon-git-merge" aria-hidden="true" />
               工作区与路由
@@ -352,7 +366,7 @@ export default function GatewayControlCenter({
             <button
               type="button"
               className={consoleView === "managed" ? "active" : undefined}
-              onClick={() => setConsoleView("managed")}
+              onClick={() => onConsoleViewChange("managed")}
             >
               <span className="codicon codicon-remote" aria-hidden="true" />
               外部接入
@@ -488,7 +502,7 @@ export default function GatewayControlCenter({
               role="tab"
               aria-selected={consoleView === "routing"}
               className={consoleView === "routing" ? "active" : undefined}
-              onClick={() => setConsoleView("routing")}
+              onClick={() => onConsoleViewChange("routing")}
             >
               路由总览
             </button>
@@ -497,7 +511,7 @@ export default function GatewayControlCenter({
               role="tab"
               aria-selected={consoleView === "managed"}
               className={consoleView === "managed" ? "active" : undefined}
-              onClick={() => setConsoleView("managed")}
+              onClick={() => onConsoleViewChange("managed")}
             >
               外部接入
             </button>

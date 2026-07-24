@@ -23,18 +23,37 @@ function fallbackLabel(kind: MessageMediaKind): string {
 
 function ImageViewer({
   items,
-  sources,
   initialIndex,
+  apiPort,
+  sessionId,
+  workspaceId,
   onClose,
 }: {
   items: MessageMediaItem[];
-  sources: ReadonlyMap<string, string>;
   initialIndex: number;
+  apiPort: number;
+  sessionId: string;
+  workspaceId?: string | null;
   onClose: () => void;
 }): React.ReactNode {
   const [index, setIndex] = React.useState(initialIndex);
   const [scale, setScale] = React.useState(1);
   const item = items[index];
+  const nearbyItems = React.useMemo(() => {
+    const indexes = new Set([
+      index,
+      (index - 1 + items.length) % items.length,
+      (index + 1) % items.length,
+    ]);
+    return items.filter((_, itemIndex) => indexes.has(itemIndex));
+  }, [index, items]);
+  const { sources } = useMessageMediaSources(
+    nearbyItems,
+    apiPort,
+    sessionId,
+    workspaceId,
+    "original",
+  );
   const source = sources.get(item.id);
 
   React.useEffect(() => {
@@ -192,8 +211,10 @@ export default function MessageAttachments({
       {viewerIndex !== null ? (
         <ImageViewer
           items={imageItems}
-          sources={sources}
           initialIndex={viewerIndex}
+          apiPort={apiPort}
+          sessionId={sessionId}
+          workspaceId={workspaceId}
           onClose={() => setViewerIndex(null)}
         />
       ) : null}

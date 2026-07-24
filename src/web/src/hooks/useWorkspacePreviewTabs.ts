@@ -17,6 +17,7 @@ import type {
   WorkspaceFileReference,
   WorkspaceFileSelection,
 } from "../utils/workspaceFileReferences";
+import { useWarmConfirm } from "../components/WarmConfirmProvider";
 
 interface UseWorkspacePreviewTabsOptions {
   apiPort: number;
@@ -46,6 +47,7 @@ export function useWorkspacePreviewTabs({
   onPersistLayout,
   onStatusChange,
 }: UseWorkspacePreviewTabsOptions) {
+  const confirm = useWarmConfirm();
   const [visible, setVisible] = useState(
     () => restoredLayout.workspace_preview_visible ?? false,
   );
@@ -374,7 +376,7 @@ export function useWorkspacePreviewTabs({
     [onStatusChange],
   );
 
-  const beginWorkspaceFileEdit = (path: string) => {
+  const beginWorkspaceFileEdit = async (path: string) => {
     const tab = tabs.find((item) => item.path === path);
     if (!tab || tab.previewType !== "file") {
       throw new Error(`只有已加载的文本文件可以编辑: ${path}`);
@@ -383,7 +385,12 @@ export function useWorkspacePreviewTabs({
       editingPath &&
       editingPath !== path &&
       hasUnsavedEdit &&
-      !window.confirm("当前文件有未保存修改，放弃修改并编辑另一个文件？")
+      !(await confirm({
+        title: "放弃未保存修改",
+        message: "当前文件有未保存修改，放弃修改并编辑另一个文件？",
+        confirmText: "放弃修改",
+        danger: true,
+      }))
     ) {
       return;
     }
@@ -393,10 +400,15 @@ export function useWorkspacePreviewTabs({
     onStatusChange(`正在编辑: ${path}`);
   };
 
-  const cancelWorkspaceFileEdit = () => {
+  const cancelWorkspaceFileEdit = async () => {
     if (
       hasUnsavedEdit &&
-      !window.confirm("放弃当前文件的未保存修改？")
+      !(await confirm({
+        title: "放弃未保存修改",
+        message: "放弃当前文件的未保存修改？",
+        confirmText: "放弃修改",
+        danger: true,
+      }))
     ) {
       return;
     }
@@ -445,11 +457,16 @@ export function useWorkspacePreviewTabs({
     }
   };
 
-  const closeWorkspaceFilePreview = (path: string) => {
+  const closeWorkspaceFilePreview = async (path: string) => {
     if (
       path === editingPath &&
       hasUnsavedEdit &&
-      !window.confirm("该文件有未保存修改，仍要关闭标签吗？")
+      !(await confirm({
+        title: "关闭未保存文件",
+        message: "该文件有未保存修改，仍要关闭标签吗？",
+        confirmText: "关闭标签",
+        danger: true,
+      }))
     ) {
       return;
     }

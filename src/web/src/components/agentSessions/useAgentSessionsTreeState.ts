@@ -1,4 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo } from "react";
+import {
+  stableUiSettingIds,
+  type AgentSessionsPreferences,
+} from "../../state/uiSettings/preferences";
+import type { WebUiSessionSidebarSettings } from "../../types/backend";
 
 function toggleSetValue(values: Set<string>, value: string): Set<string> {
   const next = new Set(values);
@@ -10,39 +15,61 @@ function toggleSetValue(values: Set<string>, value: string): Set<string> {
   return next;
 }
 
-export function useAgentSessionsTreeState() {
-  const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = useState<Set<string>>(
-    () => new Set(),
+export function useAgentSessionsTreeState({
+  preferences,
+  onPreferencesChange,
+}: {
+  preferences: AgentSessionsPreferences;
+  onPreferencesChange: (
+    updater: (
+      current: WebUiSessionSidebarSettings,
+    ) => Partial<WebUiSessionSidebarSettings>,
+  ) => void;
+}) {
+  const collapsedWorkspaceIds = useMemo(
+    () => new Set(preferences.collapsedWorkspaceIds),
+    [preferences.collapsedWorkspaceIds],
   );
-  const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(
-    () => new Set(),
+  const collapsedSessionIds = useMemo(
+    () => new Set(preferences.collapsedSessionIds),
+    [preferences.collapsedSessionIds],
   );
-  const [expandedRootTreeIds, setExpandedRootTreeIds] = useState<Set<string>>(
-    () => new Set(),
+  const expandedRootTreeIds = useMemo(
+    () => new Set(preferences.expandedRootTreeIds),
+    [preferences.expandedRootTreeIds],
   );
 
   const toggleWorkspace = useCallback((workspaceId: string) => {
-    setCollapsedWorkspaceIds((current) => toggleSetValue(current, workspaceId));
-  }, []);
+    onPreferencesChange((current) => ({
+      collapsed_workspace_ids: stableUiSettingIds(
+        toggleSetValue(new Set(current.collapsed_workspace_ids), workspaceId),
+      ),
+    }));
+  }, [onPreferencesChange]);
 
   const expandWorkspace = useCallback((workspaceId: string) => {
-    setCollapsedWorkspaceIds((current) => {
-      if (!current.has(workspaceId)) {
-        return current;
-      }
-      const next = new Set(current);
-      next.delete(workspaceId);
-      return next;
-    });
-  }, []);
+    onPreferencesChange((current) => ({
+      collapsed_workspace_ids: current.collapsed_workspace_ids.filter(
+        (currentWorkspaceId) => currentWorkspaceId !== workspaceId,
+      ),
+    }));
+  }, [onPreferencesChange]);
 
   const toggleSession = useCallback((sessionId: string) => {
-    setCollapsedSessionIds((current) => toggleSetValue(current, sessionId));
-  }, []);
+    onPreferencesChange((current) => ({
+      collapsed_session_ids: stableUiSettingIds(
+        toggleSetValue(new Set(current.collapsed_session_ids), sessionId),
+      ),
+    }));
+  }, [onPreferencesChange]);
 
   const toggleRootList = useCallback((treeId: string) => {
-    setExpandedRootTreeIds((current) => toggleSetValue(current, treeId));
-  }, []);
+    onPreferencesChange((current) => ({
+      expanded_root_tree_ids: stableUiSettingIds(
+        toggleSetValue(new Set(current.expanded_root_tree_ids), treeId),
+      ),
+    }));
+  }, [onPreferencesChange]);
 
   return {
     collapsedWorkspaceIds,

@@ -6,6 +6,7 @@ import type {
 } from "../types/backend";
 import { formatDateTime } from "../utils/format";
 import ResourceCard from "./ResourceCard";
+import { useWarmConfirm } from "./WarmConfirmProvider";
 import {
   actionLabelForKind,
   isClosedBackgroundTask,
@@ -46,6 +47,7 @@ export default function ResourcePanel({
   const [openedTerminalId, setOpenedTerminalId] = useState<string | null>(null);
   const [openedBrowserId, setOpenedBrowserId] = useState<string | null>(null);
   const [closedGroupOpen, setClosedGroupOpen] = useState(false);
+  const confirm = useWarmConfirm();
 
   useEffect(() => {
     setClosedGroupOpen(false);
@@ -85,17 +87,20 @@ export default function ResourcePanel({
     setOpenedBrowserId(null);
   }, [openedBrowserId, resources]);
 
-  const handleControl = (
+  const handleControl = async (
     kind: SessionResourceKind,
     resourceId: string,
     action: SessionResourceAction,
   ) => {
     if (action === "delete") {
-      const confirmed = window.confirm(
-        kind === "terminal"
+      const confirmed = await confirm({
+        title: kind === "terminal" ? "删除终端" : "删除后台连接",
+        message: kind === "terminal"
           ? `确认删除终端 ${resourceId}？删除后当前终端不可再 attach，只保留历史记录。`
           : `确认删除后台连接 ${resourceId}？`,
-      );
+        confirmText: "删除",
+        danger: true,
+      });
       if (!confirmed) {
         return;
       }

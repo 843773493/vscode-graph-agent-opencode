@@ -3,7 +3,7 @@ import {
   copyTextToClipboard,
   readTextFromClipboard,
 } from "../../utils/clipboard";
-import { extractWorkspaceIdFromClipboardText } from "../../state/workspaceInformation";
+import AnchoredOverlay from "../AnchoredOverlay";
 
 export interface SessionContextMenu {
   sessionId: string;
@@ -28,8 +28,8 @@ interface AgentSessionsContextMenusProps {
   workspaceMenu: WorkspaceContextMenu | null;
   onCloseSessionMenu: () => void;
   onCloseWorkspaceMenu: () => void;
-  onRenameSession: (sessionId: string, title: string) => void;
-  onDeleteSession: (sessionId: string, title: string) => void;
+  onRenameSession: (sessionId: string, title: string, workspaceId: string) => void;
+  onDeleteSession: (sessionId: string, title: string, workspaceId: string) => void;
   onUnbindSession: (sessionId: string, workspaceId: string) => void;
   onBindClipboardSession: (
     sessionId: string,
@@ -40,16 +40,17 @@ interface AgentSessionsContextMenusProps {
     workspaceId: string,
     sourceSessionId: string,
   ) => Promise<void>;
+  onCreateWorkspaceSession: (workspaceId: string, workspaceName: string) => Promise<void>;
+  onRequestCreateSessionFolder: (
+    workspaceId: string,
+    parentNodeId: string | null,
+    locationName: string,
+  ) => void;
   onCopySessionInformation: (
     workspaceId: string,
     sessionId: string,
   ) => Promise<void>;
   onRenameWorkspace: (workspaceId: string) => void;
-  onUnbindWorkspace: (workspaceId: string) => Promise<void>;
-  onBindClipboardWorkspace: (
-    workspaceId: string,
-    parentWorkspaceId: string,
-  ) => Promise<void>;
   onCopyWorkspaceInformation: (workspaceId: string) => Promise<void>;
   onRemoveWorkspace: (workspaceId: string, name: string) => void;
   onStatusChange: (message: string) => void;
@@ -65,10 +66,10 @@ export default function AgentSessionsContextMenus({
   onUnbindSession,
   onBindClipboardSession,
   onForkSessionContext,
+  onCreateWorkspaceSession,
+  onRequestCreateSessionFolder,
   onCopySessionInformation,
   onRenameWorkspace,
-  onUnbindWorkspace,
-  onBindClipboardWorkspace,
   onCopyWorkspaceInformation,
   onRemoveWorkspace,
   onStatusChange,
@@ -161,41 +162,37 @@ export default function AgentSessionsContextMenus({
       });
   };
 
-  const handleBindClipboardWorkspace = () => {
-    if (!workspaceMenu) {
-      return;
-    }
-    const target = workspaceMenu;
-    onCloseWorkspaceMenu();
-    void readTextFromClipboard()
-      .then((clipboardText) =>
-        extractWorkspaceIdFromClipboardText(clipboardText),
-      )
-      .then((childWorkspaceId) =>
-        onBindClipboardWorkspace(childWorkspaceId, target.workspaceId).then(
-          () => childWorkspaceId,
-        ),
-      )
-      .then((childWorkspaceId) => {
-        onStatusChange(
-          `已将 ${childWorkspaceId} 绑定到 ${target.workspaceId}`,
-        );
-      })
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        onStatusChange(`绑定剪贴板工作区失败: ${message}`);
-      });
-  };
-
   return (
     <>
       {sessionMenu ? (
+        <AnchoredOverlay
+          open
+          point={sessionMenu}
+          placement="bottom-start"
+          offset={2}
+          onClose={onCloseSessionMenu}
+        >
         <div
           className="agent-sessions-session-menu"
-          style={{ left: sessionMenu.x, top: sessionMenu.y }}
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const target = sessionMenu;
+              onCloseSessionMenu();
+              onRequestCreateSessionFolder(
+                target.workspaceId,
+                target.sessionId,
+                target.title || target.sessionId,
+              );
+            }}
+          >
+            <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">新建子文件夹</span>
+          </button>
           <button type="button" role="menuitem" title="复制当前会话 ID" onClick={handleCopySessionId}>
             <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">复制 ID</span>
@@ -209,9 +206,9 @@ export default function AgentSessionsContextMenus({
             <span className="codicon codicon-info agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">复制会话信息</span>
           </button>
-          <button type="button" role="menuitem" title="从剪贴板会话 ID 或通用会话信息中识别并绑定子会话" onClick={handleBindClipboardSession}>
+          <button type="button" role="menuitem" title="将剪贴板中的会话移动并绑定为当前会话的子会话" onClick={handleBindClipboardSession}>
             <span className="codicon codicon-clippy agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">粘贴为子会话</span>
+            <span className="agent-sessions-menu-item-label">绑定为子会话</span>
           </button>
           <button
             type="button"
@@ -228,7 +225,7 @@ export default function AgentSessionsContextMenus({
             onClick={() => {
               const target = sessionMenu;
               onCloseSessionMenu();
-              onRenameSession(target.sessionId, target.title);
+              onRenameSession(target.sessionId, target.title, target.workspaceId);
             }}
           >
             <span className="codicon codicon-edit agent-sessions-menu-item-icon" aria-hidden="true" />
@@ -245,7 +242,7 @@ export default function AgentSessionsContextMenus({
               }}
             >
               <span className="codicon codicon-debug-disconnect agent-sessions-menu-item-icon" aria-hidden="true" />
-              <span className="agent-sessions-menu-item-label">移出父会话</span>
+                <span className="agent-sessions-menu-item-label">解除父会话绑定</span>
             </button>
           ) : null}
           <button
@@ -255,21 +252,58 @@ export default function AgentSessionsContextMenus({
             onClick={() => {
               const target = sessionMenu;
               onCloseSessionMenu();
-              onDeleteSession(target.sessionId, target.title);
+              onDeleteSession(target.sessionId, target.title, target.workspaceId);
             }}
           >
             <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">删除会话</span>
           </button>
         </div>
+        </AnchoredOverlay>
       ) : null}
       {workspaceMenu ? (
+        <AnchoredOverlay
+          open
+          point={workspaceMenu}
+          placement="bottom-start"
+          offset={2}
+          onClose={onCloseWorkspaceMenu}
+        >
         <div
           className="agent-sessions-session-menu agent-sessions-workspace-menu"
-          style={{ left: workspaceMenu.x, top: workspaceMenu.y }}
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const target = workspaceMenu;
+              onCloseWorkspaceMenu();
+              void onCreateWorkspaceSession(target.workspaceId, target.name).catch(
+                (error: unknown) => {
+                  onStatusChange(
+                    `新建工作区会话失败: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                },
+              );
+            }}
+          >
+            <span className="codicon codicon-comment-add agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">新建会话</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const target = workspaceMenu;
+              onCloseWorkspaceMenu();
+              onRequestCreateSessionFolder(target.workspaceId, null, target.name);
+            }}
+          >
+            <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">新建会话文件夹</span>
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -291,35 +325,6 @@ export default function AgentSessionsContextMenus({
             <span className="codicon codicon-info agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">复制工作区信息</span>
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            title="从剪贴板工作区 ID 或通用工作区信息中识别并绑定子工作区"
-            onClick={handleBindClipboardWorkspace}
-          >
-            <span className="codicon codicon-clippy agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">粘贴为子工作区</span>
-          </button>
-          {workspaceMenu.parentWorkspaceId ? (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                const target = workspaceMenu;
-                onCloseWorkspaceMenu();
-                void onUnbindWorkspace(target.workspaceId).catch(
-                  (error: unknown) => {
-                    const message =
-                      error instanceof Error ? error.message : String(error);
-                    onStatusChange(`移出父工作区失败: ${message}`);
-                  },
-                );
-              }}
-            >
-              <span className="codicon codicon-debug-disconnect agent-sessions-menu-item-icon" aria-hidden="true" />
-              <span className="agent-sessions-menu-item-label">移出父工作区</span>
-            </button>
-          ) : null}
           {workspaceMenu.removable ? (
             <button
               type="button"
@@ -340,6 +345,7 @@ export default function AgentSessionsContextMenus({
             </div>
           )}
         </div>
+        </AnchoredOverlay>
       ) : null}
     </>
   );

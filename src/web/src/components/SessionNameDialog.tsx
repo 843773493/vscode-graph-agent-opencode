@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface SessionNameDialogProps {
   open: boolean;
@@ -73,7 +74,7 @@ export default function SessionNameDialog({
     onSubmit(normalizedDraft);
   };
 
-  return (
+  return createPortal(
     <div
       className="session-name-overlay"
       role="dialog"
@@ -127,6 +128,7 @@ export default function SessionNameDialog({
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }

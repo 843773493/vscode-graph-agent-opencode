@@ -26,6 +26,8 @@ interface WorkspaceAuxiliaryPanelProps {
   sessionChangesLoadedAt: string | null;
   searchOpen: boolean;
   collapseVersion: number;
+  expandedFileTreePaths: string[];
+  onExpandedFileTreePathsChange: (paths: string[]) => void;
   onTabChange: (tab: WorkspaceAuxiliaryTab) => void;
   onToggleSearch: () => void;
   onCollapseAll: () => void;
@@ -57,6 +59,8 @@ export default function WorkspaceAuxiliaryPanel({
   sessionChangesLoadedAt,
   searchOpen,
   collapseVersion,
+  expandedFileTreePaths,
+  onExpandedFileTreePathsChange,
   onTabChange,
   onToggleSearch,
   onCollapseAll,
@@ -158,6 +162,8 @@ export default function WorkspaceAuxiliaryPanel({
             activeFilePath={activeFilePath}
             searchOpen={searchOpen}
             collapseVersion={collapseVersion}
+            expandedPaths={expandedFileTreePaths}
+            onExpandedPathsChange={onExpandedFileTreePathsChange}
             onOpenFile={onOpenFile}
             onStatusChange={onStatusChange}
           />

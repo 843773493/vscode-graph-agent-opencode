@@ -1,5 +1,6 @@
 import { renderToString } from "react-dom/server";
 import type { GatewayWorkspace } from "../../types/backend";
+import WarmConfirmProvider from "../WarmConfirmProvider";
 import GatewayControlCenter from "./GatewayControlCenter";
 
 const legacyWorkspace: GatewayWorkspace = {
@@ -20,39 +21,43 @@ const legacyWorkspace: GatewayWorkspace = {
 
 const noop = async () => {};
 const html = renderToString(
-  <GatewayControlCenter
-    apiPort={8014}
-    workspaces={[legacyWorkspace]}
-    activeWorkspaceId={legacyWorkspace.workspace_id}
-    recentLocalWorkspacePaths={[]}
-    switching={false}
-    removingWorkspaceIds={new Set()}
-    gatewayError={null}
-    onActivate={noop}
-    onAddLocal={noop}
-    onAddSsh={noop}
-    onRemove={() => {}}
-    onReorder={noop}
-    onRefresh={noop}
-    onReconnect={noop}
-    onSafeRestartManagedBackend={async () => ({
-      workspace_id: "gw_legacy",
-      status: "restarted",
-      forced: false,
-      blockers: [],
-      workspaces: { active_workspace_id: null, items: [] },
-    })}
-    onForceRestartManagedBackend={async () => ({
-      workspace_id: "gw_legacy",
-      status: "restarted",
-      forced: true,
-      blockers: [],
-      workspaces: { active_workspace_id: null, items: [] },
-    })}
-    onProbeExternalBackend={noop}
-    onRename={async (_workspaceId, name) => name}
-    onUseWorkspace={noop}
-  />,
+  <WarmConfirmProvider>
+    <GatewayControlCenter
+      apiPort={8014}
+      workspaces={[legacyWorkspace]}
+      activeWorkspaceId={legacyWorkspace.workspace_id}
+      recentLocalWorkspacePaths={[]}
+      switching={false}
+      removingWorkspaceIds={new Set()}
+      gatewayError={null}
+      onActivate={noop}
+      onAddLocal={noop}
+      onAddSsh={noop}
+      onRemove={() => {}}
+      onReorder={noop}
+      onRefresh={noop}
+      onReconnect={noop}
+      onSafeRestartManagedBackend={async () => ({
+        workspace_id: "gw_legacy",
+        status: "restarted",
+        forced: false,
+        blockers: [],
+        workspaces: { active_workspace_id: null, items: [] },
+      })}
+      onForceRestartManagedBackend={async () => ({
+        workspace_id: "gw_legacy",
+        status: "restarted",
+        forced: true,
+        blockers: [],
+        workspaces: { active_workspace_id: null, items: [] },
+      })}
+      onProbeExternalBackend={noop}
+      onRename={async (_workspaceId, name) => name}
+      onUseWorkspace={noop}
+      consoleView="routing"
+      onConsoleViewChange={() => {}}
+    />
+  </WarmConfirmProvider>,
 );
 
 const versionNotice = "当前 Gateway 进程版本较旧";

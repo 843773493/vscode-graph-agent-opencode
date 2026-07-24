@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type {
   AddLocalGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
@@ -6,6 +6,7 @@ import type {
 } from "../../types/backend";
 import WorkspaceLocalDialog from "./WorkspaceLocalDialog";
 import WorkspaceSshDialog from "./WorkspaceSshDialog";
+import AnchoredOverlay from "../AnchoredOverlay";
 
 interface WorkspaceSwitcherProps {
   apiPort: number;
@@ -48,24 +49,11 @@ export default function WorkspaceSwitcher({
   const [open, setOpen] = useState(false);
   const [localDialogOpen, setLocalDialogOpen] = useState(false);
   const [sshDialogOpen, setSshDialogOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.workspace_id === activeWorkspaceId),
     [activeWorkspaceId, workspaces],
   );
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
 
   const handleAddLocal = () => {
     setOpen(false);
@@ -79,8 +67,9 @@ export default function WorkspaceSwitcher({
 
   return (
     <>
-      <div className="workspace-switcher" ref={menuRef}>
+      <div className="workspace-switcher">
         <button
+          ref={buttonRef}
           type="button"
           className={`workspace-switcher-button${switching ? " switching" : ""}`}
           disabled={switching}
@@ -95,7 +84,12 @@ export default function WorkspaceSwitcher({
           </span>
           <span className="workspace-switcher-chevron" aria-hidden="true">⌄</span>
         </button>
-        {open ? (
+        <AnchoredOverlay
+          open={open}
+          anchorRef={buttonRef}
+          placement="bottom-end"
+          onClose={() => setOpen(false)}
+        >
           <div className="workspace-switcher-menu" role="menu">
             <div className="workspace-switcher-menu-section">
               {workspaces.map((workspace) => (
@@ -128,7 +122,7 @@ export default function WorkspaceSwitcher({
               <button type="button" onClick={handleAddSsh}>连接远程 Gateway</button>
             </div>
           </div>
-        ) : null}
+        </AnchoredOverlay>
       </div>
       <WorkspaceLocalDialog
         open={localDialogOpen}

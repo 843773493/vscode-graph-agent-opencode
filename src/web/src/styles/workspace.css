@@ -56,14 +56,10 @@
 }
 
 .workspace-switcher-menu {
-  position: absolute;
-  top: 30px;
-  right: 0;
-  z-index: 240;
   display: flex;
   flex-direction: column;
-  width: min(360px, calc(100vw - 24px));
-  max-height: min(440px, calc(100vh - 56px));
+  width: min(360px, calc(100vw - 24px), var(--anchored-overlay-available-width, 360px));
+  max-height: min(440px, calc(100vh - 56px), var(--anchored-overlay-available-height, 440px));
   padding: 6px;
   border: 1px solid var(--vscode-agentsPanel-border);
   border-radius: var(--vscode-cornerRadius-large);
@@ -188,6 +184,19 @@
   background: var(--vscode-menu-background, #fff8e6);
   color: #39352b;
   box-shadow: 0 22px 48px rgba(50, 45, 34, 0.28);
+}
+
+.workspace-action-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.workspace-action-dialog-description {
+  margin: 0;
+  padding: 14px 16px 2px;
+  color: #625b4b;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-line;
 }
 
 .workspace-dialog-header {
@@ -510,6 +519,12 @@
   border-color: #2d70ac;
   background: #2d70ac;
   color: #fff;
+}
+
+.workspace-dialog-actions .workspace-dialog-danger {
+  border-color: #b33a31;
+  background: #b33a31;
+  color: #fff8e8;
 }
 
 .session-changes-tree {

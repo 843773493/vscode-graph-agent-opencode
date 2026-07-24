@@ -58,6 +58,13 @@ body > #root {
   min-height: 0;
 }
 
+.anchored-overlay-positioner {
+  z-index: 2575;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  outline: none;
+}
+
 .app-shell {
   position: fixed;
   inset: 0;
@@ -312,9 +319,9 @@ body > #root {
 }
 
 .agent-sessions-session-menu {
-  position: fixed;
-  z-index: 60;
-  width: 208px;
+  width: min(208px, var(--anchored-overlay-available-width, 208px));
+  max-height: min(70vh, 520px, var(--anchored-overlay-available-height, 520px));
+  overflow: auto;
   padding: 4px;
   border: 1px solid var(--vscode-panel-border);
   border-radius: 8px;
@@ -393,7 +400,7 @@ body > #root {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(15, 23, 42, 0.28);
+  background: rgba(44, 39, 29, 0.26);
 }
 
 .session-name-dialog {
@@ -402,10 +409,11 @@ body > #root {
   gap: 14px;
   width: min(380px, 100%);
   padding: 16px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 8px;
-  background: var(--vscode-editor-background);
-  box-shadow: var(--surface-shadow);
+  border: 1px solid var(--vscode-agentsPanel-border);
+  border-radius: var(--vscode-cornerRadius-large);
+  background: var(--vscode-menu-background, #fff8e6);
+  color: #39352b;
+  box-shadow: 0 22px 48px rgba(50, 45, 34, 0.28);
 }
 
 .session-name-header,
@@ -432,7 +440,7 @@ body > #root {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--vscode-icon-foreground);
+  color: #625b4b;
   cursor: pointer;
   font-size: 18px;
   line-height: 1;
@@ -446,7 +454,7 @@ body > #root {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  color: var(--vscode-descriptionForeground);
+  color: #625b4b;
   font-size: 12px;
 }
 
@@ -454,10 +462,10 @@ body > #root {
   width: 100%;
   height: 34px;
   padding: 0 10px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 6px;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
+  border: 1px solid rgba(106, 98, 75, 0.24);
+  border-radius: var(--vscode-cornerRadius-small);
+  background: rgba(255, 251, 239, 0.72);
+  color: #39352b;
   outline: none;
 }
 
@@ -479,10 +487,10 @@ body > #root {
 .session-name-actions button {
   min-height: 30px;
   padding: 0 12px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 6px;
-  background: var(--vscode-editor-background);
-  color: var(--vscode-editor-foreground);
+  border: 1px solid rgba(106, 98, 75, 0.24);
+  border-radius: var(--vscode-cornerRadius-small);
+  background: rgba(255, 251, 239, 0.72);
+  color: #39352b;
   cursor: pointer;
 }
 
@@ -693,12 +701,8 @@ body > #root {
   line-height: 1.35;
 }
 .composer-slash-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 10px);
-  z-index: 30;
-  width: min(520px, calc(100vw - 40px));
-  max-height: min(320px, 48vh);
+  width: min(520px, calc(100vw - 40px), var(--anchored-overlay-available-width, 520px));
+  max-height: min(320px, 48vh, var(--anchored-overlay-available-height, 320px));
   overflow-y: auto;
   scrollbar-gutter: stable;
   padding: 6px;
@@ -865,26 +869,29 @@ body > #root {
   ) !important;
 }
 .composer-view-menu,
-.composer-agent-menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 112px);
-  z-index: 120;
+.composer-agent-menu,
+.composer-model-menu {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  width: 220px;
+  width: min(220px, var(--anchored-overlay-available-width, 220px));
   padding: 6px;
   border: 1px solid var(--vscode-panel-border);
   border-radius: 12px;
   background: var(--vscode-input-background);
   box-shadow: var(--surface-shadow);
+  overflow: auto;
+  max-height: min(70vh, 520px, var(--anchored-overlay-available-height, 520px));
 }
 .composer-agent-menu {
-  width: 260px;
+  width: min(260px, var(--anchored-overlay-available-width, 260px));
+}
+.composer-model-menu {
+  width: min(280px, var(--anchored-overlay-available-width, 280px));
 }
 .composer-view-menu-item,
-.composer-agent-menu-item {
+.composer-agent-menu-item,
+.composer-model-menu-item {
   width: 100%;
   height: auto !important;
   min-height: 46px;
@@ -898,20 +905,71 @@ body > #root {
   background: transparent !important;
   text-align: left;
 }
+.composer-agent-menu-item,
+.composer-model-menu-item {
+  position: relative;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch !important;
+}
+.composer-menu-item-main {
+  width: 100%;
+  height: auto !important;
+  min-height: 46px;
+  padding: 8px 42px 8px 10px !important;
+  border: 0 !important;
+  border-radius: inherit !important;
+  background: transparent !important;
+  color: inherit !important;
+  display: flex !important;
+  flex-direction: column;
+  align-items: flex-start !important;
+  justify-content: flex-start !important;
+  gap: 4px !important;
+  text-align: left;
+}
+.composer-workspace-default-button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
+  padding: 0 !important;
+  border-radius: 8px !important;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.composer-agent-menu-item:hover .composer-workspace-default-button,
+.composer-agent-menu-item:focus-within .composer-workspace-default-button,
+.composer-model-menu-item:hover .composer-workspace-default-button,
+.composer-model-menu-item:focus-within .composer-workspace-default-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+.workspace-default .composer-workspace-default-button {
+  color: var(--vscode-charts-green);
+}
 .composer-view-menu-item:hover,
 .composer-view-menu-item.active,
 .composer-agent-menu-item:hover,
-.composer-agent-menu-item.active {
+.composer-agent-menu-item.active,
+.composer-model-menu-item:hover,
+.composer-model-menu-item.active {
   background: var(--vscode-list-hoverBackground) !important;
 }
 .composer-view-menu-label,
-.composer-agent-menu-label {
+.composer-agent-menu-label,
+.composer-model-menu-label {
   font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
 }
 .composer-view-menu-description,
-.composer-agent-menu-description {
+.composer-agent-menu-description,
+.composer-model-menu-description {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
   line-height: 1.35;
@@ -1419,15 +1477,11 @@ body {
 }
 
 .sessions-filter-menu {
-  position: absolute;
-  z-index: 180;
-  top: 30px;
-  right: 26px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  width: 190px;
-  max-height: min(70vh, 520px);
+  width: min(190px, var(--anchored-overlay-available-width, 190px));
+  max-height: min(70vh, 520px, var(--anchored-overlay-available-height, 520px));
   padding: 5px;
   border: 1px solid var(--vscode-agentsPanel-border);
   border-radius: var(--vscode-cornerRadius-large);
@@ -1841,6 +1895,7 @@ body {
 
 .composer-view-menu,
 .composer-agent-menu,
+.composer-model-menu,
 .composer-slash-menu,
 .agent-sessions-session-menu {
   border-radius: var(--vscode-cornerRadius-large);
@@ -1849,20 +1904,15 @@ body {
 }
 
 .composer-view-menu,
-.composer-agent-menu {
-  bottom: calc(100% + 8px);
-  z-index: 1000;
+.composer-agent-menu,
+.composer-model-menu {
   pointer-events: auto;
 }
 
-.composer-view-control .composer-view-menu {
-  left: 0;
-  right: auto;
+.composer-model-control {
+  position: relative;
 }
 
-.composer-agent-control .composer-agent-menu {
-  right: 0;
-}
 
 .composer-attachments {
   padding: 6px 0 0;

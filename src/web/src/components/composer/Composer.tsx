@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_BACKEND_PORT } from "../../api";
+import { DEFAULT_BACKEND_PORT, getSessionCatalogBreadcrumb } from "../../api";
 import { useAppState } from "../../hooks";
 import { useComposerSlashCommands } from "../../hooks/useComposerSlashCommands";
+import { useComposerDraft } from "../../hooks/useComposerDraft";
 import { VIEW_OPTIONS } from "../../state/contentViews";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
@@ -19,6 +20,7 @@ import {
 } from "../../utils/mediaAttachments";
 import ComposerActionButtons from "./ComposerActionButtons";
 import ComposerAgentControl from "./ComposerAgentControl";
+import ComposerModelControl from "./ComposerModelControl";
 import ComposerAttachmentTray from "./ComposerAttachmentTray";
 import ComposerSlashCommandMenu from "./ComposerSlashCommandMenu";
 import ComposerToolControl from "./ComposerToolControl";
@@ -47,6 +49,9 @@ export default function Composer() {
     compactSession,
     interruptSession,
     switchAgent,
+    switchModel,
+    setWorkspaceDefaultAgent,
+    setWorkspaceDefaultProvider,
     switchContentView,
     createSession,
     startNewSessionDraft,
@@ -57,20 +62,22 @@ export default function Composer() {
     updateUiSettings,
   } =
     useAppState();
-  const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [composerNotice, setComposerNotice] = useState("");
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [slashCommandIndex, setSlashCommandIndex] = useState(0);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDialogSubmitting, setRenameDialogSubmitting] = useState(false);
   const [renameDialogError, setRenameDialogError] = useState<string | null>(null);
+  const [newSessionFolderPath, setNewSessionFolderPath] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const currentSessionId = state.currentSession?.session_id ?? null;
   const currentWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
@@ -78,14 +85,25 @@ export default function Composer() {
     currentSessionId && currentWorkspaceId
       ? sessionScopeKey(currentWorkspaceId, currentSessionId)
       : currentSessionId;
+  const [input, setInput] = useComposerDraft(currentWorkspaceId, currentSessionId);
+  // TODO: 附件包含 data URL，后续使用 IndexedDB 恢复；本轮只持久化文本草稿。
   const previousSessionIdRef = useRef<string | null>(currentSessionCacheKey);
 
   const hasContent = input.trim().length > 0 || attachments.length > 0;
-  const currentAgent = state.currentSession?.current_agent_id || "default";
+  const currentAgent =
+    state.currentSession?.current_agent_id
+    ?? state.agents.find((agent) => agent.workspace_default)?.agent_id
+    ?? "default";
   const currentAgentConfig = state.agents.find(
     (agent) => agent.agent_id === currentAgent,
   );
-  const currentModel = currentAgentConfig?.model || "model";
+  const currentProviders = currentAgentConfig?.providers ?? [];
+  const currentProviderId =
+    state.currentSession?.current_provider_id
+    ?? currentProviders.find((provider) => provider.workspace_default)?.provider_id
+    ?? currentProviders[0]?.provider_id
+    ?? currentAgentConfig?.model
+    ?? "model";
   const defaultPendingKind =
     state.uiSettings.layout.pending_message_default_action ?? "steering";
   const currentView =
@@ -129,11 +147,11 @@ export default function Composer() {
       return;
     }
     previousSessionIdRef.current = currentSessionCacheKey;
-    setInput("");
     setAttachments([]);
     setAttachmentError("");
     setComposerNotice("");
     setAgentMenuOpen(false);
+    setModelMenuOpen(false);
     setViewMenuOpen(false);
     setSlashCommandIndex(0);
     setRenameDialogOpen(false);
@@ -142,48 +160,40 @@ export default function Composer() {
   }, [currentSessionCacheKey]);
 
   useEffect(() => {
-    if (!viewMenuOpen) {
+    if (hasCurrentSessionHistory || !currentSessionId || !currentWorkspaceId) {
+      setNewSessionFolderPath(null);
       return;
     }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        viewMenuRef.current?.contains(target)
-      ) {
+    let cancelled = false;
+    setNewSessionFolderPath("正在读取会话位置…");
+    void getSessionCatalogBreadcrumb(
+      state.apiPort ?? DEFAULT_BACKEND_PORT,
+      currentWorkspaceId,
+      currentSessionId,
+    ).then((breadcrumb) => {
+      if (cancelled) {
         return;
       }
-      setViewMenuOpen(false);
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-    };
-  }, [viewMenuOpen]);
-
-  useEffect(() => {
-    if (!agentMenuOpen) {
-      return;
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        agentMenuRef.current?.contains(target)
-      ) {
-        return;
+      const folderNames = breadcrumb.items.slice(0, -1).map((item) => item.name);
+      setNewSessionFolderPath(
+        folderNames.length > 0 ? folderNames.join(" / ") : "会话根目录",
+      );
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        setNewSessionFolderPath(
+          `会话位置读取失败：${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-      setAgentMenuOpen(false);
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown);
+    });
     return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
+      cancelled = true;
     };
-  }, [agentMenuOpen]);
+  }, [
+    currentSessionId,
+    currentWorkspaceId,
+    hasCurrentSessionHistory,
+    state.apiPort,
+  ]);
 
   const renameCurrentSession = (inlineTitle: string) => {
     const session = state.currentSession;
@@ -258,7 +268,9 @@ export default function Composer() {
     setAgentMenuOpen,
     setViewMenuOpen,
     setStatus,
-    createSession,
+    createSession: async (title) => {
+      await createSession(title);
+    },
     startNewSessionDraft,
     renameCurrentSession,
     switchContentView,
@@ -388,6 +400,25 @@ export default function Composer() {
     });
   };
 
+  const handleWorkspaceDefaultAgent = (agentId: string) => {
+    void setWorkspaceDefaultAgent(agentId).catch(() => {
+      // 错误状态和后端状态校准由 AppProvider 统一处理。
+    });
+  };
+
+  const handleModelSelect = (providerId: string) => {
+    setModelMenuOpen(false);
+    void switchModel(providerId).catch(() => {
+      // 错误状态和后端状态校准由 AppProvider 统一处理。
+    });
+  };
+
+  const handleWorkspaceDefaultProvider = (providerId: string) => {
+    void setWorkspaceDefaultProvider(currentAgent, providerId).catch(() => {
+      // 错误状态和后端状态校准由 AppProvider 统一处理。
+    });
+  };
+
   const handleViewMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "Escape") {
       return;
@@ -402,6 +433,12 @@ export default function Composer() {
     }
     e.preventDefault();
     setAgentMenuOpen(false);
+  };
+
+  const handleModelMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    setModelMenuOpen(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -477,6 +514,14 @@ export default function Composer() {
                 onAddLocal={addLocalGatewayWorkspace}
                 onAddSsh={addSshGatewayWorkspace}
               />
+              {newSessionFolderPath ? (
+                <span
+                  className="session-workspace-picker-label"
+                  title={newSessionFolderPath}
+                >
+                  / {newSessionFolderPath}
+                </span>
+              ) : null}
               <span className="session-workspace-picker-label session-workspace-picker-with-label">
                 使用
               </span>
@@ -498,6 +543,7 @@ export default function Composer() {
                 query={slashQuery}
                 commands={matchingSlashCommands}
                 activeIndex={slashCommandIndex}
+                anchorRef={textareaRef}
                 onSelect={(command) =>
                   runSlashCommand(command, getSlashCommandArgs(input, command.command))
                 }
@@ -549,6 +595,7 @@ export default function Composer() {
                   selectedView={state.contentView}
                   open={viewMenuOpen}
                   onToggle={() => setViewMenuOpen((open) => !open)}
+                  onClose={() => setViewMenuOpen(false)}
                   onSelect={handleViewSelect}
                   onKeyDown={handleViewMenuKeyDown}
                 />
@@ -562,21 +609,23 @@ export default function Composer() {
                     currentAgent={currentAgent}
                     open={agentMenuOpen}
                     onToggle={() => setAgentMenuOpen((open) => !open)}
+                    onClose={() => setAgentMenuOpen(false)}
                     onSelect={handleAgentSelect}
+                    onSetWorkspaceDefault={handleWorkspaceDefaultAgent}
                     onKeyDown={handleAgentMenuKeyDown}
                   />
-                  <button
-                    type="button"
-                    className="composer-model-pill"
-                    title={`当前模型：${currentModel}`}
-                    onClick={() => setStatus("模型由当前 Agent 配置决定，可通过 Agent 菜单切换")}
-                  >
-                    <span
-                      className="codicon codicon-chip composer-picker-button-icon"
-                      aria-hidden="true"
-                    />
-                    <span className="composer-model-label">{currentModel}</span>
-                  </button>
+                  <ComposerModelControl
+                    controlRef={modelMenuRef}
+                    providers={currentProviders}
+                    currentProviderId={currentProviderId}
+                    open={modelMenuOpen}
+                    disabled={currentProviders.length === 0}
+                    onToggle={() => setModelMenuOpen((open) => !open)}
+                    onClose={() => setModelMenuOpen(false)}
+                    onSelect={handleModelSelect}
+                    onSetWorkspaceDefault={handleWorkspaceDefaultProvider}
+                    onKeyDown={handleModelMenuKeyDown}
+                  />
                   <ComposerToolControl
                     apiPort={state.apiPort ?? DEFAULT_BACKEND_PORT}
                     agentId={currentAgent}

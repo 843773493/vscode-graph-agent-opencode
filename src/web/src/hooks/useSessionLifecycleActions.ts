@@ -4,9 +4,14 @@ import {
   DEFAULT_SESSION_TITLE,
   deleteSession as apiDeleteSession,
   forkSessionContext as apiForkSessionContext,
+  getSession as apiGetSession,
+  listAgents as apiListAgents,
   listSessions as apiListSessions,
+  setWorkspaceDefaultAgent as apiSetWorkspaceDefaultAgent,
+  setWorkspaceDefaultProvider as apiSetWorkspaceDefaultProvider,
   updateSession as apiUpdateSession,
   updateSessionAgent as apiUpdateSessionAgent,
+  updateSessionProvider as apiUpdateSessionProvider,
 } from "../api";
 import type { Session } from "../types/backend";
 import { cloneMaps } from "../state/appStateMaps";
@@ -171,16 +176,21 @@ export function useSessionLifecycleActions({
   );
 
   const createSession = useCallback(
-    async (title: string = DEFAULT_SESSION_TITLE) => {
+    async (
+      title: string = DEFAULT_SESSION_TITLE,
+      workspaceId?: string | null,
+      folderId?: string | null,
+    ) => {
       invalidateAgentState();
       const normalizedTitle = normalizeSessionTitle(title);
       const targetWorkspaceId =
-        activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
+        workspaceId ?? activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
       try {
         const session = await apiCreateSession(
           apiPort,
           normalizedTitle,
           targetWorkspaceId,
+          folderId,
         );
         setState((prev) => {
           const next = cloneMaps(prev);
@@ -241,6 +251,7 @@ export function useSessionLifecycleActions({
           );
           return next;
         });
+        return session;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setState((prev) => ({ ...prev, status: `创建会话失败: ${message}` }));
@@ -386,28 +397,30 @@ export function useSessionLifecycleActions({
   );
 
   const renameSession = useCallback(
-    async (sessionId: string, title: string) => {
+    async (sessionId: string, title: string, workspaceId?: string | null) => {
       const normalizedTitle = normalizeSessionTitle(title);
+      const workspaceIdForRequest =
+        workspaceId ?? currentSessionGatewayWorkspaceId;
       setState((prev) => ({ ...prev, status: "正在命名会话" }));
 
       try {
         const updatedSession = await apiUpdateSession(apiPort, sessionId, {
           title: normalizedTitle,
-        }, currentSessionGatewayWorkspaceId);
+        }, workspaceIdForRequest);
         setState((prev) => {
           const next = replaceSessionMetadata(
             prev,
             updatedSession,
-            currentSessionGatewayWorkspaceId,
+            workspaceIdForRequest,
           );
           next.currentSessionWorkspaceId =
-            currentSessionGatewayWorkspaceId ?? next.currentSessionWorkspaceId;
+            workspaceIdForRequest ?? next.currentSessionWorkspaceId;
           next.status = `已命名会话: ${updatedSession.title}`;
           const cacheKey =
             currentSessionCacheKey ??
-            (currentSessionGatewayWorkspaceId
+            (workspaceIdForRequest
               ? sessionScopeKey(
-                  currentSessionGatewayWorkspaceId,
+                  workspaceIdForRequest,
                   updatedSession.session_id,
                 )
               : updatedSession.session_id);
@@ -482,7 +495,7 @@ export function useSessionLifecycleActions({
   );
 
   const deleteSession = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, workspaceId?: string | null) => {
       const deletingCurrent = currentSession?.session_id === sessionId;
       if (deletingCurrent) {
         abortCurrentStream();
@@ -493,31 +506,42 @@ export function useSessionLifecycleActions({
 
       try {
         const workspaceIdForRequest =
-          currentSessionGatewayWorkspaceId ?? activeGatewayWorkspaceId;
-        const result = await apiDeleteSession(apiPort, sessionId, workspaceIdForRequest);
+          workspaceId ?? currentSessionGatewayWorkspaceId ?? activeGatewayWorkspaceId;
+        const result = await apiDeleteSession(
+          apiPort,
+          sessionId,
+          workspaceIdForRequest,
+          true,
+        );
+        const refreshed = await apiListSessions(apiPort, workspaceIdForRequest);
         setState((prev) => {
           const next = cloneMaps(prev);
           const workspaceId =
             workspaceIdForRequest ??
             prev.activeGatewayWorkspaceId ??
             "workspace";
-          const remainingSessions = prev.sessions.filter(
-            (session) => session.session_id !== sessionId,
-          );
+          const remainingSessions = refreshed.items;
           next.sessions = remainingSessions;
           next.sessionsByWorkspace.set(
             workspaceId,
-            (prev.sessionsByWorkspace.get(workspaceId) ?? []).filter(
-              (session) => session.session_id !== sessionId,
-            ),
+            refreshed.items,
           );
-          const cacheKey = sessionScopeKey(workspaceId, sessionId);
-          next.sessionAttachmentSummaries.delete(sessionId);
-          next.eventQueuesBySession.delete(cacheKey);
-          next.pendingConversations.delete(cacheKey);
-          next.sessionGatewayWorkspaceById.delete(cacheKey);
+          const remainingIds = new Set(refreshed.items.map((session) => session.session_id));
+          const removedIds = (prev.sessionsByWorkspace.get(workspaceId) ?? prev.sessions)
+            .map((session) => session.session_id)
+            .filter((candidateId) => !remainingIds.has(candidateId));
+          for (const removedId of removedIds) {
+            const cacheKey = sessionScopeKey(workspaceId, removedId);
+            next.sessionAttachmentSummaries.delete(removedId);
+            next.eventQueuesBySession.delete(cacheKey);
+            next.pendingConversations.delete(cacheKey);
+            next.sessionGatewayWorkspaceById.delete(cacheKey);
+          }
 
-          if (prev.currentSession?.session_id === sessionId) {
+          if (
+            prev.currentSession
+            && !remainingIds.has(prev.currentSession.session_id)
+          ) {
             const nextSession = remainingSessions[0] ?? null;
             next.currentSession = nextSession;
             next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
@@ -639,6 +663,211 @@ export function useSessionLifecycleActions({
     [apiPort, currentSession, currentSessionGatewayWorkspaceId, setState],
   );
 
+  const switchModel = useCallback(
+    async (providerId: string) => {
+      const session = currentSession ?? await createSession(DEFAULT_SESSION_TITLE);
+      if (providerId === session.current_provider_id) {
+        setState((prev) => ({
+          ...prev,
+          status: `当前已使用模型 provider: ${providerId}`,
+        }));
+        return;
+      }
+
+      setState((prev) => ({
+        ...prev,
+        status: `正在切换模型 provider: ${providerId}`,
+      }));
+      try {
+        const updatedSession = await apiUpdateSessionProvider(
+          apiPort,
+          session.session_id,
+          providerId,
+          currentSessionGatewayWorkspaceId
+            ?? activeGatewayWorkspaceId
+            ?? defaultGatewayWorkspaceId,
+        );
+        setState((prev) => {
+          const next = replaceSessionMetadata(
+            prev,
+            updatedSession,
+            currentSessionGatewayWorkspaceId
+              ?? activeGatewayWorkspaceId
+              ?? defaultGatewayWorkspaceId,
+          );
+          next.status = `已切换模型 provider: ${updatedSession.current_provider_id}`;
+          const workspaceId =
+            currentSessionGatewayWorkspaceId
+            ?? activeGatewayWorkspaceId
+            ?? defaultGatewayWorkspaceId
+            ?? prev.activeGatewayWorkspaceId
+            ?? updatedSession.workspace_id;
+          const cacheKey = sessionScopeKey(workspaceId, updatedSession.session_id);
+          appendFrontendEvent(
+            next.eventQueuesBySession,
+            updatedSession.session_id,
+            "model_switched",
+            "切换模型",
+            {
+              session_id: updatedSession.session_id,
+              provider_id: updatedSession.current_provider_id,
+            },
+            updatedSession.current_provider_id ?? "",
+            cacheKey,
+          );
+          return next;
+        });
+      } catch (error) {
+        let message = error instanceof Error ? error.message : String(error);
+        try {
+          const refreshed = await apiGetSession(
+            apiPort,
+            session.session_id,
+            currentSessionGatewayWorkspaceId
+              ?? activeGatewayWorkspaceId
+              ?? defaultGatewayWorkspaceId,
+          );
+          setState((prev) => {
+            const next = replaceSessionMetadata(
+              prev,
+              refreshed,
+              currentSessionGatewayWorkspaceId
+                ?? activeGatewayWorkspaceId
+                ?? defaultGatewayWorkspaceId,
+            );
+            next.status = `模型切换失败: ${message}`;
+            return next;
+          });
+        } catch (reconciliationError) {
+          const reconciliationMessage = reconciliationError instanceof Error
+            ? reconciliationError.message
+            : String(reconciliationError);
+          message = `${message}；重新读取会话也失败: ${reconciliationMessage}`;
+          setState((prev) => ({ ...prev, status: `模型切换失败: ${message}` }));
+        }
+        throw error;
+      }
+    },
+    [
+      activeGatewayWorkspaceId,
+      apiPort,
+      createSession,
+      currentSession,
+      currentSessionGatewayWorkspaceId,
+      defaultGatewayWorkspaceId,
+      setState,
+    ],
+  );
+
+  const setWorkspaceDefaultAgent = useCallback(
+    async (agentId: string) => {
+      const workspaceId =
+        currentSessionGatewayWorkspaceId
+        ?? activeGatewayWorkspaceId
+        ?? defaultGatewayWorkspaceId;
+      if (!workspaceId) {
+        throw new Error("当前没有可保存默认 Agent 的工作区");
+      }
+      setState((prev) => ({
+        ...prev,
+        status: `正在设置工作区默认 Agent: ${agentId}`,
+      }));
+      try {
+        const agents = await apiSetWorkspaceDefaultAgent(
+          apiPort,
+          agentId,
+          workspaceId,
+        );
+        setState((prev) => ({
+          ...prev,
+          agents,
+          status: `已将 ${agentId} 设为工作区默认 Agent，仅影响新会话`,
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          const agents = await apiListAgents(apiPort, workspaceId);
+          setState((prev) => ({
+            ...prev,
+            agents,
+            status: `设置工作区默认 Agent 失败: ${message}`,
+          }));
+        } catch (reconciliationError) {
+          const reconciliationMessage = reconciliationError instanceof Error
+            ? reconciliationError.message
+            : String(reconciliationError);
+          setState((prev) => ({
+            ...prev,
+            status: `设置工作区默认 Agent 失败: ${message}；重新读取 Agent 也失败: ${reconciliationMessage}`,
+          }));
+        }
+        throw error;
+      }
+    },
+    [
+      activeGatewayWorkspaceId,
+      apiPort,
+      currentSessionGatewayWorkspaceId,
+      defaultGatewayWorkspaceId,
+      setState,
+    ],
+  );
+
+  const setWorkspaceDefaultProvider = useCallback(
+    async (agentId: string, providerId: string) => {
+      const workspaceId =
+        currentSessionGatewayWorkspaceId
+        ?? activeGatewayWorkspaceId
+        ?? defaultGatewayWorkspaceId;
+      if (!workspaceId) {
+        throw new Error("当前没有可保存默认模型的工作区");
+      }
+      setState((prev) => ({
+        ...prev,
+        status: `正在设置工作区默认模型: ${providerId}`,
+      }));
+      try {
+        const agents = await apiSetWorkspaceDefaultProvider(
+          apiPort,
+          agentId,
+          providerId,
+          workspaceId,
+        );
+        setState((prev) => ({
+          ...prev,
+          agents,
+          status: `已将 ${providerId} 设为 ${agentId} 的工作区默认模型，仅影响新会话`,
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          const agents = await apiListAgents(apiPort, workspaceId);
+          setState((prev) => ({
+            ...prev,
+            agents,
+            status: `设置工作区默认模型失败: ${message}`,
+          }));
+        } catch (reconciliationError) {
+          const reconciliationMessage = reconciliationError instanceof Error
+            ? reconciliationError.message
+            : String(reconciliationError);
+          setState((prev) => ({
+            ...prev,
+            status: `设置工作区默认模型失败: ${message}；重新读取 Agent 也失败: ${reconciliationMessage}`,
+          }));
+        }
+        throw error;
+      }
+    },
+    [
+      activeGatewayWorkspaceId,
+      apiPort,
+      currentSessionGatewayWorkspaceId,
+      defaultGatewayWorkspaceId,
+      setState,
+    ],
+  );
+
   return {
     createSession,
     deleteSession,
@@ -649,5 +878,8 @@ export function useSessionLifecycleActions({
     selectSession,
     selectWorkspaceSession,
     switchAgent,
+    switchModel,
+    setWorkspaceDefaultAgent,
+    setWorkspaceDefaultProvider,
   };
 }

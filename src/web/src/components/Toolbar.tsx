@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useAppState } from '../hooks';
+import AnchoredOverlay from './AnchoredOverlay';
 
 export type WorkbenchView = "sessions" | "gateway";
 
@@ -30,28 +31,6 @@ export default function Toolbar({
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   const titleLabel = sessionTitle?.trim() || '新会话';
-
-  useEffect(() => {
-    if (!viewMenuOpen) {
-      return;
-    }
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!viewMenuRef.current?.contains(event.target as Node)) {
-        setViewMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setViewMenuOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [viewMenuOpen]);
 
   const selectWorkbenchView = (view: WorkbenchView) => {
     setViewMenuOpen(false);
@@ -91,7 +70,12 @@ export default function Toolbar({
             <span>视图</span>
             <span className="codicon codicon-chevron-down" aria-hidden="true" />
           </button>
-          {viewMenuOpen ? (
+          <AnchoredOverlay
+            open={viewMenuOpen}
+            anchorRef={viewMenuRef}
+            placement="bottom-start"
+            onClose={() => setViewMenuOpen(false)}
+          >
             <div className="workbench-view-menu" role="menu" aria-label="工作台视图">
               <button
                 type="button"
@@ -126,7 +110,7 @@ export default function Toolbar({
                 ) : null}
               </button>
             </div>
-          ) : null}
+          </AnchoredOverlay>
         </div>
       </div>
       <div className="toolbar-center" title={titleLabel}>

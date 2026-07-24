@@ -34,16 +34,13 @@ async function loadWorkspaceBootstrap(
     listGatewayWorkspaces(apiPort),
     getGatewayUiSettings(apiPort),
   ]);
-  const workspaceIds = gatewayWorkspaces.items.map(
-    (workspace) => workspace.workspace_id,
-  );
   const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
   const [workspace, workspaceSessionResults, agents] = await Promise.all([
     getWorkspace(apiPort, activeWorkspaceId),
     Promise.allSettled(
-      workspaceIds.map(async (workspaceId) => {
-        return fetchWorkspaceSessionListSnapshot(apiPort, workspaceId);
-      }),
+      activeWorkspaceId
+        ? [fetchWorkspaceSessionListSnapshot(apiPort, activeWorkspaceId)]
+        : [],
     ),
     apiListAgents(apiPort, activeWorkspaceId),
   ]);
@@ -100,10 +97,8 @@ export function useWorkspaceBootstrap({
         ? await loadInitialWorkspaceBootstrap(resolvedApiPort)
         : await loadWorkspaceBootstrap(resolvedApiPort);
       writeCachedUiSettings(uiSettings);
-      const workspaceIds = gatewayWorkspaces.items.map(
-        (workspace) => workspace.workspace_id,
-      );
       const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
+      const workspaceIds = activeWorkspaceId ? [activeWorkspaceId] : [];
       const workspaceSessionEntries: WorkspaceSessionListSnapshot[] = [];
       const workspaceSessionErrors = new Map<string, string>();
       for (const [index, result] of workspaceSessionResults.entries()) {

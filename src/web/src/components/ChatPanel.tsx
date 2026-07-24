@@ -1,4 +1,5 @@
 import React from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type {
   AttachmentRef,
   MessageReplayRequest,
@@ -31,6 +32,10 @@ export default function ChatPanel({
   conversations,
   expandDetails,
   hasActiveSession,
+  hasOlderMessages,
+  loadingOlderMessages,
+  historyError,
+  onLoadOlderMessages,
   sessionChangeSummary,
   sessionChangesLoading,
   onOpenChanges,
@@ -46,6 +51,10 @@ export default function ChatPanel({
   conversations: ConversationView[];
   expandDetails: boolean;
   hasActiveSession: boolean;
+  hasOlderMessages: boolean;
+  loadingOlderMessages: boolean;
+  historyError: string | null;
+  onLoadOlderMessages: () => Promise<void>;
   sessionChangeSummary?: SessionChangesSummary | null;
   sessionChangesLoading?: boolean;
   onOpenChanges?: () => void;
@@ -66,13 +75,15 @@ export default function ChatPanel({
   onReorderPending: (requests: PendingRequestOrderItem[]) => Promise<void>;
   onSendPendingImmediately: (messageId: string) => Promise<void>;
 }): React.ReactNode {
-  const streamRef = React.useRef<HTMLElement | null>(null);
+  const streamRef = React.useRef<VirtuosoHandle | null>(null);
+  const scrollerRef = React.useRef<HTMLElement | null>(null);
   const followsLatestRef = React.useRef(true);
   const [showJumpToLatest, setShowJumpToLatest] = React.useState(false);
   const [draggedPendingId, setDraggedPendingId] = React.useState<string | null>(null);
   const [pendingActionError, setPendingActionError] = React.useState<string | null>(null);
   const [pendingActionRunning, setPendingActionRunning] = React.useState(false);
-  const renderKey = conversations.map(conversationRenderKey).join("|");
+  const sessionId = conversations[0]?.sessionId ?? "empty";
+  const firstItemIndex = Math.max(0, 100_000 - conversations.length);
   const sessionBusy = conversations.some(
     (conversation) => conversation.status === "running" || conversation.status === "queued",
   );
@@ -146,70 +157,115 @@ export default function ChatPanel({
     await onReorderPending(reordered);
   }, [draggedPendingId, onReorderPending, pendingRequests]);
 
-  const scrollToLatest = React.useCallback((behavior: ScrollBehavior = "auto") => {
-    const stream = streamRef.current;
-    if (!stream) {
+  const scrollToLatest = React.useCallback((behavior: "auto" | "smooth" = "auto") => {
+    if (!streamRef.current || conversations.length === 0) {
       return;
     }
-    stream.scrollTo({ top: stream.scrollHeight, behavior });
+    streamRef.current.scrollToIndex({
+      index: firstItemIndex + conversations.length - 1,
+      align: "end",
+      behavior,
+    });
     followsLatestRef.current = true;
     setShowJumpToLatest(false);
-  }, []);
+  }, [conversations.length, firstItemIndex]);
 
-  React.useEffect(() => {
-    if (followsLatestRef.current) {
-      scrollToLatest();
-    } else {
-      setShowJumpToLatest(true);
-    }
-  }, [renderKey, scrollToLatest]);
+  const loadOlderPreservingAnchor = React.useCallback(async () => {
+    const scroller = scrollerRef.current;
+    const scrollerTop = scroller?.getBoundingClientRect().top ?? 0;
+    const visibleTurns = scroller
+      ? Array.from(scroller.querySelectorAll<HTMLElement>("[data-conversation-id]"))
+        .filter((element) => element.getBoundingClientRect().bottom > scrollerTop)
+      : [];
+    const anchor = visibleTurns[0] ?? null;
+    const anchorId = anchor?.dataset.conversationId ?? null;
+    const anchorTop = anchor ? anchor.getBoundingClientRect().top - scrollerTop : null;
 
-  const handleScroll = React.useCallback(() => {
-    const stream = streamRef.current;
-    if (!stream) {
-      return;
-    }
-    const distanceFromBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
-    const followsLatest = distanceFromBottom <= 72;
-    followsLatestRef.current = followsLatest;
-    if (followsLatest) {
-      setShowJumpToLatest(false);
-    }
-  }, []);
+    await onLoadOlderMessages();
+    if (!scroller || !anchorId || anchorTop === null) return;
+
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+    });
+    const restoredAnchor = Array.from(
+      scroller.querySelectorAll<HTMLElement>("[data-conversation-id]"),
+    ).find((element) => element.dataset.conversationId === anchorId);
+    if (!restoredAnchor) return;
+    const restoredTop = restoredAnchor.getBoundingClientRect().top
+      - scroller.getBoundingClientRect().top;
+    scroller.scrollTop += restoredTop - anchorTop;
+  }, [onLoadOlderMessages]);
 
   return (
     <section className="chat-stream-shell">
       <section
-        ref={streamRef}
-        className="chat-stream chat-transcript"
         data-expand-details={String(expandDetails)}
-        onScroll={handleScroll}
+        className="chat-stream-virtual-shell"
       >
-        {conversations.length === 0 ? (
-          hasActiveSession ? (
-            <div className="chat-stream-empty-history" role="status">
-              <div className="chat-stream-empty-title">该会话暂无历史消息</div>
-              <div className="chat-stream-empty-detail">
-                在下方输入任务，Assistant 的回复会显示在这里。
-              </div>
-              {sessionChangeSummary && sessionChangeSummary.files > 0 ? (
+      {conversations.length === 0 ? (
+        hasActiveSession ? (
+          <div className="chat-stream-empty-history" role="status">
+            <div className="chat-stream-empty-title">该会话暂无历史消息</div>
+            <div className="chat-stream-empty-detail">
+              在下方输入任务，Assistant 的回复会显示在这里。
+            </div>
+            {sessionChangeSummary && sessionChangeSummary.files > 0 ? (
+              <button
+                type="button"
+                className="chat-stream-empty-action"
+                onClick={onOpenChanges}
+              >
+                本会话有 {sessionChangeSummary.files} 个文件变更待审查
+              </button>
+            ) : sessionChangesLoading ? (
+              <div className="chat-stream-empty-detail">正在检查会话文件变更...</div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="chat-stream-blank" aria-hidden="true" />
+        )
+      ) : (
+      <Virtuoso
+        key={sessionId}
+        ref={streamRef}
+        scrollerRef={(element) => {
+          scrollerRef.current = element instanceof HTMLElement ? element : null;
+        }}
+        className="chat-stream chat-transcript chat-virtual-list"
+        data={conversations}
+        firstItemIndex={firstItemIndex}
+        initialTopMostItemIndex={firstItemIndex + conversations.length - 1}
+        computeItemKey={(_, conversation) => conversationRenderKey(conversation)}
+        followOutput={(isAtBottom) => (isAtBottom ? "auto" : false)}
+        atBottomStateChange={(atBottom) => {
+          followsLatestRef.current = atBottom;
+          setShowJumpToLatest(!atBottom);
+        }}
+        components={{
+          Header: () => (
+            <div className="chat-history-page-header">
+              {hasOlderMessages ? (
                 <button
                   type="button"
-                  className="chat-stream-empty-action"
-                  onClick={onOpenChanges}
+                  disabled={loadingOlderMessages}
+                  onClick={() => void loadOlderPreservingAnchor().catch(() => undefined)}
                 >
-                  本会话有 {sessionChangeSummary.files} 个文件变更待审查
+                  {loadingOlderMessages ? "正在加载更早消息…" : "加载更早消息"}
                 </button>
-              ) : sessionChangesLoading ? (
-                <div className="chat-stream-empty-detail">正在检查会话文件变更...</div>
-              ) : null}
+              ) : (
+                <span>已到达会话起点</span>
+              )}
+              {historyError ? <span role="alert">{historyError}</span> : null}
             </div>
-          ) : (
-            <div className="chat-stream-blank" aria-hidden="true" />
-          )
-        ) : (
-          conversations.map((conversation, index) => (
-            <React.Fragment key={conversation.conversationId}>
+          ),
+          Footer: () => pendingActionError ? (
+            <div className="chat-turn-action-error" role="alert">
+              {pendingActionError}
+            </div>
+          ) : null,
+        }}
+        itemContent={(index, conversation) => (
+            <div className="chat-virtual-turn">
               {conversation.userMessage?.message_id === firstSteeringId ? (
                 <div className="chat-pending-divider">
                   <span>引导消息 · {pendingRequests.filter((item) => item.kind === "steering").length}</span>
@@ -285,7 +341,7 @@ export default function ChatPanel({
                     workspaceId={workspaceId}
                     conversation={conversation}
                     showRawDetails={expandDetails}
-                    isLastTurn={index === conversations.length - 1}
+                    isLastTurn={index === firstItemIndex + conversations.length - 1}
                     sessionBusy={sessionBusy}
                     onReplayTurn={onReplayTurn}
                     onUpdatePending={(...args) => runPendingAction(
@@ -303,14 +359,10 @@ export default function ChatPanel({
                   />
                 </ChatTurnErrorBoundary>
               </div>
-            </React.Fragment>
-          ))
+            </div>
         )}
-        {pendingActionError ? (
-          <div className="chat-turn-action-error" role="alert">
-            {pendingActionError}
-          </div>
-        ) : null}
+      />
+      )}
       </section>
       {showJumpToLatest ? (
         <button

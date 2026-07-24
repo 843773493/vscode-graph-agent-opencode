@@ -6,6 +6,7 @@ import type {
   CursorPage,
   DeleteSessionResult,
   InterruptSessionResult,
+  Job,
   LLMRequestLogRecord,
   Message,
   MessageReplayAccepted,
@@ -31,6 +32,8 @@ import type {
   WorkspaceFileList,
   WorkspaceInfo,
   WorkspaceFileUpdateRequest,
+  SessionCatalogPage,
+  SessionCatalogNode,
 } from "./types/backend";
 import type {
   ToolCatalogItem,
@@ -148,6 +151,10 @@ export async function requestJson<T>(
       );
     }
 
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
     return (await response.json()) as T;
   } catch (error) {
     if (error instanceof Error && error.message === timeoutErrorMessage) {
@@ -169,9 +176,17 @@ export async function getSessionAttachmentBlob(
   sessionId: string,
   fileId: string,
   workspaceId?: string | null,
+  options: {
+    variant?: "thumbnail" | "original";
+    signal?: AbortSignal;
+  } = {},
 ): Promise<Blob> {
   const localToken = await gatewayToken(port);
   const query = new URLSearchParams({ file_id: fileId });
+  query.set("variant", options.variant ?? "original");
+  if (options.variant === "thumbnail") {
+    query.set("max_edge", "384");
+  }
   const response = await fetch(
     `${getBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/content?${query}`,
     {
@@ -179,6 +194,7 @@ export async function getSessionAttachmentBlob(
         "X-Local-Token": localToken,
         ...workspaceHeader(workspaceId),
       },
+      signal: options.signal,
     },
   );
   if (!response.ok) {
@@ -437,6 +453,155 @@ export async function listSessions(
   return normalizePageResult<Session>(unwrapApiData(data));
 }
 
+export async function listSessionCatalogChildren(
+  port: number,
+  workspaceId: string,
+  parentNodeId?: string | null,
+  cursor?: string | null,
+): Promise<SessionCatalogPage> {
+  const query = new URLSearchParams({ limit: "100" });
+  if (parentNodeId) {
+    query.set("parent_node_id", parentNodeId);
+  }
+  if (cursor) {
+    query.set("cursor", cursor);
+  }
+  return unwrapApiData(
+    await requestJson<APIResponse<SessionCatalogPage>>(
+      port,
+      `/api/v1/session-catalog/children?${query.toString()}`,
+      { headers: workspaceHeader(workspaceId) },
+    ),
+  );
+}
+
+export async function rebuildSessionCatalog(
+  port: number,
+  workspaceId: string,
+): Promise<SessionCatalogPage> {
+  return unwrapApiData(
+    await requestJson<APIResponse<SessionCatalogPage>>(
+      port,
+      "/api/v1/session-catalog/rebuild",
+      {
+        method: "POST",
+        headers: workspaceHeader(workspaceId),
+      },
+    ),
+  );
+}
+
+export async function createSessionCatalogFolder(
+  port: number,
+  workspaceId: string,
+  name: string,
+  parentFolderId?: string | null,
+): Promise<void> {
+  await requestJson<APIResponse<unknown>>(
+    port,
+    "/api/v1/session-catalog/folders",
+    {
+      method: "POST",
+      headers: workspaceHeader(workspaceId),
+      body: JSON.stringify({ name, parent_folder_id: parentFolderId ?? null }),
+    },
+  );
+}
+
+export async function renameSessionCatalogFolder(
+  port: number,
+  workspaceId: string,
+  folderId: string,
+  name: string,
+): Promise<void> {
+  await requestJson<APIResponse<unknown>>(
+    port,
+    `/api/v1/session-catalog/folders/${encodeURIComponent(folderId)}`,
+    {
+      method: "PATCH",
+      headers: workspaceHeader(workspaceId),
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
+export async function moveSessionCatalogFolder(
+  port: number,
+  workspaceId: string,
+  folderId: string,
+  parentFolderId?: string | null,
+): Promise<void> {
+  await requestJson<APIResponse<unknown>>(
+    port,
+    `/api/v1/session-catalog/folders/${encodeURIComponent(folderId)}`,
+    {
+      method: "PATCH",
+      headers: workspaceHeader(workspaceId),
+      body: JSON.stringify({ parent_folder_id: parentFolderId ?? null }),
+    },
+  );
+}
+
+export async function deleteSessionCatalogFolder(
+  port: number,
+  workspaceId: string,
+  folderId: string,
+): Promise<void> {
+  await requestJson<unknown>(
+    port,
+    `/api/v1/session-catalog/folders/${encodeURIComponent(folderId)}?recursive=true`,
+    { method: "DELETE", headers: workspaceHeader(workspaceId) },
+  );
+}
+
+export async function assignSessionCatalogFolder(
+  port: number,
+  workspaceId: string,
+  sessionId: string,
+  folderId?: string | null,
+): Promise<void> {
+  await requestJson<APIResponse<unknown>>(
+    port,
+    `/api/v1/session-catalog/sessions/${encodeURIComponent(sessionId)}/folder`,
+    {
+      method: "PUT",
+      headers: workspaceHeader(workspaceId),
+      body: JSON.stringify({ folder_id: folderId ?? null }),
+    },
+  );
+}
+
+export async function moveSessionCatalogNode(
+  port: number,
+  workspaceId: string,
+  nodeId: string,
+  parentNodeId: string | null,
+): Promise<void> {
+  await requestJson<APIResponse<unknown>>(
+    port,
+    `/api/v1/session-catalog/nodes/${encodeURIComponent(nodeId)}/parent`,
+    {
+      method: "PATCH",
+      headers: workspaceHeader(workspaceId),
+      body: JSON.stringify({ parent_node_id: parentNodeId }),
+    },
+  );
+}
+
+export async function getSessionCatalogBreadcrumb(
+  port: number,
+  workspaceId: string,
+  nodeId: string,
+): Promise<{ items: SessionCatalogNode[] }> {
+  return unwrapApiData(
+    await requestJson<APIResponse<{ items: SessionCatalogNode[] }>>(
+      port,
+      `/api/v1/session-catalog/breadcrumb/${encodeURIComponent(nodeId)}`,
+      { headers: workspaceHeader(workspaceId) },
+    ),
+  );
+}
+
 export async function getSession(
   port: number,
   sessionId: string,
@@ -478,16 +643,54 @@ export async function listAgents(
   );
 }
 
+export async function setWorkspaceDefaultAgent(
+  port: number,
+  agentId: string,
+  workspaceId: string,
+): Promise<Agent[]> {
+  return unwrapApiData(
+    await requestJson<APIResponse<Agent[]>>(
+      port,
+      "/api/v1/agents/workspace-default",
+      {
+        method: "PUT",
+        headers: workspaceHeader(workspaceId),
+        body: JSON.stringify({ agent_id: agentId }),
+      },
+    ),
+  );
+}
+
+export async function setWorkspaceDefaultProvider(
+  port: number,
+  agentId: string,
+  providerId: string,
+  workspaceId: string,
+): Promise<Agent[]> {
+  return unwrapApiData(
+    await requestJson<APIResponse<Agent[]>>(
+      port,
+      `/api/v1/agents/${encodeURIComponent(agentId)}/workspace-default-provider`,
+      {
+        method: "PUT",
+        headers: workspaceHeader(workspaceId),
+        body: JSON.stringify({ provider_id: providerId }),
+      },
+    ),
+  );
+}
+
 export async function createSession(
   port: number,
   title: string = DEFAULT_SESSION_TITLE,
   workspaceId?: string | null,
+  folderId?: string | null,
 ): Promise<Session> {
   return unwrapApiData(
     await requestJson<APIResponse<Session>>(port, "/api/v1/sessions", {
       method: "POST",
       headers: workspaceHeader(workspaceId),
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, folder_id: folderId ?? null }),
     }),
   );
 }
@@ -532,11 +735,12 @@ export async function deleteSession(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
+  cascade = false,
 ): Promise<DeleteSessionResult> {
   return unwrapApiData(
     await requestJson<APIResponse<DeleteSessionResult>>(
       port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}${cascade ? "?cascade=true" : ""}`,
       { method: "DELETE", headers: workspaceHeader(workspaceId) },
     ),
   );
@@ -549,6 +753,15 @@ export function updateSessionAgent(
   workspaceId?: string | null,
 ): Promise<Session> {
   return updateSession(port, sessionId, { agent_id: agentId }, workspaceId);
+}
+
+export function updateSessionProvider(
+  port: number,
+  sessionId: string,
+  providerId: string,
+  workspaceId?: string | null,
+): Promise<Session> {
+  return updateSession(port, sessionId, { provider_id: providerId }, workspaceId);
 }
 
 export async function compactSessionContext(
@@ -569,13 +782,20 @@ export async function listMessages(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
+  options: { cursor?: string | null; limit?: number; signal?: AbortSignal } = {},
 ): Promise<CursorPage<Message>> {
+  const params = new URLSearchParams();
+  params.set("limit", String(options.limit ?? 40));
+  if (options.cursor) {
+    params.set("cursor", options.cursor);
+  }
   const data = await requestJson<APIResponse<CursorPage<Message>>>(
     port,
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages?${params.toString()}`,
     {
       headers: workspaceHeader(workspaceId),
       timeoutMs: SESSION_HISTORY_TIMEOUT_MS,
+      signal: options.signal,
     },
   );
   return normalizePageResult<Message>(unwrapApiData(data));
@@ -783,10 +1003,15 @@ export async function getSessionTraces(
   sessionId: string,
   workspaceId?: string | null,
   afterEventId?: string | null,
+  tailLimit = 2000,
 ): Promise<TraceEvent[]> {
-  const query = afterEventId
-    ? `?${new URLSearchParams({ after_event_id: afterEventId }).toString()}`
-    : "";
+  const params = new URLSearchParams();
+  if (afterEventId) {
+    params.set("after_event_id", afterEventId);
+  } else {
+    params.set("tail_limit", String(tailLimit));
+  }
+  const query = `?${params.toString()}`;
   const result = await requestJson<APIResponse<TraceEvent[]>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces${query}`,
@@ -812,6 +1037,23 @@ export interface SessionStreamEvent {
   raw?: Record<string, unknown>;
 }
 
+export async function getJob(
+  port: number,
+  jobId: string,
+  workspaceId?: string | null,
+): Promise<Job> {
+  return unwrapApiData(
+    await requestJson<APIResponse<Job>>(
+      port,
+      `/api/v1/jobs/${encodeURIComponent(jobId)}`,
+      {
+        headers: workspaceHeader(workspaceId),
+        timeoutMs: AGENT_STATE_TIMEOUT_MS,
+      },
+    ),
+  );
+}
+
 export class TraceCursorGoneError extends Error {
   readonly status = 410;
 
@@ -819,6 +1061,44 @@ export class TraceCursorGoneError extends Error {
     super(`Trace 事件游标已失效: ${eventId}`);
     this.name = "TraceCursorGoneError";
   }
+}
+
+export class SessionStreamIdleTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`会话事件流超过 ${timeoutMs}ms 未收到任何数据`);
+    this.name = "SessionStreamIdleTimeoutError";
+  }
+}
+
+const DEFAULT_SESSION_STREAM_IDLE_TIMEOUT_MS = 45_000;
+type SessionStreamReadResult = Awaited<
+  ReturnType<
+    ReadableStreamDefaultReader<Uint8Array<ArrayBufferLike>>["read"]
+  >
+>;
+
+function readSessionStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array<ArrayBufferLike>>,
+  idleTimeoutMs: number,
+): Promise<SessionStreamReadResult> {
+  if (idleTimeoutMs <= 0) {
+    throw new Error("会话事件流空闲超时必须大于 0");
+  }
+  return new Promise((resolve, reject) => {
+    const timeoutId = globalThis.setTimeout(() => {
+      reject(new SessionStreamIdleTimeoutError(idleTimeoutMs));
+    }, idleTimeoutMs);
+    void reader.read().then(
+      (result) => {
+        globalThis.clearTimeout(timeoutId);
+        resolve(result);
+      },
+      (error: unknown) => {
+        globalThis.clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
 }
 
 function parseSseBlock(block: string): SessionStreamEvent | null {
@@ -897,6 +1177,8 @@ export async function streamSessionEvents(
     afterEventId?: string | null;
     onEvent?: (event: SessionStreamEvent) => void;
     onError?: (error: unknown) => void;
+    onActivity?: () => void;
+    idleTimeoutMs?: number;
     signal?: AbortSignal;
   },
 ): Promise<void> {
@@ -926,10 +1208,19 @@ export async function streamSessionEvents(
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  let reachedEnd = false;
+  const idleTimeoutMs =
+    options?.idleTimeoutMs ?? DEFAULT_SESSION_STREAM_IDLE_TIMEOUT_MS;
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readSessionStreamChunk(
+        reader,
+        idleTimeoutMs,
+      );
+      if (value && value.byteLength > 0) {
+        options?.onActivity?.();
+      }
       buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
 
       let boundaryIndex = buffer.indexOf("\n\n");
@@ -949,6 +1240,7 @@ export async function streamSessionEvents(
       }
 
       if (done) {
+        reachedEnd = true;
         break;
       }
     }
@@ -960,6 +1252,9 @@ export async function streamSessionEvents(
     options?.onError?.(error);
     throw error;
   } finally {
+    if (!reachedEnd) {
+      await reader.cancel();
+    }
     reader.releaseLock();
   }
 }

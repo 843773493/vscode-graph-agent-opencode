@@ -1,0 +1,330 @@
+.session-resource-explorer,
+.session-resource-search-results {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  color: var(--vscode-foreground);
+}
+
+.session-resource-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px 6px;
+}
+
+.session-resource-toolbar button,
+.session-resource-actions button,
+.session-resource-load-more,
+.session-generator-manager button {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.session-resource-toolbar button:hover,
+.session-resource-actions button:hover,
+.session-resource-load-more:hover,
+.session-generator-manager button:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.session-resource-root-drop-target {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  border-radius: 5px;
+  font-weight: 600;
+  outline: none;
+  cursor: default;
+}
+
+.session-resource-root-drop-target:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.session-resource-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-resource-row {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  padding-right: 5px;
+  border-radius: 5px;
+}
+
+.session-resource-row:hover,
+.session-resource-row.current {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.session-resource-row.current {
+  box-shadow: inset 2px 0 var(--vscode-button-background);
+}
+
+.session-resource-row[draggable="true"] {
+  cursor: grab;
+}
+
+.session-resource-row.dragging {
+  opacity: 0.45;
+}
+
+.session-resource-row.drop-target,
+.session-resource-list.navigation-root.drop-target,
+.session-resource-root-drop-target.drop-target {
+  background: color-mix(
+    in srgb,
+    var(--vscode-list-activeSelectionBackground) 68%,
+    transparent
+  );
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.session-resource-list.navigation-root.drop-target {
+  min-height: 30px;
+  border-radius: 5px;
+}
+
+.session-resource-chevron,
+.session-resource-chevron-spacer {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  flex: 0 0 18px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-icon-foreground);
+}
+
+.session-resource-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.session-resource-label.workspace-label {
+  font-weight: 650;
+}
+
+.session-resource-inline-editor {
+  min-width: 0;
+  height: 23px;
+  flex: 1 1 auto;
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 3px;
+  padding: 1px 5px;
+  outline: 0;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font: inherit;
+}
+
+.session-resource-actions {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.session-resource-row:hover .session-resource-actions,
+.session-resource-row:focus-within .session-resource-actions {
+  display: flex;
+}
+
+.session-resource-actions button {
+  min-width: 22px;
+  min-height: 22px;
+}
+
+.session-resource-state,
+.session-resource-error {
+  padding: 5px 12px 5px 30px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+}
+
+.session-resource-error {
+  color: #b42318;
+}
+
+.session-resource-badge {
+  border-radius: 999px;
+  padding: 1px 5px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 10px;
+}
+
+.session-resource-load-more {
+  width: calc(100% - 24px);
+  margin: 2px 12px;
+  padding: 5px;
+  color: var(--vscode-descriptionForeground);
+  text-align: left;
+}
+
+.session-resource-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: calc(100% - 12px);
+  margin: 2px 6px;
+  padding: 7px 9px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-resource-search-result:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.session-resource-search-result strong,
+.session-resource-search-result span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-resource-search-result span,
+.session-resource-offline-summary {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.session-resource-offline-summary {
+  margin: 8px 12px;
+}
+
+.session-generator-manager {
+  margin: 8px;
+  border-top: 1px solid var(--vscode-panel-border);
+  padding-top: 7px;
+}
+
+.session-generator-manager > summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.session-generator-manager > summary span {
+  margin-left: 4px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.session-generator-list,
+.session-generator-form {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.session-generator-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 5px;
+  background: var(--vscode-list-hoverBackground);
+}
+
+.session-generator-summary,
+.session-generator-form label {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.session-generator-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.session-generator-runs {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--vscode-panel-border);
+  padding-top: 5px;
+}
+
+.session-generator-run {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  overflow-wrap: anywhere;
+}
+
+.session-generator-row small {
+  color: var(--vscode-descriptionForeground);
+}
+
+.session-generator-form input,
+.session-generator-form textarea,
+.session-generator-form select {
+  width: 100%;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 5px;
+  padding: 5px 7px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font: inherit;
+}
+
+.session-generator-form textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.session-generator-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.session-generator-preview {
+  display: grid;
+  gap: 4px;
+}
+
+.session-generator-preview code {
+  overflow-wrap: anywhere;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.session-generator-create {
+  margin-top: 8px;
+  padding: 5px 7px;
+}

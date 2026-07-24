@@ -18,12 +18,10 @@
 }
 
 .composer-tool-menu {
-  position: fixed;
-  z-index: 1100;
   display: flex;
   flex-direction: column;
-  width: min(460px, calc(100vw - 32px));
-  max-height: min(620px, 72vh);
+  width: min(460px, calc(100vw - 32px), var(--anchored-overlay-available-width, 460px));
+  max-height: min(620px, 72vh, var(--anchored-overlay-available-height, 620px));
   border: 1px solid var(--vscode-agentsPanel-border);
   border-radius: var(--vscode-cornerRadius-large);
   background: var(--vscode-menu-background, #fff8e8);
