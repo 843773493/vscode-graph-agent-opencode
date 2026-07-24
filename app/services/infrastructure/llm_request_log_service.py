@@ -4,21 +4,23 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.core.path_utils import get_sessions_dir, safe_join
+from app.core.session_paths import SessionPathResolver
 from app.schemas.public_v2.llm_request_log import LLMRequestLogRecordDTO
 
 
 class LLMRequestLogService:
     """读取落盘的完整 LLM 请求/响应日志。"""
 
-    def __init__(self, sessions_dir: Path | None = None) -> None:
-        self._sessions_dir = sessions_dir
-
-    def _base_dir(self) -> Path:
-        return self._sessions_dir or get_sessions_dir()
+    def __init__(
+        self,
+        sessions_dir: Path,
+        *,
+        path_resolver: SessionPathResolver | None = None,
+    ) -> None:
+        self._path_resolver = path_resolver or SessionPathResolver(sessions_dir)
 
     def list_session_logs(self, session_id: str) -> list[LLMRequestLogRecordDTO]:
-        session_dir = safe_join(self._base_dir(), session_id) / "logs" / "llm_requests"
+        session_dir = self._path_resolver.resolve_session_dir(session_id) / "logs" / "llm_requests"
         if not session_dir.exists():
             return []
         if not session_dir.is_dir():

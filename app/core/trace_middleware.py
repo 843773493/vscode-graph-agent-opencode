@@ -1,8 +1,10 @@
-import time
 import logging
+import time
 import uuid
-from typing import Callable, Awaitable
+from collections.abc import Awaitable, Callable
+
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,27 @@ class TraceMiddleware(BaseHTTPMiddleware):
         request.state.start_time = start_time
         
         # Add request ID to response headers
-        response: Response = await call_next(request)
+        try:
+            response: Response = await call_next(request)
+        except Exception as error:
+            duration = time.perf_counter() - start_time
+            logger.exception(
+                "[TRACE] method=%s path=%s status=500 duration=%.4fs request_id=%s",
+                request.method,
+                request.url.path,
+                duration,
+                request_id,
+            )
+            return JSONResponse(
+                status_code=500,
+                headers={"X-Request-ID": request_id},
+                content={
+                    "code": 500,
+                    "message": f"{type(error).__name__}: {error}",
+                    "data": None,
+                    "request_id": request_id,
+                },
+            )
         response.headers["X-Request-ID"] = request_id
         
         # Calculate execution time
@@ -49,8 +71,12 @@ class TraceMiddleware(BaseHTTPMiddleware):
         
         # Log request with trace info
         logger.info(
-            f"[TRACE] method={request.method} path={request.url.path} "
-            f"status={response.status_code} duration={duration:.4f}s request_id={request_id}"
+            "[TRACE] method=%s path=%s status=%s duration=%.4fs request_id=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration,
+            request_id,
         )
         
         return response

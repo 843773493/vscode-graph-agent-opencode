@@ -76,8 +76,22 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
     child_session_id = child["session_id"]
 
     assert child["parent_session_id"] == source_session_id
+    assert child["context_source_session_id"] == source_session_id
     assert child["current_agent_id"] == source["current_agent_id"]
     assert child["title"] == "上下文 Fork E2E（上下文副本）"
+    catalog_response = await client.get("/api/v1/session-catalog/export")
+    assert catalog_response.status_code == 200, catalog_response.text
+    nodes = {
+        item["node_id"]: item for item in catalog_response.json()["data"]["items"]
+    }
+    source_path = Path(e2e_workspace_root_path) / ".boxteam" / "sessions" / nodes[
+        source_session_id
+    ]["storage_relative_path"]
+    child_path = Path(e2e_workspace_root_path) / ".boxteam" / "sessions" / nodes[
+        child_session_id
+    ]["storage_relative_path"]
+    assert child_path.parent == source_path / "children"
+    assert nodes[source_session_id]["has_children"] is True
 
     source_state_response = await client.get(
         f"/api/v1/sessions/{source_session_id}/agent-state/messages"

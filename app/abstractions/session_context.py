@@ -2,15 +2,35 @@ from __future__ import annotations
 
 from typing import Protocol, TypedDict
 
+from app.gateway.schemas import GatewayWorkspaceListDTO
+from app.schemas.public_v2.session import (
+    SessionDTO,
+    SessionInformationSnapshotDTO,
+    SessionListResultDTO,
+)
 from app.schemas.public_v2.session_context import (
-    SessionContextGrepResultDTO,
+    SessionContextReadRequest,
     SessionContextReadResultDTO,
-    SessionRecentTextMessagesDTO,
+    SessionContextSearchRequest,
+    SessionContextSearchResultDTO,
 )
 
 
 class WorkspaceSessionContextAccessError(RuntimeError):
     """模型可通过修正目标标识或提醒用户来处理的跨工作区访问错误。"""
+
+
+class SessionContextRevisionChangedError(RuntimeError):
+    """后续读取所绑定的上下文 revision 已发生变化。"""
+
+    def __init__(self, *, expected_revision: str, actual_revision: str) -> None:
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
+        super().__init__(
+            "session context revision changed: "
+            f"expected={expected_revision}, actual={actual_revision}; "
+            "请重新执行 read_context 或 search_context 获取新 cursor"
+        )
 
 
 class AgentContextState(TypedDict):
@@ -27,65 +47,71 @@ class SessionContextMessageSourceProtocol(Protocol):
 
 
 class SessionLookupProtocol(Protocol):
-    async def get(self, session_id: str) -> object: ...
+    async def get(self, session_id: str) -> SessionDTO: ...
+
+    async def list(
+        self,
+        workspace_id: str | None = None,
+        skip: int = 0,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> SessionListResultDTO: ...
+
+
+class SessionInformationSourceProtocol(Protocol):
+    async def get_information(
+        self,
+        session_id: str,
+    ) -> SessionInformationSnapshotDTO: ...
 
 
 class SessionContextQueryProtocol(Protocol):
-    async def recent_text(
+    async def read_context(
         self,
-        session_id: str,
-        *,
-        rounds: int = 5,
-    ) -> SessionRecentTextMessagesDTO: ...
-
-    async def grep(
-        self,
-        session_id: str,
-        *,
-        pattern: str,
-        case_sensitive: bool = False,
-        max_matches: int = 20,
-        expected_snapshot_id: str | None = None,
-    ) -> SessionContextGrepResultDTO: ...
-
-    async def read_lines(
-        self,
-        session_id: str,
-        *,
-        line_start: int = 1,
-        line_count: int = 20,
-        max_chars_per_line: int = 4000,
-        expected_snapshot_id: str | None = None,
+        request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO: ...
+
+    async def search_context(
+        self,
+        request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO: ...
 
 
 class WorkspaceSessionContextClientProtocol(Protocol):
-    async def recent_text_in_workspace(
+    async def read_gateway_context(
         self,
-        workspace_id: str,
-        session_id: str,
-        *,
-        rounds: int = 5,
-    ) -> SessionRecentTextMessagesDTO: ...
-
-    async def grep_in_workspace(
-        self,
-        workspace_id: str,
-        session_id: str,
-        *,
-        pattern: str,
-        case_sensitive: bool = False,
-        max_matches: int = 20,
-        expected_snapshot_id: str | None = None,
-    ) -> SessionContextGrepResultDTO: ...
-
-    async def read_lines_in_workspace(
-        self,
-        workspace_id: str,
-        session_id: str,
-        *,
-        line_start: int = 1,
-        line_count: int = 20,
-        max_chars_per_line: int = 4000,
-        expected_snapshot_id: str | None = None,
+        request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO: ...
+
+    async def search_gateway_context(
+        self,
+        request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO: ...
+
+    async def read_context_in_workspace(
+        self,
+        workspace_id: str,
+        request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO: ...
+
+    async def search_context_in_workspace(
+        self,
+        workspace_id: str,
+        request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO: ...
+
+
+class WorkspaceSessionContextTransportProtocol(Protocol):
+    async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO: ...
+
+    async def read_context_in_workspace(
+        self,
+        workspace_id: str,
+        request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO: ...
+
+    async def search_context_in_workspace(
+        self,
+        workspace_id: str,
+        request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO: ...

@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from tests.e2e.utils import (
     last_assistant_message,
     normalize_text,
@@ -40,8 +41,11 @@ async def test_session_information_uses_backend_authoritative_paths(
     assert information["session"]["session_id"] == session["session_id"]
     assert information["session"]["parent_session_id"] is None
     assert information["workspace"]["root_path"] == expected_root
+    expected_session_dir = get_session_path_resolver(
+        Path(expected_root) / ".boxteam" / "sessions"
+    ).resolve_session_dir(session["session_id"])
     assert information["storage_path"] == str(
-        Path(expected_root) / ".boxteam" / "sessions" / session["session_id"]
+        expected_session_dir
     )
     assert information["execution"] == {
         "job_id": None,

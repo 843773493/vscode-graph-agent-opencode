@@ -10,6 +10,7 @@ import httpx
 import pytest
 from pathlib import Path
 
+from app.core.path_utils import get_session_path_resolver
 from tests.e2e.utils import get_trace_payload, wait_for_job_done
 
 
@@ -137,13 +138,11 @@ async def test_llm_request_log_round_trip(
     assert "_llm_request_replay_trace" not in agent_state_jsonl
     assert "llm_request_prompt_replay_trace" not in agent_state_jsonl
 
+    session_dir = get_session_path_resolver(
+        Path(e2e_workspace_root_path).resolve() / ".boxteam" / "sessions"
+    ).resolve_session_dir(session_id)
     expected_log_dir = (
-        Path(e2e_workspace_root_path).resolve()
-        / ".boxteam"
-        / "sessions"
-        / session_id
-        / "logs"
-        / "llm_requests"
+        session_dir / "logs" / "llm_requests"
     )
     log_path = Path(log["file_path"]).resolve()
     assert log_path.is_relative_to(expected_log_dir)

@@ -1,10 +1,10 @@
 import os
 import tempfile
-import uuid
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 import pytest
 from app.core.path_utils import (
-    ensure_session_dir,
     get_boxteam_home,
     get_gateway_root,
     get_session_path,
@@ -16,6 +16,7 @@ from app.core.path_utils import (
 )
 from app.core.exceptions import ForbiddenError
 from app.core.storage_migration import migrate_user_storage_layout
+from app.core.session_paths import SessionPathResolver, physical_segment
 
 
 class TestPathUtils:
@@ -105,39 +106,89 @@ class TestPathUtils:
             else:
                 del os.environ["WORKSPACE_ROOT"]
 
-    def test_get_session_path_isolation(self):
-        """测试会话路径隔离"""
-        session_id = "test-session-123"
-        path = get_session_path(session_id)
-        assert session_id in str(path)
-        assert path.parent.name == "sessions"
+    def test_get_session_path_resolves_physical_tree(self, tmp_path, monkeypatch):
+        """稳定 ID 应解析到真实层级目录，而不是拼接固定扁平路径。"""
+        workspace_root = tmp_path / "workspace"
+        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
 
-    def test_ensure_session_dir_creates_directory(self):
-        """测试确保会话目录存在"""
-        # 先设置临时工作区环境变量
-        original_env = os.environ.get("WORKSPACE_ROOT")
-        os.environ["WORKSPACE_ROOT"] = str(self.base_path)
-        
-        try:
-            # 重新导入以刷新环境变量
-            from importlib import reload
-            import app.core.path_utils
-            reload(app.core.path_utils)
-            from app.core.path_utils import ensure_session_dir
-            
-            session_id = f"ses_{uuid.uuid4().hex}"
-            path = ensure_session_dir(session_id)
-            assert path.exists()
-            assert path.is_dir()
-    
-            # 重复调用不会报错
-            path2 = ensure_session_dir(session_id)
-            assert path2 == path
-        finally:
-            if original_env:
-                os.environ["WORKSPACE_ROOT"] = original_env
-            else:
-                del os.environ["WORKSPACE_ROOT"]
+        from app.core.path_utils import get_session_path_resolver
+
+        initialize_directories()
+        resolver = get_session_path_resolver()
+        folder = resolver.create_folder(name="项目会话", parent_node_id=None)
+        session_id = "ses_test_session_12345678"
+        session_dir = resolver.allocate_session_dir(
+            session_id=session_id,
+            title="测试会话",
+            parent_node_id=folder.node_id,
+        )
+        now = datetime.now(UTC).isoformat()
+        (session_dir / "session.json").write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "title": "测试会话",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        resolver.register_session(session_id, session_dir)
+
+        path = get_session_path(session_id)
+
+        assert path == session_dir
+        assert path.parent == folder.path
+        assert path.name == "测试会话--12345678"
+        assert path != workspace_root / ".boxteam" / "sessions" / session_id
+
+    def test_get_session_path_rejects_unknown_session(self, tmp_path, monkeypatch):
+        workspace_root = tmp_path / "workspace"
+        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
+        initialize_directories()
+
+        with pytest.raises(FileNotFoundError, match="会话物理目录不存在"):
+            get_session_path("ses_missing")
+
+    def test_get_session_path_detects_manual_directory_move(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        workspace_root = tmp_path / "workspace"
+        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
+        initialize_directories()
+        from app.core.path_utils import get_session_path_resolver
+
+        resolver = get_session_path_resolver()
+        source_folder = resolver.create_folder(name="移动前", parent_node_id=None)
+        target_folder = resolver.create_folder(name="移动后", parent_node_id=None)
+        session_id = "ses_manual_move_12345678"
+        source = resolver.allocate_session_dir(
+            session_id=session_id,
+            title="手工移动",
+            parent_node_id=source_folder.node_id,
+        )
+        now = datetime.now(UTC).isoformat()
+        (source / "session.json").write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "title": "手工移动",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ),
+            encoding="utf-8",
+        )
+        resolver.register_session(session_id, source)
+        target = target_folder.path / source.name
+
+        source.replace(target)
+
+        assert get_session_path(session_id) == target
 
     def test_safe_join_case_sensitivity(self):
         """测试大小写敏感路径处理"""
@@ -164,6 +215,13 @@ class TestPathUtils:
         result = safe_join(self.base_path, special_path)
         assert result.name == special_path
 
+    def test_physical_segment_is_windows_safe_and_stable(self):
+        assert physical_segment("CON", "fld_12345678") == "_CON--12345678"
+        assert physical_segment('日报<>:"/\\|?*', "ses_abcdefgh") == (
+            "日报_________--abcdefgh"
+        )
+        assert physical_segment("名称. ", "ses_12345678") == "名称--12345678"
+
     def test_get_user_workspace_root_uses_hidden_directory_under_home(self):
         """测试用户级持久工作区根目录命名"""
         root = get_user_workspace_root()
@@ -188,7 +246,32 @@ class TestPathUtils:
         boxteam_root = workspace_root / ".boxteam"
         session_root = boxteam_root / "sessions" / session_id
         session_root.mkdir(parents=True)
-        (session_root / "session.json").write_text("{}", encoding="utf-8")
+        now = datetime.now(UTC).isoformat()
+        (session_root / "session.json").write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "title": "迁移会话",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (session_root / "pending_requests.json").write_text(
+            json.dumps(
+                {
+                    "file_id": (
+                        f"/.boxteam/sessions/{session_id}/attachments/legacy.png"
+                    ),
+                    "read_path": (
+                        f"{workspace_root}/.boxteam/sessions/{session_id}/"
+                        "tool-results/legacy.txt"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
         legacy_checkpoint = boxteam_root / "checkpoints" / session_id
         legacy_checkpoint.mkdir(parents=True)
         (legacy_checkpoint / "checkpoints.jsonl").write_text("{}\n", encoding="utf-8")
@@ -201,8 +284,23 @@ class TestPathUtils:
 
         initialize_directories()
 
-        assert (session_root / "checkpoints" / "checkpoints.jsonl").is_file()
-        assert (session_root / "logs" / "traces" / "events.jsonl").is_file()
+        migrated_session_root = get_session_path(session_id)
+        assert migrated_session_root != session_root
+        assert (migrated_session_root / "checkpoints" / "checkpoints.jsonl").is_file()
+        assert (migrated_session_root / "logs" / "traces" / "events.jsonl").is_file()
+        migrated_references = json.loads(
+            (migrated_session_root / "pending_requests.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert migrated_references == {
+            "file_id": (
+                f"boxteam-session://{session_id}/attachments/legacy.png"
+            ),
+            "read_path": (
+                f"/session-artifacts/{session_id}/tool-results/legacy.txt"
+            ),
+        }
         assert not legacy_checkpoint.exists()
         assert (
             boxteam_root
@@ -211,6 +309,181 @@ class TestPathUtils:
             / "ses_orphaned"
             / "checkpoints.jsonl"
         ).is_file()
+
+    def test_session_layout_migration_reuses_unlocked_advisory_lock(self, tmp_path):
+        sessions_root = tmp_path / ".boxteam" / "sessions"
+        migrations_root = tmp_path / ".boxteam" / "migrations"
+        migrations_root.mkdir(parents=True)
+        lock_path = migrations_root / "session-physical-layout-v1.lock"
+        lock_path.write_text(
+            json.dumps({"pid": 2_147_483_647, "started_at": "2026-01-01T00:00:00Z"}),
+            encoding="utf-8",
+        )
+
+        SessionPathResolver(sessions_root).initialize()
+
+        assert lock_path.exists()
+        owner = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert owner["pid"] == os.getpid()
+        record = json.loads(
+            (migrations_root / "session-physical-layout-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert record["status"] == "completed"
+
+    def test_parent_manifest_migrates_to_physical_children_tree_and_detects_drift(
+        self,
+        tmp_path,
+    ):
+        sessions_root = tmp_path / ".boxteam" / "sessions"
+        parent_id = "ses_parent_physical_12345678"
+        child_id = "ses_child_physical_87654321"
+        now = datetime.now(UTC).isoformat()
+        for session_id, title, parent_session_id, kind in (
+            (parent_id, "父会话", None, "normal"),
+            (child_id, "子会话", parent_id, "context_fork"),
+        ):
+            session_dir = sessions_root / session_id
+            session_dir.mkdir(parents=True)
+            (session_dir / "session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": session_id,
+                        "workspace_id": "ws_local",
+                        "title": title,
+                        "parent_session_id": parent_session_id,
+                        "kind": kind,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+        resolver = SessionPathResolver(sessions_root)
+        resolver.initialize()
+
+        parent_path = resolver.resolve_session_dir(parent_id)
+        child_path = resolver.resolve_session_dir(child_id)
+        assert child_path.parent == parent_path / "children"
+        assert resolver.get_node(child_id).parent_node_id == parent_id
+        migrated_child_manifest = json.loads(
+            (child_path / "session.json").read_text(encoding="utf-8")
+        )
+        assert migrated_child_manifest["context_source_session_id"] == parent_id
+        migration_record = json.loads(
+            (
+                sessions_root.parent
+                / "migrations"
+                / "session-physical-parents-v2.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert migration_record["status"] == "completed"
+
+        migrated_child_manifest["parent_session_id"] = None
+        (child_path / "session.json").write_text(
+            json.dumps(migrated_child_manifest, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        with pytest.raises(RuntimeError, match="与物理祖先不一致"):
+            resolver.refresh()
+
+    def test_resolver_detects_manual_session_manifest_update(
+        self,
+        tmp_path,
+    ):
+        sessions_root = tmp_path / ".boxteam" / "sessions"
+        resolver = SessionPathResolver(sessions_root)
+        resolver.initialize()
+        session_id = "ses_manifest_refresh_12345678"
+        session_dir = resolver.allocate_session_dir(
+            session_id=session_id,
+            title="修改前",
+        )
+        now = datetime.now(UTC).isoformat()
+        manifest_path = session_dir / "session.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "title": "修改前",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ),
+            encoding="utf-8",
+        )
+        resolver.register_session(session_id, session_dir)
+        revision_before = resolver.revision
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["title"] = "人工修改后"
+        manifest["updated_at"] = datetime.now(UTC).isoformat()
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        assert resolver.get_node(session_id).name == "人工修改后"
+        assert resolver.revision > revision_before
+
+    def test_resolver_recovers_empty_stale_allocation_directory(self, tmp_path):
+        sessions_root = tmp_path / ".boxteam" / "sessions"
+        resolver = SessionPathResolver(sessions_root)
+        resolver.initialize()
+        session_dir = resolver.allocate_session_dir(
+            session_id="ses_stale_alloc_12345678",
+            title="中断创建",
+        )
+        marker_path = session_dir / ".boxteam-session-allocating.json"
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker["pid"] = 2_147_483_647
+        marker["process_identity"] = "stale-process"
+        marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+        SessionPathResolver(sessions_root).initialize()
+
+        assert not session_dir.exists()
+
+    def test_subtree_delete_freezes_create_allocate_and_move(self, tmp_path):
+        sessions_root = tmp_path / ".boxteam" / "sessions"
+        resolver = SessionPathResolver(sessions_root)
+        resolver.initialize()
+        deleting = resolver.create_folder(name="待删除", parent_node_id=None)
+        outside = resolver.create_folder(name="外部", parent_node_id=None)
+        movable = resolver.create_folder(name="准备移动", parent_node_id=None)
+
+        resolver.begin_subtree_delete(deleting.node_id)
+        try:
+            with pytest.raises(RuntimeError, match="正在递归删除"):
+                resolver.create_folder(
+                    name="竞态子目录",
+                    parent_node_id=deleting.node_id,
+                )
+            with pytest.raises(RuntimeError, match="正在递归删除"):
+                resolver.allocate_session_dir(
+                    session_id="ses_delete_race_12345678",
+                    title="竞态会话",
+                    parent_node_id=deleting.node_id,
+                )
+            with pytest.raises(RuntimeError, match="正在递归删除"):
+                resolver.move_node(
+                    node_id=movable.node_id,
+                    parent_node_id=deleting.node_id,
+                )
+            with pytest.raises(RuntimeError, match="正在递归删除"):
+                resolver.move_node(
+                    node_id=deleting.node_id,
+                    parent_node_id=outside.node_id,
+                )
+            with pytest.raises(RuntimeError, match="正在递归删除"):
+                resolver.delete_folder(deleting.node_id)
+        finally:
+            resolver.finish_subtree_delete(deleting.node_id)
+
+        created = resolver.create_folder(
+            name="删除失败后可继续",
+            parent_node_id=deleting.node_id,
+        )
+        assert created.parent_node_id == deleting.node_id
 
     def test_migrate_user_storage_layout_moves_global_data(self, tmp_path, monkeypatch):
         home = tmp_path / "home"

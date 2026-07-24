@@ -576,7 +576,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
     def _get_history_path(self) -> str:
         """将压缩历史归档到当前会话目录，而不是工作区共享目录。"""
         thread_id = self._get_thread_id()
-        return f"/.boxteam/sessions/{thread_id}/context/history.md"
+        return f"/session-artifacts/{thread_id}/context/history.md"
 
     @staticmethod
     def _apply_event_to_messages(

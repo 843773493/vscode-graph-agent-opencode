@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 import pytest
 from starlette.requests import Request
 
 from app.gateway.main import app, get_registry
+from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.server.workspace_proxy import _proxy_headers
 
 
@@ -17,10 +19,14 @@ class _GatewayRegistryStub:
 @pytest.fixture
 def gateway_client() -> Iterator[TestClient]:
     app.dependency_overrides[get_registry] = lambda: _GatewayRegistryStub()
+    app.state.session_generator_scheduler = MagicMock(
+        spec=SessionGeneratorScheduler
+    )
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
+        del app.state.session_generator_scheduler
 
 
 def test_gateway_endpoint_returns_middleware_request_id(

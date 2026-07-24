@@ -53,7 +53,7 @@ def test_mapper_marks_failed_tool_result_as_failed() -> None:
     event["type"] = "tool_call_end"
     event["part_id"] = "run_tool"
     event["payload"] = {
-        "tool_name": "read_session_recent_text_messages",
+        "tool_name": "read_context",
         "result": "Gateway 工作区不存在: gw_typo",
         "status": "error",
         "failed": True,

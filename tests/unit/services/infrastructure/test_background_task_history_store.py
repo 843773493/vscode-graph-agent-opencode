@@ -15,8 +15,13 @@ from app.services.infrastructure.background_task_history_store import (
 
 
 @pytest.mark.asyncio
-async def test_closed_task_remains_in_persistent_history(tmp_path):
-    store = BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+async def test_closed_task_remains_in_persistent_history(
+    tmp_path,
+    session_bundle_factory,
+):
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, "ses_history")
+    store = BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     registry = BackgroundTaskRegistry(history_store=store)
 
     async def wait_forever() -> None:
@@ -41,8 +46,13 @@ async def test_closed_task_remains_in_persistent_history(tmp_path):
     assert persisted[0].status == "deleted"
 
 
-def test_registry_marks_previous_process_active_tasks_lost(tmp_path):
-    store = BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+def test_registry_marks_previous_process_active_tasks_lost(
+    tmp_path,
+    session_bundle_factory,
+):
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, "ses_stale")
+    store = BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     store.upsert(
         BackgroundTaskHandle(
             task_id="bgt_stale",
@@ -64,8 +74,13 @@ def test_registry_marks_previous_process_active_tasks_lost(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_closed_history_can_be_marked_deleted_after_registry_restart(tmp_path):
-    store = BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+async def test_closed_history_can_be_marked_deleted_after_registry_restart(
+    tmp_path,
+    session_bundle_factory,
+):
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, "ses_restart_delete")
+    store = BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     handle = BackgroundTaskHandle(
         task_id="bgt_closed",
         session_id="ses_restart_delete",

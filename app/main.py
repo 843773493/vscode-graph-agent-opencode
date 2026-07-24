@@ -1,25 +1,29 @@
 from __future__ import annotations
+
 import logging
 import os
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.trace_middleware import TraceMiddleware
-from app.container import build_app_container
 from app.api.agents import router as agents_router
 from app.api.artifacts import router as artifacts_router
 from app.api.config import router as config_router
+from app.api.context import router as context_router
 from app.api.jobs import router as jobs_router
-from app.api.messages import router as messages_router
 from app.api.mcp import router as mcp_router
+from app.api.messages import router as messages_router
 from app.api.runtime import router as runtime_router
+from app.api.session_navigation import router as session_navigation_router
 from app.api.sessions import router as sessions_router
 from app.api.tools import router as tools_router
 from app.api.workspace import router as workspace_router
+from app.container import build_app_container
 from app.core.env import load_project_env
+from app.core.logging_config import configure_application_logging
+from app.core.trace_middleware import TraceMiddleware
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
@@ -27,11 +31,15 @@ from app.services.infrastructure.config import (
 
 load_project_env()
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     from app.core import path_utils
 
+    configure_application_logging()
+    logger.info("工作区后端日志引导已初始化")
     path_utils.initialize_directories()
     workspace_root = os.environ.get("WORKSPACE_ROOT", "") or None
     container = build_app_container(
@@ -41,7 +49,18 @@ async def lifespan(_: FastAPI):
     _.state.container = container
 
     container.config_service.validate_boxteam_config()
-    logging.getLogger().setLevel(container.config_service.get_logger_level())
+    logger_level = container.config_service.get_logger_level()
+    logger_pretty = container.config_service.get_logger_pretty()
+    configure_application_logging(
+        level=logger_level,
+        pretty=logger_pretty,
+    )
+    logger.info(
+        "工作区后端日志已初始化: level=%s pretty=%s workspace=%s",
+        logger_level,
+        logger_pretty,
+        workspace_root or path_utils.get_runtime_workspace_root(),
+    )
 
     await container.mcp_runtime_manager.start()
     try:
@@ -80,13 +99,15 @@ async def lifespan(_: FastAPI):
         await container.trace_event_recorder.start()
         reconciled_jobs = await container.runtime_service.reconcile_stale_executions()
         if reconciled_jobs:
-            logging.warning(
+            logger.warning(
                 "检测到 %s 个上次进程未正常结束的 Job，已持久化为中断状态",
                 reconciled_jobs,
             )
+        await container.session_generation_service.start()
         try:
             yield
         finally:
+            await container.session_generation_service.shutdown()
             await container.config_service.stop_watching()
             await container.tool_test_service.shutdown()
             await container.trace_event_recorder.stop()
@@ -124,7 +145,9 @@ async def health():
 app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(runtime_router, prefix="/api/v1")
 app.include_router(sessions_router, prefix="/api/v1")
+app.include_router(session_navigation_router, prefix="/api/v1")
 app.include_router(messages_router, prefix="/api/v1")
+app.include_router(context_router, prefix="/api/v1")
 app.include_router(mcp_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1")

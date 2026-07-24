@@ -10,7 +10,9 @@ from app.services.infrastructure.historical_terminal_record_reader import (
 
 def test_reader_ignores_terminal_results_copied_from_parent_context(
     tmp_path: Path,
+    session_bundle_factory,
 ) -> None:
+    session_bundle_factory(tmp_path, "ses_child")
     reader = HistoricalTerminalRecordReader(
         sessions_dir=tmp_path,
     )
@@ -39,7 +41,9 @@ def test_reader_ignores_terminal_results_copied_from_parent_context(
 
 def test_reader_keeps_terminal_results_created_in_current_context(
     tmp_path: Path,
+    session_bundle_factory,
 ) -> None:
+    session_bundle_factory(tmp_path, "ses_child")
     reader = HistoricalTerminalRecordReader(
         sessions_dir=tmp_path,
     )

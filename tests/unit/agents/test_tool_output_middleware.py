@@ -30,7 +30,13 @@ def test_tool_output_store_keeps_small_result_unchanged(tmp_path: Path) -> None:
 
 def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     tmp_path: Path,
+    session_bundle_factory,
 ) -> None:
+    session_id = "ses_large"
+    session_dir = session_bundle_factory(
+        tmp_path / ".boxteam" / "sessions",
+        session_id,
+    )
     content = "\n".join(
         f"large-line-{index:04d}: {'内容' * 20}"
         for index in range(80)
@@ -47,7 +53,7 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     )
 
     result = store.bound(
-        session_id="ses_large",
+        session_id=session_id,
         tool_name="large_tool",
         tool_call_id="call-large",
         message=message,
@@ -63,7 +69,13 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     reference = extract_tool_output_reference(result)
     assert reference is not None
     assert reference["type"] == "tool_output"
-    assert reference["read_path"] == f"/{reference['path']}"
+    output_name = Path(str(reference["read_path"])).name
+    assert reference["path"] == (
+        f"boxteam-session://{session_id}/tool-results/{output_name}"
+    )
+    assert reference["read_path"] == (
+        f"/session-artifacts/{session_id}/tool-results/{output_name}"
+    )
     assert reference["tool_name"] == "large_tool"
     assert reference["tool_call_id"] == "call-large"
     assert reference["byte_count"] == len(content.encode("utf-8"))
@@ -71,14 +83,20 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     assert reference["content_sha256"] == hashlib.sha256(
         content.encode("utf-8")
     ).hexdigest()
-    output_path = tmp_path / str(reference["path"])
+    output_path = session_dir / "tool-results" / output_name
+    assert output_path.parent == session_dir / "tool-results"
     assert output_path.read_text(encoding="utf-8") == content
     assert isinstance(result.artifact, dict)
     assert result.artifact["original_tool_artifact"] == {"source": "unit-test"}
     assert TOOL_OUTPUT_ARTIFACT_KEY in result.artifact
 
 
-def test_tool_output_store_reuses_identical_tool_call_output(tmp_path: Path) -> None:
+def test_tool_output_store_reuses_identical_tool_call_output(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_id = "ses_repeat"
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     content = "x" * 2_000
     store = ToolOutputStore(
         workspace_root=tmp_path,
@@ -88,13 +106,13 @@ def test_tool_output_store_reuses_identical_tool_call_output(tmp_path: Path) -> 
     message = ToolMessage(content=content, tool_call_id="call-repeat")
 
     first = store.bound(
-        session_id="ses_repeat",
+        session_id=session_id,
         tool_name="repeat_tool",
         tool_call_id="call-repeat",
         message=message,
     )
     second = store.bound(
-        session_id="ses_repeat",
+        session_id=session_id,
         tool_name="repeat_tool",
         tool_call_id="call-repeat",
         message=message,
@@ -104,13 +122,18 @@ def test_tool_output_store_reuses_identical_tool_call_output(tmp_path: Path) -> 
     assert extract_tool_output_reference(first) == extract_tool_output_reference(second)
 
 
-def test_tool_output_middleware_uses_custom_target_name(tmp_path: Path) -> None:
+def test_tool_output_middleware_uses_custom_target_name(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_id = "ses_custom"
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     store = ToolOutputStore(
         workspace_root=tmp_path,
         max_lines=20,
         max_bytes=1_024,
     )
-    middleware = ToolOutputMiddleware(session_id="ses_custom", store=store)
+    middleware = ToolOutputMiddleware(session_id=session_id, store=store)
     request = type(
         "Request",
         (),

@@ -207,15 +207,21 @@ def test_running_browser_resource_maps_identity_and_actions():
 
 
 @pytest.mark.asyncio
-async def test_browser_provider_excludes_deleted_records(tmp_path):
+async def test_browser_provider_excludes_deleted_records(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_id = "ses_browser_deleted"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     )
     browser_manager = FakeBrowserManagerClient(
         browsers=[
             {
                 "browser_id": "browser_deleted",
-                "session_id": "ses_browser_deleted",
+                "session_id": session_id,
                 "status": "deleted",
                 "created_at": "2026-07-05T01:02:03+00:00",
                 "updated_at": "2026-07-05T01:02:04+00:00",
@@ -233,16 +239,21 @@ async def test_browser_provider_excludes_deleted_records(tmp_path):
         ),
     )
 
-    result = await service.list("ses_browser_deleted")
+    result = await service.list(session_id)
 
     assert result.items == []
 
 
 @pytest.mark.asyncio
-async def test_list_includes_closed_background_task_history(tmp_path):
+async def test_list_includes_closed_background_task_history(
+    tmp_path,
+    session_bundle_factory,
+):
     session_id = "ses_closed_history"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     )
 
     async def wait_forever() -> None:
@@ -274,10 +285,15 @@ async def test_list_includes_closed_background_task_history(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_excludes_deleted_background_task_history(tmp_path):
+async def test_list_excludes_deleted_background_task_history(
+    tmp_path,
+    session_bundle_factory,
+):
     session_id = "ses_deleted_history"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     )
 
     async def wait_forever() -> None:
@@ -306,10 +322,15 @@ async def test_list_excludes_deleted_background_task_history(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(tmp_path):
+async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
+    tmp_path,
+    session_bundle_factory,
+):
     session_id = "ses_cleanup"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     )
 
     async def long_running_task() -> None:
@@ -365,9 +386,14 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_cancel_monitor_background_task_injects_system_reminder(tmp_path):
+async def test_cancel_monitor_background_task_injects_system_reminder(
+    tmp_path,
+    session_bundle_factory,
+):
     session_id = "ses_cancel_monitor"
-    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    saver = FileSystemCheckpointSaver(sessions_dir=sessions_dir)
     config = build_checkpoint_config(session_id)
     await saver.aput(
         config,
@@ -386,7 +412,7 @@ async def test_cancel_monitor_background_task_injects_system_reminder(tmp_path):
     )
 
     registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     )
 
     async def long_running_task() -> None:

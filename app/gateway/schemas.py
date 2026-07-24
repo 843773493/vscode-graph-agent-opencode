@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 GatewayConnectionKind = Literal["local", "remote_gateway"]
@@ -263,6 +263,7 @@ class WebUILayoutSettingsDTO(BaseModel):
     workbench_view: Literal["sessions", "gateway"] | None = None
     agent_sessions_panel_open: bool | None = None
     auxiliary_visible: bool | None = None
+    auxiliary_tab: Literal["changes", "files"] | None = None
     main_area_ratios: WebUIMainAreaRatiosDTO | None = None
     workspace_preview_visible: bool | None = None
     workspace_preview_maximized: bool | None = None
@@ -284,13 +285,74 @@ class WebUILayoutSettingsDTO(BaseModel):
     pending_message_default_action: Literal["steering", "queued"] | None = None
 
 
+class WebUISessionSidebarSettingsDTO(BaseModel):
+    filter_mode: Literal["all", "current", "attachments", "agent", "named"] = "all"
+    sort_mode: Literal["created", "updated"] = "updated"
+    grouping_mode: Literal["workspace", "time"] = "workspace"
+    workspace_group_capped: bool = True
+    collapsed_workspace_ids: list[str] = Field(default_factory=list, max_length=1000)
+    collapsed_session_ids: list[str] = Field(default_factory=list, max_length=5000)
+    expanded_root_tree_ids: list[str] = Field(default_factory=list, max_length=1000)
+    collapsed_section_ids: list[str] = Field(default_factory=list, max_length=1000)
+
+    @field_validator(
+        "collapsed_workspace_ids",
+        "collapsed_session_ids",
+        "expanded_root_tree_ids",
+        "collapsed_section_ids",
+    )
+    @classmethod
+    def normalize_ids(cls, values: list[str]) -> list[str]:
+        if any(len(value) > 4096 for value in values):
+            raise ValueError("UI 设置 ID 长度不能超过 4096")
+        return sorted(set(values))
+
+
+class WebUIWorkspaceFileTreeSettingsDTO(BaseModel):
+    expanded_paths_by_workspace: dict[str, list[str]] = Field(
+        default_factory=dict,
+        max_length=200,
+    )
+
+    @field_validator("expanded_paths_by_workspace")
+    @classmethod
+    def normalize_expanded_paths(
+        cls,
+        values: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        normalized: dict[str, list[str]] = {}
+        for workspace_id, paths in values.items():
+            if len(workspace_id) > 4096:
+                raise ValueError("文件树工作区 ID 长度不能超过 4096")
+            if len(paths) > 1000 or any(len(path) > 4096 for path in paths):
+                raise ValueError("单个工作区最多保存 1000 个长度不超过 4096 的路径")
+            normalized[workspace_id] = sorted(set(paths))
+        return normalized
+
+
+class WebUIGatewayConsoleSettingsDTO(BaseModel):
+    view: Literal["routing", "managed"] = "routing"
+
+
 class WebUISettingsDTO(BaseModel):
     layout: WebUILayoutSettingsDTO = Field(default_factory=WebUILayoutSettingsDTO)
+    session_sidebar: WebUISessionSidebarSettingsDTO = Field(
+        default_factory=WebUISessionSidebarSettingsDTO
+    )
+    workspace_file_tree: WebUIWorkspaceFileTreeSettingsDTO = Field(
+        default_factory=WebUIWorkspaceFileTreeSettingsDTO
+    )
+    gateway_console: WebUIGatewayConsoleSettingsDTO = Field(
+        default_factory=WebUIGatewayConsoleSettingsDTO
+    )
     recent_local_workspace_paths: list[str] = Field(default_factory=list)
 
 
 class WebUISettingsUpdateDTO(BaseModel):
     layout: WebUILayoutSettingsDTO | None = None
+    session_sidebar: WebUISessionSidebarSettingsDTO | None = None
+    workspace_file_tree: WebUIWorkspaceFileTreeSettingsDTO | None = None
+    gateway_console: WebUIGatewayConsoleSettingsDTO | None = None
     recent_local_workspace_paths: list[str] | None = None
 
 

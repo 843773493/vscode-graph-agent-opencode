@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -27,14 +28,20 @@ def migrate_workspace_storage_layout(
     boxteam_root: Path,
     sessions_root: Path,
 ) -> None:
-    """把当前工作区旧的分散会话数据一次性迁入 sessions/{session_id}/。"""
+    """把当前工作区旧的分散会话数据迁入其稳定 ID 对应的物理会话节点。"""
     if not sessions_root.exists():
         return
 
-    for session_dir in sessions_root.iterdir():
-        if not session_dir.is_dir() or not (session_dir / "session.json").is_file():
+    for session_file in sessions_root.rglob("session.json"):
+        session_dir = session_file.parent
+        if session_dir.is_symlink():
             continue
-        session_id = session_dir.name
+        raw_session = json.loads(session_file.read_text(encoding="utf-8"))
+        if not isinstance(raw_session, dict):
+            raise RuntimeError(f"会话 manifest 必须是 JSON object: {session_file}")
+        session_id = raw_session.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise RuntimeError(f"会话 manifest 缺少 session_id: {session_file}")
         _move_legacy_path(
             boxteam_root / "checkpoints" / session_id,
             session_dir / "checkpoints",

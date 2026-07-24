@@ -51,18 +51,65 @@ class SessionOrchestrator:
         )
         return await self.create_message(session_id, run_request)
 
+    async def prepare_user_message(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        metadata: dict[str, object] | None = None,
+    ) -> MessageDTO:
+        """生成稳定消息 DTO；调用方必须先写入业务账本再派发。"""
+        return await self._job_service.run_session_preparation(
+            session_id,
+            lambda: self._message_service.create(
+                session_id,
+                MessageCreateRequest(
+                    role=MessageRole.user,
+                    content=content,
+                    metadata=metadata or {},
+                ),
+            ),
+        )
+
+    async def dispatch_existing_message(
+        self,
+        session_id: str,
+        message: MessageDTO,
+        *,
+        job_id: str,
+    ) -> MessageRunAccepted:
+        """派发已经持久化的消息；重启恢复时保持同一个 message_id。"""
+        async def dispatch() -> MessageRunAccepted:
+            session = await self._session_service.get(session_id)
+            return await self.dispatch_prepared_message(
+                session_id,
+                message,
+                requested_agent_id=session.current_agent_id,
+                job_id=job_id,
+            )
+
+        return await self._job_service.run_session_preparation(
+            session_id,
+            dispatch,
+        )
+
     async def create_message(self, session_id: str, payload: MessageRunRequest) -> MessageRunAccepted:
         import logging
         logger = logging.getLogger(__name__)
         logger.info("[session_orchestrator] create_message begin: session_id=%s", session_id)
-        self._job_service.assert_accepting_jobs()
-        requested_agent_id = payload.run.agent_id if payload.run else None
-        message = await self._message_service.create(session_id, payload.message)
-        return await self.dispatch_prepared_message(
+        async def prepare_and_dispatch() -> MessageRunAccepted:
+            requested_agent_id = payload.run.agent_id if payload.run else None
+            message = await self._message_service.create(session_id, payload.message)
+            return await self.dispatch_prepared_message(
+                session_id,
+                message,
+                requested_agent_id=requested_agent_id,
+                pending_kind=payload.run.queue or "queued",
+            )
+
+        return await self._job_service.run_session_preparation(
             session_id,
-            message,
-            requested_agent_id=requested_agent_id,
-            pending_kind=payload.run.queue or "queued",
+            prepare_and_dispatch,
         )
 
     async def dispatch_prepared_message(
@@ -72,6 +119,7 @@ class SessionOrchestrator:
         *,
         requested_agent_id: str | None,
         pending_kind: PendingRequestKind = "queued",
+        job_id: str | None = None,
     ) -> MessageRunAccepted:
         """调度一条已生成稳定 message_id 的用户消息。"""
         import logging
@@ -86,14 +134,19 @@ class SessionOrchestrator:
             effective_agent_id = self._config_service.get_default_agent_id()
 
         logger.info("[session_orchestrator] message created: session_id=%s message_id=%s", session_id, message.message_id)
+        job_message_metadata = {
+            **message.metadata,
+            "boxteam_session_provider_id": session.current_provider_id,
+        }
         dispatch = await self._job_service.start_job(
             session_id,
             message.content,
+            job_id=job_id,
             agent_id=effective_agent_id,
             message_id=message.message_id,
             attachments=message.attachments,
             message_created_at=message.created_at.isoformat(),
-            message_metadata=message.metadata,
+            message_metadata=job_message_metadata,
             pending_kind=pending_kind,
         )
         job_id = dispatch.job_id

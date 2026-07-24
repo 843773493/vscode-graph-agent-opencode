@@ -7,7 +7,6 @@ from app.api.deps import (
     get_session_attachment_store,
     get_job_service,
     get_request_id,
-    get_session_context_query_service,
     get_session_orchestrator,
     get_session_turn_replay_service,
     verify_local_token,
@@ -27,15 +26,9 @@ from app.schemas.public_v2.pending_request import (
     PendingRequestReorderRequest,
     PendingRequestUpdateRequest,
 )
-from app.schemas.public_v2.session_context import (
-    SessionContextGrepRequest,
-    SessionContextGrepResultDTO,
-    SessionContextReadResultDTO,
-    SessionRecentTextMessagesDTO,
-)
-from app.services.business.session_context_query_service import SessionContextQueryService
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
+from app.services.infrastructure.message_history_store import StaleMessageHistoryCursorError
 from app.services.business.job.service import JobAdmissionClosedError
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.runtime.session_orchestrator import SessionOrchestrator
@@ -72,16 +65,24 @@ async def update_pending_request(
     job_service: JobServiceProtocol = Depends(get_job_service),
     attachment_store: SessionAttachmentStore = Depends(get_session_attachment_store),
 ):
-    attachments = attachment_store.persist_inline(session_id, payload.attachments)
-    try:
-        result = await job_service.update_pending(
+    async def update_prepared() -> PendingRequestListDTO:
+        attachments = attachment_store.persist_inline(session_id, payload.attachments)
+        return await job_service.update_pending(
             session_id,
             message_id,
             content=payload.content,
             attachments=attachments,
         )
+
+    try:
+        result = await job_service.run_session_preparation(
+            session_id,
+            update_prepared,
+        )
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -101,6 +102,8 @@ async def remove_pending_request(
         result = await job_service.remove_pending(session_id, message_id)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -115,7 +118,10 @@ async def clear_pending_requests(
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
-    result = await job_service.clear_pending(session_id)
+    try:
+        result = await job_service.clear_pending(session_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -133,7 +139,7 @@ async def reorder_pending_requests(
 ):
     try:
         result = await job_service.reorder_pending(session_id, payload.requests)
-    except (KeyError, ValueError) as error:
+    except (KeyError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -157,6 +163,8 @@ async def send_pending_request_immediately(
         )
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -179,13 +187,20 @@ async def create_message_and_run(
 @router.get("/{session_id}/messages", response_model=APIResponse[CursorPage[MessageDTO]], summary="获取消息列表")
 async def list_messages(
     session_id: str,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
 ):
-    result = await message_service.list(session_id=session_id, limit=limit, cursor=cursor)
+    try:
+        result = await message_service.list(
+            session_id=session_id,
+            limit=limit,
+            cursor=cursor,
+        )
+    except StaleMessageHistoryCursorError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -193,15 +208,34 @@ async def list_messages(
 async def get_session_attachment_content(
     session_id: str,
     file_id: str = Query(min_length=1),
+    variant: str = Query(default="original", pattern="^(original|thumbnail)$"),
+    max_edge: int = Query(default=384, ge=64, le=1024),
     _: str = Depends(verify_local_token),
     attachment_store: SessionAttachmentStore = Depends(get_session_attachment_store),
+    job_service: JobServiceProtocol = Depends(get_job_service),
 ) -> Response:
+    async def read_content():
+        return (
+            attachment_store.read_thumbnail(
+                session_id,
+                file_id,
+                max_edge=max_edge,
+            )
+            if variant == "thumbnail"
+            else attachment_store.read(session_id, file_id)
+        )
+
     try:
-        content = attachment_store.read(session_id, file_id)
+        content = await job_service.run_session_preparation(
+            session_id,
+            read_content,
+        )
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return Response(
         content=content.data,
         media_type=content.content_type,
@@ -221,75 +255,6 @@ async def get_agent_state_messages(
     message_service: MessageService = Depends(get_message_service),
 ):
     result = await message_service.get_agent_state_messages(session_id=session_id)
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get(
-    "/{session_id}/context/recent-text",
-    response_model=APIResponse[SessionRecentTextMessagesDTO],
-    summary="读取会话当前有效上下文中的最近文本消息",
-)
-async def get_session_context_recent_text(
-    session_id: str,
-    rounds: int = Query(default=5, ge=1, le=50),
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    query_service: SessionContextQueryService = Depends(
-        get_session_context_query_service
-    ),
-):
-    result = await query_service.recent_text(session_id, rounds=rounds)
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.post(
-    "/{session_id}/context/grep",
-    response_model=APIResponse[SessionContextGrepResultDTO],
-    summary="搜索会话当前有效上下文 JSONL",
-)
-async def grep_session_context(
-    session_id: str,
-    payload: SessionContextGrepRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    query_service: SessionContextQueryService = Depends(
-        get_session_context_query_service
-    ),
-):
-    result = await query_service.grep(
-        session_id,
-        pattern=payload.pattern,
-        case_sensitive=payload.case_sensitive,
-        max_matches=payload.max_matches,
-        expected_snapshot_id=payload.expected_snapshot_id,
-    )
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get(
-    "/{session_id}/context/lines",
-    response_model=APIResponse[SessionContextReadResultDTO],
-    summary="按行读取会话当前有效上下文 JSONL",
-)
-async def read_session_context_lines(
-    session_id: str,
-    line_start: int = Query(default=1, ge=1),
-    line_count: int = Query(default=20, ge=1, le=200),
-    max_chars_per_line: int = Query(default=4000, ge=200, le=20_000),
-    expected_snapshot_id: str | None = None,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    query_service: SessionContextQueryService = Depends(
-        get_session_context_query_service
-    ),
-):
-    result = await query_service.read_lines(
-        session_id,
-        line_start=line_start,
-        line_count=line_count,
-        max_chars_per_line=max_chars_per_line,
-        expected_snapshot_id=expected_snapshot_id,
-    )
     return APIResponse(data=result, request_id=request_id)
 
 

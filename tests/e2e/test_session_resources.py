@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from tests.e2e.utils import wait_for_job_done
 
 
@@ -155,14 +156,16 @@ async def test_delete_session_cleans_background_tasks(
     resources = resources_response.json()["data"]["items"]
     assert any(resource["kind"] == "background_task" for resource in resources)
 
+    session_dir = get_session_path_resolver(
+        Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
+    ).resolve_session_dir(session_id)
+
     delete_response = await client.delete(f"/api/v1/sessions/{session_id}")
     assert delete_response.status_code == 200
     delete_data = delete_response.json()["data"]
     assert delete_data["status"] == "deleted"
     assert delete_data["cleaned_background_tasks"] >= 1
-    assert not (
-        Path(e2e_workspace_root_path) / ".boxteam" / "sessions" / session_id
-    ).exists()
+    assert not session_dir.exists()
 
     list_response = await client.get("/api/v1/sessions")
     assert list_response.status_code == 200

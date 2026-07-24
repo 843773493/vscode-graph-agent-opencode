@@ -10,7 +10,8 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
 @pytest.mark.asyncio
-async def test_recorder_persists_job_events(tmp_path: Path):
+async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_factory):
+    session_bundle_factory(tmp_path, "ses_1")
     bus = JobEventBus()
     store = TraceEventStore(sessions_dir=tmp_path)
     recorder = TraceEventRecorder(bus=bus, store=store)

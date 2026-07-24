@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.public_v2.pending_request import PendingRequestDTO
 
 
@@ -12,9 +13,13 @@ class PendingRequestStore:
 
     def __init__(self, *, sessions_dir: Path) -> None:
         self._sessions_dir = sessions_dir
+        self._path_resolver = get_session_path_resolver(sessions_dir)
 
     def _path(self, session_id: str) -> Path:
-        return self._sessions_dir / session_id / "pending_requests.json"
+        return (
+            self._path_resolver.resolve_session_dir(session_id)
+            / "pending_requests.json"
+        )
 
     async def load(self, session_id: str) -> list[PendingRequestDTO]:
         path = self._path(session_id)

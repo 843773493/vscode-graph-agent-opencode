@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import json
+from collections.abc import AsyncIterator
+from contextlib import suppress
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
     get_context_compaction_service,
     get_llm_request_log_service,
+    get_job_service,
     get_request_id,
     get_session_auto_continue_service,
     get_session_changes_service,
@@ -17,6 +23,7 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.schemas.public_v2.common import APIResponse, CursorPage
+from app.abstractions.job_service import JobServiceProtocol
 from app.schemas.public_v2.llm_request_log import LLMRequestLogRecordDTO
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
@@ -52,8 +59,10 @@ from app.services.orchestration.session_auto_continue_service import SessionAuto
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceCursorGoneError
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
+from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 @router.post("", response_model=APIResponse[SessionDTO], summary="创建会话")
@@ -63,7 +72,12 @@ async def create_session(
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
-    result = await session_service.create(payload)
+    try:
+        result = await session_service.create(payload)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -86,7 +100,10 @@ async def get_session(
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
-    result = await session_service.get(session_id)
+    try:
+        result = await session_service.get(session_id)
+    except NotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error.detail)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -128,12 +145,17 @@ async def fork_session_context(
 async def list_session_traces(
     session_id: str,
     after_event_id: str | None = Query(default=None),
+    tail_limit: int | None = Query(default=None, ge=1, le=5000),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
     try:
-        result = await session_service.list_trace_events(session_id, after_event_id)
+        result = await session_service.list_trace_events(
+            session_id,
+            after_event_id,
+            tail_limit,
+        )
     except TraceCursorGoneError as exc:
         raise _trace_cursor_gone_http_error(exc) from exc
     return APIResponse(data=result, request_id=request_id)
@@ -283,20 +305,55 @@ async def stream_session_traces(
     except TraceCursorGoneError as exc:
         raise _trace_cursor_gone_http_error(exc) from exc
 
-    async def event_generator():
-        async for event in session_service.stream_trace_events(session_id, cursor):
-            if hasattr(event, "model_dump_json"):
-                data = event.model_dump_json()
-            else:
-                import json
+    events = session_service.stream_trace_events(session_id, cursor)
+    return StreamingResponse(
+        _stream_trace_sse(events),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
-                data = json.dumps(event, ensure_ascii=False, default=str)
 
-            yield f"id: {event.event_id}\n"
-            yield "event: trace\n"
-            yield f"data: {data}\n\n"
+async def _stream_trace_sse(
+    events: AsyncIterator[TraceEventDTO],
+    *,
+    heartbeat_interval_seconds: float = TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+) -> AsyncIterator[str]:
+    """在真实 Trace 事件之间发送 SSE 注释心跳。"""
+    if heartbeat_interval_seconds <= 0:
+        raise ValueError("SSE 心跳间隔必须大于 0")
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    iterator = aiter(events)
+    next_event = asyncio.create_task(anext(iterator))
+    try:
+        while True:
+            completed, _ = await asyncio.wait(
+                {next_event},
+                timeout=heartbeat_interval_seconds,
+            )
+            if not completed:
+                yield ": heartbeat\n\n"
+                continue
+
+            try:
+                event = next_event.result()
+            except StopAsyncIteration:
+                return
+
+            data = (
+                event.model_dump_json()
+                if hasattr(event, "model_dump_json")
+                else json.dumps(event, ensure_ascii=False, default=str)
+            )
+            yield f"id: {event.event_id}\nevent: trace\ndata: {data}\n\n"
+            next_event = asyncio.create_task(anext(iterator))
+    finally:
+        if not next_event.done():
+            next_event.cancel()
+            with suppress(asyncio.CancelledError):
+                await next_event
 
 
 def _trace_cursor_gone_http_error(exc: TraceCursorGoneError) -> HTTPException:
@@ -322,6 +379,8 @@ async def update_session(
 ):
     try:
         result = await session_service.update(session_id, payload)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.detail)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)
@@ -330,19 +389,45 @@ async def update_session(
 @router.delete("/{session_id}", response_model=APIResponse[DeleteSessionResultDTO], summary="删除会话")
 async def delete_session(
     session_id: str,
+    cascade: bool = Query(default=False),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
     session_resource_service: SessionResourceService = Depends(get_session_resource_service),
+    job_service: JobServiceProtocol = Depends(get_job_service),
 ):
-    cleanup_result = await session_resource_service.cleanup_session(session_id)
-    result = (await session_service.delete(session_id)).model_copy(
-        update={
-            "cleaned_execution_runs": cleanup_result.cleaned_execution_runs,
-            "cleaned_background_tasks": cleanup_result.cleaned_background_tasks,
-            "cleaned_terminals": cleanup_result.cleaned_terminals,
-        }
-    )
+    async def cleanup_and_delete() -> DeleteSessionResultDTO:
+        cleaned_execution_runs = 0
+        cleaned_background_tasks = 0
+        cleaned_terminals = 0
+        for target_session_id in session_ids:
+            cleanup_result = await session_resource_service.cleanup_session(
+                target_session_id
+            )
+            cleaned_execution_runs += cleanup_result.cleaned_execution_runs
+            cleaned_background_tasks += cleanup_result.cleaned_background_tasks
+            cleaned_terminals += cleanup_result.cleaned_terminals
+        return (await session_service.delete(session_id, cascade=cascade)).model_copy(
+            update={
+                "cleaned_execution_runs": cleaned_execution_runs,
+                "cleaned_background_tasks": cleaned_background_tasks,
+                "cleaned_terminals": cleaned_terminals,
+            }
+        )
+
+    try:
+        session_ids = session_service.path_resolver.descendant_session_ids(
+            session_id,
+            include_self=True,
+        )
+        result = await job_service.run_sessions_delete_operation(
+            session_ids,
+            cleanup_and_delete,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

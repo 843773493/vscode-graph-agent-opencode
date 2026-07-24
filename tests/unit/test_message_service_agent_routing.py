@@ -23,9 +23,15 @@ def _running_dispatch(session_id: str, job_id: str) -> JobDispatchSnapshotDTO:
 
 
 class _FakeSession:
-    def __init__(self, session_id: str, current_agent_id: str):
+    def __init__(
+        self,
+        session_id: str,
+        current_agent_id: str,
+        current_provider_id: str = "primary",
+    ):
         self.session_id = session_id
         self.current_agent_id = current_agent_id
+        self.current_provider_id = current_provider_id
         self.created_at = datetime.now()
         self.updated_at = self.created_at
 
@@ -76,6 +82,12 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
     captured: dict[str, str] = {}
 
     class _FakeJobService:
+        def assert_accepting_jobs(self):
+            return None
+
+        async def run_session_preparation(self, _session_id, operation):
+            return await operation()
+
         async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs):
             captured["session_id"] = session_id
             captured["message"] = message
@@ -100,6 +112,12 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
 @pytest.mark.asyncio
 async def test_orchestrator_preserves_reminder_metadata_without_changing_user_role():
     class _FakeJobService:
+        def assert_accepting_jobs(self):
+            return None
+
+        async def run_session_preparation(self, _session_id, operation):
+            return await operation()
+
         async def start_job(self, session_id, *args, **kwargs):
             return _running_dispatch(session_id, "job_system_reminder")
 
@@ -133,8 +151,17 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
     captured: dict[str, str] = {}
 
     class _FakeJobService:
+        def assert_accepting_jobs(self):
+            return None
+
+        async def run_session_preparation(self, _session_id, operation):
+            return await operation()
+
         async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs):
             captured["agent_id"] = agent_id
+            captured["provider_id"] = kwargs["message_metadata"][
+                "boxteam_session_provider_id"
+            ]
             return _running_dispatch(session_id, "job_test_002")
 
     orchestrator = SessionOrchestrator(
@@ -156,3 +183,4 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
     )
 
     assert captured["agent_id"] == "coder"
+    assert captured["provider_id"] == "primary"

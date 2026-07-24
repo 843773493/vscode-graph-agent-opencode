@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app.runtime.agent_runtime import (
@@ -22,6 +23,7 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
         build_session_agent_runtime(
             session_id="session_test",
             agent_id="default",
+            workspace_root=Path("/workspace"),
             config_service=config_service,
             background_task_registry=MagicMock(),
             background_message_bus=MagicMock(),
@@ -31,6 +33,7 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
 
     assert create_runtime.call_args.kwargs["job_service"] is job_service
     assert create_runtime.call_args.kwargs["mcp_tools"] is mcp_tools
+    assert create_runtime.call_args.kwargs["workspace_root"] == Path("/workspace")
 
 
 def test_get_configured_custom_tool_names_excludes_mcp_extensions() -> None:

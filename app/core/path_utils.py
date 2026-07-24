@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 from app.core.exceptions import ForbiddenError
+from app.core.session_paths import SessionPathResolver
 from app.core.storage_migration import migrate_workspace_storage_layout
 
 
@@ -75,6 +77,18 @@ def get_boxteam_root() -> Path:
 def get_sessions_dir() -> Path:
     return get_boxteam_root() / "sessions"
 
+
+@lru_cache(maxsize=32)
+def _cached_session_path_resolver(sessions_root: str) -> SessionPathResolver:
+    return SessionPathResolver(Path(sessions_root))
+
+
+def get_session_path_resolver(
+    sessions_root: Path | None = None,
+) -> SessionPathResolver:
+    resolved_root = (sessions_root or get_sessions_dir()).resolve()
+    return _cached_session_path_resolver(str(resolved_root))
+
 def get_logs_dir() -> Path:
     return get_boxteam_root() / "logs"
 
@@ -104,6 +118,7 @@ def initialize_directories() -> None:
         boxteam_root=get_boxteam_root(),
         sessions_root=get_sessions_dir(),
     )
+    get_session_path_resolver().initialize()
 
 
 def safe_join(base_path: Path, *paths: str) -> Path:
@@ -131,8 +146,11 @@ def safe_join(base_path: Path, *paths: str) -> Path:
 
 
 def get_session_path(session_id: str) -> Path:
-    """Get the directory path for a specific session"""
-    return safe_join(get_sessions_dir(), session_id)
+    """通过稳定 ID 解析会话当前所在的物理目录。"""
+    try:
+        return get_session_path_resolver().resolve_session_dir(session_id)
+    except KeyError as error:
+        raise FileNotFoundError(f"会话物理目录不存在: {session_id}") from error
 
 
 def get_session_file(session_id: str) -> Path:
@@ -140,11 +158,18 @@ def get_session_file(session_id: str) -> Path:
     return get_session_path(session_id) / "session.json"
 
 
-def ensure_session_dir(session_id: str) -> Path:
-    """Ensure session directory exists, create if not"""
-    session_dir = get_session_path(session_id)
-    session_dir.mkdir(exist_ok=True, parents=True)
-    return session_dir
+def allocate_session_dir(
+    session_id: str,
+    title: str,
+    *,
+    parent_node_id: str | None = None,
+) -> Path:
+    """为新会话分配物理目录；写入 session manifest 后必须注册该节点。"""
+    return get_session_path_resolver().allocate_session_dir(
+        session_id=session_id,
+        title=title,
+        parent_node_id=parent_node_id,
+    )
 
 
 def validate_workspace_path(path: str) -> Path:

@@ -18,13 +18,16 @@ from app.agents.upstream_request_trace import UpstreamRequestTraceCallback
 
 def test_llm_log_persists_prompt_replay_components_and_tool_stats(
     tmp_path: Path,
+    session_bundle_factory,
 ) -> None:
+    session_id = "ses_replay"
+    session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
             checkpoint_id="checkpoint",
             checkpoint_ns="",
             task_id="task",
-            thread_id="ses_replay",
+            thread_id=session_id,
         )
     )
     request = ModelRequest(
@@ -71,9 +74,7 @@ def test_llm_log_persists_prompt_replay_components_and_tool_stats(
 
     default_capture.wrap_model_call(request, after_default_capture)
 
-    log_file = next(
-        (tmp_path / "ses_replay" / "logs" / "llm_requests").glob("*.json")
-    )
+    log_file = next((session_dir / "logs" / "llm_requests").glob("*.json"))
     payload = json.loads(log_file.read_text(encoding="utf-8"))
     replay = payload["request"]["replay"]
     assert [item["label"] for item in replay["prompt_components"]] == [
@@ -125,13 +126,18 @@ def test_prompt_replay_records_non_append_system_prompt_replacement() -> None:
     assert request.state == initial_state, "替换 Prompt 的审计信息也不得污染 Agent 上下文"
 
 
-def test_llm_log_merges_redacted_upstream_request_and_response(tmp_path: Path) -> None:
+def test_llm_log_merges_redacted_upstream_request_and_response(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_id = "ses_upstream"
+    session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
             checkpoint_id="checkpoint",
             checkpoint_ns="",
             task_id="task",
-            thread_id="ses_upstream",
+            thread_id=session_id,
         )
     )
     request = ModelRequest(
@@ -172,9 +178,7 @@ def test_llm_log_merges_redacted_upstream_request_and_response(tmp_path: Path) -
 
     middleware.wrap_model_call(request, invoke)
 
-    log_file = next(
-        (tmp_path / "ses_upstream" / "logs" / "llm_requests").glob("*.json")
-    )
+    log_file = next((session_dir / "logs" / "llm_requests").glob("*.json"))
     payload = json.loads(log_file.read_text(encoding="utf-8"))
     attempts = payload["upstream"]["attempts"]
     assert len(attempts) == 1
@@ -183,13 +187,18 @@ def test_llm_log_merges_redacted_upstream_request_and_response(tmp_path: Path) -
     assert attempts[0]["response"]["choices"][0]["message"]["content"] == "done"
 
 
-def test_llm_log_persists_failed_upstream_attempt(tmp_path: Path) -> None:
+def test_llm_log_persists_failed_upstream_attempt(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_id = "ses_failed_upstream"
+    session_dir = session_bundle_factory(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
             checkpoint_id="checkpoint",
             checkpoint_ns="",
             task_id="task",
-            thread_id="ses_failed_upstream",
+            thread_id=session_id,
         )
     )
     request = ModelRequest(
@@ -227,9 +236,7 @@ def test_llm_log_persists_failed_upstream_attempt(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="model call failed"):
         middleware.wrap_model_call(request, invoke)
 
-    log_file = next(
-        (tmp_path / "ses_failed_upstream" / "logs" / "llm_requests").glob("*.json")
-    )
+    log_file = next((session_dir / "logs" / "llm_requests").glob("*.json"))
     payload = json.loads(log_file.read_text(encoding="utf-8"))
     assert payload["response"]["error"] == "model call failed"
     assert "upstream unavailable" in payload["upstream"]["attempts"][0]["error"]

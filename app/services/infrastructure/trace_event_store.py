@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 
 from pydantic import RootModel
 
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import Event
 
 logger = logging.getLogger(__name__)
@@ -34,21 +35,32 @@ class TraceCursorGoneError(RuntimeError):
 class TraceEventStore:
     def __init__(self, sessions_dir: Path) -> None:
         self._sessions_dir = sessions_dir
+        self._path_resolver = get_session_path_resolver(sessions_dir)
         self._conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
         self._append_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def _trace_file(self, session_id: str) -> Path:
-        return self._sessions_dir / session_id / "logs" / "traces" / "events.jsonl"
+        return (
+            self._path_resolver.resolve_session_dir(session_id)
+            / "logs"
+            / "traces"
+            / "events.jsonl"
+        )
 
     def list_session_ids(self) -> list[str]:
-        if not self._sessions_dir.exists():
-            return []
         return sorted(
-            path.name for path in self._sessions_dir.iterdir() if path.is_dir()
+            node.node_id
+            for node in self._path_resolver.list_nodes()
+            if node.kind == "session"
         )
 
     def _message_trace_file(self, session_id: str) -> Path:
-        return self._sessions_dir / session_id / "logs" / "traces" / "messages.jsonl"
+        return (
+            self._path_resolver.resolve_session_dir(session_id)
+            / "logs"
+            / "traces"
+            / "messages.jsonl"
+        )
 
     async def _notify(self, session_id: str) -> None:
         condition = self._conditions.get(session_id)
@@ -78,34 +90,53 @@ class TraceEventStore:
             await asyncio.to_thread(self._append_event_files, session_id, event)
         await self._notify(session_id)
 
-    def read_events(self, session_id: str, after_event_id: str | None = None) -> list[Event]:
-        events = self._read_file_events(session_id, self._trace_file(session_id))
+    def read_events(
+        self,
+        session_id: str,
+        after_event_id: str | None = None,
+        tail_limit: int | None = None,
+    ) -> list[Event]:
+        events = self._read_file_events(
+            session_id,
+            self._trace_file(session_id),
+            tail_limit=tail_limit if after_event_id is None else None,
+        )
         return self._events_after_cursor(session_id, events, after_event_id)
 
     def read_message_events(self, session_id: str) -> list[Event]:
         return self._read_file_events(session_id, self._message_trace_file(session_id))
 
-    def _read_file_events(self, session_id: str, file: Path) -> list[Event]:
+    def _read_file_events(
+        self,
+        session_id: str,
+        file: Path,
+        *,
+        tail_limit: int | None = None,
+    ) -> list[Event]:
         if not file.exists():
             return []
 
         raw_events: list[dict[str, object]] = []
-        with open(file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    value = json.loads(line)
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"Trace 行无法解析: session_id={session_id} line={line[:200]!r}"
-                    ) from exc
-                if not isinstance(value, dict):
-                    raise RuntimeError(
-                        f"Trace 行必须是 JSON object: session_id={session_id} line={line[:200]!r}"
-                    )
-                raw_events.append(value)
+        lines = (
+            self._read_last_lines(file, tail_limit)
+            if tail_limit is not None
+            else file.read_text(encoding="utf-8").splitlines()
+        )
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                value = json.loads(line)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Trace 行无法解析: session_id={session_id} line={line[:200]!r}"
+                ) from exc
+            if not isinstance(value, dict):
+                raise RuntimeError(
+                    f"Trace 行必须是 JSON object: session_id={session_id} line={line[:200]!r}"
+                )
+            raw_events.append(value)
 
         events: list[Event] = []
         for raw_event in raw_events:
@@ -116,6 +147,26 @@ class TraceEventStore:
                     f"Trace 事件协议无效: session_id={session_id} event={raw_event!r}"
                 ) from exc
         return events
+
+    @staticmethod
+    def _read_last_lines(file: Path, limit: int) -> list[str]:
+        if limit < 1:
+            raise ValueError("Trace tail_limit 必须大于 0")
+        block_size = 64 * 1024
+        chunks: list[bytes] = []
+        newline_count = 0
+        with file.open("rb") as stream:
+            stream.seek(0, 2)
+            position = stream.tell()
+            while position > 0 and newline_count <= limit:
+                read_size = min(block_size, position)
+                position -= read_size
+                stream.seek(position)
+                chunk = stream.read(read_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+        raw_lines = b"".join(reversed(chunks)).splitlines()
+        return [line.decode("utf-8") for line in raw_lines[-limit:]]
 
     @staticmethod
     def _events_after_cursor(

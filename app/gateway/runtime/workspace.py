@@ -26,6 +26,11 @@ class WorkspaceRuntime:
         errors: list[str] = []
         for name in reversed(tuple(self.processes)):
             try:
+                self.processes[name].request_terminate()
+            except Exception as error:
+                errors.append(f"{name} 发送终止信号失败: {error}")
+        for name in reversed(tuple(self.processes)):
+            try:
                 self.close_process(name)
             except Exception as error:
                 errors.append(f"{name}: {error}")

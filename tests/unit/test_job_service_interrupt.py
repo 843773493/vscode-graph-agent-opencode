@@ -73,6 +73,76 @@ async def test_session_idle_operation_is_atomic_with_job_admission() -> None:
 
 
 @pytest.mark.asyncio
+async def test_multiple_session_storage_operation_rejects_any_active_session() -> None:
+    service = create_job_service()
+    service._session_current_job["ses_active"] = "job_active"
+    operation_called = False
+
+    async def move_storage() -> None:
+        nonlocal operation_called
+        operation_called = True
+
+    with pytest.raises(RuntimeError, match="不能移动物理存储"):
+        await service.run_sessions_idle_operation(
+            ["ses_idle", "ses_active"],
+            move_storage,
+        )
+
+    assert operation_called is False
+
+
+@pytest.mark.asyncio
+async def test_storage_move_rejects_message_preparation_window() -> None:
+    service = create_job_service()
+    preparation_started = asyncio.Event()
+    release_preparation = asyncio.Event()
+
+    async def prepare_message() -> None:
+        preparation_started.set()
+        await release_preparation.wait()
+
+    preparation_task = asyncio.create_task(
+        service.run_session_preparation("ses_preparing", prepare_message)
+    )
+    await preparation_started.wait()
+
+    with pytest.raises(RuntimeError, match="正在准备持久化消息"):
+        await service.run_sessions_idle_operation(
+            ["ses_preparing"],
+            lambda: asyncio.sleep(0),
+        )
+
+    release_preparation.set()
+    await preparation_task
+
+
+@pytest.mark.asyncio
+async def test_delete_tombstone_blocks_new_session_writes() -> None:
+    service = create_job_service()
+    delete_started = asyncio.Event()
+    release_delete = asyncio.Event()
+
+    async def delete_storage() -> str:
+        delete_started.set()
+        await release_delete.wait()
+        return "deleted"
+
+    delete_task = asyncio.create_task(
+        service.run_session_delete_operation("ses_delete", delete_storage)
+    )
+    await delete_started.wait()
+
+    with pytest.raises(RuntimeError, match="正在删除"):
+        await service.run_session_preparation(
+            "ses_delete",
+            lambda: asyncio.sleep(0),
+        )
+
+    release_delete.set()
+    assert await delete_task == "deleted"
+
+
+@pytest.mark.asyncio
 async def test_job_control_pause_cancels_running_task(monkeypatch):
     service = create_job_service()
     service._jobs = {}

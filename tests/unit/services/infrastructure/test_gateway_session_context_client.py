@@ -7,6 +7,15 @@ from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
+from app.schemas.public_v2.session_context import (
+    SessionContextReadRequest,
+)
+
+
+def _read_request(workspace_id: str, session_id: str = "ses_target"):
+    return SessionContextReadRequest(
+        resource=f"boxteam://workspace/{workspace_id}/session/{session_id}"
+    )
 
 
 @pytest.mark.asyncio
@@ -28,18 +37,57 @@ async def test_gateway_connection_error_includes_target_context(
     )
 
     with pytest.raises(WorkspaceSessionContextAccessError) as captured:
-        await client.recent_text_in_workspace(
+        await client.read_context_in_workspace(
             "gw_missing_backend",
-            "ses_target",
+            _read_request("gw_missing_backend"),
         )
 
     message = str(captured.value)
     assert "无法连接 Workspace Gateway" in message
-    assert "gateway_url=http://127.0.0.1:65530" in message
     assert "workspace_id=gw_missing_backend" in message
-    assert "path=/api/v1/sessions/ses_target/context/recent-text" in message
+    assert "path=/api/v1/context/read" in message
     assert "error_type=ConnectError" in message
     assert isinstance(captured.value.__cause__, httpx.ConnectError)
+
+
+@pytest.mark.asyncio
+async def test_gateway_client_uses_default_runtime_url_without_local_token(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured_request: httpx.Request | None = None
+
+    async def capture_request(
+        _client: httpx.AsyncClient,
+        method: str,
+        path: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        nonlocal captured_request
+        captured_request = httpx.Request(
+            method,
+            f"http://127.0.0.1:8014{path}",
+            headers=_client.headers,
+        )
+        return httpx.Response(
+            404,
+            request=captured_request,
+            json={"detail": "Gateway 工作区不存在: gw_target"},
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", capture_request)
+    client = GatewaySessionContextClient()
+
+    with pytest.raises(WorkspaceSessionContextAccessError):
+        await client.read_context_in_workspace(
+            "gw_target",
+            _read_request("gw_target"),
+        )
+
+    assert captured_request is not None
+    assert captured_request.url.host == "127.0.0.1"
+    assert captured_request.url.port == 8014
+    assert captured_request.headers["X-BoxTeam-Workspace-Id"] == "gw_target"
+    assert "X-Local-Token" not in captured_request.headers
 
 
 @pytest.mark.asyncio
@@ -63,13 +111,15 @@ async def test_gateway_unknown_workspace_is_model_recoverable(
     client = GatewaySessionContextClient(gateway_url="http://127.0.0.1:8014")
 
     with pytest.raises(WorkspaceSessionContextAccessError) as captured:
-        await client.recent_text_in_workspace("gw_typo", "ses_target")
+        await client.read_context_in_workspace(
+            "gw_typo",
+            _read_request("gw_typo"),
+        )
 
     message = str(captured.value)
     assert "workspace_id=gw_typo" in message
     assert "status=404" in message
-    assert "修正 workspace_id 或 session_id 后重试" in message
-    assert "无法确认正确标识时请提醒用户" in message
+    assert "Gateway 工作区不存在" in message
 
 
 @pytest.mark.asyncio
@@ -89,6 +139,9 @@ async def test_gateway_internal_server_error_still_fails_fast(
     client = GatewaySessionContextClient(gateway_url="http://127.0.0.1:8014")
 
     with pytest.raises(RuntimeError, match="status=500") as captured:
-        await client.recent_text_in_workspace("gw_valid", "ses_target")
+        await client.read_context_in_workspace(
+            "gw_valid",
+            _read_request("gw_valid"),
+        )
 
     assert not isinstance(captured.value, WorkspaceSessionContextAccessError)

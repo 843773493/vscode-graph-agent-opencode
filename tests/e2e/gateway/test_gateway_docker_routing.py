@@ -9,6 +9,16 @@ import httpx
 import commentjson
 import pytest
 
+from app.schemas.public_v2.session_context import (
+    SessionContextReadRequest,
+    SessionContextSearchRequest,
+)
+from app.services.business.gateway_context_query_service import (
+    GatewayContextQueryService,
+)
+from app.services.infrastructure.gateway_session_context_client import (
+    GatewaySessionContextClient,
+)
 from tests.e2e.gateway.gateway_docker import (
     docker_daemon_error,
     ensure_gateway_ssh_container,
@@ -155,9 +165,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 item["tool_id"] for item in remote_tools_response.json()["data"]
             }
             assert {
-                "read_session_recent_text_messages",
-                "grep_session_context_jsonl",
-                "read_session_context_jsonl",
+                "read_context",
+                "search_context",
                 "openBrowserPage",
                 "runPlaywrightCode",
             } <= remote_tool_ids
@@ -176,6 +185,40 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 json={"title": "Docker SSH Routed Session"},
             )
             assert create_response.status_code == 200, create_response.text
+            remote_session_id = create_response.json()["data"]["session_id"]
+
+            projected_sessions_resource = (
+                f"boxteam://workspace/{remote_workspace_id}/sessions"
+            )
+            context_search_response = await client.post(
+                "/api/v1/context/search",
+                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                json={
+                    "resource": projected_sessions_resource,
+                    "query": "Docker SSH Routed Session",
+                    "sources": ["session_catalog"],
+                },
+            )
+            assert context_search_response.status_code == 200, (
+                context_search_response.text
+            )
+            context_matches = context_search_response.json()["data"]["matches"]
+            projected_locator = next(
+                item["locator"]
+                for item in context_matches
+                if remote_session_id in item["locator"]
+            )
+            assert projected_locator.startswith(
+                f"boxteam://workspace/{remote_workspace_id}/session/"
+            )
+
+            context_read_response = await client.post(
+                "/api/v1/context/read",
+                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                json={"resource": projected_locator},
+            )
+            assert context_read_response.status_code == 200, context_read_response.text
+            assert context_read_response.json()["data"]["resource"] == projected_locator
 
             sessions_response = await client.get(
                 "/api/v1/sessions",
@@ -233,6 +276,36 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             assert restored_ssh["status"] == "ready"
             assert restored_ssh["connection_error"] is None
             assert restored_list["active_workspace_id"] == remote_workspace_id
+
+        context_service = GatewayContextQueryService(
+            transport=GatewaySessionContextClient(
+                gateway_url=f"http://127.0.0.1:{gateway.port}"
+            )
+        )
+        gateway_inventory = await context_service.read_gateway_context(
+            SessionContextReadRequest(
+                resource="boxteam://gateway/workspaces",
+                view="inventory",
+            )
+        )
+        assert any(
+            item.locator == f"boxteam://workspace/{remote_workspace_id}"
+            for item in gateway_inventory.items
+        )
+
+        stop_remote_backend(docker_target, remote_gateway_pid)
+        remote_gateway_pid = None
+        offline_search = await context_service.search_gateway_context(
+            SessionContextSearchRequest(
+                resource="boxteam://gateway",
+                query="Docker SSH Routed Session",
+                sources=["session_catalog"],
+            )
+        )
+        assert any(
+            error.resource == f"boxteam://workspace/{remote_workspace_id}"
+            for error in offline_search.partial_errors
+        )
     finally:
         if gateway is not None:
             close_gateway_process(gateway)

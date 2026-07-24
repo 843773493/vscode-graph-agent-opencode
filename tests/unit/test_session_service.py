@@ -1,6 +1,7 @@
 import json
 import asyncio
 import tempfile
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -57,6 +58,7 @@ class TestSessionService:
         assert session.title_source == "user"
         assert isinstance(session.current_agent_id, str)
         assert session.current_agent_id
+        assert session.current_provider_id == "primary"
         assert session.created_at is not None
         assert session.updated_at == session.created_at
 
@@ -69,6 +71,137 @@ class TestSessionService:
             assert data["title"] == "Test Session"
             assert data["title_source"] == "user"
             assert data["current_agent_id"] == session.current_agent_id
+            assert data["current_provider_id"] == "primary"
+
+    @pytest.mark.asyncio
+    async def test_update_session_provider_is_persisted(self):
+        config = {
+            "llm": {
+                "providers": [
+                    {
+                        "id": "primary",
+                        "endpoint": "https://example.com/v1",
+                        "model": "model-primary",
+                        "api_key": "test-key",
+                        "custom_llm_provider": "openai",
+                    },
+                    {
+                        "id": "backup",
+                        "endpoint": "https://example.com/v1",
+                        "model": "model-backup",
+                        "api_key": "test-key",
+                        "custom_llm_provider": "openai",
+                    },
+                ]
+            },
+            "default_agent": "default",
+            "agents": {
+                "default": {
+                    "name": "Default Agent",
+                    "instructions": {"system_prompt": "hello"},
+                    "model": {
+                        "primary_provider": "primary",
+                        "fallback_providers": ["backup"],
+                    },
+                }
+            },
+        }
+        config_path = Path(self.temp_dir) / "boxteam.jsonc"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        config_service = ConfigService(config_path=config_path)
+        service = SessionService(
+            config_service=config_service,
+            trace_event_store=self.trace_event_store,
+        )
+        created = await service.create(SessionCreateRequest(title="模型持久化"))
+
+        updated = await service.update(
+            created.session_id,
+            SessionUpdateRequest(provider_id="backup"),
+        )
+
+        assert updated.current_provider_id == "backup"
+        restarted_service = SessionService(
+            config_service=config_service,
+            trace_event_store=self.trace_event_store,
+        )
+        restored = await restarted_service.get(created.session_id)
+        assert restored.current_provider_id == "backup"
+        persisted = json.loads(
+            get_session_file(created.session_id).read_text(encoding="utf-8")
+        )
+        assert persisted["current_provider_id"] == "backup"
+
+        with pytest.raises(ValueError, match="不允许使用 provider"):
+            await service.update(
+                created.session_id,
+                SessionUpdateRequest(provider_id="unknown"),
+            )
+
+    @pytest.mark.asyncio
+    async def test_workspace_defaults_only_affect_new_sessions(self):
+        config = {
+            "llm": {
+                "providers": [
+                    {
+                        "id": "primary",
+                        "endpoint": "https://example.com/v1",
+                        "model": "model-primary",
+                        "api_key": "test-key",
+                        "custom_llm_provider": "openai",
+                    },
+                    {
+                        "id": "backup",
+                        "endpoint": "https://example.com/v1",
+                        "model": "model-backup",
+                        "api_key": "test-key",
+                        "custom_llm_provider": "openai",
+                    },
+                ]
+            },
+            "default_agent": "default",
+            "agents": {
+                "default": {
+                    "name": "Default Agent",
+                    "instructions": {"system_prompt": "hello"},
+                    "model": {
+                        "primary_provider": "primary",
+                        "fallback_providers": ["backup"],
+                    },
+                },
+                "coder": {
+                    "name": "Coder",
+                    "instructions": {"system_prompt": "code"},
+                    "model": {
+                        "primary_provider": "primary",
+                        "fallback_providers": ["backup"],
+                    },
+                },
+            },
+        }
+        config_path = Path(self.temp_dir) / "workspace-defaults-boxteam.jsonc"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        config_service = ConfigService(
+            config_path=config_path,
+            workspace_root=self.temp_dir,
+        )
+        service = SessionService(
+            config_service=config_service,
+            trace_event_store=self.trace_event_store,
+        )
+        existing = await service.create(SessionCreateRequest(title="Existing"))
+
+        config_service.set_workspace_default_agent("coder")
+        config_service.set_workspace_default_provider("coder", "backup")
+        created_after_change = await service.create(
+            SessionCreateRequest(title="Created later")
+        )
+
+        assert existing.current_agent_id == "default"
+        assert existing.current_provider_id == "primary"
+        assert (await service.get(existing.session_id)).current_provider_id == "primary"
+        assert created_after_change.current_agent_id == "coder"
+        assert created_after_change.current_provider_id == "backup"
 
     @pytest.mark.asyncio
     async def test_create_default_session_title_source(self):
@@ -212,6 +345,11 @@ class TestSessionService:
 
         assert bound_child.parent_session_id == parent.session_id
         assert (await self.service.get(child.session_id)).parent_session_id == parent.session_id
+        parent_path = self.service.path_resolver.resolve_session_dir(parent.session_id)
+        assert (
+            self.service.path_resolver.resolve_session_dir(child.session_id).parent
+            == parent_path / "children"
+        )
 
         unbound_child = await self.service.update(
             child.session_id,
@@ -220,6 +358,46 @@ class TestSessionService:
 
         assert unbound_child.parent_session_id is None
         assert (await self.service.get(grandchild.session_id)).parent_session_id == child.session_id
+        assert (
+            self.service.path_resolver.resolve_session_dir(child.session_id).parent
+            == parent_path.parent
+        )
+        assert self.service.path_resolver.resolve_session_dir(
+            grandchild.session_id
+        ).is_relative_to(self.service.path_resolver.resolve_session_dir(child.session_id))
+
+    @pytest.mark.asyncio
+    async def test_moving_parent_session_carries_complete_child_tree(self):
+        parent = await self.service.create(SessionCreateRequest(title="Parent"))
+        child = await self.service.create_context_fork(
+            title="Child",
+            agent_id=parent.current_agent_id,
+            parent_session_id=parent.session_id,
+            context_source_session_id=parent.session_id,
+        )
+        target_folder = self.service.path_resolver.create_folder(
+            name="目标文件夹",
+            parent_node_id=None,
+        )
+        child_path_before = self.service.path_resolver.resolve_session_dir(
+            child.session_id
+        )
+
+        moved = await self.service.move_to_folder(
+            parent.session_id,
+            target_folder.node_id,
+        )
+
+        moved_parent_path = self.service.path_resolver.resolve_session_dir(
+            parent.session_id
+        )
+        moved_child_path = self.service.path_resolver.resolve_session_dir(
+            child.session_id
+        )
+        assert moved.parent_session_id is None
+        assert moved_parent_path.parent == target_folder.path
+        assert moved_child_path.parent == moved_parent_path / "children"
+        assert moved_child_path.name == child_path_before.name
 
     @pytest.mark.asyncio
     async def test_session_parent_relationship_rejects_self_and_cycles(self):
@@ -243,7 +421,7 @@ class TestSessionService:
             )
 
     @pytest.mark.asyncio
-    async def test_delete_parent_detaches_direct_children(self):
+    async def test_delete_parent_requires_confirmation_and_cascades_children(self):
         parent = await self.service.create(SessionCreateRequest(title="Parent"))
         child = await self.service.create(SessionCreateRequest(title="Child"))
         grandchild = await self.service.create(SessionCreateRequest(title="Grandchild"))
@@ -256,10 +434,24 @@ class TestSessionService:
             SessionUpdateRequest(parent_session_id=child.session_id),
         )
 
-        await self.service.delete(parent.session_id)
+        parent_path = self.service.path_resolver.resolve_session_dir(parent.session_id)
+        child_path = self.service.path_resolver.resolve_session_dir(child.session_id)
+        grandchild_path = self.service.path_resolver.resolve_session_dir(
+            grandchild.session_id
+        )
+        assert child_path.parent == parent_path / "children"
+        assert grandchild_path.parent == child_path / "children"
 
-        assert (await self.service.get(child.session_id)).parent_session_id is None
-        assert (await self.service.get(grandchild.session_id)).parent_session_id == child.session_id
+        with pytest.raises(RuntimeError, match="显式确认级联删除"):
+            await self.service.delete(parent.session_id)
+
+        await self.service.delete(parent.session_id, cascade=True)
+
+        assert not parent_path.exists()
+        with pytest.raises(NotFoundError):
+            await self.service.get(child.session_id)
+        with pytest.raises(NotFoundError):
+            await self.service.get(grandchild.session_id)
 
     @pytest.mark.asyncio
     async def test_delete_session(self):

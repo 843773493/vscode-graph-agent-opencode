@@ -157,7 +157,8 @@ async def _put_checkpoint(
     )
 
 
-async def _build_service(tmp_path, jobs: list[JobDTO]):
+async def _build_service(tmp_path, session_bundle_factory, jobs: list[JobDTO]):
+    session_bundle_factory(tmp_path, "ses_replay")
     saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config("ses_replay")
     config = await _put_checkpoint(saver, config, messages=[], todos=["initial"])
@@ -212,9 +213,13 @@ async def _build_service(tmp_path, jobs: list[JobDTO]):
 
 
 @pytest.mark.asyncio
-async def test_edit_first_turn_removes_all_following_turns(tmp_path) -> None:
+async def test_edit_first_turn_removes_all_following_turns(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
     service, saver, dispatcher = await _build_service(
         tmp_path,
+        session_bundle_factory,
         [_job("msg_1", JobStatus.completed, job_id="job_1"), _job("msg_2", JobStatus.completed)],
     )
 
@@ -245,9 +250,13 @@ async def test_edit_first_turn_removes_all_following_turns(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_regenerate_last_reply_reuses_original_prompt(tmp_path) -> None:
+async def test_regenerate_last_reply_reuses_original_prompt(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
     service, _, dispatcher = await _build_service(
         tmp_path,
+        session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
     )
 
@@ -268,10 +277,12 @@ async def test_regenerate_last_reply_reuses_original_prompt(tmp_path) -> None:
 @pytest.mark.parametrize("failure_status", [JobStatus.failed, JobStatus.timed_out])
 async def test_retry_failed_clears_partial_tool_messages(
     tmp_path,
+    session_bundle_factory,
     failure_status: JobStatus,
 ) -> None:
     service, saver, dispatcher = await _build_service(
         tmp_path,
+        session_bundle_factory,
         [_job("msg_2", failure_status)],
     )
 
@@ -301,9 +312,13 @@ async def test_retry_failed_clears_partial_tool_messages(
 
 
 @pytest.mark.asyncio
-async def test_retry_requires_failed_or_timed_out_job(tmp_path) -> None:
+async def test_retry_requires_failed_or_timed_out_job(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
     service, _, _ = await _build_service(
         tmp_path,
+        session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
     )
 
@@ -319,9 +334,13 @@ async def test_retry_requires_failed_or_timed_out_job(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_replay_rejects_running_job_before_mutating_checkpoint(tmp_path) -> None:
+async def test_replay_rejects_running_job_before_mutating_checkpoint(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
     service, saver, dispatcher = await _build_service(
         tmp_path,
+        session_bundle_factory,
         [_job("msg_2", JobStatus.running)],
     )
     before = await saver.aget_tuple(build_checkpoint_config("ses_replay"))
@@ -345,9 +364,13 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_replay_requires_explicit_context_only_acknowledgement(tmp_path) -> None:
+async def test_replay_requires_explicit_context_only_acknowledgement(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
     service, _, _ = await _build_service(
         tmp_path,
+        session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
     )
 

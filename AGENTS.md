@@ -84,7 +84,9 @@
 1. 全局安装、配置和 Gateway 控制面数据统一存储在 `${BOXTEAM_HOME:-~/.boxteams}/`，禁止新增对旧目录 `~/.boxteam/` 的写入。
 2. 工作区业务数据必须存储在独立的 `${workspace_abs_path}/.boxteam/` 目录中；不得把会话、检查点、工具结果或 Agent 日志写入全局目录。
 3. Gateway 管理多个工作区的注册表、激活状态、SSH 重连信息和自身日志属于全局控制面数据，不得存放在默认工作区或任意工作区的 `.boxteam/` 中。
-4. 同一会话的检查点、LLM 请求日志、Trace、后台任务、上下文历史、变更和工具结果统一聚合到 `${workspace_abs_path}/.boxteam/sessions/{session_id}/`，避免删除、导出或迁移时遗留孤儿数据。
+4. 同一会话的 manifest、检查点、LLM 请求日志、Trace、后台任务、上下文历史、变更和工具结果必须统一聚合在 `${workspace_abs_path}/.boxteam/sessions/` 物理目录树中的同一个会话节点目录；保留的 `children/` 目录只承载物理子会话树，不属于父会话自身的附属数据。
+5. `.boxteam/sessions/{session_id}/` 不再是允许依赖的固定路径；会话节点可以位于任意合法的文件夹或父会话 `children/` 边界下，业务代码必须通过稳定 ID 和统一路径解析器取得当前物理路径。
+6. 会话物理目录树是会话位置和父子组织的唯一权威来源；`parent_session_id` 必须与最近的物理祖先会话一致，目录索引只能是可重建缓存，不得新增或继续维护一套与物理树并行写入的虚拟文件夹关系。
 
 ### 架构原则
 

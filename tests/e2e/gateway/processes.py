@@ -128,6 +128,9 @@ def start_gateway_process(
 def close_gateway_process(handle: GatewayProcess) -> None:
     try:
         terminate_process(handle.process)
+        # Gateway 会在 lifespan 中逐个回收托管工作区进程；给已收到终止信号的
+        # Node 辅助服务一个很短的退出窗口，避免下一条用例删除隔离工作区时竞态写日志。
+        time.sleep(0.5)
         kill_process_on_port(handle.port)
     finally:
         handle.stdout_file.close()

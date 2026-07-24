@@ -409,7 +409,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
 
 
 @pytest.mark.asyncio
-async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session(
+async def test_custom_tool_reads_searches_and_expands_another_session_context(
     client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
 ):
@@ -443,13 +443,14 @@ async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session
 
     prompt = (
         "请先读取当前工作区 AGENTS.md 里的扩展工具说明。"
-        "当你看到用户要求读取另一个会话最近消息和上下文 JSONL 时，"
+        "当你看到用户要求查看和搜索另一个会话上下文时，"
         "必须根据 AGENTS.md 找到并读取正确的 skill。"
-        f"先使用默认 rounds 调用 read_session_recent_text_messages，读取 session_id={source_session_id}；"
-        "保存它返回的 context_snapshot.snapshot_id。"
-        f"再调用 grep_session_context_jsonl 搜索 {source_marker}，并把 snapshot_id 作为 expected_snapshot_id；"
-        "最后调用 read_session_context_jsonl 读取 grep 命中的第一行，line_count=1，"
-        "继续传同一个 expected_snapshot_id。"
+        f"先用 read_context 默认 overview 查看 boxteam://session/{source_session_id}；"
+        "保存返回的 revision。"
+        f"再用 search_context 在同一资源搜索 {source_marker}，"
+        "并把 revision 作为 expected_revision；"
+        "最后用 read_context 读取 search 返回的第一个 locator，view=records，"
+        "并传入该 match 的 revision。"
         "三次工具调用完成后只回复完成，不要重新抄写工具返回的大段 JSON。"
     )
     reader_message_response = await client.post(
@@ -467,43 +468,37 @@ async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session
     traces_response = await client.get(f"/api/v1/sessions/{reader_session_id}/traces")
     assert traces_response.status_code == 200
     traces = traces_response.json()["data"]
-    tool_results = {
-        get_trace_payload(trace).get("tool_name"): json.loads(
-            str(get_trace_payload(trace)["result"])
+    context_tool_results = [
+        (
+            str(get_trace_payload(trace).get("tool_name")),
+            json.loads(str(get_trace_payload(trace)["result"])),
         )
         for trace in traces
         if trace.get("type") == "tool_call_end"
         and get_trace_payload(trace).get("tool_name")
-        in {
-            "read_session_recent_text_messages",
-            "grep_session_context_jsonl",
-            "read_session_context_jsonl",
-        }
-    }
-    recent_result = tool_results["read_session_recent_text_messages"]
-    grep_result = tool_results["grep_session_context_jsonl"]
-    read_result = tool_results["read_session_context_jsonl"]
-    assert recent_result["session_id"] == source_session_id
-    assert recent_result["rounds"] == 5
-    assert recent_result["user_message_count"] >= 1
-    snapshot_id = recent_result["context_snapshot"]["snapshot_id"]
-    assert snapshot_id
-    assert any(
-        item.get("role") == "user" and source_marker in item.get("text", "")
-        for item in recent_result["messages"]
-    )
-    assert any(
-        item.get("role") == "assistant"
-        and item.get("type") == "text"
-        and source_marker in item.get("text", "")
-        for item in recent_result["messages"]
-    )
-    assert grep_result["context_snapshot"]["snapshot_id"] == snapshot_id
-    assert grep_result["context_snapshot"]["consistency"] == "matched"
-    assert grep_result["returned_match_count"] >= 1
-    assert read_result["context_snapshot"]["snapshot_id"] == snapshot_id
-    assert read_result["context_snapshot"]["consistency"] == "matched"
-    assert source_marker in read_result["lines"][0]["text"]
+        in {"read_context", "search_context"}
+    ]
+    read_results = [
+        result for tool_name, result in context_tool_results if tool_name == "read_context"
+    ]
+    search_results = [
+        result
+        for tool_name, result in context_tool_results
+        if tool_name == "search_context"
+    ]
+    assert len(read_results) >= 2
+    assert search_results
+    overview_result = read_results[0]
+    search_result = search_results[0]
+    expanded_result = read_results[-1]
+    assert overview_result["view"] == "overview"
+    assert overview_result["revision"]
+    assert source_marker in json.dumps(overview_result, ensure_ascii=False)
+    assert search_result["revision"] == overview_result["revision"]
+    assert search_result["total_matches"] >= 1
+    assert search_result["matches"][0]["locator"]
+    assert expanded_result["revision"] == search_result["matches"][0]["revision"]
+    assert source_marker in json.dumps(expanded_result, ensure_ascii=False)
 
     read_file_paths = [
         _read_file_path_from_trace(trace)
@@ -512,14 +507,10 @@ async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session
         and get_trace_payload(trace).get("tool_name") == "read_file"
     ]
     assert any(
-        path.endswith("/.boxteam/skills/read-session-recent-text-messages/SKILL.md")
+        path.endswith("/.boxteam/skills/gateway-context/SKILL.md")
         for path in read_file_paths
     )
-    for custom_tool_name in (
-        "read_session_recent_text_messages",
-        "grep_session_context_jsonl",
-        "read_session_context_jsonl",
-    ):
+    for custom_tool_name in ("read_context", "search_context"):
         custom_tool_start_dtos = [
             trace
             for trace in traces
@@ -528,7 +519,7 @@ async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session
         ]
         assert custom_tool_start_dtos
         assert custom_tool_start_dtos[-1].get("skill_names", []) == [
-            "read-session-recent-text-messages"
+            "gateway-context"
         ]
         assert (
             get_trace_payload(custom_tool_start_dtos[-1]).get("invocation_tool_name")
@@ -541,11 +532,7 @@ async def test_custom_tool_reads_and_searches_context_jsonl_from_another_session
     invoked_custom_tools = set().union(
         *[_custom_tool_targets_from_llm_log(log) for log in logs]
     )
-    assert {
-        "read_session_recent_text_messages",
-        "grep_session_context_jsonl",
-        "read_session_context_jsonl",
-    } <= invoked_custom_tools
+    assert {"read_context", "search_context"} <= invoked_custom_tools
 
     reader_agent_state_response = await client.get(
         f"/api/v1/sessions/{reader_session_id}/agent-state/messages"

@@ -35,8 +35,10 @@ def _service(sessions_dir: Path) -> JobService:
 async def test_job_service_restores_accepted_pending_requests(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "ses_restart")
     first = _service(sessions_dir)
     monkeypatch.setattr(
         first,
@@ -79,8 +81,10 @@ async def test_job_service_restores_accepted_pending_requests(
 async def test_restore_and_new_send_never_start_two_jobs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "ses_restore_race")
     store = PendingRequestStore(sessions_dir=sessions_dir)
     now = datetime.now(timezone.utc)
     await store.save(

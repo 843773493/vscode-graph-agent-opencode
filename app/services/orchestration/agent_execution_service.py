@@ -205,6 +205,7 @@ class AgentExecutionService(JobStepExecutor):
                 background_message_bus=self._background_message_bus,
                 job_event_bus=self._bus,
                 dependency_provider=self._dependency_provider,
+                workspace_root=self._workspace_root,
             )
 
         self._agent_cache[cache_key] = agent
@@ -352,7 +353,21 @@ class AgentExecutionService(JobStepExecutor):
         )
         resolved_attachments = list(attachments or [])
         resolved_message_metadata = dict(message_metadata or {})
-        human_content = build_human_content(message, resolved_attachments)
+        preferred_provider_id_value = resolved_message_metadata.pop(
+            "boxteam_session_provider_id",
+            None,
+        )
+        if preferred_provider_id_value is not None and not isinstance(
+            preferred_provider_id_value,
+            str,
+        ):
+            raise TypeError("会话模型 provider id 必须是字符串")
+        preferred_provider_id = preferred_provider_id_value
+        human_content = build_human_content(
+            message,
+            resolved_attachments,
+            workspace_root=self._workspace_root,
+        )
         human_response_metadata = build_human_response_metadata(
             message_id=message_id,
             display_content=message,
@@ -424,6 +439,8 @@ class AgentExecutionService(JobStepExecutor):
                     job_event_bus=self._bus,
                     dependency_provider=self._dependency_provider,
                     tool_denylist=disabled_tool_names,
+                    preferred_provider_id=preferred_provider_id,
+                    workspace_root=self._workspace_root,
                 )
 
             next_input_messages = [

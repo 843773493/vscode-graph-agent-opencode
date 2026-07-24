@@ -78,9 +78,17 @@ async def test_fork_copies_agent_state_into_independent_child(
     child = await fork_services.fork_service.fork(source.session_id)
 
     assert child.parent_session_id == source.session_id
+    assert child.context_source_session_id == source.session_id
     assert child.current_agent_id == source.current_agent_id
     assert child.title == "源会话（上下文副本）"
     assert child.title_source == "auto"
+    source_path = fork_services.session_service.path_resolver.resolve_session_dir(
+        source.session_id
+    )
+    child_path = fork_services.session_service.path_resolver.resolve_session_dir(
+        child.session_id
+    )
+    assert child_path.parent == source_path / "children"
 
     source_tuple = await fork_services.checkpointer.aget_tuple(
         build_checkpoint_config(source.session_id)

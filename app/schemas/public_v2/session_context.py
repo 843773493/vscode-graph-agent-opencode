@@ -2,92 +2,122 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-SessionContextConsistency = Literal["not_checked", "matched", "changed"]
+SessionContextView = Literal[
+    "overview",
+    "messages",
+    "records",
+    "information",
+    "inventory",
+]
+SessionContextInclude = Literal[
+    "visible_text",
+    "reasoning",
+    "tool_summary",
+    "tool_calls",
+    "tool_results",
+    "system",
+    "raw_record",
+]
+SessionContextSearchSource = Literal[
+    "effective_context",
+    "session_catalog",
+    "session_information",
+]
+SessionContextMatchMode = Literal["literal", "regex"]
 
 
-class SessionContextSnapshotMetadataDTO(BaseModel):
-    snapshot_id: str
-    content_sha256: str
-    generated_at: str
-    line_count: int
-    raw_message_count: int
-    byte_count: int
-    compacted: bool
-    compaction_cutoff: int | None = None
-    history_file_path: str | None = None
-    expected_snapshot_id: str | None = None
-    consistency: SessionContextConsistency
-    warning: str | None = None
+class SessionContextReadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource: str = Field(min_length=1)
+    view: SessionContextView = "overview"
+    include: list[SessionContextInclude] = Field(
+        default_factory=lambda: ["visible_text", "tool_summary"]
+    )
+    recent_rounds: int = Field(default=3, ge=1, le=50)
+    include_initial_goal: bool = True
+    cursor: str | None = None
+    limit: int = Field(default=20, ge=1, le=200)
+    max_chars: int = Field(default=16_384, ge=256, le=65_536)
+    expected_revision: str | None = None
 
 
-class SessionRecentUserTextMessageDTO(BaseModel):
-    role: Literal["user"] = "user"
-    text: str
+class SessionContextSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class SessionRecentAssistantTextMessageDTO(BaseModel):
-    role: Literal["assistant"] = "assistant"
-    type: Literal["text"] = "text"
-    text: str
-
-
-SessionRecentTextMessageDTO = (
-    SessionRecentUserTextMessageDTO | SessionRecentAssistantTextMessageDTO
-)
-
-
-class SessionRecentTextMessagesDTO(BaseModel):
-    session_id: str
-    rounds: int
-    user_message_count: int
-    context_snapshot: SessionContextSnapshotMetadataDTO
-    messages: list[SessionRecentTextMessageDTO] = Field(default_factory=list)
-
-
-class SessionContextGrepRequest(BaseModel):
-    pattern: str = Field(min_length=1, description="Python 正则表达式")
+    resource: str = Field(min_length=1)
+    query: str = Field(min_length=1)
+    sources: list[SessionContextSearchSource] = Field(
+        default_factory=lambda: ["effective_context"]
+    )
+    match_mode: SessionContextMatchMode = "literal"
     case_sensitive: bool = False
-    max_matches: int = Field(default=20, ge=1, le=200)
-    expected_snapshot_id: str | None = None
+    max_results: int = Field(default=20, ge=1, le=200)
+    max_chars: int = Field(default=16_384, ge=256, le=65_536)
+    cursor: str | None = None
+    expected_revision: str | None = None
 
 
-class SessionContextMatchDTO(BaseModel):
-    line_number: int
-    match_start: int
-    match_end: int
-    preview: str
-    preview_truncated_left: bool
-    preview_truncated_right: bool
-    line_sha256: str
+class SessionContextItemDTO(BaseModel):
+    kind: str
+    locator: str
+    role: str | None = None
+    record_index: int | None = None
+    text: str | None = None
+    reasoning: str | None = None
+    tool_summary: list[str] = Field(default_factory=list)
+    tool_calls: list[dict[str, object]] = Field(default_factory=list)
+    tool_results: list[dict[str, object]] = Field(default_factory=list)
+    data: dict[str, object] | None = None
+    raw_record: dict[str, object] | None = None
+    truncated: bool = False
 
 
-class SessionContextGrepResultDTO(BaseModel):
-    session_id: str
-    pattern: str
-    case_sensitive: bool
-    context_snapshot: SessionContextSnapshotMetadataDTO
-    total_matching_lines: int
-    returned_match_count: int
-    matches_truncated: bool
-    matches: list[SessionContextMatchDTO] = Field(default_factory=list)
-
-
-class SessionContextLineDTO(BaseModel):
-    line_number: int
-    text: str
-    original_chars: int
-    truncated: bool
-    line_sha256: str
+class SessionContextPartialErrorDTO(BaseModel):
+    resource: str
+    error: str
 
 
 class SessionContextReadResultDTO(BaseModel):
-    session_id: str
-    context_snapshot: SessionContextSnapshotMetadataDTO
-    line_start: int
-    line_end: int
-    has_more: bool
-    next_line_start: int | None = None
-    lines: list[SessionContextLineDTO] = Field(default_factory=list)
+    resource: str
+    view: SessionContextView
+    revision: str
+    compacted: bool = False
+    compaction_cutoff: int | None = None
+    raw_message_count: int = 0
+    effective_record_count: int = 0
+    returned_chars: int = 0
+    truncated: bool = False
+    has_more: bool = False
+    next_cursor: str | None = None
+    items: list[SessionContextItemDTO] = Field(default_factory=list)
+    partial_errors: list[SessionContextPartialErrorDTO] = Field(default_factory=list)
+    omitted_partial_error_count: int = 0
+
+
+class SessionContextSearchMatchDTO(BaseModel):
+    locator: str
+    preview: str
+    source: SessionContextSearchSource
+    revision: str
+    record_index: int | None = None
+    match_start: int
+    match_end: int
+
+
+class SessionContextSearchResultDTO(BaseModel):
+    resource: str
+    query: str
+    match_mode: SessionContextMatchMode
+    revision: str
+    returned_chars: int = 0
+    truncated: bool = False
+    has_more: bool = False
+    next_cursor: str | None = None
+    total_matches: int = 0
+    matches: list[SessionContextSearchMatchDTO] = Field(default_factory=list)
+    partial_errors: list[SessionContextPartialErrorDTO] = Field(default_factory=list)
+    omitted_partial_error_count: int = 0

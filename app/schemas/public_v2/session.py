@@ -22,17 +22,29 @@ class SessionDelegationDTO(BaseModel):
     start_error: Optional[str] = None
 
 
+class SessionGenerationOriginDTO(BaseModel):
+    """会话由通用生成器创建时的不可变来源。"""
+
+    generator_id: str
+    run_id: str
+    idempotency_key: str
+    generator_type_id: str
+    generator_type_version: str
+
+
 class SessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: Optional[str] = "新会话"
     agent_id: Optional[str] = None
     title_source: Optional[TitleSource] = None
+    folder_id: Optional[str] = None
 
 
 class SessionUpdateRequest(BaseModel):
     title: Optional[str] = None
     agent_id: Optional[str] = None
+    provider_id: Optional[str] = None
     title_source: Optional[TitleSource] = None
     parent_session_id: Optional[str] = None
 
@@ -43,9 +55,12 @@ class SessionDTO(TimestampedDTO):
     title: str
     title_source: TitleSource = "default"
     current_agent_id: str
+    current_provider_id: Optional[str] = None
     parent_session_id: Optional[str] = None
+    context_source_session_id: Optional[str] = None
     kind: SessionKind = "normal"
     delegation: Optional[SessionDelegationDTO] = None
+    generation_origin: Optional[SessionGenerationOriginDTO] = None
 
     @model_validator(mode="after")
     def validate_internal_origin(self) -> Self:
@@ -53,8 +68,8 @@ class SessionDTO(TimestampedDTO):
             raise ValueError("delegated 会话缺少不可变 delegation 来源")
         if self.kind != "delegated" and self.delegation is not None:
             raise ValueError("只有 delegated 会话可以包含 delegation 来源")
-        if self.kind == "context_fork" and self.parent_session_id is None:
-            raise ValueError("context_fork 会话缺少 parent_session_id")
+        if self.kind == "context_fork" and self.context_source_session_id is None:
+            raise ValueError("context_fork 会话缺少 context_source_session_id")
         return self
 
 

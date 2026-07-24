@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.background_task_registry import BackgroundTaskHandle
+from app.core.path_utils import get_session_path_resolver
 
 
 class BackgroundTaskHistoryStore:
@@ -12,6 +13,7 @@ class BackgroundTaskHistoryStore:
 
     def __init__(self, *, sessions_dir: Path) -> None:
         self._sessions_dir = sessions_dir
+        self._path_resolver = get_session_path_resolver(sessions_dir)
 
     def upsert(self, handle: BackgroundTaskHandle) -> None:
         records = {
@@ -36,10 +38,13 @@ class BackgroundTaskHistoryStore:
         return records
 
     def mark_active_tasks_lost(self) -> None:
-        if not self._sessions_dir.exists():
-            return
-        for path in self._sessions_dir.glob("*/resources/background_tasks.json"):
-            session_id = path.parents[1].name
+        for node in self._path_resolver.list_nodes():
+            if node.kind != "session":
+                continue
+            session_id = node.node_id
+            path = node.path / "resources" / "background_tasks.json"
+            if not path.exists():
+                continue
             records = self.list_session(session_id)
             changed = False
             for record in records:
@@ -60,7 +65,11 @@ class BackgroundTaskHistoryStore:
     def _session_file(self, session_id: str) -> Path:
         if not session_id or "/" in session_id or "\\" in session_id:
             raise ValueError(f"非法 session_id: {session_id!r}")
-        return self._sessions_dir / session_id / "resources" / "background_tasks.json"
+        return (
+            self._path_resolver.resolve_session_dir(session_id)
+            / "resources"
+            / "background_tasks.json"
+        )
 
     def _write_session(
         self,

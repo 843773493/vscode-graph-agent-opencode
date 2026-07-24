@@ -12,12 +12,14 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
 from app.agents.tools.session_history import (
-    create_grep_session_context_jsonl_tool,
-    create_read_session_context_jsonl_tool,
-    create_read_session_recent_text_messages_tool,
+    create_read_context_tool,
+    create_search_context_tool,
 )
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.services.business.gateway_context_query_service import (
+    GatewayContextQueryService,
+)
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
@@ -57,6 +59,7 @@ async def _write_session_context_checkpoint(
     workspace_root: Path,
     session_id: str,
     marker: str,
+    checkpoint_id: str = "ckpt-cross-workspace-context",
 ) -> None:
     saver = FileSystemCheckpointSaver(
         sessions_dir=workspace_root / ".boxteam" / "sessions"
@@ -65,12 +68,33 @@ async def _write_session_context_checkpoint(
         "channel_values": {
             "messages": [
                 HumanMessage(content=f"请记住 {marker}"),
-                AIMessage(content=[{"type": "text", "text": marker}]),
+                AIMessage(
+                    content=[
+                        {
+                            "type": "reasoning",
+                            "reasoning": "SECRET_REASONING_E2E",
+                        },
+                        {"type": "text", "text": marker},
+                    ],
+                    tool_calls=[
+                        {
+                            "name": "diagnostic_tool",
+                            "args": {"value": "SECRET_TOOL_ARG_E2E"},
+                            "id": "call_context_e2e",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content="SECRET_TOOL_RESULT_E2E",
+                    tool_call_id="call_context_e2e",
+                    name="diagnostic_tool",
+                ),
             ]
         },
         "channel_versions": {"messages": 1},
         "updated_channels": ["messages"],
-        "id": "ckpt-cross-workspace-context",
+        "id": checkpoint_id,
     }
     await saver.aput(
         build_checkpoint_config(session_id),
@@ -260,7 +284,6 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         workspace_root=str(primary_workspace),
         port=port_block.port(20),
         log_name="context-tool-primary-backend",
-        env_overrides={"BOXTEAM_GATEWAY_URL": gateway_url},
     )
     secondary_backend = start_backend_process(
         workspace_root=str(secondary_workspace),
@@ -312,61 +335,140 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
 
         context = SimpleNamespace(
             session_context_query_service=_UnexpectedLocalQueryService(),
-            workspace_session_context_client=GatewaySessionContextClient(
-                gateway_url=gateway_url
+            workspace_session_context_client=GatewayContextQueryService(
+                transport=GatewaySessionContextClient(gateway_url=gateway_url)
             ),
         )
-        recent_tool = create_read_session_recent_text_messages_tool(context)
-        grep_tool = create_grep_session_context_jsonl_tool(context)
-        read_tool = create_read_session_context_jsonl_tool(context)
+        read_tool = create_read_context_tool(context)
+        search_tool = create_search_context_tool(context)
+        resource = (
+            f"boxteam://workspace/{secondary_workspace_id}/session/"
+            f"{source_session_id}"
+        )
 
-        recent = await recent_tool.ainvoke(
+        async with httpx.AsyncClient(base_url=gateway_url, timeout=30) as client:
+            unauthenticated_response = await client.post(
+                "/api/v1/context/read",
+                headers={"X-BoxTeam-Workspace-Id": secondary_workspace_id},
+                json={"resource": resource},
+            )
+        assert unauthenticated_response.status_code == 200, (
+            unauthenticated_response.text
+        )
+
+        overview_payload = json.loads(
+            await read_tool.ainvoke({"resource": resource})
+        )
+        revision = overview_payload["revision"]
+        assert overview_payload["view"] == "overview"
+        assert marker in json.dumps(overview_payload, ensure_ascii=False)
+        overview_json = json.dumps(overview_payload, ensure_ascii=False)
+        assert "diagnostic_tool" in overview_json
+        assert "SECRET_REASONING_E2E" not in overview_json
+        assert "SECRET_TOOL_ARG_E2E" not in overview_json
+        assert "SECRET_TOOL_RESULT_E2E" not in overview_json
+
+        detailed_payload = json.loads(
+            await read_tool.ainvoke(
+                {
+                    "resource": resource,
+                    "view": "records",
+                    "include": [
+                        "visible_text",
+                        "reasoning",
+                        "tool_calls",
+                        "tool_results",
+                    ],
+                }
+            )
+        )
+        detailed_json = json.dumps(detailed_payload, ensure_ascii=False)
+        assert "SECRET_REASONING_E2E" in detailed_json
+        assert "SECRET_TOOL_ARG_E2E" in detailed_json
+        assert "SECRET_TOOL_RESULT_E2E" in detailed_json
+
+        search_payload = json.loads(
+            await search_tool.ainvoke(
+                {
+                    "resource": resource,
+                    "query": marker,
+                    "expected_revision": revision,
+                }
+            )
+        )
+        assert search_payload["total_matches"] == 2
+        match = search_payload["matches"][0]
+
+        read_payload = json.loads(
+            await read_tool.ainvoke(
+                {
+                    "resource": match["locator"],
+                    "view": "records",
+                    "expected_revision": match["revision"],
+                }
+            )
+        )
+        assert marker in json.dumps(read_payload, ensure_ascii=False)
+
+        inventory_payload = json.loads(
+            await read_tool.ainvoke(
+                {
+                    "resource": "boxteam://gateway/workspaces",
+                    "view": "inventory",
+                }
+            )
+        )
+        assert secondary_workspace_id in json.dumps(inventory_payload)
+
+        gateway_search_payload = json.loads(
+            await search_tool.ainvoke(
+                {
+                    "resource": "boxteam://gateway",
+                    "query": marker,
+                }
+            )
+        )
+        assert gateway_search_payload["total_matches"] >= 2
+        assert gateway_search_payload["partial_errors"] == []
+
+        invoker = create_custom_tool_invoker_tool([read_tool, search_tool])
+        await _write_session_context_checkpoint(
+            workspace_root=secondary_workspace,
+            session_id=source_session_id,
+            marker=f"{marker}_UPDATED",
+            checkpoint_id="ckpt-cross-workspace-context-updated",
+        )
+        stale_result = await invoker.ainvoke(
             {
-                "workspace_id": secondary_workspace_id,
-                "session_id": source_session_id,
+                "type": "tool_call",
+                "id": "call_stale_locator",
+                "name": invoker.name,
+                "args": {
+                    "tool_name": read_tool.name,
+                    "arguments": {
+                        "resource": match["locator"],
+                        "view": "records",
+                        "expected_revision": match["revision"],
+                    },
+                },
             }
         )
-        recent_payload = json.loads(recent)
-        snapshot_id = recent_payload["context_snapshot"]["snapshot_id"]
-        assert recent_payload["session_id"] == source_session_id
-        assert marker in recent
+        assert isinstance(stale_result, ToolMessage)
+        assert stale_result.status == "error"
+        assert "revision changed" in stale_result.text
 
-        grep_result = await grep_tool.ainvoke(
-            {
-                "workspace_id": secondary_workspace_id,
-                "session_id": source_session_id,
-                "pattern": marker,
-                "expected_snapshot_id": snapshot_id,
-            }
-        )
-        grep_payload = json.loads(grep_result)
-        assert grep_payload["context_snapshot"]["consistency"] == "matched"
-        assert grep_payload["returned_match_count"] == 2
-
-        read_result = await read_tool.ainvoke(
-            {
-                "workspace_id": secondary_workspace_id,
-                "session_id": source_session_id,
-                "line_start": grep_payload["matches"][0]["line_number"],
-                "line_count": 1,
-                "expected_snapshot_id": snapshot_id,
-            }
-        )
-        read_payload = json.loads(read_result)
-        assert read_payload["context_snapshot"]["consistency"] == "matched"
-        assert marker in read_payload["lines"][0]["text"]
-
-        invoker = create_custom_tool_invoker_tool([recent_tool, grep_tool, read_tool])
         failed_result = await invoker.ainvoke(
             {
                 "type": "tool_call",
                 "id": "call_wrong_workspace",
                 "name": invoker.name,
                 "args": {
-                    "tool_name": recent_tool.name,
+                    "tool_name": read_tool.name,
                     "arguments": {
-                        "workspace_id": "gw_wrong_workspace_id",
-                        "session_id": source_session_id,
+                        "resource": (
+                            "boxteam://workspace/gw_wrong_workspace_id/session/"
+                            f"{source_session_id}"
+                        )
                     },
                 },
             }
@@ -374,8 +476,14 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         assert isinstance(failed_result, ToolMessage)
         assert failed_result.status == "error"
         assert "workspace_id=gw_wrong_workspace_id" in failed_result.text
-        assert "修正 workspace_id 或 session_id 后重试" in failed_result.text
-        assert "提醒用户" in failed_result.text
+
+        close_backend_process(secondary_backend)
+        partial_gateway_search = json.loads(
+            await search_tool.ainvoke(
+                {"resource": "boxteam://gateway", "query": marker}
+            )
+        )
+        assert partial_gateway_search["partial_errors"]
     finally:
         close_gateway_process(gateway)
         close_backend_process(secondary_backend)

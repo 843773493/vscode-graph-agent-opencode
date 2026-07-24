@@ -19,7 +19,7 @@ from app.agents.upstream_request_trace import (
     end_upstream_capture,
 )
 from app.core.job_context import get_current_job_id
-from app.core.path_utils import get_sessions_dir
+from app.core.path_utils import get_session_path_resolver, get_sessions_dir
 
 
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)
@@ -208,7 +208,9 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
 
     def __init__(self, *, sessions_dir: Path | None = None) -> None:
         self._sessions_dir = sessions_dir
-        self._prepared_session_dirs: set[str] = set()
+        self._path_resolver = get_session_path_resolver(
+            self._sessions_dir or get_sessions_dir()
+        )
 
     def _get_session_id(self, runtime: Runtime[Any]) -> str:
         configurable = getattr(runtime, "configurable", None)
@@ -249,16 +251,13 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
 
         return None
 
-    def _ensure_session_dir(self, session_id: str) -> Path:
+    def _session_log_dir(self, session_id: str) -> Path:
         logs_dir = (
-            (self._sessions_dir or get_sessions_dir())
-            / session_id
+            self._path_resolver.resolve_session_dir(session_id)
             / "logs"
             / "llm_requests"
         )
-        if session_id not in self._prepared_session_dirs:
-            logs_dir.mkdir(exist_ok=True, parents=True)
-            self._prepared_session_dirs.add(session_id)
+        logs_dir.mkdir(exist_ok=True, parents=True)
         return logs_dir
 
     def _save_log(
@@ -312,7 +311,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             upstream={"attempts": _json_value(upstream_attempts)},
         )
 
-        log_file = self._ensure_session_dir(session_id) / f"{time.time_ns()}.json"
+        log_file = self._session_log_dir(session_id) / f"{time.time_ns()}.json"
         log_file.write_text(full_log.model_dump_json(indent=2), encoding="utf-8")
 
     def wrap_model_call(

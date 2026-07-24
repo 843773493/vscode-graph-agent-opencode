@@ -57,7 +57,6 @@ def ensure_gateway_ssh_container(*, known_hosts_path: Path) -> GatewaySshTarget:
     private_key = (
         project_root / "asset" / "gateway_ssh" / "boxteam_gateway_e2e_ed25519"
     )
-    private_key.chmod(0o600)
     target = GatewaySshTarget(
         target_id=TARGET_ID,
         platform="linux",

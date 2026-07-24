@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from app.abstractions.session_changes import StoredFileEdit
-from app.core.path_utils import safe_join
+from app.core.path_utils import get_session_path_resolver, safe_join
 from app.schemas.public_v2.session_changes import SessionChangesetDTO
 
 
@@ -19,6 +19,9 @@ class SessionChangesStore:
 
     def __init__(self, *, workspace_root: Path) -> None:
         self._workspace_root = workspace_root.resolve()
+        self._path_resolver = get_session_path_resolver(
+            self._workspace_root / ".boxteam" / "sessions"
+        )
 
     def resolve_file_path(self, file_path: str) -> tuple[str, Path]:
         if not isinstance(file_path, str) or not file_path.strip():
@@ -159,11 +162,7 @@ class SessionChangesStore:
         target.write_text(changeset.model_dump_json(indent=2), encoding="utf-8")
 
     def _session_changes_dir(self, session_id: str) -> Path:
-        return safe_join(
-            self._workspace_root / ".boxteam" / "sessions",
-            session_id,
-            "changes",
-        )
+        return self._path_resolver.resolve_session_dir(session_id) / "changes"
 
     def _ensure_changes_dir(self, session_id: str) -> Path:
         changes_dir = self._session_changes_dir(session_id)

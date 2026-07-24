@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from tests.e2e.processes import close_backend_process, start_backend_process, terminate_process
 from tests.e2e.utils import last_assistant_message, normalize_text, wait_for_job_done
 
@@ -60,13 +61,11 @@ async def test_checkpoint_save_reload_and_survive_restart(
     first_job_data = await wait_for_job_done(client, first_job_id)
     assert first_job_data["status"] in {"completed", "succeeded"}
 
+    session_dir = get_session_path_resolver(
+        Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
+    ).resolve_session_dir(session_id)
     checkpoint_jsonl = (
-        Path(e2e_workspace_root_path)
-        / ".boxteam"
-        / "sessions"
-        / session_id
-        / "checkpoints"
-        / "checkpoints.jsonl"
+        session_dir / "checkpoints" / "checkpoints.jsonl"
     )
     assert checkpoint_jsonl.exists(), "第一次运行后 checkpoint JSONL 文件应已创建"
 

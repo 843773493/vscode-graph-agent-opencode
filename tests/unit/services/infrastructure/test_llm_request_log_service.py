@@ -8,20 +8,23 @@ import pytest
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 
 
-def write_log(sessions_dir: Path, session_id: str, timestamp: int, payload: dict) -> Path:
-    session_dir = sessions_dir / session_id / "logs" / "llm_requests"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    log_file = session_dir / f"{timestamp}.json"
+def write_log(session_dir: Path, timestamp: int, payload: dict) -> Path:
+    log_dir = session_dir / "logs" / "llm_requests"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{timestamp}.json"
     log_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return log_file
 
 
-def test_list_session_logs_reads_request_and_response(tmp_path: Path):
+def test_list_session_logs_reads_request_and_response(
+    tmp_path: Path,
+    session_bundle_factory,
+):
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_read"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
     second = write_log(
-        sessions_dir,
-        session_id,
+        session_dir,
         2000,
         {
             "timestamp": 2000,
@@ -32,8 +35,7 @@ def test_list_session_logs_reads_request_and_response(tmp_path: Path):
         },
     )
     first = write_log(
-        sessions_dir,
-        session_id,
+        session_dir,
         1000,
         {
             "timestamp": 1000,
@@ -53,34 +55,51 @@ def test_list_session_logs_reads_request_and_response(tmp_path: Path):
     assert records[0].upstream == {"attempts": []}
 
 
-def test_list_session_logs_returns_empty_for_missing_session(tmp_path: Path):
-    records = LLMRequestLogService(sessions_dir=tmp_path / "sessions").list_session_logs("ses_missing")
+def test_list_session_logs_returns_empty_without_log_files(
+    tmp_path: Path,
+    session_bundle_factory,
+):
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_without_logs"
+    session_bundle_factory(sessions_dir, session_id)
+    records = LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(
+        session_id
+    )
 
     assert records == []
 
 
-def test_list_session_logs_exposes_invalid_log_file(tmp_path: Path):
+def test_list_session_logs_exposes_invalid_log_file(
+    tmp_path: Path,
+    session_bundle_factory,
+):
     sessions_dir = tmp_path / "sessions"
-    session_dir = sessions_dir / "ses_bad" / "logs" / "llm_requests"
-    session_dir.mkdir(parents=True)
-    (session_dir / "1000.json").write_text("[]", encoding="utf-8")
+    session_id = "ses_bad"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
+    log_dir = session_dir / "logs" / "llm_requests"
+    log_dir.mkdir(parents=True)
+    (log_dir / "1000.json").write_text("[]", encoding="utf-8")
 
     with pytest.raises(ValueError, match="不是 JSON object"):
-        LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs("ses_bad")
+        LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)
 
 
-def test_list_session_logs_exposes_missing_response(tmp_path: Path):
+def test_list_session_logs_exposes_missing_response(
+    tmp_path: Path,
+    session_bundle_factory,
+):
     sessions_dir = tmp_path / "sessions"
+    session_id = "ses_bad_shape"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
     write_log(
-        sessions_dir,
-        "ses_bad_shape",
+        session_dir,
         1000,
         {
             "timestamp": 1000,
-            "session_id": "ses_bad_shape",
+            "session_id": session_id,
             "request": {"messages": []},
         },
     )
 
     with pytest.raises(ValueError, match="缺少 response object"):
-        LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs("ses_bad_shape")
+        LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)

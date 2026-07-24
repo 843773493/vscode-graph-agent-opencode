@@ -44,32 +44,22 @@ def test_build_human_content_converts_workspace_image_attachment(tmp_path, monke
     assert image_url["url"].startswith("data:image/jpeg;base64,")
 
 
-def test_build_human_content_keeps_inline_image_data_url():
-    """浏览器上传的内联图片应直接传给模型，不再回查工作区路径。"""
+def test_build_human_content_rejects_unpersisted_inline_image():
+    """Agent 运行时只接受已经持久化的附件定位符。"""
     data_url = "data:image/jpeg;base64,/9j/2Q=="
 
-    content = build_human_content(
-        "请描述图片",
-        [
-            AttachmentRef(
-                file_id="inline:test.jpg",
-                name="test.jpg",
-                content_type="image/jpeg",
-                data_url=data_url,
-            )
-        ],
-    )
-
-    assert isinstance(content, list)
-    assert content[0] == {"type": "text", "text": "请描述图片"}
-    assert content[1]["type"] == "text"
-    assert "本消息包含 1 个附件" in str(content[1]["text"])
-    assert content[2]["type"] == "text"
-    assert "附件 1/1：test.jpg" in str(content[2]["text"])
-    assert content[3] == {
-        "type": "image_url",
-        "image_url": {"url": data_url},
-    }
+    with pytest.raises(ValueError, match="必须先持久化"):
+        build_human_content(
+            "请描述图片",
+            [
+                AttachmentRef(
+                    file_id="inline:test.jpg",
+                    name="test.jpg",
+                    content_type="image/jpeg",
+                    data_url=data_url,
+                )
+            ],
+        )
 
 
 def test_build_human_content_converts_workspace_video_attachment_to_frames(monkeypatch):
@@ -113,24 +103,27 @@ def test_build_human_content_converts_workspace_video_attachment_to_frames(monke
     )
 
 
-def test_build_human_content_labels_multiple_attachments_in_order():
+def test_build_human_content_labels_multiple_attachments_in_order(tmp_path):
     """多附件应向模型显式标注序号和文件名，避免最终回复把附件合并理解。"""
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "first.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+    (assets / "second.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     content = build_human_content(
         "请逐个说明附件",
         [
             AttachmentRef(
-                file_id="inline:first.jpg",
+                file_id="assets/first.jpg",
                 name="first.jpg",
                 content_type="image/jpeg",
-                data_url="data:image/jpeg;base64,/9j/2Q==",
             ),
             AttachmentRef(
-                file_id="inline:second.png",
+                file_id="assets/second.png",
                 name="second.png",
                 content_type="image/png",
-                data_url="data:image/png;base64,iVBORw0KGgo=",
             ),
         ],
+        workspace_root=tmp_path,
     )
 
     assert isinstance(content, list)

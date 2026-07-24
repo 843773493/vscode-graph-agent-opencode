@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
+from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
+from app.abstractions.job_service import JobServiceProtocol
 from app.core.exceptions import NotFoundError
 from app.core.identifier import create_prefixed_id
-from app.core.path_utils import get_session_file, ensure_session_dir, get_session_path, get_sessions_dir
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_paths import SessionPathResolver, SessionPhysicalNode
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
     SessionControlResultDTO,
     SessionCreateRequest,
     SessionDelegationDTO,
     SessionDTO,
+    SessionGenerationOriginDTO,
     SessionListResultDTO,
     SessionKind,
     SessionUpdateRequest,
@@ -27,9 +35,33 @@ from app.services.mapping.trace_event_mapper import TraceEventMapper
 class SessionService:
     DEFAULT_SESSION_TITLES = {"", "新会话", "未命名"}
 
-    def __init__(self, *, config_service: ConfigService, trace_event_store: TraceEventStore):
+    def __init__(
+        self,
+        *,
+        config_service: ConfigService,
+        trace_event_store: TraceEventStore,
+        path_resolver: SessionPathResolver | None = None,
+    ):
         self._config_service = config_service
         self._trace_event_store = trace_event_store
+        self._path_resolver = path_resolver or get_session_path_resolver()
+        self._path_resolver.initialize()
+        self._job_service: JobServiceProtocol | None = None
+        self._change_listeners: list[Callable[[str, str], None]] = []
+
+    @property
+    def path_resolver(self) -> SessionPathResolver:
+        return self._path_resolver
+
+    def register_change_listener(self, listener: Callable[[str, str], None]) -> None:
+        self._change_listeners.append(listener)
+
+    def bind_job_service(self, job_service: JobServiceProtocol) -> None:
+        self._job_service = job_service
+
+    def _notify_changed(self, action: str, session_id: str) -> None:
+        for listener in tuple(self._change_listeners):
+            listener(action, session_id)
 
     @classmethod
     def _infer_created_title_source(
@@ -44,28 +76,39 @@ class SessionService:
         return "user"
 
     async def get(self, session_id: str) -> SessionDTO:
-        session_file = get_session_file(session_id)
-
-        if not session_file.exists():
+        try:
+            session_file = self._path_resolver.resolve_session_dir(session_id) / "session.json"
+        except KeyError as error:
+            raise NotFoundError(f"Session {session_id} not found") from error
+        if not session_file.is_file():
             raise NotFoundError(f"Session {session_id} not found")
 
         with open(session_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        return SessionDTO.model_validate(data)
+        session = SessionDTO.model_validate(data)
+        if session.current_provider_id is None:
+            session.current_provider_id = self._config_service.resolve_agent_provider_id(
+                session.current_agent_id
+            )
+        return session
 
     async def list(self, workspace_id: Optional[str] = None, skip: int = 0, limit: int = 100, cursor: Optional[str] = None) -> SessionListResultDTO:
-        sessions_dir = get_sessions_dir()
-        sessions_dir.mkdir(exist_ok=True)
-
         sessions = []
-        for session_dir in sessions_dir.iterdir():
-            if session_dir.is_dir():
-                session_file = session_dir / "session.json"
-                if session_file.exists():
-                    with open(session_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    sessions.append(SessionDTO.model_validate(data))
+        for node in self._path_resolver.list_nodes():
+            if node.kind != "session":
+                continue
+            session_file = node.path / "session.json"
+            with open(session_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            session = SessionDTO.model_validate(data)
+            if session.current_provider_id is None:
+                session.current_provider_id = (
+                    self._config_service.resolve_agent_provider_id(
+                        session.current_agent_id
+                    )
+                )
+            sessions.append(session)
 
         sessions.sort(key=lambda s: s.created_at, reverse=True)
         paginated = sessions[skip:skip+limit]
@@ -77,6 +120,7 @@ class SessionService:
             title=session.title,
             title_source=session.title_source,
             agent_id=session.agent_id,
+            parent_node_id=session.folder_id,
         )
 
     async def create_context_fork(
@@ -84,14 +128,38 @@ class SessionService:
         *,
         title: str,
         agent_id: str,
-        parent_session_id: str,
+        parent_session_id: str | None,
+        context_source_session_id: str,
+        generation_origin: SessionGenerationOriginDTO | None = None,
+        parent_node_id: str | None = None,
     ) -> SessionDTO:
         return await self._create(
             title=title,
             title_source="auto",
             agent_id=agent_id,
             parent_session_id=parent_session_id,
+            context_source_session_id=context_source_session_id,
             kind="context_fork",
+            generation_origin=generation_origin,
+            parent_node_id=parent_node_id,
+        )
+
+    async def create_generated(
+        self,
+        *,
+        title: str,
+        agent_id: str | None,
+        parent_session_id: str | None,
+        generation_origin: SessionGenerationOriginDTO,
+        parent_node_id: str | None = None,
+    ) -> SessionDTO:
+        return await self._create(
+            title=title,
+            title_source="auto",
+            agent_id=agent_id,
+            parent_session_id=parent_session_id,
+            generation_origin=generation_origin,
+            parent_node_id=parent_node_id,
         )
 
     async def create_delegated(
@@ -125,20 +193,43 @@ class SessionService:
         title_source: TitleSource | None,
         agent_id: str | None,
         parent_session_id: str | None = None,
+        context_source_session_id: str | None = None,
         kind: SessionKind = "normal",
         delegation: SessionDelegationDTO | None = None,
+        generation_origin: SessionGenerationOriginDTO | None = None,
+        parent_node_id: str | None = None,
     ) -> SessionDTO:
         session_id = create_prefixed_id("ses")
         now = datetime.now(timezone.utc)
         if self._config_service is None:
             raise RuntimeError("SessionService 未绑定 ConfigService")
         config_service = self._config_service
-        resolved_agent_id = config_service.validate_agent_id(agent_id)
+        resolved_agent_id = config_service.resolve_new_session_agent_id(agent_id)
+        resolved_provider_id = config_service.resolve_new_session_provider_id(
+            resolved_agent_id
+        )
         await self._validate_parent_session(
             session_id=session_id,
             workspace_id="ws_local",
             parent_session_id=parent_session_id,
         )
+
+        resolved_parent_node_id = parent_node_id
+        physical_parent_session_id = self._path_resolver.nearest_session_ancestor(
+            parent_node_id
+        )
+        if parent_session_id is not None:
+            if parent_node_id is None:
+                resolved_parent_node_id = parent_session_id
+                physical_parent_session_id = parent_session_id
+            elif physical_parent_session_id != parent_session_id:
+                raise ValueError(
+                    "会话父节点与目标物理目录不一致: "
+                    f"parent_session_id={parent_session_id}, "
+                    f"physical_parent_session_id={physical_parent_session_id}"
+                )
+        else:
+            parent_session_id = physical_parent_session_id
 
         session_data = SessionDTO(
             session_id=session_id,
@@ -149,19 +240,30 @@ class SessionService:
                 title_source,
             ),
             current_agent_id=resolved_agent_id,
+            current_provider_id=resolved_provider_id,
             parent_session_id=parent_session_id,
+            context_source_session_id=context_source_session_id,
             kind=kind,
             delegation=delegation,
+            generation_origin=generation_origin,
             created_at=now,
             updated_at=now
         )
 
-        ensure_session_dir(session_id)
-        session_file = get_session_file(session_id)
+        session_dir = self._path_resolver.allocate_session_dir(
+            session_id=session_id,
+            title=session_data.title,
+            parent_node_id=resolved_parent_node_id,
+        )
+        session_file = session_dir / "session.json"
+        try:
+            self._write_session_file(session_file, session_data)
+            self._path_resolver.register_session(session_id, session_dir)
+        except Exception:
+            self._path_resolver.abandon_session_allocation(session_dir)
+            raise
 
-        with open(session_file, "w", encoding="utf-8") as f:
-            json.dump(session_data.model_dump(), f, ensure_ascii=False, indent=2, default=str)
-
+        self._notify_changed("create", session_id)
         return session_data
 
     async def set_delegation_start_result(
@@ -179,9 +281,9 @@ class SessionService:
         existing.delegation.start_status = status
         existing.delegation.start_error = error
         existing.updated_at = datetime.now(timezone.utc)
-        session_file = get_session_file(session_id)
-        with open(session_file, "w", encoding="utf-8") as f:
-            json.dump(existing.model_dump(), f, ensure_ascii=False, indent=2, default=str)
+        session_file = self._path_resolver.resolve_session_dir(session_id) / "session.json"
+        self._write_session_file(session_file, existing)
+        self._notify_changed("update", session_id)
         return existing
 
     async def update(self, session_id: str, session: SessionUpdateRequest) -> SessionDTO:
@@ -193,6 +295,18 @@ class SessionService:
             self._config_service.validate_agent_id(session.agent_id)
 
         update_data = session.model_dump(exclude_unset=True)
+        target_agent_id = update_data.get("agent_id", existing.current_agent_id)
+        requested_provider_id = update_data.get("provider_id")
+        if "agent_id" in update_data and "provider_id" not in update_data:
+            requested_provider_id = None
+        if "agent_id" in update_data or "provider_id" in update_data:
+            update_data["current_provider_id"] = (
+                self._config_service.resolve_agent_provider_id(
+                    target_agent_id,
+                    requested_provider_id,
+                )
+            )
+        update_data.pop("provider_id", None)
 
         if "parent_session_id" in update_data:
             requested_parent_id = update_data["parent_session_id"]
@@ -225,11 +339,172 @@ class SessionService:
 
         existing.updated_at = datetime.now(timezone.utc)
 
-        session_file = get_session_file(session_id)
-        with open(session_file, "w", encoding="utf-8") as f:
-            json.dump(existing.model_dump(), f, ensure_ascii=False, indent=2, default=str)
+        should_rename_physical_node = (
+            "title" in update_data and existing.title_source != "auto"
+        )
+        should_relocate_parent = "parent_session_id" in update_data
 
+        async def persist_update() -> None:
+            session_dir = self._path_resolver.resolve_session_dir(session_id)
+            if should_relocate_parent or should_rename_physical_node:
+                current_node = self._path_resolver.get_node(session_id)
+                target_parent_node_id = current_node.parent_node_id
+                if should_relocate_parent:
+                    requested_parent_id = existing.parent_session_id
+                    if requested_parent_id is not None:
+                        target_parent_node_id = requested_parent_id
+                    else:
+                        target_parent_node_id = self._unbound_target_node_id(
+                            current_node.parent_node_id
+                        )
+                        existing.parent_session_id = (
+                            self._path_resolver.nearest_session_ancestor(
+                                target_parent_node_id
+                            )
+                        )
+                moved = self._path_resolver.relocate_session(
+                    session_id=session_id,
+                    parent_node_id=target_parent_node_id,
+                    name=existing.title,
+                    manifest=existing.model_dump(mode="json"),
+                )
+                session_dir = moved.path
+            else:
+                self._write_session_file(session_dir / "session.json", existing)
+                self._path_resolver.refresh()
+
+        requires_physical_move = should_relocate_parent or should_rename_physical_node
+        affected_session_ids = self._path_resolver.descendant_session_ids(
+            session_id,
+            include_self=True,
+        )
+        if requires_physical_move and self._job_service is not None:
+            await self._job_service.run_sessions_idle_operation(
+                affected_session_ids,
+                persist_update,
+            )
+        else:
+            await persist_update()
+        self._notify_changed("update", session_id)
         return existing
+
+    def _unbound_target_node_id(self, current_parent_node_id: str | None) -> str | None:
+        current_id = current_parent_node_id
+        visited: set[str] = set()
+        while current_id is not None:
+            if current_id in visited:
+                raise RuntimeError(f"物理目录索引包含循环: {current_id}")
+            visited.add(current_id)
+            node = self._path_resolver.get_node(current_id)
+            if node.kind == "session":
+                return node.parent_node_id
+            nearest_parent = self._path_resolver.nearest_session_ancestor(current_id)
+            if nearest_parent is None:
+                return current_id
+            current_id = node.parent_node_id
+        return None
+
+    async def move_to_folder(
+        self,
+        session_id: str,
+        folder_id: str | None,
+    ) -> SessionDTO:
+        existing = await self.get(session_id)
+        if folder_id is not None:
+            folder = self._path_resolver.get_node(folder_id)
+            if folder.kind != "folder":
+                raise ValueError(f"目标节点不是会话文件夹: {folder_id}")
+        target_parent_session_id = self._path_resolver.nearest_session_ancestor(folder_id)
+        await self._validate_parent_session(
+            session_id=session_id,
+            workspace_id=existing.workspace_id,
+            parent_session_id=target_parent_session_id,
+        )
+        if (
+            existing.kind != "normal"
+            and target_parent_session_id is not None
+            and target_parent_session_id != existing.parent_session_id
+        ):
+            raise ValueError(
+                f"{existing.kind} 会话不能移动到另一个父会话的目录下"
+            )
+        if existing.kind == "context_fork" and target_parent_session_id is None:
+            existing.kind = "normal"
+        existing.parent_session_id = target_parent_session_id
+        existing.updated_at = datetime.now(timezone.utc)
+
+        async def move() -> None:
+            self._path_resolver.relocate_session(
+                session_id=session_id,
+                parent_node_id=folder_id,
+                name=existing.title,
+                manifest=existing.model_dump(mode="json"),
+            )
+
+        affected_session_ids = self._path_resolver.descendant_session_ids(
+            session_id,
+            include_self=True,
+        )
+        if self._job_service is None:
+            await move()
+        else:
+            await self._job_service.run_sessions_idle_operation(
+                affected_session_ids,
+                move,
+            )
+        self._notify_changed("update", session_id)
+        return existing
+
+    async def relocate_folder_tree(
+        self,
+        *,
+        folder_id: str,
+        parent_node_id: str | None,
+        name: str,
+    ) -> SessionPhysicalNode:
+        """准备文件夹子树中的会话父关系，再交给 resolver 原子移动。"""
+        expected_parents = self._path_resolver.expected_session_parents_after_folder_move(
+            folder_id=folder_id,
+            parent_node_id=parent_node_id,
+        )
+        manifests: dict[str, dict[str, object]] = {}
+        changed_session_ids: list[str] = []
+        for session_id, expected_parent_id in expected_parents.items():
+            existing = await self.get(session_id)
+            await self._validate_parent_session(
+                session_id=session_id,
+                workspace_id=existing.workspace_id,
+                parent_session_id=expected_parent_id,
+            )
+            if (
+                existing.kind != "normal"
+                and expected_parent_id is not None
+                and expected_parent_id != existing.parent_session_id
+            ):
+                raise ValueError(
+                    f"{existing.kind} 会话不能随文件夹改绑到另一个父会话: "
+                    f"session_id={session_id}"
+                )
+            if existing.parent_session_id != expected_parent_id:
+                existing.parent_session_id = expected_parent_id
+                existing.updated_at = datetime.now(timezone.utc)
+                changed_session_ids.append(session_id)
+            if existing.kind == "context_fork" and expected_parent_id is None:
+                existing.kind = "normal"
+                if session_id not in changed_session_ids:
+                    existing.updated_at = datetime.now(timezone.utc)
+                    changed_session_ids.append(session_id)
+            manifests[session_id] = existing.model_dump(mode="json")
+
+        moved = self._path_resolver.relocate_folder_tree(
+            folder_id=folder_id,
+            parent_node_id=parent_node_id,
+            name=name,
+            session_manifests=manifests,
+        )
+        for session_id in changed_session_ids:
+            self._notify_changed("update", session_id)
+        return moved
 
     async def _validate_parent_session(
         self,
@@ -259,27 +534,59 @@ class SessionService:
                 raise ValueError("父子会话必须属于同一个工作区")
             ancestor_id = ancestor.parent_session_id
 
-    async def delete(self, session_id: str) -> DeleteSessionResultDTO:
-        session_dir = get_session_path(session_id)
+    async def delete(
+        self,
+        session_id: str,
+        *,
+        cascade: bool = False,
+    ) -> DeleteSessionResultDTO:
+        try:
+            session_dir = self._path_resolver.resolve_session_dir(session_id)
+        except KeyError as error:
+            raise NotFoundError(f"Session {session_id} not found") from error
 
+        physical_children = self._path_resolver.child_nodes(session_id)
+        descendant_session_ids = self._path_resolver.descendant_session_ids(session_id)
+        if physical_children and not cascade:
+            child_ids = ",".join(
+                sorted(child.node_id for child in physical_children)
+            )
+            raise RuntimeError(
+                "会话包含物理子树，必须显式确认级联删除: "
+                f"session_id={session_id}, children={child_ids}"
+            )
         if not session_dir.exists():
             raise NotFoundError(f"Session {session_id} not found")
 
-        sessions = await self.list(limit=100_000)
-        direct_children = [
-            session
-            for session in sessions.items
-            if session.parent_session_id == session_id
-        ]
-        for child in direct_children:
-            await self.update(
-                child.session_id,
-                SessionUpdateRequest(parent_session_id=None),
-            )
-
-        import shutil
         shutil.rmtree(session_dir)
+        self._path_resolver.refresh()
+        for descendant_session_id in descendant_session_ids:
+            self._notify_changed("delete", descendant_session_id)
+        self._notify_changed("delete", session_id)
         return DeleteSessionResultDTO(session_id=session_id, status="deleted")
+
+    @staticmethod
+    def _write_session_file(path: Path, session: SessionDTO) -> None:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            dir=path.parent,
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                json.dump(
+                    session.model_dump(),
+                    file,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                )
+                file.write("\n")
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     async def control(self, session_id: str, action: str, payload: dict = None) -> SessionControlResultDTO:
         await self.get(session_id)
@@ -289,9 +596,14 @@ class SessionService:
         self,
         session_id: str,
         after_event_id: str | None = None,
+        tail_limit: int | None = None,
     ) -> list[TraceEventDTO]:
         await self.get(session_id)
-        events = self._trace_event_store.read_events(session_id, after_event_id)
+        events = self._trace_event_store.read_events(
+            session_id,
+            after_event_id,
+            tail_limit,
+        )
         mapper = TraceEventMapper()
         return mapper.map_many([event.model_dump() for event in events], session_id=session_id)
 

@@ -436,10 +436,9 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
             "name": "invoke_custom_tool",
             "data": {
                 "input": {
-                    "tool_name": "read_session_recent_text_messages",
+                    "tool_name": "read_context",
                     "arguments": {
-                        "workspace_id": "gw_typo",
-                        "session_id": "ses_target",
+                        "resource": "boxteam://workspace/gw_typo/session/ses_target",
                     },
                 }
             },

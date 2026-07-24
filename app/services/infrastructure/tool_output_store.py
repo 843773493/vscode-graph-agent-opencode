@@ -10,12 +10,13 @@ from pathlib import Path
 
 from langchain_core.messages import ToolMessage
 
-from app.core.path_utils import safe_join
+from app.core.path_utils import get_session_path_resolver
 
 
 DEFAULT_MAX_OUTPUT_LINES = 2_000
 DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024
 TOOL_OUTPUT_ARTIFACT_KEY = "tool_output"
+SESSION_ARTIFACT_SCHEME = "boxteam-session://"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,9 @@ class ToolOutputStore:
         if max_bytes < 1_024:
             raise ValueError("tool output max_bytes 不能小于 1024")
         self._workspace_root = workspace_root.resolve()
+        self._path_resolver = get_session_path_resolver(
+            self._workspace_root / ".boxteam" / "sessions"
+        )
         self._max_lines = max_lines
         self._max_bytes = max_bytes
 
@@ -77,8 +81,10 @@ class ToolOutputStore:
             tool_call_id=tool_call_id,
         )
         _write_exact_output(output_path, encoded)
-        relative_path = output_path.relative_to(self._workspace_root).as_posix()
-        read_path = f"/{relative_path}"
+        relative_path = (
+            f"{SESSION_ARTIFACT_SCHEME}{session_id}/tool-results/{output_path.name}"
+        )
+        read_path = f"/session-artifacts/{session_id}/tool-results/{output_path.name}"
         reference = ToolOutputReference(
             type="tool_output",
             path=relative_path,
@@ -130,8 +136,7 @@ class ToolOutputStore:
         )
 
     def _output_path(self, *, session_id: str, tool_call_id: str) -> Path:
-        sessions_root = self._workspace_root / ".boxteam" / "sessions"
-        session_root = safe_join(sessions_root, session_id)
+        session_root = self._path_resolver.resolve_session_dir(session_id)
         output_dir = session_root / "tool-results"
         filename_digest = hashlib.sha256(tool_call_id.encode("utf-8")).hexdigest()[:24]
         return output_dir / f"tool_{filename_digest}.txt"

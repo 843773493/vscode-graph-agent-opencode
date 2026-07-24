@@ -4,42 +4,62 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from app.abstractions.session_context import (
     SessionContextMessageSourceProtocol,
+    SessionInformationSourceProtocol,
     SessionLookupProtocol,
 )
+from app.schemas.public_v2.session import SessionDTO
 from app.schemas.public_v2.session_context import (
-    SessionContextGrepResultDTO,
-    SessionContextLineDTO,
-    SessionContextMatchDTO,
+    SessionContextItemDTO,
+    SessionContextReadRequest,
     SessionContextReadResultDTO,
-    SessionContextSnapshotMetadataDTO,
-    SessionRecentAssistantTextMessageDTO,
-    SessionRecentTextMessagesDTO,
-    SessionRecentTextMessageDTO,
-    SessionRecentUserTextMessageDTO,
+    SessionContextSearchMatchDTO,
+    SessionContextSearchRequest,
+    SessionContextSearchResultDTO,
+    SessionContextSearchSource,
+)
+from app.services.business.session_context_projection import (
+    is_effective_user,
+    paginate_read_items,
+    project_record_items,
+    public_session_data,
+    sessions_revision,
+    tool_summary,
+    visible_text,
+)
+from app.services.business.session_context_resource import (
+    ParsedSessionContextResource,
+    SessionContextCursorCodec,
+    parse_session_context_resource,
+    require_session_context_revision,
+    validate_session_context_read_view,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class _SessionContextSnapshot:
+    resource: str
     session_id: str
-    snapshot_id: str
-    content_sha256: str
-    generated_at: str
+    revision: str
     records: list[dict[str, object]]
-    lines: list[str]
-    byte_count: int
     raw_message_count: int
     compacted: bool
     compaction_cutoff: int | None
-    history_file_path: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchCandidate:
+    locator: str
+    source: SessionContextSearchSource
+    text: str
+    revision: str
+    record_index: int | None = None
 
 
 class SessionContextQueryService:
-    """查询会话当前有效模型上下文，并提供稳定的快照一致性语义。"""
+    """提供类似 read/grep 的渐进式结构化上下文查询。"""
 
     def __init__(
         self,
@@ -49,286 +69,503 @@ class SessionContextQueryService:
     ) -> None:
         self._message_source = message_source
         self._session_lookup = session_lookup
+        self._information_source: SessionInformationSourceProtocol | None = None
 
-    async def recent_text(
+    def bind_information_source(
         self,
-        session_id: str,
-        *,
-        rounds: int = 5,
-    ) -> SessionRecentTextMessagesDTO:
-        if rounds < 1 or rounds > 50:
-            raise ValueError("rounds 必须在 1-50 之间")
-        snapshot = await self._load_snapshot(session_id)
-        messages = self._select_recent_user_rounds_with_assistant_text(
-            snapshot.records,
-            rounds,
-        )
-        return SessionRecentTextMessagesDTO(
-            session_id=snapshot.session_id,
-            rounds=rounds,
-            user_message_count=sum(
-                1 for message in messages if message.role == "user"
-            ),
-            context_snapshot=self._snapshot_metadata(snapshot),
-            messages=messages,
-        )
+        information_source: SessionInformationSourceProtocol,
+    ) -> None:
+        """延迟绑定组合服务，避免容器构造形成循环依赖。"""
 
-    async def grep(
+        self._information_source = information_source
+
+    async def read_context(
         self,
-        session_id: str,
-        *,
-        pattern: str,
-        case_sensitive: bool = False,
-        max_matches: int = 20,
-        expected_snapshot_id: str | None = None,
-    ) -> SessionContextGrepResultDTO:
-        if not pattern:
-            raise ValueError("pattern 不能为空")
-        if max_matches < 1 or max_matches > 200:
-            raise ValueError("max_matches 必须在 1-200 之间")
-        flags = 0 if case_sensitive else re.IGNORECASE
-        try:
-            expression = re.compile(pattern, flags)
-        except re.error as error:
-            raise ValueError(f"pattern 不是有效正则表达式: {error}") from error
+        request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO:
+        resource = parse_session_context_resource(request.resource)
+        validate_session_context_read_view(resource, request.view)
 
-        snapshot = await self._load_snapshot(session_id)
-        matches: list[SessionContextMatchDTO] = []
-        total_matching_lines = 0
-        for index, line in enumerate(snapshot.lines, start=1):
-            match = expression.search(line)
-            if match is None:
-                continue
-            total_matching_lines += 1
-            if len(matches) >= max_matches:
-                continue
-            preview_start = max(0, match.start() - 180)
-            preview_end = min(len(line), match.end() + 180)
-            matches.append(
-                SessionContextMatchDTO(
-                    line_number=index,
-                    match_start=match.start() + 1,
-                    match_end=match.end(),
-                    preview=line[preview_start:preview_end],
-                    preview_truncated_left=preview_start > 0,
-                    preview_truncated_right=preview_end < len(line),
-                    line_sha256=hashlib.sha256(line.encode("utf-8")).hexdigest(),
-                )
+        if resource.kind == "workspace_sessions":
+            return await self._read_inventory(resource, request)
+
+        snapshot = await self._load_snapshot(resource)
+        require_session_context_revision(request.expected_revision, snapshot.revision)
+        offset, char_offset = SessionContextCursorCodec.decode(
+            request.cursor,
+            resource=resource.canonical,
+            revision=snapshot.revision,
+            operation=f"read:{request.view}",
+        )
+
+        if resource.selector is not None:
+            items = await self._selected_locator_items(snapshot, resource, request)
+        elif request.view == "information":
+            items = [await self._information_item(snapshot)]
+        elif request.view == "overview":
+            items = await self._overview_items(snapshot, request)
+        else:
+            items = project_record_items(
+                resource=snapshot.resource,
+                records=snapshot.records,
+                include=set(request.include),
+                messages_only=request.view == "messages",
             )
+        return paginate_read_items(
+            request=request,
+            resource=resource.canonical,
+            revision=snapshot.revision,
+            items=items,
+            offset=offset,
+            char_offset=char_offset,
+            compacted=snapshot.compacted,
+            compaction_cutoff=snapshot.compaction_cutoff,
+            raw_message_count=snapshot.raw_message_count,
+            effective_record_count=len(snapshot.records),
+        )
 
-        return SessionContextGrepResultDTO(
-            session_id=snapshot.session_id,
-            pattern=pattern,
-            case_sensitive=case_sensitive,
-            context_snapshot=self._snapshot_metadata(
-                snapshot,
-                expected_snapshot_id,
-            ),
-            total_matching_lines=total_matching_lines,
-            returned_match_count=len(matches),
-            matches_truncated=total_matching_lines > len(matches),
+    async def _selected_locator_items(
+        self,
+        snapshot: _SessionContextSnapshot,
+        resource: ParsedSessionContextResource,
+        request: SessionContextReadRequest,
+    ) -> list[SessionContextItemDTO]:
+        selector = resource.selector
+        if selector == "information":
+            return [await self._information_item(snapshot)]
+        if selector is None or not selector.startswith("record="):
+            raise ValueError(f"不支持的 context locator: {resource.canonical}")
+        record_index = int(selector.removeprefix("record="))
+        if record_index >= len(snapshot.records):
+            raise ValueError(
+                f"record locator 越界: index={record_index}, total={len(snapshot.records)}"
+            )
+        return project_record_items(
+            resource=snapshot.resource,
+            records=snapshot.records,
+            include=set(request.include),
+            messages_only=False,
+            indexes=[record_index],
+        )
+
+    async def search_context(
+        self,
+        request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO:
+        resource = parse_session_context_resource(request.resource)
+        if resource.selector is not None:
+            raise ValueError("search_context 的 resource 必须是资源根，不接受 record locator")
+        candidates, revision = await self._search_candidates(resource, request.sources)
+        require_session_context_revision(request.expected_revision, revision)
+        query_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "query": request.query,
+                    "sources": request.sources,
+                    "match_mode": request.match_mode,
+                    "case_sensitive": request.case_sensitive,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        offset, char_offset = SessionContextCursorCodec.decode(
+            request.cursor,
+            resource=resource.canonical,
+            revision=revision,
+            operation=f"search:{query_hash}",
+        )
+        if char_offset != 0:
+            raise ValueError("search cursor 不支持 item 内字符偏移")
+        expression = self._compile_search_expression(request)
+        found: list[tuple[_SearchCandidate, re.Match[str]]] = []
+        for candidate in candidates:
+            match = expression.search(candidate.text)
+            if match is not None:
+                found.append((candidate, match))
+
+        selected = found[offset:offset + request.max_results]
+        matches: list[SessionContextSearchMatchDTO] = []
+        budget_truncated = False
+        for candidate, match in selected:
+            preview_start = max(0, match.start() - 180)
+            preview_end = min(len(candidate.text), match.end() + 180)
+            preview = candidate.text[preview_start:preview_end]
+            dto = SessionContextSearchMatchDTO(
+                locator=candidate.locator,
+                preview=preview,
+                source=candidate.source,
+                revision=candidate.revision,
+                record_index=candidate.record_index,
+                match_start=match.start(),
+                match_end=match.end(),
+            )
+            candidate_result = self._build_search_result(
+                request=request,
+                resource=resource.canonical,
+                revision=revision,
+                query_hash=query_hash,
+                matches=[*matches, dto],
+                offset=offset,
+                total_matches=len(found),
+                budget_truncated=budget_truncated,
+            )
+            if candidate_result.returned_chars <= request.max_chars:
+                matches.append(dto)
+                continue
+            if matches:
+                budget_truncated = True
+                break
+            clipped = self._largest_fitting_search_match(
+                request=request,
+                resource=resource.canonical,
+                revision=revision,
+                query_hash=query_hash,
+                match=dto,
+                offset=offset,
+                total_matches=len(found),
+            )
+            if clipped is None:
+                raise ValueError("max_chars 太小，无法返回包含 locator 的最小搜索结果")
+            matches.append(clipped)
+            budget_truncated = True
+        result = self._build_search_result(
+            request=request,
+            resource=resource.canonical,
+            revision=revision,
+            query_hash=query_hash,
+            matches=matches,
+            offset=offset,
+            total_matches=len(found),
+            budget_truncated=budget_truncated,
+        )
+        if result.returned_chars > request.max_chars:
+            raise RuntimeError("上下文搜索器生成了超过 max_chars 的响应")
+        return result
+
+    @classmethod
+    def _largest_fitting_search_match(
+        cls,
+        *,
+        request: SessionContextSearchRequest,
+        resource: str,
+        revision: str,
+        query_hash: str,
+        match: SessionContextSearchMatchDTO,
+        offset: int,
+        total_matches: int,
+    ) -> SessionContextSearchMatchDTO | None:
+        low = 0
+        high = len(match.preview)
+        best: SessionContextSearchMatchDTO | None = None
+        while low <= high:
+            length = (low + high) // 2
+            clipped = match.model_copy(update={"preview": match.preview[:length]})
+            result = cls._build_search_result(
+                request=request,
+                resource=resource,
+                revision=revision,
+                query_hash=query_hash,
+                matches=[clipped],
+                offset=offset,
+                total_matches=total_matches,
+                budget_truncated=True,
+            )
+            if result.returned_chars <= request.max_chars:
+                best = clipped
+                low = length + 1
+            else:
+                high = length - 1
+        return best
+
+    @staticmethod
+    def _build_search_result(
+        *,
+        request: SessionContextSearchRequest,
+        resource: str,
+        revision: str,
+        query_hash: str,
+        matches: list[SessionContextSearchMatchDTO],
+        offset: int,
+        total_matches: int,
+        budget_truncated: bool,
+    ) -> SessionContextSearchResultDTO:
+        consumed = len(matches)
+        has_more = offset + consumed < total_matches
+        next_cursor = None
+        if has_more:
+            next_cursor = SessionContextCursorCodec.encode(
+                resource=resource,
+                revision=revision,
+                operation=f"search:{query_hash}",
+                offset=offset + consumed,
+            )
+        result = SessionContextSearchResultDTO(
+            resource=resource,
+            query=request.query,
+            match_mode=request.match_mode,
+            revision=revision,
+            truncated=budget_truncated or has_more,
+            has_more=has_more,
+            next_cursor=next_cursor,
+            total_matches=total_matches,
             matches=matches,
         )
+        for _ in range(8):
+            length = len(result.model_dump_json())
+            if result.returned_chars == length:
+                return result
+            result.returned_chars = length
+        raise RuntimeError("无法稳定计算 search_context 响应字符数")
 
-    async def read_lines(
+    async def _overview_items(
         self,
-        session_id: str,
-        *,
-        line_start: int = 1,
-        line_count: int = 20,
-        max_chars_per_line: int = 4000,
-        expected_snapshot_id: str | None = None,
-    ) -> SessionContextReadResultDTO:
-        if line_start < 1:
-            raise ValueError("line_start 必须大于等于 1")
-        if line_count < 1 or line_count > 200:
-            raise ValueError("line_count 必须在 1-200 之间")
-        if max_chars_per_line < 200 or max_chars_per_line > 20_000:
-            raise ValueError("max_chars_per_line 必须在 200-20000 之间")
+        snapshot: _SessionContextSnapshot,
+        request: SessionContextReadRequest,
+    ) -> list[SessionContextItemDTO]:
+        session = await self._session_lookup.get(snapshot.session_id)
+        items = [
+            SessionContextItemDTO(
+                kind="session",
+                locator=snapshot.resource,
+                data=public_session_data(session),
+            )
+        ]
+        user_indexes = [
+            index
+            for index, record in enumerate(snapshot.records)
+            if is_effective_user(record)
+        ]
+        selected_indexes: list[int] = []
+        if request.include_initial_goal and user_indexes:
+            selected_indexes.append(user_indexes[0])
+        if user_indexes:
+            recent_start = (
+                user_indexes[-request.recent_rounds]
+                if len(user_indexes) >= request.recent_rounds
+                else user_indexes[0]
+            )
+            selected_indexes.extend(range(recent_start, len(snapshot.records)))
 
-        snapshot = await self._load_snapshot(session_id)
-        start_index = min(line_start - 1, len(snapshot.lines))
-        selected = snapshot.lines[start_index:start_index + line_count]
-        lines: list[SessionContextLineDTO] = []
-        for offset, line in enumerate(selected):
-            clipped = line[:max_chars_per_line]
-            lines.append(
-                SessionContextLineDTO(
-                    line_number=start_index + offset + 1,
-                    text=clipped,
-                    original_chars=len(line),
-                    truncated=len(clipped) < len(line),
-                    line_sha256=hashlib.sha256(line.encode("utf-8")).hexdigest(),
+        seen: set[int] = set()
+        unique_indexes: list[int] = []
+        for index in selected_indexes:
+            if index not in seen:
+                seen.add(index)
+                unique_indexes.append(index)
+        record_items = project_record_items(
+            resource=snapshot.resource,
+            records=snapshot.records,
+            include=set(request.include),
+            messages_only=True,
+            indexes=unique_indexes,
+        )
+        items.extend(record_items)
+        if self._information_source is not None:
+            information = await self._information_source.get_information(snapshot.session_id)
+            items.append(
+                SessionContextItemDTO(
+                    kind="execution",
+                    locator=f"{snapshot.resource}#information/execution",
+                    data=information.execution.model_dump(mode="json"),
                 )
             )
-        line_end = start_index + len(selected)
-        return SessionContextReadResultDTO(
-            session_id=snapshot.session_id,
-            context_snapshot=self._snapshot_metadata(
-                snapshot,
-                expected_snapshot_id,
-            ),
-            line_start=line_start,
-            line_end=line_end,
-            has_more=line_end < len(snapshot.lines),
-            next_line_start=(
-                line_end + 1 if line_end < len(snapshot.lines) else None
-            ),
-            lines=lines,
+        return items
+
+    async def _information_item(
+        self,
+        snapshot: _SessionContextSnapshot,
+    ) -> SessionContextItemDTO:
+        if self._information_source is None:
+            raise RuntimeError(
+                "SessionContextQueryService 尚未绑定 information source，无法读取 information view"
+            )
+        information = await self._information_source.get_information(snapshot.session_id)
+        return SessionContextItemDTO(
+            kind="information",
+            locator=f"{snapshot.resource}#information",
+            data=information.model_dump(mode="json"),
         )
 
-    async def _load_snapshot(self, session_id: str) -> _SessionContextSnapshot:
-        target_session_id = session_id.strip()
-        if not target_session_id:
-            raise ValueError("session_id 不能为空")
-
-        await self._session_lookup.get(target_session_id)
-        state = await self._message_source.get_agent_context_state(target_session_id)
-        lines = [
-            json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-            for record in state["records"]
+    async def _read_inventory(
+        self,
+        resource: ParsedSessionContextResource,
+        request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO:
+        # workspace_id 由 Gateway 路由决定；远程投影 ID 与目标后端本地 ID 不同，
+        # 目标后端只查询自己的 Session，不再用投影 ID 二次过滤。
+        sessions = await self._list_sessions(None)
+        revision = sessions_revision(sessions)
+        require_session_context_revision(request.expected_revision, revision)
+        offset, char_offset = SessionContextCursorCodec.decode(
+            request.cursor,
+            resource=resource.canonical,
+            revision=revision,
+            operation="read:inventory",
+        )
+        items = [
+            SessionContextItemDTO(
+                kind="session",
+                locator=(
+                    f"boxteam://workspace/{resource.workspace_id}/session/"
+                    f"{session.session_id}"
+                ),
+                data=public_session_data(session),
+            )
+            for session in sessions
         ]
-        encoded = "\n".join(lines).encode("utf-8")
-        content_sha256 = hashlib.sha256(encoded).hexdigest()
+        return paginate_read_items(
+            request=request,
+            resource=resource.canonical,
+            revision=revision,
+            items=items,
+            offset=offset,
+            char_offset=char_offset,
+        )
+
+    async def _search_candidates(
+        self,
+        resource: ParsedSessionContextResource,
+        sources: list[SessionContextSearchSource],
+    ) -> tuple[list[_SearchCandidate], str]:
+        if not sources:
+            raise ValueError("sources 不能为空")
+        candidates: list[_SearchCandidate] = []
+        revisions: list[str] = []
+        if resource.kind == "session":
+            snapshot = await self._load_snapshot(resource)
+            revisions.append(snapshot.revision)
+            if "session_catalog" in sources:
+                session = await self._session_lookup.get(snapshot.session_id)
+                candidates.append(
+                    _SearchCandidate(
+                        locator=snapshot.resource,
+                        source="session_catalog",
+                        text=json.dumps(
+                            public_session_data(session), ensure_ascii=False
+                        ),
+                        revision=snapshot.revision,
+                    )
+                )
+            await self._append_session_search_candidates(
+                candidates,
+                snapshot,
+                sources,
+            )
+            return candidates, snapshot.revision
+        else:
+            # Gateway 已经把请求路由到目标工作区，公开的投影 workspace_id
+            # 只用于稳定 locator，不能拿来过滤目标后端的本地 workspace_id。
+            sessions = await self._list_sessions(None)
+            revisions.append(sessions_revision(sessions))
+            for session in sessions:
+                session_id = session.session_id
+                session_resource = parse_session_context_resource(
+                    f"boxteam://workspace/{resource.workspace_id}/session/{session_id}"
+                )
+                snapshot = await self._load_snapshot(session_resource)
+                revisions.append(snapshot.revision)
+                if "session_catalog" in sources:
+                    candidates.append(
+                        _SearchCandidate(
+                            locator=(
+                                f"boxteam://workspace/{resource.workspace_id}/session/"
+                                f"{session_id}"
+                            ),
+                            source="session_catalog",
+                            text=json.dumps(
+                                public_session_data(session), ensure_ascii=False
+                            ),
+                            revision=snapshot.revision,
+                        )
+                    )
+                if {"effective_context", "session_information"}.intersection(sources):
+                    await self._append_session_search_candidates(
+                        candidates,
+                        snapshot,
+                        sources,
+                    )
+        revision = hashlib.sha256("\n".join(revisions).encode("utf-8")).hexdigest()
+        return candidates, revision
+
+    async def _append_session_search_candidates(
+        self,
+        candidates: list[_SearchCandidate],
+        snapshot: _SessionContextSnapshot,
+        sources: list[SessionContextSearchSource],
+    ) -> None:
+        if "effective_context" in sources:
+            for index, record in enumerate(snapshot.records):
+                text = visible_text(record)
+                summary = tool_summary(record)
+                searchable = "\n".join([text, *summary]).strip()
+                if searchable:
+                    candidates.append(
+                        _SearchCandidate(
+                            locator=f"{snapshot.resource}#record={index}",
+                            source="effective_context",
+                            text=searchable,
+                            revision=snapshot.revision,
+                            record_index=index,
+                        )
+                    )
+        if "session_information" in sources:
+            if self._information_source is None:
+                raise RuntimeError(
+                    "SessionContextQueryService 尚未绑定 information source，"
+                    "无法搜索 session_information"
+                )
+            information = await self._information_source.get_information(
+                snapshot.session_id
+            )
+            candidates.append(
+                _SearchCandidate(
+                    locator=f"{snapshot.resource}#information",
+                    source="session_information",
+                    text=information.model_dump_json(),
+                    revision=snapshot.revision,
+                )
+            )
+
+    async def _load_snapshot(
+        self,
+        resource: ParsedSessionContextResource,
+    ) -> _SessionContextSnapshot:
+        if resource.session_id is None:
+            raise ValueError(f"资源不是 session: {resource.canonical}")
+        await self._session_lookup.get(resource.session_id)
+        state = await self._message_source.get_agent_context_state(resource.session_id)
+        encoded = json.dumps(
+            state["records"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        content_revision = hashlib.sha256(encoded).hexdigest()
         checkpoint_id = state["checkpoint_id"].strip()
+        revision = checkpoint_id or f"content:{content_revision}"
         return _SessionContextSnapshot(
-            session_id=target_session_id,
-            snapshot_id=checkpoint_id or f"content:{content_sha256}",
-            content_sha256=content_sha256,
-            generated_at=datetime.now(UTC).isoformat(),
+            resource=resource.base,
+            session_id=resource.session_id,
+            revision=revision,
             records=state["records"],
-            lines=lines,
-            byte_count=len(encoded),
             raw_message_count=state["raw_message_count"],
             compacted=state["compacted"],
             compaction_cutoff=state["compaction_cutoff"],
-            history_file_path=state["history_file_path"],
         )
 
     @staticmethod
-    def _snapshot_metadata(
-        snapshot: _SessionContextSnapshot,
-        expected_snapshot_id: str | None = None,
-    ) -> SessionContextSnapshotMetadataDTO:
-        if expected_snapshot_id is None:
-            consistency = "not_checked"
-            warning = None
-        elif expected_snapshot_id == snapshot.snapshot_id:
-            consistency = "matched"
-            warning = None
-        else:
-            consistency = "changed"
-            warning = (
-                "目标 session 上下文已变化；当前结果来自新快照，"
-                "不要与旧 grep/read 结果按行号拼接。"
-            )
-        return SessionContextSnapshotMetadataDTO(
-            snapshot_id=snapshot.snapshot_id,
-            content_sha256=snapshot.content_sha256,
-            generated_at=snapshot.generated_at,
-            line_count=len(snapshot.lines),
-            raw_message_count=snapshot.raw_message_count,
-            byte_count=snapshot.byte_count,
-            compacted=snapshot.compacted,
-            compaction_cutoff=snapshot.compaction_cutoff,
-            history_file_path=snapshot.history_file_path,
-            expected_snapshot_id=expected_snapshot_id,
-            consistency=consistency,
-            warning=warning,
+    def _compile_search_expression(request: SessionContextSearchRequest) -> re.Pattern[str]:
+        pattern = re.escape(request.query) if request.match_mode == "literal" else request.query
+        flags = 0 if request.case_sensitive else re.IGNORECASE
+        try:
+            return re.compile(pattern, flags)
+        except re.error as error:
+            raise ValueError(f"query 不是有效正则表达式: {error}") from error
+
+    async def _list_sessions(self, workspace_id: str | None) -> list[SessionDTO]:
+        result = await self._session_lookup.list(
+            workspace_id=workspace_id,
+            limit=100_000,
         )
-
-    @staticmethod
-    def _content_text(
-        content: object,
-        *,
-        assistant_text_blocks_only: bool,
-    ) -> str:
-        if isinstance(content, str):
-            return content.strip()
-        if not isinstance(content, list):
-            return ""
-
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                if not assistant_text_blocks_only:
-                    parts.append(item)
-                continue
-            if not isinstance(item, dict):
-                continue
-            item_type = item.get("type")
-            if assistant_text_blocks_only and item_type != "text":
-                continue
-            if not assistant_text_blocks_only and item_type not in {
-                None,
-                "text",
-                "input_text",
-            }:
-                continue
-            text = item.get("text")
-            if isinstance(text, str) and text.strip():
-                parts.append(text.strip())
-        return "\n".join(parts).strip()
-
-    @classmethod
-    def _is_user_record(cls, record: dict[str, object]) -> bool:
-        role = record.get("role")
-        message_type = record.get("type")
-        text = cls._content_text(
-            record.get("content"),
-            assistant_text_blocks_only=False,
-        )
-        return (
-            (role == "user" or message_type == "human")
-            and bool(text)
-            and not text.strip().startswith("<system_reminder>")
-        )
-
-    @staticmethod
-    def _is_assistant_record(record: dict[str, object]) -> bool:
-        return record.get("role") == "assistant" or record.get("type") == "ai"
-
-    @classmethod
-    def _select_recent_user_rounds_with_assistant_text(
-        cls,
-        records: list[dict[str, object]],
-        rounds: int,
-    ) -> list[SessionRecentTextMessageDTO]:
-        user_indexes = [
-            index
-            for index, record in enumerate(records)
-            if cls._is_user_record(record)
-        ]
-        if not user_indexes:
-            return []
-
-        start_index = (
-            user_indexes[-rounds]
-            if len(user_indexes) > rounds
-            else user_indexes[0]
-        )
-        selected: list[SessionRecentTextMessageDTO] = []
-        for record in records[start_index:]:
-            if cls._is_user_record(record):
-                selected.append(
-                    SessionRecentUserTextMessageDTO(
-                        text=cls._content_text(
-                            record.get("content"),
-                            assistant_text_blocks_only=False,
-                        ),
-                    )
-                )
-                continue
-            if not cls._is_assistant_record(record) or record.get("tool_calls"):
-                continue
-            text = cls._content_text(
-                record.get("content"),
-                assistant_text_blocks_only=True,
-            )
-            if text:
-                selected.append(
-                    SessionRecentAssistantTextMessageDTO(
-                        text=text,
-                    )
-                )
-        return selected
+        return result.items

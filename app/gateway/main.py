@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,6 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.env import get_project_root, load_project_env
+from app.core.logging_config import configure_application_logging
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import TraceMiddleware, get_request_id
 from app.gateway.auth import (
@@ -20,6 +22,13 @@ from app.gateway.auth import (
     verify_gateway_access,
     verify_gateway_token,
 )
+from app.gateway.auxiliary_proxy import router as auxiliary_proxy_router
+from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
+from app.gateway.control.coordinator import SessionGeneratorCoordinator
+from app.gateway.control.generators import SessionGeneratorStore
+from app.gateway.control.navigation import WorkspaceNavigationStore
+from app.gateway.control.router import router as gateway_control_router
+from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.credentials import (
     FederationCredential,
     FederationCredentialStore,
@@ -34,21 +43,19 @@ from app.gateway.managed_workspaces import (
     list_direct_managed_workspaces,
     remove_direct_managed_workspace,
 )
-from app.gateway.auxiliary_proxy import router as auxiliary_proxy_router
-from app.gateway.runtime.process import (
-    wait_for_http_ok,
-)
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceTarget,
 )
-from app.gateway.server.bootstrap import create_registry
-from app.gateway.server.workspace_proxy import router as workspace_proxy_router
-from app.gateway.server.static_ui import install_static_web_ui
-from app.gateway.ssh_connections import (
-    list_ssh_connection_options,
-    resolve_ssh_connection_request,
+from app.gateway.remote_gateway import (
+    refresh_remote_gateway_projections,
+    register_remote_gateway,
 )
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.process import (
+    wait_for_http_ok,
+)
+from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.schemas import (
     ActivateGatewayWorkspaceResultDTO,
     AddLocalWorkspaceRequest,
@@ -58,6 +65,8 @@ from app.gateway.schemas import (
     FederationProtocolManifestDTO,
     FederationWorkspaceDTO,
     FederationWorkspaceListDTO,
+    GatewayDirectoryEntryDTO,
+    GatewayDirectoryListDTO,
     GatewayHealthDTO,
     GatewayInboundAccessListDTO,
     GatewayInboundPeerDTO,
@@ -65,26 +74,27 @@ from app.gateway.schemas import (
     GatewayManagedWorkspaceListDTO,
     GatewayRuntimeRestartResultDTO,
     GatewayWorkspaceListDTO,
-    GatewayDirectoryEntryDTO,
-    GatewayDirectoryListDTO,
-    UpdateGatewayWorkspaceRequest,
     ReorderGatewayWorkspacesRequest,
     SshConnectionOptionListDTO,
+    UpdateGatewayWorkspaceRequest,
     WebUISettingsDTO,
     WebUISettingsUpdateDTO,
 )
-from app.gateway.remote_gateway import (
-    refresh_remote_gateway_projections,
-    register_remote_gateway,
+from app.gateway.server.bootstrap import create_registry
+from app.gateway.server.static_ui import install_static_web_ui
+from app.gateway.server.workspace_proxy import router as workspace_proxy_router
+from app.gateway.ssh_connections import (
+    list_ssh_connection_options,
+    resolve_ssh_connection_request,
 )
-from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.ui_settings import (
     merge_web_ui_settings,
     read_web_ui_settings,
 )
 from app.gateway.workspace_ids import build_workspace_id
-from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.schemas.public_v2.common import APIResponse
+
+logger = logging.getLogger(__name__)
 
 
 def _gateway_root() -> Path:
@@ -186,8 +196,10 @@ def _remote_http_error_detail(error: httpx.HTTPStatusError) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_application_logging()
     load_project_env()
     get_gateway_local_token()
+    logger.info("Gateway 日志已初始化: gateway_root=%s", _gateway_root())
     registry = await create_registry()
     app.state.registry = registry
     app.state.workspace_runtime_controller = GatewayWorkspaceRuntimeController(
@@ -196,19 +208,53 @@ async def lifespan(app: FastAPI):
         log_dir=_gateway_root() / "logs",
     )
     app.state.http_client = httpx.AsyncClient(timeout=None)
-    app.state.attach_frontend_urls = {
-        "terminal": os.environ.get(
-            "BOXTEAM_TERMINAL_FRONTEND_URL",
-            "http://127.0.0.1:8013",
-        ).rstrip("/"),
-        "browser": os.environ.get(
-            "BOXTEAM_BROWSER_FRONTEND_URL",
-            "http://127.0.0.1:8016",
-        ).rstrip("/"),
-    }
+    app.state.workspace_navigation_store = WorkspaceNavigationStore(
+        storage_path=_gateway_root() / "navigation" / "workspace-tree.json"
+    )
+    app.state.session_generator_store = SessionGeneratorStore(root=_gateway_root())
+    app.state.session_generator_coordinator = SessionGeneratorCoordinator(
+        registry=registry,
+        store=app.state.session_generator_store,
+        http_client=app.state.http_client,
+    )
+    app.state.session_catalog_search_service = GatewaySessionCatalogSearchService(
+        registry=registry,
+        http_client=app.state.http_client,
+        cache_dir=_gateway_root() / "indexes" / "session-catalogs",
+        navigation_store=app.state.workspace_navigation_store,
+    )
+    app.state.session_generator_scheduler = SessionGeneratorScheduler(
+        store=app.state.session_generator_store,
+        coordinator=app.state.session_generator_coordinator,
+    )
+    coordinator_started = False
+    catalog_search_started = False
+    scheduler_started = False
     try:
+        await app.state.session_generator_coordinator.start()
+        coordinator_started = True
+        await app.state.session_catalog_search_service.start()
+        catalog_search_started = True
+        await app.state.session_generator_scheduler.start()
+        scheduler_started = True
+        app.state.attach_frontend_urls = {
+            "terminal": os.environ.get(
+                "BOXTEAM_TERMINAL_FRONTEND_URL",
+                "http://127.0.0.1:8013",
+            ).rstrip("/"),
+            "browser": os.environ.get(
+                "BOXTEAM_BROWSER_FRONTEND_URL",
+                "http://127.0.0.1:8016",
+            ).rstrip("/"),
+        }
         yield
     finally:
+        if scheduler_started:
+            await app.state.session_generator_scheduler.stop()
+        if catalog_search_started:
+            await app.state.session_catalog_search_service.stop()
+        if coordinator_started:
+            await app.state.session_generator_coordinator.stop()
         await app.state.http_client.aclose()
         registry.close()
 
@@ -250,9 +296,14 @@ def get_workspace_runtime_controller(
 
 @app.get("/api/gateway/health", response_model=APIResponse[GatewayHealthDTO])
 async def health(
+    request: Request,
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
+    scheduler = getattr(request.app.state, "session_generator_scheduler", None)
+    if not isinstance(scheduler, SessionGeneratorScheduler):
+        raise RuntimeError("会话生成器调度器尚未初始化")
+    scheduler.assert_healthy()
     return APIResponse(
         data=GatewayHealthDTO(active_workspace_id=registry.active_workspace_id),
         request_id=request_id,
@@ -277,7 +328,6 @@ async def local_credential(
 
 @app.get("/api/gateway/workspaces", response_model=APIResponse[GatewayWorkspaceListDTO])
 async def list_workspaces(
-    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
@@ -1035,6 +1085,7 @@ async def remove_workspace(
 
 # 两个代理 Router 含通配路由，必须晚于 Gateway 自有接口注册，否则会吞掉
 # `/api/gateway/workspaces/{id}/runtime/*` 等更具体的控制面路由。
+app.include_router(gateway_control_router)
 app.include_router(auxiliary_proxy_router)
 app.include_router(workspace_proxy_router)
 

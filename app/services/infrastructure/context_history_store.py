@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from deepagents.backends import CompositeBackend
 from langchain_core.messages import AnyMessage, get_buffer_string
 
 from app.agents.workspace_backend import build_workspace_backend
-from app.core.path_utils import get_workspace_root
 
 
 class ContextHistoryStore:
-    def __init__(self) -> None:
-        self._backend = build_workspace_backend(get_workspace_root())
+    def __init__(self, workspace_root: Path) -> None:
+        self._backend = build_workspace_backend(workspace_root)
 
     @property
     def backend(self) -> CompositeBackend:
@@ -23,8 +23,7 @@ class ContextHistoryStore:
         session_id: str,
         messages: list[AnyMessage],
     ) -> str:
-        artifacts_root = self._backend.artifacts_root.rstrip("/")
-        path = f"{artifacts_root}/sessions/{session_id}/context/history.md"
+        path = f"/session-artifacts/{session_id}/context/history.md"
         timestamp = datetime.now(UTC).isoformat()
         new_section = (
             f"## Summarized at {timestamp}\n\n"

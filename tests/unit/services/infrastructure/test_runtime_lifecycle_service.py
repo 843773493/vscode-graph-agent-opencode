@@ -100,7 +100,11 @@ async def test_force_interrupt_persists_event_and_cancels_job(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_startup_reconciles_job_without_terminal_event(tmp_path: Path) -> None:
+async def test_startup_reconciles_job_without_terminal_event(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_stale")
     runtime, _ = build_runtime(tmp_path)
     store = runtime._trace_event_store
     now = datetime.now(timezone.utc)

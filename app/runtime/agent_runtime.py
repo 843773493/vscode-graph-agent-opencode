@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Protocol, TYPE_CHECKING
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -71,6 +72,8 @@ def build_session_agent_runtime(
     override_model: Any = None,
     model_routing_enabled: bool = True,
     tool_denylist: set[str] | None = None,
+    preferred_provider_id: str | None = None,
+    workspace_root: Path,
 ) -> Any:
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
     checkpointer = dependency_provider.get_checkpointer()
@@ -103,6 +106,8 @@ def build_session_agent_runtime(
         override_model=override_model,
         model_routing_enabled=model_routing_enabled,
         tool_denylist=tool_denylist,
+        preferred_provider_id=preferred_provider_id,
+        workspace_root=workspace_root,
     )
 
 def get_workspace_custom_tool_skill_sources(

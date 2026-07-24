@@ -2,6 +2,7 @@
 """会话上下文压缩端到端测试。"""
 from __future__ import annotations
 
+import base64
 import os
 import uuid
 from pathlib import Path
@@ -21,6 +22,7 @@ from langchain_core.messages import (
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.agent_factory import build_model_from_provider
+from app.core.path_utils import get_session_path_resolver
 from app.agents.cache_preserving_summarization import (
     CachePreservingSummarizationMiddleware,
 )
@@ -289,13 +291,11 @@ async def test_session_context_compact_writes_summarization_event(
         "执行已安排的压缩，只回复 COMPACTED_OK，不要调用工具。",
     )
 
+    session_dir = get_session_path_resolver(
+        Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
+    ).resolve_session_dir(session_id)
     history_file = (
-        Path(e2e_workspace_root_path)
-        / ".boxteam"
-        / "sessions"
-        / session_id
-        / "context"
-        / "history.md"
+        session_dir / "context" / "history.md"
     )
     assert history_file.exists()
     history_content = history_file.read_text(encoding="utf-8")
@@ -312,7 +312,7 @@ async def test_session_context_compact_writes_summarization_event(
     assert len(compact_event["cache_prefix_messages"]) >= 2
     assert compact_event["cutoff_index"] > len(compact_event["cache_prefix_messages"])
     assert compact_event["file_path"] == (
-        f"/.boxteam/sessions/{session_id}/context/history.md"
+        f"/session-artifacts/{session_id}/context/history.md"
     )
     assert compact_event["summary_message"].additional_kwargs.get("lc_source") == "summarization"
     assert channel_values["_force_cache_compaction"] is False
@@ -483,7 +483,8 @@ async def test_cache_preserving_compaction_keeps_and_grows_upstream_cache_hit(
     assert third_upstream_request["messages"][:upstream_prefix_size] == (
         second_upstream_request["messages"]
     )
-    assert third_upstream_request["extra_body"]["prompt_cache_key"] == session_id
+    third_extra_body = third_upstream_request.get("extra_body") or {}
+    assert "prompt_cache_key" not in third_extra_body
     assert second_cached_tokens > 0
     assert summary_cached_tokens >= second_cached_tokens, {
         "second_cached_tokens": second_cached_tokens,
@@ -513,8 +514,8 @@ async def test_cache_preserving_middleware_forked_summary_hits_main_prompt_cache
         workspace_root=e2e_workspace_root_path,
     )
     provider = config_service.get_llm_provider("primary")
-    cache_key = f"compact-summary-e2e-{uuid.uuid4().hex}"
-    model = build_model_from_provider(provider, {}, prompt_cache_key=cache_key)
+    assert "prompt_cache_key" not in provider.get("capabilities", [])
+    model = build_model_from_provider(provider, {})
     middleware = CachePreservingSummarizationMiddleware(
         model=model,
         backend=FilesystemBackend(
@@ -666,6 +667,236 @@ async def test_cache_preserving_middleware_forked_summary_hits_main_prompt_cache
     }
     assert summary_call["cached_tokens"] >= second_call["cached_tokens"] > 0
     assert compacted_call["cached_tokens"] > second_call["cached_tokens"]
-    assert summary_call["upstream_request"]["extra_body"]["prompt_cache_key"] == (
-        cache_key
+    for call in calls:
+        extra_body = call["upstream_request"].get("extra_body") or {}
+        assert "prompt_cache_key" not in extra_body
+
+
+def _luna_test_image_data_url() -> str:
+    image_path = (
+        Path.cwd()
+        / "asset"
+        / "default_test_workspace"
+        / "assets"
+        / "test.jpg"
     )
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def _nested_mapping_values(value: object, key: str) -> list[object]:
+    values: list[object] = []
+    if isinstance(value, dict):
+        if key in value:
+            values.append(value[key])
+        for nested in value.values():
+            values.extend(_nested_mapping_values(nested, key))
+    elif isinstance(value, list):
+        for nested in value:
+            values.extend(_nested_mapping_values(nested, key))
+    return values
+
+
+def _encrypted_reasoning_items(message: AIMessage) -> list[dict]:
+    return [
+        block["extras"]["response_item"]
+        for block in message.content
+        if isinstance(block, dict)
+        and block.get("type") == "reasoning"
+        and isinstance(block.get("extras"), dict)
+        and isinstance(block["extras"].get("response_item"), dict)
+        and block["extras"]["response_item"].get("encrypted_content")
+    ]
+
+
+@pytest.mark.skipif(
+    os.environ.get("CCTQ_API_KEY") is None,
+    reason="需要 CCTQ_API_KEY 才能验证 Luna 图片压缩 Prompt Cache",
+)
+@pytest.mark.asyncio
+async def test_luna_image_reasoning_compaction_hits_prompt_cache(
+    e2e_workspace_root_path: str,
+) -> None:
+    config_service = ConfigService(
+        config_path=Path.cwd() / "configs" / "tests" / "default.jsonc",
+        workspace_root=e2e_workspace_root_path,
+    )
+    provider = config_service.get_llm_provider("backup_3")
+    assert provider["model"] == "gpt-5.6-luna"
+    assert provider["api_mode"] == "responses"
+    assert "image_input" in provider["capabilities"]
+
+    cache_key = f"luna-image-compact-e2e-{uuid.uuid4().hex}"
+    model = build_model_from_provider(provider, {}, prompt_cache_key=cache_key)
+    middleware = CachePreservingSummarizationMiddleware(
+        model=model,
+        backend=FilesystemBackend(
+            root_dir=e2e_workspace_root_path,
+            virtual_mode=True,
+        ),
+        trigger=("messages", 7),
+        keep=("messages", 1),
+        trim_tokens_to_summarize=None,
+    )
+    stable_nonce = uuid.uuid4().hex
+    system_message = SystemMessage(
+        content="\n".join(
+            f"Luna 图片压缩缓存固定系统资料-{stable_nonce}-{index:04d}，必须逐字保持。"
+            for index in range(260)
+        )
+    )
+    calls: list[dict] = []
+
+    async def handler(request: ModelRequest) -> ModelResponse:
+        capture_token = begin_upstream_capture()
+        combined: AIMessageChunk | None = None
+        try:
+            async for chunk in request.model.astream(
+                [request.system_message, *request.messages]
+            ):
+                assert isinstance(chunk, AIMessageChunk)
+                combined = chunk if combined is None else combined + chunk
+            attempts = end_upstream_capture(capture_token)
+        except BaseException:
+            end_upstream_capture(capture_token)
+            raise
+        assert combined is not None
+        message = message_chunk_to_message(combined)
+        assert isinstance(message, AIMessage)
+        usage = message.usage_metadata
+        assert usage is not None
+        details = usage.get("input_token_details") or {}
+        calls.append(
+            {
+                "input_tokens": usage.get("input_tokens", 0),
+                "cached_tokens": details.get("cache_read", 0),
+                "upstream_request": attempts[-1]["request"],
+                "message": message,
+                "request_messages": list(request.messages),
+            }
+        )
+        return ModelResponse(result=[message])
+
+    first_user = HumanMessage(
+        content=[
+            {
+                "type": "text",
+                "text": (
+                    "识别图片内容，记住第一轮资料并只回复 LUNA-FIRST。"
+                    + "图片缓存资料甲乙丙丁" * 300
+                ),
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": _luna_test_image_data_url()},
+            },
+        ]
+    )
+    first_response = await middleware.awrap_model_call(
+        ModelRequest(
+            model=model,
+            messages=[first_user],
+            system_message=system_message,
+        ),
+        handler,
+    )
+    first_ai = _model_response_message(first_response)
+
+    second_user = HumanMessage(
+        content="记住第二轮资料并只回复 LUNA-SECOND。" + "戊己庚辛" * 400
+    )
+    second_messages = [first_user, first_ai, second_user]
+    second_response = await middleware.awrap_model_call(
+        ModelRequest(
+            model=model,
+            messages=second_messages,
+            system_message=system_message,
+        ),
+        handler,
+    )
+    second_ai = _model_response_message(second_response)
+
+    third_messages = [
+        *second_messages,
+        second_ai,
+        HumanMessage(content="需要压缩的 Luna 中段问题一：" + "天地玄黄" * 1200),
+        AIMessage(content="需要压缩的 Luna 中段回答一：" + "宇宙洪荒" * 1200),
+        HumanMessage(content="需要压缩的 Luna 中段问题二：" + "日月盈昃" * 1200),
+        AIMessage(content="需要压缩的 Luna 中段回答二：" + "辰宿列张" * 1200),
+        HumanMessage(content="压缩后只回复 LUNA-THIRD。"),
+    ]
+    third_response = await middleware.awrap_model_call(
+        ModelRequest(
+            model=model,
+            messages=third_messages,
+            system_message=system_message,
+        ),
+        handler,
+    )
+    assert isinstance(third_response, ExtendedModelResponse)
+    compacted_request_messages = calls[3]["request_messages"]
+    await handler(
+        ModelRequest(
+            model=model,
+            messages=compacted_request_messages,
+            system_message=system_message,
+        )
+    )
+    await handler(
+        ModelRequest(
+            model=model,
+            messages=third_messages,
+            system_message=system_message,
+        )
+    )
+    assert len(calls) == 6
+
+    second_call = calls[1]
+    summary_call = calls[2]
+    compacted_call = calls[3]
+    compacted_replay_call = calls[4]
+    uncompacted_call = calls[5]
+    second_input = second_call["upstream_request"]["input"]
+    summary_input = summary_call["upstream_request"]["input"]
+    compacted_input = compacted_call["upstream_request"]["input"]
+    uncompacted_input = uncompacted_call["upstream_request"]["input"]
+    print(
+        "\n[luna-image-compaction-cache] "
+        f"second={second_call['cached_tokens']}, "
+        f"summary={summary_call['cached_tokens']}, "
+        f"compacted={compacted_call['cached_tokens']}; "
+        f"compacted_replay={compacted_replay_call['cached_tokens']}; "
+        f"uncompacted_input={uncompacted_call['input_tokens']}, "
+        f"compacted_input={compacted_call['input_tokens']}"
+    )
+
+    assert summary_input[: len(second_input)] == second_input
+    assert compacted_input[: len(second_input)] == second_input
+    assert len(compacted_input) < len(uncompacted_input)
+    assert compacted_call["input_tokens"] < uncompacted_call["input_tokens"]
+    assert compacted_replay_call["upstream_request"]["input"] == compacted_input
+    assert compacted_replay_call["cached_tokens"] > 0
+    assert summary_call["upstream_request"]["prompt_cache_key"] == cache_key
+    assert compacted_replay_call["upstream_request"]["prompt_cache_key"] == cache_key
+    assert "input_image" in _nested_mapping_values(
+        calls[0]["upstream_request"]["input"],
+        "type",
+    )
+    encrypted_replay = _nested_mapping_values(second_input, "encrypted_content")
+    assert encrypted_replay, "Luna 第二轮请求没有回放 encrypted_content"
+    assert _nested_mapping_values(
+        summary_input,
+        "encrypted_content",
+    )[: len(encrypted_replay)] == encrypted_replay
+    assert _nested_mapping_values(
+        compacted_input,
+        "encrypted_content",
+    )[: len(encrypted_replay)] == encrypted_replay
+    encrypted_items = [
+        *_encrypted_reasoning_items(first_ai),
+        *_encrypted_reasoning_items(second_ai),
+        *_encrypted_reasoning_items(calls[3]["message"]),
+        *_encrypted_reasoning_items(calls[4]["message"]),
+    ]
+    assert encrypted_items, "Luna 压缩链路没有返回 encrypted reasoning item"
+    assert all(item.get("encrypted_content") for item in encrypted_items)

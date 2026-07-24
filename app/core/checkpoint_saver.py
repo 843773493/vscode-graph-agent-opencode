@@ -24,6 +24,8 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.core.path_utils import get_session_path_resolver
+
 
 class FileSystemCheckpointSaver(
     BaseCheckpointSaver[str],
@@ -33,9 +35,9 @@ class FileSystemCheckpointSaver(
     """将 LangGraph checkpoint 持久化到文件系统。
 
     存储布局：
-        {sessions_dir}/{thread_id}/checkpoints/{checkpoint_ns}/checkpoints.jsonl
-        {sessions_dir}/{thread_id}/checkpoints/{checkpoint_ns}/writes.jsonl
-        {sessions_dir}/{thread_id}/checkpoints/{checkpoint_ns}/blobs/{channel}_{version}.bin
+        {resolved_session_dir}/checkpoints/{checkpoint_ns}/checkpoints.jsonl
+        {resolved_session_dir}/checkpoints/{checkpoint_ns}/writes.jsonl
+        {resolved_session_dir}/checkpoints/{checkpoint_ns}/blobs/{channel}_{version}.bin
 
     当前实现每个 thread 只保存最新 checkpoint（保留 parent chain），
     因为项目使用 session_id 作为 thread_id 且每次运行需要快速恢复。
@@ -45,11 +47,12 @@ class FileSystemCheckpointSaver(
         super().__init__(serde=serde)
         self.sessions_dir = Path(sessions_dir)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self._path_resolver = get_session_path_resolver(self.sessions_dir)
         self._serde = serde or JsonPlusSerializer()
         self._lock = threading.Lock()
 
     def _thread_dir(self, thread_id: str) -> Path:
-        return self.sessions_dir / thread_id / "checkpoints"
+        return self._path_resolver.resolve_session_dir(thread_id) / "checkpoints"
 
     def _ns_dir(self, thread_id: str, checkpoint_ns: str) -> Path:
         return self._thread_dir(thread_id) / checkpoint_ns
@@ -258,7 +261,9 @@ class FileSystemCheckpointSaver(
             thread_ids = (config["configurable"]["thread_id"],)
         else:
             thread_ids = tuple(
-                d.name for d in self.base_dir.iterdir() if d.is_dir()
+                node.node_id
+                for node in self._path_resolver.list_nodes()
+                if node.kind == "session"
             )
 
         config_checkpoint_ns = (

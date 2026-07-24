@@ -4,6 +4,8 @@ import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from app.core.path_utils import get_session_path_resolver
+
 
 class HistoricalTerminalRecordReader:
     def __init__(
@@ -12,6 +14,7 @@ class HistoricalTerminalRecordReader:
         sessions_dir: Path,
     ) -> None:
         self._sessions_dir = sessions_dir
+        self._path_resolver = get_session_path_resolver(sessions_dir)
 
     def read_records(
         self,
@@ -48,8 +51,7 @@ class HistoricalTerminalRecordReader:
         terminal_id: str,
     ) -> str | None:
         trace_file = (
-            self._sessions_dir
-            / session_id
+            self._path_resolver.resolve_session_dir(session_id)
             / "logs"
             / "traces"
             / "messages.jsonl"

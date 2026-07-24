@@ -428,11 +428,17 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_emit_system_time_messages_tool_emits_periodic_messages(monkeypatch, tmp_path):
+async def test_emit_system_time_messages_tool_emits_periodic_messages(
+    monkeypatch,
+    tmp_path,
+    session_bundle_factory,
+):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, "session_test")
     background_message_bus = _FakeBackgroundMessageBus()
     background_task_registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     )
 
     async def fake_sleep(_seconds):
@@ -533,10 +539,15 @@ async def test_monitor_session_agent_end_accepts_zero_as_unlimited(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_monitor_and_collect_forward_agent_end_final_text(tmp_path):
+async def test_monitor_and_collect_forward_agent_end_final_text(
+    tmp_path,
+    session_bundle_factory,
+):
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, "monitor_session")
     background_message_bus = BackgroundMessageBus()
     background_task_registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=tmp_path / ".boxteam")
+        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     )
     job_event_bus = _FakeJobEventBus()
     job_service = _FakeJobService()
@@ -648,6 +659,7 @@ async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
         "queued_jobs_ahead": 0,
         "queued_job_count": 0,
         "pending_job_count": 1,
+        "pending_kind": None,
     }
     assert result["simulate_user"] is False
     assert result["sender_session_id"] == "ses_sender"
@@ -724,6 +736,7 @@ async def test_send_message_to_session_returns_atomic_target_queue_snapshot():
         "queued_jobs_ahead": 2,
         "queued_job_count": 3,
         "pending_job_count": 4,
+        "pending_kind": None,
     }
 
 

@@ -26,6 +26,7 @@ from app.schemas.public_v2.message import (
 )
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
+from app.services.infrastructure.message_history_store import MessageHistoryStore
 from app.services.business.system_reminder_checkpoint_service import (
     append_system_reminder_checkpoint,
 )
@@ -36,9 +37,11 @@ class MessageService:
         self,
         checkpointer: BaseCheckpointSaver | None = None,
         attachment_store: SessionAttachmentStore | None = None,
+        history_store: MessageHistoryStore | None = None,
     ) -> None:
         self._checkpointer = checkpointer
         self._attachment_store = attachment_store
+        self._history_store = history_store
 
     @staticmethod
     def _message_to_dto(
@@ -66,8 +69,11 @@ class MessageService:
             "tool_calls": getattr(message, "tool_calls", None) or [],
             "tool_call_id": getattr(message, "tool_call_id", None),
         }
-        if extracted["content_blocks"]:
-            metadata["content_blocks"] = extracted["content_blocks"]
+        display_blocks = MessageService._display_content_blocks(
+            extracted["content_blocks"]
+        )
+        if display_blocks:
+            metadata["content_blocks"] = display_blocks
         if extracted["reasoning_id"] is not None:
             metadata["reasoning_id"] = extracted["reasoning_id"]
         message_metadata = response_metadata.get("message_metadata")
@@ -81,7 +87,13 @@ class MessageService:
             {
                 key: value
                 for key, value in response_metadata.items()
-                if key not in {"message_metadata", "message_role"}
+                if key
+                not in {
+                    "attachments",
+                    "content_blocks",
+                    "message_metadata",
+                    "message_role",
+                }
             }
         )
         return MessageDTO(
@@ -410,17 +422,67 @@ class MessageService:
             "reasoning_id": reasoning_id,
         }
 
+    @staticmethod
+    def _display_content_blocks(value: object) -> list[dict[str, object]]:
+        """只保留历史 UI 所需的轻量文本/推理块，媒体正文由附件接口读取。"""
+        if not isinstance(value, list):
+            return []
+        result: list[dict[str, object]] = []
+        for block in value:
+            if not isinstance(block, Mapping):
+                continue
+            block_type = block.get("type")
+            if block_type == "text" and isinstance(block.get("text"), str):
+                normalized: dict[str, object] = {
+                    "type": "text",
+                    "text": block["text"],
+                }
+            elif block_type == "reasoning" and isinstance(
+                block.get("reasoning"), str
+            ):
+                normalized = {
+                    "type": "reasoning",
+                    "reasoning": block["reasoning"],
+                }
+            else:
+                continue
+            if isinstance(block.get("id"), str):
+                normalized["id"] = block["id"]
+            if isinstance(block.get("index"), int):
+                normalized["index"] = block["index"]
+            result.append(normalized)
+        return result
+
     async def list(
         self,
         session_id: str,
         limit: int = 50,
         cursor: str | None = None,
     ) -> CursorPage[MessageDTO]:
-        messages = await self._load_messages(session_id)
-        return CursorPage(
-            items=messages[:limit],
-            next_cursor=None,
-            has_more=len(messages) > limit,
+        if self._history_store is None:
+            messages = await self._load_messages(session_id)
+            return CursorPage(
+                items=messages[-limit:],
+                next_cursor=None,
+                has_more=len(messages) > limit,
+            )
+
+        checkpoint_id = self._history_store.latest_checkpoint_id(session_id)
+        if not self._history_store.is_current(session_id, checkpoint_id):
+            messages, loaded_checkpoint_id = await self._load_messages_with_checkpoint_id(
+                session_id
+            )
+            self._history_store.replace(
+                session_id,
+                loaded_checkpoint_id,
+                messages,
+            )
+            checkpoint_id = loaded_checkpoint_id
+        return self._history_store.page(
+            session_id,
+            checkpoint_id,
+            limit=limit,
+            cursor=cursor,
         )
 
     async def get(self, session_id: str, message_id: str) -> MessageDTO:
@@ -617,7 +679,25 @@ class MessageService:
         return raw_messages
 
     async def _load_messages(self, session_id: str) -> list[MessageDTO]:
-        raw_messages = await self._load_raw_messages(session_id)
+        messages, _ = await self._load_messages_with_checkpoint_id(session_id)
+        return messages
+
+    async def _load_messages_with_checkpoint_id(
+        self,
+        session_id: str,
+    ) -> tuple[list[MessageDTO], str]:
+        if self._checkpointer is None:
+            return [], ""
+        checkpoint_tuple = await self._checkpointer.aget_tuple(
+            build_checkpoint_config(session_id)
+        )
+        if checkpoint_tuple is None:
+            return [], ""
+        raw_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get(
+            "messages", []
+        )
+        if not isinstance(raw_messages, list):
+            return [], str(checkpoint_tuple.checkpoint.get("id") or "")
 
         result: list[MessageDTO] = []
         seen_visible_messages: set[tuple[str, str]] = set()
@@ -634,4 +714,4 @@ class MessageService:
                 continue
             seen_visible_messages.add(visible_key)
             result.append(dto)
-        return result
+        return result, str(checkpoint_tuple.checkpoint.get("id") or "")

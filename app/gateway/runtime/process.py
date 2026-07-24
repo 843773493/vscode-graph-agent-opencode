@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import random
 import signal
@@ -9,16 +10,19 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 import httpx
 
+from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
-
 
 GATEWAY_PROCESS_READY_TIMEOUT_SECONDS = 45
 DEFAULT_SSH_TUNNEL_PORT_MIN = 41000
 DEFAULT_SSH_TUNNEL_PORT_MAX = 41999
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -26,10 +30,18 @@ class ManagedProcess:
     process: subprocess.Popen[str]
     log_file: object
 
-    def close(self, *, timeout_seconds: float = 10) -> None:
+    def request_terminate(self) -> None:
+        if self.process.poll() is not None:
+            return
+        try:
+            self._terminate_group()
+        except ProcessLookupError:
+            return
+
+    def close(self, *, timeout_seconds: float = 8) -> None:
         try:
             if self.process.poll() is None:
-                self._terminate_group()
+                self.request_terminate()
                 try:
                     self.process.wait(timeout=timeout_seconds)
                 except subprocess.TimeoutExpired:
@@ -54,6 +66,28 @@ class ManagedProcess:
                 return
         else:
             self.process.kill()
+
+
+def _spawn_logged_process(
+    command: list[str],
+    *,
+    log_file: TextIO,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen[str]:
+    try:
+        return subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=log_file,
+            stderr=log_file,
+            text=True,
+            start_new_session=os.name == "posix",
+        )
+    except Exception:
+        log_file.close()
+        raise
 
 
 def allocate_local_port() -> int:
@@ -146,7 +180,7 @@ async def wait_for_http_ok(url: str, process: subprocess.Popen[str] | None = Non
                 last_error = RuntimeError(
                     f"健康检查返回 {response.status_code}: {response.text[:300]}"
                 )
-            except Exception as error:
+            except (httpx.HTTPError, RuntimeError) as error:
                 last_error = error
             await asyncio.sleep(0.5)
 
@@ -164,8 +198,6 @@ def start_local_backend_process(
     debug_port: int | None = None,
 ) -> ManagedProcess:
     python_executable = resolve_python_executable(project_root)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / f"local-backend-{port}.log", "a", encoding="utf-8")
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
@@ -195,14 +227,21 @@ def start_local_backend_process(
             "warning",
         ]
     )
-    process = subprocess.Popen(
+    log_store = ProcessLogStore(log_dir)
+    log_path = log_store.path_for(f"local-backend-{port}.log")
+    log_file = log_store.open(log_path.name)
+    process = _spawn_logged_process(
         command,
+        log_file=log_file,
         cwd=project_root,
         env=env,
-        stdout=log_file,
-        stderr=log_file,
-        text=True,
-        start_new_session=os.name == "posix",
+    )
+    logger.info(
+        "启动工作区后端: pid=%s port=%s workspace=%s log=%s",
+        process.pid,
+        port,
+        workspace_root,
+        log_path,
     )
     return ManagedProcess(process=process, log_file=log_file)
 
@@ -220,15 +259,16 @@ def start_local_node_service_process(
     backend_path = project_root / "src" / service / "server" / "backend.js"
     if not backend_path.is_file():
         raise FileNotFoundError(f"辅助服务入口不存在: {backend_path}")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / f"local-{service}-{port}.log", "a", encoding="utf-8")
-    env = os.environ.copy()
-    env["WORKSPACE_ROOT"] = str(workspace_root)
-    env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     node_executable = os.environ.get("BOXTEAM_NODE_BIN")
     if not node_executable:
         raise RuntimeError("启动本地辅助服务必须通过 BOXTEAM_NODE_BIN 显式提供 Node")
-    process = subprocess.Popen(
+    log_store = ProcessLogStore(log_dir)
+    log_path = log_store.path_for(f"local-{service}-{port}.log")
+    log_file = log_store.open(log_path.name)
+    env = os.environ.copy()
+    env["WORKSPACE_ROOT"] = str(workspace_root)
+    env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
+    process = _spawn_logged_process(
         [
             node_executable,
             str(backend_path),
@@ -248,12 +288,17 @@ def start_local_node_service_process(
                 "http://127.0.0.1",
             ),
         ],
+        log_file=log_file,
         cwd=project_root,
         env=env,
-        stdout=log_file,
-        stderr=log_file,
-        text=True,
-        start_new_session=os.name == "posix",
+    )
+    logger.info(
+        "启动工作区辅助服务: service=%s pid=%s port=%s workspace=%s log=%s",
+        service,
+        process.pid,
+        port,
+        workspace_root,
+        log_path,
     )
     return ManagedProcess(process=process, log_file=log_file)
 
@@ -270,12 +315,6 @@ def start_ssh_tunnel_process(
 ) -> ManagedProcess:
     if not forwards:
         raise ValueError("SSH 隧道至少需要一个端口转发")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(
-        log_dir / f"ssh-tunnel-{forwards[0].local_port}.log",
-        "a",
-        encoding="utf-8",
-    )
     forward_arguments: list[str] = ["-N"]
     for forward in forwards:
         forward_arguments.extend(
@@ -288,18 +327,29 @@ def start_ssh_tunnel_process(
             ]
         )
     forward_arguments.extend(["-o", "ExitOnForwardFailure=yes"])
-    process = subprocess.Popen(
-        build_ssh_command(
-            host=host,
-            port=port,
-            username=username,
-            private_key_path=str(private_key_path) if private_key_path is not None else None,
-            ssh_config_host=ssh_config_host,
-            extra_arguments=forward_arguments,
-        ),
-        stdout=log_file,
-        stderr=log_file,
-        text=True,
-        start_new_session=os.name == "posix",
+    command = build_ssh_command(
+        host=host,
+        port=port,
+        username=username,
+        private_key_path=str(private_key_path) if private_key_path is not None else None,
+        ssh_config_host=ssh_config_host,
+        extra_arguments=forward_arguments,
+    )
+    log_store = ProcessLogStore(log_dir)
+    log_path = log_store.path_for(
+        f"ssh-tunnel-{forwards[0].local_port}.log"
+    )
+    log_file = log_store.open(log_path.name)
+    process = _spawn_logged_process(
+        command,
+        log_file=log_file,
+    )
+    logger.info(
+        "启动 SSH 隧道: pid=%s host=%s port=%s forwards=%s log=%s",
+        process.pid,
+        host,
+        port,
+        len(forwards),
+        log_path,
     )
     return ManagedProcess(process=process, log_file=log_file)

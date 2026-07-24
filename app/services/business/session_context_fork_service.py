@@ -8,7 +8,7 @@ from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointMetadata
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.schemas.public_v2.session import SessionDTO
+from app.schemas.public_v2.session import SessionDTO, SessionGenerationOriginDTO
 from app.services.business.session_service import SessionService
 
 
@@ -24,16 +24,37 @@ class SessionContextForkService:
         self._session_service = session_service
         self._checkpointer = checkpointer
 
-    async def fork(self, source_session_id: str) -> SessionDTO:
+    async def fork(
+        self,
+        source_session_id: str,
+        *,
+        generation_origin: SessionGenerationOriginDTO | None = None,
+        title: str | None = None,
+        parent_node_id: str | None = None,
+        place_under_source: bool = True,
+    ) -> SessionDTO:
         source_session = await self._session_service.get(source_session_id)
         source_checkpoint = await self._checkpointer.aget_tuple(
             build_checkpoint_config(source_session_id)
         )
 
+        physical_parent_node_id = (
+            source_session_id if place_under_source else parent_node_id
+        )
+        physical_parent_session_id = (
+            source_session_id
+            if place_under_source
+            else self._session_service.path_resolver.nearest_session_ancestor(
+                parent_node_id
+            )
+        )
         child_session = await self._session_service.create_context_fork(
-            title=f"{source_session.title}（上下文副本）",
+            title=title or f"{source_session.title}（上下文副本）",
             agent_id=source_session.current_agent_id,
-            parent_session_id=source_session_id,
+            parent_session_id=physical_parent_session_id,
+            context_source_session_id=source_session_id,
+            generation_origin=generation_origin,
+            parent_node_id=physical_parent_node_id,
         )
 
         if source_checkpoint is None:

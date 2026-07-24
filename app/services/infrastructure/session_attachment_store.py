@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import mimetypes
 import os
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
-from app.core.path_utils import safe_join
+from PIL import Image, ImageOps
+
+from app.core.path_utils import get_session_path_resolver, safe_join
 from app.schemas.public_v2.message import AttachmentRef
 
 
 MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
 SUPPORTED_MEDIA_PREFIXES = ("image/", "audio/", "video/")
+SESSION_ATTACHMENT_SCHEME = "boxteam-session://"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +32,7 @@ class SessionAttachmentStore:
     def __init__(self, workspace_root: Path) -> None:
         self._workspace_root = workspace_root.resolve()
         self._sessions_root = self._workspace_root / ".boxteam" / "sessions"
+        self._path_resolver = get_session_path_resolver(self._sessions_root)
 
     def persist_inline(
         self,
@@ -38,10 +42,8 @@ class SessionAttachmentStore:
         return [self._persist_one(session_id, attachment) for attachment in attachments]
 
     def read(self, session_id: str, file_id: str) -> StoredAttachmentContent:
-        if file_id.startswith("inline:"):
-            return self._read_legacy_inline(session_id, file_id)
         attachments_root = self._attachments_root(session_id)
-        file_path = safe_join(self._workspace_root, file_id)
+        file_path = self._resolve_file_id(session_id, file_id)
         if file_path.parent != attachments_root.resolve():
             raise ValueError("附件路径不属于指定会话")
         if not file_path.is_file():
@@ -54,107 +56,38 @@ class SessionAttachmentStore:
             content_type=content_type,
         )
 
-    def _read_legacy_inline(
+    def read_thumbnail(
         self,
         session_id: str,
         file_id: str,
+        *,
+        max_edge: int = 384,
     ) -> StoredAttachmentContent:
-        cache_prefix = f"legacy-{hashlib.sha256(file_id.encode('utf-8')).hexdigest()}"
-        cached_files = list(self._attachments_root(session_id).glob(f"{cache_prefix}.*"))
-        if len(cached_files) > 1:
-            raise RuntimeError(f"旧附件恢复缓存不唯一: file_id={file_id!r}")
-        if cached_files:
-            return self._read_media_file(cached_files[0])
+        """读取缓存缩略图；首次请求时从原图派生 WebP。"""
+        if max_edge < 64 or max_edge > 1024:
+            raise ValueError("图片缩略图 max_edge 必须在 64 到 1024 之间")
+        source = self.read(session_id, file_id)
+        if not source.content_type.startswith("image/"):
+            raise ValueError(f"附件不是图片，无法生成缩略图: {file_id}")
 
-        matches = self._legacy_inline_matches(session_id, file_id)
-        if not matches:
-            raise FileNotFoundError(
-                f"旧会话附件内容不存在，LLM 请求日志中也无法恢复: {file_id}"
-            )
-        unique_data_urls = {(content_type, data_url) for content_type, data_url in matches}
-        if len(unique_data_urls) != 1:
-            raise ValueError(f"旧会话附件存在多个不同内容，拒绝猜测: {file_id}")
-        content_type, data_url = unique_data_urls.pop()
-        parsed_type, data = self._parse_data_url(data_url)
-        if parsed_type != content_type:
-            raise ValueError(
-                "旧会话附件日志中的 MIME 类型不一致: "
-                f"{content_type!r} != {parsed_type!r}"
-            )
-        suffix = mimetypes.guess_extension(content_type)
-        if not suffix:
-            raise ValueError(f"无法确定旧会话附件扩展名: {content_type!r}")
-        cache_root = self._attachments_root(session_id)
-        cache_root.mkdir(parents=True, exist_ok=True)
-        cache_path = cache_root / f"{cache_prefix}{suffix}"
-        self._write_once(cache_path, data)
-        return StoredAttachmentContent(data=data, content_type=content_type)
-
-    def _legacy_inline_matches(
-        self,
-        session_id: str,
-        file_id: str,
-    ) -> list[tuple[str, str]]:
-        logs_root = safe_join(self._sessions_root, session_id) / "logs" / "llm_requests"
-        if not logs_root.is_dir():
-            return []
-        matches: list[tuple[str, str]] = []
-        for log_path in sorted(logs_root.glob("*.json")):
-            raw = json.loads(log_path.read_text(encoding="utf-8"))
-            request = raw.get("request")
-            messages = request.get("messages") if isinstance(request, dict) else None
-            if not isinstance(messages, list):
-                continue
-            for message in messages:
-                match = self._match_legacy_message_attachment(message, file_id)
-                if match is not None:
-                    matches.append(match)
-        return matches
-
-    @staticmethod
-    def _match_legacy_message_attachment(
-        message: object,
-        file_id: str,
-    ) -> tuple[str, str] | None:
-        if not isinstance(message, dict):
-            return None
-        metadata = message.get("response_metadata")
-        attachments = metadata.get("attachments") if isinstance(metadata, dict) else None
-        content = message.get("content")
-        if not isinstance(attachments, list) or not isinstance(content, list):
-            return None
-        image_attachments = [
-            attachment
-            for attachment in attachments
-            if isinstance(attachment, dict)
-            and isinstance(attachment.get("content_type"), str)
-            and attachment["content_type"].startswith("image/")
-        ]
-        image_blocks = [
-            block
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "image_url"
-        ]
-        for index, attachment in enumerate(image_attachments):
-            if attachment.get("file_id") != file_id:
-                continue
-            if index >= len(image_blocks):
-                raise ValueError(f"旧会话附件缺少对应图片块: {file_id}")
-            image_url = image_blocks[index].get("image_url")
-            data_url = image_url.get("url") if isinstance(image_url, dict) else image_url
-            if not isinstance(data_url, str) or not data_url.startswith("data:image/"):
-                raise ValueError(f"旧会话附件图片块不是 data URL: {file_id}")
-            return str(attachment["content_type"]), data_url
-        return None
-
-    @staticmethod
-    def _read_media_file(file_path: Path) -> StoredAttachmentContent:
-        content_type, _ = mimetypes.guess_type(file_path.name)
-        if not content_type or not content_type.startswith(SUPPORTED_MEDIA_PREFIXES):
-            raise ValueError(f"无法识别会话媒体附件类型: {file_path}")
+        digest = hashlib.sha256(file_id.encode("utf-8")).hexdigest()
+        derived_root = self._attachments_root(session_id) / "derived"
+        derived_root.mkdir(parents=True, exist_ok=True)
+        target = derived_root / f"{digest}-{max_edge}.webp"
+        if not target.is_file():
+            with Image.open(BytesIO(source.data)) as image:
+                normalized = ImageOps.exif_transpose(image)
+                normalized.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+                if normalized.mode not in {"RGB", "RGBA"}:
+                    normalized = normalized.convert(
+                        "RGBA" if "A" in normalized.mode else "RGB"
+                    )
+                output = BytesIO()
+                normalized.save(output, format="WEBP", quality=78, method=4)
+            self._write_once(target, output.getvalue())
         return StoredAttachmentContent(
-            data=file_path.read_bytes(),
-            content_type=content_type,
+            data=target.read_bytes(),
+            content_type="image/webp",
         )
 
     def _persist_one(self, session_id: str, attachment: AttachmentRef) -> AttachmentRef:
@@ -184,14 +117,27 @@ class SessionAttachmentStore:
         self._write_once(target, data)
 
         return AttachmentRef(
-            file_id=target.relative_to(self._workspace_root).as_posix(),
+            file_id=(
+                f"{SESSION_ATTACHMENT_SCHEME}{session_id}/attachments/{target.name}"
+            ),
             name=attachment.name,
             content_type=content_type,
         )
 
     def _attachments_root(self, session_id: str) -> Path:
-        session_root = safe_join(self._sessions_root, session_id)
+        session_root = self._path_resolver.resolve_session_dir(session_id)
         return session_root / "attachments"
+
+    def _resolve_file_id(self, session_id: str, file_id: str) -> Path:
+        prefix = f"{SESSION_ATTACHMENT_SCHEME}{session_id}/attachments/"
+        if not file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+            raise ValueError(f"附件必须使用会话逻辑定位符: {file_id}")
+        if not file_id.startswith(prefix):
+            raise ValueError("附件逻辑定位符不属于指定会话")
+        relative_name = file_id.removeprefix(prefix)
+        if not relative_name or "/" in relative_name or "\\" in relative_name:
+            raise ValueError(f"附件逻辑定位符格式无效: {file_id}")
+        return safe_join(self._attachments_root(session_id), relative_name)
 
     @staticmethod
     def _write_once(target: Path, data: bytes) -> None:

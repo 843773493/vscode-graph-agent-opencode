@@ -33,6 +33,8 @@ from app.services.infrastructure.mcp import McpRuntimeManager
 from app.tool_testing.service import ToolTestService
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.runtime.session_orchestrator import SessionOrchestrator
+from app.services.business.session_generation import SessionGenerationService
+from app.services.business.session_navigation import SessionCatalogService
 
 
 class _AppContainerProtocol:
@@ -65,6 +67,8 @@ class _AppContainerProtocol:
     workspace_service: WorkspaceService
     agent_execution_service: AgentExecutionService
     session_orchestrator: SessionOrchestrator
+    session_catalog_service: SessionCatalogService
+    session_generation_service: SessionGenerationService
     mcp_runtime_manager: McpRuntimeManager
 
 
@@ -290,4 +294,18 @@ def get_session_orchestrator(request: Request) -> SessionOrchestrator:
     service = getattr(_get_container(request), "session_orchestrator", None)
     if not isinstance(service, SessionOrchestrator):
         raise RuntimeError("SessionOrchestrator 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_session_catalog_service(request: Request) -> SessionCatalogService:
+    service = getattr(_get_container(request), "session_catalog_service", None)
+    if not isinstance(service, SessionCatalogService):
+        raise RuntimeError("SessionCatalogService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_session_generation_service(request: Request) -> SessionGenerationService:
+    service = getattr(_get_container(request), "session_generation_service", None)
+    if not isinstance(service, SessionGenerationService):
+        raise RuntimeError("SessionGenerationService 尚未在应用启动阶段初始化")
     return service

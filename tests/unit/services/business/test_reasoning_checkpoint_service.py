@@ -19,8 +19,12 @@ MESSAGE_TIME = datetime(2026, 7, 14, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
-async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp_path):
+async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
+    tmp_path,
+    session_bundle_factory,
+):
     session_id = "sess_standard_assistant"
+    session_bundle_factory(tmp_path, session_id)
     reasoning_text = "用户只要求回复 OK。"
     final_text = "OK"
     saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
@@ -139,8 +143,12 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(tmp
 
 
 @pytest.mark.asyncio
-async def test_persist_checkpoint_keeps_encrypted_response_reasoning(tmp_path):
+async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
+    tmp_path,
+    session_bundle_factory,
+):
     session_id = "sess_encrypted_reasoning"
+    session_bundle_factory(tmp_path, session_id)
     saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config(session_id)
     await saver.aput(
@@ -186,8 +194,12 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_state(tmp_path):
+async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_state(
+    tmp_path,
+    session_bundle_factory,
+):
     session_id = "sess_system_reminder_state"
+    session_bundle_factory(tmp_path, session_id)
     first_reasoning = "先调用工具。"
     final_reasoning = "只回复工具 stdout。"
     final_text = "OK"

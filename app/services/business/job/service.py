@@ -88,6 +88,8 @@ class JobService:
         self._pending_queue = JobPendingQueue()
         self._dispatch_lock = asyncio.Lock()
         self._pending_restore_lock = asyncio.Lock()
+        self._session_preparations: dict[str, int] = {}
+        self._deleting_sessions: set[str] = set()
         self._accepting_jobs = True
         self._job_executor = job_executor
         self._pending_requests = JobPendingRequestService(
@@ -202,7 +204,17 @@ class JobService:
 
     async def list(self, session_id: Optional[str] = None) -> list[JobDTO]:
         if session_id is not None:
-            await self._ensure_pending_loaded(session_id)
+            async def restore_and_list() -> list[JobDTO]:
+                await self._ensure_pending_loaded(session_id)
+                return self._list_loaded_jobs(session_id)
+
+            return await self.run_session_preparation(
+                session_id,
+                restore_and_list,
+            )
+        return self._list_loaded_jobs(None)
+
+    def _list_loaded_jobs(self, session_id: str | None) -> list[JobDTO]:
         jobs = []
         for job in self._jobs.values():
             if job.internal_reservation:
@@ -253,6 +265,14 @@ class JobService:
     ) -> T:
         """与 job admission 共用锁，仅在会话空闲期间执行 checkpoint 操作。"""
         async with self._dispatch_lock:
+            if session_id in self._deleting_sessions:
+                raise RuntimeError(f"会话正在删除，不能修改 checkpoint: {session_id}")
+            preparation_count = self._session_preparations.get(session_id, 0)
+            if preparation_count:
+                raise RuntimeError(
+                    "会话正在准备持久化消息，不能修改 checkpoint: "
+                    f"session_id={session_id}, preparation_count={preparation_count}"
+                )
             active_job_id = self._session_current_job.get(session_id)
             if active_job_id is not None:
                 raise RuntimeError(
@@ -260,6 +280,97 @@ class JobService:
                     f"session_id={session_id}, active_job_id={active_job_id}"
                 )
             return await operation()
+
+    async def run_sessions_idle_operation(
+        self,
+        session_ids: list[str],
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        """与 job admission 共用锁，仅在所有目标会话空闲期间执行存储操作。"""
+        normalized_session_ids = sorted(set(session_ids))
+        async with self._dispatch_lock:
+            for session_id in normalized_session_ids:
+                if session_id in self._deleting_sessions:
+                    raise RuntimeError(
+                        f"会话正在删除，不能移动物理存储: {session_id}"
+                    )
+                preparation_count = self._session_preparations.get(session_id, 0)
+                if preparation_count:
+                    raise RuntimeError(
+                        "会话正在准备持久化消息，不能移动物理存储: "
+                        f"session_id={session_id}, preparation_count={preparation_count}"
+                    )
+                active_job_id = self._session_current_job.get(session_id)
+                if active_job_id is not None:
+                    raise RuntimeError(
+                        "会话存在运行中或正在收尾的任务，不能移动物理存储: "
+                        f"session_id={session_id}, active_job_id={active_job_id}"
+                    )
+            return await operation()
+
+    async def run_session_preparation(
+        self,
+        session_id: str,
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        """登记消息、附件和 Job 创建前的会话存储写入窗口。"""
+        async with self._dispatch_lock:
+            self.assert_accepting_jobs()
+            if session_id in self._deleting_sessions:
+                raise RuntimeError(f"会话正在删除，拒绝写入新消息: {session_id}")
+            self._session_preparations[session_id] = (
+                self._session_preparations.get(session_id, 0) + 1
+            )
+        try:
+            return await operation()
+        finally:
+            async with self._dispatch_lock:
+                remaining = self._session_preparations[session_id] - 1
+                if remaining:
+                    self._session_preparations[session_id] = remaining
+                else:
+                    self._session_preparations.pop(session_id, None)
+
+    async def run_session_delete_operation(
+        self,
+        session_id: str,
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        return await self.run_sessions_delete_operation([session_id], operation)
+
+    async def run_sessions_delete_operation(
+        self,
+        session_ids: list[str],
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        """关闭一组会话 admission，并在同一窗口内清理资源和物理目录。"""
+        normalized_session_ids = sorted(set(session_ids))
+        if not normalized_session_ids:
+            return await operation()
+        async with self._dispatch_lock:
+            for session_id in normalized_session_ids:
+                if session_id in self._deleting_sessions:
+                    raise RuntimeError(f"会话删除已在进行: {session_id}")
+                preparation_count = self._session_preparations.get(session_id, 0)
+                if preparation_count:
+                    raise RuntimeError(
+                        "会话正在准备持久化消息，不能删除: "
+                        f"session_id={session_id}, "
+                        f"preparation_count={preparation_count}"
+                    )
+                active_job_id = self._session_current_job.get(session_id)
+                if active_job_id is not None:
+                    raise RuntimeError(
+                        "会话存在运行中或正在收尾的任务，不能删除: "
+                        f"session_id={session_id}, active_job_id={active_job_id}"
+                    )
+            self._deleting_sessions.update(normalized_session_ids)
+        try:
+            return await operation()
+        except BaseException:
+            async with self._dispatch_lock:
+                self._deleting_sessions.difference_update(normalized_session_ids)
+            raise
 
     async def list_steps(self, job_id: str) -> list[StepDTO]:
         job = self._jobs.get(job_id)
@@ -299,8 +410,11 @@ class JobService:
         )
 
     async def list_pending(self, session_id: str) -> PendingRequestListDTO:
-        await self._ensure_pending_loaded(session_id)
-        return await self._pending_requests.list(session_id)
+        async def restore_and_list() -> PendingRequestListDTO:
+            await self._ensure_pending_loaded(session_id)
+            return await self._pending_requests.list(session_id)
+
+        return await self.run_session_preparation(session_id, restore_and_list)
 
     async def update_pending(
         self,
@@ -310,43 +424,68 @@ class JobService:
         content: str,
         attachments: list[AttachmentRef],
     ) -> PendingRequestListDTO:
-        await self._ensure_pending_loaded(session_id)
-        snapshot = await self._pending_requests.update(
-            session_id,
-            message_id,
-            content=content,
-            attachments=attachments,
-        )
-        await self._publish_pending(snapshot, "pending_request_updated")
-        return snapshot
+        async def update_prepared() -> PendingRequestListDTO:
+            await self._ensure_pending_loaded(session_id)
+            snapshot = await self._pending_requests.update(
+                session_id,
+                message_id,
+                content=content,
+                attachments=attachments,
+            )
+            await self._publish_pending(snapshot, "pending_request_updated")
+            return snapshot
+
+        return await self.run_session_preparation(session_id, update_prepared)
 
     async def remove_pending(
         self,
         session_id: str,
         message_id: str,
     ) -> PendingRequestListDTO:
-        await self._ensure_pending_loaded(session_id)
-        snapshot = await self._pending_requests.remove(session_id, message_id)
-        await self._publish_pending(snapshot, "pending_request_removed")
-        return snapshot
+        async def remove_prepared() -> PendingRequestListDTO:
+            await self._ensure_pending_loaded(session_id)
+            snapshot = await self._pending_requests.remove(session_id, message_id)
+            await self._publish_pending(snapshot, "pending_request_removed")
+            return snapshot
+
+        return await self.run_session_preparation(session_id, remove_prepared)
 
     async def clear_pending(self, session_id: str) -> PendingRequestListDTO:
-        await self._ensure_pending_loaded(session_id)
-        snapshot = await self._pending_requests.clear(session_id)
-        await self._publish_pending(snapshot, "pending_requests_cleared")
-        return snapshot
+        async def clear_prepared() -> PendingRequestListDTO:
+            await self._ensure_pending_loaded(session_id)
+            snapshot = await self._pending_requests.clear(session_id)
+            await self._publish_pending(snapshot, "pending_requests_cleared")
+            return snapshot
+
+        return await self.run_session_preparation(session_id, clear_prepared)
 
     async def reorder_pending(
         self,
         session_id: str,
         requests: list[PendingRequestOrderItem],
     ) -> PendingRequestListDTO:
-        await self._ensure_pending_loaded(session_id)
-        snapshot = await self._pending_requests.reorder(session_id, requests)
-        await self._publish_pending(snapshot, "pending_requests_reordered")
-        return snapshot
+        async def reorder_prepared() -> PendingRequestListDTO:
+            await self._ensure_pending_loaded(session_id)
+            snapshot = await self._pending_requests.reorder(session_id, requests)
+            await self._publish_pending(snapshot, "pending_requests_reordered")
+            return snapshot
+
+        return await self.run_session_preparation(session_id, reorder_prepared)
 
     async def send_pending_immediately(
+        self,
+        session_id: str,
+        message_id: str,
+    ) -> PendingRequestListDTO:
+        async def send_prepared() -> PendingRequestListDTO:
+            return await self._send_pending_immediately_prepared(
+                session_id,
+                message_id,
+            )
+
+        return await self.run_session_preparation(session_id, send_prepared)
+
+    async def _send_pending_immediately_prepared(
         self,
         session_id: str,
         message_id: str,
@@ -444,6 +583,35 @@ class JobService:
         session_id: str,
         message: str,
         *,
+        job_id: str | None = None,
+        agent_id: str = "default",
+        message_id: str,
+        attachments: list[AttachmentRef] | None = None,
+        message_created_at: str,
+        message_metadata: dict[str, object] | None = None,
+        pending_kind: PendingRequestKind = "queued",
+    ) -> JobDispatchSnapshotDTO:
+        async def start_prepared() -> JobDispatchSnapshotDTO:
+            return await self._start_job_prepared(
+                session_id,
+                message,
+                job_id=job_id,
+                agent_id=agent_id,
+                message_id=message_id,
+                attachments=attachments,
+                message_created_at=message_created_at,
+                message_metadata=message_metadata,
+                pending_kind=pending_kind,
+            )
+
+        return await self.run_session_preparation(session_id, start_prepared)
+
+    async def _start_job_prepared(
+        self,
+        session_id: str,
+        message: str,
+        *,
+        job_id: str | None = None,
         agent_id: str = "default",
         message_id: str,
         attachments: list[AttachmentRef] | None = None,
@@ -452,6 +620,9 @@ class JobService:
         pending_kind: PendingRequestKind = "queued",
     ) -> JobDispatchSnapshotDTO:
         self.assert_accepting_jobs()
+        async with self._dispatch_lock:
+            if session_id in self._deleting_sessions:
+                raise RuntimeError(f"会话正在删除，拒绝创建 Job: {session_id}")
         import logging
         logger = logging.getLogger(__name__)
         logger.info(
@@ -466,11 +637,27 @@ class JobService:
         if not message_created_at:
             raise ValueError("创建 Job 时必须传入用户消息的 message_created_at")
         await self._ensure_pending_loaded(session_id)
-        job_id = create_prefixed_id("job")
-        logger.info("[job_service] start_job assigned id: job_id=%s", job_id)
+        resolved_job_id = job_id or create_prefixed_id("job")
+        logger.info(
+            "[job_service] start_job assigned id: job_id=%s",
+            resolved_job_id,
+        )
+
+        existing_job = self._jobs.get(resolved_job_id)
+        if existing_job is not None:
+            if (
+                existing_job.session_id != session_id
+                or existing_job.message_id != message_id
+            ):
+                raise RuntimeError(
+                    "预留 Job ID 已被其它消息占用: "
+                    f"job_id={resolved_job_id}, session_id={session_id}, "
+                    f"message_id={message_id}"
+                )
+            return self._existing_dispatch_snapshot(existing_job)
 
         job = JobState(
-            job_id=job_id,
+            job_id=resolved_job_id,
             session_id=session_id,
             message=message,
             message_id=message_id,
@@ -481,13 +668,13 @@ class JobService:
             message_metadata=dict(message_metadata or {}),
         )
 
-        self._jobs[job_id] = job
+        self._jobs[resolved_job_id] = job
 
         if self._bus is None:
             raise RuntimeError("JobService 未绑定 JobEventBus")
 
         await self._bus.publish(
-            job_id=job_id,
+            job_id=resolved_job_id,
             event_type=EventType.JOB_CREATED,
             payload={
                 "session_id": session_id,
@@ -500,12 +687,12 @@ class JobService:
             },
             agent_id="job_service"
         )
-        logger.info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", job_id, session_id)
+        logger.info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", resolved_job_id, session_id)
 
         dispatch = await self._enqueue_or_dispatch(job, pending_kind=pending_kind)
         logger.info(
             "[job_service] enqueue_or_dispatch result: job_id=%s status=%s blocked_by=%s queued_ahead=%s pending=%s",
-            job_id,
+            resolved_job_id,
             dispatch.job_status,
             dispatch.blocked_by_job_id,
             dispatch.queued_jobs_ahead,
@@ -515,7 +702,7 @@ class JobService:
             snapshot = await self._pending_requests.list(session_id)
             await self._pending_requests.persist(snapshot)
             await self._bus.publish(
-                job_id=job_id,
+                job_id=resolved_job_id,
                 event_type=EventType.STATUS_CHANGE,
                 payload={
                     "status": JobStatus.queued.value,
@@ -530,6 +717,48 @@ class JobService:
             )
 
         return dispatch
+
+    def _existing_dispatch_snapshot(
+        self,
+        job: JobState,
+    ) -> JobDispatchSnapshotDTO:
+        if self._is_terminal_status(job.status):
+            raise RuntimeError(f"预留 Job 已结束，不能重复派发: {job.job_id}")
+        queued_ids = self._pending_queue.ids(job.session_id)
+        if job.job_id in queued_ids:
+            queued_ahead = queued_ids.index(job.job_id)
+            active_job_id = self._session_current_job.get(job.session_id)
+            if active_job_id is None:
+                raise RuntimeError(
+                    f"持久队列中的 Job 缺少活动任务: job_id={job.job_id}"
+                )
+            return JobDispatchSnapshotDTO(
+                session_id=job.session_id,
+                job_id=job.job_id,
+                job_status="queued",
+                active_job_id=active_job_id,
+                blocked_by_job_id=active_job_id,
+                queued_jobs_ahead=queued_ahead,
+                queued_job_count=len(queued_ids),
+                pending_job_count=1 + len(queued_ids),
+                pending_kind=job.pending_kind or "queued",
+            )
+        if self._session_current_job.get(job.session_id) != job.job_id:
+            raise RuntimeError(
+                "非终态 Job 既不在活动槽也不在持久队列: "
+                f"job_id={job.job_id}, session_id={job.session_id}"
+            )
+        return JobDispatchSnapshotDTO(
+            session_id=job.session_id,
+            job_id=job.job_id,
+            job_status="running",
+            active_job_id=job.job_id,
+            blocked_by_job_id=None,
+            queued_jobs_ahead=0,
+            queued_job_count=len(queued_ids),
+            pending_job_count=1 + len(queued_ids),
+            pending_kind=None,
+        )
 
     def _is_terminal_status(self, status: JobStatus) -> bool:
         return status in {
@@ -776,11 +1005,20 @@ class JobService:
 
     async def _ensure_pending_loaded(self, session_id: str) -> None:
         async with self._pending_restore_lock:
+            async with self._dispatch_lock:
+                if session_id in self._deleting_sessions:
+                    raise RuntimeError(
+                        f"会话正在删除，拒绝恢复待处理队列: {session_id}"
+                    )
             should_resume = False
             records = await self._pending_requests.load_once(session_id)
             if not records:
                 return
             async with self._dispatch_lock:
+                if session_id in self._deleting_sessions:
+                    raise RuntimeError(
+                        f"会话正在删除，拒绝恢复待处理队列: {session_id}"
+                    )
                 restored: list[tuple[str, PendingRequestKind]] = []
                 for record in sorted(records, key=lambda item: item.position):
                     self._jobs[record.job_id] = JobState(

@@ -34,6 +34,30 @@ class JobServiceProtocol(Protocol):
         operation: Callable[[], Awaitable[T]],
     ) -> T: ...
 
+    async def run_sessions_idle_operation(
+        self,
+        session_ids: list[str],
+        operation: Callable[[], Awaitable[T]],
+    ) -> T: ...
+
+    async def run_session_preparation(
+        self,
+        session_id: str,
+        operation: Callable[[], Awaitable[T]],
+    ) -> T: ...
+
+    async def run_session_delete_operation(
+        self,
+        session_id: str,
+        operation: Callable[[], Awaitable[T]],
+    ) -> T: ...
+
+    async def run_sessions_delete_operation(
+        self,
+        session_ids: list[str],
+        operation: Callable[[], Awaitable[T]],
+    ) -> T: ...
+
     async def list_steps(self, job_id: str) -> list[StepDTO]: ...
 
     async def control(
@@ -80,6 +104,7 @@ class JobServiceProtocol(Protocol):
         session_id: str,
         message: str,
         *,
+        job_id: str | None = None,
         agent_id: str = "default",
         message_id: str,
         attachments: list[AttachmentRef] | None = None,
