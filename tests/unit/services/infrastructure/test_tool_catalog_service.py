@@ -48,10 +48,10 @@ def test_catalog_only_exposes_extensions_enabled_by_resolved_policy(
                             "allowlist": ["web_search"],
                             "custom": [
                                 {
-                                    "name": "read_session_recent_text_messages",
+                                    "name": "read_context",
                                     "factory": (
                                         "app.agents.tools.session_history:"
-                                        "create_read_session_recent_text_messages_tool"
+                                        "create_read_context_tool"
                                     ),
                                 },
                                 {
@@ -105,10 +105,10 @@ def test_catalog_groups_default_session_context_extensions_as_collaboration(
                         "tools": {
                             "custom": [
                                 {
-                                    "name": "read_session_recent_text_messages",
+                                    "name": "read_context",
                                     "factory": (
                                         "app.agents.tools.session_history:"
-                                        "create_read_session_recent_text_messages_tool"
+                                        "create_read_context_tool"
                                     ),
                                 },
                             ],
@@ -131,7 +131,7 @@ def test_catalog_groups_default_session_context_extensions_as_collaboration(
         item["id"]: item
         for item in service.get_available_tools()
     }
-    session_reader = by_id["read_session_recent_text_messages"]
+    session_reader = by_id["read_context"]
     assert session_reader["group_id"] == "agent-collaboration"
     assert session_reader["group_name"] == "默认工具 · Agent Collaboration"
     assert session_reader["kind"] == "collaboration"

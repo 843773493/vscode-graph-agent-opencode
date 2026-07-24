@@ -176,5 +176,7 @@ async def test_big_pickle_chat_completions_multiturn_prompt_cache_hit_rate(
     provider = config_service.get_llm_provider("primary")
     assert provider["model"] == "big-pickle"
     assert provider["api_mode"] == "chat_completions"
+    assert "prompt_cache_key" not in provider.get("capabilities", [])
     statistics, _ = await _run_three_rounds(provider)
     _assert_cache_hit("big-pickle Chat Completions", statistics)
+    assert statistics[2][1] > statistics[1][1], statistics

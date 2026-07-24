@@ -144,7 +144,7 @@ def test_workspace_agents_middleware_reloads_latest_version_after_compaction(tmp
     state["_summarization_event"] = {
         "cutoff_index": 1,
         "summary_message": HumanMessage(content="已压缩历史"),
-        "file_path": "/.boxteam/sessions/ses_test/context/history.md",
+        "file_path": "/session-artifacts/ses_test/context/history.md",
     }
 
     compact_update = middleware.before_model(state, MagicMock())

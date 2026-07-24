@@ -149,11 +149,9 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 if normalized_block is not None:
                     normalized.append(part_state.decorate(normalized_block))
             content = normalized
-        metadata = dict(message.response_metadata)
-        metadata.setdefault("provider_id", self.provider_id)
         return ChatGenerationChunk(
             message=message.model_copy(
-                update={"content": content, "response_metadata": metadata}
+                update={"content": content}
             ),
             generation_info=generation_chunk.generation_info,
         )
@@ -179,10 +177,65 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 "store": self.responses_store,
             }
         )
-        return _construct_responses_api_payload(
+        responses_payload = _construct_responses_api_payload(
             self._history_messages(messages),
             payload,
         )
+        # TODO: LiteLLM 的 chatgpt provider 原生把 system/developer input
+        # 合并进 instructions 后，删除此兼容转换。
+        if self.custom_llm_provider == "chatgpt":
+            return self._move_system_messages_to_instructions(responses_payload)
+        return responses_payload
+
+    @staticmethod
+    def _move_system_messages_to_instructions(
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """ChatGPT Codex endpoint 只接受 instructions，不接受 system input。"""
+        input_items = payload.get("input")
+        if not isinstance(input_items, list):
+            return payload
+
+        instruction_parts: list[str] = []
+        remaining_items: list[Any] = []
+        for item in input_items:
+            if not isinstance(item, dict) or item.get("role") not in {
+                "system",
+                "developer",
+            }:
+                remaining_items.append(item)
+                continue
+
+            content = item.get("content")
+            if isinstance(content, str):
+                instruction_parts.append(content)
+                continue
+            if not isinstance(content, list):
+                raise TypeError("ChatGPT system message content 必须是字符串或内容块列表")
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") not in {
+                    "text",
+                    "input_text",
+                }:
+                    raise TypeError("ChatGPT system message 只支持文本内容块")
+                text = block.get("text")
+                if not isinstance(text, str):
+                    raise TypeError("ChatGPT system message 文本块缺少 text 字符串")
+                instruction_parts.append(text)
+
+        if not instruction_parts:
+            return payload
+        existing_instructions = payload.get("instructions")
+        if existing_instructions is not None:
+            if not isinstance(existing_instructions, str):
+                raise TypeError("Responses instructions 必须是字符串")
+            instruction_parts.insert(0, existing_instructions)
+
+        return {
+            **payload,
+            "input": remaining_items,
+            "instructions": "\n\n".join(instruction_parts),
+        }
 
     def _convert_response_event(
         self,
@@ -375,15 +428,17 @@ def build_openai_responses_model(
         if name in runtime_config:
             request_parameters[name] = runtime_config[name]
     request_parameters.update(request_options.get("overrides") or {})
-    request_parameters.update(
-        {
-            "prompt_cache_key": prompt_cache_key or f"boxteam:{provider['id']}",
-        }
-    )
+    if provider["custom_llm_provider"] == "chatgpt":
+        if prompt_cache_key is not None:
+            request_parameters["litellm_session_id"] = prompt_cache_key
+    else:
+        request_parameters["prompt_cache_key"] = (
+            prompt_cache_key or f"boxteam:{provider['id']}"
+        )
 
     return BoxteamOpenAIResponsesModel(
         model=provider["model"],
-        api_key=provider["api_key"],
+        api_key=provider.get("api_key"),
         api_base=provider.get("endpoint"),
         extra_headers=request_options.get("default_headers") or None,
         custom_llm_provider=provider["custom_llm_provider"],

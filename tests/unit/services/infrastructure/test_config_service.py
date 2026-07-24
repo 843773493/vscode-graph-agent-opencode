@@ -43,6 +43,38 @@ def _base_config() -> dict:
     }
 
 
+def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
+    config = _base_config()
+    config["llm"]["providers"].append(
+        {
+            "id": "backup_4",
+            "endpoint": "https://chatgpt.com/backend-api/codex",
+            "model": "gpt-5.6-luna",
+            "custom_llm_provider": "chatgpt",
+            "api_mode": "responses",
+            "auth": {"type": "oauth", "method": "chatgpt"},
+        }
+    )
+    config_path = _write_boxteam_config(tmp_path, config)
+
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    service.validate_boxteam_config()
+    assert service.get_llm_provider("backup_4")["auth"]["method"] == "chatgpt"
+
+
+def test_config_rejects_provider_without_api_key_or_oauth(tmp_path: Path):
+    config = _base_config()
+    del config["llm"]["providers"][0]["api_key"]
+    config_path = _write_boxteam_config(tmp_path, config)
+
+    with pytest.raises(jsonschema.ValidationError, match="api_key"):
+        ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+        ).validate_boxteam_config()
+
+
 @pytest.mark.asyncio
 async def test_get_public_config_resolves_default_model_from_agent_provider(tmp_path: Path):
     config_path = _write_boxteam_config(tmp_path, _base_config())
@@ -320,6 +352,24 @@ def test_logger_level_is_normalized_and_validated(tmp_path: Path) -> None:
         invalid_service.get_logger_level()
 
 
+def test_logger_pretty_is_read_and_validated(tmp_path: Path) -> None:
+    config = _base_config()
+    config["logger"]["pretty"] = False
+    config_path = _write_boxteam_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    assert service.get_logger_pretty() is False
+
+    config["logger"]["pretty"] = "yes"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    invalid_service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=config_path,
+    )
+    with pytest.raises(ValueError, match="logger.pretty 必须是布尔值"):
+        invalid_service.get_logger_pretty()
+
+
 def test_custom_tool_options_schema_accepts_embedding_config(tmp_path: Path) -> None:
     config = _base_config()
     config["agents"]["default"]["tools"] = {
@@ -399,6 +449,102 @@ def test_agent_runtime_omits_unspecified_generation_parameters(
     assert "temperature" not in runtime
     assert "top_p" not in runtime
     assert "max_output_tokens" not in runtime
+
+
+def test_agent_runtime_places_session_provider_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    config["llm"]["providers"].append(
+        {
+            "id": "backup",
+            "endpoint": "https://example.com/v1",
+            "model": "model-b",
+            "api_key": "${TEST_API_KEY}",
+            "custom_llm_provider": "openai",
+        }
+    )
+    config["agents"]["default"]["model"]["fallback_providers"] = ["backup"]
+    config_path = _write_boxteam_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    runtime = service.get_agent_runtime_config(
+        "default",
+        preferred_provider_id="backup",
+    )
+
+    assert [provider["id"] for provider in runtime["providers"]] == [
+        "backup",
+        "primary",
+    ]
+    assert service.resolve_agent_provider_id("default", "backup") == "backup"
+
+    with pytest.raises(ValueError, match="不允许使用 provider"):
+        service.get_agent_runtime_config(
+            "default",
+            preferred_provider_id="unknown",
+        )
+
+
+def test_workspace_session_defaults_are_persisted_without_changing_static_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    config["llm"]["providers"].append(
+        {
+            "id": "backup",
+            "endpoint": "https://example.com/v1",
+            "model": "model-b",
+            "api_key": "${TEST_API_KEY}",
+            "custom_llm_provider": "openai",
+        }
+    )
+    config["agents"]["default"]["model"]["fallback_providers"] = ["backup"]
+    config["agents"]["coder"] = {
+        "name": "Coder",
+        "instructions": {"system_prompt": "code"},
+        "model": {
+            "primary_provider": "primary",
+            "fallback_providers": ["backup"],
+        },
+    }
+    config_path = _write_boxteam_config(tmp_path, config)
+    workspace_root = tmp_path / "workspace"
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=config_path,
+        workspace_root=workspace_root,
+    )
+
+    service.set_workspace_default_agent("coder")
+    service.set_workspace_default_provider("coder", "backup")
+
+    restored = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=config_path,
+        workspace_root=workspace_root,
+    )
+    assert restored.get_workspace_default_agent_id() == "coder"
+    assert restored.get_workspace_default_provider_id("coder") == "backup"
+    assert restored.get_default_agent_id() == "default"
+    assert restored.resolve_agent_provider_id("coder") == "primary"
+    persisted = json.loads(
+        (
+            workspace_root
+            / ".boxteam"
+            / "settings"
+            / "session_defaults.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert persisted == {
+        "schema_version": 1,
+        "provider_by_agent": {"coder": "backup"},
+        "default_agent_id": "coder",
+    }
 
 
 def test_provider_request_override_schema_rejects_legacy_extra_body(

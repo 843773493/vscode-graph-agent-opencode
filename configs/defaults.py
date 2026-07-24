@@ -8,21 +8,25 @@ def _provider(
     provider_id: str,
     endpoint: str,
     model: str,
-    api_key_env: str,
+    api_key_env: str | None,
     provider_kind: str,
     *,
     api_mode: str = "chat_completions",
     capabilities: list[str] | None = None,
     request_options: dict[str, Any] | None = None,
+    auth: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "id": provider_id,
         "endpoint": endpoint,
         "model": model,
-        "api_key": f"${{{api_key_env}}}",
         "custom_llm_provider": provider_kind,
         "api_mode": api_mode,
     }
+    if api_key_env is not None:
+        result["api_key"] = f"${{{api_key_env}}}"
+    if auth is not None:
+        result["auth"] = auth
     if capabilities:
         result["capabilities"] = capabilities
     if request_options:
@@ -49,7 +53,7 @@ def _agent(
             "fallback_providers": (
                 fallback_providers
                 if fallback_providers is not None
-                else ["backup_1", "backup_2", "backup_3"]
+                else ["backup_1", "backup_2", "backup_3", "backup_4"]
             ),
         },
     }
@@ -61,16 +65,12 @@ def _agent(
 def _default_custom_tools() -> list[dict[str, Any]]:
     return [
         {
-            "name": "read_session_recent_text_messages",
-            "factory": "app.agents.tools.session_history:create_read_session_recent_text_messages_tool",
+            "name": "read_context",
+            "factory": "app.agents.tools.session_history:create_read_context_tool",
         },
         {
-            "name": "grep_session_context_jsonl",
-            "factory": "app.agents.tools.session_history:create_grep_session_context_jsonl_tool",
-        },
-        {
-            "name": "read_session_context_jsonl",
-            "factory": "app.agents.tools.session_history:create_read_session_context_jsonl_tool",
+            "name": "search_context",
+            "factory": "app.agents.tools.session_history:create_search_context_tool",
         },
         {
             "name": "web_search",
@@ -171,6 +171,16 @@ def build_boxteam_config(
                             }
                         }
                     },
+                ),
+                _provider(
+                    "backup_4",
+                    "https://chatgpt.com/backend-api/codex",
+                    "gpt-5.6-luna",
+                    None,
+                    "chatgpt",
+                    api_mode="responses",
+                    capabilities=["image_input"],
+                    auth={"type": "oauth", "method": "chatgpt"},
                 ),
             ]
         },

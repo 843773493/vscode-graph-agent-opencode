@@ -67,7 +67,7 @@
         },
         "pretty": {
           "type": "boolean",
-          "description": "是否使用便于本地阅读的日志格式。修改后需要重启工作区后端。",
+          "description": "是否使用带 UTC 时间戳的本地易读格式；false 使用不带时间戳的紧凑文本格式。进程日志始终是文本流，不承诺 JSONL。修改后需要重启工作区后端。",
           "default": true
         }
       }
@@ -293,8 +293,27 @@
         "id",
         "endpoint",
         "model",
-        "api_key",
         "custom_llm_provider"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": ["auth"]
+          },
+          "then": {
+            "properties": {
+              "custom_llm_provider": {
+                "const": "chatgpt"
+              },
+              "api_mode": {
+                "const": "responses"
+              }
+            }
+          },
+          "else": {
+            "required": ["api_key"]
+          }
+        }
       ],
       "properties": {
         "id": {
@@ -317,6 +336,20 @@
           "description": "Can be a literal API key string, or an environment variable reference like ${OPENAI_API_KEY}.",
           "type": "string",
           "minLength": 1
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "method"],
+          "description": "Provider 专属认证。ChatGPT OAuth 凭据由 LiteLLM 在 BOXTEAM_HOME/auth/chatgpt 下独立维护。",
+          "properties": {
+            "type": {
+              "const": "oauth"
+            },
+            "method": {
+              "const": "chatgpt"
+            }
+          }
         },
         "custom_llm_provider": {
           "type": "string",

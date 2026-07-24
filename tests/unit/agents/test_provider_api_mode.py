@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from langchain_core.messages import message_chunk_to_message
+import pytest
+
+from langchain_core.messages import HumanMessage, SystemMessage, message_chunk_to_message
 
 from app.agents.agent_factory import build_model_from_provider
 from app.agents.providers.litellm_chat import (
@@ -82,6 +84,56 @@ def test_responses_mode_uses_encrypted_reasoning_and_stable_cache_key():
     assert model.responses_store is False
     assert model.responses_include == ["reasoning.encrypted_content"]
     assert model._client_params["prompt_cache_key"] == "session-123"
+
+
+def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
+    monkeypatch.setattr(
+        "app.runtime.chatgpt_auth.configure_litellm_chatgpt_auth_directory",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "app.runtime.chatgpt_auth.ensure_litellm_chatgpt_model_capabilities",
+        lambda _: False,
+    )
+    provider = {
+        "id": "backup_4",
+        "endpoint": "https://chatgpt.com/backend-api/codex",
+        "model": "gpt-5.6-luna",
+        "custom_llm_provider": "chatgpt",
+        "api_mode": "responses",
+        "auth": {"type": "oauth", "method": "chatgpt"},
+    }
+
+    model = build_model_from_provider(
+        provider,
+        {},
+        prompt_cache_key="ses_chatgpt_cache_affinity",
+    )
+
+    assert isinstance(model, BoxteamOpenAIResponsesModel)
+    assert model._client_params["custom_llm_provider"] == "chatgpt"
+    assert (
+        model._client_params["litellm_session_id"]
+        == "ses_chatgpt_cache_affinity"
+    )
+    assert "prompt_cache_key" not in model._client_params
+
+    payload = model._responses_payload(
+        [SystemMessage(content="项目系统指令"), HumanMessage(content="用户问题")],
+        None,
+        {},
+    )
+    assert payload["instructions"] == "项目系统指令"
+    assert [item.get("role") for item in payload["input"]] == ["user"]
+    assert payload["litellm_session_id"] == "ses_chatgpt_cache_affinity"
+
+
+def test_chatgpt_provider_rejects_missing_oauth_config():
+    provider = _provider("responses")
+    provider["custom_llm_provider"] = "chatgpt"
+
+    with pytest.raises(ValueError, match="auth.type='oauth'"):
+        build_model_from_provider(provider, {})
 
 
 def test_responses_history_replays_encrypted_reasoning_without_server_id():

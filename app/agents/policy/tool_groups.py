@@ -44,9 +44,8 @@ DIRECT_AGENT_COLLABORATION_TOOL_NAMES = frozenset(
 )
 AGENT_COLLABORATION_EXTENSION_TOOL_NAMES = frozenset(
     {
-        "read_session_recent_text_messages",
-        "grep_session_context_jsonl",
-        "read_session_context_jsonl",
+        "read_context",
+        "search_context",
     }
 )
 AGENT_COLLABORATION_TOOL_NAMES = (

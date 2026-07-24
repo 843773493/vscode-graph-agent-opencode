@@ -43,6 +43,24 @@ def test_build_boxteam_config_only_enables_development_features_when_requested()
         for item in development["agents"]["default"]["tools"]["custom"]
     }
     assert "test_tool_2" in custom_names
+    providers = {
+        provider["id"]: provider for provider in production["llm"]["providers"]
+    }
+    assert providers["backup_4"] == {
+        "id": "backup_4",
+        "endpoint": "https://chatgpt.com/backend-api/codex",
+        "model": "gpt-5.6-luna",
+        "custom_llm_provider": "chatgpt",
+        "api_mode": "responses",
+        "capabilities": ["image_input"],
+        "auth": {"type": "oauth", "method": "chatgpt"},
+    }
+    assert production["agents"]["default"]["model"]["fallback_providers"] == [
+        "backup_1",
+        "backup_2",
+        "backup_3",
+        "backup_4",
+    ]
 
 
 def test_build_boxteam_config_can_enable_gateway_e2e_workspace() -> None:

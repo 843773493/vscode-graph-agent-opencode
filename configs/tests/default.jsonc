@@ -10,8 +10,7 @@
         "custom_llm_provider": "openai",
         "api_mode": "chat_completions",
         "capabilities": [
-          "reasoning_content_replay",
-          "prompt_cache_key"
+          "reasoning_content_replay"
         ]
       },
       {
@@ -48,6 +47,20 @@
             }
           }
         }
+      },
+      {
+        "id": "backup_4",
+        "endpoint": "https://chatgpt.com/backend-api/codex",
+        "model": "gpt-5.6-luna",
+        "custom_llm_provider": "chatgpt",
+        "api_mode": "responses",
+        "auth": {
+          "type": "oauth",
+          "method": "chatgpt"
+        },
+        "capabilities": [
+          "image_input"
+        ]
       }
     ]
   },
@@ -76,7 +89,8 @@
         "fallback_providers": [
           "backup_1",
           "backup_2",
-          "backup_3"
+          "backup_3",
+          "backup_4"
         ]
       },
       "tools": {
@@ -93,16 +107,12 @@
             "factory": "app.agents.tools.testing:create_large_test_output_tool"
           },
           {
-            "name": "read_session_recent_text_messages",
-            "factory": "app.agents.tools.session_history:create_read_session_recent_text_messages_tool"
+            "name": "read_context",
+            "factory": "app.agents.tools.session_history:create_read_context_tool"
           },
           {
-            "name": "grep_session_context_jsonl",
-            "factory": "app.agents.tools.session_history:create_grep_session_context_jsonl_tool"
-          },
-          {
-            "name": "read_session_context_jsonl",
-            "factory": "app.agents.tools.session_history:create_read_session_context_jsonl_tool"
+            "name": "search_context",
+            "factory": "app.agents.tools.session_history:create_search_context_tool"
           },
           {
             "name": "web_search",
@@ -235,7 +245,8 @@
         "fallback_providers": [
           "backup_1",
           "backup_2",
-          "backup_3"
+          "backup_3",
+          "backup_4"
         ]
       },
       "tools": {
@@ -317,7 +328,8 @@
         "fallback_providers": [
           "backup_1",
           "backup_2",
-          "backup_3"
+          "backup_3",
+          "backup_4"
         ]
       },
       "tools": {
@@ -402,7 +414,8 @@
         "fallback_providers": [
           "backup_1",
           "backup_2",
-          "backup_3"
+          "backup_3",
+          "backup_4"
         ]
       },
       "tools": {

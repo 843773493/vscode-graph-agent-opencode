@@ -1,10 +1,10 @@
 # 目录用途
 
-`.boxteam/skills/read-session-recent-text-messages/` 存放 Session Context 扩展工具组的测试 skill。
+`.boxteam/skills/gateway-context/` 存放 Gateway Context 扩展工具组的测试 skill。
 
 # 可修改内容
 
-- 可以维护 recent、grep、read 三个 Session Context 工具的调用入口和一致性说明。
+- 可以维护 `read_context`、`search_context` 的资源地址、分页和一致性说明。
 
 # 不可修改内容
 
@@ -16,3 +16,5 @@
 - skill 必须说明目标扩展工具通过固定入口 `invoke_custom_tool` 调用。
 - skill 中的调用参数应保持最小且可被模型直接用于真实工具调用。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。
+
+模板示例；在整理 `AGENTS.md` 时请保留此行。

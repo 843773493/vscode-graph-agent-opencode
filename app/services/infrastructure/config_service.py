@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
@@ -44,6 +45,8 @@ def get_config_path() -> str | None:
 
 
 class ConfigService:
+    _WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION = 1
+
     def __init__(
         self,
         *,
@@ -461,6 +464,107 @@ class ConfigService:
 
         return "default"
 
+    def get_workspace_default_agent_id(self) -> str:
+        payload = self._read_workspace_session_defaults()
+        configured = payload.get("default_agent_id")
+        if configured is None:
+            return self.get_default_agent_id()
+        if not isinstance(configured, str) or not configured:
+            raise TypeError("工作区默认 Agent 必须是非空字符串")
+        return self.validate_agent_id(configured)
+
+    def get_workspace_default_provider_id(self, agent_id: str) -> str:
+        resolved_agent_id = self.validate_agent_id(agent_id)
+        payload = self._read_workspace_session_defaults()
+        raw_providers = payload.get("provider_by_agent", {})
+        if not isinstance(raw_providers, dict):
+            raise TypeError("工作区默认 provider 映射必须是对象")
+        configured = raw_providers.get(resolved_agent_id)
+        if configured is None:
+            return self.resolve_agent_provider_id(resolved_agent_id)
+        if not isinstance(configured, str) or not configured:
+            raise TypeError(
+                f"工作区默认 provider 必须是非空字符串: agent={resolved_agent_id}"
+            )
+        return self.resolve_agent_provider_id(resolved_agent_id, configured)
+
+    def set_workspace_default_agent(self, agent_id: str) -> None:
+        resolved_agent_id = self.validate_agent_id(agent_id)
+        payload = self._read_workspace_session_defaults()
+        payload["default_agent_id"] = resolved_agent_id
+        self._write_workspace_session_defaults(payload)
+
+    def set_workspace_default_provider(
+        self,
+        agent_id: str,
+        provider_id: str,
+    ) -> None:
+        resolved_agent_id = self.validate_agent_id(agent_id)
+        resolved_provider_id = self.resolve_agent_provider_id(
+            resolved_agent_id,
+            provider_id,
+        )
+        payload = self._read_workspace_session_defaults()
+        raw_providers = payload.get("provider_by_agent", {})
+        if not isinstance(raw_providers, dict):
+            raise TypeError("工作区默认 provider 映射必须是对象")
+        payload["provider_by_agent"] = {
+            **raw_providers,
+            resolved_agent_id: resolved_provider_id,
+        }
+        self._write_workspace_session_defaults(payload)
+
+    def resolve_new_session_agent_id(self, agent_id: str | None) -> str:
+        if agent_id is not None:
+            return self.validate_agent_id(agent_id)
+        return self.get_workspace_default_agent_id()
+
+    def resolve_new_session_provider_id(self, agent_id: str) -> str:
+        return self.get_workspace_default_provider_id(agent_id)
+
+    def _workspace_session_defaults_path(self) -> Path:
+        if self._workspace_root is None:
+            raise RuntimeError("ConfigService 未绑定工作区，无法保存工作区会话默认值")
+        return (
+            self._workspace_root
+            / ".boxteam"
+            / "settings"
+            / "session_defaults.json"
+        )
+
+    def _read_workspace_session_defaults(self) -> dict[str, Any]:
+        if self._workspace_root is None:
+            return {
+                "schema_version": self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION,
+                "provider_by_agent": {},
+            }
+        path = self._workspace_session_defaults_path()
+        if not path.exists():
+            return {
+                "schema_version": self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION,
+                "provider_by_agent": {},
+            }
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise TypeError(f"工作区会话默认值必须是对象: {path}")
+        if payload.get("schema_version") != self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION:
+            raise ValueError(f"工作区会话默认值版本非法: {path}")
+        return payload
+
+    def _write_workspace_session_defaults(self, payload: dict[str, Any]) -> None:
+        path = self._workspace_session_defaults_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        persisted = {
+            **payload,
+            "schema_version": self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION,
+        }
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(persisted, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
     def _normalize_agent_id(self, agent_id: str | None) -> str:
         if not agent_id:
             return self.get_default_agent_id()
@@ -526,6 +630,16 @@ class ConfigService:
             )
         return normalized_level
 
+    def get_logger_pretty(self) -> bool:
+        config = self._get_effective_config()
+        logger_config = config.get("logger", {})
+        if not isinstance(logger_config, dict):
+            raise ValueError("logger 配置必须是对象")
+        pretty = logger_config.get("pretty", True)
+        if not isinstance(pretty, bool):
+            raise ValueError("logger.pretty 必须是布尔值")
+        return pretty
+
     def development_test_tools_enabled(self) -> bool:
         config = self._get_effective_config()
         development = config.get("development", {})
@@ -538,7 +652,11 @@ class ConfigService:
             raise ValueError("development.test_tools 必须是布尔值")
         return enabled
 
-    def get_agent_runtime_config(self, agent_id: str | None = None) -> dict[str, Any]:
+    def get_agent_runtime_config(
+        self,
+        agent_id: str | None = None,
+        preferred_provider_id: str | None = None,
+    ) -> dict[str, Any]:
         config = self._get_effective_config()
         providers = self.get_llm_providers()
 
@@ -576,6 +694,16 @@ class ConfigService:
             raise ValueError(f"agent {resolved_agent_id} 缺少 model.primary_provider 配置")
 
         provider_ids = [primary_provider, *fallback_providers]
+        if preferred_provider_id is not None:
+            if preferred_provider_id not in provider_ids:
+                raise ValueError(
+                    f"agent {resolved_agent_id} 不允许使用 provider: "
+                    f"{preferred_provider_id}"
+                )
+            provider_ids = [
+                preferred_provider_id,
+                *(item for item in provider_ids if item != preferred_provider_id),
+            ]
         selected_providers = []
         for provider_id in provider_ids:
             provider = provider_map.get(provider_id)
@@ -593,6 +721,23 @@ class ConfigService:
             if option_name in model_cfg:
                 runtime_config[option_name] = model_cfg[option_name]
         return runtime_config
+
+    def resolve_agent_provider_id(
+        self,
+        agent_id: str | None,
+        provider_id: str | None = None,
+    ) -> str:
+        runtime = self.get_agent_runtime_config(
+            agent_id,
+            preferred_provider_id=provider_id,
+        )
+        providers = runtime["providers"]
+        if not providers:
+            raise ValueError(f"agent {self._normalize_agent_id(agent_id)} 没有可用 provider")
+        resolved = providers[0].get("id")
+        if not isinstance(resolved, str) or not resolved:
+            raise ValueError("LLM provider 缺少非空 id")
+        return resolved
 
     def get_agent_tool_config(self, agent_id: str | None = None) -> dict[str, Any]:
         config = self._get_effective_config()

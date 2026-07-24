@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from deepagents.middleware.permissions import FilesystemPermission
@@ -13,7 +14,6 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from app.core.path_utils import get_workspace_root
 from app.agents.agent_tools import build_default_tools
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
@@ -91,6 +91,23 @@ def build_model_from_provider(
             "缺少 llm.providers[].custom_llm_provider 配置"
         )
 
+    if custom_llm_provider == "chatgpt":
+        from app.runtime.chatgpt_auth import (
+            configure_litellm_chatgpt_auth_directory,
+            ensure_litellm_chatgpt_model_capabilities,
+            is_chatgpt_oauth_provider,
+        )
+
+        if not is_chatgpt_oauth_provider(provider):
+            raise ValueError(
+                "ChatGPT provider 必须配置 auth.type='oauth' 和 "
+                "auth.method='chatgpt'"
+            )
+        if provider.get("api_mode") != "responses":
+            raise ValueError("ChatGPT OAuth provider 必须配置 api_mode='responses'")
+        configure_litellm_chatgpt_auth_directory()
+        ensure_litellm_chatgpt_model_capabilities(provider["model"])
+
     request_options = _get_provider_request_options(provider)
     api_mode = provider.get("api_mode", "chat_completions")
     if api_mode == "responses":
@@ -142,11 +159,15 @@ def build_runtime_for_agent(
     config_service: ConfigService | None = None,
     *,
     prompt_cache_key: str | None = None,
+    preferred_provider_id: str | None = None,
 ) -> dict[str, Any]:
     if config_service is None:
         raise RuntimeError("build_runtime_for_agent 需要显式传入 ConfigService")
     service = config_service
-    runtime_config = service.get_agent_runtime_config(agent_id)
+    runtime_config = service.get_agent_runtime_config(
+        agent_id,
+        preferred_provider_id=preferred_provider_id,
+    )
     providers = runtime_config["providers"]
 
     candidates = []
@@ -213,6 +234,7 @@ def create_my_deep_agent(
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
+    workspace_root: Path,
 ) -> Any:
     if checkpointer is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
@@ -246,7 +268,7 @@ def create_my_deep_agent(
     if workspace_session_context_client is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 WorkspaceSessionContextClient")
 
-    workspace_root = get_workspace_root()
+    workspace_root = workspace_root.resolve()
 
     if tools is not None:
         resolved_tools = list(tools)
@@ -406,6 +428,8 @@ def create_runtime_deep_agent_for_session(
     name: str | None = None,
     override_model: Any = None,
     model_routing_enabled: bool = True,
+    preferred_provider_id: str | None = None,
+    workspace_root: Path,
 ):
     if config_service is None:
         raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
@@ -414,6 +438,7 @@ def create_runtime_deep_agent_for_session(
         agent_id=agent_id,
         config_service=service,
         prompt_cache_key=session_id,
+        preferred_provider_id=preferred_provider_id,
     )
     tool_config = service.get_agent_tool_config(agent_id)
     tool_policy = service.resolve_agent_tool_policy(agent_id)
@@ -456,4 +481,5 @@ def create_runtime_deep_agent_for_session(
         mcp_tools=mcp_tools,
         interrupt_on={tool_name: True for tool_name in confirmation_tool_names},
         config_service=service,
+        workspace_root=workspace_root,
     )
