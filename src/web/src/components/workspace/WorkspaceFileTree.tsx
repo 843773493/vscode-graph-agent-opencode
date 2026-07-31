@@ -1,19 +1,59 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_BACKEND_PORT, getWorkspaceFiles } from "../../api";
-import type { WorkspaceFileNode } from "../../types/backend";
-
-interface DirectoryState {
-  items: WorkspaceFileNode[];
-  loading: boolean;
-  error: string | null;
-  truncated: boolean;
-}
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import { Virtuoso } from "react-virtuoso";
+import {
+  addSessionFileTreeShortcut,
+  applyFileTreeShortcutToWorkspace,
+  createWorkspaceFileEntry,
+  decodeFileTreePath,
+  DEFAULT_BACKEND_PORT,
+  filesystemFileTreePath,
+  getSessionFileTreeSettings,
+  getWorkspaceFiles,
+  pasteWorkspaceFileEntries,
+  removeSessionFileTreeShortcut,
+  revealWorkspaceFileEntry,
+} from "../../api";
+import type {
+  FileTreeShortcut,
+  SessionFileTreeSettings,
+  WorkspaceFileList,
+  WorkspaceFileNode,
+} from "../../types/backend";
+import {
+  copyTextToClipboard,
+  readFilePathTextFromClipboard,
+} from "../../utils/clipboard";
+import {
+  WORKSPACE_FILE_CHANGES_EVENT,
+  type WorkspaceFileChangesEventDetail,
+} from "../../state/workspaceFileTreeEvents";
+import { useWorkspaceFileWatch } from "../../hooks/useWorkspaceFileWatch";
+import AnchoredOverlay from "../AnchoredOverlay";
+import {
+  type DirectoryCacheEntry,
+  pruneDirectoryCache,
+  restoreDirectoriesInOrder,
+} from "./workspaceFileTreeCache";
+import {
+  buildVisibleFileTreeRows,
+  FILE_TREE_VIRTUALIZATION_THRESHOLD,
+  type WorkspaceFileTreeRow,
+} from "./workspaceFileTreeRows";
 
 interface WorkspaceFileTreeProps {
+  active: boolean;
   apiPort: number | null;
   workspaceId: string | null;
   workspaceName: string | null;
   workspaceRoot: string | null;
+  sessionId: string;
   activeFilePath: string | null;
   searchOpen: boolean;
   collapseVersion: number;
@@ -24,6 +64,22 @@ interface WorkspaceFileTreeProps {
 }
 
 const ROOT_PATH = "";
+const FILESYSTEM_ROOT_PATH = filesystemFileTreePath("/");
+
+interface FileTreeContextMenu {
+  treePath: string;
+  absolutePath: string;
+  label: string;
+  kind: WorkspaceFileNode["kind"];
+  shortcutSource: "session" | "workspace" | null;
+  x: number;
+  y: number;
+}
+
+interface DirectoryRequest {
+  controller: AbortController;
+  promise: Promise<boolean>;
+}
 
 function fileIcon(node: WorkspaceFileNode): string {
   if (node.kind === "directory") {
@@ -52,11 +108,112 @@ function shortWorkspaceLabel(workspaceRoot: string | null, workspaceName: string
   return workspaceName || workspaceRoot?.split(/[\\/]/).filter(Boolean).pop() || "workspace";
 }
 
+function parentFileTreePath(treePath: string): string {
+  const location = decodeFileTreePath(treePath);
+  const normalized = location.path.replace(/\\/g, "/").replace(/\/$/, "");
+  const separatorIndex = normalized.lastIndexOf("/");
+  if (location.scope === "workspace") {
+    return separatorIndex < 0 ? ROOT_PATH : normalized.slice(0, separatorIndex);
+  }
+  let parent = separatorIndex <= 0 ? "/" : normalized.slice(0, separatorIndex);
+  if (/^[A-Za-z]:$/.test(parent)) {
+    parent += "/";
+  }
+  return filesystemFileTreePath(parent);
+}
+
+function changedPathToTreePath(
+  path: string,
+  workspaceRoot: string | null,
+): string | null {
+  const normalized = path.trim().replace(/\\/g, "/");
+  if (!normalized) {
+    return null;
+  }
+  const isAbsolute = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
+  if (!isAbsolute) {
+    const relative = normalized.replace(/^\.\//, "");
+    if (relative.split("/").includes("..")) {
+      return null;
+    }
+    return relative;
+  }
+  const rawRoot = workspaceRoot?.replace(/\\/g, "/") ?? "";
+  const normalizedRoot = rawRoot === "/" ? "/" : rawRoot.replace(/\/$/, "");
+  const comparePath = /^[A-Za-z]:\//.test(normalized)
+    ? normalized.toLowerCase()
+    : normalized;
+  const compareRoot = /^[A-Za-z]:\//.test(normalizedRoot)
+    ? normalizedRoot.toLowerCase()
+    : normalizedRoot;
+  if (compareRoot && comparePath === compareRoot) {
+    return ROOT_PATH;
+  }
+  if (compareRoot === "/" && comparePath.startsWith("/")) {
+    return normalized.slice(1);
+  }
+  if (compareRoot && comparePath.startsWith(`${compareRoot}/`)) {
+    return normalized.slice(normalizedRoot.length + 1);
+  }
+  return filesystemFileTreePath(normalized);
+}
+
+function isTreePathInside(candidate: string, ancestor: string): boolean {
+  const candidateLocation = decodeFileTreePath(candidate);
+  const ancestorLocation = decodeFileTreePath(ancestor);
+  if (candidateLocation.scope !== ancestorLocation.scope) {
+    return false;
+  }
+  const candidatePath = candidateLocation.path.replace(/\\/g, "/").replace(/\/$/, "");
+  const ancestorPath = ancestorLocation.path.replace(/\\/g, "/").replace(/\/$/, "");
+  if (!ancestorPath) {
+    return true;
+  }
+  return candidatePath === ancestorPath || candidatePath.startsWith(`${ancestorPath}/`);
+}
+
+export function parseClipboardFilePaths(text: string): [string, ...string[]] {
+  const paths = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => (
+      line
+      && line !== "copy"
+      && line !== "cut"
+      && !line.startsWith("#")
+    ))
+    .map((line) => {
+      const unquoted = line.length >= 2 && line.startsWith('"') && line.endsWith('"')
+        ? line.slice(1, -1)
+        : line;
+      if (unquoted.startsWith("file://")) {
+        const url = new URL(unquoted);
+        const decodedPath = decodeURIComponent(url.pathname);
+        if (url.hostname) {
+          return `//${url.hostname}${decodedPath}`;
+        }
+        return /^\/[A-Za-z]:\//.test(decodedPath)
+          ? decodedPath.slice(1)
+          : decodedPath;
+      }
+      if (unquoted.startsWith("/") || /^[A-Za-z]:[\\/]/.test(unquoted)) {
+        return unquoted;
+      }
+      throw new Error(`剪贴板内容不是绝对文件路径: ${unquoted}`);
+    });
+  if (paths.length === 0) {
+    throw new Error("剪贴板中没有可粘贴的文件路径");
+  }
+  return [...new Set(paths)] as [string, ...string[]];
+}
+
 export default function WorkspaceFileTree({
+  active,
   apiPort,
   workspaceId,
   workspaceName,
   workspaceRoot,
+  sessionId,
   activeFilePath,
   searchOpen,
   collapseVersion,
@@ -73,62 +230,446 @@ export default function WorkspaceFileTree({
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
     () => new Set(restoredExpandedPaths),
   );
-  const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
+  const [directories, setDirectories] = useState<Record<string, DirectoryCacheEntry>>({});
   const [searchQuery, setSearchQuery] = useState("");
+  const [settings, setSettings] = useState<SessionFileTreeSettings | null>(null);
+  const [contextMenu, setContextMenu] = useState<FileTreeContextMenu | null>(null);
   const lastCollapseVersionRef = useRef(collapseVersion);
+  const restoredExpandedPathsRef = useRef(restoredExpandedPaths);
+  const directoryRequestsRef = useRef<Map<string, DirectoryRequest>>(new Map());
+  const directoriesRef = useRef<Record<string, DirectoryCacheEntry>>({});
+  const shortcutTreePathsRef = useRef<Set<string>>(new Set());
+  const activeFilePathRef = useRef(activeFilePath);
+  const activeRef = useRef(active);
+  const previousActiveRef = useRef(active);
+  const expandedPathsRef = useRef(expandedPaths);
+  const pendingExpandedPersistenceRef = useRef<{
+    callback: (paths: string[]) => void;
+    paths: string[];
+  } | null>(null);
+  const expandedPersistenceTimerRef = useRef<number | null>(null);
+  const pendingFileChangesRef = useRef<Map<string, { kind: string; path: string }>>(
+    new Map(),
+  );
+  const fileChangeFlushTimerRef = useRef<number | null>(null);
+
+  const updateDirectories = useCallback((
+    updater: (
+      current: Record<string, DirectoryCacheEntry>,
+    ) => Record<string, DirectoryCacheEntry>,
+  ) => {
+    setDirectories((current) => {
+      const candidate = updater(current);
+      const protectedPaths = new Set(expandedPathsRef.current);
+      protectedPaths.add(ROOT_PATH);
+      protectedPaths.add(FILESYSTEM_ROOT_PATH);
+      for (const shortcutPath of shortcutTreePathsRef.current) {
+        protectedPaths.add(shortcutPath);
+      }
+      let activePath = activeFilePathRef.current;
+      const visitedActivePaths = new Set<string>();
+      while (activePath && !visitedActivePaths.has(activePath)) {
+        visitedActivePaths.add(activePath);
+        const parentPath = parentFileTreePath(activePath);
+        protectedPaths.add(parentPath);
+        activePath = parentPath;
+      }
+      const next = pruneDirectoryCache(candidate, protectedPaths);
+      directoriesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const acceptFileTreeSettings = useCallback((result: SessionFileTreeSettings) => {
+    shortcutTreePathsRef.current = new Set(
+      (result.effective_shortcuts ?? []).map((shortcut) => (
+        filesystemFileTreePath(shortcut.path)
+      )),
+    );
+    setSettings(result);
+    updateDirectories((current) => current);
+  }, [updateDirectories]);
+
+  const commitExpandedPaths = (next: Set<string>) => {
+    expandedPathsRef.current = next;
+    setExpandedPaths(next);
+  };
+
+  const flushExpandedPathsPersistence = useCallback(() => {
+    if (expandedPersistenceTimerRef.current !== null) {
+      window.clearTimeout(expandedPersistenceTimerRef.current);
+      expandedPersistenceTimerRef.current = null;
+    }
+    const pending = pendingExpandedPersistenceRef.current;
+    pendingExpandedPersistenceRef.current = null;
+    pending?.callback(pending.paths);
+  }, []);
+
+  const scheduleExpandedPathsPersistence = useCallback((paths: string[]) => {
+    pendingExpandedPersistenceRef.current = {
+      callback: onExpandedPathsChange,
+      paths,
+    };
+    if (expandedPersistenceTimerRef.current !== null) {
+      window.clearTimeout(expandedPersistenceTimerRef.current);
+    }
+    expandedPersistenceTimerRef.current = window.setTimeout(
+      flushExpandedPathsPersistence,
+      250,
+    );
+  }, [flushExpandedPathsPersistence, onExpandedPathsChange]);
+  const scheduleExpandedPathsPersistenceRef = useRef(
+    scheduleExpandedPathsPersistence,
+  );
+
+  useEffect(() => {
+    scheduleExpandedPathsPersistenceRef.current = scheduleExpandedPathsPersistence;
+  }, [scheduleExpandedPathsPersistence]);
+
+  useEffect(() => {
+    restoredExpandedPathsRef.current = restoredExpandedPaths;
+  }, [restoredExpandedPaths]);
+
+  useEffect(() => {
+    activeFilePathRef.current = activeFilePath;
+    updateDirectories((current) => current);
+  }, [activeFilePath, updateDirectories]);
+
+  useEffect(() => {
+    updateDirectories((current) => current);
+  }, [expandedPaths, updateDirectories]);
+
+  useEffect(() => flushExpandedPathsPersistence, [
+    flushExpandedPathsPersistence,
+    workspaceId,
+  ]);
 
   const loadDirectory = useCallback(
-    async (path: string): Promise<boolean> => {
-      setDirectories((prev) => ({
+    (path: string, force = false, append = false): Promise<boolean> => {
+      const existingRequest = directoryRequestsRef.current.get(path);
+      if (existingRequest && !force) {
+        return existingRequest.promise;
+      }
+      existingRequest?.controller.abort();
+      const currentEntry = directoriesRef.current[path];
+      const cursor = append ? currentEntry?.nextCursor : null;
+      if (append && !cursor) {
+        return Promise.resolve(true);
+      }
+      const controller = new AbortController();
+      updateDirectories((prev) => ({
         ...prev,
         [path]: {
           items: prev[path]?.items ?? [],
           loading: true,
           error: null,
           truncated: prev[path]?.truncated ?? false,
+          nextCursor: prev[path]?.nextCursor ?? null,
+          stale: prev[path]?.stale ?? false,
+          lastAccessedAt: Date.now(),
         },
       }));
 
-      try {
-        const result = await getWorkspaceFiles(port, path, workspaceId);
-        setDirectories((prev) => ({
-          ...prev,
-          [path]: {
-            items: result.items ?? [],
-            loading: false,
-            error: null,
-            truncated: result.truncated ?? false,
-          },
-        }));
-        return true;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setDirectories((prev) => ({
-          ...prev,
-          [path]: {
-            items: prev[path]?.items ?? [],
-            loading: false,
-            error: message,
-            truncated: prev[path]?.truncated ?? false,
-          },
-        }));
-        onStatusChange(`文件树加载失败: ${message}`);
-        return false;
-      }
+      const promise = (async (): Promise<boolean> => {
+        try {
+          const result = await getWorkspaceFiles(
+            port,
+            path,
+            workspaceId,
+            controller.signal,
+            cursor,
+          );
+          if (directoryRequestsRef.current.get(path)?.controller !== controller) {
+            return false;
+          }
+          updateDirectories((prev) => {
+            const previousItems = append ? prev[path]?.items ?? [] : [];
+            const itemsByPath = new Map(
+              previousItems.map((item) => [item.path, item]),
+            );
+            for (const item of result.items ?? []) {
+              itemsByPath.set(item.path, item);
+            }
+            return {
+              ...prev,
+              [path]: {
+                items: [...itemsByPath.values()],
+                loading: false,
+                error: null,
+                truncated: result.truncated ?? false,
+                nextCursor: result.next_cursor ?? null,
+                stale: false,
+                lastAccessedAt: Date.now(),
+              },
+            };
+          });
+          return true;
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") {
+            return false;
+          }
+          if (directoryRequestsRef.current.get(path)?.controller !== controller) {
+            return false;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          updateDirectories((prev) => ({
+            ...prev,
+            [path]: {
+              items: prev[path]?.items ?? [],
+              loading: false,
+              error: message,
+              truncated: prev[path]?.truncated ?? false,
+              nextCursor: prev[path]?.nextCursor ?? null,
+              stale: prev[path]?.stale ?? false,
+              lastAccessedAt: Date.now(),
+            },
+          }));
+          onStatusChange(`文件树加载失败: ${message}`);
+          return false;
+        } finally {
+          if (directoryRequestsRef.current.get(path)?.controller === controller) {
+            directoryRequestsRef.current.delete(path);
+          }
+        }
+      })();
+      directoryRequestsRef.current.set(path, { controller, promise });
+      return promise;
     },
-    [onStatusChange, port, workspaceId],
+    [onStatusChange, port, updateDirectories, workspaceId],
   );
 
-  useEffect(() => {
-    const restoredPaths = new Set(restoredExpandedPaths);
-    setExpandedPaths(restoredPaths);
-    setDirectories({});
-    for (const path of [...restoredPaths].sort(
-      (left, right) => left.split("/").length - right.split("/").length,
-    )) {
-      void loadDirectory(path);
+  const refreshExpandedDirectories = useCallback(() => {
+    updateDirectories((current) => Object.fromEntries(
+      Object.entries(current).map(([path, entry]) => [path, { ...entry, stale: true }]),
+    ));
+    for (const path of expandedPathsRef.current) {
+      if (directoriesRef.current[path]) {
+        void loadDirectory(path, true);
+      }
     }
-  }, [loadDirectory, restoredExpandedPaths, workspaceId, workspaceRoot]);
+  }, [loadDirectory, updateDirectories]);
+
+  const watchedShortcutPaths = useMemo(
+    () => (settings?.effective_shortcuts ?? [])
+      .map((shortcut) => shortcut.path)
+      .filter((path) => !/^\/$|^[A-Za-z]:[\\/]?$/.test(path.trim())),
+    [settings],
+  );
+  useWorkspaceFileWatch({
+    active: active && (!sessionId || settings !== null),
+    port,
+    workspaceId,
+    paths: watchedShortcutPaths,
+    onOverflow: refreshExpandedDirectories,
+    onStatusChange,
+  });
+
+  useEffect(() => {
+    const flushFileChanges = () => {
+      fileChangeFlushTimerRef.current = null;
+      const changes = [...pendingFileChangesRef.current.values()];
+      pendingFileChangesRef.current.clear();
+      const changedParents = new Set<string>();
+      let nextExpanded = new Set(expandedPathsRef.current);
+      let expandedChanged = false;
+
+      updateDirectories((current) => {
+        const next = { ...current };
+        for (const change of changes) {
+          const treePath = changedPathToTreePath(change.path, workspaceRoot);
+          if (treePath === null) {
+            onStatusChange(`忽略无法定位的文件变更路径: ${change.path}`);
+            continue;
+          }
+          changedParents.add(parentFileTreePath(treePath));
+          if (change.kind !== "delete") {
+            continue;
+          }
+          for (const cachedPath of Object.keys(next)) {
+            if (isTreePathInside(cachedPath, treePath)) {
+              delete next[cachedPath];
+            }
+          }
+          for (const expandedPath of nextExpanded) {
+            if (isTreePathInside(expandedPath, treePath)) {
+              nextExpanded.delete(expandedPath);
+              expandedChanged = true;
+            }
+          }
+        }
+        for (const parentPath of changedParents) {
+          const entry = next[parentPath];
+          if (
+            entry
+            && (!activeRef.current || !expandedPathsRef.current.has(parentPath))
+          ) {
+            next[parentPath] = { ...entry, stale: true };
+          }
+        }
+        return next;
+      });
+
+      if (expandedChanged) {
+        commitExpandedPaths(nextExpanded);
+        scheduleExpandedPathsPersistenceRef.current([...nextExpanded].sort());
+      }
+      for (const parentPath of changedParents) {
+        if (
+          activeRef.current
+          &&
+          expandedPathsRef.current.has(parentPath)
+          && directoriesRef.current[parentPath]
+        ) {
+          void loadDirectory(parentPath, true);
+        }
+      }
+    };
+
+    const handleFileChanges = (event: Event) => {
+      const detail = (event as CustomEvent<WorkspaceFileChangesEventDetail>).detail;
+      if (detail.workspaceId && detail.workspaceId !== workspaceId) {
+        return;
+      }
+      for (const change of detail.changes) {
+        pendingFileChangesRef.current.set(`${change.kind}:${change.path}`, change);
+      }
+      if (fileChangeFlushTimerRef.current !== null) {
+        window.clearTimeout(fileChangeFlushTimerRef.current);
+      }
+      fileChangeFlushTimerRef.current = window.setTimeout(flushFileChanges, 250);
+    };
+
+    window.addEventListener(WORKSPACE_FILE_CHANGES_EVENT, handleFileChanges);
+    return () => {
+      window.removeEventListener(WORKSPACE_FILE_CHANGES_EVENT, handleFileChanges);
+      if (fileChangeFlushTimerRef.current !== null) {
+        window.clearTimeout(fileChangeFlushTimerRef.current);
+        fileChangeFlushTimerRef.current = null;
+      }
+      pendingFileChangesRef.current.clear();
+    };
+  }, [
+    loadDirectory,
+    onStatusChange,
+    updateDirectories,
+    workspaceId,
+    workspaceRoot,
+  ]);
+
+  const absolutePathForTreePath = useCallback((treePath: string): string => {
+    const location = decodeFileTreePath(treePath);
+    if (location.scope === "filesystem") {
+      return location.path;
+    }
+    if (!workspaceRoot) {
+      throw new Error("当前工作区缺少根目录，无法添加快捷路径");
+    }
+    if (!location.path) {
+      return workspaceRoot;
+    }
+    const separator = workspaceRoot.includes("\\") ? "\\" : "/";
+    return `${workspaceRoot.replace(/[\\/]$/, "")}${separator}${location.path.split("/").join(separator)}`;
+  }, [workspaceRoot]);
+
+  const displayPathForTreePath = useCallback((treePath: string): string => {
+    const location = decodeFileTreePath(treePath);
+    if (location.scope === "filesystem" || workspaceRoot) {
+      return absolutePathForTreePath(treePath);
+    }
+    return location.path || rootLabel;
+  }, [absolutePathForTreePath, rootLabel, workspaceRoot]);
+
+  useEffect(() => {
+    shortcutTreePathsRef.current.clear();
+    setSettings(null);
+    updateDirectories((current) => current);
+    if (!sessionId) {
+      return;
+    }
+    let cancelled = false;
+    void getSessionFileTreeSettings(port, sessionId, workspaceId)
+      .then((result) => {
+        if (!cancelled) {
+          acceptFileTreeSettings(result);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error);
+          onStatusChange(`快捷路径加载失败: ${message}`);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    acceptFileTreeSettings,
+    onStatusChange,
+    port,
+    sessionId,
+    updateDirectories,
+    workspaceId,
+  ]);
+
+  useEffect(() => {
+    for (const request of directoryRequestsRef.current.values()) {
+      request.controller.abort();
+    }
+    directoryRequestsRef.current.clear();
+    const restoredPaths = new Set(restoredExpandedPathsRef.current);
+    commitExpandedPaths(restoredPaths);
+    directoriesRef.current = {};
+    setDirectories({});
+    if (activeRef.current) {
+      void restoreDirectoriesInOrder(
+        [...restoredPaths],
+        (path) => loadDirectory(path),
+        parentFileTreePath,
+      );
+    }
+    return () => {
+      for (const request of directoryRequestsRef.current.values()) {
+        request.controller.abort();
+      }
+      directoryRequestsRef.current.clear();
+    };
+  }, [loadDirectory, workspaceId, workspaceRoot]);
+
+  useEffect(() => {
+    const resumedAfterPause = !previousActiveRef.current && active;
+    previousActiveRef.current = active;
+    activeRef.current = active;
+    if (!active) {
+      const abortedPaths = [...directoryRequestsRef.current.keys()];
+      for (const request of directoryRequestsRef.current.values()) {
+        request.controller.abort();
+      }
+      directoryRequestsRef.current.clear();
+      updateDirectories((current) => {
+        const next = { ...current };
+        for (const path of abortedPaths) {
+          const entry = next[path];
+          if (entry) {
+            next[path] = { ...entry, loading: false };
+          }
+        }
+        return next;
+      });
+      return;
+    }
+    const pathsToRestore = [...expandedPathsRef.current].filter((path) => {
+      const entry = directoriesRef.current[path];
+      return resumedAfterPause || !entry || entry.stale;
+    });
+    void restoreDirectoriesInOrder(
+      pathsToRestore,
+      (path) => loadDirectory(
+        path,
+        resumedAfterPause || Boolean(directoriesRef.current[path]?.stale),
+      ),
+      parentFileTreePath,
+    );
+  }, [active, loadDirectory, updateDirectories]);
 
   useEffect(() => {
     if (lastCollapseVersionRef.current === collapseVersion) {
@@ -136,10 +677,10 @@ export default function WorkspaceFileTree({
     }
     lastCollapseVersionRef.current = collapseVersion;
     const collapsedPaths = [ROOT_PATH];
-    setExpandedPaths(new Set(collapsedPaths));
-    onExpandedPathsChange(collapsedPaths);
+    commitExpandedPaths(new Set(collapsedPaths));
+    scheduleExpandedPathsPersistence(collapsedPaths);
     onStatusChange("文件树已全部折叠");
-  }, [collapseVersion, onExpandedPathsChange, onStatusChange]);
+  }, [collapseVersion, onStatusChange, scheduleExpandedPathsPersistence]);
 
   useEffect(() => {
     if (!searchOpen) {
@@ -147,44 +688,224 @@ export default function WorkspaceFileTree({
     }
   }, [searchOpen]);
 
-  const handleRootClick = () => {
-    setExpandedPaths((prev) => {
-      const next = new Set(prev);
-      if (next.has(ROOT_PATH)) {
-        next.delete(ROOT_PATH);
-      } else {
-        next.add(ROOT_PATH);
-        if (!directories[ROOT_PATH]) {
-          void loadDirectory(ROOT_PATH);
-        }
+  const toggleDirectory = (path: string, status: string) => {
+    const next = new Set(expandedPathsRef.current);
+    const wasExpanded = next.has(path);
+    if (wasExpanded) {
+      next.delete(path);
+    } else {
+      next.add(path);
+    }
+    commitExpandedPaths(next);
+    scheduleExpandedPathsPersistence([...next].sort());
+    if (!wasExpanded) {
+      const cached = directoriesRef.current[path];
+      if (cached) {
+        updateDirectories((current) => ({
+          ...current,
+          [path]: {
+            ...cached,
+            lastAccessedAt: Date.now(),
+          },
+        }));
       }
-      onExpandedPathsChange([...next].sort());
-      return next;
+      if (!cached || cached.stale) {
+        void loadDirectory(path, Boolean(cached?.stale));
+      }
+    }
+    onStatusChange(status);
+  };
+
+  const openContextMenu = (
+    event: ReactMouseEvent,
+    treePath: string,
+    label: string,
+    kind: WorkspaceFileNode["kind"],
+    shortcutSource: "session" | "workspace" | null = null,
+  ) => {
+    event.preventDefault();
+    setContextMenu({
+      treePath,
+      absolutePath: absolutePathForTreePath(treePath),
+      label,
+      kind,
+      shortcutSource,
+      x: event.clientX,
+      y: event.clientY,
     });
-    onStatusChange(`工作区根目录: ${workspaceRoot || rootLabel}`);
+  };
+
+  const replaceDirectory = (result: WorkspaceFileList) => {
+    updateDirectories((prev) => ({
+      ...prev,
+      [result.path]: {
+        items: result.items ?? [],
+        loading: false,
+        error: null,
+        truncated: result.truncated ?? false,
+        nextCursor: result.next_cursor ?? null,
+        stale: false,
+        lastAccessedAt: Date.now(),
+      },
+    }));
+    if (!expandedPathsRef.current.has(result.path)) {
+      const next = new Set(expandedPathsRef.current);
+      next.add(result.path);
+      commitExpandedPaths(next);
+      scheduleExpandedPathsPersistence([...next].sort());
+    }
+  };
+
+  const contextTargetDirectory = (target: FileTreeContextMenu): string =>
+    target.kind === "directory" ? target.treePath : parentFileTreePath(target.treePath);
+
+  const createEntry = async (
+    target: FileTreeContextMenu,
+    kind: "file" | "directory",
+  ) => {
+    const name = window.prompt(kind === "file" ? "新文件名称" : "新文件夹名称");
+    if (name === null) {
+      return;
+    }
+    const directoryPath = contextTargetDirectory(target);
+    const result = await createWorkspaceFileEntry(
+      port,
+      directoryPath,
+      { name, kind },
+      workspaceId,
+    );
+    replaceDirectory(result);
+    onStatusChange(`已创建${kind === "file" ? "文件" : "文件夹"}: ${name}`);
+  };
+
+  const pasteEntries = async (target: FileTreeContextMenu) => {
+    const directoryPath = contextTargetDirectory(target);
+    try {
+      const sourcePaths = parseClipboardFilePaths(
+        await readFilePathTextFromClipboard(),
+      );
+      const result = await pasteWorkspaceFileEntries(
+        port,
+        directoryPath,
+        { source_paths: sourcePaths },
+        workspaceId,
+      );
+      replaceDirectory(result);
+      onStatusChange(`已粘贴 ${sourcePaths.length} 个文件或目录`);
+    } catch (error) {
+      await loadDirectory(directoryPath, true);
+      throw error;
+    }
+  };
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+    const handlePasteShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "v") {
+        return;
+      }
+      event.preventDefault();
+      const target = contextMenu;
+      setContextMenu(null);
+      void pasteEntries(target).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        onStatusChange(`粘贴失败: ${message}`);
+      });
+    };
+    window.addEventListener("keydown", handlePasteShortcut);
+    return () => window.removeEventListener("keydown", handlePasteShortcut);
+  }, [contextMenu]);
+
+  const runContextAction = (
+    target: FileTreeContextMenu,
+    failurePrefix: string,
+    action: () => Promise<unknown>,
+  ) => {
+    setContextMenu(null);
+    void action().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      onStatusChange(`${failurePrefix}: ${message}`);
+    });
+  };
+
+  const addShortcut = async (treePath: string, label: string) => {
+    if (!sessionId) {
+      throw new Error("添加快捷路径需要当前会话");
+    }
+    const result = await addSessionFileTreeShortcut(
+      port,
+      sessionId,
+      { path: absolutePathForTreePath(treePath), label },
+      workspaceId,
+    );
+    acceptFileTreeSettings(result);
+    onStatusChange(`已添加会话快捷路径: ${label}`);
+  };
+
+  const addShortcutToNewSessions = async (treePath: string, label: string) => {
+    if (!sessionId) {
+      throw new Error("设置新会话默认快捷路径需要当前会话");
+    }
+    const path = absolutePathForTreePath(treePath);
+    const workspaceSettings = await applyFileTreeShortcutToWorkspace(
+      port,
+      sessionId,
+      path,
+      label,
+      workspaceId,
+    );
+    acceptFileTreeSettings(workspaceSettings);
+    onStatusChange(`已将 ${label} 添加为新会话默认快捷路径`);
+  };
+
+  const applyShortcutToNewSessions = async (shortcut: FileTreeShortcut) => {
+    if (!sessionId) {
+      throw new Error("设置新会话默认快捷路径需要当前会话");
+    }
+    const result = await applyFileTreeShortcutToWorkspace(
+      port,
+      sessionId,
+      shortcut.path,
+      shortcut.label,
+      workspaceId,
+    );
+    acceptFileTreeSettings(result);
+    onStatusChange(`已将 ${shortcut.label} 设为新会话默认快捷路径`);
+  };
+
+  const removeShortcut = async (
+    path: string,
+    source: "session" | "workspace",
+  ) => {
+    if (!sessionId) {
+      throw new Error("删除快捷路径需要当前会话");
+    }
+    const result = await removeSessionFileTreeShortcut(
+      port,
+      sessionId,
+      path,
+      source,
+      workspaceId,
+    );
+    acceptFileTreeSettings(result);
+    onStatusChange(
+      source === "workspace"
+        ? `已从新会话默认快捷路径中删除: ${path}`
+        : `已删除会话快捷路径: ${path}`,
+    );
   };
 
   const handleNodeClick = (node: WorkspaceFileNode) => {
     if (node.kind !== "directory") {
       const size = formatFileSize(node.size);
       onOpenFile(node);
-      onStatusChange(size ? `${node.path} · ${size}` : node.path);
+      const absolutePath = absolutePathForTreePath(node.path);
+      onStatusChange(size ? `${absolutePath} · ${size}` : absolutePath);
       return;
     }
-
-    setExpandedPaths((prev) => {
-      const next = new Set(prev);
-      if (next.has(node.path)) {
-        next.delete(node.path);
-      } else {
-        next.add(node.path);
-        if (!directories[node.path]) {
-          void loadDirectory(node.path);
-        }
-      }
-      onExpandedPathsChange([...next].sort());
-      return next;
-    });
+    toggleDirectory(node.path, absolutePathForTreePath(node.path));
   };
 
   const nodeMatchesSearch = (node: WorkspaceFileNode): boolean => {
@@ -196,12 +917,16 @@ export default function WorkspaceFileTree({
     if (nodeTextMatches || node.kind !== "directory") {
       return nodeTextMatches;
     }
-    return (directories[node.path]?.items ?? []).some(nodeMatchesSearch);
+    const loadedDirectory = directories[node.path];
+    if (!loadedDirectory) {
+      return true;
+    }
+    return loadedDirectory.items.some(nodeMatchesSearch);
   };
 
   const renderDirectory = (path: string, depth: number) => {
     const directory = directories[path];
-    if (!directory || directory.loading) {
+    if (!directory || (directory.loading && directory.items.length === 0)) {
       return (
         <div className="files-tree-item files-tree-loading" style={{ paddingLeft: `${22 + depth * 14}px` }}>
           <span className="file-icon">◇</span>
@@ -244,9 +969,21 @@ export default function WorkspaceFileTree({
     return (
       <>
         {visibleItems.map((node) => renderNode(node, depth))}
-        {directory.truncated ? (
+        {directory.nextCursor ? (
+          <button
+            type="button"
+            className="files-tree-load-more"
+            style={{ marginLeft: `${22 + depth * 14}px` }}
+            disabled={directory.loading}
+            onClick={() => void loadDirectory(path, false, true)}
+          >
+            {directory.loading
+              ? "正在加载下一页..."
+              : `加载更多（当前 ${directory.items.length} 项）`}
+          </button>
+        ) : directory.truncated ? (
           <div className="files-tree-note" style={{ marginLeft: `${22 + depth * 14}px` }}>
-            当前目录项目过多，仅展示前 {directory.items.length} 项
+            目录仍有未加载项目，请刷新后重试
           </div>
         ) : null}
       </>
@@ -261,9 +998,15 @@ export default function WorkspaceFileTree({
         <button
           type="button"
           className={`files-tree-item files-tree-row${isDirectory ? " directory" : ""}${activeFilePath === node.path ? " active" : ""}`}
-          title={node.path}
+          title={displayPathForTreePath(node.path)}
           style={{ paddingLeft: `${8 + depth * 14}px` }}
           onClick={() => handleNodeClick(node)}
+          onContextMenu={(event) => openContextMenu(
+            event,
+            node.path,
+            node.name,
+            node.kind,
+          )}
         >
           <span className="codicon-lite files-tree-chevron">
             {isDirectory ? (expanded ? "⌄" : "›") : ""}
@@ -279,7 +1022,133 @@ export default function WorkspaceFileTree({
     );
   };
 
+  const shortcuts = settings?.effective_shortcuts ?? [];
+  const defaultShortcutPaths = new Set(
+    (settings?.default_shortcuts ?? []).map((shortcut) => shortcut.path),
+  );
   const rootExpanded = expandedPaths.has(ROOT_PATH);
+  const filesystemRootExpanded = expandedPaths.has(FILESYSTEM_ROOT_PATH);
+  const visibleRows = useMemo(() => buildVisibleFileTreeRows({
+    directories,
+    expandedPaths,
+    shortcuts,
+    searchQuery,
+    workspaceLabel: rootLabel,
+    workspaceTitle: workspaceRoot || rootLabel,
+    workspaceRootPath: ROOT_PATH,
+    filesystemRootPath: FILESYSTEM_ROOT_PATH,
+    shortcutPath: filesystemFileTreePath,
+  }), [
+    directories,
+    expandedPaths,
+    rootLabel,
+    searchQuery,
+    shortcuts,
+    workspaceRoot,
+  ]);
+
+  const renderFlatRow = (row: WorkspaceFileTreeRow) => {
+    if (row.kind === "root") {
+      return (
+        <button
+          type="button"
+          className="files-tree-item root files-tree-row"
+          title={row.title}
+          aria-expanded={row.expanded}
+          onClick={() => toggleDirectory(row.treePath, row.title)}
+          onContextMenu={(event) => openContextMenu(
+            event,
+            row.treePath,
+            row.label,
+            "directory",
+            row.shortcutSource,
+          )}
+        >
+          <span className="codicon-lite files-tree-chevron">
+            {row.expanded ? "⌄" : "›"}
+          </span>
+          {row.icon === "shortcut" ? (
+            <span className="codicon codicon-bookmark file-icon" aria-hidden="true" />
+          ) : row.icon === "filesystem" ? (
+            <span className="codicon codicon-file-directory file-icon directory" aria-hidden="true" />
+          ) : (
+            <span className="file-icon directory">▣</span>
+          )}
+          <span className="file-label">{row.label}</span>
+          {row.icon === "shortcut" ? (
+            <span className="files-tree-shortcut-kind">快捷路径</span>
+          ) : null}
+        </button>
+      );
+    }
+    if (row.kind === "node") {
+      const { node } = row;
+      const isDirectory = node.kind === "directory";
+      return (
+        <button
+          type="button"
+          className={`files-tree-item files-tree-row${isDirectory ? " directory" : ""}${activeFilePath === node.path ? " active" : ""}`}
+          title={displayPathForTreePath(node.path)}
+          style={{ paddingLeft: `${8 + row.depth * 14}px` }}
+          onClick={() => handleNodeClick(node)}
+          onContextMenu={(event) => openContextMenu(
+            event,
+            node.path,
+            node.name,
+            node.kind,
+          )}
+        >
+          <span className="codicon-lite files-tree-chevron">
+            {isDirectory ? (row.expanded ? "⌄" : "›") : ""}
+          </span>
+          <span className={`file-icon ${node.kind}`}>{fileIcon(node)}</span>
+          <span className="file-label">{node.name}</span>
+          {node.kind === "file" ? (
+            <span className="files-tree-meta">{formatFileSize(node.size)}</span>
+          ) : null}
+        </button>
+      );
+    }
+    if (row.status === "error") {
+      return (
+        <div className="files-tree-error" style={{ marginLeft: `${22 + row.depth * 14}px` }}>
+          <span>{row.text}</span>
+          <button type="button" onClick={() => void loadDirectory(row.directoryPath)}>
+            重试
+          </button>
+        </div>
+      );
+    }
+    if (row.status === "load-more") {
+      return (
+        <button
+          type="button"
+          className="files-tree-load-more"
+          style={{ marginLeft: `${22 + row.depth * 14}px` }}
+          disabled={directories[row.directoryPath]?.loading}
+          onClick={() => void loadDirectory(row.directoryPath, false, true)}
+        >
+          {row.text}
+        </button>
+      );
+    }
+    if (row.status === "truncated") {
+      return (
+        <div className="files-tree-note" style={{ marginLeft: `${22 + row.depth * 14}px` }}>
+          {row.text}
+        </div>
+      );
+    }
+    return (
+      <div
+        className={`files-tree-item${row.status === "loading" ? " files-tree-loading" : " muted"}`}
+        style={{ paddingLeft: `${22 + row.depth * 14}px` }}
+      >
+        <span className="file-icon">◇</span>
+        <span className="file-label">{row.text}</span>
+      </div>
+    );
+  };
 
   return (
     <div className="workspace-file-tree">
@@ -296,19 +1165,259 @@ export default function WorkspaceFileTree({
         </div>
       ) : null}
       <div className="files-tree-root" role="tree" aria-label="工作区文件树">
+        {visibleRows.length > FILE_TREE_VIRTUALIZATION_THRESHOLD ? (
+          <Virtuoso
+            className="files-tree-virtualized"
+            data={visibleRows}
+            computeItemKey={(_, row) => row.key}
+            increaseViewportBy={240}
+            itemContent={(_, row) => renderFlatRow(row)}
+          />
+        ) : (
+          <>
+        {shortcuts.map((shortcut) => {
+          const treePath = filesystemFileTreePath(shortcut.path);
+          const expanded = expandedPaths.has(treePath);
+          return (
+            <div className="files-tree-shortcut" key={shortcut.path}>
+              <div className="files-tree-quick-row">
+                <button
+                  type="button"
+                  className="files-tree-item root files-tree-row files-tree-quick-main"
+                  title={shortcut.path}
+                  aria-expanded={expanded}
+                  onClick={() => toggleDirectory(treePath, shortcut.path)}
+                  onContextMenu={(event) => openContextMenu(
+                    event,
+                    treePath,
+                    shortcut.label,
+                    "directory",
+                    shortcut.source,
+                  )}
+                >
+                  <span className="codicon-lite files-tree-chevron">{expanded ? "⌄" : "›"}</span>
+                  <span className="codicon codicon-bookmark file-icon" aria-hidden="true" />
+                  <span className="file-label">{shortcut.label}</span>
+                  <span className="files-tree-shortcut-kind">快捷路径</span>
+                </button>
+              </div>
+              {expanded ? renderDirectory(treePath, 0) : null}
+            </div>
+          );
+        })}
         <button
           type="button"
           className="files-tree-item root files-tree-row"
           title={workspaceRoot || rootLabel}
           aria-expanded={rootExpanded}
-          onClick={handleRootClick}
+          onClick={() => toggleDirectory(
+            ROOT_PATH,
+            workspaceRoot || rootLabel,
+          )}
+          onContextMenu={(event) => openContextMenu(
+            event,
+            ROOT_PATH,
+            rootLabel,
+            "directory",
+          )}
         >
           <span className="codicon-lite files-tree-chevron">{rootExpanded ? "⌄" : "›"}</span>
           <span className="file-icon directory">▣</span>
           <span className="file-label">{rootLabel}</span>
         </button>
         {rootExpanded ? renderDirectory(ROOT_PATH, 0) : null}
+        <button
+          type="button"
+          className="files-tree-item root files-tree-row"
+          title="/"
+          aria-expanded={filesystemRootExpanded}
+          onClick={() => toggleDirectory(FILESYSTEM_ROOT_PATH, "/")}
+          onContextMenu={(event) => openContextMenu(
+            event,
+            FILESYSTEM_ROOT_PATH,
+            "/",
+            "directory",
+          )}
+        >
+          <span className="codicon-lite files-tree-chevron">{filesystemRootExpanded ? "⌄" : "›"}</span>
+          <span className="codicon codicon-file-directory file-icon directory" aria-hidden="true" />
+          <span className="file-label">/</span>
+        </button>
+        {filesystemRootExpanded ? renderDirectory(FILESYSTEM_ROOT_PATH, 0) : null}
+          </>
+        )}
       </div>
+      {contextMenu ? (
+        <AnchoredOverlay
+          open
+          point={contextMenu}
+          placement="bottom-start"
+          offset={2}
+          onClose={() => setContextMenu(null)}
+        >
+          <div
+            className="agent-sessions-session-menu files-tree-context-menu"
+            role="menu"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <button type="button" role="menuitem" onClick={() => {
+              const target = contextMenu;
+              runContextAction(target, "新建文件失败", () => createEntry(target, "file"));
+            }}>
+              <span className="codicon codicon-new-file agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">新建文件</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => {
+              const target = contextMenu;
+              runContextAction(target, "新建文件夹失败", () => createEntry(target, "directory"));
+            }}>
+              <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">新建文件夹</span>
+            </button>
+            <div className="files-tree-context-separator" role="separator" />
+            <button type="button" role="menuitem" onClick={() => {
+              const target = contextMenu;
+              runContextAction(target, "粘贴失败", () => pasteEntries(target));
+            }}>
+              <span className="codicon codicon-clippy agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">粘贴</span>
+              <span className="files-tree-context-keybinding">Ctrl+V</span>
+            </button>
+            <div className="files-tree-context-separator" role="separator" />
+            {contextMenu.shortcutSource ? (
+              <div className="files-tree-context-shortcut-action">
+                <button type="button" role="menuitem" onClick={() => {
+                  const target = contextMenu;
+                  runContextAction(
+                    target,
+                    "删除快捷路径失败",
+                    () => removeShortcut(target.absolutePath, "session"),
+                  );
+                }}>
+                  <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
+                  <span className="agent-sessions-menu-item-label">
+                    删除当前会话快捷路径
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="files-tree-context-apply"
+                  title={defaultShortcutPaths.has(contextMenu.absolutePath)
+                    ? "从新会话默认快捷路径中移除；只影响之后创建的会话"
+                    : "添加为新会话默认快捷路径；只影响之后创建的会话"}
+                  aria-label={defaultShortcutPaths.has(contextMenu.absolutePath)
+                    ? `从新会话默认快捷路径中移除 ${contextMenu.label}`
+                    : `将 ${contextMenu.label} 添加为新会话默认快捷路径`}
+                  onClick={() => {
+                    const target = shortcuts.find(
+                      (item) => item.path === contextMenu.absolutePath,
+                    );
+                    const isDefault = defaultShortcutPaths.has(
+                      contextMenu.absolutePath,
+                    );
+                    setContextMenu(null);
+                    if (!target) {
+                      onStatusChange(`快捷路径已失效: ${contextMenu.absolutePath}`);
+                      return;
+                    }
+                    const action = isDefault
+                      ? removeShortcut(target.path, "workspace")
+                      : applyShortcutToNewSessions(target);
+                    void action.catch((error: unknown) => {
+                      const message = error instanceof Error ? error.message : String(error);
+                      onStatusChange(`更新新会话默认快捷路径失败: ${message}`);
+                    });
+                  }}
+                >
+                  <span
+                    className={`codicon ${defaultShortcutPaths.has(contextMenu.absolutePath)
+                      ? "codicon-pinned"
+                      : "codicon-pin"}`}
+                    aria-hidden="true"
+                  />
+                </button>
+              </div>
+            ) : contextMenu.kind === "directory" ? (
+              <div className="files-tree-context-shortcut-action">
+                <button type="button" role="menuitem" onClick={() => {
+                  const target = contextMenu;
+                  runContextAction(
+                    target,
+                    "添加快捷路径失败",
+                    () => addShortcut(target.treePath, target.label),
+                  );
+                }}>
+                  <span className="codicon codicon-bookmark agent-sessions-menu-item-icon" aria-hidden="true" />
+                  <span className="agent-sessions-menu-item-label">添加到当前会话快捷路径</span>
+                </button>
+                <button
+                  type="button"
+                  className="files-tree-context-apply"
+                  title="添加为新会话默认快捷路径；只影响之后创建的会话"
+                  aria-label={`将 ${contextMenu.label} 添加为新会话默认快捷路径`}
+                  onClick={() => {
+                    const target = contextMenu;
+                    runContextAction(
+                      target,
+                      "添加新会话默认快捷路径失败",
+                      () => addShortcutToNewSessions(target.treePath, target.label),
+                    );
+                  }}
+                >
+                  <span className="codicon codicon-pin" aria-hidden="true" />
+                </button>
+              </div>
+            ) : null}
+            <div className="files-tree-context-separator" role="separator" />
+            <button type="button" role="menuitem" onClick={() => {
+              const target = contextMenu;
+              setContextMenu(null);
+              void copyTextToClipboard(target.absolutePath)
+                .then(() => onStatusChange(`已复制路径: ${target.absolutePath}`))
+                .catch((error: unknown) => {
+                  const message = error instanceof Error ? error.message : String(error);
+                  onStatusChange(`复制路径失败: ${message}`);
+                });
+            }}>
+              <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">复制路径</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => {
+              const target = contextMenu;
+              runContextAction(
+                target,
+                "在系统中显示失败",
+                async () => {
+                  const result = await revealWorkspaceFileEntry(
+                    port,
+                    target.treePath,
+                    workspaceId,
+                  );
+                  onStatusChange(`已请求系统显示: ${result.path}`);
+                },
+              );
+            }}>
+              <span className="codicon codicon-folder-opened agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">在系统中显示</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => {
+              const target = contextMenu;
+              const directoryPath = contextTargetDirectory(target);
+              runContextAction(
+                target,
+                "刷新目录失败",
+                async () => {
+                  await loadDirectory(directoryPath, true);
+                  onStatusChange(`已刷新目录: ${absolutePathForTreePath(directoryPath)}`);
+                },
+              );
+            }}>
+              <span className="codicon codicon-refresh agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">刷新根目录文件树</span>
+            </button>
+          </div>
+        </AnchoredOverlay>
+      ) : null}
     </div>
   );
 }

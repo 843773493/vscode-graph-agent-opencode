@@ -13,6 +13,12 @@ const baseManifest = {
   version: "0.1.0",
   python_executable: "../../.venv/bin/python",
   application_root: "../..",
+  config_resources: {
+    gateway: "../../configs/gateway.jsonc",
+    gateway_schema: "../../configs/gateway_config.jsonc",
+    workspace: "../../configs/workspace.jsonc",
+    workspace_schema: "../../configs/workspace_config.jsonc",
+  },
   web_assets: null,
   chromium_executable: null,
   node: {
@@ -43,6 +49,18 @@ describe("runtime manifest", () => {
     expect(() =>
       validateRuntimeManifest({ ...baseManifest, schema_version: 2 }),
     ).toThrow("不支持的 runtime manifest");
+  });
+
+  test("拒绝未声明的配置资源域", () => {
+    expect(() =>
+      validateRuntimeManifest({
+        ...baseManifest,
+        config_resources: {
+          ...baseManifest.config_resources,
+          legacy_combined: "../../configs/boxteam.jsonc",
+        },
+      }),
+    ).toThrow("包含未知字段");
   });
 
   test("npm launcher Node 使用当前 Node", () => {

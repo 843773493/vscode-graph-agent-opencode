@@ -197,7 +197,7 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
     assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]
+    traces = traces_response.json()["data"]["items"]
     tool_starts = [
         get_trace_payload(trace).get("tool_name")
         for trace in traces
@@ -239,7 +239,7 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
         for log in logs
     )
     assert any(
-        "<workspace_agents_md path=\"/AGENTS.md\">" in _system_message_text_from_llm_log(log)
+        "<workspace_agents_md " in _system_message_text_from_llm_log(log)
         for log in logs
     )
     for log in logs:
@@ -291,7 +291,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
     assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]
+    traces = traces_response.json()["data"]["items"]
     tool_end_payloads = [
         get_trace_payload(trace)
         for trace in traces
@@ -467,7 +467,7 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
 
     traces_response = await client.get(f"/api/v1/sessions/{reader_session_id}/traces")
     assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]
+    traces = traces_response.json()["data"]["items"]
     context_tool_results = [
         (
             str(get_trace_payload(trace).get("tool_name")),

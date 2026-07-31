@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.tool_catalog_service import ToolCatalogService
 
@@ -36,8 +38,13 @@ class _RuntimeCatalog:
 
 def test_catalog_only_exposes_extensions_enabled_by_resolved_policy(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_path = tmp_path / "boxteam.jsonc"
+    monkeypatch.setattr(
+        "app.services.infrastructure.config_service.load_custom_tool_factory",
+        lambda _factory_path: object(),
+    )
+    config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(
         json.dumps(
             {
@@ -96,7 +103,7 @@ def test_catalog_only_exposes_extensions_enabled_by_resolved_policy(
 def test_catalog_groups_default_session_context_extensions_as_collaboration(
     tmp_path: Path,
 ) -> None:
-    config_path = tmp_path / "boxteam.jsonc"
+    config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(
         json.dumps(
             {

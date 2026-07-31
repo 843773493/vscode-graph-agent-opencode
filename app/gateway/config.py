@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-from app.core.path_utils import get_user_config_path
-from app.services.infrastructure.config_service import ConfigService
+from app.core.path_utils import (
+    get_user_config_root,
+    get_user_gateway_config_path,
+    get_user_gateway_schema_path,
+)
+from configs.runtime import load_validated_config
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,25 +31,6 @@ class GatewayConfig:
 
 
 def _workspace_from_validated_config(raw: dict[str, object]) -> ConfiguredRemoteGateway:
-    legacy_fields = sorted(
-        {
-            "remote_workspace_path",
-            "remote_backend_host",
-            "remote_backend_port",
-            "remote_terminal_backend_host",
-            "remote_terminal_backend_port",
-            "remote_browser_backend_host",
-            "remote_browser_backend_port",
-        }
-        & raw.keys()
-    )
-    if legacy_fields or raw.get("kind") == "ssh":
-        raise ValueError(
-            "Gateway 配置仍使用已移除的 SSH 直连后端字段: "
-            f"{', '.join(legacy_fields) or 'kind=ssh'}。"
-            "请改为 kind=remote_gateway，并只配置 remote_gateway_port；"
-            "远程工作区由远端 Gateway 自动发现。"
-        )
     return ConfiguredRemoteGateway(
         name=cast(str | None, raw.get("name")),
         host=cast(str, raw["host"]),
@@ -58,14 +43,19 @@ def _workspace_from_validated_config(raw: dict[str, object]) -> ConfiguredRemote
     )
 
 
-def load_gateway_config(workspace_root: Path | None) -> GatewayConfig:
-    if workspace_root is None:
-        return GatewayConfig()
-
-    config_service = ConfigService(workspace_root=workspace_root)
-    config_service.validate_boxteam_config()
-    raw_gateway_config = config_service.get_gateway_config()
-    raw_workspaces = raw_gateway_config.get("workspaces", [])
+def load_gateway_config(
+    *,
+    config_path: Path | None = None,
+    schema_path: Path | None = None,
+) -> GatewayConfig:
+    """只从 BOXTEAM_HOME 的 Gateway 配置域加载远程 Gateway。"""
+    raw_gateway_config = load_validated_config(
+        config_path=config_path or get_user_gateway_config_path(),
+        schema_path=schema_path or get_user_gateway_schema_path(),
+    )
+    raw_workspaces = raw_gateway_config["workspaces"]
+    if not isinstance(raw_workspaces, list):
+        raise TypeError("Gateway workspaces 配置必须是数组")
     validated_workspaces = cast(list[dict[str, object]], raw_workspaces)
     return GatewayConfig(
         workspaces=tuple(
@@ -81,4 +71,4 @@ def resolve_gateway_path(value: str, *, config_root: Path | None = None) -> Path
     raw_path = Path(value).expanduser()
     if raw_path.is_absolute():
         return raw_path.resolve()
-    return ((config_root or get_user_config_path().parent) / raw_path).resolve()
+    return ((config_root or get_user_config_root()) / raw_path).resolve()

@@ -5,6 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.core.path_utils import get_user_env_path
+
 
 def get_project_root(project_root: Path | str | None = None) -> Path:
     """解析项目根目录。
@@ -12,7 +14,9 @@ def get_project_root(project_root: Path | str | None = None) -> Path:
     默认使用当前运行目录，也可以通过显式路径或 BOXTEAM_PROJECT_ROOT 指定。
     这里不再根据当前文件位置向上推导仓库根目录，避免框架层隐式依赖源码布局。
     """
-    configured_root = project_root or os.environ.get("BOXTEAM_PROJECT_ROOT") or Path.cwd()
+    configured_root = (
+        project_root or os.environ.get("BOXTEAM_PROJECT_ROOT") or Path.cwd()
+    )
     resolved_root = Path(configured_root).expanduser().resolve()
     if not resolved_root.is_dir():
         raise NotADirectoryError(f"项目根目录必须是目录: {resolved_root}")
@@ -24,21 +28,15 @@ def get_project_root(project_root: Path | str | None = None) -> Path:
     return resolved_root
 
 
-def load_project_env(
-    project_root: Path | str | None = None,
-    *,
-    override: bool = False,
-    required: bool = False,
-) -> Path | None:
-    """加载项目根目录下的 .env 文件。"""
-    resolved_project_root = get_project_root(project_root)
-    env_file = resolved_project_root / ".env"
+def load_boxteam_env(*, override: bool = False, required: bool = False) -> Path | None:
+    """从统一用户配置目录加载运行时环境变量。"""
+    env_file = get_user_env_path()
 
-    print(f"[Env] 加载 .env 文件: {env_file.resolve()}")
+    print(f"[Env] 加载 BoxTeam 环境配置: {env_file}")
 
     if not env_file.exists():
         if required:
-            raise FileNotFoundError(f"未找到项目环境文件: {env_file}")
+            raise FileNotFoundError(f"未找到 BoxTeam 环境配置: {env_file}")
 
         return None
 

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 import httpx
 import pytest
 
-from app.core.path_utils import get_session_path_resolver
 from tests.e2e.utils import wait_for_job_done
 
 
@@ -131,43 +129,3 @@ async def test_session_resource_api_lists_and_controls_model_created_background_
     assert after_delete_response.status_code == 200
     remaining_resources = after_delete_response.json()["data"]["items"]
     assert all(resource["resource_id"] != task_id for resource in remaining_resources)
-
-
-@pytest.mark.asyncio
-async def test_delete_session_cleans_background_tasks(
-    client: httpx.AsyncClient,
-    e2e_workspace_root_path: str,
-):
-    create_session_response = await client.post(
-        "/api/v1/sessions",
-        json={"title": "Session Delete Cleanup Test"},
-    )
-    assert create_session_response.status_code == 200
-    session_id = create_session_response.json()["data"]["session_id"]
-
-    start_response = await client.post(
-        f"/api/v1/sessions/{session_id}/auto-continue/start",
-        json={"poll_interval_seconds": 0.2},
-    )
-    assert start_response.status_code == 200
-
-    resources_response = await client.get(f"/api/v1/sessions/{session_id}/resources")
-    assert resources_response.status_code == 200
-    resources = resources_response.json()["data"]["items"]
-    assert any(resource["kind"] == "background_task" for resource in resources)
-
-    session_dir = get_session_path_resolver(
-        Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
-    ).resolve_session_dir(session_id)
-
-    delete_response = await client.delete(f"/api/v1/sessions/{session_id}")
-    assert delete_response.status_code == 200
-    delete_data = delete_response.json()["data"]
-    assert delete_data["status"] == "deleted"
-    assert delete_data["cleaned_background_tasks"] >= 1
-    assert not session_dir.exists()
-
-    list_response = await client.get("/api/v1/sessions")
-    assert list_response.status_code == 200
-    sessions = list_response.json()["data"]["items"]
-    assert all(session["session_id"] != session_id for session in sessions)

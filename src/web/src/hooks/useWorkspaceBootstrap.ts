@@ -184,7 +184,6 @@ export function useWorkspaceBootstrap({
           sessions: activeSessions,
           currentSession: nextCurrentSession,
           currentSessionWorkspaceId: nextCurrentSession ? activeWorkspaceId : null,
-          messages: contentTargetChanged ? [] : prev.messages,
           traceEvents: contentTargetChanged ? [] : prev.traceEvents,
           llmRequestLogs: contentTargetChanged ? [] : prev.llmRequestLogs,
           llmRequestLogsLoadedAt: contentTargetChanged ? null : prev.llmRequestLogsLoadedAt,

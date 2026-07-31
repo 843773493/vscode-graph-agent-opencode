@@ -94,8 +94,8 @@ try {
   await workspaceFolderOneRow.waitFor({ state: "visible" });
   await workspaceFolderTwoRow.waitFor({ state: "visible" });
   const nestWorkspaceFolderResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "PATCH"
-      && response.url().includes(`/workspace-navigation/nodes/${workspaceFolderTwo.node_id}`),
+    (response) => response.request().method() === "PUT"
+      && response.url().includes("/workspace-navigation/placement"),
   );
   await workspaceFolderTwoRow.dragTo(workspaceFolderOneRow);
   const nestWorkspaceFolderResponse = await nestWorkspaceFolderResponsePromise;
@@ -113,8 +113,8 @@ try {
   nestedWorkspaceFolders = workspaceFolderTwoPadding > workspaceFolderOnePadding;
 
   const returnWorkspaceFolderToRootResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "PATCH"
-      && response.url().includes(`/workspace-navigation/nodes/${workspaceFolderTwo.node_id}`),
+    (response) => response.request().method() === "PUT"
+      && response.url().includes("/workspace-navigation/placement"),
   );
   await workspaceFolderTwoRow.dragTo(navigationRootDropTarget);
   const returnWorkspaceFolderToRootResponse = await returnWorkspaceFolderToRootResponsePromise;

@@ -80,6 +80,30 @@ function spawnProcess(command, args, cwd, environment) {
   });
 }
 
+function installDevelopmentConfiguration(environment) {
+  const result = Bun.spawnSync(
+    [
+      pythonBin,
+      "-m",
+      "configs.boxteam",
+      "install-source-development",
+      "--project-root",
+      projectRoot,
+    ],
+    {
+      cwd: projectRoot,
+      env: environment,
+      stdout: "inherit",
+      stderr: "inherit",
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `源码开发配置安装失败: exit=${String(result.exitCode)}`,
+    );
+  }
+}
+
 function writeDevelopmentManifest() {
   const runtimeRoot = path.join(projectRoot, "out", "development-runtime");
   mkdirSync(runtimeRoot, { recursive: true });
@@ -93,6 +117,12 @@ function writeDevelopmentManifest() {
         version: "0.1.0",
         python_executable: pythonBin,
         application_root: projectRoot,
+        config_resources: {
+          gateway: path.join(projectRoot, "configs", "gateway.jsonc"),
+          gateway_schema: path.join(projectRoot, "configs", "gateway_config.jsonc"),
+          workspace: path.join(projectRoot, "configs", "workspace.jsonc"),
+          workspace_schema: path.join(projectRoot, "configs", "workspace_config.jsonc"),
+        },
         web_assets: null,
         chromium_executable:
           process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? null,
@@ -326,14 +356,12 @@ async function main() {
         "BOXTEAM_GATEWAY_ROOT=/home/boxteam/.boxteams-dev/state/gateway " +
         "/opt/boxteam-dev/repository/.venv/bin/python " +
         "-m app.gateway.federation_pairing",
-    BOXTEAM_CONFIG_OVERLAY_PATHS:
-      process.env.BOXTEAM_CONFIG_OVERLAY_PATHS ??
-      path.join(projectRoot, "configs", "development.overlay.jsonc"),
     BOXTEAM_TERMINAL_FRONTEND_URL: `http://${host}:${ports.terminalFrontend}`,
     BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${ports.browserFrontend}`,
     BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),
     ...(detachedReadyFile === null ? {} : { [SERVICE_LOG_CAPTURED_ENV]: "1" }),
   };
+  installDevelopmentConfiguration(environment);
   const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
   const terminalFrontend = spawnProcess(
     nodeBin,

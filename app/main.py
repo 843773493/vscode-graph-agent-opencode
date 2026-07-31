@@ -17,19 +17,21 @@ from app.api.mcp import router as mcp_router
 from app.api.messages import router as messages_router
 from app.api.runtime import router as runtime_router
 from app.api.session_navigation import router as session_navigation_router
+from app.api.session_turns import router as session_turns_router
 from app.api.sessions import router as sessions_router
 from app.api.tools import router as tools_router
 from app.api.workspace import router as workspace_router
 from app.container import build_app_container
-from app.core.env import load_project_env
+from app.core.env import load_boxteam_env
 from app.core.logging_config import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
+from app.schemas.public_v2.sse import install_sse_openapi_components
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
 )
 
-load_project_env()
+load_boxteam_env()
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,14 @@ async def lifespan(_: FastAPI):
     )
     _.state.container = container
 
-    container.config_service.validate_boxteam_config()
+    migrated_pending_files = await container.pending_request_store.migrate_all()
+    if migrated_pending_files:
+        logger.info(
+            "已升级 %s 个旧 pending request 存储文件",
+            migrated_pending_files,
+        )
+
+    container.config_service.validate_workspace_config()
     logger_level = container.config_service.get_logger_level()
     logger_pretty = container.config_service.get_logger_pretty()
     configure_application_logging(
@@ -97,6 +106,9 @@ async def lifespan(_: FastAPI):
             candidate_applier=apply_config_candidate,
         )
         await container.trace_event_recorder.start()
+        await container.job_event_bus.register_durable_listener(
+            container.goal_runtime_service.on_event
+        )
         reconciled_jobs = await container.runtime_service.reconcile_stale_executions()
         if reconciled_jobs:
             logger.warning(
@@ -104,16 +116,22 @@ async def lifespan(_: FastAPI):
                 reconciled_jobs,
             )
         await container.session_generation_service.start()
+        await container.goal_runtime_service.resume_active_goals()
         try:
             yield
         finally:
             await container.session_generation_service.shutdown()
+            await container.job_event_bus.unregister_durable_listener(
+                container.goal_runtime_service.on_event
+            )
             await container.config_service.stop_watching()
+            await container.workspace_file_watch_service.shutdown()
             await container.tool_test_service.shutdown()
             await container.trace_event_recorder.stop()
     finally:
         await container.mcp_runtime_manager.shutdown()
         _.state.container = None
+
 
 app = FastAPI(
     title="BoxTeam Local Workspace API",
@@ -142,9 +160,11 @@ app.add_middleware(
 async def health():
     return {"status": "ok"}
 
+
 app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(runtime_router, prefix="/api/v1")
 app.include_router(sessions_router, prefix="/api/v1")
+app.include_router(session_turns_router, prefix="/api/v1")
 app.include_router(session_navigation_router, prefix="/api/v1")
 app.include_router(messages_router, prefix="/api/v1")
 app.include_router(context_router, prefix="/api/v1")
@@ -154,8 +174,10 @@ app.include_router(agents_router, prefix="/api/v1")
 app.include_router(tools_router, prefix="/api/v1")
 app.include_router(artifacts_router, prefix="/api/v1")
 app.include_router(config_router, prefix="/api/v1")
+install_sse_openapi_components(app)
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="127.0.0.1", port=8010)

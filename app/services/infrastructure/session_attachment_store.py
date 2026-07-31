@@ -125,7 +125,7 @@ class SessionAttachmentStore:
         )
 
     def _attachments_root(self, session_id: str) -> Path:
-        session_root = self._path_resolver.resolve_session_dir(session_id)
+        session_root = self._path_resolver.resolve_session_node(session_id)
         return session_root / "attachments"
 
     def _resolve_file_id(self, session_id: str, file_id: str) -> Path:

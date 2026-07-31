@@ -6,6 +6,22 @@
 /* Do not modify it by hand - just update the pydantic models and then re-run the script
 */
 
+export interface FileTreeShortcutDTO {
+  path: string;
+  label: string;
+  source: "session" | "workspace";
+}
+export interface FileTreeShortcutRequest {
+  path: string;
+  label?: string | null;
+}
+export interface SessionFileTreeSettingsDTO {
+  session_id: string;
+  session_shortcuts?: FileTreeShortcutDTO[];
+  workspace_shortcuts?: FileTreeShortcutDTO[];
+  default_shortcuts?: FileTreeShortcutDTO[];
+  effective_shortcuts?: FileTreeShortcutDTO[];
+}
 export interface WorkspaceContextDTO {
   workspace_id: string;
   root_path: string;
@@ -33,6 +49,14 @@ export interface WorkspaceDTO {
     [k: string]: unknown;
   };
 }
+export interface WorkspaceFileChangeBatchDTO {
+  changes: WorkspaceFileChangeDTO[];
+  overflow: boolean;
+}
+export interface WorkspaceFileChangeDTO {
+  kind: "create" | "edit" | "delete";
+  path: string;
+}
 export interface WorkspaceFileContentDTO {
   root_path: string;
   path: string;
@@ -43,12 +67,17 @@ export interface WorkspaceFileContentDTO {
   modified_at?: string | null;
   revision: string;
 }
+export interface WorkspaceFileCreateRequest {
+  name: string;
+  kind: "file" | "directory";
+}
 export interface WorkspaceFileListDTO {
   root_path: string;
   path: string;
   items?: WorkspaceFileNodeDTO[];
   truncated?: boolean;
   limit?: number;
+  next_cursor?: string | null;
 }
 export interface WorkspaceFileNodeDTO {
   name: string;
@@ -58,9 +87,25 @@ export interface WorkspaceFileNodeDTO {
   size?: number | null;
   modified_at?: string | null;
 }
+export interface WorkspaceFilePasteRequest {
+  /**
+   * @minItems 1
+   * @maxItems 100
+   */
+  source_paths: [string, ...string[]];
+}
+export interface WorkspaceFileRevealDTO {
+  path: string;
+}
 export interface WorkspaceFileUpdateRequest {
   content: string;
   expected_revision: string;
+}
+export interface WorkspaceFileWatchRequest {
+  /**
+   * @maxItems 100
+   */
+  paths?: string[];
 }
 export interface WorkspaceIndexRebuildDTO {
   status: string;

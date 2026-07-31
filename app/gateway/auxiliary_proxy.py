@@ -255,9 +255,13 @@ async def _proxy_auxiliary_websocket(
         ).get(connection_id)
         upstream_headers["X-BoxTeam-Federation-Token"] = credential.token
     try:
+        browser_stream = service == "browser_manager"
         async with connect(
             target_url,
             additional_headers=upstream_headers or None,
+            compression=None if browser_stream else "deflate",
+            max_queue=1 if browser_stream else 16,
+            write_limit=256 * 1024 if browser_stream else 32 * 1024,
         ) as upstream:
             tasks = {
                 asyncio.create_task(_relay_client_to_upstream(websocket, upstream)),

@@ -31,6 +31,7 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:8014",
         changeOrigin: true,
+        xfwd: true,
         ws: true,
       },
     },

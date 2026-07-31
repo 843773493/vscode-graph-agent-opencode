@@ -5,9 +5,8 @@ const gatewayMode = Boolean(workspaceId);
 const backendBaseUrl = workspaceId
   ? `${window.location.origin}/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/terminal-manager`
   : window.BOXTEAM_TERMINAL_BACKEND_URL || "http://127.0.0.1:8012";
-const backendRequestHeaders = gatewayMode
-  ? { "X-Local-Token": "local-dev-token" }
-  : {};
+let gatewayToken = null;
+let backendRequestHeaders = {};
 document.documentElement.classList.toggle("embedded-terminal", params.get("embedded") === "1");
 
 const terminalIdElement = document.querySelector("#terminal-id");
@@ -72,8 +71,25 @@ function backendWsUrl() {
   const url = new URL(backendBaseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/$/, "")}/terminal`;
-  url.search = gatewayMode ? "?token=local-dev-token" : "";
+  url.search = gatewayMode ? `?token=${encodeURIComponent(gatewayToken)}` : "";
   return url.toString();
+}
+
+async function initializeGatewayAuth() {
+  if (!gatewayMode) {
+    return;
+  }
+  const response = await fetch(`${window.location.origin}/api/gateway/auth/local-credential`);
+  if (!response.ok) {
+    throw new Error(`获取 Gateway 本地凭据失败: ${response.status}`);
+  }
+  const payload = await response.json();
+  const token = payload.data?.token;
+  if (typeof token !== "string" || !token) {
+    throw new Error("Gateway 本地凭据响应缺少 token");
+  }
+  gatewayToken = token;
+  backendRequestHeaders = { "X-Local-Token": token };
 }
 
 function setStatus(message, error = false) {
@@ -533,7 +549,8 @@ deleteButton.addEventListener("click", async () => {
   markDeleted("终端已删除", payload.data?.terminal ?? null);
 });
 
-void loadSnapshot()
+void initializeGatewayAuth()
+  .then(() => loadSnapshot())
   .then((snapshot) => {
     if (snapshot?.status === "running") {
       attach();

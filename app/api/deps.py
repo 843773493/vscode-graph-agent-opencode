@@ -7,34 +7,44 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.trace_middleware import get_request_id  # noqa: F401
-from app.services.orchestration.agent_execution_service import AgentExecutionService
+from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
 from app.services.business.context_compaction_service import ContextCompactionService
-from app.services.infrastructure.artifact_service import ArtifactService
-from app.services.infrastructure.config_service import ConfigService
-from app.services.event_service import EventService
 from app.services.business.message_service import MessageService
 from app.services.business.session_changes_service import SessionChangesService
-from app.services.business.session_information_service import SessionInformationService
-from app.services.business.session_context_query_service import SessionContextQueryService
-from app.services.business.session_resource_service import SessionResourceService
-from app.services.infrastructure.runtime_service import RuntimeService
-from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
-from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
-from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_context_fork_service import SessionContextForkService
-from app.services.business.session_turn_replay_service import SessionTurnReplayService
+from app.services.business.session_context_query_service import (
+    SessionContextQueryService,
+)
+from app.services.business.session_generation import SessionGenerationService
+from app.services.business.session_goal_service import SessionGoalService
+from app.services.business.session_information_service import SessionInformationService
+from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
+from app.services.business.session_turn_history import SessionTurnHistoryService
+from app.services.business.session_turn_replay_service import SessionTurnReplayService
+from app.services.event_service import EventService
+from app.services.infrastructure.artifact_service import ArtifactService
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.file_tree_settings_service import (
+    FileTreeSettingsService,
+)
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
-from app.services.infrastructure.tool_service import ToolService
-from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.infrastructure.mcp import McpRuntimeManager
-from app.tool_testing.service import ToolTestService
+from app.services.infrastructure.runtime_service import RuntimeService
+from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
+from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.infrastructure.tool_service import ToolService
+from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileWatchService,
+)
 from app.services.infrastructure.workspace_service import WorkspaceService
-from app.runtime.session_orchestrator import SessionOrchestrator
-from app.services.business.session_generation import SessionGenerationService
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.orchestration.agent_execution_service import AgentExecutionService
+from app.services.orchestration.goal_runtime_service import GoalRuntimeService
+from app.tool_testing.service import ToolTestService
 
 
 class _AppContainerProtocol:
@@ -49,10 +59,12 @@ class _AppContainerProtocol:
     message_service: MessageService
     session_attachment_store: SessionAttachmentStore
     runtime_service: RuntimeService
-    session_auto_continue_service: SessionAutoContinueService
+    goal_service: SessionGoalService
+    goal_runtime_service: GoalRuntimeService
     session_interrupt_service: SessionInterruptService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
+    session_turn_history_service: SessionTurnHistoryService
     context_compaction_service: ContextCompactionService
     session_changes_service: SessionChangesService
     session_information_service: SessionInformationService
@@ -65,6 +77,8 @@ class _AppContainerProtocol:
     tool_test_service: ToolTestService
     tool_selection_store: ToolSelectionStore
     workspace_service: WorkspaceService
+    workspace_file_watch_service: WorkspaceFileWatchService
+    file_tree_settings_service: FileTreeSettingsService
     agent_execution_service: AgentExecutionService
     session_orchestrator: SessionOrchestrator
     session_catalog_service: SessionCatalogService
@@ -164,10 +178,17 @@ def get_runtime_service(request: Request) -> RuntimeService:
     return service
 
 
-def get_session_auto_continue_service(request: Request) -> SessionAutoContinueService:
-    service = getattr(_get_container(request), "session_auto_continue_service", None)
-    if not isinstance(service, SessionAutoContinueService):
-        raise RuntimeError("SessionAutoContinueService 尚未在应用启动阶段初始化")
+def get_goal_service(request: Request) -> SessionGoalService:
+    service = getattr(_get_container(request), "goal_service", None)
+    if not isinstance(service, SessionGoalService):
+        raise RuntimeError("SessionGoalService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_goal_runtime_service(request: Request) -> GoalRuntimeService:
+    service = getattr(_get_container(request), "goal_runtime_service", None)
+    if not isinstance(service, GoalRuntimeService):
+        raise RuntimeError("GoalRuntimeService 尚未在应用启动阶段初始化")
     return service
 
 
@@ -234,6 +255,13 @@ def get_session_turn_replay_service(request: Request) -> SessionTurnReplayServic
     return service
 
 
+def get_session_turn_history_service(request: Request) -> SessionTurnHistoryService:
+    service = getattr(_get_container(request), "session_turn_history_service", None)
+    if not isinstance(service, SessionTurnHistoryService):
+        raise RuntimeError("SessionTurnHistoryService 尚未在应用启动阶段初始化")
+    return service
+
+
 def get_llm_request_log_service(request: Request) -> LLMRequestLogService:
     service = getattr(_get_container(request), "llm_request_log_service", None)
     if not isinstance(service, LLMRequestLogService):
@@ -280,6 +308,20 @@ def get_workspace_service(request: Request) -> WorkspaceService:
     service = getattr(_get_container(request), "workspace_service", None)
     if not isinstance(service, WorkspaceService):
         raise RuntimeError("WorkspaceService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_workspace_file_watch_service(request: Request) -> WorkspaceFileWatchService:
+    service = getattr(_get_container(request), "workspace_file_watch_service", None)
+    if not isinstance(service, WorkspaceFileWatchService):
+        raise RuntimeError("WorkspaceFileWatchService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_file_tree_settings_service(request: Request) -> FileTreeSettingsService:
+    service = getattr(_get_container(request), "file_tree_settings_service", None)
+    if not isinstance(service, FileTreeSettingsService):
+        raise RuntimeError("FileTreeSettingsService 尚未在应用启动阶段初始化")
     return service
 
 

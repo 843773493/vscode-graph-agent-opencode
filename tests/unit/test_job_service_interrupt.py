@@ -389,3 +389,99 @@ async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch
     assert started_jobs == [first_job_id, second_job_id]
     assert service._session_current_job[session_id] == second_job_id
     assert list(service._pending_queue.ids(session_id)) == [third_job_id]
+
+
+@pytest.mark.asyncio
+async def test_immediate_dispatch_promotes_message_and_cancels_active_job(
+    monkeypatch,
+):
+    service = create_job_service()
+    started_jobs: list[str] = []
+
+    def fake_start_job_task(job):
+        started_jobs.append(job.job_id)
+        job.task = DummyTask(done=False)
+
+    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
+
+    session_id = "session_immediate_dispatch"
+    active = await service.start_job(
+        session_id,
+        "正在执行",
+        message_id="msg_active",
+        message_created_at="2026-07-27T00:00:00+00:00",
+    )
+    queued = await service.start_job(
+        session_id,
+        "普通排队",
+        message_id="msg_queued",
+        message_created_at="2026-07-27T00:00:01+00:00",
+    )
+    immediate = await service.start_job(
+        session_id,
+        "立即处理",
+        message_id="msg_immediate",
+        message_created_at="2026-07-27T00:00:02+00:00",
+        dispatch_mode="immediate",
+    )
+
+    active_job = service._jobs[active.job_id]
+    assert active_job.status == JobStatus.cancelling
+    assert active_job.dispatch_pending_after_cancel is True
+    assert active_job.error_message == "为跨会话立即消息而停止"
+    assert active_job.task is not None
+    assert active_job.task.cancel_called is True
+    assert immediate.job_status == "queued"
+    assert immediate.blocked_by_job_id == active.job_id
+    assert immediate.queued_jobs_ahead == 0
+    assert service._pending_queue.ids(session_id) == (
+        immediate.job_id,
+        queued.job_id,
+    )
+    assert service._pending_queue.kind(immediate.job_id) == "queued"
+    assert started_jobs == [active.job_id]
+
+
+@pytest.mark.asyncio
+async def test_steering_dispatch_yields_without_cancelling_active_job(
+    monkeypatch,
+):
+    service = create_job_service()
+
+    def fake_start_job_task(job):
+        job.task = DummyTask(done=False)
+
+    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
+
+    session_id = "session_steering_dispatch"
+    active = await service.start_job(
+        session_id,
+        "正在执行",
+        message_id="msg_active",
+        message_created_at="2026-07-27T00:00:00+00:00",
+    )
+    queued = await service.start_job(
+        session_id,
+        "普通排队",
+        message_id="msg_queued",
+        message_created_at="2026-07-27T00:00:01+00:00",
+    )
+    steering = await service.start_job(
+        session_id,
+        "调整方向",
+        message_id="msg_steering",
+        message_created_at="2026-07-27T00:00:02+00:00",
+        dispatch_mode="steering",
+    )
+
+    active_job = service._jobs[active.job_id]
+    assert active_job.status == JobStatus.running
+    assert active_job.dispatch_pending_after_cancel is False
+    assert active_job.task is not None
+    assert active_job.task.cancel_called is False
+    assert steering.pending_kind == "steering"
+    assert service._pending_queue.ids(session_id) == (
+        steering.job_id,
+        queued.job_id,
+    )
+    assert service._pending_queue.yield_requested(session_id) is True

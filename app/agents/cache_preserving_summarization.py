@@ -29,6 +29,8 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command
 
+from app.prompting import internal_message_factory
+
 
 CACHE_PRESERVING_STRATEGY = "cache_preserving"
 CACHE_REPLACEMENT_STRATEGY = "cache_replacement"
@@ -308,8 +310,9 @@ def build_cache_preserving_event(
 
 
 def _summary_instruction(message_count: int) -> HumanMessage:
-    return HumanMessage(
-        content=(
+    prepared = internal_message_factory.build(
+        kind="compaction_summary_instruction",
+        control=(
             "CRITICAL: Return plain text only. Do not call tools; tool calls are "
             "rejected and make this compaction fail.\n\n"
             "Create a concise but complete summary of only the "
@@ -322,7 +325,11 @@ def _summary_instruction(message_count: int) -> HumanMessage:
             "repeated content, and never reproduce large source blocks. Return only "
             "the summary."
         ),
-        additional_kwargs={"lc_source": "summarization_request"},
+        metadata={"lc_source": "summarization_request"},
+    )
+    return HumanMessage(
+        content=prepared.content,
+        response_metadata=prepared.metadata,
     )
 
 
@@ -514,10 +521,7 @@ def _overflow_retry_middle_messages(
             []
             if suffix and isinstance(suffix[0], HumanMessage)
             else [
-                HumanMessage(
-                    content="[earlier conversation truncated for compaction retry]",
-                    additional_kwargs={"lc_source": "summarization_retry"},
-                )
+                _compaction_retry_marker()
             ]
         )
         retries.append(
@@ -527,6 +531,18 @@ def _overflow_retry_middle_messages(
             ]
         )
     return retries
+
+
+def _compaction_retry_marker() -> HumanMessage:
+    prepared = internal_message_factory.build(
+        kind="compaction_retry_marker",
+        control="[earlier conversation truncated for compaction retry]",
+        metadata={"lc_source": "summarization_retry"},
+    )
+    return HumanMessage(
+        content=prepared.content,
+        response_metadata=prepared.metadata,
+    )
 
 
 def validate_summary_text(summary: str) -> str:

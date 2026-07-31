@@ -149,6 +149,6 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
         f"/api/v1/sessions/{child_session_id}/resources"
     )
     assert traces_response.status_code == 200
-    assert traces_response.json()["data"] == []
+    assert traces_response.json()["data"]["items"] == []
     assert resources_response.status_code == 200
     assert resources_response.json()["data"]["items"] == []

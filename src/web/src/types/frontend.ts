@@ -8,11 +8,13 @@ import type {
   SessionChangeset,
   SessionChangesetListItem,
   SessionCompactResult,
+  SessionGoal,
   SessionResource,
   TraceEvent,
   WebUiSettings,
   PendingRequestKind,
 } from "./backend";
+import type { SessionTurnTimeline } from "../state/session/turnTimeline";
 
 export type ConversationContentView =
   | "default"
@@ -22,9 +24,12 @@ export type ConversationContentView =
   | "resources"
   | "agent";
 
+export type CreatableSessionConnectionKind = "terminal" | "browser";
+
 export type FrontendEventSource =
   | "frontend"
   | "initial_load"
+  | "recovery"
   | "sse";
 
 interface FrontendReceivedEventBase {
@@ -64,6 +69,10 @@ export type FrontendReceivedEvent =
 
 export interface ConversationView {
   conversationId: string;
+  /** 展示历史中的权威 Turn 身份；待处理消息和旧诊断路径没有该字段。 */
+  turnId?: string;
+  turnRevision?: number;
+  turnItemsView?: "summary" | "full";
   sessionId: string;
   userMessage: Message | null;
   /** 当历史 trace 不完整时，用持久化 Assistant 消息恢复最终正文。 */
@@ -74,9 +83,10 @@ export interface ConversationView {
   jobId: string | null;
   pending: boolean;
   pendingSubmissionId?: string;
+  activeJobOverlay?: boolean;
   pendingKind?: PendingRequestKind;
   pendingPosition?: number;
-  source: "messages" | "pending";
+  source: "turn" | "pending";
 }
 
 export interface ConversationTokenUsage {
@@ -86,6 +96,10 @@ export interface ConversationTokenUsage {
   cacheReadInputTokens: number | null;
   modelCalls: number;
   reportedModelCalls: number;
+}
+
+export interface ConversationModelUsage {
+  finalModelId: string;
 }
 
 export interface SessionAttachmentSummary {
@@ -113,11 +127,7 @@ export interface AppState {
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
   currentSession: Session | null;
   currentSessionWorkspaceId: string | null;
-  messages: Message[];
-  messageHistoryNextCursor: string | null;
-  messageHistoryHasMore: boolean;
-  messageHistoryLoadingOlder: boolean;
-  messageHistoryError: string | null;
+  turnTimelinesBySession: Map<string, SessionTurnTimeline>;
   traceEvents: TraceEvent[];
   llmRequestLogs: LLMRequestLogRecord[];
   llmRequestLogsLoadedAt: string | null;
@@ -134,8 +144,10 @@ export interface AppState {
   sessionResourcesLoading: boolean;
   sessionResourcesError: string | null;
   eventQueuesBySession: Map<string, FrontendReceivedEvent[]>;
+  sessionTraceHistoryBySession: Map<string, SessionTraceHistoryState>;
   pendingConversations: Map<string, ConversationView[]>;
   activeJobIdsBySession: Map<string, string>;
+  unreadSessionKeys: Set<string>;
   status: string;
   error: string | null;
   isBootstrapping: boolean;
@@ -149,4 +161,19 @@ export interface AppState {
   agentStateError: string | null;
   compactLoading: boolean;
   lastCompactResult: SessionCompactResult | null;
+  currentGoal: SessionGoal | null;
+  currentGoalSessionId: string | null;
+  goalLoading: boolean;
+  goalError: string | null;
+}
+
+export interface SessionTraceHistoryState {
+  scopeKey: string;
+  generation: number;
+  items: TraceEvent[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  loading: boolean;
+  loadingOlder: boolean;
+  error: string | null;
 }

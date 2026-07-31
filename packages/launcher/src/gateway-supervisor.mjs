@@ -2,20 +2,36 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 
 const GATEWAY_HOST = "127.0.0.1";
-const GATEWAY_PORT = 8014;
-const GATEWAY_URL = `http://${GATEWAY_HOST}:${GATEWAY_PORT}`;
+const DEVELOPMENT_GATEWAY_PORT = 8014;
+const INSTALLED_GATEWAY_PORT = 8114;
 const GATEWAY_READY_TIMEOUT_MS = 90_000;
-const FORWARDED_SIGNALS =
-  process.platform === "win32"
+function forwardedSignals(platform) {
+  return platform === "win32"
     ? ["SIGINT", "SIGTERM", "SIGBREAK"]
     : ["SIGINT", "SIGTERM", "SIGHUP"];
+}
+
+export function gatewayEndpoint(distribution) {
+  const port =
+    distribution === "source-development"
+      ? DEVELOPMENT_GATEWAY_PORT
+      : INSTALLED_GATEWAY_PORT;
+  return Object.freeze({
+    host: GATEWAY_HOST,
+    port,
+    url: `http://${GATEWAY_HOST}:${port}`,
+  });
+}
 
 export async function waitForGateway({
   fetchImpl = fetch,
-  url = `${GATEWAY_URL}/api/gateway/health`,
+  url,
   timeoutMs = GATEWAY_READY_TIMEOUT_MS,
   intervalMs = 250,
 }) {
+  if (typeof url !== "string" || url.length === 0) {
+    throw new TypeError("Gateway 健康检查 URL 必须是非空字符串");
+  }
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
@@ -36,12 +52,13 @@ export async function waitForGateway({
 }
 
 export function gatewayEnvironment(runtime, baseEnvironment) {
+  const endpoint = gatewayEndpoint(runtime.distribution);
   return {
     ...baseEnvironment,
     BOXTEAM_DISTRIBUTION: runtime.distribution,
     BOXTEAM_RUNTIME_MANIFEST: runtime.manifestPath,
     BOXTEAM_PROJECT_ROOT: runtime.applicationRoot,
-    BOXTEAM_GATEWAY_URL: GATEWAY_URL,
+    BOXTEAM_GATEWAY_URL: endpoint.url,
     BOXTEAM_NODE_BIN: runtime.nodeExecutable,
     BOXTEAM_PYTHON_BIN: runtime.pythonExecutable,
     ...(runtime.webAssets === null
@@ -55,7 +72,13 @@ export function gatewayEnvironment(runtime, baseEnvironment) {
   };
 }
 
-export function spawnGateway({ runtime, environment, spawnImpl = spawn }) {
+export function spawnGateway({
+  runtime,
+  environment,
+  spawnImpl = spawn,
+  platform = process.platform,
+}) {
+  const endpoint = gatewayEndpoint(runtime.distribution);
   return spawnImpl(
     runtime.pythonExecutable,
     [
@@ -63,14 +86,17 @@ export function spawnGateway({ runtime, environment, spawnImpl = spawn }) {
       "uvicorn",
       "app.gateway.main:app",
       "--host",
-      GATEWAY_HOST,
+      endpoint.host,
       "--port",
-      String(GATEWAY_PORT),
+      String(endpoint.port),
     ],
     {
       cwd: runtime.applicationRoot,
       env: gatewayEnvironment(runtime, environment),
       stdio: ["inherit", "pipe", "pipe"],
+      // POSIX 终端会把 Ctrl+C 发给整个前台进程组。让 Gateway 进入独立
+      // 进程组后，由 Launcher 成为唯一信号所有者并只转发一次。
+      detached: platform !== "win32",
     },
   );
 }
@@ -86,11 +112,21 @@ export function forwardGatewayOutput(child, stdout, stderr) {
   };
 }
 
-export function installSignalForwarding(child, processObject = process) {
+export function installSignalForwarding(
+  child,
+  processObject = process,
+  platform = process.platform,
+) {
   const listeners = new Map();
-  for (const signal of FORWARDED_SIGNALS) {
+  let forwarded = false;
+  for (const signal of forwardedSignals(platform)) {
     const listener = () => {
-      if (child.exitCode === null && child.signalCode === null) {
+      if (
+        !forwarded &&
+        child.exitCode === null &&
+        child.signalCode === null
+      ) {
+        forwarded = true;
         child.kill(signal === "SIGBREAK" ? "SIGTERM" : signal);
       }
     };
@@ -107,9 +143,12 @@ export function installSignalForwarding(child, processObject = process) {
 export async function openGatewayBrowser({
   spawnImpl = spawn,
   platform = process.platform,
-  url = GATEWAY_URL,
+  url,
   stderr = process.stderr,
 }) {
+  if (typeof url !== "string" || url.length === 0) {
+    throw new TypeError("Gateway 浏览器 URL 必须是非空字符串");
+  }
   const command =
     platform === "win32"
       ? ["cmd.exe", ["/d", "/s", "/c", "start", "", url]]
@@ -138,11 +177,12 @@ export async function superviseGateway({
   stderr = process.stderr,
   processObject = process,
 }) {
+  const endpoint = gatewayEndpoint(runtime.distribution);
   stdout.write(
     `BoxTeam ${runtime.version} 正在启动 ` +
       `(distribution=${runtime.distribution})\n`,
   );
-  stdout.write(`Gateway: ${GATEWAY_URL}\n`);
+  stdout.write(`Gateway: ${endpoint.url}\n`);
   stdout.write(`Python: ${runtime.pythonExecutable}\n`);
   stdout.write(`Node: ${runtime.nodeExecutable}\n`);
 
@@ -153,16 +193,23 @@ export async function superviseGateway({
   const closeResult = once(child, "close");
   try {
     await Promise.race([
-      waitForGateway({ fetchImpl }),
+      waitForGateway({
+        fetchImpl,
+        url: `${endpoint.url}/api/gateway/health`,
+      }),
       exitResult.then(([code, signal]) => {
         throw new Error(
           `Gateway 就绪前退出: exit=${String(code)} signal=${String(signal)}`,
         );
       }),
     ]);
-    stdout.write(`Gateway 已就绪: ${GATEWAY_URL}\n`);
+    stdout.write(`Gateway 已就绪: ${endpoint.url}\n`);
     if (openBrowser) {
-      void openGatewayBrowser({ spawnImpl, stderr });
+      void openGatewayBrowser({
+        spawnImpl,
+        url: endpoint.url,
+        stderr,
+      });
     }
     const [code, signal] = await closeResult;
     if (signal) {
@@ -179,5 +226,3 @@ export async function superviseGateway({
     removeSignalHandlers();
   }
 }
-
-export { GATEWAY_URL };

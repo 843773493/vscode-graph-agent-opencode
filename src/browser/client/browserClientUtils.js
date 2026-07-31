@@ -2,8 +2,17 @@ export function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+export function createOpaqueId(prefix, cryptoSource = globalThis.crypto) {
+  if (!cryptoSource || typeof cryptoSource.getRandomValues !== "function") {
+    throw new Error("当前浏览器不支持生成连接参与者 ID 所需的 crypto.getRandomValues");
+  }
+  const bytes = cryptoSource.getRandomValues(new Uint8Array(16));
+  const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${prefix}_${value}`;
+}
+
 export function shortUrlLabel(value) {
-  if (!value) {
+  if (!value || value === "about:blank") {
     return "about:blank";
   }
   if (value.startsWith("data:")) {
@@ -11,6 +20,9 @@ export function shortUrlLabel(value) {
   }
   try {
     const url = new URL(value);
+    if (url.origin === "null") {
+      return value.length > 64 ? `${value.slice(0, 64)}...` : value;
+    }
     const path = `${url.pathname}${url.search}`;
     return `${url.origin}${path.length > 48 ? `${path.slice(0, 48)}...` : path}`;
   } catch {

@@ -57,6 +57,7 @@
 }
 
 .session-resource-row {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 28px;
@@ -83,9 +84,9 @@
   opacity: 0.45;
 }
 
-.session-resource-row.drop-target,
-.session-resource-list.navigation-root.drop-target,
-.session-resource-root-drop-target.drop-target {
+.session-resource-row.drop-inside,
+.session-resource-list.navigation-root.drop-inside,
+.session-resource-root-drop-target.drop-inside {
   background: color-mix(
     in srgb,
     var(--vscode-list-activeSelectionBackground) 68%,
@@ -95,9 +96,38 @@
   outline-offset: -1px;
 }
 
-.session-resource-list.navigation-root.drop-target {
+.session-resource-list.navigation-root.drop-inside {
   min-height: 30px;
   border-radius: 5px;
+}
+
+.session-resource-row.drop-before::before,
+.session-resource-row.drop-after::after {
+  position: absolute;
+  right: 3px;
+  left: 3px;
+  z-index: 20;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--vscode-button-background, #0e639c);
+  box-shadow:
+    0 0 0 1px var(--vscode-editor-background),
+    0 0 5px color-mix(in srgb, var(--vscode-button-background, #0e639c) 75%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.session-resource-row.drop-before,
+.session-resource-row.drop-after {
+  z-index: 3;
+}
+
+.session-resource-row.drop-before::before {
+  top: -2px;
+}
+
+.session-resource-row.drop-after::after {
+  bottom: -2px;
 }
 
 .session-resource-chevron,
@@ -128,6 +158,33 @@
 
 .session-resource-label.workspace-label {
   font-weight: 650;
+}
+
+.session-activity-indicator {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  place-items: center;
+}
+
+.session-activity-indicator.running {
+  color: var(--vscode-progressBar-background, #0078d4);
+  font-size: 13px;
+}
+
+.session-activity-indicator.unread::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--vscode-progressBar-background, #0078d4);
+  content: "";
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-activity-indicator .codicon-modifier-spin {
+    animation: none;
+  }
 }
 
 .session-resource-inline-editor {
@@ -187,6 +244,7 @@
 }
 
 .session-resource-search-result {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -200,6 +258,12 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.session-resource-search-result .session-activity-indicator {
+  position: absolute;
+  top: 8px;
+  right: 9px;
 }
 
 .session-resource-search-result:hover {

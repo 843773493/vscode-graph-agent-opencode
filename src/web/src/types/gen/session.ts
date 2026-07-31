@@ -16,22 +16,6 @@ export interface DeleteSessionResultDTO {
   cleaned_background_tasks?: number;
   cleaned_terminals?: number;
 }
-export interface SessionAutoContinueStartRequest {
-  poll_interval_seconds?: number;
-}
-export interface SessionAutoContinueStatusDTO {
-  session_id: string;
-  enabled: boolean;
-  task_id: string | null;
-  task_status: string;
-  poll_interval_seconds: number | null;
-  started_at: string | null;
-  forwarded_count: number;
-  last_forwarded_at: string | null;
-  last_trigger_event_id: string | null;
-  last_trigger_job_id: string | null;
-  last_enqueued_job_id: string | null;
-}
 export interface SessionCompactResultDTO {
   session_id: string;
   status: "scheduled" | "compacted" | "skipped";
@@ -152,7 +136,6 @@ export interface SessionUpdateRequest {
   agent_id?: string | null;
   provider_id?: string | null;
   title_source?: ("default" | "user" | "auto") | null;
-  parent_session_id?: string | null;
 }
 export interface TimestampedDTO {
   created_at: string;

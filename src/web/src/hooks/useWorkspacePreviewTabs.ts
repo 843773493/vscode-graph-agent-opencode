@@ -252,12 +252,8 @@ export function useWorkspacePreviewTabs({
       .finally(() => setLoadingPath(null));
   }, [apiPort, onStatusChange, openWorkspaceFileContent, tabs, workspaceId]);
 
-  const openWorkspaceFilePreview = (node: WorkspaceFileNode) => {
-    if (node.kind !== "file" && node.kind !== "symlink" && node.kind !== "other") {
-      return;
-    }
-
-    const existingTab = tabs.find((tab) => tab.path === node.path);
+  const openWorkspaceFilePath = useCallback(async (path: string) => {
+    const existingTab = tabs.find((tab) => tab.path === path);
     if (existingTab) {
       if (existingTab.previewType === "file-placeholder") {
         selectWorkspacePreviewTab(existingTab.path);
@@ -278,27 +274,39 @@ export function useWorkspacePreviewTabs({
     }
 
     setVisible(true);
-    setActivePath(node.path);
-    setLoadingPath(node.path);
+    setActivePath(path);
+    setLoadingPath(path);
     setError(null);
-    onStatusChange(`正在读取文件: ${node.path}`);
+    onStatusChange(`正在读取文件: ${path}`);
 
-    void getWorkspaceFileContent(
-      apiPort ?? DEFAULT_BACKEND_PORT,
-      node.path,
-      workspaceId,
-    )
-      .then((content) => {
-        openWorkspaceFileContent(content, null);
-      })
-      .catch((openError: unknown) => {
-        const message = openError instanceof Error ? openError.message : String(openError);
-        setError(message);
-        onStatusChange(`文件预览失败: ${message}`);
-      })
-      .finally(() => {
-        setLoadingPath(null);
-      });
+    try {
+      const content = await getWorkspaceFileContent(
+        apiPort ?? DEFAULT_BACKEND_PORT,
+        path,
+        workspaceId,
+      );
+      openWorkspaceFileContent(content, null);
+    } catch (openError) {
+      const message = openError instanceof Error ? openError.message : String(openError);
+      setError(message);
+      onStatusChange(`文件预览失败: ${message}`);
+    } finally {
+      setLoadingPath(null);
+    }
+  }, [
+    apiPort,
+    onStatusChange,
+    openWorkspaceFileContent,
+    selectWorkspacePreviewTab,
+    tabs,
+    workspaceId,
+  ]);
+
+  const openWorkspaceFilePreview = (node: WorkspaceFileNode) => {
+    if (node.kind !== "file" && node.kind !== "symlink" && node.kind !== "other") {
+      return;
+    }
+    void openWorkspaceFilePath(node.path);
   };
 
   const openWorkspaceFileReference = useCallback((
@@ -502,6 +510,7 @@ export function useWorkspacePreviewTabs({
     selectWorkspacePreviewTab,
     setError,
     openWorkspaceFilePreview,
+    openWorkspaceFilePath,
     openWorkspaceFileReference,
     openTerminalPreview,
     openBrowserPreview,

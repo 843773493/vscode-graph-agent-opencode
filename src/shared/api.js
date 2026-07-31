@@ -1,4 +1,13 @@
 import { API_PREFIX, DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_TOKEN } from './constants.js';
+import {
+  consumeSseResponse,
+  decodeJsonSseData,
+  defineSseEvent,
+} from './sse.js';
+import {
+  validateSessionExecutionSse,
+  validateTraceEvent,
+} from './sseRuntime.js';
 
 function buildUrl(port, path) {
   return `http://${DEFAULT_BACKEND_HOST}:${port}${API_PREFIX}${path}`;
@@ -32,59 +41,19 @@ async function requestJson(port, path, options = {}) {
   }
 }
 
-function parseSseBlock(block) {
-  let eventType = 'message';
-  let eventId = '';
-  const dataLines = [];
-
-  for (const line of block.split('\n')) {
-    if (!line || line.startsWith(':')) {
-      continue;
-    }
-
-    if (line.startsWith('event:')) {
-      eventType = line.slice(6).trim();
-      continue;
-    }
-
-    if (line.startsWith('id:')) {
-      eventId = line.slice(3).trim();
-      continue;
-    }
-
-    if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  }
-
-  const data = dataLines.join('\n');
-  if (!data) {
-    return null;
-  }
-
-  let payload = data;
-  try {
-    payload = JSON.parse(data);
-  } catch {
-    // keep raw text payload
-  }
-
-  if (payload && typeof payload === 'object') {
-    return {
-      eventType: typeof payload.type === 'string' ? payload.type : eventType,
-      eventId: typeof payload.event_id === 'string' ? payload.event_id : eventId,
-      payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : {},
-      event: payload,
-    };
-  }
-
-  return { eventType, eventId, payload };
-}
-
 export class TraceCursorGoneError extends Error {
   constructor(eventId) {
     super(`Trace 事件游标已失效: ${eventId}`);
     this.name = 'TraceCursorGoneError';
+    this.eventId = eventId;
+    this.status = 410;
+  }
+}
+
+export class JobEventCursorGoneError extends Error {
+  constructor(eventId) {
+    super(`Job 事件游标已失效: ${eventId}`);
+    this.name = 'JobEventCursorGoneError';
     this.eventId = eventId;
     this.status = 410;
   }
@@ -120,6 +89,52 @@ export async function updateSession(port, sessionId, payload) {
     body: JSON.stringify(payload),
   });
   return result.data;
+}
+
+export async function getSession(port, sessionId) {
+  const result = await requestJson(port, `/sessions/${encodeURIComponent(sessionId)}`);
+  return result.data;
+}
+
+export async function getSessionGoal(port, sessionId) {
+  const result = await requestJson(
+    port,
+    `/sessions/${encodeURIComponent(sessionId)}/goal`,
+  );
+  return result.data ?? null;
+}
+
+export async function updateSessionGoal(port, sessionId, payload) {
+  const result = await requestJson(
+    port,
+    `/sessions/${encodeURIComponent(sessionId)}/goal`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    },
+  );
+  return result.data;
+}
+
+export async function clearSessionGoal(port, sessionId) {
+  const result = await requestJson(
+    port,
+    `/sessions/${encodeURIComponent(sessionId)}/goal`,
+    { method: 'DELETE' },
+  );
+  return result.data;
+}
+
+export async function moveSessionParent(port, sessionId, parentNodeId) {
+  await requestJson(
+    port,
+    `/session-catalog/nodes/${encodeURIComponent(sessionId)}/parent`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ parent_node_id: parentNodeId }),
+    },
+  );
+  return getSession(port, sessionId);
 }
 
 export async function listMessages(port, sessionId) {
@@ -167,41 +182,39 @@ export async function streamSessionEvents(port, sessionId, { afterEventId, onEve
     throw new Error(`后端事件流失败 ${response.status}: ${text}`);
   }
 
-  if (!response.body) {
-    throw new Error('后端事件流不可用');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-
   try {
-    while (true) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-
-      let boundaryIndex = buffer.indexOf('\n\n');
-      while (boundaryIndex !== -1) {
-        const block = buffer.slice(0, boundaryIndex).trim();
-        buffer = buffer.slice(boundaryIndex + 2);
-        boundaryIndex = buffer.indexOf('\n\n');
-
-        if (!block) {
-          continue;
-        }
-
-        const parsed = parseSseBlock(block);
-        if (!parsed) {
-          continue;
-        }
-
-        onEvent?.(parsed);
-      }
-
-      if (done) {
-        break;
-      }
-    }
+    await consumeSseResponse(response, {
+      signal,
+      idleTimeoutMs: 45_000,
+      events: {
+        trace: defineSseEvent(
+          (data, frame) => {
+            if (!frame.id) {
+              throw new Error('SSE trace 缺少 id 行');
+            }
+            const event = validateTraceEvent(decodeJsonSseData(data, frame));
+            if (event.event_id !== frame.id) {
+              throw new Error(
+                `SSE trace event_id 不一致: transport=${frame.id} payload=${event.event_id}`,
+              );
+            }
+            return event;
+          },
+          (event) => {
+            const raw = event.raw && typeof event.raw === 'object' ? event.raw : {};
+            const payload = raw.payload && typeof raw.payload === 'object'
+              ? raw.payload
+              : {};
+            onEvent?.({
+              eventType: event.type,
+              eventId: event.event_id,
+              payload,
+              event,
+            });
+          },
+        ),
+      },
+    });
   } catch (error) {
     if (signal?.aborted) {
       return;
@@ -209,7 +222,74 @@ export async function streamSessionEvents(port, sessionId, { afterEventId, onEve
 
     onError?.(error);
     throw error;
-  } finally {
-    reader.releaseLock();
+  }
+}
+
+export async function streamJobEvents(
+  port,
+  jobId,
+  { afterEventId, onEvent, onError, signal } = {},
+) {
+  const response = await fetch(
+    buildUrl(port, `/jobs/${encodeURIComponent(jobId)}/events/stream`),
+    {
+      headers: {
+        accept: 'text/event-stream',
+        'X-Local-Token': DEFAULT_BACKEND_TOKEN,
+        ...(afterEventId ? { 'Last-Event-ID': afterEventId } : {}),
+      },
+      signal,
+    },
+  );
+  if (response.status === 410) {
+    throw new JobEventCursorGoneError(afterEventId ?? '');
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`后端 Job 事件流失败 ${response.status}: ${text}`);
+  }
+
+  try {
+    await consumeSseResponse(response, {
+      signal,
+      idleTimeoutMs: 45_000,
+      events: {
+        '*': defineSseEvent(
+          (data, frame) => {
+            if (!frame.id) {
+              throw new Error(`SSE Job 事件缺少 id 行: event=${frame.event}`);
+            }
+            const envelope = validateSessionExecutionSse(
+              decodeJsonSseData(data, frame),
+            );
+            if (envelope.event.event_id !== frame.id) {
+              throw new Error(
+                `SSE Job event_id 不一致: transport=${frame.id} payload=${envelope.event.event_id}`,
+              );
+            }
+            if (envelope.event.type !== frame.event) {
+              throw new Error(
+                `SSE Job event type 不一致: transport=${frame.event} payload=${envelope.event.type}`,
+              );
+            }
+            return envelope;
+          },
+          (envelope) => onEvent?.({
+            eventType: envelope.event.type,
+            eventId: envelope.event.event_id,
+            payload: envelope.event.payload,
+            event: envelope.event,
+            rawType: envelope.raw_type,
+            rawPayload: envelope.raw_payload,
+          }),
+        ),
+      },
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      return;
+    }
+    onError?.(error);
+    throw error;
   }
 }

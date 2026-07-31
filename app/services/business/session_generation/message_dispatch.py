@@ -156,7 +156,7 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
         phase: str,
     ) -> Path:
         session_path = (
-            self._session_catalog_service.path_resolver.resolve_session_dir(session_id)
+            self._session_catalog_service.path_resolver.resolve_session_node(session_id)
         )
         run_digest = hashlib.sha256(
             f"{payload.generator_id}\n{payload.run_id}".encode("utf-8")

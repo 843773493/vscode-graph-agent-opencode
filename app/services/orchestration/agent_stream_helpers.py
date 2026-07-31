@@ -62,18 +62,19 @@ def is_tracked_chat_model_event(name: str) -> bool:
 def build_human_response_metadata(
     *,
     message_id: str,
-    display_content: str,
+    display_content: str | None,
     attachments: list[AttachmentRef],
     message_created_at: str,
     message_metadata: dict[str, object],
 ) -> dict[str, object]:
     metadata: dict[str, object] = {
-        "display_content": display_content,
         "message_id": message_id,
         "created_at": message_created_at,
         "updated_at": message_created_at,
         "message_metadata": dict(message_metadata),
     }
+    if display_content is not None:
+        metadata["display_content"] = display_content
     if attachments:
         metadata["attachments"] = [
             attachment.model_dump(mode="json", exclude={"data_url"})

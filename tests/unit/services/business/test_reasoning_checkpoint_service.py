@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.prompting import internal_message_factory
 from app.schemas.event import ModelTokenUsagePayload
 from app.services.business.message_service import MessageService
 from app.services.business.reasoning_checkpoint_service import (
@@ -233,6 +234,10 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
 
     saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
     config = build_checkpoint_config(session_id)
+    prepared_reminder = internal_message_factory.build(
+        kind="checkpoint_reminder",
+        control=reminder,
+    )
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -240,7 +245,8 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
                 tool_call_message,
                 tool_message,
                 HumanMessage(
-                    content=f"<system_reminder>\n{reminder}\n</system_reminder>"
+                    content=prepared_reminder.content,
+                    response_metadata=prepared_reminder.metadata,
                 ),
                 final_message,
             ],

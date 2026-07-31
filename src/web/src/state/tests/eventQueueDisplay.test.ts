@@ -89,7 +89,7 @@ const failedItems = buildTraceTimelineItems([
     status: "error",
     jobId: "job_failed_tool",
     pending: false,
-    source: "messages",
+    source: "turn",
   } satisfies ConversationView,
 ]);
 assert(

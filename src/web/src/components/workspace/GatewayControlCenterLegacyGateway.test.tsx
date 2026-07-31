@@ -25,45 +25,17 @@ const html = renderToString(
     <GatewayControlCenter
       apiPort={8014}
       workspaces={[legacyWorkspace]}
-      activeWorkspaceId={legacyWorkspace.workspace_id}
-      recentLocalWorkspacePaths={[]}
-      switching={false}
-      removingWorkspaceIds={new Set()}
       gatewayError={null}
-      onActivate={noop}
-      onAddLocal={noop}
       onAddSsh={noop}
-      onRemove={() => {}}
-      onReorder={noop}
       onRefresh={noop}
       onReconnect={noop}
-      onSafeRestartManagedBackend={async () => ({
-        workspace_id: "gw_legacy",
-        status: "restarted",
-        forced: false,
-        blockers: [],
-        workspaces: { active_workspace_id: null, items: [] },
-      })}
-      onForceRestartManagedBackend={async () => ({
-        workspace_id: "gw_legacy",
-        status: "restarted",
-        forced: true,
-        blockers: [],
-        workspaces: { active_workspace_id: null, items: [] },
-      })}
-      onProbeExternalBackend={noop}
-      onRename={async (_workspaceId, name) => name}
-      onUseWorkspace={noop}
-      consoleView="routing"
-      onConsoleViewChange={() => {}}
     />
   </WarmConfirmProvider>,
 );
 
-const versionNotice = "当前 Gateway 进程版本较旧";
-if (!html.includes(versionNotice)) {
-  throw new Error("旧版 Gateway 数据应正常渲染并显示控制台级版本提示");
+if (!html.includes("连接管理")) {
+  throw new Error("旧版 Gateway 数据应正常渲染连接管理页面");
 }
-if (html.includes("需重启 Gateway")) {
-  throw new Error("旧版 Gateway 不应在每个工作区显示伪操作按钮");
+if (html.includes("工作区与路由") || html.includes("添加工作区")) {
+  throw new Error("连接管理页面不应继续承载工作区管理职责");
 }

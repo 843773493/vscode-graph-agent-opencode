@@ -25,6 +25,7 @@ def _candidate(
 ) -> ProviderModelCandidate:
     return ProviderModelCandidate(
         provider_id=provider_id,
+        model_id=provider_id,
         model=model,
         capabilities=frozenset({"text_input", *capabilities}),
     )
@@ -145,7 +146,7 @@ async def test_tool_returned_image_uses_same_context_capability_routing() -> Non
 
 
 @pytest.mark.asyncio
-async def test_text_request_falls_back_in_configured_order() -> None:
+async def test_text_request_falls_back_in_configured_order(monkeypatch: pytest.MonkeyPatch) -> None:
     primary_model = _model()
     fallback_model = _model()
     middleware = CapabilityRoutingMiddleware(
@@ -155,6 +156,15 @@ async def test_text_request_falls_back_in_configured_order() -> None:
         ]
     )
     requested_models: list[BaseChatModel] = []
+    failed_events: list[tuple[str, dict[str, str]]] = []
+
+    async def record_failed_event(name: str, data: dict[str, str]) -> None:
+        failed_events.append((name, data))
+
+    monkeypatch.setattr(
+        "app.agents.model_capability_routing.adispatch_custom_event",
+        record_failed_event,
+    )
 
     async def handler(request: ModelRequest) -> AIMessage:
         requested_models.append(request.model)
@@ -170,6 +180,17 @@ async def test_text_request_falls_back_in_configured_order() -> None:
     await middleware.awrap_model_call(request, handler)
 
     assert requested_models == [primary_model, fallback_model]
+    assert failed_events == [
+        (
+            "boxteam_model_failed",
+            {
+                "provider_id": "primary",
+                "model": "primary",
+                "error_type": "RuntimeError",
+                "error": "primary failed",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

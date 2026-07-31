@@ -1,9 +1,75 @@
-.event-queue-group-card {
-  border-color: color-mix(
-    in srgb,
-    var(--vscode-focusBorder) 45%,
-    var(--vscode-panel-border)
-  );
+.event-queue-card.panel-card {
+  display: block;
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.event-queue-card-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.event-queue-card-summary::-webkit-details-marker {
+  display: none;
+}
+
+.event-queue-card-summary::before {
+  content: "▶";
+  grid-column: 1;
+  grid-row: 1;
+  color: var(--vscode-descriptionForeground);
+  font-size: 9px;
+  transition: transform 100ms ease-in-out;
+}
+
+.event-queue-card[open] > .event-queue-card-summary::before {
+  transform: rotate(90deg);
+}
+
+.event-queue-card-summary .panel-title-row {
+  grid-column: 1;
+  grid-row: 1;
+  padding-left: 14px;
+}
+
+.event-queue-compact-content {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-queue-card-summary .panel-time {
+  grid-column: 3;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.event-queue-card-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 10px 10px;
+  border-top: var(--surface-border);
+}
+
+.event-queue-load-older {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  text-align: center;
 }
 
 .event-queue-key-trace {

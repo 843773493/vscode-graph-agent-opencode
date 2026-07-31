@@ -69,12 +69,12 @@ def e2e_workspace_config_path(
     source_path = Path(e2e_config_path).resolve()
     if not source_path.is_file():
         raise FileNotFoundError(f"E2E 配置不存在: {source_path}")
-    target_path = Path(e2e_workspace_root_path) / ".boxteam" / "boxteam.jsonc"
+    target_path = Path(e2e_workspace_root_path) / ".boxteam" / "workspace.jsonc"
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, target_path)
     shutil.copy2(
-        Path.cwd().resolve() / "configs" / "config.jsonc",
-        target_path.parent / "config.schema.jsonc",
+        Path.cwd().resolve() / "configs" / "workspace_config.jsonc",
+        target_path.parent / "workspace_config.jsonc",
     )
     return str(target_path)
 

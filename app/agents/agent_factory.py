@@ -14,30 +14,6 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from app.agents.agent_tools import build_default_tools
-from app.agents.llm_logging_middleware import LLMLoggingMiddleware
-from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
-from app.agents.deep_agent_stack import (
-    build_deep_agent_middleware,
-    filter_tools_by_name,
-)
-from app.agents.custom_tools import build_custom_tool_bundle
-from app.agents.skill_runtime import (
-    append_skill_middlewares,
-    discover_workspace_skill_sources,
-)
-from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
-from app.agents.model_capability_routing import (
-    CapabilityRoutingMiddleware,
-    build_provider_model_candidate,
-)
-from app.agents.tool_invocation_context import (
-    ToolInvocationContext,
-    ToolInvocationContextMiddleware,
-)
-from app.agents.tool_output_middleware import ToolOutputMiddleware
-from app.agents.policy import validate_tool_dependencies
-from app.agents.workspace_backend import build_workspace_backend
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_context import (
@@ -46,15 +22,40 @@ from app.abstractions.session_context import (
 )
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
-from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
-from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.agents.agent_tools import build_default_tools
+from app.agents.custom_tools import build_custom_tool_bundle
+from app.agents.deep_agent_stack import (
+    build_deep_agent_middleware,
+    filter_tools_by_name,
+)
+from app.agents.llm_logging_middleware import LLMLoggingMiddleware
+from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
+from app.agents.model_capability_routing import (
+    CapabilityRoutingMiddleware,
+    build_provider_model_candidate,
+)
+from app.agents.policy import validate_tool_dependencies
+from app.agents.skill_runtime import (
+    append_skill_middlewares,
+    discover_workspace_skill_sources,
+)
+from app.agents.tool_invocation_context import (
+    ToolInvocationContext,
+    ToolInvocationContextMiddleware,
+)
+from app.agents.tool_output_middleware import ToolOutputMiddleware
+from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
+from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 
 if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
+    from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
 
 
@@ -94,6 +95,7 @@ def build_model_from_provider(
     if custom_llm_provider == "chatgpt":
         from app.runtime.chatgpt_auth import (
             configure_litellm_chatgpt_auth_directory,
+            ensure_chatgpt_oauth_ready,
             ensure_litellm_chatgpt_model_capabilities,
             is_chatgpt_oauth_provider,
         )
@@ -105,7 +107,8 @@ def build_model_from_provider(
             )
         if provider.get("api_mode") != "responses":
             raise ValueError("ChatGPT OAuth provider 必须配置 api_mode='responses'")
-        configure_litellm_chatgpt_auth_directory()
+        token_dir = configure_litellm_chatgpt_auth_directory()
+        ensure_chatgpt_oauth_ready(token_dir)
         ensure_litellm_chatgpt_model_capabilities(provider["model"])
 
     request_options = _get_provider_request_options(provider)
@@ -223,6 +226,7 @@ def create_my_deep_agent(
     background_message_bus: BackgroundMessageBus | None = None,
     job_event_bus: JobEventBusProtocol | None = None,
     job_service: JobServiceProtocol | None = None,
+    goal_service: SessionGoalService | None = None,
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
@@ -283,6 +287,7 @@ def create_my_deep_agent(
             background_message_bus=background_message_bus,
             job_event_bus=job_event_bus,
             job_service=job_service,
+            goal_service=goal_service,
             message_service=message_service,
             session_service=session_service,
             session_orchestrator=session_orchestrator,
@@ -410,6 +415,7 @@ def create_runtime_deep_agent_for_session(
     background_message_bus: BackgroundMessageBus | None = None,
     job_event_bus: JobEventBusProtocol | None = None,
     job_service: JobServiceProtocol | None = None,
+    goal_service: SessionGoalService | None = None,
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
@@ -469,6 +475,7 @@ def create_runtime_deep_agent_for_session(
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
         job_service=job_service,
+        goal_service=goal_service,
         message_service=message_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,

@@ -1,12 +1,17 @@
 import type {
-  AddLocalGatewayWorkspaceRequest,
+  AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
   APIResponse,
   GatewayInboundAccessList,
+  GatewayDeviceConnectionList,
+  GatewayDeviceAccessAddressList,
+  CreatedGatewayDeviceConnection,
   GatewayWorkspaceList,
   GatewayRuntimeRestartResult,
+  GatewayRuntimeStateResult,
   GatewayHealth,
   GatewayDirectoryList,
+  GatewayManagedWorkspaceList,
   UpdateGatewayWorkspaceRequest,
   ReorderGatewayWorkspacesRequest,
   SshConnectionOptionList,
@@ -20,7 +25,73 @@ import type {
   SessionGeneratorList,
   WorkspaceNavigationTree,
 } from "./types/backend";
-import { requestJson, unwrapApiData } from "./api";
+import { HttpRequestError, requestJson, unwrapApiData } from "./api";
+import type { CreatableSessionConnectionKind } from "./types/frontend";
+
+export interface CreatedSessionConnection {
+  kind: CreatableSessionConnectionKind;
+  resourceId: string;
+}
+
+interface ManagerResourceResponse {
+  data?: Record<string, unknown>;
+}
+
+interface SessionConnectionCreateRequest {
+  service: string;
+  path: string;
+  payload: Record<string, unknown>;
+  idField: string;
+}
+
+const SESSION_CONNECTION_CREATE_REQUESTS: Record<
+  CreatableSessionConnectionKind,
+  (sessionId: string) => SessionConnectionCreateRequest
+> = {
+  terminal: (sessionId) => ({
+    service: "terminal-manager",
+    path: "api/terminals",
+    payload: {
+      session_id: sessionId,
+      title: "用户终端",
+    },
+    idField: "terminal_id",
+  }),
+  browser: (sessionId) => ({
+    service: "browser-manager",
+    path: "api/browsers",
+    payload: {
+      session_id: sessionId,
+      title: "用户浏览器",
+      url: "about:blank",
+      viewport: { width: 1280, height: 800 },
+    },
+    idField: "browser_id",
+  }),
+};
+
+export async function createSessionConnection(
+  port: number,
+  workspaceId: string,
+  sessionId: string,
+  kind: CreatableSessionConnectionKind,
+): Promise<CreatedSessionConnection> {
+  const encodedWorkspaceId = encodeURIComponent(workspaceId);
+  const request = SESSION_CONNECTION_CREATE_REQUESTS[kind](sessionId);
+  const response = await requestJson<ManagerResourceResponse>(
+    port,
+    `/api/gateway/workspaces/${encodedWorkspaceId}/${request.service}/${request.path}`,
+    {
+      method: "POST",
+      body: JSON.stringify(request.payload),
+    },
+  );
+  const resourceId = response.data?.[request.idField];
+  if (typeof resourceId !== "string" || !resourceId) {
+    throw new Error(`${request.service} 创建响应缺少 ${request.idField}`);
+  }
+  return { kind, resourceId };
+}
 
 export async function getGatewayHealth(port: number): Promise<GatewayHealth> {
   return unwrapApiData(
@@ -97,18 +168,22 @@ export async function deleteWorkspaceNavigationFolder(
   );
 }
 
-export async function moveWorkspaceNavigationNode(
+export async function placeWorkspaceNavigationNode(
   port: number,
-  nodeId: string,
-  parentNodeId?: string | null,
+  payload: {
+    node_id: string;
+    parent_node_id: string | null;
+    mode: "before" | "after" | "last";
+    target_node_id?: string;
+  },
 ): Promise<WorkspaceNavigationTree> {
   return unwrapApiData(
     await requestJson<APIResponse<WorkspaceNavigationTree>>(
       port,
-      `/api/gateway/workspace-navigation/nodes/${encodeURIComponent(nodeId)}`,
+      "/api/gateway/workspace-navigation/placement",
       {
-        method: "PATCH",
-        body: JSON.stringify({ parent_node_id: parentNodeId ?? null }),
+        method: "PUT",
+        body: JSON.stringify(payload),
       },
     ),
   );
@@ -229,6 +304,54 @@ export async function listGatewayInboundAccess(
   );
 }
 
+export async function listGatewayDeviceConnections(
+  port: number,
+): Promise<GatewayDeviceConnectionList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayDeviceConnectionList>>(
+      port,
+      "/api/gateway/device-connections",
+    ),
+  );
+}
+
+export async function listGatewayDeviceAccessAddresses(
+  port: number,
+): Promise<GatewayDeviceAccessAddressList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayDeviceAccessAddressList>>(
+      port,
+      "/api/gateway/device-connections/access-addresses",
+    ),
+  );
+}
+
+export async function createGatewayDeviceConnection(
+  port: number,
+  payload: { device_name: string; gateway_url: string },
+): Promise<CreatedGatewayDeviceConnection> {
+  return unwrapApiData(
+    await requestJson<APIResponse<CreatedGatewayDeviceConnection>>(
+      port,
+      "/api/gateway/device-connections",
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  );
+}
+
+export async function revokeGatewayDeviceConnection(
+  port: number,
+  connectionId: string,
+): Promise<GatewayDeviceConnectionList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayDeviceConnectionList>>(
+      port,
+      `/api/gateway/device-connections/${encodeURIComponent(connectionId)}`,
+      { method: "DELETE" },
+    ),
+  );
+}
+
 export async function activateGatewayWorkspace(
   port: number,
   workspaceId: string,
@@ -243,17 +366,20 @@ export async function activateGatewayWorkspace(
   return result.active_workspace_id;
 }
 
-export async function addLocalGatewayWorkspace(
+export async function addManagedGatewayWorkspace(
   port: number,
-  payload: AddLocalGatewayWorkspaceRequest,
-): Promise<GatewayWorkspaceList> {
+  payload: AddManagedGatewayWorkspaceRequest,
+): Promise<GatewayManagedWorkspaceList> {
   return unwrapApiData(
-    await requestJson<APIResponse<GatewayWorkspaceList>>(
+    await requestJson<APIResponse<GatewayManagedWorkspaceList>>(
       port,
-      "/api/gateway/workspaces/local",
+      "/api/gateway/managed-workspaces",
       {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          create_directory: payload.create_directory ?? false,
+        }),
       },
     ),
   );
@@ -339,6 +465,32 @@ export async function safeRestartManagedGatewayWorkspaceBackend(
   );
 }
 
+export async function startManagedGatewayWorkspaceBackend(
+  port: number,
+  workspaceId: string,
+): Promise<GatewayRuntimeStateResult> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayRuntimeStateResult>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/start`,
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function stopManagedGatewayWorkspaceBackend(
+  port: number,
+  workspaceId: string,
+): Promise<GatewayRuntimeStateResult> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayRuntimeStateResult>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/stop`,
+      { method: "POST" },
+    ),
+  );
+}
+
 export async function forceRestartManagedGatewayWorkspaceBackend(
   port: number,
   workspaceId: string,
@@ -409,18 +561,28 @@ export async function updateGatewayUiSettings(
 export async function browseGatewayLocalDirectories(
   port: number,
   path?: string | null,
+  gatewayConnectionId?: string | null,
 ): Promise<GatewayDirectoryList> {
   const query = new URLSearchParams();
   if (path?.trim()) {
     query.set("path", path.trim());
   }
+  if (gatewayConnectionId) {
+    query.set("gateway_connection_id", gatewayConnectionId);
+  }
   const suffix = query.toString();
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayDirectoryList>>(
-      port,
-      `/api/gateway/local-directories${suffix ? `?${suffix}` : ""}`,
-    ),
-  );
+  const requestPath = `/api/gateway/local-directories${suffix ? `?${suffix}` : ""}`;
+  const requestListing = async () =>
+    unwrapApiData(
+      await requestJson<APIResponse<GatewayDirectoryList>>(port, requestPath),
+    );
+  try {
+    return await requestListing();
+  } catch (error) {
+    if (!(error instanceof HttpRequestError) || error.status !== 503) throw error;
+    // TODO: Vite 开发代理偶发在 Gateway 可用时返回一次 503；仅对幂等目录读取重试一次。
+    return await requestListing();
+  }
 }
 
 export async function listGatewaySshConnections(

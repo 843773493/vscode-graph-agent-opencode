@@ -8,9 +8,10 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import Protocol, TextIO
 
 import httpx
 
@@ -23,6 +24,14 @@ DEFAULT_SSH_TUNNEL_PORT_MIN = 41000
 DEFAULT_SSH_TUNNEL_PORT_MAX = 41999
 
 logger = logging.getLogger(__name__)
+
+
+class ManagedProcessHandle(Protocol):
+    def request_terminate(self) -> None: ...
+
+    def close(self, *, timeout_seconds: float = 8) -> None: ...
+
+    def detach(self) -> None: ...
 
 
 @dataclass(slots=True)
@@ -52,6 +61,12 @@ class ManagedProcess:
             if callable(close):
                 close()
 
+    def detach(self) -> None:
+        """Gateway 重启时放弃进程所有权，不向独立进程组发送信号。"""
+        close = getattr(self.log_file, "close", None)
+        if callable(close):
+            close()
+
     def _terminate_group(self) -> None:
         if os.name == "posix":
             os.killpg(self.process.pid, signal.SIGTERM)
@@ -66,6 +81,55 @@ class ManagedProcess:
                 return
         else:
             self.process.kill()
+
+
+@dataclass(slots=True)
+class AdoptedManagedProcess:
+    """新 Gateway 通过已验证的健康接口重新接管存活的辅助服务。"""
+
+    pid: int
+
+    def __post_init__(self) -> None:
+        if self.pid <= 0:
+            raise ValueError(f"接管进程 PID 必须为正整数: {self.pid}")
+
+    def request_terminate(self) -> None:
+        if not self._is_alive():
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(self.pid, signal.SIGTERM)
+            else:
+                os.kill(self.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+
+    def close(self, *, timeout_seconds: float = 8) -> None:
+        self.request_terminate()
+        deadline = time.monotonic() + timeout_seconds
+        while self._is_alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not self._is_alive():
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(self.pid, signal.SIGKILL)
+            else:
+                os.kill(self.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+
+    def detach(self) -> None:
+        return
+
+    def _is_alive(self) -> bool:
+        try:
+            os.kill(self.pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError as error:
+            raise PermissionError(f"无权检查已接管辅助服务 PID: {self.pid}") from error
+        return True
 
 
 def _spawn_logged_process(

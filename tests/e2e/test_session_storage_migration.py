@@ -270,10 +270,10 @@ def test_legacy_session_parented_to_session_is_rejected_before_backend_startup(
     rejected_boxteam = rejected_workspace / ".boxteam"
     rejected_boxteam.mkdir()
     source_config = Path(e2e_workspace_config_path)
-    shutil.copy2(source_config, rejected_boxteam / "boxteam.jsonc")
+    shutil.copy2(source_config, rejected_boxteam / "workspace.jsonc")
     shutil.copy2(
-        source_config.parent / "config.schema.jsonc",
-        rejected_boxteam / "config.schema.jsonc",
+        source_config.parent / "workspace_config.jsonc",
+        rejected_boxteam / "workspace_config.jsonc",
     )
     rejected_sessions_root = rejected_boxteam / "sessions"
     parent_session_id = "ses_legacy_parent_00000001"

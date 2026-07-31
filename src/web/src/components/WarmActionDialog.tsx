@@ -7,6 +7,8 @@ interface WarmActionDialogProps {
   description?: string;
   inputLabel?: string;
   initialValue?: string;
+  inputMaxLength?: number;
+  inputMultiline?: boolean;
   confirmText: string;
   danger?: boolean;
   onClose: () => void;
@@ -19,6 +21,8 @@ export default function WarmActionDialog({
   description,
   inputLabel,
   initialValue = "",
+  inputMaxLength = 200,
+  inputMultiline = false,
   confirmText,
   danger = false,
   onClose,
@@ -84,7 +88,9 @@ export default function WarmActionDialog({
       }}
     >
       <form
-        className="workspace-dialog workspace-action-dialog"
+        className={`workspace-dialog workspace-action-dialog${
+          inputMultiline ? " workspace-action-dialog-multiline" : ""
+        }`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -111,16 +117,30 @@ export default function WarmActionDialog({
           <div className="workspace-dialog-grid">
             <label className="workspace-dialog-wide">
               <span>{inputLabel}</span>
-              <input
-                autoFocus
-                value={value}
-                disabled={submitting}
-                maxLength={200}
-                onChange={(event) => {
-                  setValue(event.target.value);
-                  setError(null);
-                }}
-              />
+              {inputMultiline ? (
+                <textarea
+                  autoFocus
+                  value={value}
+                  disabled={submitting}
+                  maxLength={inputMaxLength}
+                  rows={7}
+                  onChange={(event) => {
+                    setValue(event.target.value);
+                    setError(null);
+                  }}
+                />
+              ) : (
+                <input
+                  autoFocus
+                  value={value}
+                  disabled={submitting}
+                  maxLength={inputMaxLength}
+                  onChange={(event) => {
+                    setValue(event.target.value);
+                    setError(null);
+                  }}
+                />
+              )}
             </label>
           </div>
         ) : null}

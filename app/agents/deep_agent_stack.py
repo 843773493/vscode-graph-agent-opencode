@@ -6,7 +6,6 @@ from typing import Any
 
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.filesystem import FilesystemMiddleware
-from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
@@ -35,6 +34,10 @@ from app.agents.middleware_prompts import (
     TODO_TOOL_DESCRIPTION,
 )
 from app.agents.request_replay_middleware import PromptReplayCaptureMiddleware
+from app.agents.structured_memory_middleware import StructuredMemoryMiddleware
+from app.agents.structured_prompt_validation_middleware import (
+    StructuredPromptValidationMiddleware,
+)
 from app.agents.structured_tool_call_middleware import StructuredToolCallMiddleware
 from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
@@ -54,6 +57,7 @@ _PROMPT_REPLAY_LABELS = {
     "CachePreservingSummarizationToolMiddleware": "上下文压缩工具指令",
     "WorkspaceAgentsMiddleware": "工作区 AGENTS.md",
     "MemoryMiddleware": "Agent 记忆",
+    "StructuredMemoryMiddleware": "Agent 记忆",
 }
 
 
@@ -216,7 +220,7 @@ def build_deep_agent_middleware(
 
     if memory:
         deepagent_middleware.append(
-            MemoryMiddleware(
+            StructuredMemoryMiddleware(
                 backend=backend,
                 sources=memory,
                 system_prompt=MEMORY_SYSTEM_PROMPT,
@@ -225,5 +229,8 @@ def build_deep_agent_middleware(
 
     if interrupt_on:
         deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+
+    # 放在所有会改写模型请求的 middleware 之后，确保派生的压缩请求也会被验证。
+    deepagent_middleware.append(StructuredPromptValidationMiddleware())
 
     return _instrument_prompt_replay(deepagent_middleware)

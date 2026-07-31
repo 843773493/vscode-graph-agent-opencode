@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  AddManagedGatewayWorkspaceRequest,
   GatewayWorkspace,
   Session,
   WebUiSessionSidebarSettings,
@@ -22,6 +23,7 @@ import AgentSessionsSessionTree from './agentSessions/AgentSessionsSessionTree';
 import SessionResourceExplorer from './agentSessions/SessionResourceExplorer';
 import { useAgentSessionsTreeState } from './agentSessions/useAgentSessionsTreeState';
 import WorkspaceRenameDialog from './workspace/WorkspaceRenameDialog';
+import WorkspaceAddDialog from './workspace/WorkspaceAddDialog';
 import AnchoredOverlay from './AnchoredOverlay';
 import WarmActionDialog from './WarmActionDialog';
 import {
@@ -73,6 +75,10 @@ interface AgentSessionsPanelProps {
   ) => Promise<void>;
   onRefreshWorkspaceSessions: (workspaceId: string) => Promise<void>;
   onRemoveWorkspace: (workspaceId: string, workspaceName: string) => void;
+  onAddWorkspace: (payload: AddManagedGatewayWorkspaceRequest) => Promise<void>;
+  onOpenGatewayControl: () => void;
+  onStartWorkspace: (workspaceId: string) => Promise<void>;
+  onStopWorkspace: (workspaceId: string) => Promise<void>;
   onRenameWorkspace: (workspaceId: string, name: string) => Promise<string>;
   onCopySessionInformation: (
     workspaceId: string,
@@ -82,6 +88,8 @@ interface AgentSessionsPanelProps {
   onSelectWorkspaceSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
   activeSession: Session | null;
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
+  activeJobIdsBySession: ReadonlyMap<string, string>;
+  unreadSessionKeys: ReadonlySet<string>;
   onCreateSession: (workspaceId?: string | null) => void;
   onCreateSessionInFolder: (
     workspaceId: string,
@@ -96,7 +104,8 @@ interface AgentSessionsPanelProps {
     workspaceId: string,
     deletedCurrentSession: boolean,
   ) => Promise<void>;
-  catalogRefreshVersion: number;
+  catalogSyncKeys: ReadonlyMap<string, string>;
+  catalogRefreshVersions: ReadonlyMap<string, number>;
   flexRatio: number;
   preferences: AgentSessionsPreferences;
   onPreferencesChange: (
@@ -129,17 +138,24 @@ export default function AgentSessionsPanel({
   onSetWorkspaceParent,
   onRefreshWorkspaceSessions,
   onRemoveWorkspace,
+  onAddWorkspace,
+  onOpenGatewayControl,
+  onStartWorkspace,
+  onStopWorkspace,
   onRenameWorkspace,
   onCopySessionInformation,
   onCopyWorkspaceInformation,
   onSelectWorkspaceSession,
   activeSession,
   sessionAttachmentSummaries,
+  activeJobIdsBySession,
+  unreadSessionKeys,
   onCreateSession,
   onCreateSessionInFolder,
   onCreateSessionFolder,
   onSessionFolderDeleted,
-  catalogRefreshVersion,
+  catalogSyncKeys,
+  catalogRefreshVersions,
   flexRatio,
   preferences,
   onPreferencesChange,
@@ -159,6 +175,7 @@ export default function AgentSessionsPanel({
     locationName: string;
   } | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [workspaceAddOpen, setWorkspaceAddOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const filterMode = preferences.filterMode;
@@ -278,6 +295,9 @@ export default function AgentSessionsPanel({
       name: workspace.name,
       parentWorkspaceId: workspace.parent_workspace_id ?? null,
       removable: workspace.removable,
+      managed: workspace.managed,
+      systemDefault: workspace.system_default,
+      status: workspace.status,
       x,
       y,
     });
@@ -472,11 +492,15 @@ export default function AgentSessionsPanel({
               onRefreshWorkspaceSessions={onRefreshWorkspaceSessions}
               onCreateSessionInFolder={onCreateSessionInFolder}
               onSessionFolderDeleted={onSessionFolderDeleted}
-              catalogRefreshVersion={catalogRefreshVersion}
+              catalogSyncKeys={catalogSyncKeys}
+              catalogRefreshVersions={catalogRefreshVersions}
               onSelectSession={onSelectWorkspaceSession}
               onStatusChange={onStatusChange}
               onOpenWorkspaceMenu={openWorkspaceMenu}
               onOpenSessionMenu={openSessionMenu}
+              activeJobIdsBySession={activeJobIdsBySession}
+              unreadSessionKeys={unreadSessionKeys}
+              onRequestAddWorkspace={() => setWorkspaceAddOpen(true)}
             />
           ) : null}
 
@@ -508,6 +532,13 @@ export default function AgentSessionsPanel({
                             sortMode={sortMode}
                             currentSessionId={currentSessionId}
                             active
+                            workspaceId={
+                              activeGatewayWorkspaceId
+                              ?? activeSession?.workspace_id
+                              ?? 'ws_local'
+                            }
+                            activeJobIdsBySession={activeJobIdsBySession}
+                            unreadSessionKeys={unreadSessionKeys}
                             treeId={`section:${section.id}`}
                             collapsedSessionIds={collapsedSessionIds}
                             showAllRoots={expandedRootTreeIds.has(
@@ -619,12 +650,22 @@ export default function AgentSessionsPanel({
           }}
           onCopyWorkspaceInformation={onCopyWorkspaceInformation}
           onRemoveWorkspace={onRemoveWorkspace}
+          onStartWorkspace={onStartWorkspace}
+          onStopWorkspace={onStopWorkspace}
           onStatusChange={onStatusChange}
         />
         <WorkspaceRenameDialog
           workspace={renamingWorkspace}
           onClose={() => setRenamingWorkspace(null)}
           onSubmit={onRenameWorkspace}
+        />
+        <WorkspaceAddDialog
+          open={workspaceAddOpen}
+          apiPort={apiPort}
+          workspaces={gatewayWorkspaces}
+          onClose={() => setWorkspaceAddOpen(false)}
+          onOpenConnectionManager={onOpenGatewayControl}
+          onAdd={onAddWorkspace}
         />
         <WarmActionDialog
           open={sessionFolderDialog !== null}

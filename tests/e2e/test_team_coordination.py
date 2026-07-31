@@ -18,7 +18,7 @@ def e2e_workspace_config_path(
 ) -> str:
     """本场景需要可靠工具调用，避开只返回 reasoning 的默认测试模型。"""
     source_path = Path(e2e_config_path).resolve()
-    target_path = Path(e2e_workspace_root_path) / ".boxteam" / "boxteam.jsonc"
+    target_path = Path(e2e_workspace_root_path) / ".boxteam" / "workspace.jsonc"
     target_path.parent.mkdir(parents=True, exist_ok=True)
     payload = source_path.read_text(encoding="utf-8")
     payload = payload.replace(
@@ -28,8 +28,8 @@ def e2e_workspace_config_path(
     )
     target_path.write_text(payload, encoding="utf-8")
     shutil.copy2(
-        Path.cwd().resolve() / "configs" / "config.jsonc",
-        target_path.parent / "config.schema.jsonc",
+        Path.cwd().resolve() / "configs" / "workspace_config.jsonc",
+        target_path.parent / "workspace_config.jsonc",
     )
     return str(target_path)
 
@@ -70,7 +70,7 @@ async def _job_tool_names(
     assert response.status_code == 200, response.text
     return [
         str(get_trace_payload(event).get("tool_name"))
-        for event in response.json()["data"]
+        for event in response.json()["data"]["items"]
         if event.get("job_id") == job_id and event.get("type") == "tool_call_start"
     ]
 

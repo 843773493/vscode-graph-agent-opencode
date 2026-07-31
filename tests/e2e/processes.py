@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 from urllib.request import urlopen
+
+from configs.installer import install_user_configuration
 
 E2E_READY_TIMEOUT_SECONDS = 60
 
@@ -49,24 +51,30 @@ def terminate_process(process: subprocess.Popen[str]) -> None:
 
 def kill_process_on_port(port: int) -> None:
     if os.name == "nt":
+        powershell_command = (
+            "$connections = Get-NetTCPConnection "
+            f"-LocalPort {port} -State Listen -ErrorAction SilentlyContinue; "
+            "$connections | Select-Object -ExpandProperty OwningProcess | "
+            "Sort-Object -Unique | ForEach-Object { "
+            "Stop-Process -Id $_ -Force -ErrorAction Stop }"
+        )
         try:
             subprocess.run(
                 [
                     "powershell",
                     "-NoProfile",
                     "-Command",
-                    f"$connections = Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue; "
-                    "$connections | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | "
-                    "ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction Stop }",
+                    powershell_command,
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=True,
             )
         except subprocess.CalledProcessError as error:
+            stderr = error.stderr.decode("utf-8", errors="ignore")
             raise RuntimeError(
                 "清理监听端口失败: "
-                f"port={port}, returncode={error.returncode}, stderr={error.stderr.decode('utf-8', errors='ignore')}"
+                f"port={port}, returncode={error.returncode}, stderr={stderr}"
             ) from error
         return
 
@@ -78,9 +86,10 @@ def kill_process_on_port(port: int) -> None:
             check=True,
         )
     except subprocess.CalledProcessError as error:
+        stderr = error.stderr.decode("utf-8", errors="ignore")
         raise RuntimeError(
             "清理监听端口失败: "
-            f"port={port}, returncode={error.returncode}, stderr={error.stderr.decode('utf-8', errors='ignore')}"
+            f"port={port}, returncode={error.returncode}, stderr={stderr}"
         ) from error
 
 
@@ -105,7 +114,8 @@ def wait_for_backend_ready(port: int, process: subprocess.Popen[str]) -> None:
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
-                f"后端进程提前退出: pid={process.pid}, returncode={process.returncode}, port={port}"
+                "后端进程提前退出: "
+                f"pid={process.pid}, returncode={process.returncode}, port={port}"
             )
         try:
             with urlopen(url, timeout=1) as response:
@@ -122,7 +132,8 @@ def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
-                f"测试进程提前退出: pid={process.pid}, returncode={process.returncode}, url={url}"
+                "测试进程提前退出: "
+                f"pid={process.pid}, returncode={process.returncode}, url={url}"
             )
         try:
             with urlopen(url, timeout=1) as response:
@@ -148,39 +159,48 @@ def start_backend_process(
 
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
-    workspace_config_path = Path(workspace_root) / ".boxteam" / "boxteam.jsonc"
+    boxteam_home = Path(workspace_root).resolve().parent / "boxteam-home"
+    install_user_configuration(
+        config_root=boxteam_home / "config",
+        profile="default",
+        project_root=project_root,
+    )
+    workspace_config_path = Path(workspace_root) / ".boxteam" / "workspace.jsonc"
     if not workspace_config_path.is_file():
         raise FileNotFoundError(
-            "启动 E2E 后端前必须先复制工作区配置: "
-            f"{workspace_config_path}"
+            f"启动 E2E 后端前必须先复制工作区配置: {workspace_config_path}"
         )
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = workspace_root
-    env["BOXTEAM_USER_CONFIG_PATH"] = str(workspace_config_path)
+    env["BOXTEAM_HOME"] = str(boxteam_home)
     env["PYTHONUNBUFFERED"] = "1"
     if env_overrides:
         env.update(env_overrides)
 
     cmd = [str(python_executable)]
     if debugpy_port is not None:
-        cmd.extend([
+        cmd.extend(
+            [
+                "-m",
+                "debugpy",
+                "--listen",
+                f"127.0.0.1:{debugpy_port}",
+                "--wait-for-client",
+            ]
+        )
+    cmd.extend(
+        [
             "-m",
-            "debugpy",
-            "--listen",
-            f"127.0.0.1:{debugpy_port}",
-            "--wait-for-client",
-        ])
-    cmd.extend([
-        "-m",
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--log-level",
-        "warning",
-    ])
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ]
+    )
 
     log_dir = Path(workspace_root) / ".boxteam" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

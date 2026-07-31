@@ -8,39 +8,39 @@ from contextlib import suppress
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from app.abstractions.job_service import JobServiceProtocol
 from app.api.deps import (
     get_context_compaction_service,
-    get_llm_request_log_service,
+    get_file_tree_settings_service,
+    get_goal_runtime_service,
+    get_goal_service,
     get_job_service,
+    get_llm_request_log_service,
     get_request_id,
-    get_session_auto_continue_service,
     get_session_changes_service,
-    get_session_information_service,
     get_session_context_fork_service,
+    get_session_information_service,
     get_session_interrupt_service,
     get_session_resource_service,
     get_session_service,
     verify_local_token,
 )
+from app.core.exceptions import NotFoundError
 from app.schemas.public_v2.common import APIResponse, CursorPage
-from app.abstractions.job_service import JobServiceProtocol
+from app.schemas.public_v2.goal import (
+    SessionGoalClearResultDTO,
+    SessionGoalDTO,
+    SessionGoalSetRequest,
+)
 from app.schemas.public_v2.llm_request_log import LLMRequestLogRecordDTO
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
-    SessionAutoContinueStartRequest,
-    SessionAutoContinueStatusDTO,
+    SessionCompactResultDTO,
     SessionCreateRequest,
     SessionDTO,
     SessionInformationSnapshotDTO,
-    SessionCompactResultDTO,
     SessionInterruptResultDTO,
     SessionUpdateRequest,
-)
-from app.schemas.public_v2.session_resource import (
-    SessionResourceControlRequest,
-    SessionResourceControlResultDTO,
-    SessionResourceKind,
-    SessionResourceListDTO,
 )
 from app.schemas.public_v2.session_changes import (
     SessionChangesetDTO,
@@ -48,21 +48,120 @@ from app.schemas.public_v2.session_changes import (
     SessionFileReviewRequest,
     SessionFileReviewResultDTO,
 )
+from app.schemas.public_v2.session_resource import (
+    SessionResourceControlRequest,
+    SessionResourceControlResultDTO,
+    SessionResourceKind,
+    SessionResourceListDTO,
+)
+from app.schemas.public_v2.sse import sse_responses
 from app.schemas.public_v2.trace import TraceEventDTO
-from app.services.business.session_interrupt_service import SessionInterruptService
-from app.services.business.session_context_fork_service import SessionContextForkService
+from app.schemas.public_v2.workspace import (
+    FileTreeShortcutRequest,
+    SessionFileTreeSettingsDTO,
+)
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_context_fork_service import SessionContextForkService
+from app.services.business.session_goal_service import (
+    TOKEN_BUDGET_UNSET,
+    SessionGoalService,
+)
 from app.services.business.session_information_service import SessionInformationService
+from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_resource_service import SessionResourceService
-from app.services.orchestration.session_auto_continue_service import SessionAutoContinueService
 from app.services.business.session_service import SessionService
-from app.services.infrastructure.trace_event_store import TraceCursorGoneError
+from app.services.infrastructure.file_tree_settings_service import (
+    FileTreeSettingsService,
+)
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
-from app.core.exceptions import NotFoundError
+from app.services.infrastructure.trace_event_store import TraceCursorGoneError
+from app.services.infrastructure.turn_history.trace_page import (
+    TracePageBudgetExceededError,
+)
+from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
+
+
+@router.get(
+    "/{session_id}/goal",
+    response_model=APIResponse[SessionGoalDTO | None],
+    summary="获取会话 Goal",
+)
+async def get_session_goal(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    goal_service: SessionGoalService = Depends(get_goal_service),
+):
+    return APIResponse(data=await goal_service.get(session_id), request_id=request_id)
+
+
+@router.put(
+    "/{session_id}/goal",
+    response_model=APIResponse[SessionGoalDTO],
+    summary="设置会话 Goal",
+)
+async def set_session_goal(
+    session_id: str,
+    payload: SessionGoalSetRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    goal_service: SessionGoalService = Depends(get_goal_service),
+    runtime: GoalRuntimeService = Depends(get_goal_runtime_service),
+):
+    token_budget = (
+        payload.token_budget
+        if "token_budget" in payload.model_fields_set
+        else TOKEN_BUDGET_UNSET
+    )
+    try:
+        previous_goal = await goal_service.get(session_id)
+        if payload.replace or (
+            payload.status is not None and payload.status.value != "active"
+        ):
+            await runtime.settle_active_progress(session_id)
+        goal = await goal_service.set(
+            session_id,
+            objective=payload.objective,
+            status=payload.status,
+            token_budget=token_budget,
+            replace=payload.replace,
+        )
+        if goal.status.value == "active":
+            if (
+                not payload.replace
+                and payload.objective is not None
+                and previous_goal is not None
+                and previous_goal.objective != goal.objective
+            ):
+                await runtime.apply_objective_update(goal)
+            await runtime.ensure_active_goal_running(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return APIResponse(data=goal, request_id=request_id)
+
+
+@router.delete(
+    "/{session_id}/goal",
+    response_model=APIResponse[SessionGoalClearResultDTO],
+    summary="清除会话 Goal",
+)
+async def clear_session_goal(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    goal_service: SessionGoalService = Depends(get_goal_service),
+    runtime: GoalRuntimeService = Depends(get_goal_runtime_service),
+):
+    await runtime.settle_active_progress(session_id)
+    cleared = await goal_service.clear(session_id)
+    return APIResponse(
+        data=SessionGoalClearResultDTO(session_id=session_id, cleared=cleared),
+        request_id=request_id,
+    )
 
 
 @router.post("", response_model=APIResponse[SessionDTO], summary="创建会话")
@@ -81,7 +180,9 @@ async def create_session(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("", response_model=APIResponse[CursorPage[SessionDTO]], summary="获取会话列表")
+@router.get(
+    "", response_model=APIResponse[CursorPage[SessionDTO]], summary="获取会话列表"
+)
 async def list_sessions(
     limit: int = 20,
     cursor: str | None = None,
@@ -93,7 +194,9 @@ async def list_sessions(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{session_id}", response_model=APIResponse[SessionDTO], summary="获取会话详情")
+@router.get(
+    "/{session_id}", response_model=APIResponse[SessionDTO], summary="获取会话详情"
+)
 async def get_session(
     session_id: str,
     _: str = Depends(verify_local_token),
@@ -133,19 +236,21 @@ async def fork_session_context(
     session_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    fork_service: SessionContextForkService = Depends(
-        get_session_context_fork_service
-    ),
+    fork_service: SessionContextForkService = Depends(get_session_context_fork_service),
 ):
     result = await fork_service.fork(session_id)
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{session_id}/traces", response_model=APIResponse[list[TraceEventDTO]], summary="获取会话执行轨迹")
+@router.get(
+    "/{session_id}/traces",
+    response_model=APIResponse[CursorPage[TraceEventDTO]],
+    summary="分页获取会话执行轨迹",
+)
 async def list_session_traces(
     session_id: str,
-    after_event_id: str | None = Query(default=None),
-    tail_limit: int | None = Query(default=None, ge=1, le=5000),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
@@ -153,11 +258,13 @@ async def list_session_traces(
     try:
         result = await session_service.list_trace_events(
             session_id,
-            after_event_id,
-            tail_limit,
+            cursor=cursor,
+            limit=limit,
         )
     except TraceCursorGoneError as exc:
         raise _trace_cursor_gone_http_error(exc) from exc
+    except TracePageBudgetExceededError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -170,7 +277,9 @@ async def list_session_llm_request_logs(
     session_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    llm_request_log_service: LLMRequestLogService = Depends(get_llm_request_log_service),
+    llm_request_log_service: LLMRequestLogService = Depends(
+        get_llm_request_log_service
+    ),
 ):
     result = llm_request_log_service.list_session_logs(session_id)
     return APIResponse(data=result, request_id=request_id)
@@ -185,7 +294,9 @@ async def list_session_resources(
     session_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    session_resource_service: SessionResourceService = Depends(get_session_resource_service),
+    session_resource_service: SessionResourceService = Depends(
+        get_session_resource_service
+    ),
 ):
     try:
         result = await session_resource_service.list(session_id)
@@ -203,7 +314,9 @@ async def list_session_changesets(
     session_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    session_changes_service: SessionChangesService = Depends(get_session_changes_service),
+    session_changes_service: SessionChangesService = Depends(
+        get_session_changes_service
+    ),
 ):
     result = await session_changes_service.list_changesets(session_id)
     return APIResponse(data=result, request_id=request_id)
@@ -219,7 +332,9 @@ async def get_session_changeset(
     changeset_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    session_changes_service: SessionChangesService = Depends(get_session_changes_service),
+    session_changes_service: SessionChangesService = Depends(
+        get_session_changes_service
+    ),
 ):
     try:
         result = await session_changes_service.get_changeset(
@@ -242,7 +357,9 @@ async def review_session_changeset_file(
     payload: SessionFileReviewRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    session_changes_service: SessionChangesService = Depends(get_session_changes_service),
+    session_changes_service: SessionChangesService = Depends(
+        get_session_changes_service
+    ),
 ):
     del changeset_id
     try:
@@ -268,7 +385,9 @@ async def control_session_resource(
     payload: SessionResourceControlRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    session_resource_service: SessionResourceService = Depends(get_session_resource_service),
+    session_resource_service: SessionResourceService = Depends(
+        get_session_resource_service
+    ),
 ):
     try:
         result = await session_resource_service.control(
@@ -282,7 +401,12 @@ async def control_session_resource(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{session_id}/traces/stream", summary="订阅会话执行轨迹流")
+@router.get(
+    "/{session_id}/traces/stream",
+    response_class=StreamingResponse,
+    summary="订阅会话执行轨迹流",
+    responses=sse_responses("SSE Trace 事件流", {"trace": TraceEventDTO}),
+)
 async def stream_session_traces(
     session_id: str,
     after_event_id: str | None = Query(default=None),
@@ -317,7 +441,7 @@ async def stream_session_traces(
 
 
 async def _stream_trace_sse(
-    events: AsyncIterator[TraceEventDTO],
+    events: AsyncIterator[tuple[TraceEventDTO, str]],
     *,
     heartbeat_interval_seconds: float = TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
 ) -> AsyncIterator[str]:
@@ -338,7 +462,7 @@ async def _stream_trace_sse(
                 continue
 
             try:
-                event = next_event.result()
+                event, cursor = next_event.result()
             except StopAsyncIteration:
                 return
 
@@ -347,7 +471,7 @@ async def _stream_trace_sse(
                 if hasattr(event, "model_dump_json")
                 else json.dumps(event, ensure_ascii=False, default=str)
             )
-            yield f"id: {event.event_id}\nevent: trace\ndata: {data}\n\n"
+            yield f"id: {cursor}\nevent: trace\ndata: {data}\n\n"
             next_event = asyncio.create_task(anext(iterator))
     finally:
         if not next_event.done():
@@ -363,13 +487,125 @@ def _trace_cursor_gone_http_error(exc: TraceCursorGoneError) -> HTTPException:
             "code": "trace_cursor_gone",
             "message": "事件游标已不在当前会话历史中",
             "session_id": exc.session_id,
-            "requested_event_id": exc.event_id,
+            "requested_cursor": exc.cursor,
             "recovery": "reload_snapshot",
         },
     )
 
 
-@router.patch("/{session_id}", response_model=APIResponse[SessionDTO], summary="更新会话")
+@router.get(
+    "/{session_id}/file-tree-settings",
+    response_model=APIResponse[SessionFileTreeSettingsDTO],
+    summary="获取会话文件树快捷路径配置",
+)
+async def get_session_file_tree_settings(
+    session_id: str,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+):
+    try:
+        result = service.get(session_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/file-tree-shortcuts",
+    response_model=APIResponse[SessionFileTreeSettingsDTO],
+    summary="添加会话级文件树快捷路径",
+)
+async def add_session_file_tree_shortcut(
+    session_id: str,
+    payload: FileTreeShortcutRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+):
+    try:
+        result = service.add_session_shortcut(
+            session_id,
+            path=payload.path,
+            label=payload.label,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (FileNotFoundError, NotADirectoryError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.delete(
+    "/{session_id}/file-tree-shortcuts",
+    response_model=APIResponse[SessionFileTreeSettingsDTO],
+    summary="删除会话级文件树快捷路径",
+)
+async def remove_session_file_tree_shortcut(
+    session_id: str,
+    path: str = Query(min_length=1, max_length=4096),
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+):
+    try:
+        result = service.remove_session_shortcut(session_id, path=path)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/file-tree-shortcuts/apply-to-workspace",
+    response_model=APIResponse[SessionFileTreeSettingsDTO],
+    summary="将会话快捷路径设为新会话默认值",
+)
+async def apply_file_tree_shortcut_to_workspace(
+    session_id: str,
+    payload: FileTreeShortcutRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+):
+    try:
+        result = service.apply_to_workspace(
+            session_id,
+            path=payload.path,
+            label=payload.label,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (FileNotFoundError, NotADirectoryError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.delete(
+    "/{session_id}/workspace-file-tree-shortcuts",
+    response_model=APIResponse[SessionFileTreeSettingsDTO],
+    summary="删除新会话默认文件树快捷路径",
+)
+async def remove_workspace_file_tree_shortcut(
+    session_id: str,
+    path: str = Query(min_length=1, max_length=4096),
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+):
+    try:
+        result = service.remove_workspace_shortcut(session_id, path=path)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.patch(
+    "/{session_id}", response_model=APIResponse[SessionDTO], summary="更新会话"
+)
 async def update_session(
     session_id: str,
     payload: SessionUpdateRequest,
@@ -386,14 +622,20 @@ async def update_session(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.delete("/{session_id}", response_model=APIResponse[DeleteSessionResultDTO], summary="删除会话")
+@router.delete(
+    "/{session_id}",
+    response_model=APIResponse[DeleteSessionResultDTO],
+    summary="删除会话",
+)
 async def delete_session(
     session_id: str,
     cascade: bool = Query(default=False),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
-    session_resource_service: SessionResourceService = Depends(get_session_resource_service),
+    session_resource_service: SessionResourceService = Depends(
+        get_session_resource_service
+    ),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
     async def cleanup_and_delete() -> DeleteSessionResultDTO:
@@ -432,52 +674,6 @@ async def delete_session(
 
 
 @router.post(
-    "/{session_id}/auto-continue/start",
-    response_model=APIResponse[SessionAutoContinueStatusDTO],
-    summary="开启会话自动继续任务",
-)
-async def start_session_auto_continue(
-    session_id: str,
-    payload: SessionAutoContinueStartRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
-):
-    result = await auto_continue_service.start(session_id=session_id, poll_interval_seconds=payload.poll_interval_seconds)
-    return APIResponse(message="accepted", data=result, request_id=request_id)
-
-
-@router.post(
-    "/{session_id}/auto-continue/stop",
-    response_model=APIResponse[SessionAutoContinueStatusDTO],
-    summary="关闭会话自动继续任务",
-)
-async def stop_session_auto_continue(
-    session_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
-):
-    result = await auto_continue_service.stop(session_id=session_id)
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get(
-    "/{session_id}/auto-continue",
-    response_model=APIResponse[SessionAutoContinueStatusDTO],
-    summary="获取会话自动继续任务状态",
-)
-async def get_session_auto_continue_status(
-    session_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    auto_continue_service: SessionAutoContinueService = Depends(get_session_auto_continue_service),
-):
-    result = await auto_continue_service.get_status(session_id=session_id)
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.post(
     "/{session_id}/compact",
     response_model=APIResponse[SessionCompactResultDTO],
     summary="压缩会话上下文",
@@ -486,7 +682,9 @@ async def compact_session_context(
     session_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    context_compaction_service: ContextCompactionService = Depends(get_context_compaction_service),
+    context_compaction_service: ContextCompactionService = Depends(
+        get_context_compaction_service
+    ),
 ):
     result = await context_compaction_service.compact(session_id=session_id)
     return APIResponse(data=result, request_id=request_id)
@@ -501,7 +699,9 @@ async def interrupt_session(
     session_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    session_interrupt_service: SessionInterruptService = Depends(get_session_interrupt_service),
+    session_interrupt_service: SessionInterruptService = Depends(
+        get_session_interrupt_service
+    ),
 ):
     try:
         result = await session_interrupt_service.interrupt(session_id=session_id)

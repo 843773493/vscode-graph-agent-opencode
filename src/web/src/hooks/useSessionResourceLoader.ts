@@ -39,7 +39,6 @@ export function useSessionResourceLoader({
       requestIdRef.current = requestId;
       setState((prev) => ({
         ...prev,
-        contentView: "resources",
         sessionResourcesLoading: silent ? prev.sessionResourcesLoading : true,
         sessionResourcesError: null,
         status: silent ? prev.status : "正在读取后台连接",
@@ -50,8 +49,7 @@ export function useSessionResourceLoader({
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||
-            prev.currentSession?.session_id !== sessionId ||
-            prev.contentView !== "resources"
+            prev.currentSession?.session_id !== sessionId
           ) {
             return prev;
           }
@@ -65,7 +63,6 @@ export function useSessionResourceLoader({
                 : `后台连接已加载 (${nextCount} 个)`;
           return {
             ...prev,
-            contentView: "resources",
             sessionResources: resources.items,
             sessionResourcesLoadedAt: new Date().toISOString(),
             sessionResourcesLoading: false,
@@ -78,14 +75,12 @@ export function useSessionResourceLoader({
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||
-            prev.currentSession?.session_id !== sessionId ||
-            prev.contentView !== "resources"
+            prev.currentSession?.session_id !== sessionId
           ) {
             return prev;
           }
           return {
             ...prev,
-            contentView: "resources",
             sessionResourcesLoading: false,
             sessionResourcesError: message,
             status: silent ? prev.status : `后台连接加载失败: ${message}`,

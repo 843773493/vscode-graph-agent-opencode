@@ -6,6 +6,7 @@ import {
 
 const LAST_SESSION_STORAGE_KEY = "boxteam.web.currentSessionId";
 const UI_SETTINGS_CACHE_KEY = "boxteam.web.uiSettings";
+const UNREAD_SESSIONS_STORAGE_KEY = "boxteam.web.unreadSessionKeys";
 
 function emptyUiSettings(): WebUiSettings {
   return createDefaultWebUiSettings();
@@ -49,4 +50,29 @@ export function writeCachedUiSettings(settings: WebUiSettings): void {
     return;
   }
   window.localStorage.setItem(UI_SETTINGS_CACHE_KEY, JSON.stringify(settings));
+}
+
+export function readUnreadSessionKeys(): Set<string> {
+  if (typeof window === "undefined") {
+    return new Set();
+  }
+  const raw = window.localStorage.getItem(UNREAD_SESSIONS_STORAGE_KEY);
+  if (!raw) {
+    return new Set();
+  }
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string")) {
+    throw new Error("本地未读会话状态格式无效");
+  }
+  return new Set(parsed);
+}
+
+export function writeUnreadSessionKeys(sessionKeys: Set<string>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(
+    UNREAD_SESSIONS_STORAGE_KEY,
+    JSON.stringify([...sessionKeys]),
+  );
 }

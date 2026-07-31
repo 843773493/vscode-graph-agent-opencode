@@ -62,6 +62,35 @@ export interface JobProgressDTO {
   progress?: number;
   message?: string | null;
 }
+export interface JobStatusChangedExecutionEventDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+  type: "job.status.changed";
+  payload: JobProgressDTO;
+}
+export interface JobStepProgressDTO {
+  agent_id?: string | null;
+  message?: string | null;
+  phase?: string | null;
+}
+export interface JobStepUpdatedExecutionEventDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+  type: "job.step.updated";
+  payload: JobStepProgressDTO;
+}
+export interface JobUpdatedExecutionEventDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+  type: "job.updated";
+  payload: JobProgressDTO;
+}
 export interface MessageDTO {
   created_at: string;
   updated_at: string;
@@ -90,6 +119,33 @@ export interface MessageDeltaDTO {
   metadata?: {
     [k: string]: unknown;
   };
+}
+export interface MessageDeltaExecutionEventDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+  type: "message.delta";
+  payload: MessageDeltaDTO;
+}
+export interface MessageObservationDTO {
+  message_id: string;
+  session_id: string;
+  role: string;
+  content: string;
+  attachments?: unknown[];
+  metadata?: {
+    [k: string]: unknown;
+  };
+  created_at: string;
+}
+export interface MessageUpdatedExecutionEventDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+  type: "message.updated";
+  payload: MessageObservationDTO;
 }
 export interface PermissionRequestDTO {
   id: string;
@@ -129,6 +185,14 @@ export interface QuestionRequestDTO {
     [k: string]: string;
   } | null;
 }
+export interface SessionCompletedExecutionEventDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+  type: "session.completed";
+  payload: JobProgressDTO;
+}
 export interface SessionDTO {
   created_at: string;
   updated_at: string;
@@ -164,29 +228,33 @@ export interface SessionGenerationOriginDTO {
   generator_type_version: string;
   [k: string]: unknown;
 }
-export interface SessionExecutionEventDTO {
+export interface SessionErrorExecutionEventDTO {
   event_id: string;
   session_id: string;
   job_id?: string | null;
-  type:
-    | "message.updated"
-    | "message.delta"
-    | "job.updated"
-    | "job.step.updated"
-    | "job.status.changed"
-    | "session.status.changed"
-    | "session.completed"
-    | "session.error";
   time: string;
-  payload:
-    | MessageDTO
-    | MessageDeltaDTO
-    | JobDTO
-    | StepDTO
-    | JobProgressDTO
-    | {
-        [k: string]: unknown;
-      };
+  type: "session.error";
+  payload: SessionErrorPayloadDTO;
+}
+export interface SessionErrorPayloadDTO {
+  error: string;
+}
+export interface SessionExecutionEventBaseDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+}
+export interface SessionExecutionSnapshotDTO {
+  created_at: string;
+  updated_at: string;
+  session: SessionDTO;
+  message: MessageDTO;
+  job?: JobDTO | null;
+  steps?: StepDTO[];
+  status?: JobStatus1;
+  active_step_status?: StepStatus | null;
+  last_event_id?: string | null;
 }
 export interface StepDTO {
   created_at: string;
@@ -206,25 +274,65 @@ export interface StepDTO {
   started_at?: string | null;
   ended_at?: string | null;
 }
-export interface SessionExecutionSnapshotDTO {
-  created_at: string;
-  updated_at: string;
-  session: SessionDTO;
-  message: MessageDTO;
-  job?: JobDTO | null;
-  steps?: StepDTO[];
-  status?: JobStatus1;
-  active_step_status?: StepStatus | null;
-  last_event_id?: string | null;
-}
 export interface SessionExecutionSseDTO {
-  event: SessionExecutionEventDTO;
+  event:
+    | MessageUpdatedExecutionEventDTO
+    | MessageDeltaExecutionEventDTO
+    | JobUpdatedExecutionEventDTO
+    | JobStepUpdatedExecutionEventDTO
+    | JobStatusChangedExecutionEventDTO
+    | SessionStatusChangedExecutionEventDTO
+    | SessionCompletedExecutionEventDTO
+    | SessionErrorExecutionEventDTO
+    | TraceObservedExecutionEventDTO;
   raw_type: string;
   raw_payload?: {
     [k: string]: unknown;
   };
 }
+export interface SessionStatusChangedExecutionEventDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+  type: "session.status.changed";
+  payload: SessionStatusDTO | SessionObservationStateDTO;
+}
+export interface SessionStatusDTO {
+  session_id: string;
+  status: "idle" | "busy" | "question" | "permission" | "retry" | "offline";
+  message?: string | null;
+  active_job_id?: string | null;
+  waiting?: SessionNetworkWaitDTO | null;
+}
+export interface SessionNetworkWaitDTO {
+  id: string;
+  session_id: string;
+  message: string;
+  restored: boolean;
+  created_at: string;
+  restored_at?: string | null;
+  [k: string]: unknown;
+}
+export interface SessionObservationStateDTO {
+  session_id: string;
+  active_job_id?: string | null;
+  is_streaming?: boolean;
+  is_idle?: boolean;
+}
+export interface TraceObservedExecutionEventDTO {
+  event_id: string;
+  session_id: string;
+  job_id?: string | null;
+  time: string;
+  type: "trace.observed";
+  payload: TraceObservedPayloadDTO;
+}
+export interface TraceObservedPayloadDTO {
+  raw_type: string;
+}
 export interface TimestampedDTO {
   created_at: string;
   updated_at: string;
 }
+export type SessionExecutionEventDTO = SessionExecutionSseDTO["event"];

@@ -7,6 +7,7 @@ import {
   getSession as apiGetSession,
   listAgents as apiListAgents,
   listSessions as apiListSessions,
+  moveSessionParent as apiMoveSessionParent,
   setWorkspaceDefaultAgent as apiSetWorkspaceDefaultAgent,
   setWorkspaceDefaultProvider as apiSetWorkspaceDefaultProvider,
   updateSession as apiUpdateSession,
@@ -76,7 +77,7 @@ export function useSessionLifecycleActions({
             workspaceId,
           );
         }
-        next.messages = [];
+        next.unreadSessionKeys.delete(cacheKey);
         next.traceEvents = [];
         next.llmRequestLogs = [];
         next.llmRequestLogsLoadedAt = null;
@@ -140,7 +141,7 @@ export function useSessionLifecycleActions({
         next.currentSessionWorkspaceId = workspaceId;
         const cacheKey = sessionScopeKey(workspaceId, selected.session_id);
         next.sessionGatewayWorkspaceById.set(cacheKey, workspaceId);
-        next.messages = [];
+        next.unreadSessionKeys.delete(cacheKey);
         next.traceEvents = [];
         next.llmRequestLogs = [];
         next.llmRequestLogsLoadedAt = null;
@@ -222,7 +223,6 @@ export function useSessionLifecycleActions({
           next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
           next.currentSession = session;
           writeLastSessionId(session.session_id);
-          next.messages = [];
           next.traceEvents = [];
           next.llmRequestLogs = [];
           next.llmRequestLogsLoadedAt = null;
@@ -287,7 +287,6 @@ export function useSessionLifecycleActions({
       next.currentSession = null;
       next.currentSessionWorkspaceId = null;
       next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-      next.messages = [];
       next.traceEvents = [];
       next.llmRequestLogs = [];
       next.llmRequestLogsLoadedAt = null;
@@ -349,7 +348,6 @@ export function useSessionLifecycleActions({
           next.sessionGatewayWorkspaceById.set(cacheKey, workspaceId);
           next.currentSession = childSession;
           next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-          next.messages = [];
           next.traceEvents = [];
           next.llmRequestLogs = [];
           next.llmRequestLogsLoadedAt = null;
@@ -459,11 +457,11 @@ export function useSessionLifecycleActions({
       }));
 
       try {
-        const updatedSession = await apiUpdateSession(
+        const updatedSession = await apiMoveSessionParent(
           apiPort,
-          sessionId,
-          { parent_session_id: parentSessionId },
           workspaceId,
+          sessionId,
+          parentSessionId,
         );
         setState((prev) => {
           const next = replaceSessionMetadata(prev, updatedSession, workspaceId);
@@ -535,6 +533,8 @@ export function useSessionLifecycleActions({
             next.sessionAttachmentSummaries.delete(removedId);
             next.eventQueuesBySession.delete(cacheKey);
             next.pendingConversations.delete(cacheKey);
+            next.activeJobIdsBySession.delete(cacheKey);
+            next.unreadSessionKeys.delete(cacheKey);
             next.sessionGatewayWorkspaceById.delete(cacheKey);
           }
 
@@ -546,7 +546,6 @@ export function useSessionLifecycleActions({
             next.currentSession = nextSession;
             next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
             next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-            next.messages = [];
             next.traceEvents = [];
             next.llmRequestLogs = [];
             next.llmRequestLogsLoadedAt = null;

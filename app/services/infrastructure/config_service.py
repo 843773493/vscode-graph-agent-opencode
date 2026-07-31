@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-import commentjson
 import jsonschema
 
+from app.agents.custom_tools import load_custom_tool_factory
 from app.agents.policy import (
     ResolvedToolPolicy,
     build_agent_tool_universe,
@@ -19,7 +20,11 @@ from app.agents.policy import (
     resolve_tool_policy,
     resolve_tool_selectors,
 )
-from app.core.path_utils import get_user_config_path
+from app.core.path_utils import (
+    get_user_workspace_config_path,
+    get_user_workspace_schema_path,
+    get_workspace_config_path,
+)
 from app.schemas.public_v2.config import ConfigDTO, ConfigUpdateRequest
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
@@ -28,20 +33,12 @@ from app.services.infrastructure.config import (
     ConfigSnapshotStore,
     build_config_snapshot,
 )
+from configs.layout_migrations import migrate_legacy_workspace_configuration
+from configs.runtime import read_jsonc_object
 
-_config_path_override: Path | None = None
-
+logger = logging.getLogger(__name__)
 
 ConfigCandidateApplier = Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[None]]
-
-
-def set_config_path(config_path: str | Path | None) -> None:
-    global _config_path_override
-    _config_path_override = Path(config_path).expanduser().resolve() if config_path else None
-
-
-def get_config_path() -> str | None:
-    return str(_config_path_override) if _config_path_override is not None else None
 
 
 class ConfigService:
@@ -53,31 +50,19 @@ class ConfigService:
         config_dir: str | Path | None = None,
         config_path: str | Path | None = None,
         workspace_root: str | Path | None = None,
-        overlay_paths: tuple[str | Path, ...] | None = None,
     ) -> None:
         resolved_config_dir = (
             Path(config_dir).expanduser().resolve()
             if config_dir
-            else get_user_config_path().parent
+            else get_user_workspace_config_path().parent
         )
         self._config_dir = resolved_config_dir
-        self._config_path = Path(config_path).expanduser().resolve() if config_path else None
-        self._schema: dict[str, Any] | None = None
-        self._workspace_root = Path(workspace_root).expanduser().resolve() if workspace_root else None
-        configured_overlays = (
-            overlay_paths
-            if overlay_paths is not None
-            else tuple(
-                path
-                for path in os.environ.get(
-                    "BOXTEAM_CONFIG_OVERLAY_PATHS",
-                    "",
-                ).split(os.pathsep)
-                if path
-            )
+        self._config_path = (
+            Path(config_path).expanduser().resolve() if config_path else None
         )
-        self._overlay_paths = tuple(
-            Path(path).expanduser().resolve() for path in configured_overlays
+        self._schema: dict[str, Any] | None = None
+        self._workspace_root = (
+            Path(workspace_root).expanduser().resolve() if workspace_root else None
         )
         self._runtime_config_overrides: dict[str, Any] = {}
         self._mcp_tool_names: frozenset[str] | None = None
@@ -90,65 +75,57 @@ class ConfigService:
         )
         self._watcher: ConfigFileWatcher | None = None
 
-    def _first_existing_file(self, *paths: Path) -> Path:
-        for path in paths:
-            if path.exists():
-                return path
-        checked_paths = "\n".join(str(path) for path in paths)
-        raise FileNotFoundError(f"未找到配置文件，已检查:\n{checked_paths}")
+    def _resolve_schema_path(self) -> Path:
+        config_path = self._get_workspace_config_path()
+        if config_path.is_file():
+            schema_reference = read_jsonc_object(config_path).get("$schema")
+            if (
+                isinstance(schema_reference, str)
+                and schema_reference
+                and "://" not in schema_reference
+            ):
+                referenced_path = (config_path.parent / schema_reference).resolve()
+                if referenced_path.is_file():
+                    return referenced_path
+        configured_schema = self._config_dir / "workspace_config.jsonc"
+        if configured_schema.is_file():
+            return configured_schema
+        installed_schema = get_user_workspace_schema_path()
+        if installed_schema.is_file():
+            return installed_schema
+        raise FileNotFoundError(
+            "Workspace 配置 schema 不存在: "
+            f"config={config_path} expected={configured_schema}"
+        )
 
-    def _load_schema(self) -> dict:
+    def _load_schema(self) -> dict[str, Any]:
         if self._schema is None:
-            config_path = self._get_boxteam_config_path()
-            config_schema_path: Path | None = None
-            if config_path.is_file():
-                with config_path.open("r", encoding="utf-8") as config_stream:
-                    schema_reference = commentjson.load(config_stream).get("$schema")
-                if (
-                    isinstance(schema_reference, str)
-                    and schema_reference
-                    and "://" not in schema_reference
-                ):
-                    referenced_path = (config_path.parent / schema_reference).resolve()
-                    if referenced_path.is_file():
-                        config_schema_path = referenced_path
-            schema_path = self._first_existing_file(
-                config_path.parent / "config.schema.jsonc",
-                *([config_schema_path] if config_schema_path is not None else []),
-                self._config_dir / "config.schema.jsonc",
-                self._config_dir / "config.jsonc",
-                self._config_dir / "config.json",
-            )
-            with schema_path.open("r", encoding="utf-8") as f:
-                self._schema = commentjson.load(f)
+            self._schema = read_jsonc_object(self._resolve_schema_path())
         return self._schema
 
-    def _get_boxteam_config_path(self) -> Path:
+    def _get_workspace_config_path(self) -> Path:
         if self._config_path is not None:
             return self._config_path
-        if _config_path_override is not None:
-            return _config_path_override
-        return get_user_config_path()
+        return get_user_workspace_config_path()
 
-    def _read_effective_config(self) -> tuple[dict[str, Any], tuple[Path, ...]]:
-        config_path = self._get_boxteam_config_path()
+    def _read_effective_config(
+        self,
+    ) -> tuple[
+        dict[str, Any],
+        tuple[Path, ...],
+    ]:
+        config_path = self._get_workspace_config_path()
         source_paths: list[Path] = []
         if config_path.exists():
-            with config_path.open("r", encoding="utf-8") as f:
-                config = commentjson.load(f)
+            config = self._read_config_source(config_path)
             source_paths.append(config_path)
         else:
             config = {}
-        for overlay_path in self._overlay_paths:
-            if not overlay_path.is_file():
-                raise FileNotFoundError(f"配置 overlay 不存在: {overlay_path}")
-            with overlay_path.open("r", encoding="utf-8") as stream:
-                overlay_config = commentjson.load(stream)
-            if not isinstance(overlay_config, dict):
-                raise TypeError(f"配置 overlay 根节点必须是对象: {overlay_path}")
-            config = self._merge_config(config, overlay_config)
-            source_paths.append(overlay_path)
         if self._workspace_root is not None:
+            migrate_legacy_workspace_configuration(
+                workspace_root=self._workspace_root,
+                workspace_schema_path=self._resolve_schema_path(),
+            )
             config, workspace_path = self._apply_workspace_override(
                 config,
                 self._workspace_root,
@@ -158,30 +135,39 @@ class ConfigService:
         self._validate_agent_tool_policies(config)
         return config, tuple(source_paths)
 
+    @staticmethod
+    def _read_config_source(
+        path: Path,
+    ) -> dict[str, Any]:
+        config = dict(read_jsonc_object(path))
+        ConfigService._preflight_custom_tool_factories(config, source_path=path)
+        return config
+
     def _apply_workspace_override(
         self,
         base_config: dict[str, Any],
         workspace_root: Path,
-    ) -> tuple[dict[str, Any], Path | None]:
-        override_dir = workspace_root / ".boxteam"
-        override_path_jsonc = override_dir / "boxteam.jsonc"
-        override_path_json = override_dir / "boxteam.json"
-        override_path: Path | None = None
-        if override_path_jsonc.exists():
-            override_path = override_path_jsonc
-        elif override_path_json.exists():
-            override_path = override_path_json
-
-        if override_path:
-            with override_path.open("r", encoding="utf-8") as f:
-                override_config = commentjson.load(f)
-            return self._merge_config(base_config, override_config), override_path
+    ) -> tuple[
+        dict[str, Any],
+        Path | None,
+    ]:
+        override_path = get_workspace_config_path(workspace_root)
+        if override_path.exists():
+            override_config = self._read_config_source(override_path)
+            return (
+                self._merge_config(base_config, override_config),
+                override_path,
+            )
         return base_config, None
 
     def _merge_config(self, base: dict, override: dict) -> dict:
         result = base.copy()
         for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            if (
+                key in result
+                and isinstance(result[key], dict)
+                and isinstance(value, dict)
+            ):
                 result[key] = self._merge_config(result[key], value)
             else:
                 result[key] = value
@@ -195,12 +181,13 @@ class ConfigService:
         config, source_paths = self._read_effective_config()
         if validate_schema:
             jsonschema.validate(config, self._load_schema())
-        return build_config_snapshot(
+        snapshot = build_config_snapshot(
             config,
             source_paths=source_paths,
         )
+        return snapshot
 
-    def validate_boxteam_config(self) -> None:
+    def validate_workspace_config(self) -> None:
         self._snapshot_store.initialize()
 
     def _require_snapshot(self) -> ConfigSnapshot:
@@ -264,20 +251,12 @@ class ConfigService:
         if self._watcher is not None:
             raise RuntimeError("配置文件监听器不允许重复启动")
         self._require_snapshot()
-        directories = {self._get_boxteam_config_path().parent}
-        candidate_paths = {self._get_boxteam_config_path()}
-        for overlay_path in self._overlay_paths:
-            directories.add(overlay_path.parent)
-            candidate_paths.add(overlay_path)
+        directories = {self._get_workspace_config_path().parent}
+        candidate_paths = {self._get_workspace_config_path()}
         if self._workspace_root is not None:
             workspace_config_dir = self._workspace_root / ".boxteam"
             directories.add(workspace_config_dir)
-            candidate_paths.update(
-                {
-                    workspace_config_dir / "boxteam.jsonc",
-                    workspace_config_dir / "boxteam.json",
-                }
-            )
+            candidate_paths.add(workspace_config_dir / "workspace.jsonc")
         watcher = ConfigFileWatcher(
             directories=directories,
             candidate_paths=candidate_paths,
@@ -331,7 +310,9 @@ class ConfigService:
         if default_model is None:
             default_model = self._resolve_default_model(config)
 
-        default_orchestration = public_config.get("default_orchestration", "single_agent")
+        default_orchestration = public_config.get(
+            "default_orchestration", "single_agent"
+        )
         max_concurrent_agents = public_config.get("max_concurrent_agents", 4)
         allow_shell_tools = public_config.get("allow_shell_tools", False)
         ignored_paths = public_config.get("ignored_paths", [])
@@ -346,8 +327,8 @@ class ConfigService:
             auto_summarize=auto_summarize,
             metadata={
                 "default_agent_id": self.get_default_agent_id(),
-                "config_path": str(self._get_boxteam_config_path()),
-                "source": "boxteam",
+                "config_path": str(self._get_workspace_config_path()),
+                "source": "workspace",
                 "runtime_overrides": sorted(self._runtime_config_overrides.keys()),
                 "revision": snapshot.revision,
                 "source_paths": [str(path) for path in snapshot.source_paths],
@@ -387,7 +368,9 @@ class ConfigService:
 
         primary_provider_id = model_config.get("primary_provider")
         if not isinstance(primary_provider_id, str) or not primary_provider_id:
-            raise ValueError(f"agent {default_agent_id} 缺少 model.primary_provider 配置")
+            raise ValueError(
+                f"agent {default_agent_id} 缺少 model.primary_provider 配置"
+            )
 
         return self._resolve_provider_model(config, primary_provider_id)
 
@@ -525,12 +508,7 @@ class ConfigService:
     def _workspace_session_defaults_path(self) -> Path:
         if self._workspace_root is None:
             raise RuntimeError("ConfigService 未绑定工作区，无法保存工作区会话默认值")
-        return (
-            self._workspace_root
-            / ".boxteam"
-            / "settings"
-            / "session_defaults.json"
-        )
+        return self._workspace_root / ".boxteam" / "settings" / "session_defaults.json"
 
     def _read_workspace_session_defaults(self) -> dict[str, Any]:
         if self._workspace_root is None:
@@ -547,7 +525,10 @@ class ConfigService:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise TypeError(f"工作区会话默认值必须是对象: {path}")
-        if payload.get("schema_version") != self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION:
+        if (
+            payload.get("schema_version")
+            != self._WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION
+        ):
             raise ValueError(f"工作区会话默认值版本非法: {path}")
         return payload
 
@@ -599,15 +580,6 @@ class ConfigService:
         if not isinstance(agents, dict):
             raise ValueError("agents 配置必须是对象")
         return agents
-
-    def get_gateway_config(self) -> dict[str, Any]:
-        config = self._get_effective_config()
-        gateway = config.get("gateway", {})
-        if gateway is None:
-            return {}
-        if not isinstance(gateway, dict):
-            raise ValueError("gateway 配置必须是对象")
-        return gateway
 
     def get_logger_level(self) -> str:
         config = self._get_effective_config()
@@ -666,6 +638,7 @@ class ConfigService:
         default_runtime = {
             "system_prompt": "You are a helpful assistant.",
             "providers": providers,
+            "require_delegated_report": False,
         }
 
         agents = config.get("agents", {})
@@ -679,6 +652,18 @@ class ConfigService:
         target_agent = agents[resolved_agent_id]
         instructions = target_agent.get("instructions", {})
         model_cfg = target_agent.get("model", {})
+        execution_cfg = target_agent.get("execution", {})
+        if not isinstance(execution_cfg, dict):
+            raise TypeError(f"agent {resolved_agent_id} 的 execution 配置必须是对象")
+        require_delegated_report = execution_cfg.get(
+            "require_delegated_report",
+            False,
+        )
+        if not isinstance(require_delegated_report, bool):
+            raise TypeError(
+                f"agent {resolved_agent_id} 的 "
+                "execution.require_delegated_report 必须是布尔值"
+            )
 
         provider_map: dict[str, dict[str, Any]] = {}
         for index, provider in enumerate(providers):
@@ -691,7 +676,9 @@ class ConfigService:
         fallback_providers = model_cfg.get("fallback_providers", [])
 
         if not primary_provider:
-            raise ValueError(f"agent {resolved_agent_id} 缺少 model.primary_provider 配置")
+            raise ValueError(
+                f"agent {resolved_agent_id} 缺少 model.primary_provider 配置"
+            )
 
         provider_ids = [primary_provider, *fallback_providers]
         if preferred_provider_id is not None:
@@ -714,8 +701,11 @@ class ConfigService:
             selected_providers.append(provider)
 
         runtime_config: dict[str, Any] = {
-            "system_prompt": instructions.get("system_prompt", default_runtime["system_prompt"]),
+            "system_prompt": instructions.get(
+                "system_prompt", default_runtime["system_prompt"]
+            ),
             "providers": selected_providers,
+            "require_delegated_report": require_delegated_report,
         }
         for option_name in ("temperature", "top_p", "max_output_tokens"):
             if option_name in model_cfg:
@@ -733,7 +723,9 @@ class ConfigService:
         )
         providers = runtime["providers"]
         if not providers:
-            raise ValueError(f"agent {self._normalize_agent_id(agent_id)} 没有可用 provider")
+            raise ValueError(
+                f"agent {self._normalize_agent_id(agent_id)} 没有可用 provider"
+            )
         resolved = providers[0].get("id")
         if not isinstance(resolved, str) or not resolved:
             raise ValueError("LLM provider 缺少非空 id")
@@ -909,6 +901,42 @@ class ConfigService:
                 context=f"agent {agent_id} 的 tools.confirmation_required",
             )
 
+    @staticmethod
+    def _preflight_custom_tool_factories(
+        config: dict[str, Any],
+        *,
+        source_path: Path,
+    ) -> None:
+        agents = config.get("agents")
+        if agents is None:
+            return
+        if not isinstance(agents, dict):
+            raise ValueError(f"配置源 agents 必须是对象: {source_path}")
+        for agent_id, agent_config in agents.items():
+            if not isinstance(agent_config, dict):
+                continue
+            tools = agent_config.get("tools")
+            if not isinstance(tools, dict) or "custom" not in tools:
+                continue
+            raw_custom = tools["custom"]
+            if not isinstance(raw_custom, list):
+                raise ValueError(
+                    f"配置源 {source_path} 的 agents.{agent_id}.tools.custom 必须是数组"
+                )
+            specs = parse_custom_tool_specs(
+                raw_custom,
+                context=(f"配置源 {source_path} 的 agents.{agent_id}.tools.custom"),
+            )
+            for spec in specs:
+                try:
+                    load_custom_tool_factory(spec.factory_path)
+                except (ImportError, AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "配置源扩展工具预检失败: "
+                        f"path={source_path}, agent={agent_id}, "
+                        f"tool={spec.name}, factory={spec.factory_path}"
+                    ) from exc
+
     def _resolved_mcp_tool_names(
         self,
         tool_config: dict[str, Any],
@@ -942,9 +970,7 @@ class ConfigService:
         for field_name in ("allowlist", "denylist", "confirmation_required"):
             value = raw_tools_config.get(field_name, [])
             if not isinstance(value, list):
-                raise ValueError(
-                    f"agent {agent_id} 的 tools.{field_name} 必须是数组"
-                )
+                raise ValueError(f"agent {agent_id} 的 tools.{field_name} 必须是数组")
             result[field_name] = list(value)
         raw_custom = raw_tools_config.get("custom", [])
         if not isinstance(raw_custom, list):

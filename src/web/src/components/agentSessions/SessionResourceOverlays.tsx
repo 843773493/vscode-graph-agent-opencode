@@ -56,6 +56,7 @@ function extractFolderIdFromClipboardText(text: string): string {
 interface SessionResourceOverlaysProps {
   workspaceFolderMenu: WorkspaceFolderContextMenu | null;
   setWorkspaceFolderMenu: Dispatch<SetStateAction<WorkspaceFolderContextMenu | null>>;
+  setWorkspaceFolderEditor: Dispatch<SetStateAction<WorkspaceFolderEditor | null>>;
   folderMenu: SessionFolderContextMenu | null;
   setFolderMenu: Dispatch<SetStateAction<SessionFolderContextMenu | null>>;
   resourceDialog: SessionResourceDialog | null;
@@ -74,6 +75,7 @@ interface SessionResourceOverlaysProps {
 export default function SessionResourceOverlays({
   workspaceFolderMenu,
   setWorkspaceFolderMenu,
+  setWorkspaceFolderEditor,
   folderMenu,
   setFolderMenu,
   resourceDialog,
@@ -148,7 +150,11 @@ export default function SessionResourceOverlays({
                 <button type="button" role="menuitem" onClick={() => {
                   const target = workspaceFolderMenu;
                   setWorkspaceFolderMenu(null);
-                  void explorer.moveWorkspaceNode(target.nodeId as string, null)
+                  void explorer.placeWorkspaceNode(
+                    target.nodeId as string,
+                    null,
+                    "last",
+                  )
                     .then(() => onStatusChange(`已将 ${target.name} 移动到工作区导航根`))
                     .catch((error) => handleError("移动工作区文件夹失败", error));
                 }}>

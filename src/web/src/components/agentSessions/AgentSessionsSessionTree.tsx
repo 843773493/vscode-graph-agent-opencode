@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { buildSessionTree, type SessionTreeNode } from "../../state/session/sessionTree";
 import type { Session } from "../../types/backend";
 import AgentSessionsSessionButton from "./AgentSessionsSessionButton";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 
 const DEFAULT_VISIBLE_ROOT_COUNT = 5;
 
@@ -24,6 +25,9 @@ interface AgentSessionsSessionTreeProps {
   onOpenMenu: (session: Session, x: number, y: number) => void;
   onToggleSession: (sessionId: string) => void;
   onToggleShowAllRoots: (treeId: string) => void;
+  workspaceId?: string | null;
+  activeJobIdsBySession?: ReadonlyMap<string, string>;
+  unreadSessionKeys?: ReadonlySet<string>;
 }
 
 export default function AgentSessionsSessionTree({
@@ -38,6 +42,9 @@ export default function AgentSessionsSessionTree({
   onOpenMenu,
   onToggleSession,
   onToggleShowAllRoots,
+  workspaceId,
+  activeJobIdsBySession,
+  unreadSessionKeys,
 }: AgentSessionsSessionTreeProps): ReactNode {
   const tree = buildSessionTree(sessions, sortMode);
   const visibleRoots = showAllRoots
@@ -51,6 +58,10 @@ export default function AgentSessionsSessionTree({
     const sessionId = node.session.session_id;
     const expanded =
       node.children.length > 0 && !collapsedSessionIds.has(sessionId);
+    const cacheKey = sessionScopeKey(
+      workspaceId ?? node.session.workspace_id,
+      sessionId,
+    );
     return (
       <li className="session-tree-node" key={sessionId}>
         <div className="session-tree-row">
@@ -62,6 +73,8 @@ export default function AgentSessionsSessionTree({
             expanded={expanded}
             showToggle={node.children.length > 0}
             onToggle={() => onToggleSession(sessionId)}
+            running={activeJobIdsBySession?.has(cacheKey) ?? false}
+            unread={unreadSessionKeys?.has(cacheKey) ?? false}
           />
         </div>
         {expanded && node.children.length > 0 ? (

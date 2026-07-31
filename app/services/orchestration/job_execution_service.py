@@ -1,15 +1,27 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
-from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_executor import JobRuntimeStateProtocol
+from app.abstractions.job_step_executor import JobStepExecutor
 from app.core.job_event_bus import EventType
 from app.schemas.public_v2.common import JobStatus
-
 from app.services.business.message_service import MessageService
-from app.abstractions.job_step_executor import JobStepExecutor
 from app.services.orchestration.session_title_service import SessionTitleService
+
+
+def session_title_message(
+    message: str,
+    message_metadata: dict[str, object],
+) -> str | None:
+    """选择可用于会话标题的用户可见文本。"""
+    if message_metadata.get("internal") is not True:
+        return message
+    if message_metadata.get("goal_continuation") is not True:
+        return None
+    objective = message_metadata.get("goal_objective")
+    return objective.strip() if isinstance(objective, str) and objective.strip() else None
 
 
 class JobExecutionService:
@@ -17,7 +29,7 @@ class JobExecutionService:
         self,
         *,
         agent_execution_service: JobStepExecutor,
-        message_service: "MessageService",
+        message_service: MessageService,
         job_event_bus: JobEventBusProtocol,
         session_title_service: SessionTitleService,
     ) -> None:
@@ -28,15 +40,17 @@ class JobExecutionService:
 
     async def run(self, job: JobRuntimeStateProtocol) -> str:
         job.status = JobStatus.running
-        job.updated_at = datetime.now()
+        job.updated_at = datetime.now(UTC)
 
         try:
-            await self._session_title_service.maybe_auto_title_before_first_message(
-                session_id=job.session_id,
-                job_id=job.job_id,
-                user_message=job.message,
-            )
-        except Exception as error:
+            title_message = session_title_message(job.message, job.message_metadata)
+            if title_message is not None:
+                await self._session_title_service.maybe_auto_title_before_first_message(
+                    session_id=job.session_id,
+                    job_id=job.job_id,
+                    user_message=title_message,
+                )
+        except Exception as error:  # noqa: BLE001
             await self._bus.publish(
                 job_id=job.job_id,
                 event_type=EventType.ERROR,
@@ -64,8 +78,8 @@ class JobExecutionService:
         job.result = result_text
         job.status = JobStatus.completed
         job.progress = 100
-        job.ended_at = datetime.now()
-        job.updated_at = datetime.now()
+        job.ended_at = datetime.now(UTC)
+        job.updated_at = datetime.now(UTC)
 
         await self._bus.publish(
             job_id=job.job_id,
@@ -78,8 +92,8 @@ class JobExecutionService:
     async def fail(self, job: JobRuntimeStateProtocol, error: Exception) -> None:
         job.status = JobStatus.failed
         job.error_message = str(error)
-        job.ended_at = datetime.now()
-        job.updated_at = datetime.now()
+        job.ended_at = datetime.now(UTC)
+        job.updated_at = datetime.now(UTC)
         await self._bus.publish(
             job_id=job.job_id,
             event_type=EventType.JOB_FAILED,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import httpx
@@ -10,7 +11,11 @@ from app.core.trace_middleware import get_request_id
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import GatewayAuthContext, LOCAL_TOKEN, verify_gateway_access
 from app.gateway.credentials import FederationCredentialStore
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    WorkspaceRouteLease,
+    WorkspaceTarget,
+)
 
 
 router = APIRouter()
@@ -84,10 +89,34 @@ def _response_headers(response: httpx.Response) -> dict[str, str]:
     }
 
 
-async def _stream_proxy_response(response: httpx.Response) -> AsyncIterator[bytes]:
-    async for chunk in response.aiter_bytes():
-        yield chunk
-    await response.aclose()
+async def _stream_proxy_response(
+    response: httpx.Response,
+    route_lease: WorkspaceRouteLease,
+) -> AsyncIterator[bytes]:
+    iterator = response.aiter_bytes()
+    next_chunk = asyncio.create_task(anext(iterator))
+    route_changed = asyncio.create_task(route_lease.invalidated.wait())
+    try:
+        while True:
+            completed, _ = await asyncio.wait(
+                {next_chunk, route_changed},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if route_changed in completed:
+                yield b": gateway-route-invalidated\n\n"
+                return
+            try:
+                chunk = next_chunk.result()
+            except StopAsyncIteration:
+                return
+            yield chunk
+            next_chunk = asyncio.create_task(anext(iterator))
+    finally:
+        for task in (next_chunk, route_changed):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(next_chunk, route_changed, return_exceptions=True)
+        await response.aclose()
 
 
 async def _proxy_workspace_request(
@@ -112,6 +141,7 @@ async def _proxy_workspace_request(
             status_code=400,
             detail="bounded federation 禁止通过远程 Gateway 继续代理嵌套工作区",
         )
+    route_lease = registry.route_lease(target.workspace_id)
 
     target_url = (
         f"{registry.remote_gateway_url(target.remote_gateway_connection_id)}/api/v1/{path}"
@@ -142,11 +172,13 @@ async def _proxy_workspace_request(
         ) from error
     media_type = response.headers.get("content-type")
     if media_type and "text/event-stream" in media_type:
+        headers = _response_headers(response)
+        headers["X-BoxTeam-Route-Revision"] = route_lease.token
         return StreamingResponse(
-            _stream_proxy_response(response),
+            _stream_proxy_response(response, route_lease),
             status_code=response.status_code,
             media_type=media_type,
-            headers=_response_headers(response),
+            headers=headers,
         )
     content = await response.aread()
     headers = _response_headers(response)

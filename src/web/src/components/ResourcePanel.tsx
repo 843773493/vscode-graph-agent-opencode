@@ -1,17 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
+  SessionGoal,
+  SessionGoalUpdateRequest,
   SessionResource,
   SessionResourceAction,
   SessionResourceKind,
 } from "../types/backend";
-import { formatDateTime } from "../utils/format";
-import ResourceCard from "./ResourceCard";
 import { useWarmConfirm } from "./WarmConfirmProvider";
 import {
   actionLabelForKind,
-  isClosedBackgroundTask,
+  groupSessionResources,
+  isPreviewedResource,
+  kindLabel,
+  type ResourceAttentionGroup,
   statusLabel,
 } from "../state/resourceDisplay";
+import { CREATABLE_SESSION_CONNECTIONS } from "../state/sessionConnections";
+import type { CreatableSessionConnectionKind } from "../types/frontend";
+import AnchoredOverlay from "./AnchoredOverlay";
+import GoalManagerCard from "./GoalManagerCard";
+import ResourceTreeRow from "./ResourceTreeRow";
+
+const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {
+  active: true,
+  attention: true,
+  available: true,
+  sleeping: false,
+  history: false,
+};
 
 export default function ResourcePanel({
   resources,
@@ -20,11 +36,20 @@ export default function ResourcePanel({
   loadedAt,
   sessionId,
   workspaceId,
+  activePreviewPath,
+  goal,
+  goalLoading,
+  goalError,
   onRefresh,
+  onRefreshGoal,
+  onUpdateGoal,
+  onClearGoal,
   onControl,
   onOpenTerminalPreview,
   onOpenBrowserPreview,
+  onCloseResourcePreview,
   onShowConversation,
+  onCreateConnection,
 }: {
   resources: SessionResource[];
   loading: boolean;
@@ -32,7 +57,14 @@ export default function ResourcePanel({
   loadedAt: string | null;
   sessionId: string;
   workspaceId: string | null;
+  activePreviewPath: string | null;
+  goal: SessionGoal | null;
+  goalLoading: boolean;
+  goalError: string | null;
   onRefresh: () => void;
+  onRefreshGoal: () => Promise<SessionGoal | null>;
+  onUpdateGoal: (payload: SessionGoalUpdateRequest) => Promise<SessionGoal>;
+  onClearGoal: () => Promise<void>;
   onControl: (
     kind: SessionResourceKind,
     resourceId: string,
@@ -40,17 +72,25 @@ export default function ResourcePanel({
   ) => Promise<void>;
   onOpenTerminalPreview: (terminalId: string) => void;
   onOpenBrowserPreview: (browserId: string) => void;
+  onCloseResourcePreview: (
+    kind: Extract<SessionResourceKind, "terminal" | "browser">,
+    resourceId: string,
+  ) => Promise<void>;
   onShowConversation: (jobId?: string) => void;
+  onCreateConnection: (kind: CreatableSessionConnectionKind) => Promise<void>;
 }) {
   const [busyResourceId, setBusyResourceId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [openedTerminalId, setOpenedTerminalId] = useState<string | null>(null);
   const [openedBrowserId, setOpenedBrowserId] = useState<string | null>(null);
-  const [closedGroupOpen, setClosedGroupOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState(DEFAULT_GROUP_OPEN);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [creatingKind, setCreatingKind] = useState<CreatableSessionConnectionKind | null>(null);
+  const createMenuAnchorRef = useRef<HTMLDivElement | null>(null);
   const confirm = useWarmConfirm();
 
   useEffect(() => {
-    setClosedGroupOpen(false);
+    setOpenGroups(DEFAULT_GROUP_OPEN);
   }, [sessionId]);
 
   useEffect(() => {
@@ -65,7 +105,7 @@ export default function ResourcePanel({
       return;
     }
     setNotice(
-      `终端 ${openedTerminalId} ${statusLabel(terminal.status)}，当前不可连接；历史信息仍可在后台连接卡片查看。`,
+      `终端 ${openedTerminalId} ${statusLabel(terminal.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
     );
     setOpenedTerminalId(null);
   }, [openedTerminalId, resources]);
@@ -82,7 +122,7 @@ export default function ResourcePanel({
       return;
     }
     setNotice(
-      `浏览器 ${openedBrowserId} ${statusLabel(browser.status)}，当前不可连接；历史信息仍可在后台连接卡片查看。`,
+      `浏览器 ${openedBrowserId} ${statusLabel(browser.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
     );
     setOpenedBrowserId(null);
   }, [openedBrowserId, resources]);
@@ -110,7 +150,10 @@ export default function ResourcePanel({
     setOpenedTerminalId(null);
     setOpenedBrowserId(null);
     void onControl(kind, resourceId, action)
-      .then(() => {
+      .then(async () => {
+        if (action === "delete" && (kind === "terminal" || kind === "browser")) {
+          await onCloseResourcePreview(kind, resourceId);
+        }
         setNotice(`已执行 ${actionLabelForKind(kind, action)}: ${resourceId}`);
       })
       .catch((controlError: unknown) => {
@@ -183,54 +226,106 @@ export default function ResourcePanel({
     onOpenBrowserPreview(resourceId);
     setNotice(`已在预览区连接浏览器: ${resourceId}`);
   };
-  const historicalResourceCount = resources.filter(
-    (resource) =>
-      resource.status === "deleted" ||
-      resource.status === "lost" ||
-      resource.metadata.resource_source === "历史记录",
-  ).length;
-  const closedBackgroundTasks = resources.filter(isClosedBackgroundTask);
-  const openResources = resources.filter(
-    (resource) => !isClosedBackgroundTask(resource),
-  );
-  const resourceCountText =
-    historicalResourceCount > 0
-      ? `${resources.length} 个连接（含 ${historicalResourceCount} 个历史/不可连接连接）`
-      : `${resources.length} 个连接`;
+  const handleCreateConnection = (kind: CreatableSessionConnectionKind) => {
+    setCreateMenuOpen(false);
+    setCreatingKind(kind);
+    setNotice("");
+    void onCreateConnection(kind)
+      .then(() => {
+        const option = CREATABLE_SESSION_CONNECTIONS.find(
+          (candidate) => candidate.kind === kind,
+        );
+        setNotice(
+          `${option?.label ?? "新建连接"}成功，已在预览区打开；连接状态请查看预览区`,
+        );
+      })
+      .catch((createError: unknown) => {
+        setNotice(
+          `新建连接失败: ${
+            createError instanceof Error ? createError.message : String(createError)
+          }`,
+        );
+      })
+      .finally(() => setCreatingKind(null));
+  };
+  const resourceGroups = groupSessionResources(resources, activePreviewPath);
+  const activeCount = resourceGroups.find((group) => group.key === "active")
+    ?.resources.length ?? 0;
+  const attentionCount = resourceGroups.find((group) => group.key === "attention")
+    ?.resources.length ?? 0;
   const waitingForFirstMessage = !sessionId || error === "当前没有会话可读取资源";
 
   return (
     <section className="panel-view resource-panel">
+      <GoalManagerCard
+        sessionId={sessionId}
+        goal={goal}
+        loading={goalLoading}
+        error={goalError}
+        onRefresh={onRefreshGoal}
+        onUpdate={onUpdateGoal}
+        onClear={onClearGoal}
+      />
       <div className="panel-header">
-        <div className="panel-title">后台连接</div>
+        <div
+          className="panel-title"
+          title={`${sessionId || "无会话"}${loadedAt ? ` · 最近读取 ${loadedAt}` : ""}`}
+        >
+          后台连接 <span className="resource-total-count">{resources.length}</span>
+        </div>
         <div className="panel-header-meta">
-          <span>{resourceCountText}</span>
-          <span>{sessionId || "无会话"}</span>
-          {loadedAt ? <span>读取于 {formatDateTime(loadedAt)}</span> : null}
+          <span>{activeCount} 个正在使用</span>
+          {attentionCount > 0 ? <span className="resource-attention-count">{attentionCount} 个需要处理</span> : null}
         </div>
         <button
           type="button"
-          className="resource-refresh-button"
+          className="resource-icon-button"
           onClick={onRefresh}
           disabled={loading || !sessionId}
           title="刷新后台连接"
+          aria-label="刷新后台连接"
         >
-          刷新
+          <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
         </button>
-        <button
-          type="button"
-          className="resource-refresh-button"
-          onClick={() => onShowConversation()}
-          disabled={!sessionId}
-          title="查看默认对话回复"
-        >
-          查看最新回复
-        </button>
+        <div ref={createMenuAnchorRef} className="resource-create-control">
+          <button
+            type="button"
+            className="resource-refresh-button resource-create-button"
+            onClick={() => setCreateMenuOpen((open) => !open)}
+            disabled={!sessionId || !workspaceId || creatingKind !== null}
+            aria-haspopup="menu"
+            aria-expanded={createMenuOpen}
+          >
+            {creatingKind ? "创建中" : "新建连接"}
+            <span className="codicon codicon-chevron-down" aria-hidden="true" />
+          </button>
+          <AnchoredOverlay
+            open={createMenuOpen}
+            anchorRef={createMenuAnchorRef}
+            placement="bottom-end"
+            onClose={() => setCreateMenuOpen(false)}
+          >
+            <div className="resource-create-menu" role="menu">
+              {CREATABLE_SESSION_CONNECTIONS.map((option) => (
+                <button
+                  key={option.kind}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => handleCreateConnection(option.kind)}
+                >
+                  <span className={`codicon ${option.icon}`} aria-hidden="true" />
+                  <span className="resource-create-menu-copy">
+                    <strong>{option.label}</strong>
+                    <small>{option.description}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </AnchoredOverlay>
+        </div>
       </div>
 
-      <div className="resource-status-note">
-        这里只展示可保留、可重新打开或可连接的后台对象，例如持久终端、浏览器页面和持续后台任务；一次性 agent job 请在默认视图或事件视图查看。
-      </div>
+      {/* 这里只承载可重新 attach 的持久资源；一次性 Agent job 仍属于对话或事件视图。 */}
       {notice ? <div className="resource-notice">{notice}</div> : null}
       {loading ? <div className="empty-state">正在读取后台连接...</div> : null}
       {error && !waitingForFirstMessage ? (
@@ -240,51 +335,68 @@ export default function ResourcePanel({
         <div className="empty-state">发送第一条消息后，这里会显示当前会话创建的可连接后台对象。</div>
       ) : null}
 
-      {!loading && !error && openResources.length > 0 ? (
-        <div className="panel-list">
-          {openResources.map((resource) => (
-            <ResourceCard
-              key={`${resource.kind}-${resource.resource_id}`}
-              resource={resource}
-              busy={busyResourceId === resource.resource_id}
-              onControl={handleControl}
-              onCopy={handleCopy}
-              onOpenTerminal={handleOpenTerminal}
-              onOpenBrowser={handleOpenBrowser}
-              onShowConversation={onShowConversation}
-            />
-          ))}
+      {!loading && !error && resourceGroups.length > 0 ? (
+        <div className="resource-tree" role="tree" aria-label="后台连接">
+          {resourceGroups.map((group) => {
+            const isOpen = openGroups[group.key];
+            const resourcesByKind = (["browser", "terminal", "background_task"] as const)
+              .map((kind) => ({
+                kind,
+                resources: group.resources.filter((resource) => resource.kind === kind),
+              }))
+              .filter((kindGroup) => kindGroup.resources.length > 0);
+            const showKindGroups = group.resources.length > 1;
+            return (
+              <section key={group.key} className={`resource-tree-group resource-tree-group-${group.key}`}>
+                <button
+                  type="button"
+                  className="resource-tree-group-row"
+                  aria-expanded={isOpen}
+                  onClick={() => setOpenGroups((current) => ({
+                    ...current,
+                    [group.key]: !current[group.key],
+                  }))}
+                  title={group.description}
+                >
+                  <span className={`codicon codicon-chevron-${isOpen ? "down" : "right"}`} aria-hidden="true" />
+                  <strong>{group.label}</strong>
+                  <span>{group.resources.length}</span>
+                  <small>{group.description}</small>
+                </button>
+                {isOpen ? (
+                  <div className="resource-tree-group-children" role="group">
+                    {resourcesByKind.map((kindGroup) => (
+                      <div key={kindGroup.kind} className="resource-tree-kind-group">
+                        {showKindGroups ? (
+                          <div className="resource-tree-kind-heading">
+                            <span className={`codicon ${kindGroup.kind === "browser" ? "codicon-globe" : kindGroup.kind === "terminal" ? "codicon-terminal" : "codicon-server-process"}`} aria-hidden="true" />
+                            <span>{kindLabel(kindGroup.kind)}</span>
+                            <span>{kindGroup.resources.length}</span>
+                          </div>
+                        ) : null}
+                        <div className={showKindGroups ? "resource-tree-kind-children" : undefined}>
+                          {kindGroup.resources.map((resource) => (
+                            <ResourceTreeRow
+                              key={`${resource.kind}-${resource.resource_id}`}
+                              resource={resource}
+                              selected={isPreviewedResource(resource, activePreviewPath)}
+                              busy={busyResourceId === resource.resource_id}
+                              onControl={handleControl}
+                              onCopy={handleCopy}
+                              onOpenTerminal={handleOpenTerminal}
+                              onOpenBrowser={handleOpenBrowser}
+                              onShowConversation={onShowConversation}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+            );
+          })}
         </div>
-      ) : null}
-
-      {!loading && !error && closedBackgroundTasks.length > 0 ? (
-        <section className="resource-closed-group">
-          <button
-            type="button"
-            className="resource-closed-summary"
-            aria-expanded={closedGroupOpen}
-            onClick={() => setClosedGroupOpen((open) => !open)}
-          >
-            已关闭后台连接 ({closedBackgroundTasks.length})
-            <span aria-hidden="true">{closedGroupOpen ? "⌄" : "›"}</span>
-          </button>
-          {closedGroupOpen ? (
-            <div className="panel-list">
-              {closedBackgroundTasks.map((resource) => (
-                <ResourceCard
-                  key={`${resource.kind}-${resource.resource_id}`}
-                  resource={resource}
-                  busy={busyResourceId === resource.resource_id}
-                  onControl={handleControl}
-                  onCopy={handleCopy}
-                  onOpenTerminal={handleOpenTerminal}
-                  onOpenBrowser={handleOpenBrowser}
-                  onShowConversation={onShowConversation}
-                />
-              ))}
-            </div>
-          ) : null}
-        </section>
       ) : null}
 
       {!loading && !error && resources.length === 0 ? (

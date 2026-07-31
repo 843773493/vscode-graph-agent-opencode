@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -37,11 +38,10 @@ def config_service():
     from tests.conftest import CONFIGS_DIR
 
     test_config_path = os.path.join(CONFIGS_DIR, "tests", "default.jsonc")
-    from app.services.infrastructure.config_service import set_config_path
-
-    set_config_path(test_config_path)
-    yield ConfigService()
-    set_config_path(None)
+    yield ConfigService(
+        config_dir=Path(CONFIGS_DIR),
+        config_path=Path(test_config_path),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -84,7 +84,9 @@ async def _astream_chunks(model, messages):
                 "content": chunk.content,
                 "content_blocks": chunk.content_blocks,
                 "additional_kwargs": dict(chunk.additional_kwargs),
-                "response_metadata": dict(chunk.response_metadata) if chunk.response_metadata else {},
+                "response_metadata": dict(chunk.response_metadata)
+                if chunk.response_metadata
+                else {},
             }
         )
     return chunks
@@ -247,7 +249,9 @@ async def test_ainvoke_shows_reasoning_in_metadata(test_model):
     if custom_llm_provider is not None:
         assert custom_llm_provider == "openai"
     if reasoning_tokens is not None:
-        assert reasoning_tokens > 0, f"reasoning_tokens 应该 > 0，但得到 {reasoning_tokens}。"
+        assert reasoning_tokens > 0, (
+            f"reasoning_tokens 应该 > 0，但得到 {reasoning_tokens}。"
+        )
 
     print(f"\n[ainvoke] reasoning_tokens: {reasoning_tokens}")
     print(f"[ainvoke] completion_tokens: {token_usage.get('completion_tokens')}")

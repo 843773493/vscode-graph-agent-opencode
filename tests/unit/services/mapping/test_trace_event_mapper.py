@@ -65,3 +65,24 @@ def test_mapper_marks_failed_tool_result_as_failed() -> None:
     assert mapped.title == "工具失败"
     assert mapped.status == "failed"
     assert mapped.content == "Gateway 工作区不存在: gw_typo"
+
+
+def test_mapper_preserves_model_failure_details() -> None:
+    event = _event()
+    event["type"] = "model_failed"
+    event["payload"] = {
+        "provider_id": "primary",
+        "model": "big-pickle",
+        "error_type": "RateLimitError",
+        "error": "Rate limit exceeded",
+    }
+
+    mapped = TraceEventMapper().map_one(event, session_id="ses_1")
+
+    assert mapped is not None
+    assert mapped.phase == "llm"
+    assert mapped.title == "模型调用失败"
+    assert mapped.status == "failed"
+    assert mapped.content == (
+        "primary/big-pickle：RateLimitError: Rate limit exceeded"
+    )

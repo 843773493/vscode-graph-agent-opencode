@@ -60,7 +60,7 @@ class CustomToolFactory(Protocol):
         ...
 
 
-def _load_factory(factory_path: str) -> CustomToolFactory:
+def load_custom_tool_factory(factory_path: str) -> CustomToolFactory:
     module_name, separator, qualname = factory_path.partition(":")
     if not separator or not module_name or not qualname:
         raise ValueError(
@@ -68,9 +68,19 @@ def _load_factory(factory_path: str) -> CustomToolFactory:
             f"实际值: {factory_path!r}"
         )
 
-    module = import_module(module_name)
+    try:
+        module = import_module(module_name)
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise ImportError(
+            f"无法导入扩展工具 factory 模块: factory={factory_path!r}"
+        ) from exc
     target: object = module
     for attr_name in qualname.split("."):
+        if not hasattr(target, attr_name):
+            raise AttributeError(
+                "扩展工具 factory 属性不存在: "
+                f"factory={factory_path!r}, missing={attr_name!r}"
+            )
         target = getattr(target, attr_name)
 
     if not callable(target):
@@ -86,7 +96,7 @@ def build_custom_tools(
     """构建可由固定扩展入口调用的自定义工具集。"""
     tools: list[BaseTool] = []
     for spec in parse_custom_tool_specs(specs):
-        factory = _load_factory(spec.factory_path)
+        factory = load_custom_tool_factory(spec.factory_path)
         tool = factory(replace(context, tool_options=spec.options))
         if not isinstance(tool, BaseTool):
             raise TypeError(

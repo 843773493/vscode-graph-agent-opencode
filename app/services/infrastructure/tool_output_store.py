@@ -136,7 +136,7 @@ class ToolOutputStore:
         )
 
     def _output_path(self, *, session_id: str, tool_call_id: str) -> Path:
-        session_root = self._path_resolver.resolve_session_dir(session_id)
+        session_root = self._path_resolver.resolve_session_node(session_id)
         output_dir = session_root / "tool-results"
         filename_digest = hashlib.sha256(tool_call_id.encode("utf-8")).hexdigest()[:24]
         return output_dir / f"tool_{filename_digest}.txt"

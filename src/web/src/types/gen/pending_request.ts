@@ -44,6 +44,18 @@ export interface PendingRequestOrderItem {
 export interface PendingRequestReorderRequest {
   requests: PendingRequestOrderItem[];
 }
+export interface PendingRequestSummaryDTO {
+  job_id: string;
+  message_id: string;
+  updated_at: string;
+}
+export interface PendingRequestSummaryListDTO {
+  session_id: string;
+  active_job_id?: string | null;
+  requests?: PendingRequestSummaryDTO[];
+  request_count: number;
+  truncated?: boolean;
+}
 export interface PendingRequestUpdateRequest {
   content: string;
   attachments?: AttachmentRef[];

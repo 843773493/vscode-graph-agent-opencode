@@ -43,7 +43,7 @@ describe("待处理消息状态", () => {
       conversationId: "msg_history",
       pending: false,
       pendingPosition: undefined,
-      source: "messages" as const,
+      source: "turn" as const,
       status: "done" as const,
     };
 
@@ -70,6 +70,12 @@ describe("待处理消息状态", () => {
     );
 
     expect(active.get("workspace::ses_active")).toBe("job_active");
-    expect(pending.has("workspace::ses_active")).toBe(false);
+    expect(pending.get("workspace::ses_active")).toEqual([
+      expect.objectContaining({
+        jobId: "job_active",
+        activeJobOverlay: true,
+        status: "running",
+      }),
+    ]);
   });
 });

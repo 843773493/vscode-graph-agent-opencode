@@ -1,16 +1,10 @@
 import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { createSession as apiCreateSession, sendMessage as apiSendMessage, DEFAULT_AGENT_ID, DEFAULT_SESSION_TITLE, getSessionTraces, getWorkspace, listMessages, listSessions, streamSessionEvents, TraceCursorGoneError, updateSession as apiUpdateSession } from './api';
-import type { ActiveJob, Message, Session, TraceEvent } from './types/backend';
+import { clearSessionGoal as apiClearSessionGoal, createSession as apiCreateSession, sendMessage as apiSendMessage, DEFAULT_AGENT_ID, DEFAULT_SESSION_TITLE, getSessionGoal, getSessionTraces, getWorkspace, listMessages, listSessions, moveSessionParent as apiMoveSessionParent, streamSessionEvents, TraceCursorGoneError, updateSessionGoal as apiUpdateSessionGoal } from './api';
+import type { StreamEvent } from './api';
+import type { ActiveJob, Message, Session, SessionGoal, SessionGoalUpdateRequest, TraceEvent } from './types/backend';
 import type { AppState, ConversationView } from './types/frontend';
 import { clearRuntimeLog, getVsCodeState, interceptConsoleToMessageSink, setVsCodeState, writeRuntimeLog } from './vscode';
-
-type StreamEvent = {
-  eventType: string;
-  eventId?: string;
-  payload: Record<string, unknown>;
-  event?: TraceEvent;
-};
 
 function waitForStreamReconnect(signal: AbortSignal, delayMs: number): Promise<void> {
   return new Promise(resolve => {
@@ -95,7 +89,10 @@ function isTraceEventLike(value: unknown): value is TraceEvent {
   }
 
   const record = value as Record<string, unknown>;
-  return typeof record.type === 'string' && typeof record.event_id === 'string' && typeof record.job_id === 'string' && 'payload' in record;
+  return typeof record.type === 'string'
+    && typeof record.event_id === 'string'
+    && typeof record.job_id === 'string'
+    && ('payload' in record || 'raw' in record);
 }
 
 function isLegacyTraceEventLike(value: unknown): value is { event_type: string; data?: Record<string, unknown>; timestamp?: string | number | null } {
@@ -109,12 +106,20 @@ function isLegacyTraceEventLike(value: unknown): value is { event_type: string; 
 
 function toTraceEvent(value: unknown): TraceEvent | null {
   if (isTraceEventLike(value)) {
-    const record = value as TraceEvent;
+    const record = value as TraceEvent & { raw?: Record<string, unknown> };
+    const raw = record.raw && typeof record.raw === 'object' ? record.raw : {};
+    const payload = 'payload' in record && record.payload && typeof record.payload === 'object'
+      ? record.payload
+      : raw.payload && typeof raw.payload === 'object'
+        ? raw.payload as Record<string, unknown>
+        : {};
     return {
       ...record,
       timestamp: typeof record.timestamp === 'string' ? record.timestamp : String(record.timestamp),
       step_id: record.step_id ?? null,
-      agent_id: record.agent_id ?? null,
+      agent_id: record.agent_id
+        ?? (typeof raw.agent_id === 'string' ? raw.agent_id : null),
+      payload: payload as never,
     };
   }
 
@@ -292,6 +297,9 @@ const INITIAL_STATE: AppState = {
   messages: [],
   traceEvents: [],
   activeJob: null,
+  currentGoal: null,
+  goalLoading: false,
+  goalError: null,
   observationState: null,
   sessionStatus: null,
   pendingQuestions: [],
@@ -306,6 +314,8 @@ interface AppContextType {
   state: AppState;
   setStatus: (text: string) => void;
   sendMessage: (content: string) => void;
+  updateGoal: (payload: SessionGoalUpdateRequest) => Promise<SessionGoal>;
+  clearGoal: () => Promise<void>;
   selectSession: (sessionId: string) => void;
   createSession: (title?: string) => void;
   setSessionParent: (sessionId: string, parentSessionId: string | null) => Promise<void>;
@@ -319,6 +329,10 @@ export function useAppState() {
   const ctx = useContext(AppContext);
   if (!ctx) throw new Error('useAppState must be used within AppProvider');
   return ctx;
+}
+
+function goalErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function persistCurrentState(state: AppState): void {
@@ -367,11 +381,26 @@ function normalizeMessageList(value: unknown): Message[] {
 }
 
 function normalizeTraceEventList(value: unknown): TraceEvent[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+  return normalizeTraceEvents(value);
+}
 
-  return value.filter((item): item is TraceEvent => Boolean(item) && typeof item === 'object' && 'event_id' in item && 'job_id' in item && 'payload' in item) as TraceEvent[];
+function normalizeGoal(value: unknown): SessionGoal | null {
+  if (value === null) {
+    return null;
+  }
+  if (!value || typeof value !== 'object') {
+    throw new Error('Goal 响应不是对象');
+  }
+  const goal = value as SessionGoal;
+  if (
+    typeof goal.goal_id !== 'string'
+    || typeof goal.session_id !== 'string'
+    || typeof goal.objective !== 'string'
+    || typeof goal.status !== 'string'
+  ) {
+    throw new Error('Goal 响应缺少权威字段');
+  }
+  return goal;
 }
 
 function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppState {
@@ -394,6 +423,9 @@ function mergeState(boot: Partial<AppState>, persisted: Partial<AppState>): AppS
     messages: normalizeMessageList(boot.messages ?? []),
     traceEvents: normalizeTraceEventList(boot.traceEvents),
     activeJob: (boot.activeJob ?? null) as ActiveJob | null,
+    currentGoal: normalizeGoal(boot.currentGoal ?? null),
+    goalLoading: false,
+    goalError: boot.goalError ?? null,
     observationState: bootObservationState,
     sessionStatus: bootSessionStatus,
     pendingQuestions: bootPendingQuestions,
@@ -412,6 +444,7 @@ async function requestInitialState(port: number): Promise<Partial<AppState>> {
   const currentSession = sessions[0] ?? null;
   const messagesPage = currentSession ? await listMessages(port, currentSession.session_id) : { items: [] as Message[] };
   const traces = currentSession ? await getSessionTraces(port, currentSession.session_id) : [] as TraceEvent[];
+  const goal = currentSession ? await getSessionGoal(port, currentSession.session_id) : null;
 
   return {
     apiPort: port,
@@ -420,8 +453,11 @@ async function requestInitialState(port: number): Promise<Partial<AppState>> {
     sessions,
     currentSession,
     messages: messagesPage.items ?? [],
-    traceEvents: traces,
+    traceEvents: normalizeTraceEventList(traces),
     activeJob: null,
+    currentGoal: goal,
+    goalLoading: false,
+    goalError: null,
     status: '准备就绪',
     expandDetails: true,
     historyPanelOpen: false,
@@ -447,6 +483,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const sessions = normalizeSessionList(sessionsPage.items ?? []);
     const currentSession = state.currentSession ? sessions.find(session => session.session_id === state.currentSession?.session_id) ?? sessions[0] ?? null : sessions[0] ?? null;
     const messagesPage = currentSession ? await listMessages(state.apiPort, currentSession.session_id) : { items: [] as Message[] };
+    const goal = currentSession ? await getSessionGoal(state.apiPort, currentSession.session_id) : null;
 
     setState(prev => {
       const next = cloneMaps(prev);
@@ -455,6 +492,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       next.sessions = sessions;
       next.currentSession = currentSession;
       next.messages = normalizeMessageList(messagesPage.items ?? []);
+      next.currentGoal = normalizeGoal(goal);
+      next.goalLoading = false;
+      next.goalError = null;
       next.status = '已刷新消息';
       return next;
     });
@@ -493,6 +533,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         next.messages = normalizeMessageList(initial.messages ?? prev.messages);
         next.traceEvents = normalizeTraceEventList(initial.traceEvents ?? prev.traceEvents);
         next.activeJob = (initial.activeJob ?? prev.activeJob) as ActiveJob | null;
+        next.currentGoal = normalizeGoal(initial.currentGoal ?? null);
+        next.goalLoading = false;
+        next.goalError = null;
         next.status = String(initial.status ?? prev.status);
         next.expandDetails = Boolean(initial.expandDetails ?? prev.expandDetails);
         next.historyPanelOpen = Boolean(initial.historyPanelOpen ?? prev.historyPanelOpen);
@@ -527,6 +570,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             afterEventId: lastEventId,
             signal: controller.signal,
             onEvent: ({ eventType, eventId, payload, event }: StreamEvent) => {
+        const streamedGoal = eventType === 'goal_updated'
+          ? normalizeGoal(payload.goal)
+          : null;
         if (eventId) {
           lastEventId = eventId;
         }
@@ -537,8 +583,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setState(prev => {
           const next = cloneMaps(prev);
           const sessionId = activeSessionIdRef.current ?? '';
-          if (event && !next.traceEvents.some(item => item.event_id === event.event_id)) {
-            next.traceEvents = [...next.traceEvents, event];
+          const normalizedEvent = toTraceEvent(event);
+          if (normalizedEvent && !next.traceEvents.some(item => item.event_id === normalizedEvent.event_id)) {
+            next.traceEvents = [...next.traceEvents, normalizedEvent];
+          }
+          if (eventType === 'goal_updated') {
+            next.currentGoal = streamedGoal;
+            next.goalLoading = false;
+            next.goalError = null;
+          } else if (eventType === 'goal_cleared') {
+            next.currentGoal = null;
+            next.goalLoading = false;
+            next.goalError = null;
           }
           const pending = next.pendingConversations.get(sessionId);
           if (pending) {
@@ -601,6 +657,95 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setStatus = useCallback((text: string) => {
     setState(prev => ({ ...prev, status: text }));
   }, []);
+
+  const updateGoal = useCallback(async (
+    payload: SessionGoalUpdateRequest,
+  ): Promise<SessionGoal> => {
+    if (!state.apiPort) {
+      throw new Error('后端端口未初始化');
+    }
+    const activeSession = state.currentSession
+      ?? await apiCreateSession(state.apiPort, DEFAULT_SESSION_TITLE);
+    const sessionId = activeSession.session_id;
+    if (!state.currentSession) {
+      setState(prev => ({
+        ...prev,
+        currentSession: activeSession,
+        sessions: [activeSession, ...prev.sessions],
+      }));
+    }
+    setState(prev => ({ ...prev, goalLoading: true, goalError: null }));
+    try {
+      const goal = normalizeGoal(
+        await apiUpdateSessionGoal(state.apiPort, sessionId, payload),
+      );
+      if (!goal) {
+        throw new Error('设置 Goal 后端未返回 Goal');
+      }
+      setState(prev => ({
+        ...prev,
+        currentGoal: goal,
+        goalLoading: false,
+        goalError: null,
+        status: 'Goal 已更新',
+      }));
+      return goal;
+    } catch (error) {
+      const message = goalErrorMessage(error);
+      try {
+        const reconciled = normalizeGoal(await getSessionGoal(state.apiPort, sessionId));
+        setState(prev => ({
+          ...prev,
+          currentGoal: reconciled,
+          goalLoading: false,
+          goalError: message,
+        }));
+      } catch (refreshError) {
+        setState(prev => ({
+          ...prev,
+          goalLoading: false,
+          goalError: `${message}；重新读取也失败：${goalErrorMessage(refreshError)}`,
+        }));
+      }
+      throw error;
+    }
+  }, [state.apiPort, state.currentSession]);
+
+  const clearGoal = useCallback(async (): Promise<void> => {
+    if (!state.apiPort || !state.currentSession) {
+      throw new Error('当前没有可清除 Goal 的会话');
+    }
+    const { session_id: sessionId } = state.currentSession;
+    setState(prev => ({ ...prev, goalLoading: true, goalError: null }));
+    try {
+      await apiClearSessionGoal(state.apiPort, sessionId);
+      setState(prev => ({
+        ...prev,
+        currentGoal: null,
+        goalLoading: false,
+        goalError: null,
+        status: 'Goal 已清除',
+      }));
+    } catch (error) {
+      const message = goalErrorMessage(error);
+      try {
+        const reconciled = normalizeGoal(await getSessionGoal(state.apiPort, sessionId));
+        setState(prev => ({
+          ...prev,
+          currentGoal: reconciled,
+          goalLoading: false,
+          goalError: message,
+        }));
+      } catch (refreshError) {
+        setState(prev => ({
+          ...prev,
+          goalLoading: false,
+          goalError: `${message}；重新读取也失败：${goalErrorMessage(refreshError)}`,
+        }));
+      }
+      throw error;
+    }
+  }, [state.apiPort, state.currentSession]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim()) {
@@ -689,12 +834,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const messagesPage = await listMessages(state.apiPort, sessionId);
     const traces = await getSessionTraces(state.apiPort, sessionId);
+    const goal = await getSessionGoal(state.apiPort, sessionId);
 
     setState(prev => {
       const next = cloneMaps(prev);
       next.currentSession = selected;
       next.messages = normalizeMessageList(messagesPage.items ?? []);
       next.traceEvents = normalizeTraceEventList(traces);
+      next.currentGoal = normalizeGoal(goal);
+      next.goalLoading = false;
+      next.goalError = null;
       next.activeJob = null;
       next.status = '已切换 session';
       return next;
@@ -714,6 +863,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       messages: [],
       traceEvents: [],
       activeJob: null,
+      currentGoal: null,
+      goalLoading: false,
+      goalError: null,
       status: '已创建新 session',
     }));
   }, [state.apiPort]);
@@ -726,9 +878,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error('后端端口未初始化');
     }
     try {
-      const updated = await apiUpdateSession(state.apiPort, sessionId, {
-        parent_session_id: parentSessionId,
-      });
+      const updated = await apiMoveSessionParent(
+        state.apiPort,
+        sessionId,
+        parentSessionId,
+      );
       setState(prev => ({
         ...prev,
         sessions: prev.sessions.map(item => item.session_id === sessionId ? updated : item),
@@ -753,12 +907,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     state,
     setStatus,
     sendMessage,
+    updateGoal,
+    clearGoal,
     selectSession,
     createSession,
     setSessionParent,
     toggleHistoryPanel,
     toggleExpandDetails,
-  }), [state, setStatus, sendMessage, selectSession, createSession, setSessionParent, toggleHistoryPanel, toggleExpandDetails]);
+  }), [state, setStatus, sendMessage, updateGoal, clearGoal, selectSession, createSession, setSessionParent, toggleHistoryPanel, toggleExpandDetails]);
 
   useEffect(() => {
     if (state.apiPort == null) {
@@ -775,6 +931,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       messages: state.messages,
       traceEvents: normalizeTraceEvents(state.traceEvents),
       activeJob: state.activeJob,
+      currentGoal: state.currentGoal,
+      goalError: state.goalError,
       status: state.status,
       expandDetails: state.expandDetails,
       historyPanelOpen: state.historyPanelOpen,

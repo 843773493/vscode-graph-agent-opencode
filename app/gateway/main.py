@@ -5,13 +5,13 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.env import get_project_root, load_project_env
+from app.core.env import get_project_root, load_boxteam_env
 from app.core.logging_config import configure_application_logging
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import TraceMiddleware, get_request_id
@@ -34,6 +34,7 @@ from app.gateway.credentials import (
     FederationCredentialStore,
     load_or_create_gateway_id,
 )
+from app.gateway.device_connections import router as device_connections_router
 from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
     request_remote_gateway_management,
@@ -73,6 +74,7 @@ from app.gateway.schemas import (
     GatewayInboundWorkspaceDTO,
     GatewayManagedWorkspaceListDTO,
     GatewayRuntimeRestartResultDTO,
+    GatewayRuntimeStateResultDTO,
     GatewayWorkspaceListDTO,
     ReorderGatewayWorkspacesRequest,
     SshConnectionOptionListDTO,
@@ -101,6 +103,19 @@ def _gateway_root() -> Path:
     return get_gateway_root()
 
 
+def _preserve_browser_managers_on_shutdown() -> bool:
+    raw = os.environ.get(
+        "BOXTEAM_GATEWAY_PRESERVE_BROWSER_MANAGERS_ON_SHUTDOWN",
+        "true",
+    ).strip().lower()
+    if raw not in {"true", "false"}:
+        raise RuntimeError(
+            "BOXTEAM_GATEWAY_PRESERVE_BROWSER_MANAGERS_ON_SHUTDOWN "
+            f"必须是 true 或 false，实际为 {raw!r}"
+        )
+    return raw == "true"
+
+
 def _resolve_local_directory(raw_path: str | None) -> Path:
     target_path = Path(raw_path).expanduser() if raw_path else Path.home()
     resolved_path = target_path.resolve()
@@ -109,6 +124,49 @@ def _resolve_local_directory(raw_path: str | None) -> Path:
     if not resolved_path.is_dir():
         raise HTTPException(status_code=400, detail=f"路径不是目录: {resolved_path}")
     return resolved_path
+
+
+def _scan_local_directories(
+    root_path: Path,
+    limit: int,
+) -> tuple[list[GatewayDirectoryEntryDTO], bool]:
+    with os.scandir(root_path) as directory_iterator:
+        directories = [
+            entry
+            for entry in directory_iterator
+            if entry.is_dir(follow_symlinks=False)
+        ]
+    directories.sort(key=lambda entry: (entry.name.lower(), entry.name))
+    entries = [
+        GatewayDirectoryEntryDTO(
+            name=entry.name,
+            path=str(Path(entry.path).resolve()),
+        )
+        for entry in directories[:limit]
+    ]
+    return entries, len(directories) > limit
+
+
+async def _directory_listing(
+    raw_path: str | None,
+    *,
+    limit: int,
+) -> GatewayDirectoryListDTO:
+    root_path = _resolve_local_directory(raw_path)
+    entries, truncated = await asyncio.to_thread(
+        _scan_local_directories,
+        root_path,
+        limit,
+    )
+    parent_path = root_path.parent if root_path.parent != root_path else None
+    return GatewayDirectoryListDTO(
+        path=str(root_path),
+        parent_path=str(parent_path) if parent_path is not None else None,
+        home_path=str(Path.home().resolve()),
+        entries=entries,
+        truncated=truncated,
+        limit=limit,
+    )
 
 
 def _workspace_name(root_path: str, fallback: str = "workspace") -> str:
@@ -197,7 +255,7 @@ def _remote_http_error_detail(error: httpx.HTTPStatusError) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_application_logging()
-    load_project_env()
+    load_boxteam_env()
     get_gateway_local_token()
     logger.info("Gateway 日志已初始化: gateway_root=%s", _gateway_root())
     registry = await create_registry()
@@ -256,7 +314,9 @@ async def lifespan(app: FastAPI):
         if coordinator_started:
             await app.state.session_generator_coordinator.stop()
         await app.state.http_client.aclose()
-        registry.close()
+        registry.close(
+            preserve_browser_managers=_preserve_browser_managers_on_shutdown()
+        )
 
 
 app = FastAPI(
@@ -484,6 +544,30 @@ async def remove_federation_managed_workspace(
 
 
 @app.get(
+    "/api/gateway/federation/directories",
+    response_model=APIResponse[GatewayDirectoryListDTO],
+)
+async def list_federation_directories(
+    path: str | None = Query(default=None),
+    limit: int = Query(default=120, ge=1, le=500),
+    _: object = Depends(verify_federation_token),
+    request_id: str = Depends(get_request_id),
+):
+    try:
+        listing = await _directory_listing(path, limit=limit)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"读取远程 Gateway 目录失败: {error}",
+        ) from error
+    return APIResponse(data=listing, request_id=request_id)
+
+
+@app.get(
     "/api/gateway/managed-workspaces",
     response_model=APIResponse[GatewayManagedWorkspaceListDTO],
 )
@@ -693,43 +777,64 @@ async def update_web_ui_settings(
     )
 
 
-@app.get("/api/gateway/local-directories", response_model=APIResponse[GatewayDirectoryListDTO])
+@app.get(
+    "/api/gateway/local-directories",
+    response_model=APIResponse[GatewayDirectoryListDTO],
+)
 async def list_local_directories(
-    path: str | None = Query(default=None, description="要浏览的本机目录；为空时使用用户主目录"),
+    path: str | None = Query(
+        default=None,
+        description="要浏览的本机目录；为空时使用用户主目录",
+    ),
     limit: int = Query(default=120, ge=1, le=500),
+    gateway_connection_id: str | None = Query(default=None),
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
-    root_path = _resolve_local_directory(path)
-    entries: list[GatewayDirectoryEntryDTO] = []
-    with os.scandir(root_path) as directory_iterator:
-        directory_entries = list(directory_iterator)
-    directories = [
-        entry
-        for entry in directory_entries
-        if entry.is_dir(follow_symlinks=False)
-    ]
-    directories.sort(key=lambda entry: (entry.name.lower(), entry.name))
-    for entry in directories[:limit]:
-        entry_path = Path(entry.path).resolve()
-        entries.append(
-            GatewayDirectoryEntryDTO(
-                name=entry.name,
-                path=str(entry_path),
-            )
+    if gateway_connection_id is not None:
+        query = urlencode(
+            {
+                **({"path": path} if path is not None else {}),
+                "limit": limit,
+            }
         )
-    parent_path = root_path.parent if root_path.parent != root_path else None
-    return APIResponse(
-        data=GatewayDirectoryListDTO(
-            path=str(root_path),
-            parent_path=str(parent_path) if parent_path is not None else None,
-            home_path=str(Path.home().resolve()),
-            entries=entries,
-            truncated=len(directories) > limit,
-            limit=limit,
-        ),
-        request_id=request_id,
-    )
+        try:
+            remote_data = await request_remote_gateway_management(
+                gateway_url=registry.remote_gateway_url(gateway_connection_id),
+                credential=_remote_gateway_credential(gateway_connection_id),
+                method="GET",
+                path=f"/api/gateway/federation/directories?{query}",
+                request_id=request_id,
+            )
+            listing = GatewayDirectoryListDTO.model_validate(remote_data)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except httpx.HTTPStatusError as error:
+            status_code = error.response.status_code
+            raise HTTPException(
+                status_code=status_code if 400 <= status_code < 500 else 502,
+                detail=_remote_http_error_detail(error),
+            ) from error
+        except (PermissionError, RuntimeError, httpx.HTTPError) as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        return APIResponse(data=listing, request_id=request_id)
+
+    try:
+        listing = await _directory_listing(path, limit=limit)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(
+            status_code=403,
+            detail=str(error),
+        ) from error
+    except OSError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"读取本机目录失败: {error}",
+        ) from error
+    return APIResponse(data=listing, request_id=request_id)
 
 
 @app.get(
@@ -751,7 +856,10 @@ async def list_ssh_connections(
     )
 
 
-@app.post("/api/gateway/workspaces/local", response_model=APIResponse[GatewayWorkspaceListDTO])
+@app.post(
+    "/api/gateway/workspaces/local",
+    response_model=APIResponse[GatewayWorkspaceListDTO],
+)
 async def add_local_workspace(
     payload: AddLocalWorkspaceRequest,
     _: str = Depends(verify_gateway_token),
@@ -760,7 +868,10 @@ async def add_local_workspace(
 ):
     workspace_root = Path(payload.root_path).expanduser().resolve()
     if not workspace_root.is_dir():
-        raise HTTPException(status_code=400, detail=f"本机工作区不存在: {workspace_root}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"本机工作区不存在: {workspace_root}",
+        )
 
     if payload.backend_url is None:
         try:
@@ -909,6 +1020,71 @@ async def reconnect_workspace(
 
 
 @app.post(
+    "/api/gateway/workspaces/{workspace_id}/runtime/start",
+    response_model=APIResponse[GatewayRuntimeStateResultDTO],
+)
+async def start_managed_workspace_backend(
+    workspace_id: str,
+    auth: GatewayAuthContext = Depends(verify_gateway_access),
+    request_id: str = Depends(get_request_id),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    controller: GatewayWorkspaceRuntimeController = Depends(
+        get_workspace_runtime_controller
+    ),
+):
+    try:
+        if (
+            auth.kind == "federation"
+            and registry.resolve(workspace_id).connection_kind != "local"
+        ):
+            raise ValueError("bounded federation 禁止委托嵌套远程工作区启动")
+        result = await controller.start_managed_backend(
+            workspace_id,
+            request_id=request_id,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (PermissionError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
+        registry.mark_connection_error(workspace_id, str(error))
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@app.post(
+    "/api/gateway/workspaces/{workspace_id}/runtime/stop",
+    response_model=APIResponse[GatewayRuntimeStateResultDTO],
+)
+async def stop_managed_workspace_backend(
+    workspace_id: str,
+    auth: GatewayAuthContext = Depends(verify_gateway_access),
+    request_id: str = Depends(get_request_id),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    controller: GatewayWorkspaceRuntimeController = Depends(
+        get_workspace_runtime_controller
+    ),
+):
+    try:
+        if (
+            auth.kind == "federation"
+            and registry.resolve(workspace_id).connection_kind != "local"
+        ):
+            raise ValueError("bounded federation 禁止委托嵌套远程工作区关闭")
+        result = await controller.stop_managed_backend(
+            workspace_id,
+            request_id=request_id,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (PermissionError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (OSError, RuntimeError, httpx.HTTPError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@app.post(
     "/api/gateway/workspaces/{workspace_id}/runtime/restart-safe",
     response_model=APIResponse[GatewayRuntimeRestartResultDTO],
 )
@@ -1010,7 +1186,10 @@ async def probe_external_workspace_backend(
     )
 
 
-@app.put("/api/gateway/workspaces/order", response_model=APIResponse[GatewayWorkspaceListDTO])
+@app.put(
+    "/api/gateway/workspaces/order",
+    response_model=APIResponse[GatewayWorkspaceListDTO],
+)
 async def reorder_workspaces(
     payload: ReorderGatewayWorkspacesRequest,
     _: str = Depends(verify_gateway_token),
@@ -1061,7 +1240,10 @@ async def update_workspace(
     )
 
 
-@app.delete("/api/gateway/workspaces/{workspace_id}", response_model=APIResponse[GatewayWorkspaceListDTO])
+@app.delete(
+    "/api/gateway/workspaces/{workspace_id}",
+    response_model=APIResponse[GatewayWorkspaceListDTO],
+)
 async def remove_workspace(
     workspace_id: str,
     _: str = Depends(verify_gateway_token),
@@ -1086,6 +1268,7 @@ async def remove_workspace(
 # 两个代理 Router 含通配路由，必须晚于 Gateway 自有接口注册，否则会吞掉
 # `/api/gateway/workspaces/{id}/runtime/*` 等更具体的控制面路由。
 app.include_router(gateway_control_router)
+app.include_router(device_connections_router)
 app.include_router(auxiliary_proxy_router)
 app.include_router(workspace_proxy_router)
 

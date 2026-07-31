@@ -9,6 +9,7 @@ from .attachment import AttachmentRef
 
 
 PendingRequestKind = Literal["queued", "steering"]
+MessageDispatchMode = Literal["queued", "steering", "immediate"]
 
 
 class PendingRequestOrderItem(BaseModel):
@@ -47,3 +48,17 @@ class PendingRequestListDTO(BaseModel):
     active_job_id: str | None = None
     yield_requested: bool = False
     requests: list[PendingRequestDTO] = Field(default_factory=list)
+
+
+class PendingRequestSummaryDTO(BaseModel):
+    job_id: str
+    message_id: str
+    updated_at: datetime
+
+
+class PendingRequestSummaryListDTO(BaseModel):
+    session_id: str
+    active_job_id: str | None = None
+    requests: list[PendingRequestSummaryDTO] = Field(default_factory=list)
+    request_count: int = Field(ge=0)
+    truncated: bool = False

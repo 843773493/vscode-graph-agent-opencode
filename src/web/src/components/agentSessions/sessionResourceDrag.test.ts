@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { decideSessionResourceDrop } from "./sessionResourceDrag";
+import {
+  decideSessionResourceDrop,
+  workspaceDropZoneForPointer,
+} from "./sessionResourceDrag";
 
 describe("会话资源树拖放决策", () => {
   test("工作区拖到工作区时建立父子工作区关系", () => {
@@ -16,6 +19,7 @@ describe("会话资源树拖放决策", () => {
         nodeId: "gwn_parent",
         workspaceId: "gw_parent",
         navigationParentNodeId: "gwn_folder",
+        parentWorkspaceId: null,
       },
     )).toEqual({
       allowed: true,
@@ -23,6 +27,7 @@ describe("会话资源树拖放决策", () => {
         kind: "set_workspace_parent",
         parentWorkspaceId: "gw_parent",
         navigationParentNodeId: "gwn_folder",
+        placement: { mode: "last" },
       },
     });
   });
@@ -34,12 +39,17 @@ describe("会话资源树拖放决策", () => {
         nodeId: "gwn_source",
         parentNodeId: null,
       },
-      { kind: "workspace_folder", nodeId: "gwn_target" },
+      {
+        kind: "workspace_folder",
+        nodeId: "gwn_target",
+        parentNodeId: null,
+      },
     )).toEqual({
       allowed: true,
       action: {
         kind: "move_workspace_navigation",
         parentNodeId: "gwn_target",
+        placement: { mode: "last" },
       },
     });
   });
@@ -57,6 +67,7 @@ describe("会话资源树拖放决策", () => {
       action: {
         kind: "move_workspace_navigation",
         parentNodeId: null,
+        placement: { mode: "last" },
       },
     });
   });
@@ -107,6 +118,88 @@ describe("会话资源树拖放决策", () => {
     )).toEqual({
       allowed: false,
       reason: "会话和会话文件夹不能拖到其他工作区",
+    });
+  });
+
+  test("工作区行按上四分之一、中间、下四分之一分配拖放区域", () => {
+    expect(workspaceDropZoneForPointer(100, 100, 40)).toBe("before");
+    expect(workspaceDropZoneForPointer(109, 100, 40)).toBe("before");
+    expect(workspaceDropZoneForPointer(120, 100, 40)).toBe("inside");
+    expect(workspaceDropZoneForPointer(131, 100, 40)).toBe("after");
+    expect(workspaceDropZoneForPointer(140, 100, 40)).toBe("after");
+  });
+
+  test("工作区文件夹可插入工作区之前", () => {
+    expect(decideSessionResourceDrop(
+      {
+        kind: "workspace_folder",
+        nodeId: "gwn_source",
+        parentNodeId: null,
+      },
+      {
+        kind: "workspace",
+        nodeId: "gwn_workspace",
+        workspaceId: "gw_workspace",
+        navigationParentNodeId: "gwn_parent",
+        parentWorkspaceId: null,
+      },
+      "before",
+    )).toEqual({
+      allowed: true,
+      action: {
+        kind: "move_workspace_navigation",
+        parentNodeId: "gwn_parent",
+        placement: { mode: "before", targetNodeId: "gwn_workspace" },
+      },
+    });
+  });
+
+  test("工作区插入子工作区旁时继承相同父工作区", () => {
+    expect(decideSessionResourceDrop(
+      {
+        kind: "workspace",
+        nodeId: "gwn_source",
+        workspaceId: "gw_source",
+        parentWorkspaceId: null,
+        parentNodeId: null,
+      },
+      {
+        kind: "workspace",
+        nodeId: "gwn_child",
+        workspaceId: "gw_child",
+        navigationParentNodeId: "gwn_folder",
+        parentWorkspaceId: "gw_parent",
+      },
+      "after",
+    )).toEqual({
+      allowed: true,
+      action: {
+        kind: "set_workspace_parent",
+        parentWorkspaceId: "gw_parent",
+        navigationParentNodeId: "gwn_folder",
+        placement: { mode: "after", targetNodeId: "gwn_child" },
+      },
+    });
+  });
+
+  test("工作区文件夹不能插入子工作区列表", () => {
+    expect(decideSessionResourceDrop(
+      {
+        kind: "workspace_folder",
+        nodeId: "gwn_source",
+        parentNodeId: null,
+      },
+      {
+        kind: "workspace",
+        nodeId: "gwn_child",
+        workspaceId: "gw_child",
+        navigationParentNodeId: null,
+        parentWorkspaceId: "gw_parent",
+      },
+      "before",
+    )).toEqual({
+      allowed: false,
+      reason: "工作区文件夹不能插入子工作区列表",
     });
   });
 });

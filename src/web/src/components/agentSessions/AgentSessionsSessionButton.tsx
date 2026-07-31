@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { Session } from '../../types/backend';
 import { formatDateTime } from '../../utils/format';
+import SessionActivityIndicator from './SessionActivityIndicator';
 
 function formatRelativeTime(value: string | null | undefined): string {
   const time = new Date(value || '').getTime();
@@ -32,6 +33,8 @@ export default function AgentSessionsSessionButton({
   showToggle,
   onToggle,
   focus,
+  running = false,
+  unread = false,
 }: {
   session: Session;
   isActive: boolean;
@@ -41,6 +44,8 @@ export default function AgentSessionsSessionButton({
   showToggle?: boolean;
   onToggle?: () => void;
   focus?: boolean;
+  running?: boolean;
+  unread?: boolean;
 }): React.ReactNode {
   const relativeTime = formatRelativeTime(session.updated_at || session.created_at);
   const delegationFailed = session.delegation?.start_status === 'failed';
@@ -51,6 +56,7 @@ export default function AgentSessionsSessionButton({
     <button
       type="button"
       className={`session-item${isActive ? ' active' : ''}${focus ? ' session-item-focus' : ''}`}
+      data-session-id={session.session_id}
       onClick={() => onSelectSession(session.session_id)}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -69,6 +75,7 @@ export default function AgentSessionsSessionButton({
         />
       ) : null}
       <span className="session-title">{session.title || '未命名'}</span>
+      <SessionActivityIndicator running={running} unread={unread} />
       <span className="session-time">
         {relativeTime || formatDateTime(session.updated_at || session.created_at) || 'now'}
       </span>

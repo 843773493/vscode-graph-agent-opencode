@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as vscode from 'vscode';
 
-import { createSession, getSessionTraces, listAgents, listMessages, listSessions, sendMessage, streamJobEvents } from '../shared/api.js';
+import { createSession, getJob, getSessionTraces, JobEventCursorGoneError, listAgents, listMessages, listSessions, sendMessage, streamJobEvents } from '../shared/api.js';
 import { DEFAULT_AGENT_ID, DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_TOKEN, DEFAULT_SESSION_TITLE } from '../shared/constants.js';
 import { HostToWebviewMessageType, WebviewToHostMessageType } from '../shared/protocol.js';
 import { renderSidebarHtml } from './html.js';
@@ -68,6 +68,30 @@ function getRuntimeWebviewUiLogPath() {
 
 function formatLogTimestamp() {
   return new Date().toISOString();
+}
+
+const TERMINAL_JOB_STATUSES = new Set([
+  'completed',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'timed_out',
+]);
+
+function waitForReconnect(delayMs, signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(finish, delayMs);
+    function finish() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    }
+    signal.addEventListener('abort', finish, { once: true });
+  });
 }
 
 function requestBackendJson(port, message) {
@@ -492,7 +516,8 @@ export class SidebarProvider {
         messageId: accepted.message_id ?? null,
         content,
       });
-      void this.observeJobEvents(ready.port, accepted.job_id, this.state.currentSession.session_id);
+      void this.observeJobEvents(ready.port, accepted.job_id, this.state.currentSession.session_id)
+        .catch((error) => this.postError(error));
     }
 
     this.syncState('任务已提交，正在更新回复...');
@@ -500,31 +525,72 @@ export class SidebarProvider {
 
   async observeJobEvents(port, jobId, sessionId) {
     this.log(`[${formatLogTimestamp()}] 开始监听 job 事件: jobId=${jobId}, sessionId=${sessionId}, port=${port}`);
+    this.jobStreams.get(jobId)?.abort();
     const controller = new AbortController();
     this.jobStreams.set(jobId, controller);
+    let afterEventId = null;
+    let reconnectAttempt = 0;
+    let terminal = false;
 
     try {
-      await streamJobEvents(port, jobId, {
-        signal: controller.signal,
-        onEvent: ({ eventType, payload }) => {
-          this.log(`[${formatLogTimestamp()}] 收到 SSE 事件: jobId=${jobId}, sessionId=${sessionId}, eventType=${eventType}, payload=${JSON.stringify(payload).slice(0, 1000)}`);
-          this.postMessageToWebview({ type: HostToWebviewMessageType.jobEvent, jobId, sessionId, eventType, payload });
-          if (['job_completed', 'job_failed', 'job_cancelled'].includes(eventType)) {
-            this.log(`[${formatLogTimestamp()}] job 结束事件到达: ${eventType}，准备刷新 messages/traces`);
-            this.state.activeJob = { ...(this.state.activeJob ?? {}), jobId, sessionId, status: eventType };
-            controller.abort();
-            this.jobStreams.delete(jobId);
-            void Promise.all([this.reloadMessages(), this.reloadTraces()]);
+      while (!controller.signal.aborted && !terminal) {
+        try {
+          await streamJobEvents(port, jobId, {
+            afterEventId,
+            signal: controller.signal,
+            onEvent: ({ eventType, eventId, payload, rawType }) => {
+              afterEventId = eventId;
+              reconnectAttempt = 0;
+              this.log(`[${formatLogTimestamp()}] 收到 SSE 事件: jobId=${jobId}, sessionId=${sessionId}, eventType=${eventType}, payload=${JSON.stringify(payload).slice(0, 1000)}`);
+              this.postMessageToWebview({ type: HostToWebviewMessageType.jobEvent, jobId, sessionId, eventType, payload });
+              if (['session.completed', 'session.error'].includes(eventType) || rawType === 'job_cancelled') {
+                terminal = true;
+                this.log(`[${formatLogTimestamp()}] job 结束事件到达: ${eventType}，准备刷新 messages/traces`);
+                this.state.activeJob = { ...(this.state.activeJob ?? {}), jobId, sessionId, status: rawType };
+                controller.abort();
+                void Promise.all([this.reloadMessages(), this.reloadTraces()])
+                  .then(() => this.syncState('任务已结束'))
+                  .catch((error) => this.postError(error));
+              }
+            },
+          });
+          if (!controller.signal.aborted && !terminal) {
+            reconnectAttempt += 1;
+            const delayMs = Math.min(500 * (2 ** (reconnectAttempt - 1)), 5_000);
+            this.log(`[${formatLogTimestamp()}] Job SSE 已正常关闭，将在 ${delayMs}ms 后从 ${afterEventId ?? '当前时刻'} 续传`);
+            await waitForReconnect(delayMs, controller.signal);
           }
-        },
-        onError: (error) => {
-          this.log(`[${formatLogTimestamp()}] SSE 监听出错: ${error instanceof Error ? error.message : String(error)}`);
-          this.postError(error);
-        },
-      });
+        } catch (error) {
+          if (controller.signal.aborted || terminal) {
+            break;
+          }
+
+          if (error instanceof JobEventCursorGoneError) {
+            afterEventId = null;
+            await Promise.all([this.reloadMessages(), this.reloadTraces()]);
+            this.log(`[${formatLogTimestamp()}] Job SSE 游标失效，已刷新权威状态并改为仅监听后续事件`);
+          }
+
+          const job = await getJob(port, jobId);
+          if (TERMINAL_JOB_STATUSES.has(job.status)) {
+            terminal = true;
+            this.state.activeJob = { ...(this.state.activeJob ?? {}), jobId, sessionId, status: job.status };
+            await Promise.all([this.reloadMessages(), this.reloadTraces()]);
+            this.syncState(job.status === 'failed' ? '任务失败' : '任务已结束');
+            break;
+          }
+
+          reconnectAttempt += 1;
+          const delayMs = Math.min(500 * (2 ** (reconnectAttempt - 1)), 5_000);
+          this.log(`[${formatLogTimestamp()}] Job SSE 已断开，将在 ${delayMs}ms 后从 ${afterEventId ?? '当前时刻'} 续传: ${error instanceof Error ? error.message : String(error)}`);
+          await waitForReconnect(delayMs, controller.signal);
+        }
+      }
     } finally {
       this.log(`[${formatLogTimestamp()}] 结束监听 job 事件: jobId=${jobId}`);
-      this.jobStreams.delete(jobId);
+      if (this.jobStreams.get(jobId) === controller) {
+        this.jobStreams.delete(jobId);
+      }
     }
   }
 

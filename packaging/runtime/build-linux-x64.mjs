@@ -165,10 +165,26 @@ function installChromium(applicationRoot, chromiumRoot) {
   if (!existsSync(executable)) {
     throw new Error(`Playwright 声明的 Chromium 不存在: ${executable}`);
   }
-  cpSync(chromiumCacheRoot, chromiumRoot, { recursive: true });
+  const executableRelativePath = path.relative(chromiumCacheRoot, executable);
+  const [browserDirectory] = executableRelativePath.split(path.sep);
+  if (
+    !browserDirectory ||
+    browserDirectory === "." ||
+    browserDirectory === ".." ||
+    executableRelativePath.startsWith(`..${path.sep}`)
+  ) {
+    throw new Error(
+      `Playwright Chromium 不在浏览器缓存目录内: ${executable}`,
+    );
+  }
+  cpSync(
+    path.join(chromiumCacheRoot, browserDirectory),
+    path.join(chromiumRoot, browserDirectory),
+    { recursive: true },
+  );
   const packagedExecutable = path.join(
     chromiumRoot,
-    path.relative(chromiumCacheRoot, executable),
+    executableRelativePath,
   );
   if (!existsSync(packagedExecutable)) {
     throw new Error(`复制后缺少 Chromium: ${packagedExecutable}`);
@@ -184,6 +200,12 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
     // npm pack 会排除包内符号链接，因此必须指向实际解释器文件。
     python_executable: "python/bin/python3.12",
     application_root: "application",
+    config_resources: {
+      gateway: "application/configs/gateway.jsonc",
+      gateway_schema: "application/configs/gateway_config.jsonc",
+      workspace: "application/configs/workspace.jsonc",
+      workspace_schema: "application/configs/workspace_config.jsonc",
+    },
     web_assets: "web",
     chromium_executable: path.relative(runtimePackageRoot, chromiumExecutable),
     node: {
@@ -202,7 +224,7 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
         python: PYTHON_RUNTIME,
         node_dependencies: NODE_RUNTIME_DEPENDENCIES,
         playwright: "Apache-2.0",
-        chromium: "Chromium 项目随附许可文件，构建产物未裁剪浏览器资源",
+        chromium: "Chromium 项目随附许可文件，仅打包 manifest 指向的浏览器资源",
       },
       null,
       2,

@@ -43,7 +43,7 @@ function fallbackContent(item: ToolItem): string {
     .join("\n\n");
 }
 
-export default function ToolRow({
+function ToolRow({
   item,
   showRawDetails,
 }: {
@@ -52,8 +52,16 @@ export default function ToolRow({
 }): React.ReactNode {
   const [open, setOpen] = React.useState(false);
   const status = toolStatus(item);
-  const content = formatToolCardContent(item) ?? fallbackContent(item);
-  const hasDetails = Boolean(content || showRawDetails);
+  const hasDetails = Boolean(
+    item.inputText
+    || item.resultText
+    || showRawDetails
+    || Object.keys(item.rawStart).length > 0
+    || Object.keys(item.rawEnd).length > 0,
+  );
+  const content = open
+    ? formatToolCardContent(item) ?? fallbackContent(item)
+    : null;
 
   return (
     <section className={`chat-tool-row ${status.className}`}>
@@ -88,3 +96,5 @@ export default function ToolRow({
     </section>
   );
 }
+
+export default React.memo(ToolRow);

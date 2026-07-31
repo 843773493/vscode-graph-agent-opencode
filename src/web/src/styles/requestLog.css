@@ -1,3 +1,11 @@
+.request-log-load-older {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  text-align: center;
+}
+
 .request-log-card,
 .request-log-key-flow {
   flex: 0 0 auto;

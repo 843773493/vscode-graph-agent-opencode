@@ -5,8 +5,10 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.abstractions.internal_message import PreparedInternalMessage
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.prompting import PromptSection, internal_message_factory
 from app.schemas.public_v2.common import MessageRole
 from app.schemas.public_v2.session import SessionDTO
 from app.schemas.public_v2.session_navigation import (
@@ -190,7 +192,7 @@ class SessionGenerationReportingSupport:
                 report_back_job_id = await self._dispatch_report_back_message(
                     payload,
                     target_session_id,
-                    self._report_back_prompt(
+                    self._report_back_message(
                         payload,
                         generated_session_id=generated_session_id,
                         generated_job_id=generated_job_id,
@@ -250,7 +252,7 @@ class SessionGenerationReportingSupport:
         self,
         payload: SessionGenerationExecuteRequest,
         target_session_id: str,
-        prompt: str,
+        internal_message: PreparedInternalMessage,
         *,
         ledger_path: Path,
     ) -> str:
@@ -260,10 +262,9 @@ class SessionGenerationReportingSupport:
             phase="report_back",
         )
         if message is None:
-            message = await self._session_orchestrator.prepare_user_message(
+            message = await self._session_orchestrator.prepare_internal_message(
                 target_session_id,
-                prompt,
-                metadata=self._message_metadata(payload, "report_back"),
+                internal_message,
             )
             self._persist_prepared_message(payload, "report_back", message)
         record = self._read_ledger(ledger_path)
@@ -464,16 +465,49 @@ class SessionGenerationReportingSupport:
         terminal_status: str,
         branch_result: str,
     ) -> str:
-        return (
-            "这是系统直接注入当前会话的分支执行结果，不是来自其它会话的通信请求。"
-            "请只在当前会话中基于结果继续处理并回复当前用户；禁止调用 "
-            "send_message_to_session、reply_to_session 或其它跨会话通信工具，"
-            "也不要重新访问、唤醒或启动生成会话。"
-            f"回报模式: {payload.session_strategy.report_back}。"
-            f"生成会话 ID: {generated_session_id}；生成 Job ID: {generated_job_id}。"
-            f"分支终态: {terminal_status}。分支最终回复已由系统直接读取并注入如下，"
-            "不要猜测文件路径，也不需要再次读取其它会话：\n\n"
-            f"<generated_session_result>\n{branch_result}\n</generated_session_result>"
+        return SessionGenerationReportingSupport._report_back_message(
+            payload,
+            generated_session_id=generated_session_id,
+            generated_job_id=generated_job_id,
+            terminal_status=terminal_status,
+            branch_result=branch_result,
+        ).content
+
+    @staticmethod
+    def _report_back_message(
+        payload: SessionGenerationExecuteRequest,
+        *,
+        generated_session_id: str,
+        generated_job_id: str,
+        terminal_status: str,
+        branch_result: str,
+    ) -> PreparedInternalMessage:
+        context = {
+            "report_back": payload.session_strategy.report_back,
+            "generated_session_id": generated_session_id,
+            "generated_job_id": generated_job_id,
+            "terminal_status": terminal_status,
+        }
+        return internal_message_factory.build(
+            kind="generated_session_result",
+            control=(
+                "这是系统直接注入当前会话的分支执行结果，不是来自其它会话的通信请求。"
+                "请只在当前会话中基于结果继续处理并回复当前用户；禁止调用 "
+                "send_message_to_session、reply_to_session 或其它跨会话通信工具，"
+                "也不要重新访问、唤醒或启动生成会话。"
+                "分支最终回复已由系统直接读取并注入如下，不要猜测文件路径，"
+                "也不需要再次读取其它会话。"
+            ),
+            sections=(
+                PromptSection("control_context", context),
+                PromptSection("generated_session_result", branch_result),
+            ),
+            metadata={
+                "boxteam_generation_run_id": payload.run_id,
+                "boxteam_generator_id": payload.generator_id,
+                "boxteam_generation_phase": "report_back",
+            },
+            display_content="生成分支已结束，主会话正在处理返回结果。",
         )
 
     def _result(

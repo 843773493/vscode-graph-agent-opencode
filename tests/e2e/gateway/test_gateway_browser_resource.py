@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import commentjson
 import httpx
@@ -41,6 +42,7 @@ from tests.e2e.gateway.terminal_manager import (
     start_terminal_frontend_process,
 )
 from tests.e2e.ports import e2e_port_block_for_file
+from tests.e2e.processes import kill_process_on_port
 
 
 async def _receive_websocket_type(websocket, expected_type: str) -> dict[str, object]:
@@ -70,13 +72,105 @@ async def _receive_terminal_output(websocket, expected_text: str) -> None:
 
 
 def _remove_declared_remote_gateway(workspace_root: Path) -> None:
-    config_path = workspace_root / ".boxteam" / "boxteam.jsonc"
+    config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
     payload["gateway"] = {"workspaces": []}
     config_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+@pytest.mark.asyncio
+async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
+    request: pytest.FixtureRequest,
+    e2e_workspace_root_path: str,
+) -> None:
+    workspace_root = Path(e2e_workspace_root_path).resolve()
+    gateway_port = e2e_port_block_for_file(Path(request.node.fspath)).port(40)
+    gateway: GatewayProcess | None = None
+    browser_manager_port: int | None = None
+    browser_id: str | None = None
+    try:
+        gateway = start_gateway_process(
+            workspace_root=workspace_root,
+            default_backend_url="managed-by-gateway",
+            port=gateway_port,
+        )
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as client:
+            workspace_list = (await client.get("/api/gateway/workspaces")).json()["data"]
+            workspace_id = workspace_list["active_workspace_id"]
+            health_path = (
+                f"/api/gateway/workspaces/{workspace_id}/browser-manager/health"
+            )
+            first_health = await client.get(health_path)
+            assert first_health.status_code == 200, first_health.text
+            first_browser_manager_pid = first_health.json()["process_id"]
+
+            session_response = await client.post(
+                "/api/v1/sessions",
+                json={"title": "Gateway Browser Manager Restart E2E"},
+            )
+            assert session_response.status_code == 200, session_response.text
+            session_id = session_response.json()["data"]["session_id"]
+            browser_response = await client.post(
+                f"/api/gateway/workspaces/{workspace_id}/browser-manager/api/browsers",
+                json={
+                    "session_id": session_id,
+                    "title": "Gateway Restart Preserved Page",
+                    "url": browser_test_data_url(),
+                },
+            )
+            assert browser_response.status_code == 200, browser_response.text
+            browser_id = browser_response.json()["data"]["browser_id"]
+
+        registry_payload = json.loads(
+            (workspace_root / ".boxteam" / "gateway" / "workspaces.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        persisted_target = next(
+            target
+            for target in registry_payload["targets"]
+            if target["workspace_id"] == workspace_id
+        )
+        browser_manager_url = persisted_target["local_service_urls"]["browser_manager"]
+        browser_manager_port = urlparse(browser_manager_url).port
+        assert browser_manager_port is not None
+
+        close_gateway_process(gateway)
+        gateway = None
+        gateway = start_gateway_process(
+            workspace_root=workspace_root,
+            default_backend_url="managed-by-gateway",
+            port=gateway_port,
+        )
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as restarted_client:
+            restarted_health = await restarted_client.get(health_path)
+            assert restarted_health.status_code == 200, restarted_health.text
+            assert restarted_health.json()["process_id"] == first_browser_manager_pid
+            restored_browser = await restarted_client.get(
+                f"/api/gateway/workspaces/{workspace_id}/browser-manager/api/browsers/{browser_id}"
+            )
+            assert restored_browser.status_code == 200, restored_browser.text
+            assert restored_browser.json()["data"]["status"] == "running"
+            delete_response = await restarted_client.delete(
+                f"/api/gateway/workspaces/{workspace_id}/browser-manager/api/browsers/{browser_id}"
+            )
+            assert delete_response.status_code == 200, delete_response.text
+    finally:
+        if gateway is not None:
+            close_gateway_process(gateway)
+        if browser_manager_port is not None:
+            kill_process_on_port(browser_manager_port)
 
 
 @pytest.mark.asyncio

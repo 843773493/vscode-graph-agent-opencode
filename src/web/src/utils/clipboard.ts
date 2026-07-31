@@ -73,4 +73,47 @@ export async function readTextFromClipboard(): Promise<string> {
   }
   throw new Error("剪贴板为空，且应用内没有最近复制的文本");
 }
+
+export async function readFilePathTextFromClipboard(): Promise<string> {
+  let fileClipboardError: unknown = null;
+  if (navigator.clipboard?.read) {
+    try {
+      const items = await navigator.clipboard.read();
+      const preferredTypes = [
+        "x-special/gnome-copied-files",
+        "text/uri-list",
+        "text/plain",
+      ];
+      for (const type of preferredTypes) {
+        const item = items.find((candidate) => candidate.types.includes(type));
+        if (!item) {
+          continue;
+        }
+        const text = (await (await item.getType(type)).text()).trim();
+        if (text) {
+          return text;
+        }
+      }
+    } catch (error) {
+      // TODO: 浏览器统一支持文件剪贴板 MIME 后，移除纯文本和应用内副本兼容路径。
+      fileClipboardError = error;
+    }
+  }
+  try {
+    return await readTextFromClipboard();
+  } catch (textError) {
+    if (fileClipboardError) {
+      const fileMessage = fileClipboardError instanceof Error
+        ? fileClipboardError.message
+        : String(fileClipboardError);
+      const textMessage = textError instanceof Error
+        ? textError.message
+        : String(textError);
+      throw new Error(
+        `读取文件剪贴板失败：${fileMessage}；读取文本路径失败：${textMessage}`,
+      );
+    }
+    throw textError;
+  }
+}
 let lastWrittenText: string | null = null;

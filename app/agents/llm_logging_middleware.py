@@ -253,7 +253,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
 
     def _session_log_dir(self, session_id: str) -> Path:
         logs_dir = (
-            self._path_resolver.resolve_session_dir(session_id)
+            self._path_resolver.resolve_session_node(session_id)
             / "logs"
             / "llm_requests"
         )

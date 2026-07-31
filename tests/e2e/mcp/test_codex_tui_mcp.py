@@ -167,7 +167,7 @@ async def test_agent_auto_detects_and_uses_codex_tui_mcp(
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
     assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]
+    traces = traces_response.json()["data"]["items"]
     tool_start = _find_tool_trace(
         traces,
         trace_type="tool_call_start",

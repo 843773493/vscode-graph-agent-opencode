@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -10,14 +10,14 @@ from app.api.sessions import _stream_trace_sse
 from app.schemas.public_v2.trace import TraceEventDTO
 
 
-async def _idle_trace_events() -> AsyncIterator[TraceEventDTO]:
+async def _idle_trace_events() -> AsyncIterator[tuple[TraceEventDTO, str]]:
     await asyncio.Event().wait()
     if False:
-        yield _trace_event()
+        yield _trace_event(), "tc1.idle"
 
 
-async def _single_trace_event() -> AsyncIterator[TraceEventDTO]:
-    yield _trace_event()
+async def _single_trace_event() -> AsyncIterator[tuple[TraceEventDTO, str]]:
+    yield _trace_event(), "tc1.heartbeat"
 
 
 def _trace_event() -> TraceEventDTO:
@@ -29,7 +29,7 @@ def _trace_event() -> TraceEventDTO:
         phase="job",
         title="任务开始",
         content="",
-        timestamp=datetime(2026, 7, 24, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 7, 24, tzinfo=UTC),
     )
 
 
@@ -55,7 +55,7 @@ async def test_trace_sse_emits_complete_event_block() -> None:
 
     chunk = await asyncio.wait_for(anext(stream), timeout=0.2)
 
-    assert chunk.startswith("id: evt_sse_heartbeat\nevent: trace\ndata: ")
+    assert chunk.startswith("id: tc1.heartbeat\nevent: trace\ndata: ")
     assert '"session_id":"ses_sse_heartbeat"' in chunk
     assert chunk.endswith("\n\n")
     await stream.aclose()

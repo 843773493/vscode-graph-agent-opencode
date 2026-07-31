@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from collections import defaultdict
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.trace_event_sink import TraceEventSinkProtocol
+from app.abstractions.turn_history import TurnEventProjectorProtocol
 from app.schemas.event import Event
 
 
@@ -15,10 +17,15 @@ class TraceEventRecorder:
         *,
         bus: JobEventBusProtocol,
         store: TraceEventSinkProtocol,
+        turn_projector: TurnEventProjectorProtocol | None = None,
     ) -> None:
         self._bus = bus
         self._store = store
+        self._turn_projector = turn_projector
         self._job_sessions: dict[str, str] = {}
+        self._session_locks: defaultdict[str, asyncio.Lock] = defaultdict(
+            asyncio.Lock
+        )
         self._started = False
 
     async def start(self) -> None:
@@ -41,15 +48,23 @@ class TraceEventRecorder:
                 f"event_id={event.event_id} type={event.type} job_id={event.job_id}"
             )
 
-        await self._store.append(session_id, event)
-        if event.type == "job_created":
-            self._job_sessions[event.job_id] = session_id
+        async with self._session_locks[session_id]:
+            receipt = await self._store.append(session_id, event)
+            if self._turn_projector is not None:
+                await asyncio.to_thread(
+                    self._turn_projector.record_event,
+                    session_id,
+                    event,
+                    source_offset=receipt.projected_event_offset,
+                )
+            if event.type == "job_created":
+                self._job_sessions[event.job_id] = session_id
 
     def _resolve_session_id(self, event: Event) -> str | None:
         payload = event.payload
 
         if hasattr(payload, "session_id"):
-            value = getattr(payload, "session_id")
+            value = payload.session_id
             if isinstance(value, str) and value:
                 return value
 

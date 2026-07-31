@@ -77,7 +77,7 @@ async def list_session_catalog_children(
             limit=limit,
             cursor=cursor,
         )
-    except ValueError as error:
+    except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -98,21 +98,24 @@ async def list_session_catalog_roots(
             limit=limit,
             cursor=cursor,
         )
-    except ValueError as error:
+    except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(
-    "/session-catalog/rebuild",
+    "/session-catalog/refresh",
     response_model=APIResponse[SessionCatalogPageDTO],
 )
-async def rebuild_session_catalog(
+async def refresh_session_catalog(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
-    result = await service.rebuild()
+    try:
+        result = await service.refresh()
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -129,6 +132,8 @@ async def get_session_catalog_breadcrumb(
         result = await service.breadcrumb(node_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -140,7 +145,11 @@ async def export_session_catalog(
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
-    return APIResponse(data=await service.export_index(), request_id=request_id)
+    try:
+        result = await service.export_index()
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get(
@@ -156,7 +165,7 @@ async def search_session_catalog(
 ):
     try:
         result = await service.search(query=query, limit=limit, cursor=cursor)
-    except ValueError as error:
+    except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 

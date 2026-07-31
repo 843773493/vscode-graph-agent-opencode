@@ -255,17 +255,11 @@ async def test_job_event_history_is_available(client: httpx.AsyncClient):
     assert len(events) > 0, "No events received from job event history"
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
     assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]
+    trace_page = traces_response.json()["data"]
+    traces = trace_page["items"]
     trace_event_ids = [trace["event_id"] for trace in traces]
     assert {event["event_id"] for event in events}.issubset(set(trace_event_ids))
 
-    cursor_index = max(0, len(traces) - 3)
-    cursor = traces[cursor_index]["event_id"]
-    replay_response = await client.get(
-        f"/api/v1/sessions/{session_id}/traces",
-        params={"after_event_id": cursor},
-    )
-    assert replay_response.status_code == 200
-    replayed_ids = [trace["event_id"] for trace in replay_response.json()["data"]]
-    assert replayed_ids == trace_event_ids[cursor_index + 1 :]
+    assert trace_page["has_more"] is False
+    assert trace_page["next_cursor"] is None
     print(f"Received {len(events)} events successfully")

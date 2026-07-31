@@ -63,7 +63,7 @@ async def test_checkpoint_save_reload_and_survive_restart(
 
     session_dir = get_session_path_resolver(
         Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
-    ).resolve_session_dir(session_id)
+    ).resolve_session_node(session_id)
     checkpoint_jsonl = (
         session_dir / "checkpoints" / "checkpoints.jsonl"
     )

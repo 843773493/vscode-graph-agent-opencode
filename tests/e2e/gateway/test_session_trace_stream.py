@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -48,24 +48,50 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
             trace_store = TraceEventStore(
                 sessions_dir=workspace_root / ".boxteam" / "sessions"
             )
+            for index in range(2):
+                await trace_store.append(
+                    session_id,
+                    JobStartedEvent(
+                        event_id=f"evt_gateway_page_{index}",
+                        job_id="job_gateway_sse_cursor",
+                        agent_id="default",
+                        timestamp=datetime.now(UTC),
+                    ),
+                )
             await trace_store.append(
                 session_id,
                 JobStartedEvent(
                     event_id=event_id,
                     job_id="job_gateway_sse_cursor",
                     agent_id="default",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                 ),
             )
 
             trace_response = await client.get(
                 f"/api/v1/sessions/{session_id}/traces",
-                params={"tail_limit": 1},
+                params={"limit": 1},
             )
             assert trace_response.status_code == 200, trace_response.text
+            trace_page = trace_response.json()["data"]
+            assert [event["event_id"] for event in trace_page["items"]] == [event_id]
+            assert trace_page["has_more"] is True
+            assert trace_page["next_cursor"].startswith("tp1.")
+
+            older_response = await client.get(
+                f"/api/v1/sessions/{session_id}/traces",
+                params={"limit": 1, "cursor": trace_page["next_cursor"]},
+            )
+            assert older_response.status_code == 200, older_response.text
             assert [
-                event["event_id"] for event in trace_response.json()["data"]
-            ] == [event_id]
+                event["event_id"] for event in older_response.json()["data"]["items"]
+            ] == ["evt_gateway_page_1"]
+
+            stale_page_response = await client.get(
+                f"/api/v1/sessions/{session_id}/traces",
+                params={"cursor": "not-a-trace-page-cursor"},
+            )
+            assert stale_page_response.status_code == 410
 
             stale_cursor_response = await client.get(
                 f"/api/v1/sessions/{session_id}/traces/stream",
@@ -74,7 +100,7 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
             assert stale_cursor_response.status_code == 410
             stale_detail = stale_cursor_response.json()["detail"]
             assert stale_detail["code"] == "trace_cursor_gone"
-            assert stale_detail["requested_event_id"] == "evt_missing_cursor"
+            assert stale_detail["requested_cursor"] == "evt_missing_cursor"
 
             started_at = time.monotonic()
             lines_before_heartbeat: list[str] = []
@@ -88,6 +114,9 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
                     assert stream_response.status_code == 200
                     assert stream_response.headers["cache-control"] == "no-cache"
                     assert stream_response.headers["x-accel-buffering"] == "no"
+                    assert stream_response.headers[
+                        "x-boxteam-route-revision"
+                    ].startswith("gw_")
                     assert stream_response.headers["x-request-id"]
                     async for line in stream_response.aiter_lines():
                         if not line:

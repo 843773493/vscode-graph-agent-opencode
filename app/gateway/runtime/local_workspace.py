@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
+
+import httpx
 
 from app.gateway.runtime.process import (
+    AdoptedManagedProcess,
     allocate_local_port,
     start_local_backend_process,
     start_local_node_service_process,
@@ -11,12 +15,49 @@ from app.gateway.runtime.process import (
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
+async def _adopt_browser_manager(
+    *,
+    service_url: str,
+    workspace_root: Path,
+) -> AdoptedManagedProcess | None:
+    parsed = urlparse(service_url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        raise ValueError(f"持久化 Browser Manager URL 必须是本机 HTTP 地址: {service_url}")
+    if parsed.port is None:
+        raise ValueError(f"持久化 Browser Manager URL 缺少端口: {service_url}")
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            response = await client.get(f"{service_url.rstrip('/')}/health")
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        raise RuntimeError(
+            "持久化 Browser Manager 健康检查失败: "
+            f"url={service_url}, status={response.status_code}, body={response.text[:300]}"
+        )
+    payload = response.json()
+    expected_workspace = str(workspace_root.resolve())
+    if payload.get("workspace_root") != expected_workspace:
+        raise RuntimeError(
+            "持久化 Browser Manager 工作区身份不匹配: "
+            f"url={service_url}, expected={expected_workspace}, "
+            f"actual={payload.get('workspace_root')!r}"
+        )
+    process_id = payload.get("process_id")
+    if isinstance(process_id, bool) or not isinstance(process_id, int):
+        raise RuntimeError(
+            f"持久化 Browser Manager 健康响应缺少 process_id: url={service_url}"
+        )
+    return AdoptedManagedProcess(pid=process_id)
+
+
 async def start_managed_local_workspace_runtime(
     *,
     project_root: Path,
     workspace_root: Path,
     log_dir: Path,
     backend_debug_port: int | None = None,
+    reusable_service_urls: dict[str, str] | None = None,
 ) -> WorkspaceRuntime:
     allocated_ports: set[int] = set()
 
@@ -29,7 +70,22 @@ async def start_managed_local_workspace_runtime(
 
     backend_port = next_port()
     terminal_port = next_port()
-    browser_port = next_port()
+    reusable_browser_url = (reusable_service_urls or {}).get("browser_manager")
+    adopted_browser = (
+        await _adopt_browser_manager(
+            service_url=reusable_browser_url,
+            workspace_root=workspace_root,
+        )
+        if reusable_browser_url
+        else None
+    )
+    browser_port = (
+        urlparse(reusable_browser_url).port
+        if reusable_browser_url and adopted_browser is not None
+        else next_port()
+    )
+    if browser_port is None:
+        raise RuntimeError(f"Browser Manager URL 缺少端口: {reusable_browser_url}")
     service_urls = {
         "workspace_api": f"http://127.0.0.1:{backend_port}",
         "terminal_manager": f"http://127.0.0.1:{terminal_port}",
@@ -48,16 +104,24 @@ async def start_managed_local_workspace_runtime(
             log_dir=log_dir,
         )
         runtime.set_process("terminal_manager", terminal)
-        browser = start_local_node_service_process(
-            project_root=project_root,
-            workspace_root=workspace_root,
-            service="browser",
-            port=browser_port,
-            log_dir=log_dir,
-        )
+        if adopted_browser is None:
+            browser = start_local_node_service_process(
+                project_root=project_root,
+                workspace_root=workspace_root,
+                service="browser",
+                port=browser_port,
+                log_dir=log_dir,
+            )
+            browser_process = browser.process
+        else:
+            browser = adopted_browser
+            browser_process = None
         runtime.set_process("browser_manager", browser)
         await wait_for_http_ok(f"{service_urls['terminal_manager']}/health", terminal.process)
-        await wait_for_http_ok(f"{service_urls['browser_manager']}/health", browser.process)
+        await wait_for_http_ok(
+            f"{service_urls['browser_manager']}/health",
+            browser_process,
+        )
 
         backend = start_local_backend_process(
             project_root=project_root,
@@ -77,7 +141,7 @@ async def start_managed_local_workspace_runtime(
         )
         return runtime
     except Exception:
-        runtime.close()
+        runtime.close_for_gateway_restart()
         raise
 
 

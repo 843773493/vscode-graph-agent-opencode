@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.core.session_paths import SessionPathResolver
 from app.schemas.public_v2.session import (
@@ -15,7 +15,6 @@ from app.schemas.public_v2.trace import TraceEventDTO
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.workspace_service import WorkspaceService
-
 
 _TERMINAL_STATUS_BY_EVENT_TYPE = {
     "job_completed": "completed",
@@ -45,7 +44,11 @@ class SessionInformationService:
         session = await self._session_service.get(session_id)
         sessions = await self._session_service.list(limit=100_000)
         workspace = await self._workspace_service.get()
-        trace_events = await self._session_service.list_trace_events(session_id)
+        trace_page = await self._session_service.list_trace_events(
+            session_id,
+            limit=100,
+        )
+        trace_events = trace_page.items
         resources = await self._session_resource_service.list(session_id)
 
         if session.workspace_id != workspace.workspace_id:
@@ -61,7 +64,7 @@ class SessionInformationService:
             if item.parent_session_id == session_id
         )
         return SessionInformationSnapshotDTO(
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
             session=session,
             child_session_ids=child_session_ids,
             workspace=SessionInformationWorkspaceDTO(
@@ -69,7 +72,7 @@ class SessionInformationService:
                 name=workspace.name,
                 root_path=workspace.root_path,
             ),
-            storage_path=str(self._path_resolver.resolve_session_dir(session_id)),
+            storage_path=str(self._path_resolver.resolve_session_node(session_id)),
             execution=self._build_execution(trace_events),
             trace=self._build_trace(trace_events),
             resources=[

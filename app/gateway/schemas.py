@@ -4,11 +4,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 GatewayConnectionKind = Literal["local", "remote_gateway"]
 GatewayWorkspaceStatus = Literal["ready", "offline"]
 GatewayServiceStatus = Literal["ready", "offline", "unavailable"]
 GatewayRuntimeAction = Literal[
+    "start_managed_backend",
     "safe_restart_managed_backend",
     "force_restart_managed_backend",
     "reconnect_remote_gateway",
@@ -177,6 +177,13 @@ class GatewayRuntimeRestartResultDTO(BaseModel):
     workspaces: GatewayWorkspaceListDTO
 
 
+class GatewayRuntimeStateResultDTO(BaseModel):
+    workspace_id: str
+    status: Literal["started", "stopped", "blocked"]
+    blockers: list[GatewayRuntimeBlockerDTO] = Field(default_factory=list)
+    workspaces: GatewayWorkspaceListDTO
+
+
 class AddLocalWorkspaceRequest(BaseModel):
     root_path: str = Field(description="本机工作区绝对路径")
     name: str | None = Field(default=None, description="工作区显示名称")
@@ -198,6 +205,13 @@ class AddRemoteGatewayRequest(BaseModel):
         default=None,
         description="复用用户 ~/.ssh/config 中的 Host 别名",
     )
+    host: str | None = Field(default=None, description="手动连接的 SSH 主机")
+    port: int = Field(default=22, ge=1, le=65535, description="手动连接的 SSH 端口")
+    username: str | None = Field(default=None, description="手动连接的 SSH 用户名")
+    private_key_path: str | None = Field(
+        default=None,
+        description="手动连接使用的 SSH 私钥路径",
+    )
     remote_gateway_port: int = Field(
         default=8014,
         ge=1,
@@ -206,14 +220,23 @@ class AddRemoteGatewayRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_connection_source(self) -> "AddRemoteGatewayRequest":
+    def validate_connection_source(self) -> AddRemoteGatewayRequest:
+        explicit_values = (self.host, self.username, self.private_key_path)
+        has_explicit_source = any(bool(value) for value in explicit_values)
         connection_source_count = sum(
-            bool(value) for value in (self.connection_workspace_id, self.ssh_config_host)
+            bool(value)
+            for value in (
+                self.connection_workspace_id,
+                self.ssh_config_host,
+                has_explicit_source,
+            )
         )
         if connection_source_count != 1:
             raise ValueError(
-                "必须且只能选择一个已注册 SSH 连接或 ~/.ssh/config Host"
+                "必须且只能选择一个已注册 SSH 连接、~/.ssh/config Host 或手动 SSH 连接"
             )
+        if has_explicit_source and not all(bool(value) for value in explicit_values):
+            raise ValueError("手动 SSH 连接必须提供主机、用户名和私钥路径")
         return self
 
 
@@ -235,7 +258,7 @@ class UpdateGatewayWorkspaceRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_update_fields(self) -> "UpdateGatewayWorkspaceRequest":
+    def validate_update_fields(self) -> UpdateGatewayWorkspaceRequest:
         if not self.model_fields_set:
             raise ValueError("工作区更新至少需要一个字段")
         if "name" in self.model_fields_set and self.name is None:
@@ -263,7 +286,7 @@ class WebUILayoutSettingsDTO(BaseModel):
     workbench_view: Literal["sessions", "gateway"] | None = None
     agent_sessions_panel_open: bool | None = None
     auxiliary_visible: bool | None = None
-    auxiliary_tab: Literal["changes", "files"] | None = None
+    auxiliary_tab: Literal["changes", "files", "resources"] | None = None
     main_area_ratios: WebUIMainAreaRatiosDTO | None = None
     workspace_preview_visible: bool | None = None
     workspace_preview_maximized: bool | None = None

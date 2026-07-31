@@ -166,11 +166,24 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
             system_default=True,
         )
     )
+    optional_root = tmp_path / "optional-workspace"
+    optional_root.mkdir()
+    persisted.upsert(
+        WorkspaceTarget(
+            workspace_id="optional",
+            name="Optional",
+            root_path=str(optional_root),
+            backend_url="http://127.0.0.1:18110",
+            connection_kind="local",
+            managed=True,
+        ),
+        activate=False,
+    )
     persisted.close()
     monkeypatch.delenv("BOXTEAM_DEFAULT_WORKSPACE_NAME", raising=False)
     monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
     monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
-    monkeypatch.setattr(bootstrap, "load_gateway_config", lambda _root: GatewayConfig())
+    monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
 
     async def start_default_runtime(**_: object) -> WorkspaceRuntime:
         return WorkspaceRuntime(
@@ -191,6 +204,7 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
     assert initial.active_workspace_id == default_workspace_id
     assert initial.resolve(default_workspace_id).name == "home"
     assert initial.resolve(default_workspace_id).managed is True
+    assert initial.has_runtime("optional") is False
     initial.rename(default_workspace_id, "My home")
     initial.close()
 

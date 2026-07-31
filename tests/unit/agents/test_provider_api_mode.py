@@ -92,6 +92,10 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
         lambda: None,
     )
     monkeypatch.setattr(
+        "app.runtime.chatgpt_auth.ensure_chatgpt_oauth_ready",
+        lambda _token_dir: None,
+    )
+    monkeypatch.setattr(
         "app.runtime.chatgpt_auth.ensure_litellm_chatgpt_model_capabilities",
         lambda _: False,
     )

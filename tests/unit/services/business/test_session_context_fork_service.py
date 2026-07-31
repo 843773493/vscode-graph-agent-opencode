@@ -82,10 +82,10 @@ async def test_fork_copies_agent_state_into_independent_child(
     assert child.current_agent_id == source.current_agent_id
     assert child.title == "源会话（上下文副本）"
     assert child.title_source == "auto"
-    source_path = fork_services.session_service.path_resolver.resolve_session_dir(
+    source_path = fork_services.session_service.path_resolver.resolve_session_node(
         source.session_id
     )
-    child_path = fork_services.session_service.path_resolver.resolve_session_dir(
+    child_path = fork_services.session_service.path_resolver.resolve_session_node(
         child.session_id
     )
     assert child_path.parent == source_path / "children"

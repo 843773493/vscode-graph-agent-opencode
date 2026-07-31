@@ -1,0 +1,208 @@
+{
+  "$schema": "./workspace_config.jsonc",
+  "config_version": 1,
+  "llm": {
+    "providers": [
+      {
+        "id": "primary",
+        "endpoint": "https://opencode.ai/zen/v1",
+        "model": "big-pickle",
+        "custom_llm_provider": "openai",
+        "api_mode": "chat_completions",
+        "api_key": "${OPENCODE_ZEN_API_KEY}",
+        "capabilities": [
+          "reasoning_content_replay"
+        ]
+      },
+      {
+        "id": "backup_1",
+        "endpoint": "https://api.kilo.ai/api/gateway",
+        "model": "openrouter/free",
+        "custom_llm_provider": "openai",
+        "api_mode": "chat_completions",
+        "api_key": "${KILO_API_KEY}"
+      },
+      {
+        "id": "backup_2",
+        "endpoint": "https://openrouter.ai/api/v1",
+        "model": "openrouter/free",
+        "custom_llm_provider": "openrouter",
+        "api_mode": "chat_completions",
+        "api_key": "${OPENROUTER_API_KEY}"
+      },
+      {
+        "id": "backup_3",
+        "endpoint": "https://www.cctq.ai/v1",
+        "model": "gpt-5.6-luna",
+        "custom_llm_provider": "openai",
+        "api_mode": "responses",
+        "api_key": "${CCTQ_API_KEY}",
+        "capabilities": [
+          "image_input"
+        ],
+        "request_options": {
+          "overrides": {
+            "reasoning": {
+              "effort": "high",
+              "summary": "auto"
+            }
+          }
+        }
+      },
+      {
+        "id": "backup_4",
+        "endpoint": "https://chatgpt.com/backend-api/codex",
+        "model": "gpt-5.6-luna",
+        "custom_llm_provider": "chatgpt",
+        "api_mode": "responses",
+        "auth": {
+          "type": "oauth",
+          "method": "chatgpt"
+        },
+        "capabilities": [
+          "image_input"
+        ]
+      }
+    ]
+  },
+  "logger": {
+    "level": "info"
+  },
+  "default_agent": "default",
+  "agents": {
+    "default": {
+      "name": "Workspace Assistant",
+      "description": "工作区默认助手，负责通用问答、代码解释、开发辅助和文档问答。",
+      "language": "zh-CN",
+      "instructions": {
+        "system_prompt": "你是面向工程团队的工作区助手。优先提供准确、可执行、可验证的回答；信息不足时明确指出缺失信息。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1",
+          "backup_2",
+          "backup_3",
+          "backup_4"
+        ]
+      },
+      "tools": {
+        "denylist": [],
+        "confirmation_required": [],
+        "custom": [
+          {
+            "tool_id": "read_context"
+          },
+          {
+            "tool_id": "search_context"
+          },
+          {
+            "tool_id": "web_search"
+          },
+          {
+            "tool_id": "fetch_webpage",
+            "options": {
+              "embedding": {
+                "provider_id": "backup_2",
+                "model": "openai/text-embedding-3-small"
+              }
+            }
+          },
+          {
+            "tool_id": "listBrowserPage"
+          },
+          {
+            "tool_id": "openBrowserPage"
+          },
+          {
+            "tool_id": "readPage"
+          },
+          {
+            "tool_id": "navigatePage"
+          },
+          {
+            "tool_id": "clickElement"
+          },
+          {
+            "tool_id": "typeInPage"
+          },
+          {
+            "tool_id": "hoverElement"
+          },
+          {
+            "tool_id": "dragElement"
+          },
+          {
+            "tool_id": "handleDialog"
+          },
+          {
+            "tool_id": "screenshotPage"
+          },
+          {
+            "tool_id": "runPlaywrightCode"
+          }
+        ]
+      }
+    },
+    "coder": {
+      "name": "Coding Assistant",
+      "description": "专门用于代码实现、重构和修复问题。",
+      "language": "zh-CN",
+      "instructions": {
+        "system_prompt": "你是工程实践导向的编程助手。输出代码时优先保证正确性、可读性和可验证性。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1",
+          "backup_2",
+          "backup_3",
+          "backup_4"
+        ]
+      },
+      "tools": {
+        "denylist": [
+          "edit_file"
+        ],
+        "confirmation_required": []
+      }
+    },
+    "reviewer": {
+      "name": "Code Reviewer",
+      "description": "专门用于代码审查、风险检查和设计评估。",
+      "language": "zh-CN",
+      "instructions": {
+        "system_prompt": "你是代码审查助手。优先指出正确性、架构、安全性和可维护性问题，并给出具体依据。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1",
+          "backup_2",
+          "backup_3",
+          "backup_4"
+        ]
+      }
+    },
+    "researcher": {
+      "name": "Research Assistant",
+      "description": "专门用于资料检索、文档总结和方案调研。",
+      "language": "zh-CN",
+      "instructions": {
+        "system_prompt": "你是调研助手。优先基于可验证来源归纳结论，并明确不确定点和假设。"
+      },
+      "model": {
+        "primary_provider": "primary",
+        "fallback_providers": [
+          "backup_1",
+          "backup_2",
+          "backup_3",
+          "backup_4"
+        ]
+      }
+    }
+  },
+  "development": {
+    "test_tools": false
+  }
+}

@@ -155,10 +155,15 @@ const streamedPart = buildTraceEvent({
   session_id: "session_part",
   job_id: "job_part",
   step_id: null,
-  agent_id: "default",
   timestamp: "2026-07-11T00:00:00.000Z",
   type: "text_start",
-  payload: { kind: "markdown" },
+  phase: "text",
+  title: "文本开始",
+  content: "",
+  raw: {
+    agent_id: "default",
+    payload: { kind: "markdown" },
+  },
 });
 assert(streamedPart.part_id === "part_stream", "SSE 适配层必须保留顶层 part_id");
 
@@ -179,3 +184,61 @@ assert(
   resumedText?.kind === "aggregated_text" && resumedText.text === "前半后半",
   "同一权威 part 暂停后恢复时应继续合并，不得让整轮消息崩溃或丢失前段文本",
 );
+
+const startlessEndParts = aggregateConversationEvents(
+  [event(26, "text_end", { kind: "markdown", text: "仅持久化的最终正文" }, "bounded_final")],
+  "conversation_bounded_detail",
+  false,
+);
+const startlessEnd = startlessEndParts.find((item) => item.id === "bounded_final");
+assert(
+  startlessEnd?.kind === "aggregated_text"
+    && startlessEnd.text === "仅持久化的最终正文"
+    && startlessEnd.active === false,
+  "bounded Turn detail 的孤立 text_end 应建立完成文本 part",
+);
+
+const startlessDeltaParts = aggregateConversationEvents(
+  [
+    event(27, "text_delta", { kind: "markdown", text: "晚加入前半" }, "joined_stream"),
+    event(28, "text_start", { kind: "markdown" }, "joined_stream"),
+    event(29, "text_delta", { kind: "markdown", text: "后半" }, "joined_stream"),
+    event(30, "text_end", { kind: "markdown", text: "后半" }, "joined_stream"),
+  ],
+  "conversation_joined_stream",
+  true,
+);
+const startlessDelta = startlessDeltaParts.find((item) => item.id === "joined_stream");
+assert(
+  startlessDelta?.kind === "aggregated_text"
+    && startlessDelta.text === "晚加入前半后半"
+    && startlessDelta.active === false,
+  "晚加入 SSE 的孤立 delta 应建立活动 part，并与后续 start/end 合并",
+);
+
+const activeStartlessDelta = aggregateConversationEvents(
+  [event(31, "text_delta", { kind: "reasoning", text: "正在接收" }, "joined_active")],
+  "conversation_joined_active",
+  true,
+).find((item) => item.id === "joined_active");
+assert(
+  activeStartlessDelta?.kind === "aggregated_text"
+    && activeStartlessDelta.text === "正在接收"
+    && activeStartlessDelta.active === true,
+  "尚未收到 start 的实时 delta 必须保持 active",
+);
+
+let kindMismatchError = "";
+try {
+  aggregateConversationEvents(
+    [
+      event(32, "text_delta", { kind: "markdown", text: "片段" }, "kind_mismatch"),
+      event(33, "text_start", { kind: "reasoning" }, "kind_mismatch"),
+    ],
+    "conversation_kind_mismatch",
+    true,
+  );
+} catch (error) {
+  kindMismatchError = error instanceof Error ? error.message : String(error);
+}
+assert(kindMismatchError.includes("kind 从 markdown 变成了 reasoning"), "孤立事件恢复后仍必须校验 kind");

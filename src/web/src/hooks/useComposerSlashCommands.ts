@@ -6,7 +6,8 @@ import {
   slashQueryFromInput,
   type SlashCommandOption,
 } from "../state/slashCommands";
-import type { AppState, ConversationContentView } from "../types/frontend";
+import type { ConversationContentView } from "../types/frontend";
+import type { Session } from "../types/backend";
 import type { SelectedAttachment } from "../utils/mediaAttachments";
 
 function copyTextWithSelection(text: string): boolean {
@@ -38,7 +39,9 @@ function copyTextWithSelection(text: string): boolean {
 
 export function useComposerSlashCommands({
   input,
-  state,
+  currentSession,
+  compactLoading,
+  getLatestAssistantContent,
   setInput,
   setAttachments,
   setAttachmentError,
@@ -51,9 +54,12 @@ export function useComposerSlashCommands({
   renameCurrentSession,
   switchContentView,
   compactSession,
+  runGoalCommand,
 }: {
   input: string;
-  state: AppState;
+  currentSession: Session | null;
+  compactLoading: boolean;
+  getLatestAssistantContent: () => string | null;
   setInput: Dispatch<SetStateAction<string>>;
   setAttachments: Dispatch<SetStateAction<SelectedAttachment[]>>;
   setAttachmentError: Dispatch<SetStateAction<string>>;
@@ -66,6 +72,7 @@ export function useComposerSlashCommands({
   renameCurrentSession: (inlineTitle: string) => void;
   switchContentView: (view: ConversationContentView) => void;
   compactSession: () => Promise<void>;
+  runGoalCommand: (args: string) => void;
 }) {
   const slashCommands = COMPOSER_SLASH_COMMANDS;
   const slashQuery = useMemo(() => slashQueryFromInput(input), [input]);
@@ -105,17 +112,12 @@ export function useComposerSlashCommands({
           setComposerNotice("已清空输入和未发送附件");
           break;
         case "copy": {
-          const latestAssistantMessage = [...state.messages]
-            .reverse()
-            .find(
-              (message) =>
-                message.role === "assistant" && message.content.trim().length > 0,
-            );
-          if (!latestAssistantMessage) {
+          const latestAssistantContent = getLatestAssistantContent();
+          if (!latestAssistantContent) {
             setAttachmentError("没有可复制的助手回复");
             break;
           }
-          if (copyTextWithSelection(latestAssistantMessage.content)) {
+          if (copyTextWithSelection(latestAssistantContent)) {
             setStatus("已复制最近助手回复");
             setComposerNotice("已复制最近助手回复");
             break;
@@ -125,7 +127,7 @@ export function useComposerSlashCommands({
             break;
           }
           void navigator.clipboard
-            .writeText(latestAssistantMessage.content)
+            .writeText(latestAssistantContent)
             .then(() => {
               setStatus("已复制最近助手回复");
               setComposerNotice("已复制最近助手回复");
@@ -173,9 +175,12 @@ export function useComposerSlashCommands({
           switchContentView("agent");
           break;
         case "compact":
-          if (state.currentSession && !state.compactLoading) {
+          if (currentSession && !compactLoading) {
             void compactSession();
           }
+          break;
+        case "goal":
+          runGoalCommand(args);
           break;
         default:
           break;
@@ -185,6 +190,7 @@ export function useComposerSlashCommands({
       compactSession,
       createSession,
       renameCurrentSession,
+      runGoalCommand,
       setAgentMenuOpen,
       setAttachmentError,
       setAttachments,
@@ -193,9 +199,9 @@ export function useComposerSlashCommands({
       setStatus,
       setViewMenuOpen,
       startNewSessionDraft,
-      state.compactLoading,
-      state.currentSession,
-      state.messages,
+      compactLoading,
+      currentSession,
+      getLatestAssistantContent,
       switchContentView,
     ],
   );

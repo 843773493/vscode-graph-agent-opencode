@@ -31,8 +31,8 @@ def _node_path(sessions_root: Path, node: dict[str, object]) -> Path:
 
 
 def _assert_readable_stable_segment(path: Path, name: str, stable_id: str) -> None:
-    assert path.name.startswith(name)
-    assert path.name.endswith(f"--{stable_id[-8:]}")
+    del name
+    assert path.name == stable_id
 
 
 def _write_bundle_sentinels(session_dir: Path) -> dict[str, bytes]:
@@ -68,6 +68,12 @@ async def test_catalog_node_move_supports_session_and_folder_children(
     )
     parent_session_id = await _create_session(client, "拖放父会话")
     child_session_id = await _create_session(client, "拖放子会话")
+    implicit_move_response = await client.patch(
+        f"/api/v1/sessions/{child_session_id}",
+        json={"parent_session_id": parent_session_id},
+    )
+    assert implicit_move_response.status_code == 422, implicit_move_response.text
+
     folder_response = await client.post(
         "/api/v1/session-catalog/folders",
         json={"name": "拖放文件夹"},
@@ -136,7 +142,7 @@ async def test_catalog_node_move_supports_session_and_folder_children(
 
 
 @pytest.mark.asyncio
-async def test_session_catalog_uses_real_physical_tree_for_crud_and_rebuild(
+async def test_session_catalog_uses_authoritative_index_for_crud_and_validation(
     client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
 ) -> None:
@@ -219,7 +225,7 @@ async def test_session_catalog_uses_real_physical_tree_for_crud_and_rebuild(
     renamed_nodes = await _catalog_nodes(client)
     renamed_child_path = _node_path(sessions_root, renamed_nodes[child_folder_id])
     renamed_session_path = _node_path(sessions_root, renamed_nodes[session_ids[1]])
-    assert not child_path.exists()
+    assert renamed_child_path == child_path
     assert renamed_child_path.parent == parent_path
     assert renamed_session_path.parent == renamed_child_path
     _assert_bundle_sentinels(renamed_session_path, sentinel_values)
@@ -244,13 +250,8 @@ async def test_session_catalog_uses_real_physical_tree_for_crud_and_rebuild(
     assert rename_session_response.status_code == 200, rename_session_response.text
     title_nodes = await _catalog_nodes(client)
     title_session_path = _node_path(sessions_root, title_nodes[session_ids[1]])
-    assert not moved_session_path.exists()
-    assert title_session_path.parent == moved_child_path
-    _assert_readable_stable_segment(
-        title_session_path,
-        "Catalog Needle Renamed",
-        session_ids[1],
-    )
+    assert title_session_path == moved_session_path
+    assert title_session_path.exists()
     _assert_bundle_sentinels(title_session_path, sentinel_values)
 
     roots_page_response = await client.get(
@@ -288,15 +289,22 @@ async def test_session_catalog_uses_real_physical_tree_for_crud_and_rebuild(
     os.replace(moved_child_path, manual_child_path)
     assert not moved_child_path.exists()
     assert manual_child_path.is_dir()
-    rebuild_response = await client.post("/api/v1/session-catalog/rebuild")
-    assert rebuild_response.status_code == 200, rebuild_response.text
+    refresh_response = await client.post("/api/v1/session-catalog/refresh")
+    assert refresh_response.status_code == 409, refresh_response.text
+    assert "绕过软件修改会话目录结构" in refresh_response.text
+    export_response = await client.get("/api/v1/session-catalog/export")
+    assert export_response.status_code == 409, export_response.text
+
+    os.replace(manual_child_path, moved_child_path)
+    refresh_response = await client.post("/api/v1/session-catalog/refresh")
+    assert refresh_response.status_code == 200, refresh_response.text
     rebuilt_nodes = await _catalog_nodes(client)
-    assert rebuilt_nodes[child_folder_id]["name"] == manual_name
-    assert rebuilt_nodes[child_folder_id]["parent_node_id"] == parent_folder_id
+    assert rebuilt_nodes[child_folder_id]["name"] == "阶段一已重命名"
+    assert rebuilt_nodes[child_folder_id]["parent_node_id"] == sibling_folder_id
     rebuilt_child_path = _node_path(sessions_root, rebuilt_nodes[child_folder_id])
     rebuilt_session_path = _node_path(sessions_root, rebuilt_nodes[session_ids[1]])
-    assert rebuilt_child_path == manual_child_path
-    assert rebuilt_session_path.parent == manual_child_path
+    assert rebuilt_child_path == moved_child_path
+    assert rebuilt_session_path.parent == moved_child_path
     _assert_bundle_sentinels(rebuilt_session_path, sentinel_values)
     rebuilt_breadcrumb_response = await client.get(
         f"/api/v1/session-catalog/breadcrumb/{session_ids[1]}"
@@ -305,19 +313,18 @@ async def test_session_catalog_uses_real_physical_tree_for_crud_and_rebuild(
     assert [
         item["name"]
         for item in rebuilt_breadcrumb_response.json()["data"]["items"]
-    ] == ["项目资料", manual_name, "Catalog Needle Renamed"]
+    ] == ["待归档", "阶段一已重命名", "Catalog Needle Renamed"]
 
     index_path = (
         workspace_root / ".boxteam" / "navigation" / "session-catalog-index.json"
     )
     stored_index = json.loads(index_path.read_text(encoding="utf-8"))
-    assert stored_index["schema_version"] == 2
+    assert stored_index["schema_version"] == 3
     indexed_session = next(
         node for node in stored_index["nodes"] if node["node_id"] == session_ids[1]
     )
-    assert indexed_session["storage_relative_path"] == rebuilt_nodes[session_ids[1]][
-        "storage_relative_path"
-    ]
+    assert indexed_session["parent_node_id"] == child_folder_id
+    assert indexed_session["name"] == "Catalog Needle Renamed"
 
     nonempty_delete_response = await client.delete(
         f"/api/v1/session-catalog/folders/{parent_folder_id}"
@@ -334,7 +341,7 @@ async def test_session_catalog_uses_real_physical_tree_for_crud_and_rebuild(
         f"/api/v1/session-catalog/folders/{child_folder_id}"
     )
     assert delete_child_response.status_code == 204, delete_child_response.text
-    assert not manual_child_path.exists()
+    assert not rebuilt_child_path.exists()
 
     move_parent_session_to_root = await client.put(
         f"/api/v1/session-catalog/sessions/{session_ids[0]}/folder",

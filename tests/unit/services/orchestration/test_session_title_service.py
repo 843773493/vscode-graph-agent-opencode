@@ -1,11 +1,27 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
 from app.schemas.public_v2.session import SessionUpdateRequest
+from app.services.orchestration.job_execution_service import session_title_message
 from app.services.orchestration.session_title_service import SessionTitleService
+
+
+def test_internal_goal_title_uses_objective_instead_of_system_reminder():
+    assert session_title_message(
+        "<system_reminder>内部提示</system_reminder>",
+        {
+            "internal": True,
+            "goal_continuation": True,
+            "goal_objective": "验证 Goal 控制",
+        },
+    ) == "验证 Goal 控制"
+    assert session_title_message(
+        "内部维护消息",
+        {"internal": True},
+    ) is None
 
 
 class _FakeSession:
@@ -14,7 +30,7 @@ class _FakeSession:
         self.title = title
         self.title_source = title_source
         self.current_agent_id = "default"
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(UTC)
         self.updated_at = self.created_at
 
 
@@ -35,7 +51,7 @@ class _FakeSessionService:
         self.session.title = session.title
         if session.title_source is not None:
             self.session.title_source = session.title_source
-        self.session.updated_at = datetime.now()
+        self.session.updated_at = datetime.now(UTC)
         return self.session
 
 

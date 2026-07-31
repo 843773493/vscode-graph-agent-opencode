@@ -103,7 +103,7 @@ async def test_model_searches_web_then_fetches_selected_result(
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
     assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]
+    traces = traces_response.json()["data"]["items"]
     read_file_paths = [
         _read_file_path_from_trace(trace)
         for trace in traces

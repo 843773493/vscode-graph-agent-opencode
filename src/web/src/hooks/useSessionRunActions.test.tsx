@@ -26,6 +26,7 @@ function state(currentSession: Session): AppState {
     eventQueuesBySession: new Map(),
     pendingConversations: new Map(),
     activeJobIdsBySession: new Map(),
+    unreadSessionKeys: new Set(),
     sessionAttachmentSummaries: new Map(),
     sessionsByWorkspace: new Map(),
     sessionGatewayWorkspaceById: new Map(),

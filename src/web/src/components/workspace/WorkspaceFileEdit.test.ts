@@ -51,7 +51,7 @@ try {
     "workspace-test",
   );
   const request = requests[1];
-  if (!request.url.endsWith("/api/v1/workspace/files/content?path=notes%2Fa+b.txt")) {
+  if (!request.url.endsWith("/api/v1/workspace/files/content?path=notes%2Fa+b.txt&scope=workspace")) {
     throw new Error(`保存接口路径错误: ${request.url}`);
   }
   if (request.init?.method !== "PUT") {

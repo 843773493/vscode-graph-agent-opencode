@@ -1,5 +1,5 @@
 // 前端内部类型
-import type { ActiveJob, Message, ObservationSseMessage, PermissionRequest, QuestionRequest, Session, SessionObservationState, SessionStatusInfo, TraceEvent } from './backend';
+import type { ActiveJob, Message, ObservationSseMessage, PermissionRequest, QuestionRequest, Session, SessionGoal, SessionObservationState, SessionStatusInfo, TraceEvent } from './backend';
 
 export interface ConversationView {
   conversationId: string;
@@ -29,6 +29,9 @@ export interface AppState {
   messages: Message[];
   traceEvents: TraceEvent[];
   activeJob: ActiveJob | null;
+  currentGoal: SessionGoal | null;
+  goalLoading: boolean;
+  goalError: string | null;
   observationState: SessionObservationState | null;
   sessionStatus: SessionStatusInfo | null;
   pendingQuestions: QuestionRequest[];

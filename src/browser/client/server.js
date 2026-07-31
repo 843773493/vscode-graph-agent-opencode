@@ -40,6 +40,7 @@ function send(response, status, body, type = "text/plain; charset=utf-8") {
   response.writeHead(status, {
     "content-type": type,
     "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
   });
   response.end(body);
 }
@@ -140,7 +141,10 @@ async function main() {
       const vendorPath = vendorMap.get(url.pathname);
       if (vendorPath) {
         const body = await readFile(vendorPath);
-        response.writeHead(200, { "content-type": contentType(vendorPath) });
+        response.writeHead(200, {
+          "content-type": contentType(vendorPath),
+          "cache-control": "no-store",
+        });
         response.end(body);
         return;
       }
@@ -148,7 +152,10 @@ async function main() {
       const fileName = url.pathname === "/" ? "index.html" : path.basename(url.pathname);
       const filePath = path.join(currentDir, fileName);
       const body = await readFile(filePath);
-      response.writeHead(200, { "content-type": contentType(filePath) });
+      response.writeHead(200, {
+        "content-type": contentType(filePath),
+        "cache-control": "no-store",
+      });
       response.end(body);
     } catch (error) {
       send(response, 404, error instanceof Error ? error.message : String(error));

@@ -121,8 +121,8 @@ class TeamCoordinationService:
                     coordinator_session_id=board.coordinator_session_id,
                     role=normalized_role,
                     work_mode=work_mode,
-                    instructions=instructions,
                 ),
+                untrusted_instructions=instructions,
                 before_start=add_member_before_start,
             )
         except Exception as error:
@@ -184,15 +184,9 @@ class TeamCoordinationService:
         if notify:
             member = require_active_member(board, target_session_id)
             try:
-                accepted = await self._session_orchestrator.create_and_run(
+                accepted = await self._session_orchestrator.create_and_run_internal(
                     target_session_id,
                     membership_message(board=board, member=member),
-                    metadata={
-                        "source": "team_membership_attached",
-                        "team_id": team_id,
-                        "coordinator_session_id": requester_session_id,
-                        "role": member.role,
-                    },
                 )
             except Exception as error:
                 await self._boards.set_member_activation(
@@ -255,15 +249,9 @@ class TeamCoordinationService:
         accepted = None
         if start_assignee:
             try:
-                accepted = await self._session_orchestrator.create_and_run(
+                accepted = await self._session_orchestrator.create_and_run_internal(
                     assignee_session_id,
                     task_assignment_message(board=board, task=task),
-                    metadata={
-                        "source": "team_task_assignment",
-                        "team_id": team_id,
-                        "team_task_id": task.task_id,
-                        "coordinator_session_id": board.coordinator_session_id,
-                    },
                 )
             except Exception as error:
                 await self._boards.set_task_dispatch_failure(
@@ -310,16 +298,9 @@ class TeamCoordinationService:
             and status in COORDINATOR_NOTIFICATION_STATUSES
         ):
             try:
-                notification = await self._session_orchestrator.create_and_run(
+                notification = await self._session_orchestrator.create_and_run_internal(
                     board.coordinator_session_id,
                     task_update_message(board=board, task=task),
-                    metadata={
-                        "source": "team_task_update",
-                        "team_id": team_id,
-                        "team_task_id": task_id,
-                        "member_session_id": requester_session_id,
-                        "status": status,
-                    },
                 )
             except Exception as error:
                 raise RuntimeError(

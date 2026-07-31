@@ -5,6 +5,7 @@ import AgentSessionsSessionTree from './AgentSessionsSessionTree';
 import {
   buildVisibleWorkspaceTree,
   sortSessions,
+  workspaceHoverTitle,
   type SessionSortMode,
 } from './agentSessionsUtils';
 
@@ -42,14 +43,6 @@ interface AgentSessionsWorkspaceGroupsProps {
     x: number,
     y: number,
   ) => void;
-}
-
-export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
-  const lines = [workspace.name, `路径：${workspace.root_path}`];
-  if (workspace.connection_kind === 'remote_gateway') {
-    lines.push(`远程 Gateway：${workspace.remote?.gateway_id ?? '未连接'}`);
-  }
-  return lines.join('\n');
 }
 
 export default function AgentSessionsWorkspaceGroups({

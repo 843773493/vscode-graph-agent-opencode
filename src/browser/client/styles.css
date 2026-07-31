@@ -25,7 +25,7 @@ input {
 
 .browser-shell {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto auto auto minmax(0, 1fr);
   gap: 8px;
   height: 100vh;
   max-width: 100vw;
@@ -202,6 +202,137 @@ button:focus-visible,
   white-space: nowrap;
 }
 
+.browser-tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid rgba(47, 58, 74, 0.76);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(13, 17, 23, 0.9);
+}
+
+.browser-tab-list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.browser-tab {
+  display: flex;
+  align-items: center;
+  min-width: 120px;
+  max-width: 220px;
+  border: 0;
+  border-right: 1px solid #2f3a4a;
+  border-radius: 0;
+  background: transparent;
+  color: #94a3b8;
+}
+
+.browser-tab.is-active {
+  background: #202938;
+  color: #f8fafc;
+}
+
+.browser-tab-label {
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-tab-close {
+  display: grid;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.new-tab-button {
+  flex: 0 0 36px;
+  width: 36px;
+  border: 0;
+  border-left: 1px solid #2f3a4a;
+  border-radius: 0;
+  background: transparent;
+}
+
+.download-shelf {
+  border: 1px solid rgba(47, 58, 74, 0.76);
+  border-radius: 8px;
+  background: rgba(22, 27, 34, 0.92);
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.download-shelf[hidden] {
+  display: none;
+}
+
+.download-shelf summary {
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.download-list {
+  display: grid;
+  gap: 4px;
+  max-height: 150px;
+  padding: 0 8px 8px;
+  overflow: auto;
+}
+
+.download-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.download-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.find-bar {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  width: min(420px, 100%);
+  padding: 4px;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  background: #171d26;
+}
+
+.find-bar[hidden] {
+  display: none;
+}
+
+.find-bar input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+}
+
+.find-bar button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
 .status-line.error {
   border-color: #ef4444;
   color: #fecaca;
@@ -226,6 +357,12 @@ button:focus-visible,
   background: #11161d;
 }
 
+.screen-content {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
 .screen-canvas {
   display: block;
   width: 100%;
@@ -240,6 +377,106 @@ button:focus-visible,
   opacity: 0.58;
 }
 
+.screen-canvas.is-picking {
+  cursor: crosshair;
+}
+
+.browser-input-proxy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  left: 0;
+  bottom: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  resize: none;
+}
+
+.element-highlight {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border: 2px solid #60a5fa;
+  background: rgba(59, 130, 246, 0.18);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.78);
+}
+
+.participant-cursors {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.participant-cursor {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  background: var(--participant-color, #22c55e);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+  transform: translate(-2px, -2px) rotate(-45deg);
+  transition: left 45ms linear, top 45ms linear;
+}
+
+.element-highlight[hidden] {
+  display: none;
+}
+
+.element-highlight-label {
+  position: absolute;
+  left: -2px;
+  bottom: 100%;
+  max-width: 320px;
+  overflow: hidden;
+  padding: 3px 6px;
+  border-radius: 4px 4px 4px 0;
+  background: #2563eb;
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#element-picker-toggle.is-active {
+  border-color: #60a5fa;
+  background: #1d4ed8;
+  color: #fff;
+}
+
+#agent-lock-toggle .icon-agent-locked,
+#agent-lock-toggle.is-locked .icon-agent-unlocked {
+  display: none;
+}
+
+#agent-lock-toggle.is-locked .icon-agent-locked {
+  display: inline-block;
+}
+
+#agent-lock-toggle.is-locked {
+  border-color: #f59e0b;
+  background: rgba(180, 83, 9, 0.42);
+  color: #fde68a;
+}
+
+.ai-control-badge {
+  padding: 2px 7px;
+  border: 1px solid rgba(245, 158, 11, 0.72);
+  border-radius: 999px;
+  background: rgba(180, 83, 9, 0.3);
+  color: #fde68a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ai-control-badge[hidden] {
+  display: none;
+}
+
 .screen-overlay {
   position: absolute;
   inset: 0;
@@ -252,6 +489,85 @@ button:focus-visible,
 
 .screen-overlay[hidden] {
   display: none;
+}
+
+.browser-modal {
+  width: min(460px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid #475569;
+  border-radius: 10px;
+  background: #171d26;
+  color: #e5e7eb;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.48);
+}
+
+.browser-modal::backdrop {
+  background: rgba(3, 7, 18, 0.62);
+}
+
+.browser-modal form {
+  display: grid;
+  gap: 14px;
+}
+
+.browser-modal h2,
+.browser-modal p {
+  margin: 0;
+}
+
+.browser-modal h2 {
+  font-size: 16px;
+}
+
+.browser-modal p {
+  color: #cbd5e1;
+  white-space: pre-wrap;
+}
+
+.browser-modal input:not([hidden]) {
+  display: block;
+  width: 100%;
+}
+
+.browser-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.browser-context-menu {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  min-width: 180px;
+  padding: 5px;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  background: #171d26;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+
+.browser-context-menu[hidden] {
+  display: none;
+}
+
+.browser-context-menu button {
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  color: #e5e7eb;
+  text-align: left;
+}
+
+.browser-context-menu button:hover {
+  background: #283548;
+}
+
+.browser-context-menu hr {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid #334155;
 }
 
 .sr-only {

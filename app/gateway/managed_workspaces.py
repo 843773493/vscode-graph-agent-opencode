@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.runtime.local_workspace import start_managed_local_workspace_runtime
 from app.gateway.schemas import GatewayManagedWorkspaceDTO
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 
@@ -56,21 +55,16 @@ async def create_direct_managed_workspace(
     workspace_id = build_managed_local_workspace_id(str(workspace_root))
     if any(target.workspace_id == workspace_id for target in registry.targets()):
         raise ValueError(f"工作区已经由当前 Gateway 托管: {workspace_root}")
-    runtime = await start_managed_local_workspace_runtime(
-        project_root=project_root,
-        workspace_root=workspace_root,
-        log_dir=log_dir,
-    )
     target = WorkspaceTarget(
         workspace_id=workspace_id,
         name=name or workspace_root.name or "workspace",
         name_customized=bool(name),
         root_path=str(workspace_root),
-        backend_url=runtime.service_urls["workspace_api"],
+        backend_url="",
         connection_kind="local",
         managed=True,
     )
-    registry.upsert(target, runtime=runtime, activate=False)
+    registry.upsert(target, activate=False)
     return target
 
 

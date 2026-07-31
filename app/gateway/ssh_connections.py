@@ -103,4 +103,13 @@ def resolve_ssh_connection_request(
             ssh_config_host=host.alias,
             remote_gateway_port=payload.remote_gateway_port,
         )
+    if payload.host and payload.username and payload.private_key_path:
+        return ResolvedSshConnection(
+            host=payload.host,
+            port=payload.port,
+            username=payload.username,
+            private_key_path=payload.private_key_path,
+            ssh_config_host=None,
+            remote_gateway_port=payload.remote_gateway_port,
+        )
     raise RuntimeError("AddSshWorkspaceRequest 连接来源未通过校验")

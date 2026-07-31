@@ -83,6 +83,39 @@ export function aggregateConversationEvents(
     return item;
   }
 
+  function appendTextPart({
+    partId,
+    text,
+    kind,
+    active,
+    timestamp,
+    eventType,
+    payload,
+  }: {
+    partId: string;
+    text: string;
+    kind: TextPart["partKind"];
+    active: boolean;
+    timestamp: string | null;
+    eventType: string;
+    payload: Record<string, unknown>;
+  }): TextPart {
+    const item: TextPart = {
+      kind: "aggregated_text",
+      id: partId,
+      text,
+      partKind: kind,
+      active,
+      timestamp,
+      eventCount: 1,
+      rawEvents: [{ type: eventType, payload }],
+    };
+    textPartIndexes.set(partId, items.length);
+    textPartSegmentStarts.set(partId, 0);
+    items.push(item);
+    return item;
+  }
+
   function replaceTextPart(partId: string, item: TextPart) {
     const index = textPartIndexes.get(partId);
     if (index === undefined) {
@@ -121,9 +154,9 @@ export function aggregateConversationEvents(
 
     if (type === "text_start") {
       const id = requiredPartId(partId, eventType);
+      const kind = requiredPartKind(payload, eventType);
       if (textPartIndexes.has(id)) {
         const current = textPart(id, eventType);
-        const kind = requiredPartKind(payload, eventType);
         if (current.partKind !== kind) {
           throw new Error(`part_id=${id} 的 kind 从 ${current.partKind} 变成了 ${kind}`);
         }
@@ -136,32 +169,44 @@ export function aggregateConversationEvents(
         });
         continue;
       }
-      const item: TextPart = {
-        kind: "aggregated_text",
-        id,
+      appendTextPart({
+        partId: id,
         text: "",
-        partKind: requiredPartKind(payload, eventType),
+        kind,
         active: isRunning,
         timestamp,
-        eventCount: 1,
-        rawEvents: [{ type: eventType, payload }],
-      };
-      textPartIndexes.set(id, items.length);
-      textPartSegmentStarts.set(id, 0);
-      items.push(item);
+        eventType,
+        payload,
+      });
       continue;
     }
 
     if (type === "text_delta") {
       const id = requiredPartId(partId, eventType);
-      const current = textPart(id, eventType);
       const kind = requiredPartKind(payload, eventType);
+      const deltaText = getOptionalString(payload, "text");
+      if (!textPartIndexes.has(id)) {
+        const activePart = appendTextPart({
+          partId: id,
+          text: deltaText,
+          kind,
+          active: isRunning,
+          timestamp,
+          eventType,
+          payload,
+        });
+        if (activePart.text.trim()) {
+          hasOutputContent = true;
+        }
+        continue;
+      }
+      const current = textPart(id, eventType);
       if (current.partKind !== kind) {
         throw new Error(`part_id=${id} 的 kind 从 ${current.partKind} 变成了 ${kind}`);
       }
       const next = {
         ...current,
-        text: current.text + getOptionalString(payload, "text"),
+        text: current.text + deltaText,
         active: isRunning,
         eventCount: current.eventCount + 1,
         rawEvents: [...current.rawEvents, { type: eventType, payload }],
@@ -175,12 +220,30 @@ export function aggregateConversationEvents(
 
     if (type === "text_end") {
       const id = requiredPartId(partId, eventType);
-      const current = textPart(id, eventType);
       const kind = requiredPartKind(payload, eventType);
+      const finalText = getOptionalString(payload, "text");
+      if (!textPartIndexes.has(id)) {
+        const completed = appendTextPart({
+          partId: id,
+          text: finalText,
+          kind,
+          active: false,
+          timestamp,
+          eventType,
+          payload,
+        });
+        if (kind === "markdown") {
+          recordFinalText(skillFlow, completed.text);
+        }
+        if (completed.text.trim()) {
+          hasOutputContent = true;
+        }
+        continue;
+      }
+      const current = textPart(id, eventType);
       if (current.partKind !== kind) {
         throw new Error(`part_id=${id} 的结束 kind 与开始 kind 不一致`);
       }
-      const finalText = getOptionalString(payload, "text");
       const segmentStart = textPartSegmentStarts.get(id) ?? 0;
       const streamedSegment = current.text.slice(segmentStart);
       const resolvedText = !finalText || finalText === streamedSegment

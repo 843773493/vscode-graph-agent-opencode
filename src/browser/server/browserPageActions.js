@@ -7,15 +7,32 @@ export function selectorFor(refSelectors, { ref, selector, fieldPrefix = "" }) {
   if (ref) {
     const mapped = refSelectors.get(ref);
     if (!mapped) {
-      throw new Error(`未知元素 ref: ${fieldPrefix}${ref}。请先调用 readPage 获取最新 ref。`);
+      const error = new Error(`页面已变化或元素 ref 已失效: ${fieldPrefix}${ref}。请重新调用 readPage 获取最新 ref。`);
+      error.code = "browser_stale_element_ref";
+      throw error;
     }
-    return mapped;
+    return typeof mapped === "string" ? mapped : mapped.selector;
   }
   throw new Error(`${fieldPrefix}ref 或 ${fieldPrefix}selector 必须提供一个`);
 }
 
-export async function readBrowserSummary(page, refSelectors) {
-  const result = await page.evaluate(() => {
+async function locatorFor(page, refSelectors, target) {
+  const targetSelector = selectorFor(refSelectors, target);
+  const locator = page.locator(targetSelector).first();
+  if (await locator.count() === 0) {
+    if (target.ref) {
+      refSelectors.delete(target.ref);
+    }
+    const label = target.ref || target.selector;
+    const error = new Error(`页面已变化或目标元素已移除: ${label}。请重新调用 readPage。`);
+    error.code = "browser_stale_element_ref";
+    throw error;
+  }
+  return locator;
+}
+
+export async function readBrowserSummary(page, refSelectors, documentRevision = 0) {
+  const result = await page.evaluate((revision) => {
     const refAttribute = "data-boxteam-ref";
     let counter = 0;
     const maxElements = 80;
@@ -63,9 +80,9 @@ export async function readBrowserSummary(page, refSelectors) {
     const refs = [];
     for (const element of elements) {
       let ref = element.getAttribute(refAttribute);
-      if (!ref) {
+      if (!ref || !ref.startsWith(`r${revision}_`)) {
         counter += 1;
-        ref = `e${Date.now().toString(36)}_${counter}`;
+        ref = `r${revision}_e${counter}`;
         element.setAttribute(refAttribute, ref);
       }
       refs.push({
@@ -86,14 +103,15 @@ export async function readBrowserSummary(page, refSelectors) {
     return {
       title: document.title || "",
       url: location.href,
+      documentRevision: revision,
       text: bodyText,
       refs,
     };
-  });
+  }, documentRevision);
 
   refSelectors.clear();
   for (const item of result.refs) {
-    refSelectors.set(item.ref, item.selector);
+    refSelectors.set(item.ref, { selector: item.selector, documentRevision });
   }
 
   const elementLines = result.refs.map((item) => {
@@ -112,7 +130,63 @@ export async function readBrowserSummary(page, refSelectors) {
     "页面文本:",
     result.text || "(无可见文本)",
   ].join("\n");
-  return { summary, refs: result.refs, title: result.title, url: result.url };
+  return {
+    summary,
+    refs: result.refs,
+    title: result.title,
+    url: result.url,
+    document_revision: result.documentRevision,
+  };
+}
+
+export async function inspectPageElement(page, refSelectors, { x, y }, documentRevision = 0) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error(`元素命中坐标必须是有限数字: x=${x}, y=${y}`);
+  }
+  const result = await page.evaluate(({ pointX, pointY, revision }) => {
+    const element = document.elementFromPoint(pointX, pointY);
+    if (!(element instanceof Element)) {
+      return null;
+    }
+
+    const refAttribute = "data-boxteam-ref";
+    let ref = element.getAttribute(refAttribute);
+    if (!ref || !ref.startsWith(`r${revision}_`)) {
+      ref = `r${revision}_e${Math.random().toString(36).slice(2, 8)}`;
+      element.setAttribute(refAttribute, ref);
+    }
+    const rect = element.getBoundingClientRect();
+    const text = String(
+      element.getAttribute("aria-label")
+      || element.getAttribute("alt")
+      || element.getAttribute("title")
+      || ("value" in element ? element.value : "")
+      || element.textContent
+      || "",
+    ).replace(/\s+/g, " ").trim().slice(0, 240);
+    return {
+      ref,
+      selector: `[${refAttribute}="${CSS.escape(ref)}"]`,
+      tag: element.tagName.toLowerCase(),
+      role: element.getAttribute("role") || "",
+      type: element.getAttribute("type") || "",
+      text,
+      title: document.title || "",
+      url: location.href,
+      document_revision: revision,
+      bounds: {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      },
+    };
+  }, { pointX: x, pointY: y, revision: documentRevision });
+
+  if (result) {
+    refSelectors.set(result.ref, { selector: result.selector, documentRevision });
+  }
+  return result;
 }
 
 export async function clickElement(page, refSelectors, {
@@ -121,8 +195,7 @@ export async function clickElement(page, refSelectors, {
   dblClick = false,
   button = "left",
 }) {
-  const targetSelector = selectorFor(refSelectors, { ref, selector });
-  const locator = page.locator(targetSelector).first();
+  const locator = await locatorFor(page, refSelectors, { ref, selector });
   if (dblClick) {
     await locator.dblclick({ button, timeout: TOOL_TIMEOUT_MS });
   } else {
@@ -131,8 +204,8 @@ export async function clickElement(page, refSelectors, {
 }
 
 export async function hoverElement(page, refSelectors, { ref = null, selector = null }) {
-  const targetSelector = selectorFor(refSelectors, { ref, selector });
-  await page.locator(targetSelector).first().hover({ timeout: TOOL_TIMEOUT_MS });
+  const locator = await locatorFor(page, refSelectors, { ref, selector });
+  await locator.hover({ timeout: TOOL_TIMEOUT_MS });
 }
 
 export async function typeInPage(page, refSelectors, {
@@ -146,17 +219,16 @@ export async function typeInPage(page, refSelectors, {
   if (!text && !key) {
     throw new Error("text 或 key 必须提供一个");
   }
-  const targetSelector = hasTarget ? selectorFor(refSelectors, { ref, selector }) : null;
+  const locator = hasTarget ? await locatorFor(page, refSelectors, { ref, selector }) : null;
   if (key) {
-    if (targetSelector) {
-      await page.locator(targetSelector).first().press(key, { timeout: TOOL_TIMEOUT_MS });
+    if (locator) {
+      await locator.press(key, { timeout: TOOL_TIMEOUT_MS });
     } else {
       await page.keyboard.press(key);
     }
     return;
   }
-  if (targetSelector) {
-    const locator = page.locator(targetSelector).first();
+  if (locator) {
     await locator.fill(text, { timeout: TOOL_TIMEOUT_MS });
     if (submit) {
       await locator.press("Enter", { timeout: TOOL_TIMEOUT_MS });
@@ -175,24 +247,40 @@ export async function dragElement(page, refSelectors, {
   toRef = null,
   toSelector = null,
 }) {
-  const sourceSelector = selectorFor(refSelectors, {
+  const sourceLocator = await locatorFor(page, refSelectors, {
     ref: fromRef,
     selector: fromSelector,
     fieldPrefix: "from",
   });
-  const targetSelector = selectorFor(refSelectors, {
+  const targetLocator = await locatorFor(page, refSelectors, {
     ref: toRef,
     selector: toSelector,
     fieldPrefix: "to",
   });
-  await page.dragAndDrop(sourceSelector, targetSelector, { timeout: TOOL_TIMEOUT_MS });
+  await sourceLocator.dragTo(targetLocator, { timeout: TOOL_TIMEOUT_MS });
 }
 
 export async function handleDialog(session, {
   acceptModal = null,
   promptText = undefined,
   selectFiles = undefined,
+  filePayloads = undefined,
 }) {
+  if (filePayloads !== undefined) {
+    if (!Array.isArray(filePayloads)) {
+      throw new Error("filePayloads 必须是文件数组");
+    }
+    if (!session.pendingFileChooser) {
+      throw new Error("当前页面没有待处理的文件选择对话框");
+    }
+    await session.pendingFileChooser.setFiles(filePayloads.map((file) => ({
+      name: file.name,
+      mimeType: file.mimeType || "application/octet-stream",
+      buffer: Buffer.from(file.data, "base64"),
+    })));
+    session.pendingFileChooser = null;
+    return { summary: `已从用户设备选择 ${filePayloads.length} 个文件` };
+  }
   if (selectFiles !== undefined && selectFiles !== null) {
     if (!Array.isArray(selectFiles)) {
       throw new Error("selectFiles 必须是文件路径数组");
@@ -228,11 +316,10 @@ export async function screenshotPage(page, refSelectors, {
   selector = null,
   scrollIntoViewIfNeeded = false,
 }) {
-  const targetSelector = ref || selector ? selectorFor(refSelectors, { ref, selector }) : null;
-  if (!targetSelector) {
+  if (!ref && !selector) {
     return await page.screenshot({ type: "png" });
   }
-  const locator = page.locator(targetSelector).first();
+  const locator = await locatorFor(page, refSelectors, { ref, selector });
   if (scrollIntoViewIfNeeded) {
     await locator.scrollIntoViewIfNeeded();
   }

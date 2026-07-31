@@ -15,7 +15,7 @@ export const VIEW_OPTIONS: ViewOption[] = [
   {
     id: "events",
     label: "事件视图",
-    description: "查看前端收到的当前会话事件队列",
+    description: "按需查看当前会话的历史与实时 Trace 事件",
   },
   {
     id: "requests",
@@ -26,11 +26,6 @@ export const VIEW_OPTIONS: ViewOption[] = [
     id: "changes",
     label: "变更",
     description: "在右侧更改栏和文件预览区查看本会话可审查变更",
-  },
-  {
-    id: "resources",
-    label: "后台连接",
-    description: "查看可保留、可重新打开或可连接的持久终端、浏览器页面和周期/常驻后台任务",
   },
   {
     id: "agent",

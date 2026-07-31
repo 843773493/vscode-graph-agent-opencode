@@ -23,6 +23,33 @@ export type {
   PendingRequestUpdateRequest,
 } from "./gen/pending_request";
 export type PendingRequestKind = PendingRequestOrderItemType["kind"];
+
+export type SessionGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete";
+
+export interface SessionGoal {
+  goal_id: string;
+  session_id: string;
+  objective: string;
+  status: SessionGoalStatus;
+  token_budget: number | null;
+  tokens_used: number;
+  time_used_seconds: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SessionGoalUpdateRequest {
+  objective?: string;
+  status?: SessionGoalStatus;
+  token_budget?: number | null;
+  replace?: boolean;
+}
 export type {
   DeleteSessionResultDTO as DeleteSessionResult,
   SessionCompactResultDTO as SessionCompactResult,
@@ -45,11 +72,33 @@ import type {
   SessionFileReviewResultDTO,
 } from "./gen/session_changes";
 import type { TraceEventDTO } from "./gen/trace";
+export type { TraceEventDTO as SessionStreamEvent } from "./gen/trace";
 export type {
+  SessionTurnBootstrapDTO as SessionTurnBootstrap,
+  StaleTurnCursorErrorDTO as StaleTurnCursorError,
+  TurnAttachmentDTO as TurnAttachment,
+  TurnDetailBatchDTO as TurnDetailBatch,
+  TurnDetailBatchRequest,
+  TurnDetailDTO as TurnDetail,
+  TurnJobSummaryDTO as TurnJobSummary,
+  TurnPageDTO as TurnPage,
+  TurnSummaryDTO as TurnSummary,
+  TurnUserMessageDTO as TurnUserMessage,
+  TurnUserMessageSummaryDTO as TurnUserMessageSummary,
+} from "./gen/turn";
+export type {
+  FileTreeShortcutDTO as FileTreeShortcut,
+  FileTreeShortcutRequest,
+  SessionFileTreeSettingsDTO as SessionFileTreeSettings,
   WorkspaceDTO as WorkspaceInfo,
   WorkspaceFileContentDTO as WorkspaceFileContent,
+  WorkspaceFileChangeBatchDTO as WorkspaceFileStreamBatch,
+  WorkspaceFileChangeDTO as WorkspaceFileStreamChange,
+  WorkspaceFileCreateRequest,
   WorkspaceFileListDTO as WorkspaceFileList,
   WorkspaceFileNodeDTO as WorkspaceFileNode,
+  WorkspaceFilePasteRequest,
+  WorkspaceFileRevealDTO as WorkspaceFileReveal,
   WorkspaceFileUpdateRequest,
 } from "./gen/workspace";
 
@@ -167,6 +216,7 @@ export interface GatewayWorkspace {
   removable: boolean;
   system_default: boolean;
   runtime_action?:
+    | "start_managed_backend"
     | "safe_restart_managed_backend"
     | "force_restart_managed_backend"
     | "reconnect_remote_gateway"
@@ -216,6 +266,30 @@ export interface GatewayWorkspaceList {
   items: GatewayWorkspace[];
 }
 
+export interface GatewayManagedWorkspace {
+  workspace_id: string;
+  name: string;
+  root_path: string;
+  status: "ready" | "offline";
+  removable: boolean;
+  system_default: boolean;
+}
+
+export interface GatewayManagedWorkspaceList {
+  gateway_connection_id?: string | null;
+  gateway_id: string;
+  gateway_name: string;
+  connection_kind: "local" | "remote_gateway";
+  items: GatewayManagedWorkspace[];
+}
+
+export interface AddManagedGatewayWorkspaceRequest {
+  gateway_connection_id?: string | null;
+  root_path: string;
+  name?: string | null;
+  create_directory?: boolean;
+}
+
 export interface GatewayInboundPeer {
   connection_id: string;
   peer_gateway_id: string;
@@ -237,6 +311,40 @@ export interface GatewayInboundAccessList {
   items: GatewayInboundWorkspace[];
 }
 
+export interface GatewayDeviceConnection {
+  connection_id: string;
+  device_name: string;
+  status: "authorized" | "expired";
+  credential_expires_at: string;
+}
+
+export interface GatewayDeviceConnectionList {
+  items: GatewayDeviceConnection[];
+}
+
+export interface GatewayDeviceAccessAddress {
+  url: string;
+  label: string;
+  is_loopback: boolean;
+}
+
+export interface GatewayDeviceAccessAddressList {
+  items: GatewayDeviceAccessAddress[];
+}
+
+export interface GatewayDeviceConnectionInfo {
+  gateway_url: string;
+  federation_token: string;
+  request_header: string;
+  manifest_url: string;
+  workspaces_url: string;
+}
+
+export interface CreatedGatewayDeviceConnection {
+  connection: GatewayDeviceConnection;
+  connection_info: GatewayDeviceConnectionInfo;
+}
+
 export interface GatewayRuntimeBlocker {
   kind: "job" | "tool" | "background_task";
   resource_id: string;
@@ -253,15 +361,16 @@ export interface GatewayRuntimeRestartResult {
   workspaces: GatewayWorkspaceList;
 }
 
+export interface GatewayRuntimeStateResult {
+  workspace_id: string;
+  status: "started" | "stopped" | "blocked";
+  blockers: GatewayRuntimeBlocker[];
+  workspaces: GatewayWorkspaceList;
+}
+
 export interface GatewayHealth {
   status: "ok";
   active_workspace_id: string | null;
-}
-
-export interface AddLocalGatewayWorkspaceRequest {
-  root_path: string;
-  name?: string | null;
-  backend_url?: string | null;
 }
 
 interface AddSshGatewayWorkspaceRequestBase {
@@ -279,9 +388,18 @@ export interface AddSshGatewayWorkspaceFromConfigRequest
   ssh_config_host: string;
 }
 
+export interface AddSshGatewayWorkspaceManualRequest
+  extends AddSshGatewayWorkspaceRequestBase {
+  host: string;
+  port: number;
+  username: string;
+  private_key_path: string;
+}
+
 export type AddSshGatewayWorkspaceRequest =
   | AddSshGatewayWorkspaceFromWorkspaceRequest
-  | AddSshGatewayWorkspaceFromConfigRequest;
+  | AddSshGatewayWorkspaceFromConfigRequest
+  | AddSshGatewayWorkspaceManualRequest;
 
 export interface UpdateGatewayWorkspaceRequest {
   name?: string;
@@ -303,7 +421,7 @@ export interface WebUiLayoutSettings {
   workbench_view?: "sessions" | "gateway" | null;
   agent_sessions_panel_open?: boolean | null;
   auxiliary_visible?: boolean | null;
-  auxiliary_tab?: "changes" | "files" | null;
+  auxiliary_tab?: "changes" | "files" | "resources" | null;
   main_area_ratios?: WebUiMainAreaRatios | null;
   workspace_preview_visible?: boolean | null;
   workspace_preview_maximized?: boolean | null;

@@ -18,11 +18,7 @@ import type { ConversationContentView, ConversationView } from "../types/fronten
 import { cloneMaps } from "../state/appStateMaps";
 import { updateSessionAttachmentSummary } from "../state/attachments";
 import { writePendingList } from "../state/conversations";
-import {
-  appendFrontendEvent,
-  traceJobId,
-  tracePayloadString,
-} from "../state/traceEvents";
+import { appendFrontendEvent } from "../state/traceEvents";
 import { writeLastSessionId } from "../state/storage";
 import type { SetAppState } from "./contentViewLoaderTypes";
 import { sessionScopeKey } from "../state/session/sessionScope";
@@ -110,7 +106,6 @@ export function useSessionRunActions({
           next.currentSession = createdSession;
           next.currentSessionWorkspaceId = resolvedWorkspaceId ?? null;
           writeLastSessionId(createdSession.session_id);
-          next.messages = [];
           next.traceEvents = [];
           next.llmRequestLogs = [];
           next.llmRequestLogsLoadedAt = null;
@@ -414,30 +409,6 @@ export function useSessionRunActions({
         : displayContent;
       setState((prev) => {
         const next = cloneMaps(prev);
-        const targetIndex = next.messages.findIndex(
-          (message) => message.message_id === targetMessageId,
-        );
-        if (targetIndex >= 0) {
-          const removedMessageIds = new Set(
-            next.messages
-              .slice(targetIndex)
-              .map((message) => message.message_id),
-          );
-          const removedJobIds = new Set(
-            next.traceEvents
-              .filter(
-                (event) =>
-                  event.type === "message_created"
-                  && removedMessageIds.has(tracePayloadString(event, "message_id")),
-              )
-              .map(traceJobId)
-              .filter(Boolean),
-          );
-          next.messages = next.messages.slice(0, targetIndex);
-          next.traceEvents = next.traceEvents.filter(
-            (event) => !removedJobIds.has(traceJobId(event)),
-          );
-        }
         next.pendingConversations.set(sessionCacheKey, [{
           conversationId: accepted.message_id,
           sessionId: session.session_id,

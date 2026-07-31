@@ -1,5 +1,4 @@
-import type { SessionStreamEvent } from "../api";
-import type { TraceEvent } from "../types/backend";
+import type { SessionStreamEvent, TraceEvent } from "../types/backend";
 import type {
   ConversationView,
   FrontendEventSource,
@@ -7,6 +6,7 @@ import type {
 } from "../types/frontend";
 
 export const FRONTEND_EVENT_QUEUE_LIMIT = 200;
+export const LIVE_TRACE_EVENT_LIMIT = 512;
 
 export function rawTracePayload(event: TraceEvent): Record<string, unknown> {
   return event.raw?.payload ?? event.payload ?? {};
@@ -40,6 +40,18 @@ export function dedupeTraceEvents(events: TraceEvent[]): TraceEvent[] {
       (a, b) =>
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
     );
+}
+
+export function appendBoundedLiveTraceEvents(
+  current: TraceEvent[],
+  incoming: TraceEvent[],
+  limit: number = LIVE_TRACE_EVENT_LIMIT,
+): TraceEvent[] {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`Live Trace 上限必须是正整数，实际为 ${limit}`);
+  }
+  const merged = dedupeTraceEvents([...current, ...incoming]);
+  return merged.length <= limit ? merged : merged.slice(-limit);
 }
 
 function frontendEventQueueId(event: TraceEvent, source: FrontendEventSource) {
@@ -213,7 +225,7 @@ export function terminalStatusTextForEvent(eventType: string): string {
 }
 
 export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
-  const raw = event.raw;
+  const raw = event.raw ?? {};
   const rawPayload =
     raw &&
     typeof raw.payload === "object" &&
@@ -221,8 +233,7 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
     !Array.isArray(raw.payload)
       ? (raw.payload as Record<string, unknown>)
       : {};
-  const payload =
-    Object.keys(rawPayload).length > 0 ? rawPayload : event.payload || {};
+  const payload = rawPayload;
   const normalizedRaw: TraceEvent["raw"] | undefined = raw
     ? {
         event_id:
@@ -242,7 +253,7 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
         agent_id:
           typeof raw.agent_id === "string" || raw.agent_id === null
             ? raw.agent_id
-            : event.agent_id,
+            : null,
         step_id:
           typeof raw.step_id === "string" || raw.step_id === null
             ? raw.step_id
@@ -255,9 +266,15 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
     session_id: event.session_id,
     job_id: event.job_id,
     step_id: event.step_id ?? null,
-    agent_id: event.agent_id ?? null,
+    agent_id: normalizedRaw?.agent_id ?? null,
     timestamp: event.timestamp,
-    type: event.type as TraceEvent["type"],
+    type: event.type,
+    phase: event.phase,
+    title: event.title,
+    content: event.content,
+    status: event.status,
+    tool_name: event.tool_name,
+    skill_names: event.skill_names ?? [],
     payload,
     raw: normalizedRaw,
   };

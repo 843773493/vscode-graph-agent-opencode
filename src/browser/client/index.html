@@ -14,9 +14,19 @@
         <div class="browser-title">
           <strong>可附加浏览器</strong>
           <span id="browser-id">未选择页面</span>
-          <span id="attach-state-badge" class="attach-state-badge">未连接</span>
+          <span id="attach-state-badge" class="attach-state-badge attaching">正在初始化</span>
+          <span id="ai-control-badge" class="ai-control-badge" hidden>AI 已锁定</span>
         </div>
         <div class="browser-actions">
+          <button id="agent-lock-toggle" class="icon-button" type="button" title="锁定 AI 操作" aria-label="锁定 AI 操作" aria-pressed="false">
+            <span class="codicon codicon-unlock icon-agent-unlocked" aria-hidden="true"></span>
+            <span class="codicon codicon-lock icon-agent-locked" aria-hidden="true"></span>
+            <span class="sr-only">锁定 AI 操作</span>
+          </button>
+          <button id="element-picker-toggle" class="icon-button" type="button" title="选择页面元素" aria-label="选择页面元素">
+            <span class="codicon codicon-inspect" aria-hidden="true"></span>
+            <span class="sr-only">选择页面元素</span>
+          </button>
           <button id="attach-toggle" class="icon-button" type="button" title="连接浏览器" aria-label="连接浏览器">
             <span class="codicon codicon-vm-connect icon-connect" aria-hidden="true"></span>
             <span class="codicon codicon-debug-disconnect icon-disconnect" aria-hidden="true"></span>
@@ -53,14 +63,129 @@
         </button>
       </form>
 
-      <section id="status-line" class="status-line">等待连接</section>
+      <nav id="browser-tabs" class="browser-tabs" aria-label="浏览器标签页">
+        <div id="browser-tab-list" class="browser-tab-list"></div>
+        <button id="new-tab-button" class="new-tab-button" type="button" title="新建标签页" aria-label="新建标签页">
+          <span class="codicon codicon-add" aria-hidden="true"></span>
+        </button>
+      </nav>
+
+      <details id="download-shelf" class="download-shelf" hidden>
+        <summary id="download-summary">下载</summary>
+        <div id="download-list" class="download-list"></div>
+      </details>
+      <form id="find-bar" class="find-bar" hidden>
+        <input id="find-input" type="search" autocomplete="off" placeholder="在页面中查找" aria-label="在页面中查找" />
+        <button id="find-previous" type="button" title="上一个匹配项" aria-label="上一个匹配项">
+          <span class="codicon codicon-arrow-up" aria-hidden="true"></span>
+        </button>
+        <button id="find-next" type="submit" title="下一个匹配项" aria-label="下一个匹配项">
+          <span class="codicon codicon-arrow-down" aria-hidden="true"></span>
+        </button>
+        <button id="find-close" type="button" title="关闭查找" aria-label="关闭查找">
+          <span class="codicon codicon-close" aria-hidden="true"></span>
+        </button>
+      </form>
+
+      <section id="status-line" class="status-line">正在初始化浏览器连接…</section>
       <section id="screen-stage" class="screen-stage" aria-label="浏览器远程画面">
         <div id="screen-scroll" class="screen-scroll">
-          <canvas id="screen-canvas" class="screen-canvas" tabindex="0"></canvas>
+          <div id="screen-content" class="screen-content">
+            <canvas id="screen-canvas" class="screen-canvas" tabindex="0"></canvas>
+            <textarea
+              id="browser-input-proxy"
+              class="browser-input-proxy"
+              aria-label="远程浏览器键盘输入"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+            ></textarea>
+            <div id="participant-cursors" class="participant-cursors" aria-hidden="true"></div>
+            <div id="element-highlight" class="element-highlight" hidden>
+              <span id="element-highlight-label" class="element-highlight-label"></span>
+            </div>
+          </div>
         </div>
-        <div id="screen-overlay" class="screen-overlay">未连接</div>
+        <div id="screen-overlay" class="screen-overlay">正在连接浏览器…</div>
       </section>
+      <dialog id="browser-modal" class="browser-modal">
+        <form id="browser-modal-form" method="dialog">
+          <h2 id="browser-modal-title">页面对话框</h2>
+          <p id="browser-modal-message"></p>
+          <input id="browser-modal-prompt" type="text" aria-label="页面对话框输入" hidden />
+          <input id="browser-modal-files" type="file" aria-label="选择上传文件" multiple hidden />
+          <div class="browser-modal-actions">
+            <button id="browser-modal-cancel" type="button">取消</button>
+            <button id="browser-modal-accept" type="submit">确定</button>
+          </div>
+        </form>
+      </dialog>
+      <div id="browser-context-menu" class="browser-context-menu" role="menu" hidden>
+        <button type="button" data-context-command="back">后退</button>
+        <button type="button" data-context-command="forward">前进</button>
+        <button type="button" data-context-command="reload">刷新</button>
+        <hr />
+        <button type="button" data-context-command="copy">复制所选文字</button>
+        <button type="button" data-context-command="paste">粘贴</button>
+        <hr />
+        <button type="button" data-context-command="newPage">新建标签页</button>
+      </div>
     </main>
+    <script>
+      (() => {
+        const initializationFailures = [];
+        const describeFailure = (reason) => {
+          if (reason instanceof Error) {
+            return reason.stack || reason.message;
+          }
+          if (reason && typeof reason === "object" && "message" in reason) {
+            return String(reason.message);
+          }
+          return String(reason || "未知初始化错误");
+        };
+        window.addEventListener("error", (event) => {
+          initializationFailures.push(describeFailure(event.error || event.message));
+        });
+        window.addEventListener("unhandledrejection", (event) => {
+          initializationFailures.push(describeFailure(event.reason));
+        });
+        const form = document.querySelector("#url-form");
+        const address = document.querySelector("#address-input");
+        const status = document.querySelector("#status-line");
+        const badge = document.querySelector("#attach-state-badge");
+        const overlay = document.querySelector("#screen-overlay");
+        form.addEventListener("submit", (event) => {
+          if (window.BOXTEAM_BROWSER_CLIENT_READY === true) {
+            return;
+          }
+          event.preventDefault();
+          const targetUrl = address.value.trim();
+          if (!targetUrl) {
+            status.textContent = "请输入要打开的 URL";
+            status.classList.add("error");
+            return;
+          }
+          window.BOXTEAM_BROWSER_EARLY_URL = targetUrl;
+          status.textContent = "浏览器正在初始化，将在连接后打开该地址";
+          status.classList.remove("error");
+        });
+        window.setTimeout(() => {
+          if (window.BOXTEAM_BROWSER_CLIENT_READY === true) {
+            return;
+          }
+          badge.textContent = "初始化失败";
+          badge.className = "attach-state-badge failed";
+          const failure = initializationFailures.at(-1);
+          status.textContent = failure
+            ? `浏览器界面初始化失败：${failure}；请点击画面区域重新加载`
+            : "浏览器界面初始化失败，请点击画面区域重新加载";
+          status.classList.add("error");
+          overlay.textContent = "初始化失败，点击重新加载";
+          overlay.style.cursor = "pointer";
+          overlay.addEventListener("click", () => window.location.reload(), { once: true });
+        }, 8000);
+      })();
+    </script>
     <script src="./config.js"></script>
     <script type="module" src="./main.js"></script>
   </body>

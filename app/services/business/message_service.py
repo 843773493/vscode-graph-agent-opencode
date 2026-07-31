@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from langchain_core.messages import (
     AIMessage,
@@ -17,6 +17,7 @@ from app.abstractions.session_context import AgentContextState
 from app.agents.cache_preserving_summarization import apply_summarization_event
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
+from app.prompting.validation import internal_prompt_metadata, validate_internal_message
 from app.schemas.public_v2.common import CursorPage, MessageRole
 from app.schemas.public_v2.message import (
     AgentStateMessagesDTO,
@@ -24,12 +25,13 @@ from app.schemas.public_v2.message import (
     MessageCreateRequest,
     MessageDTO,
 )
-from app.services.mapping.agent_content_mapper import extract_reasoning_summary
-from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
-from app.services.infrastructure.message_history_store import MessageHistoryStore
+from app.services.business.message_display import project_message_for_display
 from app.services.business.system_reminder_checkpoint_service import (
     append_system_reminder_checkpoint,
 )
+from app.services.infrastructure.message_history_store import MessageHistoryStore
+from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
+from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
 
 class MessageService:
@@ -43,6 +45,20 @@ class MessageService:
         self._attachment_store = attachment_store
         self._history_store = history_store
 
+    def has_checkpoint_history(self, session_id: str) -> bool:
+        if self._history_store is None:
+            raise RuntimeError("MessageService 未配置 history_store，无法检测旧会话")
+        return bool(self._history_store.latest_checkpoint_id(session_id))
+
+    async def list_visible_messages_for_turn_migration(
+        self,
+        session_id: str,
+    ) -> list[MessageDTO]:
+        messages, _checkpoint_id = await self._load_messages_with_checkpoint_id(
+            session_id
+        )
+        return messages
+
     @staticmethod
     def _message_to_dto(
         session_id: str,
@@ -53,9 +69,24 @@ class MessageService:
         extracted = MessageService._extract_content(message)
         content = extracted["content"]
         response_metadata = message.response_metadata or {}
-        display_content = response_metadata.get("display_content")
-        if role == MessageRole.user and isinstance(display_content, str):
-            content = display_content
+        structured_metadata = internal_prompt_metadata(response_metadata)
+        display_projection = None
+        if isinstance(message.content, str):
+            display_projection = project_message_for_display(
+                message.content,
+                response_metadata,
+            )
+            if role == MessageRole.user:
+                content = display_projection.content
+        elif structured_metadata is not None:
+            raise TypeError("内部结构消息 content 必须是字符串")
+        else:
+            display_content = response_metadata.get("display_content")
+            if display_content is not None:
+                if not isinstance(display_content, str):
+                    raise TypeError("message metadata.display_content 必须是字符串")
+                if role == MessageRole.user:
+                    content = display_content
         message_id = response_metadata.get("message_id")
         if not isinstance(message_id, str) or not message_id:
             raise RuntimeError(
@@ -96,6 +127,13 @@ class MessageService:
                 }
             }
         )
+        if structured_metadata is not None:
+            if display_projection is None:
+                raise RuntimeError("内部结构消息缺少展示投影")
+            metadata = {
+                "langchain_type": message.type,
+                **display_projection.metadata,
+            }
         return MessageDTO(
             message_id=message_id,
             session_id=session_id,
@@ -113,7 +151,7 @@ class MessageService:
         if isinstance(value, datetime):
             parsed = value
         elif isinstance(value, str) and value:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value)
         else:
             raise RuntimeError(f"用户可见消息缺少持久化 {key}")
         if parsed.tzinfo is None:
@@ -182,16 +220,22 @@ class MessageService:
         content = getattr(message, "content", "")
         if not isinstance(content, str):
             return False
-        stripped = content.strip()
-        return (
-            stripped.startswith("<system_reminder>")
-            and stripped.endswith("</system_reminder>")
-        )
+        metadata = message.response_metadata or {}
+        if internal_prompt_metadata(metadata) is None:
+            return False
+        validate_internal_message(content, metadata)
+        return True
 
     @staticmethod
     def _is_user_visible_message(message: BaseMessage) -> bool:
         if MessageService._is_system_reminder_only_message(message):
-            return False
+            content = message.content
+            if not isinstance(content, str):
+                raise TypeError("内部结构消息 content 必须是字符串")
+            return project_message_for_display(
+                content,
+                message.response_metadata or {},
+            ).visible
         if isinstance(message, ToolMessage):
             return False
         if isinstance(message, AIMessage):
@@ -506,7 +550,7 @@ class MessageService:
         attachments = message_create.attachments
         if self._attachment_store is not None:
             attachments = self._attachment_store.persist_inline(session_id, attachments)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return MessageDTO(
             message_id=create_prefixed_id("msg"),
             session_id=session_id,

@@ -35,6 +35,8 @@ import {
   useAppState,
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
+import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
+import { createSessionConnection } from "./gatewayApi";
 import {
   DEFAULT_MAIN_AREA_RATIOS,
   LAYOUT_RESIZING_CLASS,
@@ -79,16 +81,14 @@ export default function AppShell() {
     activateGatewayWorkspace,
     refreshGatewayState,
     reconnectGatewayWorkspace,
-    safeRestartManagedGatewayWorkspaceBackend,
-    forceRestartManagedGatewayWorkspaceBackend,
-    probeExternalGatewayWorkspace,
-    addLocalGatewayWorkspace,
+    startManagedGatewayWorkspaceBackend,
+    stopManagedGatewayWorkspaceBackend,
+    addManagedGatewayWorkspace,
     addSshGatewayWorkspace,
     removeGatewayWorkspace,
     renameGatewayWorkspace,
     setGatewayWorkspaceParent,
     refreshGatewayWorkspaceSessions,
-    reorderGatewayWorkspaces,
     copySessionInformation,
     copyWorkspaceInformation,
     updateUiSettings,
@@ -99,10 +99,18 @@ export default function AppShell() {
     clearPendingRequests,
     reorderPendingRequests,
     sendPendingRequestImmediately,
+    refreshGoal,
+    updateGoal,
+    clearGoal,
     loadOlderMessages,
+    loadTurnDetails,
+    refreshTurnHistory,
+    loadOlderTraceHistory,
+    refreshTraceHistory,
   } = useAppState();
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
-  const [sessionCatalogRefreshVersion, setSessionCatalogRefreshVersion] = useState(0);
+  const [sessionCatalogRefreshVersions, setSessionCatalogRefreshVersions] =
+    useState<ReadonlyMap<string, number>>(new Map());
   const [workbenchView, setWorkbenchView] = useState<WorkbenchView>(
     () => state.uiSettings.layout.workbench_view ?? "sessions",
   );
@@ -145,10 +153,24 @@ export default function AppShell() {
     activeSession && activeSessionWorkspaceId
       ? sessionScopeKey(activeSessionWorkspaceId, activeSession.session_id)
       : activeSession?.session_id ?? null;
+  const activeTurnTimeline = activeSessionCacheKey
+    ? state.turnTimelinesBySession.get(activeSessionCacheKey) ?? null
+    : null;
   const agentSessionsPreferences = useMemo(
     () => resolveAgentSessionsPreferences(state.uiSettings),
     [state.uiSettings],
   );
+  const sessionCatalogSyncKeys = useMemo(
+    () => buildSessionCatalogSyncKeys(state.sessionsByWorkspace),
+    [state.sessionsByWorkspace],
+  );
+  const invalidateSessionCatalog = useCallback((workspaceId: string) => {
+    setSessionCatalogRefreshVersions((previous) => {
+      const next = new Map(previous);
+      next.set(workspaceId, (previous.get(workspaceId) ?? 0) + 1);
+      return next;
+    });
+  }, []);
   const expandedFileTreePaths = useMemo(() => {
     if (!activeSessionWorkspaceId) {
       return [""];
@@ -216,14 +238,36 @@ export default function AppShell() {
     [
       activeSession,
       activeSessionCacheKey,
-      state.messages,
       state.pendingConversations,
-      state.traceEvents,
+      state.turnTimelinesBySession,
     ],
   );
-  const receivedEvents = activeSession
-    ? (state.eventQueuesBySession.get(activeSessionCacheKey ?? activeSession.session_id) ?? [])
-    : [];
+  const activeTraceHistory = activeSession
+    ? state.sessionTraceHistoryBySession.get(
+        activeSessionCacheKey ?? activeSession.session_id,
+      ) ?? null
+    : null;
+  const receivedEvents = useMemo(() => {
+    if (!activeSession) return [];
+    const scopeKey = activeSessionCacheKey ?? activeSession.session_id;
+    const historical = (activeTraceHistory?.items ?? []).map((event) => ({
+      id: `initial_load:${event.event_id}`,
+      kind: "trace" as const,
+      sessionId: activeSession.session_id,
+      receivedAt: event.timestamp,
+      source: "initial_load" as const,
+      event,
+    }));
+    return [
+      ...historical,
+      ...(state.eventQueuesBySession.get(scopeKey) ?? []),
+    ];
+  }, [
+    activeSession,
+    activeSessionCacheKey,
+    activeTraceHistory?.items,
+    state.eventQueuesBySession,
+  ]);
   const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
   const sortedSessions = useMemo(
     () => [...state.sessions].sort(
@@ -275,6 +319,45 @@ export default function AppShell() {
   const activePreviewPath = workspacePreview.activePath;
   const previewLoadingPath = workspacePreview.loadingPath;
   const previewError = workspacePreview.error;
+  const resourcePanelActive = auxiliaryVisible && auxiliaryTab === "resources";
+
+  useEffect(() => {
+    if (state.contentView !== "resources") {
+      return;
+    }
+    setAuxiliaryVisible(true);
+    setAuxiliaryTab("resources");
+    persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "resources" });
+    switchContentView("default");
+  }, [persistLayoutSettings, state.contentView, switchContentView]);
+
+  useEffect(() => {
+    if (!resourcePanelActive || !activeSession) {
+      return;
+    }
+
+    let disposed = false;
+    let pollInFlight = false;
+    const poll = async (silent: boolean) => {
+      if (disposed || pollInFlight || document.visibilityState !== "visible") {
+        return;
+      }
+      pollInFlight = true;
+      try {
+        await refreshSessionResources(activeSession.session_id, { silent });
+      } finally {
+        pollInFlight = false;
+      }
+    };
+
+    const initialTimerId = window.setTimeout(() => void poll(false), 120);
+    const timerId = window.setInterval(() => void poll(true), 5000);
+    return () => {
+      disposed = true;
+      window.clearTimeout(initialTimerId);
+      window.clearInterval(timerId);
+    };
+  }, [activeSession, refreshSessionResources, resourcePanelActive]);
 
   const openSessionChangeInPreview = (file: SessionFileChange) => {
     if (!state.activeChangeset) {
@@ -546,6 +629,7 @@ export default function AppShell() {
       await activateGatewayWorkspace(workspaceId);
     }
     await createSession(DEFAULT_SESSION_TITLE, workspaceId, folderId);
+    invalidateSessionCatalog(workspaceId);
   };
   const handleCreateSessionFolder = async (
     workspaceId: string,
@@ -558,7 +642,7 @@ export default function AppShell() {
       name,
       parentNodeId,
     );
-    setSessionCatalogRefreshVersion((version) => version + 1);
+    invalidateSessionCatalog(workspaceId);
   };
   const handleSessionFolderDeleted = async (
     workspaceId: string,
@@ -631,7 +715,7 @@ export default function AppShell() {
         return;
       }
       await deleteSession(sessionId, workspaceId);
-      setSessionCatalogRefreshVersion((version) => version + 1);
+      invalidateSessionCatalog(workspaceId);
     }).catch((error: unknown) => {
       setStatus(`删除会话失败: ${error instanceof Error ? error.message : String(error)}`);
     });
@@ -642,14 +726,14 @@ export default function AppShell() {
     parentSessionId: string | null,
   ) => {
     await setSessionParent(workspaceId, sessionId, parentSessionId);
-    setSessionCatalogRefreshVersion((version) => version + 1);
+    invalidateSessionCatalog(workspaceId);
   };
   const handleForkSessionContext = async (
     workspaceId: string,
     sourceSessionId: string,
   ) => {
     await forkSessionContext(workspaceId, sourceSessionId);
-    setSessionCatalogRefreshVersion((version) => version + 1);
+    invalidateSessionCatalog(workspaceId);
   };
   const closeNameDialog = () => {
     if (nameDialogSubmitting) {
@@ -673,7 +757,7 @@ export default function AppShell() {
 
     void action
       .then(() => {
-        setSessionCatalogRefreshVersion((version) => version + 1);
+        invalidateSessionCatalog(nameDialog.workspaceId);
         setNameDialog(null);
       })
       .catch((error: unknown) => {
@@ -739,7 +823,6 @@ export default function AppShell() {
       "agent",
       "events",
       "requests",
-      "resources",
     ].includes(contentView);
     const activeSessionChangeHint =
       defaultViewChangesHint &&
@@ -775,6 +858,13 @@ export default function AppShell() {
           items={receivedEvents}
           limit={FRONTEND_EVENT_QUEUE_LIMIT}
           sessionId={activeSession?.session_id ?? ""}
+          active={contentView === "events"}
+          historyLoading={activeTraceHistory?.loading ?? false}
+          historyLoadingOlder={activeTraceHistory?.loadingOlder ?? false}
+          historyHasMore={activeTraceHistory?.hasMore ?? false}
+          historyError={activeTraceHistory?.error ?? null}
+          onLoadOlderHistory={loadOlderTraceHistory}
+          onRetryHistory={() => void refreshTraceHistory()}
         />
         </div>
         <div
@@ -789,30 +879,7 @@ export default function AppShell() {
           error={state.llmRequestLogsError}
           loadedAt={state.llmRequestLogsLoadedAt}
           sessionId={activeSession?.session_id ?? ""}
-        />
-        </div>
-        <div
-          className={`content-view-slot${
-            contentView === "resources" ? "" : " preserve-mounted-hidden"
-          }`}
-          hidden={contentView !== "resources"}
-        >
-        <ResourcePanel
-          resources={state.sessionResources}
-          loading={state.sessionResourcesLoading}
-          error={state.sessionResourcesError}
-          loadedAt={state.sessionResourcesLoadedAt}
-          sessionId={activeSession?.session_id ?? ""}
-          workspaceId={activeSessionWorkspaceId}
-          onRefresh={() => {
-            if (activeSession) {
-              void refreshSessionResources(activeSession.session_id);
-            }
-          }}
-          onControl={controlSessionResource}
-          onOpenTerminalPreview={workspacePreview.openTerminalPreview}
-          onOpenBrowserPreview={workspacePreview.openBrowserPreview}
-          onShowConversation={showConversation}
+          active={contentView === "requests"}
         />
         </div>
         <div
@@ -827,10 +894,19 @@ export default function AppShell() {
             conversations={conversations}
             expandDetails={state.expandDetails}
             hasActiveSession={Boolean(activeSession)}
-            hasOlderMessages={state.messageHistoryHasMore}
-            loadingOlderMessages={state.messageHistoryLoadingOlder}
-            historyError={state.messageHistoryError}
+            hasOlderMessages={activeTurnTimeline?.hasMore ?? false}
+            loadingOlderMessages={activeTurnTimeline?.loadingOlder ?? false}
+            historyLoading={Boolean(activeSession) && (
+              !activeTurnTimeline || activeTurnTimeline.phase === "bootstrapping"
+            )}
+            projectionState={activeTurnTimeline?.projectionState ?? "ready"}
+            timelineGeneration={activeTurnTimeline?.generation ?? 0}
+            projectionEpoch={activeTurnTimeline?.projectionEpoch ?? null}
+            historyError={activeTurnTimeline?.error ?? null}
             onLoadOlderMessages={loadOlderMessages}
+            loadingDetailTurnIds={activeTurnTimeline?.loadingDetailIds ?? []}
+            onLoadTurnDetails={loadTurnDetails}
+            onRetryHistory={refreshTurnHistory}
             sessionChangeSummary={activeSessionChangeHint}
             sessionChangesLoading={defaultViewChangesLoading}
             onOpenChanges={handleOpenChangesView}
@@ -884,27 +960,10 @@ export default function AppShell() {
         <GatewayControlCenter
           apiPort={resolvedApiPort}
           workspaces={state.gatewayWorkspaces}
-          activeWorkspaceId={state.activeGatewayWorkspaceId}
-          recentLocalWorkspacePaths={state.uiSettings.recent_local_workspace_paths}
-          switching={state.workspaceSwitching}
-          removingWorkspaceIds={state.removingGatewayWorkspaceIds}
           gatewayError={state.gatewayError}
-          onActivate={activateGatewayWorkspace}
-          onAddLocal={addLocalGatewayWorkspace}
           onAddSsh={addSshGatewayWorkspace}
-          onRemove={handleRemoveWorkspace}
-          onRename={renameGatewayWorkspace}
-          onReorder={reorderGatewayWorkspaces}
           onRefresh={refreshGatewayState}
           onReconnect={reconnectGatewayWorkspace}
-          onSafeRestartManagedBackend={safeRestartManagedGatewayWorkspaceBackend}
-          onForceRestartManagedBackend={forceRestartManagedGatewayWorkspaceBackend}
-          onProbeExternalBackend={probeExternalGatewayWorkspace}
-          onUseWorkspace={handleUseGatewayWorkspace}
-          consoleView={state.uiSettings.gateway_console.view}
-          onConsoleViewChange={(view) => {
-            persistUiSettings({ gateway_console: { view } });
-          }}
         />
       </div>
       <main
@@ -935,17 +994,24 @@ export default function AppShell() {
             onSetWorkspaceParent={setGatewayWorkspaceParent}
             onRefreshWorkspaceSessions={refreshGatewayWorkspaceSessions}
             onRemoveWorkspace={handleRemoveWorkspace}
+            onAddWorkspace={addManagedGatewayWorkspace}
+            onOpenGatewayControl={() => handleWorkbenchViewChange("gateway")}
+            onStartWorkspace={startManagedGatewayWorkspaceBackend}
+            onStopWorkspace={stopManagedGatewayWorkspaceBackend}
             onRenameWorkspace={renameGatewayWorkspace}
             onCopySessionInformation={copySessionInformation}
             onCopyWorkspaceInformation={copyWorkspaceInformation}
             onSelectWorkspaceSession={handleSelectAgentSession}
             activeSession={activeSession}
             sessionAttachmentSummaries={state.sessionAttachmentSummaries}
+            activeJobIdsBySession={state.activeJobIdsBySession}
+            unreadSessionKeys={state.unreadSessionKeys}
             onCreateSession={handleCreateSession}
             onCreateSessionInFolder={handleCreateSessionInFolder}
             onCreateSessionFolder={handleCreateSessionFolder}
             onSessionFolderDeleted={handleSessionFolderDeleted}
-            catalogRefreshVersion={sessionCatalogRefreshVersion}
+            catalogSyncKeys={sessionCatalogSyncKeys}
+            catalogRefreshVersions={sessionCatalogRefreshVersions}
             flexRatio={mainAreaRatios.agent_sessions}
             preferences={agentSessionsPreferences}
             onPreferencesChange={(updater) => {
@@ -997,6 +1063,8 @@ export default function AppShell() {
           ) : null}
           <WorkspaceFilePreviewArea
             visible={previewVisible}
+            apiPort={resolvedApiPort}
+            workspaceId={activeSessionWorkspaceId}
             flexRatio={
               previewMaximized
                 ? mainAreaRatios.agent_sessions +
@@ -1029,6 +1097,7 @@ export default function AppShell() {
             onDraftChange={workspacePreview.setDraftContent}
             onCancelEdit={workspacePreview.cancelWorkspaceFileEdit}
             onSaveEdit={workspacePreview.saveWorkspaceFileEdit}
+            onOpenWorkspacePath={workspacePreview.openWorkspaceFilePath}
           />
           {auxiliaryVisible ? (
             <button
@@ -1048,6 +1117,7 @@ export default function AppShell() {
             workspaceId={activeSessionWorkspaceId}
             workspaceName={state.workspaceName ?? ""}
             workspaceRoot={state.workspaceRoot ?? ""}
+            sessionId={activeSession?.session_id ?? ""}
             activeFilePath={activePreviewPath}
             sessionChangesets={state.sessionChangesets}
             selectedChangesetId={state.selectedChangesetId}
@@ -1072,6 +1142,56 @@ export default function AppShell() {
               }));
             }}
             onTabChange={handleAuxiliaryTabChange}
+            resourcePanel={(
+              <ResourcePanel
+                resources={state.sessionResources}
+                loading={state.sessionResourcesLoading}
+                error={state.sessionResourcesError}
+                loadedAt={state.sessionResourcesLoadedAt}
+                sessionId={activeSession?.session_id ?? ""}
+                workspaceId={activeSessionWorkspaceId}
+                activePreviewPath={activePreviewPath}
+                goal={
+                  state.currentGoalSessionId === activeSession?.session_id
+                    ? state.currentGoal
+                    : null
+                }
+                goalLoading={state.goalLoading}
+                goalError={state.goalError}
+                onRefresh={() => {
+                  if (activeSession) {
+                    void refreshSessionResources(activeSession.session_id);
+                  }
+                }}
+                onRefreshGoal={() => refreshGoal()}
+                onUpdateGoal={(payload) => updateGoal(payload)}
+                onClearGoal={() => clearGoal()}
+                onControl={controlSessionResource}
+                onOpenTerminalPreview={workspacePreview.openTerminalPreview}
+                onOpenBrowserPreview={workspacePreview.openBrowserPreview}
+                onCloseResourcePreview={(kind, resourceId) =>
+                  workspacePreview.closeWorkspaceFilePreview(`${kind}://${resourceId}`)
+                }
+                onShowConversation={showConversation}
+                onCreateConnection={async (kind) => {
+                  if (!activeSession || !activeSessionWorkspaceId) {
+                    throw new Error("新建连接需要当前会话和 Gateway workspace_id");
+                  }
+                  const created = await createSessionConnection(
+                    resolvedApiPort,
+                    activeSessionWorkspaceId,
+                    activeSession.session_id,
+                    kind,
+                  );
+                  await refreshSessionResources(activeSession.session_id);
+                  if (created.kind === "terminal") {
+                    workspacePreview.openTerminalPreview(created.resourceId);
+                  } else {
+                    workspacePreview.openBrowserPreview(created.resourceId);
+                  }
+                }}
+              />
+            )}
             onToggleSearch={() => {
               handleAuxiliaryTabChange("files");
               setFileTreeSearchOpen((open) => !open);

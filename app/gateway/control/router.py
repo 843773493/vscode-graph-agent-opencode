@@ -5,14 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
+from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.coordinator import (
     GeneratorCapabilityMissingError,
     SessionGeneratorCoordinator,
 )
-from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.schemas import (
+    GatewaySessionSearchResultsDTO,
     GenerationRunDTO,
     GenerationRunListDTO,
     GeneratorDefinitionCreateRequest,
@@ -22,16 +23,15 @@ from app.gateway.control.schemas import (
     GeneratorManualRunRequest,
     GeneratorPlacementPreviewDTO,
     GeneratorPlacementPreviewRequest,
-    GatewaySessionSearchResultsDTO,
     WorkspaceFolderCreateRequest,
     WorkspaceNavigationBreadcrumbDTO,
     WorkspaceNavigationNodeUpdateRequest,
+    WorkspaceNavigationPlacementRequest,
     WorkspaceNavigationReorderRequest,
     WorkspaceNavigationTreeDTO,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.schemas.public_v2.common import APIResponse
-
 
 router = APIRouter(prefix="/api/gateway", tags=["gateway-control"])
 
@@ -190,6 +190,26 @@ async def reorder_workspace_navigation(
     try:
         result = store.reorder(payload, registry.targets())
     except (KeyError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.put(
+    "/workspace-navigation/placement",
+    response_model=APIResponse[WorkspaceNavigationTreeDTO],
+)
+async def place_workspace_navigation_node(
+    payload: WorkspaceNavigationPlacementRequest,
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+    registry: GatewayWorkspaceRegistry = Depends(_registry),
+    store: WorkspaceNavigationStore = Depends(_navigation_store),
+):
+    try:
+        result = store.place(payload, registry.targets())
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 

@@ -1,6 +1,9 @@
 import type { TraceEvent } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
-import { conversationTokenUsage } from "../tokenUsage";
+import {
+  conversationModelUsage,
+  conversationTokenUsage,
+} from "../tokenUsage";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -13,8 +16,8 @@ const tokenUsage = {
   output_tokens: 30,
   total_tokens: 270,
   cache_read_input_tokens: 180,
-  model_calls: 2,
-  reported_model_calls: 2,
+  model_calls: 1,
+  reported_model_calls: 1,
 };
 
 const agentEnd: TraceEvent = {
@@ -37,7 +40,7 @@ const traceConversation = {
   status: "done",
   jobId: "job_usage",
   pending: false,
-  source: "messages",
+  source: "turn",
 } satisfies ConversationView;
 
 const traceResult = conversationTokenUsage(traceConversation);
@@ -65,8 +68,37 @@ const messageConversation = {
 } satisfies ConversationView;
 
 assert(
-  conversationTokenUsage(messageConversation)?.modelCalls === 2,
+  conversationTokenUsage(messageConversation)?.modelCalls === 1,
   "trace 缺失时应从 Assistant checkpoint metadata 恢复统计",
+);
+
+assert(
+  conversationTokenUsage({
+    ...traceConversation,
+    events: [
+      {
+        ...agentEnd,
+        payload: {
+          token_usage: {
+            ...tokenUsage,
+            model_calls: 2,
+            reported_model_calls: 2,
+          },
+        },
+        raw: {
+          payload: {
+            token_usage: {
+              ...tokenUsage,
+              model_calls: 2,
+              reported_model_calls: 2,
+            },
+          },
+        },
+      },
+    ],
+    assistantMessages: [],
+  }) === null,
+  "旧版累计的多模型请求统计不应冒充最后一次请求统计",
 );
 
 assert(
@@ -75,4 +107,26 @@ assert(
     events: [],
   }) === null,
   "旧回复没有 token_usage 时不应伪造零值",
+);
+
+const modelEvents: TraceEvent[] = ["big-pickle", "openrouter/free"].map(
+  (model, index) => ({
+    event_id: `evt_model_${index}`,
+    part_id: null,
+    session_id: "ses_usage",
+    job_id: "job_usage",
+    type: "llm_request",
+    timestamp: `2026-07-13T00:00:0${index}.000Z`,
+    payload: { model },
+    raw: { payload: { model } },
+  }),
+);
+const modelUsage = conversationModelUsage({
+  ...traceConversation,
+  events: modelEvents,
+});
+assert(modelUsage?.finalModelId === "openrouter/free", "应显示最终响应模型");
+assert(
+  conversationModelUsage({ ...traceConversation, events: [] }) === null,
+  "没有模型调用记录时不应伪造模型 ID",
 );

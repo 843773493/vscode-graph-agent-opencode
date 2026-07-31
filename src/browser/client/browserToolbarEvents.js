@@ -16,6 +16,7 @@ export function bindBrowserToolbarEvents({
   detach,
   loadSnapshot,
   command,
+  navigate,
   updateControls,
   applyState,
   markDeleted,
@@ -47,7 +48,7 @@ export function bindBrowserToolbarEvents({
       setStatus("请输入要打开的 URL", true);
       return;
     }
-    command("goto", { url: targetUrl });
+    navigate(targetUrl);
   });
 
   closeBrowserButton.addEventListener("click", async () => {

@@ -32,3 +32,12 @@ def test_workspace_backend_reads_relative_and_virtual_absolute_paths(tmp_path):
     assert absolute_result.error is None
     assert absolute_result.file_data is not None
     assert absolute_result.file_data["content"] == "# Workspace\n"
+
+
+def test_workspace_backend_lists_session_artifact_route_root(tmp_path):
+    backend = build_workspace_backend(tmp_path)
+
+    result = backend.ls("/session-artifacts")
+
+    assert result.error is None
+    assert result.entries == []

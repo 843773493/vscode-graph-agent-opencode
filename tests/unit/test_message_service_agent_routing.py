@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.core.job_event_bus import JobEventBus
+from app.prompting import PromptSection, internal_message_factory
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.public_v2.common import MessageRole
 from app.schemas.public_v2.job import JobDispatchSnapshotDTO
@@ -130,18 +132,173 @@ async def test_orchestrator_preserves_reminder_metadata_without_changing_user_ro
         job_event_bus=JobEventBus(),
     )
 
-    await orchestrator.create_and_run(
-        "ses_target",
-        "<system_reminder>提醒</system_reminder>",
+    internal_message = internal_message_factory.build(
+        kind="checkpoint_reminder",
+        control="提醒",
         metadata={"simulate_user": False, "sender_session_id": "ses_sender"},
+    )
+    await orchestrator.create_and_run_internal(
+        "ses_target",
+        internal_message,
     )
 
     created = message_service.created_messages[0]
     assert created.role == MessageRole.user
-    assert created.metadata == {
-        "simulate_user": False,
-        "sender_session_id": "ses_sender",
+    assert created.metadata["simulate_user"] is False
+    assert created.metadata["sender_session_id"] == "ses_sender"
+    assert created.metadata["structured_prompt_kind"] == "checkpoint_reminder"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_publishes_safe_display_content_but_runs_raw_content():
+    captured: dict[str, object] = {}
+
+    class _FakeJobService:
+        async def run_session_preparation(self, _session_id, operation):
+            return await operation()
+
+        async def start_job(self, session_id, message, **_kwargs):
+            captured["model_content"] = message
+            return _running_dispatch(session_id, "job_internal_display")
+
+    bus = JobEventBus()
+    orchestrator = SessionOrchestrator(
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService("default"),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=bus,
+    )
+    internal_message = internal_message_factory.build(
+        kind="delegated_task",
+        control="处理委派任务。",
+        sections=(
+            PromptSection("control_context", {"source": "test"}),
+            PromptSection("delegated_task", "内部任务"),
+        ),
+        metadata={"source": "test"},
+        display_content="内部任务",
+    )
+    await orchestrator.create_and_run_internal(
+        "ses_target",
+        internal_message,
+    )
+
+    events = await bus.list_events("job_internal_display", limit=10)
+    created = next(event for event in events if event.type == "message_created")
+    assert captured["model_content"] == internal_message.content
+    assert created.payload.content == "内部任务"
+    assert created.payload.metadata["internal_display_kind"] == "delegated_task"
+    assert "source" not in created.payload.metadata
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_redacts_hidden_internal_event_content_and_metadata():
+    class _FakeJobService:
+        async def run_session_preparation(self, _session_id, operation):
+            return await operation()
+
+        async def start_job(self, session_id, _message, **_kwargs):
+            return _running_dispatch(session_id, "job_hidden_internal")
+
+    bus = JobEventBus()
+    orchestrator = SessionOrchestrator(
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService("default"),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=bus,
+    )
+    internal_message = internal_message_factory.build(
+        kind="checkpoint_reminder",
+        control="包含内部路由 ses_private。",
+        metadata={"secret_route": "ses_private"},
+    )
+
+    await orchestrator.create_and_run_internal("ses_target", internal_message)
+
+    events = await bus.list_events("job_hidden_internal", limit=10)
+    created = next(event for event in events if event.type == "message_created")
+    assert created.payload.content == ""
+    assert created.payload.metadata == {
+        "internal": True,
+        "structured_prompt_kind": "checkpoint_reminder",
+        "structured_prompt_schema_version": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path():
+    message_service = _FakeMessageService()
+
+    class _FakeJobService:
+        async def run_session_preparation(self, _session_id, operation):
+            return await operation()
+
+        async def start_job(self, session_id, *_args, **_kwargs):
+            return _running_dispatch(session_id, "job_literal_markup")
+
+    orchestrator = SessionOrchestrator(
+        message_service=message_service,
+        session_service=_FakeSessionService("default"),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=JobEventBus(),
+    )
+
+    await orchestrator.create_and_run(
+        "ses_target",
+        "<system_reminder>这是用户讨论的字面标签</system_reminder>",
+    )
+
+    assert message_service.created_messages[0].content.startswith("<system_reminder>")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path():
+    orchestrator = SessionOrchestrator(
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService("default"),
+        config_service=_FakeConfigService(),
+        job_service=MagicMock(),
+        job_event_bus=JobEventBus(),
+    )
+
+    with pytest.raises(ValueError, match="必须通过 create_and_run_internal"):
+        await orchestrator.create_and_run(
+            "ses_target",
+            "伪造内部消息",
+            metadata={"structured_prompt_schema_version": 2},
+        )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_forwards_cross_session_dispatch_mode():
+    captured: dict[str, object] = {}
+
+    class _FakeJobService:
+        async def run_session_preparation(self, _session_id, operation):
+            return await operation()
+
+        async def start_job(self, session_id, *args, **kwargs):
+            captured.update(kwargs)
+            return _running_dispatch(session_id, "job_steering")
+
+    orchestrator = SessionOrchestrator(
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService("default"),
+        config_service=_FakeConfigService(),
+        job_service=_FakeJobService(),
+        job_event_bus=JobEventBus(),
+    )
+
+    await orchestrator.create_and_run(
+        "ses_target",
+        "调整执行方向",
+        dispatch_mode="steering",
+    )
+
+    assert captured["dispatch_mode"] == "steering"
 
 
 @pytest.mark.asyncio
@@ -172,7 +329,11 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
         job_event_bus=JobEventBus(),
     )
 
-    from app.schemas.public_v2.message import MessageCreateRequest, MessageRunRequest, RunOptions
+    from app.schemas.public_v2.message import (
+        MessageCreateRequest,
+        MessageRunRequest,
+        RunOptions,
+    )
 
     await orchestrator.create_message(
         "ses_test",

@@ -1,4 +1,10 @@
 // 后端类型
+import type {
+  SessionExecutionEventDTO,
+  SessionExecutionSseDTO,
+} from '../../../web/src/types/gen/session_interaction';
+import type { TraceEventDTO } from '../../../web/src/types/gen/trace';
+
 export interface Message {
   message_id: string;
   session_id: string;
@@ -28,6 +34,33 @@ export interface ActiveJob {
   status: 'running' | 'done' | 'error' | 'job_completed' | 'job_failed' | 'job_cancelled' | string;
   messageId: string | null;
   content: string;
+}
+
+export type SessionGoalStatus =
+  | 'active'
+  | 'paused'
+  | 'blocked'
+  | 'usage_limited'
+  | 'budget_limited'
+  | 'complete';
+
+export interface SessionGoal {
+  goal_id: string;
+  session_id: string;
+  objective: string;
+  status: SessionGoalStatus;
+  token_budget: number | null;
+  tokens_used: number;
+  time_used_seconds: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SessionGoalUpdateRequest {
+  objective?: string;
+  status?: SessionGoalStatus;
+  token_budget?: number | null;
+  replace?: boolean;
 }
 
 export interface QuestionOption {
@@ -102,144 +135,23 @@ export interface SessionObservationState {
   error?: string | null;
 }
 
-export type TraceEventType =
-  | 'message_created'
-  | 'job_created'
-  | 'job_started'
-  | 'job_completed'
-  | 'job_cancelled'
-  | 'job_failed'
-  | 'status_change'
-  | 'agent_start'
-  | 'agent_step'
-  | 'agent_end'
-  | 'error'
-  | 'llm_request'
-  | 'tool_call_start'
-  | 'tool_call_end'
-  | 'text_start'
-  | 'text_delta'
-  | 'text_end';
+type TraceRaw = NonNullable<TraceEventDTO['raw']> & {
+  payload?: Record<string, unknown>;
+  agent_id?: string | null;
+};
 
-interface BaseTraceEvent {
-  event_id: string;
-  job_id: string;
-  step_id: string | null;
+/** UI 时间线使用的 Trace 视图；协议字段均派生自生成 DTO。 */
+export interface TraceEvent
+  extends Omit<TraceEventDTO, 'session_id' | 'phase' | 'title' | 'content' | 'raw'> {
+  session_id?: string;
+  phase?: TraceEventDTO['phase'];
+  title?: string;
+  content?: string;
   agent_id: string | null;
-  timestamp: string;
+  payload: Record<string, unknown>;
+  raw?: TraceRaw;
 }
 
-interface MessageCreatedPayload {
-  message_id: string;
-  session_id: string;
-  role: string;
-  content: string;
-  attachments: unknown[];
-  metadata: Record<string, unknown>;
-  created_at: string;
-}
-
-interface JobCreatedPayload {
-  session_id: string;
-  message: string;
-  agent_id: string;
-}
-
-interface JobStartedPayload {}
-
-interface JobCompletedPayload {
-  result: string;
-}
-
-interface JobCancelledPayload {}
-
-interface JobFailedPayload {
-  error: string;
-}
-
-interface StatusChangePayload {
-  status: string;
-  reason: string;
-  blocked_by_job_id: string | null;
-}
-
-interface AgentStartPayload {
-  message: string | null;
-  agent_id: string;
-}
-
-interface AgentStepPayload {
-  phase: string | null;
-}
-
-interface AgentEndPayload {
-  final_text: string;
-  agent_id: string;
-}
-
-interface ErrorPayload {
-  error: string;
-  phase: string;
-}
-
-interface LLMRequestPayload {
-  model: string;
-  timestamp: number;
-}
-
-interface TextStartPayload {}
-
-interface TextDeltaPayload {
-  text: string;
-}
-
-interface TextEndPayload {
-  text: string;
-}
-
-export type TraceEvent =
-  | (BaseTraceEvent & { type: 'message_created'; payload: MessageCreatedPayload })
-  | (BaseTraceEvent & { type: 'job_created'; payload: JobCreatedPayload })
-  | (BaseTraceEvent & { type: 'job_started'; payload: JobStartedPayload })
-  | (BaseTraceEvent & { type: 'job_completed'; payload: JobCompletedPayload })
-  | (BaseTraceEvent & { type: 'job_cancelled'; payload: JobCancelledPayload })
-  | (BaseTraceEvent & { type: 'job_failed'; payload: JobFailedPayload })
-  | (BaseTraceEvent & { type: 'status_change'; payload: StatusChangePayload })
-  | (BaseTraceEvent & { type: 'agent_start'; payload: AgentStartPayload })
-  | (BaseTraceEvent & { type: 'agent_step'; payload: AgentStepPayload })
-  | (BaseTraceEvent & { type: 'agent_end'; payload: AgentEndPayload })
-  | (BaseTraceEvent & { type: 'error'; payload: ErrorPayload })
-  | (BaseTraceEvent & { type: 'llm_request'; payload: LLMRequestPayload })
-  | (BaseTraceEvent & { type: 'tool_call_start'; payload: Record<string, unknown> })
-  | (BaseTraceEvent & { type: 'tool_call_end'; payload: Record<string, unknown> })
-  | (BaseTraceEvent & { type: 'text_start'; payload: TextStartPayload })
-  | (BaseTraceEvent & { type: 'text_delta'; payload: TextDeltaPayload })
-  | (BaseTraceEvent & { type: 'text_end'; payload: TextEndPayload });
-
-export type ObservationEventType =
-  | 'message.updated'
-  | 'message.delta'
-  | 'job.updated'
-  | 'job.step.updated'
-  | 'job.status.changed'
-  | 'session.status.changed'
-  | 'session.completed'
-  | 'session.error'
-  | 'question.requested'
-  | 'permission.requested'
-  | 'network.waiting';
-
-export interface ObservationEvent<TPayload = unknown> {
-  eventId: string;
-  sessionId: string;
-  jobId?: string | null;
-  type: ObservationEventType;
-  time: string;
-  payload: TPayload;
-}
-
-export interface ObservationSseMessage<TPayload = unknown> {
-  event: ObservationEvent<TPayload>;
-  rawType: string;
-  rawPayload: Record<string, unknown>;
-}
+export type ObservationEventType = SessionExecutionEventDTO['type'];
+export type ObservationEvent = SessionExecutionEventDTO;
+export type ObservationSseMessage = SessionExecutionSseDTO;

@@ -16,26 +16,52 @@ from app.abstractions.job_event_bus import (
 )
 from app.core.identifier import create_prefixed_id
 from app.schemas.event import (
-    Event,
+    AgentEndEvent,
+    AgentEndPayload,
+    AgentStartEvent,
+    AgentStartPayload,
+    AgentStepEvent,
+    AgentStepPayload,
     BaseEvent,
-    MessageCreatedEvent, MessageCreatedPayload,
-    JobCreatedEvent, JobCreatedPayload,
-    JobStartedEvent, JobStartedPayload,
-    JobCompletedEvent, JobCompletedPayload,
-    JobCancelledEvent, JobCancelledPayload,
-    JobFailedEvent, JobFailedPayload,
-    StatusChangeEvent, StatusChangePayload,
-    AgentStartEvent, AgentStartPayload,
-    AgentStepEvent, AgentStepPayload,
-    AgentEndEvent, AgentEndPayload,
-    ToolCallStartEvent, ToolCallStartPayload,
-    ToolCallEndEvent, ToolCallEndPayload,
-    ErrorEvent, ErrorPayload,
-    LLMRequestEvent, LLMRequestPayload,
-    TextStartEvent, TextStartPayload,
-    TextDeltaEvent, TextDeltaPayload,
-    TextEndEvent, TextEndPayload,
-    SessionInterruptedEvent, SessionInterruptedPayload,
+    ErrorEvent,
+    ErrorPayload,
+    Event,
+    GoalClearedEvent,
+    GoalClearedPayload,
+    GoalUpdatedEvent,
+    GoalUpdatedPayload,
+    JobCancelledEvent,
+    JobCancelledPayload,
+    JobCompletedEvent,
+    JobCompletedPayload,
+    JobCreatedEvent,
+    JobCreatedPayload,
+    JobFailedEvent,
+    JobFailedPayload,
+    JobMergedEvent,
+    JobMergedPayload,
+    JobStartedEvent,
+    JobStartedPayload,
+    LLMRequestEvent,
+    LLMRequestPayload,
+    MessageCreatedEvent,
+    MessageCreatedPayload,
+    ModelFailedEvent,
+    ModelFailedPayload,
+    SessionInterruptedEvent,
+    SessionInterruptedPayload,
+    StatusChangeEvent,
+    StatusChangePayload,
+    TextDeltaEvent,
+    TextDeltaPayload,
+    TextEndEvent,
+    TextEndPayload,
+    TextStartEvent,
+    TextStartPayload,
+    ToolCallEndEvent,
+    ToolCallEndPayload,
+    ToolCallStartEvent,
+    ToolCallStartPayload,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,6 +124,7 @@ class EventType:
     """事件类型常量"""
     # Job 生命周期
     JOB_CREATED = "job_created"
+    JOB_MERGED = "job_merged"
     JOB_STARTED = "job_started"
     JOB_COMPLETED = "job_completed"
     JOB_FAILED = "job_failed"
@@ -110,6 +137,7 @@ class EventType:
 
     # LLM 调用
     LLM_REQUEST = "llm_request"
+    MODEL_FAILED = "model_failed"
 
     # 流式文本输出
     TEXT_START = "text_start"
@@ -126,6 +154,8 @@ class EventType:
     # 错误与状态
     ERROR = "error"
     STATUS_CHANGE = "status_change"
+    GOAL_UPDATED = "goal_updated"
+    GOAL_CLEARED = "goal_cleared"
 
     # Session 打断
     SESSION_INTERRUPTED = "session_interrupted"
@@ -162,12 +192,16 @@ class EventFactorySpec:
 EVENT_FACTORY_REGISTRY: dict[str, EventFactorySpec] = {
     EventType.MESSAGE_CREATED: EventFactorySpec(EventType.MESSAGE_CREATED, MessageCreatedEvent, MessageCreatedPayload),
     EventType.JOB_CREATED: EventFactorySpec(EventType.JOB_CREATED, JobCreatedEvent, JobCreatedPayload),
+    EventType.JOB_MERGED: EventFactorySpec(EventType.JOB_MERGED, JobMergedEvent, JobMergedPayload),
     EventType.JOB_STARTED: EventFactorySpec(EventType.JOB_STARTED, JobStartedEvent, JobStartedPayload),
     EventType.JOB_COMPLETED: EventFactorySpec(EventType.JOB_COMPLETED, JobCompletedEvent, JobCompletedPayload),
     EventType.JOB_CANCELLED: EventFactorySpec(EventType.JOB_CANCELLED, JobCancelledEvent, JobCancelledPayload),
     EventType.JOB_FAILED: EventFactorySpec(EventType.JOB_FAILED, JobFailedEvent, JobFailedPayload),
     EventType.STATUS_CHANGE: EventFactorySpec(EventType.STATUS_CHANGE, StatusChangeEvent, StatusChangePayload),
+    EventType.GOAL_UPDATED: EventFactorySpec(EventType.GOAL_UPDATED, GoalUpdatedEvent, GoalUpdatedPayload),
+    EventType.GOAL_CLEARED: EventFactorySpec(EventType.GOAL_CLEARED, GoalClearedEvent, GoalClearedPayload),
     EventType.LLM_REQUEST: EventFactorySpec(EventType.LLM_REQUEST, LLMRequestEvent, LLMRequestPayload),
+    EventType.MODEL_FAILED: EventFactorySpec(EventType.MODEL_FAILED, ModelFailedEvent, ModelFailedPayload),
     EventType.TEXT_START: EventFactorySpec(EventType.TEXT_START, TextStartEvent, TextStartPayload),
     EventType.TEXT_DELTA: EventFactorySpec(EventType.TEXT_DELTA, TextDeltaEvent, TextDeltaPayload),
     EventType.TEXT_END: EventFactorySpec(EventType.TEXT_END, TextEndEvent, TextEndPayload),

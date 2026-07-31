@@ -10,18 +10,22 @@ from pathlib import Path
 from typing import IO
 from urllib.request import Request, urlopen
 
-import httpx
 import commentjson
+import httpx
 
+from configs.installer import install_user_configuration
 from tests.e2e.processes import (
     kill_process_on_port,
     resolve_workspace_python_executable,
     terminate_process,
 )
 
-
 LOCAL_TOKEN_HEADERS = {"X-Local-Token": "local-dev-token"}
 READY_TIMEOUT_SECONDS = 60
+
+
+def _test_boxteam_home(workspace_root: Path) -> Path:
+    return workspace_root.resolve().parent / "boxteam-home"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,17 +67,21 @@ def start_gateway_process(
     kill_process_on_port(port)
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
+    boxteam_home = _test_boxteam_home(workspace_root)
+    install_user_configuration(
+        config_root=boxteam_home / "config",
+        profile="default",
+        project_root=project_root,
+    )
     log_dir = workspace_root / ".boxteam" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     stdout_file = open(log_dir / "gateway.stdout.log", "a", encoding="utf-8")
     stderr_file = open(log_dir / "gateway.stderr.log", "a", encoding="utf-8")
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = str(workspace_root)
+    env["BOXTEAM_HOME"] = str(boxteam_home)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["BOXTEAM_GATEWAY_ROOT"] = str(workspace_root / ".boxteam" / "gateway")
-    env["BOXTEAM_USER_CONFIG_PATH"] = str(
-        workspace_root / ".boxteam" / "boxteam.jsonc"
-    )
     env["BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
     env["PYTHONUNBUFFERED"] = "1"
@@ -150,26 +158,28 @@ def write_gateway_remote_gateway_config(
     remote_gateway_port: int,
     private_key_path: Path,
 ) -> None:
-    boxteam_dir = workspace_root / ".boxteam"
-    boxteam_dir.mkdir(parents=True, exist_ok=True)
-    config_path = boxteam_dir / "boxteam.jsonc"
+    config_root = _test_boxteam_home(workspace_root) / "config"
+    install_user_configuration(
+        config_root=config_root,
+        profile="default",
+        project_root=Path.cwd(),
+    )
+    config_path = config_root / "gateway.jsonc"
     if not config_path.is_file():
         raise FileNotFoundError(f"Gateway E2E 工作区配置不存在: {config_path}")
     payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    payload["gateway"] = {
-        "workspaces": [
-            {
-                "kind": "remote_gateway",
-                "name": "remote docker gateway",
-                "host": "127.0.0.1",
-                "port": ssh_port,
-                "username": username,
-                "private_key_path": str(private_key_path.resolve()),
-                "remote_gateway_port": remote_gateway_port,
-                "activate": False,
-            }
-        ]
-    }
+    payload["workspaces"] = [
+        {
+            "kind": "remote_gateway",
+            "name": "remote docker gateway",
+            "host": "127.0.0.1",
+            "port": ssh_port,
+            "username": username,
+            "private_key_path": str(private_key_path.resolve()),
+            "remote_gateway_port": remote_gateway_port,
+            "activate": False,
+        }
+    ]
     config_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",

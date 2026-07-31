@@ -14,9 +14,10 @@ from app.schemas.public_v2.job import (
 T = TypeVar("T")
 from app.schemas.public_v2.message import AttachmentRef
 from app.schemas.public_v2.pending_request import (
-    PendingRequestKind,
+    MessageDispatchMode,
     PendingRequestListDTO,
     PendingRequestOrderItem,
+    PendingRequestSummaryListDTO,
 )
 
 
@@ -70,6 +71,13 @@ class JobServiceProtocol(Protocol):
 
     async def list_pending(self, session_id: str) -> PendingRequestListDTO: ...
 
+    async def list_pending_summaries(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> PendingRequestSummaryListDTO: ...
+
     async def update_pending(
         self,
         session_id: str,
@@ -110,5 +118,5 @@ class JobServiceProtocol(Protocol):
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
-        pending_kind: PendingRequestKind = "queued",
+        dispatch_mode: MessageDispatchMode = "queued",
     ) -> JobDispatchSnapshotDTO: ...

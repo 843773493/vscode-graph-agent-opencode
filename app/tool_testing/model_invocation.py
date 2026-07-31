@@ -16,6 +16,8 @@ from litellm.exceptions import (
     Timeout,
 )
 
+from app.prompting import internal_message_factory
+
 
 MAX_MODEL_CALLS_PER_ATTEMPT = 3
 MAX_TRANSIENT_RETRIES = 3
@@ -231,15 +233,21 @@ async def probe_tool_call(
         reasoning_only_calls += 1
         if model_call == max_model_calls:
             break
+        retry_message = internal_message_factory.build(
+            kind="tool_test_retry",
+            control=(
+                "你刚才只完成了 reasoning，测试任务尚未完成。"
+                f"请继续执行，并通过真实 tool call 调用 {tool.name}；"
+                "不要在普通正文中描述或模拟调用。"
+            ),
+            metadata={"source": "tool_test_retry", "tool_name": tool.name},
+        )
         conversation.extend(
             [
                 response,
                 HumanMessage(
-                    content=(
-                        "<system_reminder>你刚才只完成了 reasoning，测试任务尚未完成。"
-                        f"请继续执行，并通过真实 tool call 调用 {tool.name}；"
-                        "不要在普通正文中描述或模拟调用。</system_reminder>"
-                    )
+                    content=retry_message.content,
+                    response_metadata=retry_message.metadata,
                 ),
             ]
         )

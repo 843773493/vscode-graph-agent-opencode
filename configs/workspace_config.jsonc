@@ -1,0 +1,932 @@
+{
+  // ============================================================
+  // BoxTeam Workspace 配置模式定义 (JSON Schema)
+  // ============================================================
+  // 此文件定义了 workspace.jsonc 配置文件的验证模式。
+  // 用于 JSON Schema 验证，确保配置文件结构正确。
+  //
+  // 文件位置: configs/workspace_config.jsonc
+  // 参考标准: https://json-schema.org/
+  //
+  // 配置生效规则:
+  // - llm、agents、development 支持热重载；有效配置变化后从下一轮 Job 开始生效，
+  //   已经运行中的 Job 会继续使用启动时的配置快照。
+  // - default_agent 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。
+  // - ui 配置支持热重载，后续配置读取使用新值。
+  // - logger 当前不会动态调整运行中的日志系统，需要重启工作区后端。
+  // - mcp 当前不支持进程内热切换；修改会拒绝整个候选配置，需要重启工作区后端。
+  // - 用户级配置与工作区级配置深度合并；被高优先级值遮蔽的低优先级变化
+  //   不会触发有效配置 revision 变化。
+  // ============================================================
+
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boxteam.dev/schemas/workspace-config-v1.json",
+  "title": "BoxTeam Workspace Config Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "config_version",
+    "llm",
+    "logger",
+    "default_agent",
+    "agents"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "config_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "配置格式版本；程序会在加载旧版本时按顺序迁移。"
+    },
+    "llm": {
+      "type": "object",
+      "description": "LLM Provider 配置。支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。",
+      "additionalProperties": false,
+      "required": [
+        "providers"
+      ],
+      "properties": {
+        "providers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/provider"
+          }
+        }
+      }
+    },
+    "logger": {
+      "type": "object",
+      "description": "日志配置。修改后需要重启工作区后端。",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ],
+          "default": "info"
+        },
+        "pretty": {
+          "type": "boolean",
+          "description": "是否使用带 UTC 时间戳的本地易读格式；false 使用不带时间戳的紧凑文本格式。进程日志始终是文本流，不承诺 JSONL。修改后需要重启工作区后端。",
+          "default": true
+        }
+      }
+    },
+    "default_agent": {
+      "type": "string",
+      "description": "Default agent key in the agents object. 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。",
+      "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+    },
+    "agents": {
+      "type": "object",
+      "description": "Workspace agent registry, keyed by agent name. 支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/agentConfig"
+      },
+      "propertyNames": {
+        "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+      }
+    },
+    "ui": {
+      "$ref": "#/$defs/uiConfig"
+    },
+    "mcp": {
+      "$ref": "#/$defs/mcpConfig"
+    },
+    "development": {
+      "$ref": "#/$defs/developmentConfig"
+    }
+  },
+  "$defs": {
+    "uiConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "default_orchestration": {
+          "type": "string",
+          "minLength": 1
+        },
+        "max_concurrent_agents": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "allow_shell_tools": {
+          "type": "boolean"
+        },
+        "ignored_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "auto_summarize": {
+          "type": "boolean"
+        }
+      }
+    },
+
+    "mcpConfig": {
+      "type": "object",
+      "description": "当前工作区后端连接的 MCP Server。当前不支持进程内热切换；修改会拒绝整个候选配置，需要重启工作区后端。",
+      "additionalProperties": false,
+      "properties": {
+        "servers": {
+          "type": "object",
+          "default": {},
+          "propertyNames": {
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/mcpServer"
+          }
+        }
+      }
+    },
+
+    "mcpServer": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/mcpStdioServer"
+        },
+        {
+          "$ref": "#/$defs/mcpStreamableHttpServer"
+        }
+      ]
+    },
+
+    "mcpStdioServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "command"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "transport": {
+          "const": "stdio"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+
+    "mcpStreamableHttpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "url"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "transport": {
+          "const": "streamable_http"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      }
+    },
+
+    "developmentConfig": {
+      "type": "object",
+      "description": "仅由开发安装生成器写入的功能开关。支持热重载，从下一轮 Job 开始生效。",
+      "additionalProperties": false,
+      "properties": {
+        "test_tools": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "endpoint",
+        "model",
+        "custom_llm_provider"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": ["auth"]
+          },
+          "then": {
+            "properties": {
+              "custom_llm_provider": {
+                "const": "chatgpt"
+              },
+              "api_mode": {
+                "const": "responses"
+              }
+            }
+          },
+          "else": {
+            "required": ["api_key"]
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable unique ID of the provider, referenced by agents.*.model",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$",
+          "minLength": 2,
+          "maxLength": 64
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "api_key": {
+          "description": "Can be a literal API key string, or an environment variable reference like ${OPENAI_API_KEY}.",
+          "type": "string",
+          "minLength": 1
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "method"],
+          "description": "Provider 专属认证。ChatGPT OAuth 凭据由 LiteLLM 在 BOXTEAM_HOME/auth/chatgpt 下独立维护。",
+          "properties": {
+            "type": {
+              "const": "oauth"
+            },
+            "method": {
+              "const": "chatgpt"
+            }
+          }
+        },
+        "custom_llm_provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "LiteLLM custom_llm_provider 参数，例如 openai、openrouter、anthropic。"
+        },
+        "api_mode": {
+          "type": "string",
+          "enum": [
+            "chat_completions",
+            "responses"
+          ],
+          "default": "chat_completions",
+          "description": "模型请求协议。仅明确配置为 responses 时使用 OpenAI Responses API。"
+        },
+        "capabilities": {
+          "type": "array",
+          "description": "Provider capabilities used by request routing and protocol adaptation. reasoning_content_replay promotes historical LangChain reasoning blocks to Chat Completions assistant.reasoning_content.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "text_input",
+              "image_input",
+              "video_input",
+              "audio_input",
+              "reasoning_content_replay",
+              "prompt_cache_key"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "auth_header": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_options": {
+          "type": "object",
+          "description": "Provider-specific request options passed to the chat model client.",
+          "additionalProperties": false,
+          "properties": {
+            "overrides": {
+              "type": "object",
+              "description": "Raw LiteLLM completion parameters. These values override agent-level defaults such as temperature, top_p and max_tokens. Put provider body extensions under extra_body.",
+              "additionalProperties": true
+            },
+            "default_headers": {
+              "type": "object",
+              "description": "Additional default HTTP headers for this provider.",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "agentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "instructions",
+        "model"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Display name of the agent",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "language": {
+          "type": "string",
+          "description": "Default response language",
+          "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+          "default": "zh-CN"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "Default timezone, preferably IANA timezone name",
+          "minLength": 1,
+          "maxLength": 64,
+          "default": "Asia/Shanghai"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "uniqueItems": true,
+          "maxItems": 20
+        },
+        "persona": {
+          "$ref": "#/$defs/agentPersona"
+        },
+        "instructions": {
+          "$ref": "#/$defs/agentInstructions"
+        },
+        "model": {
+          "$ref": "#/$defs/agentModel"
+        },
+        "tools": {
+          "$ref": "#/$defs/agentTools"
+        },
+        "knowledge": {
+          "$ref": "#/$defs/agentKnowledge"
+        },
+        "memory": {
+          "$ref": "#/$defs/agentMemory"
+        },
+        "safety": {
+          "$ref": "#/$defs/agentSafety"
+        },
+        "execution": {
+          "$ref": "#/$defs/agentExecution"
+        },
+        "env": {
+          "$ref": "#/$defs/agentEnv"
+        }
+      }
+    },
+
+    "agentPersona": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "professional",
+            "friendly",
+            "concise",
+            "formal",
+            "technical"
+          ],
+          "default": "professional"
+        },
+        "identity": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "verbosity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "medium"
+        }
+      }
+    },
+
+    "agentInstructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system_prompt"
+      ],
+      "properties": {
+        "system_prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30000
+        },
+        "developer_prompt": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "fallback_prompt": {
+          "type": "string",
+          "maxLength": 5000
+        }
+      }
+    },
+
+    "agentModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary_provider"
+      ],
+      "properties": {
+        "primary_provider": {
+          "type": "string",
+          "description": "Primary provider ID from llm.providers[].id",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+        },
+        "fallback_providers": {
+          "type": "array",
+          "description": "Fallback provider IDs from llm.providers[].id, used in order",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 10
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Optional explicit sampling temperature. Omit to use the provider/model default."
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Optional explicit nucleus sampling value. Omit to use the provider/model default."
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional explicit output cap. Omit to avoid imposing a client-side output limit."
+        }
+      }
+    },
+    "agentTools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "tool_choice": {
+          "type": "string",
+          "enum": [
+            "none",
+            "auto",
+            "required"
+          ],
+          "default": "auto"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 300000,
+          "default": 10000
+        },
+        "allowlist": {
+          "type": "array",
+          "description": "恢复列表。工具全集为 U：先把 denylist 展开为禁用集合 D，再把 allowlist 展开为恢复集合 A；最终禁用 D-A，最终可用 U-(D-A)。默认所有工具可用。保留值 all 表示所有工具，extensions 表示所有扩展子工具。",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        },
+        "denylist": {
+          "type": "array",
+          "description": "禁用列表。工具全集为 U：先把 denylist 展开为禁用集合 D，再把 allowlist 展开为恢复集合 A；最终禁用 D-A，最终可用 U-(D-A)。扩展子工具直接按其 name 禁用。保留值 all 表示所有工具，extensions 表示所有扩展子工具。",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        },
+        "confirmation_required": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        },
+        "custom": {
+          "type": "array",
+          "description": "内置工具使用稳定 tool_id；第三方扩展使用 name 与 factory。",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["tool_id"],
+                "properties": {
+                  "tool_id": {
+                    "type": "string",
+                    "enum": [
+                      "read_context", "search_context", "web_search", "fetch_webpage",
+                      "listBrowserPage", "openBrowserPage", "readPage", "navigatePage", "clickElement",
+                      "typeInPage", "hoverElement", "dragElement", "handleDialog",
+                      "screenshotPage", "runPlaywrightCode", "test_tool_2", "large_test_output"
+                    ]
+                  },
+                  "options": {
+                    "type": "object",
+                    "description": "传给该工具 factory 的专属配置。",
+                    "additionalProperties": true
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "工具目录中展示的扩展工具说明。"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "factory"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+                  },
+                  "factory": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*:[a-zA-Z_][a-zA-Z0-9_.]*$"
+                  },
+                  "options": {
+                    "type": "object",
+                    "description": "传给该工具 factory 的专属配置。",
+                    "additionalProperties": true
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "工具目录中展示的扩展工具说明。"
+                  }
+                }
+              }
+            ]
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        }
+      }
+    },
+    "agentKnowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agentKnowledgeSource"
+          },
+          "maxItems": 20
+        },
+        "retrieval": {
+          "$ref": "#/$defs/agentRetrieval"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "required": [
+              "sources"
+            ]
+          }
+        }
+      ]
+    },
+
+    "agentKnowledgeSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "web",
+            "file",
+            "directory",
+            "notion",
+            "s3",
+            "custom"
+          ]
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "auth_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Reference to secret or environment variable",
+          "pattern": "^[A-Z0-9_./:-]+$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      }
+    },
+
+    "agentRetrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "keyword",
+            "vector",
+            "hybrid"
+          ],
+          "default": "hybrid"
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 5
+        },
+        "score_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.65
+        },
+        "rerank": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+
+    "agentMemory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "session",
+            "user",
+            "workspace"
+          ],
+          "default": "workspace"
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "redis",
+            "postgres",
+            "vector-db",
+            "custom"
+          ]
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 315360000,
+          "default": 2592000
+        },
+        "max_items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "default": 200
+        },
+        "store_user_preferences": {
+          "type": "boolean",
+          "default": true
+        },
+        "store_sensitive_data": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "required": [
+              "backend"
+            ]
+          }
+        }
+      ]
+    },
+
+    "agentSafety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy_mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "standard",
+            "strict"
+          ],
+          "default": "standard"
+        },
+        "prompt_injection_protection": {
+          "type": "boolean",
+          "default": true
+        },
+        "pii_redaction": {
+          "type": "boolean",
+          "default": true
+        },
+        "refuse_secrets_exfiltration": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+
+    "agentExecution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stream": {
+          "type": "boolean",
+          "default": true
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 16
+        },
+        "max_history_messages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200,
+          "default": 30
+        },
+        "max_context_tokens": {
+          "type": "integer",
+          "minimum": 512,
+          "maximum": 200000,
+          "default": 32000
+        },
+        "require_delegated_report": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否强制委派子 Agent 通过 send_message_to_session 向父会话报告结果"
+        }
+      }
+    },
+
+    "agentEnv": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "development",
+            "staging",
+            "production"
+          ],
+          "default": "development"
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "feature_flags": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

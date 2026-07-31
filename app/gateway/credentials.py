@@ -5,7 +5,7 @@ import os
 import secrets
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -18,7 +18,7 @@ class FederationCredential:
 
     @property
     def expired(self) -> bool:
-        return datetime.now(timezone.utc) >= self.expires_at
+        return datetime.now(UTC) >= self.expires_at
 
 
 class FederationCredentialStore:
@@ -38,7 +38,7 @@ class FederationCredentialStore:
             connection_id=connection_id,
             peer_gateway_id=peer_gateway_id,
             token=secrets.token_urlsafe(48),
-            expires_at=datetime.now(timezone.utc) + lifetime,
+            expires_at=datetime.now(UTC) + lifetime,
         )
         credentials = self._load()
         credentials[connection_id] = credential
@@ -70,6 +70,10 @@ class FederationCredentialStore:
             for credential in self._load().values()
             if not credential.expired
         )
+
+    def list_all(self) -> tuple[FederationCredential, ...]:
+        """返回全部凭据，供控制面明确展示已授权和已过期连接。"""
+        return tuple(self._load().values())
 
     def remove(self, connection_id: str) -> None:
         credentials = self._load()

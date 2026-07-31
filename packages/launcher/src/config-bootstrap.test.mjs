@@ -43,12 +43,12 @@ describe("config bootstrap", () => {
     expect(calls[0].args).toEqual(["-m", "configs.boxteam"]);
     expect(calls[0].options.cwd).toBe("/runtime/application");
     expect(calls[0].options.env.BOXTEAM_HOME).toBe("/tmp/boxteams");
-    expect(calls[0].options.env.BOXTEAM_INSTALL_DEVELOPMENT_ASSETS).toBe("0");
-    expect(calls[0].options.env.BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE).toBe("0");
+    expect(calls[0].options.env.BOXTEAM_INSTALL_DEVELOPMENT_ASSETS).toBe("1");
+    expect(calls[0].options.env.BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE).toBe("1");
     expect(result.output).toContain('"created":true');
   });
 
-  test("源码开发保留显式开发资产开关", () => {
+  test("源码开发与安装发行使用相同初始化命令", () => {
     const calls = [];
     initializeUserConfiguration({
       runtime: {
@@ -68,12 +68,7 @@ describe("config bootstrap", () => {
 
     expect(calls[0].options.env.BOXTEAM_INSTALL_DEVELOPMENT_ASSETS).toBe("1");
     expect(calls[0].options.env.BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE).toBe("1");
-    expect(calls[0].args).toEqual([
-      "-m",
-      "configs.boxteam",
-      "--project-root",
-      "/repo",
-    ]);
+    expect(calls[0].args).toEqual(["-m", "configs.boxteam"]);
   });
 
   test("内置 Python 初始化失败不会静默继续", () => {

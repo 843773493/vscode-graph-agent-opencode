@@ -293,7 +293,7 @@ async def test_session_context_compact_writes_summarization_event(
 
     session_dir = get_session_path_resolver(
         Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
-    ).resolve_session_dir(session_id)
+    ).resolve_session_node(session_id)
     history_file = (
         session_dir / "context" / "history.md"
     )

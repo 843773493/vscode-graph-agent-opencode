@@ -1,6 +1,6 @@
 ## Purpose
 
-定义 BoxTeam 用户配置从首次安装到日常启动的完整生命周期，包括缺失初始化、显式强制重建、版本化 schema 安装、源码开发隔离，以及多来源配置合并后的有效优先级与热重载判定。
+定义 BoxTeam 用户配置从首次安装到日常启动的完整生命周期，包括缺失初始化、显式强制重建、版本化 schema 安装、源码开发配置安装，以及统一配置优先级与热重载判定。
 
 ## Requirements
 
@@ -30,14 +30,29 @@
 - **THEN** schema 内容来自已打包的 runtime 资源，且 `$schema` 解析到配置同目录
 
 ### Requirement: 开发配置隔离
-仅开发使用的工具和测试工作区 MUST（必须）由显式 development overlay 提供，并 MUST NOT（不得）写入正常安装的用户配置。
+源码开发启动 MUST（必须）在进程启动前将源码 `.env`、静态 `gateway_dev.jsonc` 与静态 `workspace_dev.jsonc` 安装到 development `BOXTEAM_HOME`。运行期 MUST NOT（不得）直接读取源码配置，且不得修改正常安装使用的 `BOXTEAM_HOME`。
 
 #### Scenario: 源码开发启动
 - **WHEN** development profile 启动
-- **THEN** development overlay 参与有效配置合并，同时保持安装配置不变
+- **THEN** 启动器原子替换 development home 中的 `.env`、`gateway.jsonc`、`workspace.jsonc` 及各自 schema，再通过与安装发行相同的配置加载路径启动 Launcher
+
+#### Scenario: 源码开发配置无效
+- **WHEN** 源码 `.env`、任一开发模板或对应 schema 缺失或校验失败
+- **THEN** development profile 在启动任何服务前失败，并报告源配置路径
+
+### Requirement: 统一运行时配置来源
+development、源码安装和 npm 安装的 Gateway runtime MUST（必须）只从 `${BOXTEAM_HOME}/config/.env` 与 `${BOXTEAM_HOME}/config/gateway.jsonc` 加载控制面配置；Workspace runtime MUST（必须）只从 `${BOXTEAM_HOME}/config/workspace.jsonc` 以及当前显式工作区 `.boxteam/workspace.jsonc` 加载业务配置。
+
+#### Scenario: 运行源码开发版本
+- **WHEN** Gateway 或工作区后端在 development profile 中启动
+- **THEN** runtime 不访问项目根 `.env`、`configs/gateway_dev.jsonc` 或 `configs/workspace_dev.jsonc`
 
 ### Requirement: 有效配置优先级
 runtime SHALL（必须）保持用户配置与工作区配置的优先级，并且仅在最终有效配置发生变化时触发重载操作。
+
+#### Scenario: 迁移旧 SSH 直连 Gateway 配置
+- **WHEN** v3 配置包含 `kind: ssh` 或旧的远程后端直连字段
+- **THEN** runtime 将其迁移为 `kind: remote_gateway`、补充 `remote_gateway_port` 并删除新 schema 不再支持的直连字段
 
 #### Scenario: 被遮蔽的低优先级修改
 - **WHEN** 低优先级来源修改了仍被工作区配置覆盖的值

@@ -22,7 +22,7 @@ def write_e2e_mcp_config(
 
     artifacts_dir = workspace_root.parent / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    config_path = artifacts_dir / "boxteam.jsonc"
+    config_path = artifacts_dir / "workspace.jsonc"
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2),
         encoding="utf-8",

@@ -8,6 +8,12 @@ const DISTRIBUTIONS = new Set([
   "npm",
 ]);
 const NODE_SOURCES = new Set(["launcher", "bundled"]);
+const CONFIG_RESOURCE_KEYS = [
+  "gateway",
+  "gateway_schema",
+  "workspace",
+  "workspace_schema",
+];
 
 function requireObject(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -40,6 +46,18 @@ export function validateRuntimeManifest(value) {
     throw new Error(`未知 runtime distribution: ${String(manifest.distribution)}`);
   }
   const node = requireObject(manifest.node, "runtime manifest.node");
+  const configResources = requireObject(
+    manifest.config_resources,
+    "runtime manifest.config_resources",
+  );
+  const unknownConfigResourceKeys = Object.keys(configResources).filter(
+    (key) => !CONFIG_RESOURCE_KEYS.includes(key),
+  );
+  if (unknownConfigResourceKeys.length > 0) {
+    throw new Error(
+      `runtime manifest.config_resources 包含未知字段: ${unknownConfigResourceKeys.join(", ")}`,
+    );
+  }
   if (!NODE_SOURCES.has(node.source)) {
     throw new Error(`未知 Node runtime source: ${String(node.source)}`);
   }
@@ -64,6 +82,17 @@ export function validateRuntimeManifest(value) {
     applicationRoot: requireString(
       manifest.application_root,
       "runtime manifest.application_root",
+    ),
+    configResources: Object.freeze(
+      Object.fromEntries(
+        CONFIG_RESOURCE_KEYS.map((key) => [
+          key,
+          requireString(
+            configResources[key],
+            `runtime manifest.config_resources.${key}`,
+          ),
+        ]),
+      ),
     ),
     webAssets: optionalString(manifest.web_assets, "runtime manifest.web_assets"),
     chromiumExecutable: optionalString(
@@ -91,6 +120,14 @@ export function resolveRuntimeManifest(manifestPath, value) {
     runtimeRoot,
     pythonExecutable: resolveResource(runtimeRoot, manifest.pythonExecutable),
     applicationRoot: resolveResource(runtimeRoot, manifest.applicationRoot),
+    configResources: Object.freeze(
+      Object.fromEntries(
+        Object.entries(manifest.configResources).map(([key, value]) => [
+          key,
+          resolveResource(runtimeRoot, value),
+        ]),
+      ),
+    ),
     webAssets:
       manifest.webAssets === null
         ? null
@@ -131,6 +168,10 @@ export function assertRuntimeResources(manifest) {
   for (const [label, resourcePath] of [
     ["Python", manifest.pythonExecutable],
     ["应用根目录", manifest.applicationRoot],
+    ...Object.entries(manifest.configResources).map(([name, resourcePath]) => [
+      `配置资源 ${name}`,
+      resourcePath,
+    ]),
     ...(manifest.webAssets === null ? [] : [["Web UI", manifest.webAssets]]),
     ...(manifest.chromiumExecutable === null
       ? []

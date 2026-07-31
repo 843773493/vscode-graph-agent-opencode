@@ -1,15 +1,18 @@
 import {
     createSession as sharedCreateSession,
     getJob as sharedGetJob,
+    getSessionGoal as sharedGetSessionGoal,
     getSessionTraces as sharedGetSessionTraces,
     getWorkspace as sharedGetWorkspace,
     listAgents as sharedListAgents,
     listMessages as sharedListMessages,
     listSessions as sharedListSessions,
+    moveSessionParent as sharedMoveSessionParent,
     sendMessage as sharedSendMessage,
     streamSessionEvents as sharedStreamSessionEvents,
+    updateSessionGoal as sharedUpdateSessionGoal,
+    clearSessionGoal as sharedClearSessionGoal,
     TraceCursorGoneError,
-    updateSession as sharedUpdateSession,
 } from '../../shared/api.js';
 import {
     DEFAULT_AGENT_ID,
@@ -18,7 +21,11 @@ import {
     DEFAULT_BACKEND_TOKEN,
     DEFAULT_SESSION_TITLE,
 } from '../../shared/constants.js';
-import type { ActiveJob, Message, Session, TraceEvent } from './types/backend';
+import type {
+    StreamEvent as SharedStreamEvent,
+} from '../../shared/api.js';
+import type { TraceEventDTO } from '../../web/src/types/gen/trace';
+import type { ActiveJob, Message, Session, SessionGoal, SessionGoalUpdateRequest, TraceEvent } from './types/backend';
 
 export type { ActiveJob, Message, Session, TraceEvent };
 
@@ -36,12 +43,7 @@ export interface SessionAcceptResult {
   message_id: string | null;
 }
 
-export interface StreamEvent<TPayload = Record<string, unknown>> {
-  eventType: string;
-  eventId?: string;
-  payload: TPayload;
-  event?: TraceEvent;
-}
+export type StreamEvent = SharedStreamEvent;
 
 function normalizePageResult<T>(value: unknown): PageResult<T> {
   if (!value || typeof value !== 'object') {
@@ -68,12 +70,12 @@ export async function createSession(port: number, title: string = DEFAULT_SESSIO
   return (await sharedCreateSession(port, title)) as Session;
 }
 
-export async function updateSession(
+export async function moveSessionParent(
   port: number,
   sessionId: string,
-  payload: { parent_session_id: string | null },
+  parentNodeId: string | null,
 ): Promise<Session> {
-  return (await sharedUpdateSession(port, sessionId, payload)) as Session;
+  return (await sharedMoveSessionParent(port, sessionId, parentNodeId)) as Session;
 }
 
 export async function listMessages(port: number, sessionId: string): Promise<PageResult<Message>> {
@@ -85,11 +87,34 @@ export async function sendMessage(port: number, sessionId: string, payload: unkn
 }
 
 export async function getJob(port: number, jobId: string): Promise<ActiveJob | null> {
-  return (await sharedGetJob(port, jobId)) as ActiveJob | null;
+  const job = await sharedGetJob(port, jobId);
+  return {
+    jobId: job.job_id,
+    sessionId: job.session_id,
+    status: job.status,
+    messageId: job.message_id,
+    content: '',
+  };
 }
 
-export async function getSessionTraces(port: number, sessionId: string, afterEventId?: string | null): Promise<TraceEvent[]> {
-  return (await sharedGetSessionTraces(port, sessionId, afterEventId)) as TraceEvent[];
+export async function getSessionGoal(port: number, sessionId: string): Promise<SessionGoal | null> {
+  return (await sharedGetSessionGoal(port, sessionId)) as SessionGoal | null;
+}
+
+export async function updateSessionGoal(
+  port: number,
+  sessionId: string,
+  payload: SessionGoalUpdateRequest,
+): Promise<SessionGoal> {
+  return (await sharedUpdateSessionGoal(port, sessionId, payload)) as SessionGoal;
+}
+
+export async function clearSessionGoal(port: number, sessionId: string): Promise<void> {
+  await sharedClearSessionGoal(port, sessionId);
+}
+
+export async function getSessionTraces(port: number, sessionId: string, afterEventId?: string | null): Promise<TraceEventDTO[]> {
+  return sharedGetSessionTraces(port, sessionId, afterEventId);
 }
 
 export async function streamSessionEvents(

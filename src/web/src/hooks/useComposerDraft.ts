@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   composerDraftScopeKey,
   readComposerDraft,
@@ -11,18 +11,27 @@ export function useComposerDraft(
 ): [string, Dispatch<SetStateAction<string>>] {
   const scopeKey = composerDraftScopeKey(workspaceId, sessionId);
   const activeScopeKeyRef = useRef(scopeKey);
-  const [draft, setDraftState] = useState(() => readComposerDraft(scopeKey));
-
-  useEffect(() => {
-    activeScopeKeyRef.current = scopeKey;
-    setDraftState(readComposerDraft(scopeKey));
-  }, [scopeKey]);
+  const [draftState, setDraftState] = useState(() => ({
+    scopeKey,
+    value: readComposerDraft(scopeKey),
+  }));
+  activeScopeKeyRef.current = scopeKey;
+  if (draftState.scopeKey !== scopeKey) {
+    // React 会在提交 DOM 前重新渲染，避免先显示上一会话草稿再由 effect 修正。
+    setDraftState({ scopeKey, value: readComposerDraft(scopeKey) });
+  }
+  const draft = draftState.scopeKey === scopeKey
+    ? draftState.value
+    : readComposerDraft(scopeKey);
 
   const setDraft = useCallback<Dispatch<SetStateAction<string>>>((action) => {
     setDraftState((current) => {
-      const next = typeof action === "function" ? action(current) : action;
+      const currentValue = current.scopeKey === activeScopeKeyRef.current
+        ? current.value
+        : readComposerDraft(activeScopeKeyRef.current);
+      const next = typeof action === "function" ? action(currentValue) : action;
       writeComposerDraft(activeScopeKeyRef.current, next);
-      return next;
+      return { scopeKey: activeScopeKeyRef.current, value: next };
     });
   }, []);
 

@@ -140,7 +140,7 @@ async def test_llm_request_log_round_trip(
 
     session_dir = get_session_path_resolver(
         Path(e2e_workspace_root_path).resolve() / ".boxteam" / "sessions"
-    ).resolve_session_dir(session_id)
+    ).resolve_session_node(session_id)
     expected_log_dir = (
         session_dir / "logs" / "llm_requests"
     )
@@ -188,7 +188,7 @@ async def test_reply_token_usage_is_persisted_in_trace_and_message(
     assert traces_response.status_code == 200
     persisted_agent_end = next(
         event
-        for event in traces_response.json()["data"]
+        for event in traces_response.json()["data"]["items"]
         if event["type"] == "agent_end" and event["job_id"] == job_id
     )
     assert get_trace_payload(persisted_agent_end)["token_usage"] == token_usage

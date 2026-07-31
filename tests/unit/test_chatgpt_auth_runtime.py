@@ -1,10 +1,12 @@
 import base64
 import json
 import os
+import time
 from pathlib import Path
 
 from app.runtime.chatgpt_auth import (
     configure_litellm_chatgpt_auth_directory,
+    ensure_chatgpt_oauth_ready,
     ensure_litellm_chatgpt_model_capabilities,
     is_chatgpt_oauth_provider,
 )
@@ -101,6 +103,72 @@ def test_chatgpt_oauth_provider_requires_explicit_auth_shape() -> None:
         {"auth": {"type": "oauth", "method": "chatgpt"}}
     )
     assert not is_chatgpt_oauth_provider({"auth": {"type": "oauth"}})
+
+
+def test_expired_chatgpt_auth_is_replaced_by_valid_codex_auth(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    now = int(time.time())
+    home = tmp_path / "home"
+    boxteam_home = tmp_path / "boxteam-home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    token_dir = configure_litellm_chatgpt_auth_directory()
+    target = token_dir / "auth.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(
+            {
+                "access_token": _access_token(now - 60),
+                "refresh_token": "stale-refresh",
+                "id_token": "stale-id",
+                "expires_at": now - 60,
+                "account_id": "stale-account",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_codex_auth(
+        home / ".codex" / "auth.json",
+        access_token=_access_token(now + 3600),
+    )
+
+    ensure_chatgpt_oauth_ready(token_dir)
+
+    refreshed = json.loads(target.read_text(encoding="utf-8"))
+    assert refreshed["access_token"] == _access_token(now + 3600)
+    assert refreshed["refresh_token"] == "codex-refresh"
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_expired_chatgpt_auth_fails_fast_without_valid_codex_auth(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    now = int(time.time())
+    home = tmp_path / "home"
+    token_dir = tmp_path / "chatgpt-auth"
+    token_dir.mkdir()
+    (token_dir / "auth.json").write_text(
+        json.dumps(
+            {
+                "access_token": _access_token(now - 60),
+                "expires_at": now - 60,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    try:
+        ensure_chatgpt_oauth_ready(token_dir)
+    except RuntimeError as error:
+        assert "codex login" in str(error)
+    else:
+        raise AssertionError("过期凭据必须快速失败")
 
 
 def test_gpt_56_capabilities_register_only_while_litellm_is_missing_support(

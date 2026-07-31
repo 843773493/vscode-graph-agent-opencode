@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.prompting import PromptSection, internal_message_factory
 from app.schemas.public_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.message_history_store import MessageHistoryStore
@@ -805,6 +806,43 @@ async def test_message_service_uses_display_content_for_user_message_text(
     state_snapshot = await service.get_agent_state_messages("sess_video_display")
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
     assert "display_content" not in records[0].get("response_metadata", {})
+
+
+def test_system_reminder_with_explicit_display_content_is_user_visible():
+    prepared = internal_message_factory.build(
+        kind="generated_session_result",
+        control="处理生成结果。",
+        sections=(
+            PromptSection("control_context", {"source": "test"}),
+            PromptSection("generated_session_result", "内部结果"),
+        ),
+        display_content="生成分支已结束，主会话正在处理返回结果。",
+    )
+    message = HumanMessage(
+        content=prepared.content,
+        response_metadata=prepared.metadata,
+    )
+
+    assert MessageService._is_user_visible_message(message) is True
+
+
+def test_literal_system_reminder_without_internal_metadata_stays_visible():
+    message = HumanMessage(content="<system_reminder>提醒</system_reminder>")
+
+    assert MessageService._is_user_visible_message(message) is True
+
+
+def test_registered_hidden_system_reminder_stays_hidden():
+    prepared = internal_message_factory.build(
+        kind="checkpoint_reminder",
+        control="继续处理。",
+    )
+    message = HumanMessage(
+        content=prepared.content,
+        response_metadata=prepared.metadata,
+    )
+
+    assert MessageService._is_user_visible_message(message) is False
 
 
 @pytest.mark.asyncio

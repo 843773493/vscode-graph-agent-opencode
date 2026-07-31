@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import copy
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,7 @@ class BrowserManagerClient:
         *,
         backend_url: str | None = None,
         state_file: Path | None = None,
+        actor: str | None = None,
     ) -> None:
         configured_backend_url = backend_url or os.environ.get("BOXTEAM_BROWSER_BACKEND_URL")
         self._backend_url = (
@@ -29,6 +31,14 @@ class BrowserManagerClient:
         ).rstrip("/")
         self._state_file = state_file or get_boxteam_root() / "browser-manager" / "browsers.json"
         self._prefer_backend_listing = configured_backend_url is not None and state_file is None
+        self._actor = actor
+
+    def for_actor(self, actor: str) -> BrowserManagerClient:
+        if not actor.strip():
+            raise ValueError("browser manager actor 不能为空")
+        client = copy(self)
+        client._actor = actor
+        return client
 
     @property
     def backend_url(self) -> str:
@@ -117,11 +127,12 @@ class BrowserManagerClient:
         browser_id: str,
         navigation_type: str,
         url: str | None = None,
+        tab_id: str | None = None,
     ) -> dict[str, Any]:
         response = await self._json_request(
             "POST",
             f"/api/browsers/{browser_id}/navigate",
-            {"type": navigation_type, "url": url},
+            {"type": navigation_type, "url": url, "tab_id": tab_id},
         )
         return self._require_data(response)
 
@@ -161,6 +172,26 @@ class BrowserManagerClient:
         response = await self._json_request("DELETE", f"/api/browsers/{browser_id}")
         return self._require_data(response)
 
+    async def set_resource_policy(self, browser_id: str, policy: str) -> dict[str, Any]:
+        response = await self._json_request(
+            "PATCH",
+            f"/api/browsers/{browser_id}/resource-policy",
+            {"policy": policy},
+        )
+        return self._require_data(response)
+
+    async def freeze_browser(self, browser_id: str) -> dict[str, Any]:
+        response = await self._json_request("POST", f"/api/browsers/{browser_id}/freeze")
+        return self._require_data(response)
+
+    async def wake_browser(self, browser_id: str) -> dict[str, Any]:
+        response = await self._json_request("POST", f"/api/browsers/{browser_id}/wake")
+        return self._require_data(response)
+
+    async def discard_browser(self, browser_id: str) -> dict[str, Any]:
+        response = await self._json_request("POST", f"/api/browsers/{browser_id}/discard")
+        return self._require_data(response)
+
     def _require_data(self, response: dict[str, Any]) -> dict[str, Any]:
         data = response.get("data")
         if not isinstance(data, dict):
@@ -188,13 +219,30 @@ class BrowserManagerClient:
             f"{self._backend_url}{path}",
             data=body,
             method=method,
-            headers={"content-type": "application/json"},
+            headers={
+                "content-type": "application/json",
+                **(
+                    {"X-BoxTeam-Actor": self._actor}
+                    if self._actor is not None
+                    else {}
+                ),
+            },
         )
         try:
             with urlopen(request, timeout=30) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            try:
+                error_payload = json.loads(detail)
+            except json.JSONDecodeError:
+                error_payload = None
+            error_message = (
+                error_payload.get("error")
+                if isinstance(error_payload, dict)
+                else None
+            )
             raise RuntimeError(
-                f"浏览器管理器请求失败: method={method}, path={path}, status={exc.code}, detail={detail}"
+                error_message
+                or f"浏览器管理器请求失败: method={method}, path={path}, status={exc.code}, detail={detail}"
             ) from exc

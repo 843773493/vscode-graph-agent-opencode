@@ -29,7 +29,7 @@ class MessageHistoryStore:
 
     def latest_checkpoint_id(self, session_id: str) -> str:
         checkpoint_path = (
-            self._path_resolver.resolve_session_dir(session_id)
+            self._path_resolver.resolve_session_node(session_id)
             / "checkpoints"
             / "checkpoints.jsonl"
         )
@@ -55,7 +55,7 @@ class MessageHistoryStore:
         messages: Sequence[MessageDTO],
     ) -> None:
         history_dir = (
-            self._path_resolver.resolve_session_dir(session_id) / "message_history"
+            self._path_resolver.resolve_session_node(session_id) / "message_history"
         )
         history_dir.mkdir(parents=True, exist_ok=True)
         data_path = history_dir / "visible_messages.jsonl"
@@ -139,7 +139,7 @@ class MessageHistoryStore:
 
     def _read_index(self, session_id: str, *, required: bool) -> dict[str, object] | None:
         index_path = (
-            self._path_resolver.resolve_session_dir(session_id)
+            self._path_resolver.resolve_session_node(session_id)
             / "message_history"
             / "index.json"
         )
@@ -179,7 +179,7 @@ class MessageHistoryStore:
         if start == end:
             return []
         data_path = (
-            self._path_resolver.resolve_session_dir(session_id)
+            self._path_resolver.resolve_session_node(session_id)
             / "message_history"
             / "visible_messages.jsonl"
         )

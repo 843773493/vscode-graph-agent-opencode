@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Dict, Optional, TypeVar
+from datetime import datetime
+from typing import TypeVar
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobExecutorProtocol
@@ -13,7 +13,7 @@ from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
-from app.schemas.public_v2.common import JobStatus, RunMode, ControlAction
+from app.schemas.public_v2.common import ControlAction, JobStatus, RunMode
 from app.schemas.public_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
@@ -23,9 +23,11 @@ from app.schemas.public_v2.job import (
 )
 from app.schemas.public_v2.message import AttachmentRef
 from app.schemas.public_v2.pending_request import (
+    MessageDispatchMode,
     PendingRequestKind,
     PendingRequestListDTO,
     PendingRequestOrderItem,
+    PendingRequestSummaryListDTO,
 )
 from app.services.business.job.pending_queue import JobPendingQueue
 from app.services.business.job.pending_request_service import (
@@ -61,12 +63,12 @@ class JobState:
     message_metadata: dict[str, object] = field(default_factory=dict)
     attachments: list[AttachmentRef] = field(default_factory=list)
     progress: int = 0
-    error_message: Optional[str] = None
-    result: Optional[str] = None
+    error_message: str | None = None
+    result: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
-    ended_at: Optional[datetime] = None
-    task: Optional[asyncio.Task] = None
+    ended_at: datetime | None = None
+    task: asyncio.Task | None = None
     steps: list[StepDTO] = field(default_factory=list)
     pending_kind: PendingRequestKind | None = None
     dispatch_pending_after_cancel: bool = False
@@ -82,7 +84,7 @@ class JobService:
         job_executor: JobExecutorProtocol,
         pending_request_store: PendingRequestStoreProtocol | None = None,
     ):
-        self._jobs: Dict[str, JobState] = {}
+        self._jobs: dict[str, JobState] = {}
         self._bus: JobEventBusProtocol | None = job_event_bus
         self._session_current_job: dict[str, str] = {}
         self._pending_queue = JobPendingQueue()
@@ -202,7 +204,7 @@ class JobService:
             return result
         return str(result)
 
-    async def list(self, session_id: Optional[str] = None) -> list[JobDTO]:
+    async def list(self, session_id: str | None = None) -> list[JobDTO]:
         if session_id is not None:
             async def restore_and_list() -> list[JobDTO]:
                 await self._ensure_pending_loaded(session_id)
@@ -416,6 +418,20 @@ class JobService:
 
         return await self.run_session_preparation(session_id, restore_and_list)
 
+    async def list_pending_summaries(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> PendingRequestSummaryListDTO:
+        async def list_prepared() -> PendingRequestSummaryListDTO:
+            return await self._pending_requests.list_summaries(
+                session_id,
+                limit=limit,
+            )
+
+        return await self.run_session_preparation(session_id, list_prepared)
+
     async def update_pending(
         self,
         session_id: str,
@@ -589,7 +605,7 @@ class JobService:
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
-        pending_kind: PendingRequestKind = "queued",
+        dispatch_mode: MessageDispatchMode = "queued",
     ) -> JobDispatchSnapshotDTO:
         async def start_prepared() -> JobDispatchSnapshotDTO:
             return await self._start_job_prepared(
@@ -601,7 +617,7 @@ class JobService:
                 attachments=attachments,
                 message_created_at=message_created_at,
                 message_metadata=message_metadata,
-                pending_kind=pending_kind,
+                dispatch_mode=dispatch_mode,
             )
 
         return await self.run_session_preparation(session_id, start_prepared)
@@ -617,7 +633,7 @@ class JobService:
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
-        pending_kind: PendingRequestKind = "queued",
+        dispatch_mode: MessageDispatchMode = "queued",
     ) -> JobDispatchSnapshotDTO:
         self.assert_accepting_jobs()
         async with self._dispatch_lock:
@@ -680,6 +696,9 @@ class JobService:
                 "session_id": session_id,
                 "message": message,
                 "agent_id": agent_id,
+                "message_id": message_id,
+                "message_created_at": message_created_at,
+                "message_metadata": dict(message_metadata or {}),
                 "attachments": [
                     attachment.model_dump(mode="json", exclude={"data_url"})
                     for attachment in job.attachments
@@ -689,7 +708,10 @@ class JobService:
         )
         logger.info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", resolved_job_id, session_id)
 
-        dispatch = await self._enqueue_or_dispatch(job, pending_kind=pending_kind)
+        dispatch = await self._enqueue_or_dispatch(
+            job,
+            dispatch_mode=dispatch_mode,
+        )
         logger.info(
             "[job_service] enqueue_or_dispatch result: job_id=%s status=%s blocked_by=%s queued_ahead=%s pending=%s",
             resolved_job_id,
@@ -779,7 +801,7 @@ class JobService:
                 pass
             except Exception as e:
                 import logging
-                logging.error(f"Job task failed: job_id={job.job_id}, error={str(e)}", exc_info=True)
+                logging.error(f"Job task failed: job_id={job.job_id}, error={e!s}", exc_info=True)
                 job.status = JobStatus.failed
                 job.error_message = str(e)
                 job.ended_at = datetime.now()
@@ -806,13 +828,16 @@ class JobService:
         self,
         job: JobState,
         *,
-        pending_kind: PendingRequestKind,
+        dispatch_mode: MessageDispatchMode,
     ) -> JobDispatchSnapshotDTO:
         async with self._dispatch_lock:
             current_job_id = self._session_current_job.get(job.session_id)
             if current_job_id:
                 current_job = self._jobs.get(current_job_id)
                 if current_job and not self._is_terminal_status(current_job.status):
+                    pending_kind: PendingRequestKind = (
+                        "steering" if dispatch_mode == "steering" else "queued"
+                    )
                     queued_jobs_ahead = self._pending_queue.append(
                         job.session_id,
                         job.job_id,
@@ -821,6 +846,19 @@ class JobService:
                     job.status = JobStatus.queued
                     job.pending_kind = pending_kind
                     job.updated_at = datetime.now()
+                    if dispatch_mode == "immediate":
+                        self._pending_queue.promote(job.session_id, job.job_id)
+                        queued_jobs_ahead = 0
+                        if current_job.task is not None and not current_job.task.done():
+                            current_job.status = JobStatus.cancelling
+                            current_job.error_message = "为跨会话立即消息而停止"
+                            current_job.dispatch_pending_after_cancel = True
+                            current_job.updated_at = datetime.now()
+                            SessionInterruptState.set(
+                                job.session_id,
+                                cancellation_reason="session_message_immediate",
+                            )
+                            current_job.task.cancel()
                     waiting_job_count = len(self._pending_queue.ids(job.session_id))
                     return JobDispatchSnapshotDTO(
                         session_id=job.session_id,
@@ -868,6 +906,7 @@ class JobService:
             return
 
         next_job: JobState | None = None
+        merge_event_payload: dict[str, object] | None = None
 
         async with self._dispatch_lock:
             current_job_id = self._session_current_job.get(finished_job.session_id)
@@ -906,6 +945,15 @@ class JobService:
                             )
                             merged_job.ended_at = now
                             merged_job.updated_at = now
+                        merge_event_payload = {
+                            "session_id": next_job.session_id,
+                            "merged_job_ids": [
+                                merged_job.job_id for merged_job in merged_jobs[1:]
+                            ],
+                            "source_message_ids": [
+                                merged_job.message_id for merged_job in merged_jobs
+                            ],
+                        }
                     break
 
             if next_job is None:
@@ -915,6 +963,15 @@ class JobService:
             self._session_current_job[finished_job.session_id] = next_job.job_id
             next_job.pending_kind = None
 
+        if merge_event_payload is not None:
+            if self._bus is None:
+                raise RuntimeError("JobService 未绑定 JobEventBus")
+            await self._bus.publish(
+                job_id=next_job.job_id,
+                event_type=EventType.JOB_MERGED,
+                payload=merge_event_payload,
+                agent_id="job_service",
+            )
         self._start_job_task(next_job)
         await self._pending_requests.persist(
             await self._pending_requests.list(finished_job.session_id)

@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Callable
-from typing import Dict, Any
+from typing import Any, Dict
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_step_executor import JobStepExecutor
+from app.abstractions.session_changes import SessionChangesRecorderProtocol
+from app.abstractions.tool_selection import ToolSelectionReader
+from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
 from app.core.job_context import (
+    reset_active_tool_name,
     reset_current_agent_id,
     reset_current_job_id,
-    reset_active_tool_name,
     reset_interruptible_phase,
     set_active_tool_name,
     set_current_agent_id,
@@ -23,14 +28,8 @@ from app.core.job_context import (
     set_interruptible_phase,
 )
 from app.core.job_event_bus import EventType
-from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_interrupt_state import SessionInterruptState
-from app.schemas.public_v2.message import AttachmentRef
-from app.schemas.event import ModelTokenUsagePayload
-from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
-from app.services.infrastructure.attachment_content_service import build_human_content
-from app.services.infrastructure.config_service import ConfigService
-from app.abstractions.job_step_executor import JobStepExecutor
+from app.prompting import PromptSection, internal_message_factory
 from app.runtime.agent_runtime import (
     AgentRuntimeDependencyProvider,
     build_agent_tool_definitions,
@@ -38,25 +37,30 @@ from app.runtime.agent_runtime import (
     get_configured_custom_tool_names,
     get_workspace_custom_tool_skill_sources,
 )
+from app.schemas.event import ModelTokenUsagePayload
+from app.schemas.public_v2.message import AttachmentRef
+from app.services.business.message_display import (
+    DISPLAY_CONTENT_METADATA_KEY,
+    project_message_for_display,
+)
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
 )
-from app.services.mapping.agent_content_mapper import split_agent_content
 from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
 )
-from app.abstractions.session_changes import SessionChangesRecorderProtocol
-from app.abstractions.tool_selection import ToolSelectionReader
+from app.services.infrastructure.attachment_content_service import build_human_content
+from app.services.infrastructure.config_service import ConfigService
+from app.services.mapping.agent_content_mapper import split_agent_content
 from app.services.orchestration.agent_event_stream_processor import (
     SuccessfulToolCall,
-    combine_model_token_usage,
+    last_model_token_usage,
     process_agent_event_stream,
 )
 from app.services.orchestration.agent_stream_helpers import (
     build_human_response_metadata,
     unwrap_json_string_tool_result,
 )
-
 
 EMPTY_RESPONSE_RETRY_LIMIT = 2
 CUSTOM_TOOL_RESPONSE_RETRY_LIMIT = 2
@@ -159,6 +163,26 @@ def _build_missing_custom_tool_retry_reminder(
         '参数格式为 {"tool_name": "<目标扩展工具名>", "arguments": {}}。'
         "不要只描述调用计划，不要把工具名称或 JSON 参数写成普通正文。"
         "工具返回后，最终回复只能包含用户需要看到的结果。"
+    )
+
+
+def _internal_retry_human_message(
+    *,
+    message_id: str,
+    kind: str,
+    reminder: str,
+    metadata: dict[str, object],
+) -> HumanMessage:
+    prepared = internal_message_factory.build(
+        kind=kind,
+        control=reminder,
+        sections=(PromptSection("control_context", metadata),),
+        metadata=metadata,
+    )
+    return HumanMessage(
+        id=message_id,
+        content=prepared.content,
+        response_metadata=prepared.metadata,
     )
 
 
@@ -286,6 +310,17 @@ class AgentExecutionService(JobStepExecutor):
         config_snapshot = self._config_service.get_snapshot()
         with self._config_service.use_snapshot(config_snapshot):
             resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
+            agent_runtime_config = self._config_service.get_agent_runtime_config(
+                resolved_agent_id
+            )
+            require_delegated_report = agent_runtime_config.get(
+                "require_delegated_report",
+                False,
+            )
+            if not isinstance(require_delegated_report, bool):
+                raise TypeError(
+                    "Agent 运行时配置 require_delegated_report 必须是布尔值"
+                )
         if self._bus is None:
             raise RuntimeError("AgentExecutionService 未绑定 JobEventBus")
         bus = self._bus
@@ -353,6 +388,11 @@ class AgentExecutionService(JobStepExecutor):
         )
         resolved_attachments = list(attachments or [])
         resolved_message_metadata = dict(message_metadata or {})
+        display_projection = project_message_for_display(
+            message,
+            resolved_message_metadata,
+        )
+        resolved_message_metadata.pop(DISPLAY_CONTENT_METADATA_KEY, None)
         preferred_provider_id_value = resolved_message_metadata.pop(
             "boxteam_session_provider_id",
             None,
@@ -370,17 +410,23 @@ class AgentExecutionService(JobStepExecutor):
         )
         human_response_metadata = build_human_response_metadata(
             message_id=message_id,
-            display_content=message,
+            display_content=(
+                display_projection.content if display_projection.visible else None
+            ),
             attachments=resolved_attachments,
             message_created_at=message_created_at,
             message_metadata=resolved_message_metadata,
         )
         message_source = resolved_message_metadata.get("source")
         message_kind = resolved_message_metadata.get("kind")
-        requires_delegated_report = message_source == "session_subagent_delegation"
+        requires_delegated_report = (
+            require_delegated_report
+            and message_source == "session_subagent_delegation"
+        )
         parent_session_id = resolved_message_metadata.get("parent_session_id")
         if (
-            message_source == "send_message_to_session"
+            require_delegated_report
+            and message_source == "send_message_to_session"
             and message_kind in {"reply", "progress", "result"}
         ):
             session_service = self._dependency_provider.get_session_service()
@@ -559,10 +605,11 @@ class AgentExecutionService(JobStepExecutor):
                         },
                     )
                     next_input_messages = [
-                        HumanMessage(
-                            id=f"{effective_job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
-                            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
-                            response_metadata={
+                        _internal_retry_human_message(
+                            message_id=f"{effective_job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
+                            kind="missing_custom_tool_retry",
+                            reminder=reminder,
+                            metadata={
                                 "source": "missing_custom_tool_retry",
                                 "attempt": custom_tool_response_retries,
                                 "missing_tools": sorted(missing_custom_tool_names),
@@ -595,13 +642,14 @@ class AgentExecutionService(JobStepExecutor):
                         },
                     )
                     next_input_messages = [
-                        HumanMessage(
-                            id=(
+                        _internal_retry_human_message(
+                            message_id=(
                                 f"{effective_job_id}:delegated_report_retry:"
                                 f"{delegated_report_retries}"
                             ),
-                            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
-                            response_metadata={
+                            kind="delegated_report_retry",
+                            reminder=reminder,
+                            metadata={
                                 "source": "delegated_report_retry",
                                 "attempt": delegated_report_retries,
                                 "parent_session_id": parent_session_id,
@@ -637,13 +685,14 @@ class AgentExecutionService(JobStepExecutor):
                         },
                     )
                     next_input_messages = [
-                        HumanMessage(
-                            id=(
+                        _internal_retry_human_message(
+                            message_id=(
                                 f"{effective_job_id}:session_question_reply_retry:"
                                 f"{delegated_report_retries}"
                             ),
-                            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
-                            response_metadata={
+                            kind="session_question_reply_retry",
+                            reminder=reminder,
+                            metadata={
                                 "source": "session_question_reply_retry",
                                 "attempt": delegated_report_retries,
                                 "sender_session_id": question_sender_session_id,
@@ -676,10 +725,11 @@ class AgentExecutionService(JobStepExecutor):
                     },
                 )
                 next_input_messages = [
-                    HumanMessage(
-                        id=f"{effective_job_id}:empty_response_retry:{empty_response_retries}",
-                        content=f"<system_reminder>\n{reminder}\n</system_reminder>",
-                        response_metadata={
+                    _internal_retry_human_message(
+                        message_id=f"{effective_job_id}:empty_response_retry:{empty_response_retries}",
+                        kind="empty_response_retry",
+                        reminder=reminder,
+                        metadata={
                             "source": "empty_response_retry",
                             "attempt": empty_response_retries,
                         },
@@ -696,7 +746,7 @@ class AgentExecutionService(JobStepExecutor):
                 set_interruptible_phase("text")
                 set_active_tool_name(None)
             checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
-            turn_token_usage = combine_model_token_usage(turn_token_usage_parts)
+            turn_token_usage = last_model_token_usage(turn_token_usage_parts)
             if checkpointer is not None:
                 assistant_message_id = create_prefixed_id("msg")
                 assistant_message_created_at = datetime.now(timezone.utc)

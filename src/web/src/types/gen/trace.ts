@@ -14,11 +14,13 @@ export interface TraceEventDTO {
   type:
     | "agent_start"
     | "llm_request"
+    | "model_failed"
     | "tool_call_start"
     | "tool_call_end"
     | "agent_end"
     | "error"
     | "job_created"
+    | "job_merged"
     | "job_started"
     | "job_completed"
     | "job_cancelled"
@@ -29,8 +31,10 @@ export interface TraceEventDTO {
     | "text_delta"
     | "text_end"
     | "message_created"
-    | "session_interrupted";
-  phase: "agent" | "llm" | "tool" | "error" | "job" | "text" | "system" | "status" | "message" | "session";
+    | "session_interrupted"
+    | "goal_updated"
+    | "goal_cleared";
+  phase: "agent" | "llm" | "tool" | "error" | "job" | "text" | "system" | "status" | "message" | "session" | "goal";
   title: string;
   content: string;
   status?: string | null;

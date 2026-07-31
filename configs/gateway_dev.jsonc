@@ -1,0 +1,17 @@
+{
+  "$schema": "./gateway_config.jsonc",
+  "config_version": 1,
+  "workspaces": [
+    {
+      "enabled": false,
+      "kind": "remote_gateway",
+      "name": "Gateway E2E Docker Gateway",
+      "host": "127.0.0.1",
+      "port": 22222,
+      "username": "boxteam",
+      "private_key_path": "~/.ssh/boxteam_gateway_e2e_ed25519",
+      "remote_gateway_port": 8014,
+      "activate": false
+    }
+  ]
+}

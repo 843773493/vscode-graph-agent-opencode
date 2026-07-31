@@ -11,12 +11,13 @@ export async function listPendingRequests(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
+  signal?: AbortSignal,
 ): Promise<PendingRequestList> {
   return unwrapApiData(
     await requestJson<APIResponse<PendingRequestList>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/pending-requests`,
-      { headers: workspaceHeader(workspaceId) },
+      { headers: workspaceHeader(workspaceId), signal },
     ),
   );
 }

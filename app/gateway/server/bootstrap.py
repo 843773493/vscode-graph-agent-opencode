@@ -7,18 +7,16 @@ from pathlib import Path
 from app.core.env import get_project_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.gateway.config import load_gateway_config
-from app.gateway.runtime.local_workspace import start_managed_local_workspace_runtime
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.federation import build_remote_gateway_connection_id
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.remote_gateway import (
     reconnect_remote_gateway,
     register_remote_gateway,
 )
+from app.gateway.runtime.local_workspace import start_managed_local_workspace_runtime
 from app.gateway.workspace_ids import (
     build_managed_local_workspace_id,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +28,7 @@ def _default_backend_debug_port() -> int | None:
     value = int(raw_value)
     if value < 1 or value > 65535:
         raise ValueError(
-            "BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT 必须是 1-65535: "
-            f"{raw_value}"
+            f"BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT 必须是 1-65535: {raw_value}"
         )
     return value
 
@@ -45,49 +42,6 @@ def _default_workspace_root() -> Path:
     )
     root_path.mkdir(parents=True, exist_ok=True)
     return root_path
-
-
-def _gateway_config_workspace_root(default_root_path: Path) -> Path:
-    configured_root = os.environ.get("BOXTEAM_GATEWAY_CONFIG_WORKSPACE_ROOT")
-    if configured_root:
-        return Path(configured_root).expanduser().resolve()
-    raw_runtime_root = os.environ.get("WORKSPACE_ROOT")
-    if raw_runtime_root:
-        return Path(raw_runtime_root).expanduser().resolve()
-    return default_root_path
-
-
-async def _restore_managed_local_workspace(
-    registry: GatewayWorkspaceRegistry,
-    target: WorkspaceTarget,
-) -> None:
-    workspace_root = Path(target.root_path).expanduser().resolve()
-    if not workspace_root.is_dir():
-        registry.mark_connection_error(
-            target.workspace_id,
-            f"本地工作区目录不存在，无法恢复托管后端: {workspace_root}",
-        )
-        return
-    runtime = await start_managed_local_workspace_runtime(
-        project_root=get_project_root(),
-        workspace_root=workspace_root,
-        log_dir=get_gateway_root() / "logs",
-    )
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id=target.workspace_id,
-            name=target.name,
-            name_customized=target.name_customized,
-            root_path=str(workspace_root),
-            backend_url=runtime.service_urls["workspace_api"],
-            connection_kind="local",
-            managed=True,
-            removable=target.removable,
-            system_default=target.system_default,
-        ),
-        runtime=runtime,
-        activate=False,
-    )
 
 
 async def create_registry() -> GatewayWorkspaceRegistry:
@@ -116,6 +70,11 @@ async def create_registry() -> GatewayWorkspaceRegistry:
         workspace_root=default_root_path,
         log_dir=gateway_root / "logs",
         backend_debug_port=_default_backend_debug_port(),
+        reusable_service_urls=(
+            persisted_default.local_service_urls
+            if persisted_default is not None
+            else None
+        ),
     )
     backend_url = default_runtime.service_urls["workspace_api"]
     registry.upsert(
@@ -123,10 +82,7 @@ async def create_registry() -> GatewayWorkspaceRegistry:
             workspace_id=default_workspace_id,
             name=(
                 persisted_default.name
-                if (
-                    persisted_default is not None
-                    and persisted_default.name_customized
-                )
+                if (persisted_default is not None and persisted_default.name_customized)
                 else os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or "home"
             ),
             name_customized=(
@@ -140,6 +96,9 @@ async def create_registry() -> GatewayWorkspaceRegistry:
             managed=True,
             removable=False,
             system_default=True,
+            local_service_urls={
+                "browser_manager": default_runtime.service_urls["browser_manager"]
+            },
         ),
         runtime=default_runtime,
         activate=persisted_active_workspace_id is None,
@@ -151,9 +110,7 @@ async def create_registry() -> GatewayWorkspaceRegistry:
     # TODO: Gateway 配置热重载需要先为 registry 目标增加 config/manual/system
     # 来源归属、原子 batch commit 与代理 runtime lease。否则删除配置可能误删手动
     # 目标，或在 HTTP/SSE/WebSocket 仍使用旧 SSH 隧道时提前关闭它。
-    gateway_config = load_gateway_config(
-        _gateway_config_workspace_root(default_root_path)
-    )
+    gateway_config = load_gateway_config()
     configured_active_workspace_id: str | None = None
     for configured_workspace in gateway_config.workspaces:
         projected = await register_remote_gateway(
@@ -170,18 +127,6 @@ async def create_registry() -> GatewayWorkspaceRegistry:
         )
         if configured_workspace.activate and projected:
             configured_active_workspace_id = projected[0].workspace_id
-
-    for target in persisted_targets:
-        if target.connection_kind != "local" or not target.managed or target.system_default:
-            continue
-        try:
-            await _restore_managed_local_workspace(registry, target)
-        except Exception as error:
-            message = (
-                f"恢复本地托管工作区失败: workspace_id={target.workspace_id}: {error}"
-            )
-            registry.mark_connection_error(target.workspace_id, message)
-            logger.exception(message)
 
     configured_connection_ids = {
         build_remote_gateway_connection_id(
@@ -216,8 +161,18 @@ async def create_registry() -> GatewayWorkspaceRegistry:
         or persisted_active_workspace_id
         or default_workspace_id
     )
-    if requested_active_workspace_id and registry.has_target(requested_active_workspace_id):
-        registry.activate(requested_active_workspace_id)
+    if requested_active_workspace_id and registry.has_target(
+        requested_active_workspace_id
+    ):
+        requested_target = registry.resolve(requested_active_workspace_id)
+        if (
+            requested_target.connection_kind == "local"
+            and requested_target.managed
+            and not registry.has_runtime(requested_active_workspace_id)
+        ):
+            registry.activate(default_workspace_id)
+        else:
+            registry.activate(requested_active_workspace_id)
     elif default_workspace_id:
         registry.activate(default_workspace_id)
     registry.ensure_default_workspace_first()

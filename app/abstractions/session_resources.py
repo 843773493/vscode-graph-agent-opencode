@@ -26,6 +26,18 @@ class BrowserViewport(TypedDict, total=False):
     height: int
 
 
+BrowserResourceProtection = TypedDict(
+    "BrowserResourceProtection",
+    {
+        "code": str,
+        "class": str,
+        "observed_at": str,
+        "expires_at": str | None,
+    },
+    total=False,
+)
+
+
 class BrowserRecord(TypedDict, total=False):
     browser_id: str
     page_id: str
@@ -39,9 +51,36 @@ class BrowserRecord(TypedDict, total=False):
     started_at: str | None
     ended_at: str | None
     client_count: int
+    participants: list[dict[str, object]]
     sequence: int
+    document_revision: int
+    operation_revision: int
+    active_operation: dict[str, object] | None
+    last_operation: dict[str, object] | None
+    active_page_id: str | None
+    pages: list[dict[str, object]]
+    downloads: list[dict[str, object]]
+    download_error: str | None
     pending_dialog: object | None
     pending_file_chooser: bool
+    agent_access_locked: bool
+    agent_lock_updated_at: str | None
+    agent_lock_owner_id: str | None
+    agent_lock_expires_at: str | None
+    resource_state: str
+    resource_policy: str
+    resource_protection_reasons: list[str]
+    resource_hard_protection_reasons: list[str]
+    resource_soft_protection_reasons: list[str]
+    resource_protections: list[BrowserResourceProtection]
+    resource_transition_reason: str | None
+    resource_transition_error: str | None
+    frozen_at: str | None
+    discarded_at: str | None
+    last_wake_at: str | None
+    runtime_generation: int | None
+    stream_metrics: dict[str, object]
+    checkpoint: dict[str, object] | None
 
 
 class BrowserToolResult(TypedDict, total=False):
@@ -103,6 +142,7 @@ class BrowserManagerClientProtocol(Protocol):
         browser_id: str,
         navigation_type: str,
         url: str | None = None,
+        tab_id: str | None = None,
     ) -> BrowserToolResult: ...
 
     async def click_element(self, browser_id: str, payload: BrowserActionPayload) -> BrowserToolResult: ...
@@ -122,6 +162,14 @@ class BrowserManagerClientProtocol(Protocol):
     async def close_browser(self, browser_id: str) -> BrowserRecord: ...
 
     async def delete_browser(self, browser_id: str) -> BrowserToolResult: ...
+
+    async def set_resource_policy(self, browser_id: str, policy: str) -> BrowserRecord: ...
+
+    async def freeze_browser(self, browser_id: str) -> BrowserRecord: ...
+
+    async def wake_browser(self, browser_id: str) -> BrowserRecord: ...
+
+    async def discard_browser(self, browser_id: str) -> BrowserRecord: ...
 
 
 @runtime_checkable

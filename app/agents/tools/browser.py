@@ -22,7 +22,14 @@ def _page_id(value: str) -> str:
 
 class OpenBrowserPageInput(BaseModel):
     url: str = Field(description="要在可附加浏览器中打开的 URL，可传完整 URL 或 www.example.com 这类裸域名。")
-    forceNew: bool = Field(default=False, description="保留给 VS Code 兼容语义；当前总是打开新页面。")
+    forceNew: bool = Field(
+        default=False,
+        description="为 false 时优先接管当前会话已有的运行中浏览器；为 true 时新建浏览器。",
+    )
+
+
+class ListBrowserPageInput(BaseModel):
+    """只读浏览器页面列表无需调用参数。"""
 
 
 class PageIdInput(BaseModel):
@@ -30,11 +37,20 @@ class PageIdInput(BaseModel):
 
 
 class NavigatePageInput(PageIdInput):
-    type: Literal["url", "back", "forward", "reload"] = Field(
+    type: Literal[
+        "url",
+        "back",
+        "forward",
+        "reload",
+        "new_tab",
+        "activate_tab",
+        "close_tab",
+    ] = Field(
         default="url",
-        description="导航类型。",
+        description="导航类型；标签页 ID 可从 readPage 返回的 pages 获取。",
     )
     url: str | None = Field(default=None, description="type=url 时要打开的 URL，可传完整 URL 或裸域名。")
+    tabId: str | None = Field(default=None, description="activate_tab/close_tab 时的标签页 ID。")
 
 
 class ElementInput(PageIdInput):
@@ -78,13 +94,97 @@ class RunPlaywrightCodeInput(PageIdInput):
     timeoutMs: int = Field(default=5000, ge=1, le=60000, description="最大等待毫秒数。")
 
 
+def _browser_page_summary(browser: dict[str, Any]) -> dict[str, Any]:
+    browser_id = browser.get("browser_id")
+    if not isinstance(browser_id, str) or not browser_id:
+        raise RuntimeError(f"浏览器记录缺少 browser_id: {browser!r}")
+
+    raw_pages = browser.get("pages")
+    if raw_pages is None:
+        raw_pages = []
+    if not isinstance(raw_pages, list):
+        raise RuntimeError(f"浏览器记录 pages 不是数组: browser_id={browser_id}")
+    pages: list[dict[str, Any]] = []
+    for raw_page in raw_pages:
+        if not isinstance(raw_page, dict):
+            raise RuntimeError(f"浏览器标签页记录不是对象: browser_id={browser_id}")
+        page_id = raw_page.get("page_id")
+        if not isinstance(page_id, str) or not page_id:
+            raise RuntimeError(f"浏览器标签页缺少 page_id: browser_id={browser_id}")
+        pages.append(
+            {
+                "tabId": page_id,
+                "title": raw_page.get("title"),
+                "url": raw_page.get("actual_url") or raw_page.get("url"),
+                "active": raw_page.get("active") is True,
+            }
+        )
+
+    return {
+        "pageId": browser_id,
+        "browserId": browser_id,
+        "title": browser.get("title"),
+        "url": browser.get("actual_url") or browser.get("url"),
+        "status": browser.get("status"),
+        "resourceState": browser.get("resource_state"),
+        "clientCount": browser.get("client_count", 0),
+        "activePageId": browser.get("active_page_id"),
+        "pages": pages,
+        "agentAccessLocked": browser.get("agent_access_locked") is True,
+        "updatedAt": browser.get("updated_at"),
+    }
+
+
+def create_list_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool:
+    async def list_browser_page() -> str:
+        browsers = context.browser_manager_client.list_browsers_from_state(
+            context.session_id
+        )
+        pages = [
+            _browser_page_summary(dict(browser))
+            for browser in browsers
+            if browser.get("status") != "deleted"
+        ]
+        return _json_result({"count": len(pages), "pages": pages})
+
+    return StructuredTool.from_function(
+        coroutine=list_browser_page,
+        name="listBrowserPage",
+        description=(
+            "只读列出当前 Session 中未删除的可附加浏览器页面，返回 pageId、"
+            "网址、标题、资源状态、连接人数和标签页摘要；不会创建、唤醒或导航页面。"
+        ),
+        args_schema=ListBrowserPageInput,
+    )
+
+
 def create_open_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def open_browser_page(url: str, forceNew: bool = False) -> str:
-        browser = await context.browser_manager_client.create_browser(
-            session_id=context.session_id,
-            title="Agent browser",
-            url=url,
-        )
+        browser = None
+        if not forceNew:
+            browser = next(
+                (
+                    candidate
+                    for candidate in context.browser_manager_client.list_browsers_from_state(
+                        context.session_id
+                    )
+                    if candidate.get("status") == "running"
+                ),
+                None,
+            )
+        reused = browser is not None
+        if browser is None:
+            browser = await context.browser_manager_client.create_browser(
+                session_id=context.session_id,
+                title="Agent browser",
+                url=url,
+            )
+        else:
+            browser = await context.browser_manager_client.navigate_page(
+                browser_id=str(browser["browser_id"]),
+                navigation_type="url",
+                url=url,
+            )
         browser_id = str(browser["browser_id"])
         page = await context.browser_manager_client.read_page(browser_id)
         return _json_result(
@@ -94,6 +194,7 @@ def create_open_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool
                 "url": browser.get("url"),
                 "title": browser.get("title"),
                 "forceNew": forceNew,
+                "reused": reused,
                 "summary": page.get("summary"),
             }
         )
@@ -101,7 +202,7 @@ def create_open_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool
     return StructuredTool.from_function(
         coroutine=open_browser_page,
         name="openBrowserPage",
-        description="在可附加浏览器中打开 URL，并返回 pageId 和页面摘要。",
+        description="在可附加浏览器中打开 URL；默认接管当前会话已有页面，forceNew=true 时新建。",
         args_schema=OpenBrowserPageInput,
     )
 
@@ -122,20 +223,30 @@ def create_read_page_tool(context: CustomToolFactoryContext) -> BaseTool:
 def create_navigate_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def navigate_page(
         pageId: str,
-        type: Literal["url", "back", "forward", "reload"] = "url",
+        type: Literal[
+            "url",
+            "back",
+            "forward",
+            "reload",
+            "new_tab",
+            "activate_tab",
+            "close_tab",
+        ] = "url",
         url: str | None = None,
+        tabId: str | None = None,
     ) -> str:
         page = await context.browser_manager_client.navigate_page(
             browser_id=_page_id(pageId),
             navigation_type=type,
             url=url,
+            tab_id=tabId,
         )
         return _json_result(page)
 
     return StructuredTool.from_function(
         coroutine=navigate_page,
         name="navigatePage",
-        description="让浏览器页面跳转 URL、后退、前进或刷新。",
+        description="让浏览器跳转、后退、前进、刷新，或新建、激活、关闭标签页。",
         args_schema=NavigatePageInput,
     )
 

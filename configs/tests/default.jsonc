@@ -1,5 +1,5 @@
 {
-  "$schema": "../config.jsonc",
+  "$schema": "../workspace_config.jsonc",
   "llm": {
     "providers": [
       {
@@ -94,33 +94,26 @@
         ]
       },
       "tools": {
-        "denylist": [
-        ],
+        "denylist": [],
         "confirmation_required": [],
         "custom": [
           {
-            "name": "test_tool_2",
-            "factory": "app.agents.tools.testing:create_test_tool_2"
+            "tool_id": "test_tool_2"
           },
           {
-            "name": "large_test_output",
-            "factory": "app.agents.tools.testing:create_large_test_output_tool"
+            "tool_id": "large_test_output"
           },
           {
-            "name": "read_context",
-            "factory": "app.agents.tools.session_history:create_read_context_tool"
+            "tool_id": "read_context"
           },
           {
-            "name": "search_context",
-            "factory": "app.agents.tools.session_history:create_search_context_tool"
+            "tool_id": "search_context"
           },
           {
-            "name": "web_search",
-            "factory": "app.agents.tools.web:create_web_search_tool"
+            "tool_id": "web_search"
           },
           {
-            "name": "fetch_webpage",
-            "factory": "app.agents.tools.web:create_fetch_webpage_tool",
+            "tool_id": "fetch_webpage",
             "options": {
               "embedding": {
                 "provider_id": "backup_2",
@@ -129,44 +122,37 @@
             }
           },
           {
-            "name": "openBrowserPage",
-            "factory": "app.agents.tools.browser:create_open_browser_page_tool"
+            "tool_id": "listBrowserPage"
           },
           {
-            "name": "readPage",
-            "factory": "app.agents.tools.browser:create_read_page_tool"
+            "tool_id": "openBrowserPage"
           },
           {
-            "name": "navigatePage",
-            "factory": "app.agents.tools.browser:create_navigate_page_tool"
+            "tool_id": "readPage"
           },
           {
-            "name": "clickElement",
-            "factory": "app.agents.tools.browser:create_click_element_tool"
+            "tool_id": "navigatePage"
           },
           {
-            "name": "typeInPage",
-            "factory": "app.agents.tools.browser:create_type_in_page_tool"
+            "tool_id": "clickElement"
           },
           {
-            "name": "hoverElement",
-            "factory": "app.agents.tools.browser:create_hover_element_tool"
+            "tool_id": "typeInPage"
           },
           {
-            "name": "dragElement",
-            "factory": "app.agents.tools.browser:create_drag_element_tool"
+            "tool_id": "hoverElement"
           },
           {
-            "name": "handleDialog",
-            "factory": "app.agents.tools.browser:create_handle_dialog_tool"
+            "tool_id": "dragElement"
           },
           {
-            "name": "screenshotPage",
-            "factory": "app.agents.tools.browser:create_screenshot_page_tool"
+            "tool_id": "handleDialog"
           },
           {
-            "name": "runPlaywrightCode",
-            "factory": "app.agents.tools.browser:create_run_playwright_code_tool"
+            "tool_id": "screenshotPage"
+          },
+          {
+            "tool_id": "runPlaywrightCode"
           }
         ]
       },
@@ -226,7 +212,6 @@
         }
       }
     },
-
     "coder": {
       "name": "Coding Assistant",
       "description": "专门用于代码实现、重构、修复 bug 和生成补丁。",
@@ -256,8 +241,7 @@
           "send_message_to_session",
           "edit_file"
         ],
-        "confirmation_required": [
-        ]
+        "confirmation_required": []
       },
       "knowledge": {
         "enabled": true,
@@ -301,7 +285,6 @@
         }
       }
     },
-
     "reviewer": {
       "name": "Code Reviewer",
       "description": "专门用于代码审查、风险检查、设计评估和质量把关。",
@@ -387,7 +370,6 @@
         }
       }
     },
-
     "researcher": {
       "name": "Research Assistant",
       "description": "专门用于资料检索、文档总结、方案调研和知识问答。",
@@ -483,7 +465,5 @@
   "development": {
     "test_tools": true
   },
-  "gateway": {
-    "workspaces": []
-  }
+  "config_version": 1
 }

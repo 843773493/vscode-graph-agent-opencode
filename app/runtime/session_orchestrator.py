@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.job_event_bus import EventType
-from app.schemas.public_v2.common import MessageRole, RunMode
+from app.prompting.validation import validate_internal_message
+from app.schemas.public_v2.common import MessageRole
 from app.schemas.public_v2.message import (
     MessageCreateRequest,
     MessageDTO,
     MessageRunAccepted,
     MessageRunRequest,
-    RunOptions,
 )
-from app.schemas.public_v2.pending_request import PendingRequestKind
-from app.services.infrastructure.config_service import ConfigService
+from app.schemas.public_v2.pending_request import MessageDispatchMode
+from app.services.business.message_display import project_message_for_display
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.config_service import ConfigService
 
 
 class SessionOrchestrator:
@@ -39,17 +41,41 @@ class SessionOrchestrator:
         content: str,
         *,
         metadata: dict[str, object] | None = None,
+        dispatch_mode: MessageDispatchMode = "queued",
     ) -> MessageRunAccepted:
+        self._reject_internal_message_on_user_path(content, metadata)
         session = await self._session_service.get(session_id)
-        run_request = MessageRunRequest(
-            message=MessageCreateRequest(
-                role=MessageRole.user,
-                content=content,
-                metadata=metadata or {},
-            ),
-            run=RunOptions(mode=RunMode.single_agent, agent_id=session.current_agent_id),
+        message_request = MessageCreateRequest(
+            role=MessageRole.user,
+            content=content,
+            metadata=metadata or {},
         )
-        return await self.create_message(session_id, run_request)
+        return await self._create_and_dispatch(
+            session_id,
+            message_request,
+            requested_agent_id=session.current_agent_id,
+            dispatch_mode=dispatch_mode,
+        )
+
+    async def create_and_run_internal(
+        self,
+        session_id: str,
+        message: PreparedInternalMessage,
+        *,
+        dispatch_mode: MessageDispatchMode = "queued",
+    ) -> MessageRunAccepted:
+        validate_internal_message(message.content, message.metadata)
+        session = await self._session_service.get(session_id)
+        return await self._create_and_dispatch(
+            session_id,
+            MessageCreateRequest(
+                role=MessageRole.user,
+                content=message.content,
+                metadata=dict(message.metadata),
+            ),
+            requested_agent_id=session.current_agent_id,
+            dispatch_mode=dispatch_mode,
+        )
 
     async def prepare_user_message(
         self,
@@ -59,6 +85,7 @@ class SessionOrchestrator:
         metadata: dict[str, object] | None = None,
     ) -> MessageDTO:
         """生成稳定消息 DTO；调用方必须先写入业务账本再派发。"""
+        self._reject_internal_message_on_user_path(content, metadata)
         return await self._job_service.run_session_preparation(
             session_id,
             lambda: self._message_service.create(
@@ -70,6 +97,43 @@ class SessionOrchestrator:
                 ),
             ),
         )
+
+    async def prepare_internal_message(
+        self,
+        session_id: str,
+        message: PreparedInternalMessage,
+    ) -> MessageDTO:
+        """生成稳定的内部结构消息 DTO；调用方必须先写账本再派发。"""
+        validate_internal_message(message.content, message.metadata)
+        return await self._job_service.run_session_preparation(
+            session_id,
+            lambda: self._message_service.create(
+                session_id,
+                MessageCreateRequest(
+                    role=MessageRole.user,
+                    content=message.content,
+                    metadata=dict(message.metadata),
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _reject_internal_message_on_user_path(
+        content: str,
+        metadata: dict[str, object] | None,
+    ) -> None:
+        del content
+        reserved_metadata_keys = {
+            "internal",
+            "structured_prompt_kind",
+            "structured_prompt_schema_version",
+            "internal_display_kind",
+        }
+        if metadata is not None and reserved_metadata_keys & metadata.keys():
+            raise ValueError(
+                "内部结构消息必须通过 create_and_run_internal 或 "
+                "prepare_internal_message 注入"
+            )
 
     async def dispatch_existing_message(
         self,
@@ -97,14 +161,34 @@ class SessionOrchestrator:
         import logging
         logger = logging.getLogger(__name__)
         logger.info("[session_orchestrator] create_message begin: session_id=%s", session_id)
+        requested_agent_id = payload.run.agent_id if payload.run else None
+        dispatch_mode: MessageDispatchMode = payload.run.queue or "queued"
+        self._reject_internal_message_on_user_path(
+            payload.message.content,
+            payload.message.metadata,
+        )
+        return await self._create_and_dispatch(
+            session_id,
+            payload.message,
+            requested_agent_id=requested_agent_id,
+            dispatch_mode=dispatch_mode,
+        )
+
+    async def _create_and_dispatch(
+        self,
+        session_id: str,
+        message_request: MessageCreateRequest,
+        *,
+        requested_agent_id: str | None,
+        dispatch_mode: MessageDispatchMode,
+    ) -> MessageRunAccepted:
         async def prepare_and_dispatch() -> MessageRunAccepted:
-            requested_agent_id = payload.run.agent_id if payload.run else None
-            message = await self._message_service.create(session_id, payload.message)
+            message = await self._message_service.create(session_id, message_request)
             return await self.dispatch_prepared_message(
                 session_id,
                 message,
                 requested_agent_id=requested_agent_id,
-                pending_kind=payload.run.queue or "queued",
+                dispatch_mode=dispatch_mode,
             )
 
         return await self._job_service.run_session_preparation(
@@ -118,7 +202,7 @@ class SessionOrchestrator:
         message: MessageDTO,
         *,
         requested_agent_id: str | None,
-        pending_kind: PendingRequestKind = "queued",
+        dispatch_mode: MessageDispatchMode = "queued",
         job_id: str | None = None,
     ) -> MessageRunAccepted:
         """调度一条已生成稳定 message_id 的用户消息。"""
@@ -147,10 +231,14 @@ class SessionOrchestrator:
             attachments=message.attachments,
             message_created_at=message.created_at.isoformat(),
             message_metadata=job_message_metadata,
-            pending_kind=pending_kind,
+            dispatch_mode=dispatch_mode,
         )
         job_id = dispatch.job_id
         logger.info("[session_orchestrator] start_job returned: session_id=%s job_id=%s", session_id, job_id)
+        display_projection = project_message_for_display(
+            message.content,
+            message.metadata,
+        )
         await self._job_event_bus.publish(
             job_id=job_id,
             event_type=EventType.MESSAGE_CREATED,
@@ -158,12 +246,12 @@ class SessionOrchestrator:
                 "message_id": message.message_id,
                 "session_id": message.session_id,
                 "role": message.role,
-                "content": message.content,
+                "content": display_projection.content,
                 "attachments": [
                     a.model_dump(mode="json", exclude={"data_url"})
                     for a in message.attachments
                 ],
-                "metadata": message.metadata,
+                "metadata": display_projection.metadata,
                 "created_at": message.created_at,
             },
             agent_id=effective_agent_id,

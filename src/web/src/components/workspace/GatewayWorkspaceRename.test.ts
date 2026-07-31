@@ -1,6 +1,6 @@
 import { renameGatewayWorkspace } from "../../gatewayApi";
 import type { GatewayWorkspace } from "../../types/backend";
-import { workspaceHoverTitle } from "../agentSessions/AgentSessionsWorkspaceGroups";
+import { workspaceHoverTitle } from "../agentSessions/agentSessionsUtils";
 import { groupGatewayWorkspaces } from "./GatewayControlCenter";
 
 const originalFetch = globalThis.fetch;
@@ -88,11 +88,25 @@ const remoteGatewayWorkspace: GatewayWorkspace = {
 };
 
 const hoverTitle = workspaceHoverTitle(remoteGatewayWorkspace);
-if (!hoverTitle.includes("路径：/srv/project")) {
+if (!hoverTitle.includes("root_path: /srv/project")) {
   throw new Error(`悬停提示缺少完整路径: ${hoverTitle}`);
 }
-if (!hoverTitle.includes("远程 Gateway：gateway_dev")) {
-  throw new Error(`悬停提示缺少远程 Gateway 信息: ${hoverTitle}`);
+if (!hoverTitle.includes("hostname: 192.0.2.10")) {
+  throw new Error(`悬停提示缺少 SSH hostname: ${hoverTitle}`);
+}
+
+const localHoverTitle = workspaceHoverTitle({
+  ...remoteGatewayWorkspace,
+  workspace_id: "gw_local",
+  root_path: "/data/local-project",
+  connection_kind: "local",
+  remote: null,
+});
+if (localHoverTitle.includes("hostname:")) {
+  throw new Error(`本地工作区不应显示 hostname: ${localHoverTitle}`);
+}
+if (!localHoverTitle.includes("root_path: /data/local-project")) {
+  throw new Error(`本地工作区悬停提示缺少 root_path: ${localHoverTitle}`);
 }
 
 const grouped = groupGatewayWorkspaces([

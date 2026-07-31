@@ -1,4 +1,5 @@
 import type {
+  ConversationModelUsage,
   ConversationTokenUsage,
   ConversationView,
 } from "../types/frontend";
@@ -30,6 +31,11 @@ function parseTokenUsage(value: unknown): ConversationTokenUsage | null {
   if (reportedModelCalls === 0) {
     return null;
   }
+  const modelCalls = nonNegativeInteger(usage.model_calls, "model_calls");
+  if (modelCalls !== 1 || reportedModelCalls !== 1) {
+    // 旧版本写入的是多次模型请求的累计值，无法可靠还原最后一次请求，故不展示。
+    return null;
+  }
   const rawCacheRead = usage.cache_read_input_tokens;
   return {
     inputTokens: nonNegativeInteger(usage.input_tokens, "input_tokens"),
@@ -38,7 +44,7 @@ function parseTokenUsage(value: unknown): ConversationTokenUsage | null {
     cacheReadInputTokens: rawCacheRead === null || rawCacheRead === undefined
       ? null
       : nonNegativeInteger(rawCacheRead, "cache_read_input_tokens"),
-    modelCalls: nonNegativeInteger(usage.model_calls, "model_calls"),
+    modelCalls,
     reportedModelCalls,
   };
 }
@@ -65,4 +71,26 @@ export function conversationTokenUsage(
     }
   }
   return null;
+}
+
+export function conversationModelUsage(
+  conversation: ConversationView,
+): ConversationModelUsage | null {
+  const modelIds = conversation.events.flatMap((event) => {
+    if (event.type !== "llm_request") {
+      return [];
+    }
+    const modelId = rawTracePayload(event).model;
+    if (typeof modelId !== "string" || modelId.trim().length === 0) {
+      throw new TypeError("llm_request.model 必须是非空字符串");
+    }
+    return [modelId.trim()];
+  });
+  const finalModelId = modelIds[modelIds.length - 1];
+  if (!finalModelId) {
+    return null;
+  }
+  return {
+    finalModelId,
+  };
 }

@@ -7,11 +7,17 @@ import type {
   WorkspaceNavigationNode,
 } from "../../types/backend";
 import SessionGeneratorManager from "./SessionGeneratorManager";
+import SessionActivityIndicator from "./SessionActivityIndicator";
+import { workspaceHoverTitle } from "./agentSessionsUtils";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   decideSessionResourceDrop,
   sessionResourceDropTargetKey,
+  workspaceDropZoneForPointer,
   type SessionResourceDragItem,
   type SessionResourceDropTarget,
+  type SessionResourceDropZone,
+  type WorkspaceNavigationPlacement,
 } from "./sessionResourceDrag";
 import SessionResourceOverlays, {
   type SessionFolderContextMenu,
@@ -19,6 +25,7 @@ import SessionResourceOverlays, {
   type WorkspaceFolderContextMenu,
   type WorkspaceFolderEditor,
 } from "./SessionResourceOverlays";
+import { buildWorkspaceNavigationSyncKey } from "../../hooks/sessionResourceExplorer/resourceTreeSync";
 
 interface SessionResourceExplorerProps {
   apiPort: number;
@@ -42,11 +49,15 @@ interface SessionResourceExplorerProps {
     workspaceId: string,
     deletedCurrentSession: boolean,
   ) => Promise<void>;
-  catalogRefreshVersion: number;
+  catalogSyncKeys: ReadonlyMap<string, string>;
+  catalogRefreshVersions: ReadonlyMap<string, number>;
   onSelectSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
   onStatusChange: (message: string) => void;
   onOpenWorkspaceMenu: (workspace: GatewayWorkspace, x: number, y: number) => void;
   onOpenSessionMenu: (session: Session, workspaceId: string, x: number, y: number) => void;
+  activeJobIdsBySession: ReadonlyMap<string, string>;
+  unreadSessionKeys: ReadonlySet<string>;
+  onRequestAddWorkspace: () => void;
 }
 
 function Chevron({ expanded }: { expanded: boolean }) {
@@ -71,11 +82,15 @@ export default function SessionResourceExplorer({
   onRefreshWorkspaceSessions,
   onCreateSessionInFolder,
   onSessionFolderDeleted,
-  catalogRefreshVersion,
+  catalogSyncKeys,
+  catalogRefreshVersions,
   onSelectSession,
   onStatusChange,
   onOpenWorkspaceMenu,
   onOpenSessionMenu,
+  activeJobIdsBySession,
+  unreadSessionKeys,
+  onRequestAddWorkspace,
 }: SessionResourceExplorerProps): ReactNode {
   const [actionError, setActionError] = useState<string | null>(null);
   const [folderMenu, setFolderMenu] = useState<SessionFolderContextMenu | null>(null);
@@ -86,13 +101,17 @@ export default function SessionResourceExplorer({
   const [resourceDialog, setResourceDialog] = useState<SessionResourceDialog | null>(null);
   const [dragItem, setDragItem] = useState<SessionResourceDragItem | null>(null);
   const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
+  const [dropTargetZone, setDropTargetZone] =
+    useState<SessionResourceDropZone | null>(null);
   const explorer = useSessionResourceExplorer({
     apiPort,
     activeWorkspaceId,
     searchOpen,
     searchQuery,
     currentSessionId,
-    refreshVersion: catalogRefreshVersion,
+    workspaceNavigationSyncKey: buildWorkspaceNavigationSyncKey(workspaces),
+    catalogSyncKeys,
+    catalogRefreshVersions,
   });
   const workspacesById = new Map(
     workspaces.map((workspace) => [workspace.workspace_id, workspace]),
@@ -135,12 +154,24 @@ export default function SessionResourceExplorer({
     children.sort((left, right) => left.position - right.position || left.name.localeCompare(right.name));
   }
 
+  const dropTargetClass = (targetKey: string): string => (
+    dropTargetKey === targetKey && dropTargetZone
+      ? ` drop-${dropTargetZone}`
+      : ""
+  );
+
+  const clearDropTarget = () => {
+    setDropTargetKey(null);
+    setDropTargetZone(null);
+  };
+
   const startDrag = (
     event: DragEvent<HTMLElement>,
     item: SessionResourceDragItem,
   ) => {
     setDragItem(item);
     setDropTargetKey(null);
+    setDropTargetZone(null);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("application/x-boxteam-session-resource", JSON.stringify(item));
     event.dataTransfer.setData("text/plain", item.nodeId);
@@ -148,7 +179,21 @@ export default function SessionResourceExplorer({
 
   const clearDrag = () => {
     setDragItem(null);
-    setDropTargetKey(null);
+    clearDropTarget();
+  };
+
+  const dropZoneForEvent = (
+    event: DragEvent<HTMLElement>,
+    target: SessionResourceDropTarget,
+  ): SessionResourceDropZone => {
+    if (
+      (dragItem?.kind === "workspace" || dragItem?.kind === "workspace_folder")
+      && (target.kind === "workspace" || target.kind === "workspace_folder")
+    ) {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      return workspaceDropZoneForPointer(event.clientY, bounds.top, bounds.height);
+    }
+    return "inside";
   };
 
   const handleDragOver = (
@@ -159,44 +204,83 @@ export default function SessionResourceExplorer({
       return;
     }
     event.stopPropagation();
-    const decision = decideSessionResourceDrop(dragItem, target);
+    const zone = dropZoneForEvent(event, target);
+    const decision = decideSessionResourceDrop(dragItem, target, zone);
     if (!decision.allowed) {
       event.dataTransfer.dropEffect = "none";
+      setDropTargetKey(null);
+      setDropTargetZone(null);
       return;
     }
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
     setDropTargetKey(sessionResourceDropTargetKey(target));
+    setDropTargetZone(zone);
+  };
+
+  const placeWorkspaceNavigation = (
+    nodeId: string,
+    parentNodeId: string | null,
+    placement: WorkspaceNavigationPlacement,
+  ) => explorer.placeWorkspaceNode(
+    nodeId,
+    parentNodeId,
+    placement.mode,
+    placement.mode === "last" ? undefined : placement.targetNodeId,
+  );
+
+  const originalNavigationPlacement = (
+    source: Extract<SessionResourceDragItem, { kind: "workspace" | "workspace_folder" }>,
+  ): WorkspaceNavigationPlacement => {
+    const siblings = navigationChildren.get(source.parentNodeId) ?? [];
+    const sourceIndex = siblings.findIndex((node) => node.node_id === source.nodeId);
+    const nextSibling = sourceIndex >= 0 ? siblings[sourceIndex + 1] : undefined;
+    return nextSibling
+      ? { mode: "before", targetNodeId: nextSibling.node_id }
+      : { mode: "last" };
   };
 
   const performDrop = async (
     source: SessionResourceDragItem,
     target: SessionResourceDropTarget,
+    zone: SessionResourceDropZone,
   ) => {
-    const decision = decideSessionResourceDrop(source, target);
+    const decision = decideSessionResourceDrop(source, target, zone);
     if (!decision.allowed) {
       throw new Error(decision.reason);
     }
     if (decision.action.kind === "move_workspace_navigation") {
-      await explorer.moveWorkspaceNode(source.nodeId, decision.action.parentNodeId);
+      if (source.kind !== "workspace" && source.kind !== "workspace_folder") {
+        throw new Error("拖放来源不是工作区或工作区文件夹");
+      }
+      const rollbackPlacement = originalNavigationPlacement(source);
+      await placeWorkspaceNavigation(
+        source.nodeId,
+        decision.action.parentNodeId,
+        decision.action.placement,
+      );
       if (source.kind === "workspace" && source.parentWorkspaceId !== null) {
         try {
           await onSetWorkspaceParent(source.workspaceId, null);
         } catch (error) {
           try {
-            await explorer.moveWorkspaceNode(source.nodeId, source.parentNodeId);
+            await placeWorkspaceNavigation(
+              source.nodeId,
+              source.parentNodeId,
+              rollbackPlacement,
+            );
           } catch (rollbackError) {
             throw new Error(
-              `${error instanceof Error ? error.message : String(error)}；恢复工作区虚拟位置也失败: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+              `${error instanceof Error ? error.message : String(error)}；恢复工作区导航位置也失败: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
             );
           }
           throw error;
         }
       }
       onStatusChange(
-        source.kind === "workspace"
-          ? "已移动工作区"
-          : "已移动工作区文件夹",
+        zone === "inside"
+          ? source.kind === "workspace" ? "已移动工作区" : "已移动工作区文件夹"
+          : source.kind === "workspace" ? "已调整工作区顺序" : "已调整工作区文件夹顺序",
       );
       return;
     }
@@ -204,26 +288,34 @@ export default function SessionResourceExplorer({
       if (source.kind !== "workspace") {
         throw new Error("拖放来源不是工作区");
       }
-      await explorer.moveWorkspaceNode(
+      const rollbackPlacement = originalNavigationPlacement(source);
+      await placeWorkspaceNavigation(
         source.nodeId,
         decision.action.navigationParentNodeId,
+        decision.action.placement,
       );
-      try {
-        await onSetWorkspaceParent(
-          source.workspaceId,
-          decision.action.parentWorkspaceId,
-        );
-      } catch (error) {
+      if (source.parentWorkspaceId !== decision.action.parentWorkspaceId) {
         try {
-          await explorer.moveWorkspaceNode(source.nodeId, source.parentNodeId);
-        } catch (rollbackError) {
-          throw new Error(
-            `${error instanceof Error ? error.message : String(error)}；恢复工作区虚拟位置也失败: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+          await onSetWorkspaceParent(
+            source.workspaceId,
+            decision.action.parentWorkspaceId,
           );
+        } catch (error) {
+          try {
+            await placeWorkspaceNavigation(
+              source.nodeId,
+              source.parentNodeId,
+              rollbackPlacement,
+            );
+          } catch (rollbackError) {
+            throw new Error(
+              `${error instanceof Error ? error.message : String(error)}；恢复工作区导航位置也失败: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+            );
+          }
+          throw error;
         }
-        throw error;
       }
-      onStatusChange("已设置子工作区");
+      onStatusChange(zone === "inside" ? "已设置子工作区" : "已调整子工作区顺序");
       return;
     }
     if (source.kind !== "session" && source.kind !== "session_folder") {
@@ -261,7 +353,8 @@ export default function SessionResourceExplorer({
     }
     event.stopPropagation();
     const source = dragItem;
-    const decision = decideSessionResourceDrop(source, target);
+    const zone = dropZoneForEvent(event, target);
+    const decision = decideSessionResourceDrop(source, target, zone);
     if (!decision.allowed) {
       clearDrag();
       handleError("无法拖放", new Error(decision.reason));
@@ -269,7 +362,7 @@ export default function SessionResourceExplorer({
     }
     event.preventDefault();
     clearDrag();
-    void performDrop(source, target).catch((error) => handleError("拖放失败", error));
+    void performDrop(source, target, zone).catch((error) => handleError("拖放失败", error));
   };
 
   const submitWorkspaceFolderEditor = (editor: WorkspaceFolderEditor) => {
@@ -342,7 +435,7 @@ export default function SessionResourceExplorer({
           </li>
         ) : null}
         {!branch.loading && !branch.error && branch.items.length === 0 ? (
-          <li className="session-resource-state">空文件夹</li>
+          <li className="session-resource-state">暂无会话或会话文件夹</li>
         ) : null}
         {branch.cursor ? (
           <li>
@@ -369,6 +462,9 @@ export default function SessionResourceExplorer({
     const isFolder = node.kind === "folder";
     const canExpand = isFolder || node.has_children;
     const isCurrent = node.session_id === currentSessionId && workspaceId === activeWorkspaceId;
+    const sessionCacheKey = node.session_id
+      ? sessionScopeKey(workspaceId, node.session_id)
+      : null;
     const target: SessionResourceDropTarget = isFolder
       ? { kind: "session_folder", nodeId: node.node_id, workspaceId }
       : {
@@ -381,7 +477,7 @@ export default function SessionResourceExplorer({
     return (
       <li key={node.node_id} role="treeitem" aria-expanded={canExpand ? expanded : undefined}>
         <div
-          className={`session-resource-row${isCurrent ? " current" : ""}${dropTargetKey === targetKey ? " drop-target" : ""}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          className={`session-resource-row${isCurrent ? " current" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
           aria-current={isCurrent ? "true" : undefined}
           aria-grabbed={dragItem?.nodeId === node.node_id}
           draggable
@@ -408,7 +504,7 @@ export default function SessionResourceExplorer({
           onDragEnter={(event) => handleDragOver(event, target)}
           onDragLeave={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-              setDropTargetKey(null);
+              clearDropTarget();
             }
           }}
           onDrop={(event) => handleDrop(event, target)}
@@ -450,6 +546,7 @@ export default function SessionResourceExplorer({
           <button
             type="button"
             className="session-resource-label"
+            data-session-id={!isFolder ? node.session_id : undefined}
             title={node.storage_relative_path || node.name}
             onClick={() => {
               if (isFolder) {
@@ -461,6 +558,12 @@ export default function SessionResourceExplorer({
           >
             {node.name}
           </button>
+          {!isFolder && sessionCacheKey ? (
+            <SessionActivityIndicator
+              running={activeJobIdsBySession.has(sessionCacheKey)}
+              unread={unreadSessionKeys.has(sessionCacheKey)}
+            />
+          ) : null}
         </div>
         {canExpand && expanded ? renderCatalogBranch(workspaceId, node.node_id, depth + 1) : null}
       </li>
@@ -473,6 +576,7 @@ export default function SessionResourceExplorer({
       return null;
     }
     const workspace = workspacesById.get(workspaceId);
+    const hoverTitle = workspace ? workspaceHoverTitle(workspace) : node.name;
     const expanded = explorer.expandedIds.has(`workspace:${workspaceId}`);
     const active = workspaceId === activeWorkspaceId;
     const target: SessionResourceDropTarget = {
@@ -480,13 +584,15 @@ export default function SessionResourceExplorer({
       nodeId: node.node_id,
       workspaceId,
       navigationParentNodeId: node.parent_node_id ?? null,
+      parentWorkspaceId: workspace?.parent_workspace_id ?? null,
     };
     const targetKey = sessionResourceDropTargetKey(target);
     const childWorkspaces = workspaceChildren.get(workspaceId) ?? [];
     return (
       <li key={node.node_id} role="treeitem" aria-expanded={expanded}>
         <div
-          className={`session-resource-row workspace${active ? " current" : ""}${dropTargetKey === targetKey ? " drop-target" : ""}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          className={`session-resource-row workspace${active ? " current" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          title={hoverTitle}
           aria-grabbed={dragItem?.nodeId === node.node_id}
           draggable={!workspaceSwitching}
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
@@ -522,7 +628,8 @@ export default function SessionResourceExplorer({
           <button
             type="button"
             className="session-resource-label workspace-label"
-            disabled={workspaceSwitching}
+            title={hoverTitle}
+            disabled={workspaceSwitching || workspace?.status === "offline"}
             onClick={() => void onActivateWorkspace(workspaceId).catch((error) => handleError("切换工作区失败", error))}
           >
             {node.name}
@@ -558,6 +665,7 @@ export default function SessionResourceExplorer({
     const target: SessionResourceDropTarget = {
       kind: "workspace_folder",
       nodeId: node.node_id,
+      parentNodeId: node.parent_node_id ?? null,
     };
     const targetKey = sessionResourceDropTargetKey(target);
     const activeEditor =
@@ -567,7 +675,7 @@ export default function SessionResourceExplorer({
     return (
       <li key={node.node_id} role="treeitem" aria-expanded={expanded}>
         <div
-          className={`session-resource-row workspace-folder${dropTargetKey === targetKey ? " drop-target" : ""}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          className={`session-resource-row workspace-folder${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
           aria-grabbed={dragItem?.nodeId === node.node_id}
           draggable={!activeEditor}
           data-testid={`workspace-folder-node-${node.node_id}`}
@@ -661,6 +769,16 @@ export default function SessionResourceExplorer({
           >
             <strong>{item.name}</strong>
             <span title={item.storage_relative_path || item.relative_path}>{item.workspace_name} / {item.relative_path}</span>
+            {item.node_kind === "session" && item.session_id ? (
+              <SessionActivityIndicator
+                running={activeJobIdsBySession.has(
+                  sessionScopeKey(item.workspace_id, item.session_id),
+                )}
+                unread={unreadSessionKeys.has(
+                  sessionScopeKey(item.workspace_id, item.session_id),
+                )}
+              />
+            ) : null}
           </button>
         ))}
         {explorer.searchResults.workspaces.some((workspace) => workspace.status !== "available") ? (
@@ -678,7 +796,7 @@ export default function SessionResourceExplorer({
     <section className="session-resource-explorer" aria-label="工作区和会话资源管理器">
       <div className="session-resource-toolbar">
         <div
-          className={`session-resource-root-drop-target${dropTargetKey === "navigation_root" ? " drop-target" : ""}`}
+          className={`session-resource-root-drop-target${dropTargetClass("navigation_root")}`}
           role="heading"
           aria-level={2}
           tabIndex={0}
@@ -713,15 +831,18 @@ export default function SessionResourceExplorer({
           onDragEnter={(event) => handleDragOver(event, { kind: "navigation_root" })}
           onDragLeave={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-              setDropTargetKey(null);
+              clearDropTarget();
             }
           }}
           onDrop={(event) => handleDrop(event, { kind: "navigation_root" })}
         >
           <span className="codicon codicon-folder" aria-hidden="true" /> 工作区文件夹
         </div>
-        <button type="button" title="重新扫描当前工作区的真实会话目录" aria-label="刷新资源树" onClick={() => void explorer.refreshResourceTree().catch((error) => handleError("刷新失败", error))}>
+        <button type="button" title="重新加载并校验会话目录索引" aria-label="刷新资源树" onClick={() => void explorer.refreshResourceTree().catch((error) => handleError("刷新失败", error))}>
           <span className="codicon codicon-refresh" aria-hidden="true" />
+        </button>
+        <button type="button" title="添加工作区" aria-label="添加工作区" onClick={onRequestAddWorkspace}>
+          <span className="codicon codicon-add" aria-hidden="true" />
         </button>
       </div>
       {actionError ? (
@@ -731,9 +852,10 @@ export default function SessionResourceExplorer({
         </div>
       ) : null}
       {explorer.navigationError ? <div className="session-resource-error" role="alert">{explorer.navigationError}</div> : null}
+      {explorer.resourceSyncError ? <div className="session-resource-error" role="alert">{explorer.resourceSyncError}</div> : null}
       {!explorer.navigation && !explorer.navigationError ? <div className="session-resource-state">正在加载工作区目录…</div> : null}
       <ul
-        className={`session-resource-list navigation-root${dropTargetKey === "navigation_root" ? " drop-target" : ""}`}
+        className={`session-resource-list navigation-root${dropTargetClass("navigation_root")}`}
         role="tree"
         onDragOver={(event) => handleDragOver(event, { kind: "navigation_root" })}
         onDragEnter={(event) => handleDragOver(event, { kind: "navigation_root" })}
@@ -769,6 +891,7 @@ export default function SessionResourceExplorer({
     <SessionResourceOverlays
       workspaceFolderMenu={workspaceFolderMenu}
       setWorkspaceFolderMenu={setWorkspaceFolderMenu}
+      setWorkspaceFolderEditor={setWorkspaceFolderEditor}
       folderMenu={folderMenu}
       setFolderMenu={setFolderMenu}
       resourceDialog={resourceDialog}

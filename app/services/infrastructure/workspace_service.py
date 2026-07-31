@@ -1,24 +1,37 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import codecs
+import heapq
 import hashlib
+import json
+import mimetypes
 import os
+import shutil
 import stat
+import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
-from app.core.path_utils import get_runtime_workspace_root, get_user_workspace_root, safe_join
+from app.core.path_utils import (
+    get_runtime_workspace_root,
+    get_user_workspace_root,
+    safe_join,
+)
 from app.schemas.public_v2.workspace import (
     WorkspaceContextDTO,
     WorkspaceDTO,
     WorkspaceFileContentDTO,
     WorkspaceFileListDTO,
     WorkspaceFileNodeDTO,
+    WorkspaceFileScope,
     WorkspaceIndexRebuildDTO,
     WorkspaceIndexStatusDTO,
 )
 from app.services.infrastructure.config_service import ConfigService
-
 
 DEFAULT_WORKSPACE_FILE_LIMIT = 500
 MAX_PREVIEW_FILE_BYTES = 1024 * 1024
@@ -110,39 +123,101 @@ class WorkspaceService:
         self,
         *,
         path: str = "",
+        scope: WorkspaceFileScope = "workspace",
         limit: int = DEFAULT_WORKSPACE_FILE_LIMIT,
+        cursor: str | None = None,
     ) -> WorkspaceFileListDTO:
-        relative_path = self._normalize_workspace_relative_path(path)
-        target_path = (
-            safe_join(self._workspace_root, relative_path)
-            if relative_path
-            else self._workspace_root
+        target_path, display_path = self._resolve_file_tree_path(
+            path,
+            scope=scope,
+            allow_empty=True,
         )
         if not target_path.exists():
-            raise FileNotFoundError(f"工作区路径不存在: {relative_path or '.'}")
+            raise FileNotFoundError(f"文件树路径不存在: {display_path or '.'}")
         if not target_path.is_dir():
-            raise NotADirectoryError(f"工作区路径不是目录: {relative_path or '.'}")
+            raise NotADirectoryError(f"文件树路径不是目录: {display_path or '.'}")
 
-        items: list[WorkspaceFileNodeDTO] = []
-        entries = list(os.scandir(target_path))
-        entries.sort(
-            key=lambda entry: (
+        cursor_key = self._decode_directory_cursor(cursor) if cursor else None
+        items, next_cursor = await asyncio.to_thread(
+            self._scan_directory,
+            target_path,
+            display_path,
+            scope,
+            limit,
+            cursor_key,
+        )
+
+        return WorkspaceFileListDTO(
+            root_path=(
+                self.root_path
+                if scope == "workspace"
+                else str(self._filesystem_root())
+            ),
+            path=display_path,
+            items=items,
+            truncated=next_cursor is not None,
+            limit=limit,
+            next_cursor=next_cursor,
+        )
+
+    def _scan_directory(
+        self,
+        target_path: Path,
+        display_path: str,
+        scope: WorkspaceFileScope,
+        limit: int,
+        cursor_key: tuple[bool, str, str] | None,
+    ) -> tuple[list[WorkspaceFileNodeDTO], str | None]:
+        def entry_key(entry: os.DirEntry[str]) -> tuple[bool, str, str]:
+            return (
                 not entry.is_dir(follow_symlinks=False),
                 entry.name.lower(),
                 entry.name,
             )
+
+        with os.scandir(target_path) as directory_entries:
+            entries = heapq.nsmallest(
+                limit + 1,
+                (
+                    entry
+                    for entry in directory_entries
+                    if cursor_key is None or entry_key(entry) > cursor_key
+                ),
+                key=entry_key,
+            )
+        page = entries[:limit]
+        next_cursor = (
+            self._encode_directory_cursor(entry_key(page[-1]))
+            if len(entries) > limit and page
+            else None
+        )
+        return (
+            [self._entry_to_file_node(entry, display_path, scope=scope) for entry in page],
+            next_cursor,
         )
 
-        for entry in entries[:limit]:
-            items.append(self._entry_to_file_node(entry, relative_path))
+    @staticmethod
+    def _encode_directory_cursor(key: tuple[bool, str, str]) -> str:
+        raw = json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
-        return WorkspaceFileListDTO(
-            root_path=self.root_path,
-            path=relative_path,
-            items=items,
-            truncated=len(entries) > limit,
-            limit=limit,
-        )
+    @staticmethod
+    def _decode_directory_cursor(cursor: str) -> tuple[bool, str, str]:
+        try:
+            padded = cursor + "=" * (-len(cursor) % 4)
+            raw = base64.urlsafe_b64decode(padded.encode()).decode()
+            value = json.loads(raw)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("目录分页游标格式错误") from error
+        if (
+            not isinstance(value, list)
+            or len(value) != 3
+            or not isinstance(value[0], bool)
+            or not isinstance(value[1], str)
+            or not isinstance(value[2], str)
+        ):
+            raise ValueError("目录分页游标内容错误")
+        return value[0], value[1], value[2]
 
     def _normalize_workspace_relative_path(self, path: str) -> str:
         normalized = path.replace("\\", "/").strip()
@@ -159,15 +234,55 @@ class WorkspaceService:
 
         return "/".join(parts)
 
+    @staticmethod
+    def _filesystem_root() -> Path:
+        return Path(Path.cwd().anchor or os.path.abspath(os.sep)).resolve()
+
+    def _resolve_file_tree_path(
+        self,
+        path: str,
+        *,
+        scope: WorkspaceFileScope,
+        allow_empty: bool,
+    ) -> tuple[Path, str]:
+        if scope == "workspace":
+            relative_path = self._normalize_workspace_relative_path(path)
+            if not allow_empty and not relative_path:
+                raise ValueError("工作区文件路径不能为空")
+            return (
+                safe_join(self._workspace_root, relative_path)
+                if relative_path
+                else self._workspace_root,
+                relative_path,
+            )
+
+        normalized = path.strip()
+        if not normalized:
+            if not allow_empty:
+                raise ValueError("文件系统路径不能为空")
+            target = self._filesystem_root()
+        else:
+            target = Path(normalized).expanduser()
+            if not target.is_absolute():
+                raise ValueError(f"文件系统路径必须是绝对路径: {path}")
+            target = target.resolve()
+        return target, str(target)
+
     def _entry_to_file_node(
         self,
         entry: os.DirEntry[str],
         parent_path: str,
+        *,
+        scope: WorkspaceFileScope,
     ) -> WorkspaceFileNodeDTO:
-        stat_result = entry.stat(follow_symlinks=False)
         is_directory = entry.is_dir(follow_symlinks=False)
         is_symlink = entry.is_symlink()
-        relative_path = f"{parent_path}/{entry.name}" if parent_path else entry.name
+        stat_result = None if is_directory else entry.stat(follow_symlinks=False)
+        relative_path = (
+            str(Path(parent_path) / entry.name)
+            if scope == "filesystem"
+            else f"{parent_path}/{entry.name}" if parent_path else entry.name
+        )
 
         if is_symlink:
             kind = "symlink"
@@ -183,19 +298,28 @@ class WorkspaceService:
             path=relative_path,
             kind=kind,
             has_children=is_directory,
-            size=None if is_directory else stat_result.st_size,
-            modified_at=datetime.fromtimestamp(
-                stat_result.st_mtime,
-                timezone.utc,
-            ).isoformat(),
+            size=None if stat_result is None else stat_result.st_size,
+            modified_at=(
+                None
+                if stat_result is None
+                else datetime.fromtimestamp(
+                    stat_result.st_mtime,
+                    timezone.utc,
+                ).isoformat()
+            ),
         )
 
-    async def get_file_content(self, *, path: str) -> WorkspaceFileContentDTO:
-        relative_path = self._normalize_workspace_relative_path(path)
-        if not relative_path:
-            raise ValueError("文件预览路径不能为空")
-
-        target_path = safe_join(self._workspace_root, relative_path)
+    async def get_file_content(
+        self,
+        *,
+        path: str,
+        scope: WorkspaceFileScope = "workspace",
+    ) -> WorkspaceFileContentDTO:
+        target_path, relative_path = self._resolve_file_tree_path(
+            path,
+            scope=scope,
+            allow_empty=False,
+        )
         if not target_path.exists():
             raise FileNotFoundError(f"工作区文件不存在: {relative_path}")
         if not target_path.is_file():
@@ -217,7 +341,7 @@ class WorkspaceService:
             raise ValueError(f"文件不是 UTF-8 文本，暂不预览: {relative_path}") from error
 
         return WorkspaceFileContentDTO(
-            root_path=self.root_path,
+            root_path=(self.root_path if scope == "workspace" else str(self._filesystem_root())),
             path=relative_path,
             name=target_path.name,
             content=content,
@@ -230,21 +354,45 @@ class WorkspaceService:
             revision=self._content_revision(raw_content),
         )
 
+    def resolve_raw_file(
+        self,
+        *,
+        path: str,
+        scope: WorkspaceFileScope = "workspace",
+    ) -> tuple[Path, str]:
+        target_path, relative_path = self._resolve_file_tree_path(
+            path,
+            scope=scope,
+            allow_empty=False,
+        )
+        if not target_path.exists():
+            raise FileNotFoundError(f"工作区文件不存在: {relative_path}")
+        if not target_path.is_file():
+            raise IsADirectoryError(f"工作区路径不是文件: {relative_path}")
+
+        media_type, _ = mimetypes.guess_type(target_path.name)
+        return target_path, media_type or "application/octet-stream"
+
     async def update_file_content(
         self,
         *,
         path: str,
         content: str,
         expected_revision: str,
+        scope: WorkspaceFileScope = "workspace",
     ) -> WorkspaceFileContentDTO:
-        relative_path = self._normalize_workspace_relative_path(path)
-        if not relative_path:
-            raise ValueError("文件编辑路径不能为空")
-
-        unresolved_path = self._workspace_root.joinpath(relative_path)
+        target_path, relative_path = self._resolve_file_tree_path(
+            path,
+            scope=scope,
+            allow_empty=False,
+        )
+        unresolved_path = (
+            self._workspace_root.joinpath(relative_path)
+            if scope == "workspace"
+            else Path(path).expanduser()
+        )
         if unresolved_path.is_symlink():
             raise ValueError(f"不允许通过文件预览编辑符号链接: {relative_path}")
-        target_path = safe_join(self._workspace_root, relative_path)
         if not target_path.exists():
             raise FileNotFoundError(f"工作区文件不存在: {relative_path}")
         if not target_path.is_file():
@@ -269,7 +417,7 @@ class WorkspaceService:
                 f"({len(encoded_content)} bytes)"
             )
         if encoded_content == current_content:
-            return await self.get_file_content(path=relative_path)
+            return await self.get_file_content(path=relative_path, scope=scope)
 
         original_mode = stat.S_IMODE(target_path.stat().st_mode)
         temporary_path: str | None = None
@@ -297,7 +445,135 @@ class WorkspaceService:
             if temporary_path is not None and os.path.exists(temporary_path):
                 os.unlink(temporary_path)
 
-        return await self.get_file_content(path=relative_path)
+        return await self.get_file_content(path=relative_path, scope=scope)
+
+    async def create_file_entry(
+        self,
+        *,
+        directory_path: str,
+        scope: WorkspaceFileScope,
+        name: str,
+        kind: str,
+    ) -> WorkspaceFileListDTO:
+        target_directory, display_path = self._resolve_file_tree_path(
+            directory_path,
+            scope=scope,
+            allow_empty=True,
+        )
+        if not target_directory.exists():
+            raise FileNotFoundError(f"目标目录不存在: {display_path or '.'}")
+        if not target_directory.is_dir():
+            raise NotADirectoryError(f"目标路径不是目录: {display_path or '.'}")
+        entry_name = self._validate_entry_name(name)
+        target = target_directory / entry_name
+        if target.exists() or target.is_symlink():
+            raise FileExistsError(f"目标已存在: {target}")
+        if kind == "directory":
+            target.mkdir()
+        elif kind == "file":
+            with target.open("x", encoding="utf-8"):
+                pass
+        else:
+            raise ValueError(f"不支持的文件条目类型: {kind}")
+        return await self.list_files(path=display_path, scope=scope)
+
+    async def paste_file_entries(
+        self,
+        *,
+        directory_path: str,
+        scope: WorkspaceFileScope,
+        source_paths: list[str],
+    ) -> WorkspaceFileListDTO:
+        target_directory, display_path = self._resolve_file_tree_path(
+            directory_path,
+            scope=scope,
+            allow_empty=True,
+        )
+        if not target_directory.exists():
+            raise FileNotFoundError(f"目标目录不存在: {display_path or '.'}")
+        if not target_directory.is_dir():
+            raise NotADirectoryError(f"目标路径不是目录: {display_path or '.'}")
+
+        copy_pairs: list[tuple[Path, Path]] = []
+        destinations: set[Path] = set()
+        for raw_source_path in source_paths:
+            source = Path(raw_source_path).expanduser()
+            if not source.is_absolute():
+                raise ValueError(f"粘贴来源必须是绝对路径: {raw_source_path}")
+            if source.is_symlink():
+                raise ValueError(f"暂不支持粘贴符号链接: {source}")
+            source = source.resolve()
+            if not source.exists():
+                raise FileNotFoundError(f"粘贴来源不存在: {source}")
+            if not source.is_file() and not source.is_dir():
+                raise ValueError(f"粘贴来源不是文件或目录: {source}")
+            if not source.name:
+                raise ValueError(f"不能粘贴文件系统根目录: {source}")
+            if source.is_dir() and target_directory.is_relative_to(source):
+                raise ValueError(f"不能把目录粘贴到自身内部: {source}")
+            destination = target_directory / source.name
+            if destination in destinations:
+                raise FileExistsError(f"多个粘贴来源具有相同名称: {source.name}")
+            if destination.exists() or destination.is_symlink():
+                raise FileExistsError(f"粘贴目标已存在: {destination}")
+            destinations.add(destination)
+            copy_pairs.append((source, destination))
+
+        for source, destination in copy_pairs:
+            if source.is_dir():
+                shutil.copytree(source, destination)
+            else:
+                shutil.copy2(source, destination)
+        return await self.list_files(path=display_path, scope=scope)
+
+    def reveal_file_entry(
+        self,
+        *,
+        path: str,
+        scope: WorkspaceFileScope,
+    ) -> Path:
+        target, display_path = self._resolve_file_tree_path(
+            path,
+            scope=scope,
+            allow_empty=True,
+        )
+        if not target.exists():
+            raise FileNotFoundError(f"系统定位路径不存在: {display_path or '.'}")
+
+        if sys.platform == "darwin":
+            command = ["open", "-R", str(target)] if target.is_file() else ["open", str(target)]
+        elif os.name == "nt":
+            command = (
+                ["explorer.exe", f"/select,{target}"]
+                if target.is_file()
+                else ["explorer.exe", str(target)]
+            )
+        else:
+            opener = shutil.which("gio") or shutil.which("xdg-open")
+            if opener is None:
+                raise RuntimeError("当前系统未安装 gio 或 xdg-open，无法在系统文件管理器中显示")
+            command = (
+                [opener, "open", str(target if target.is_dir() else target.parent)]
+                if Path(opener).name == "gio"
+                else [opener, str(target if target.is_dir() else target.parent)]
+            )
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return target
+
+    @staticmethod
+    def _validate_entry_name(name: str) -> str:
+        normalized = name.strip()
+        if normalized != name or normalized in {"", ".", ".."}:
+            raise ValueError(f"文件名无效: {name!r}")
+        if "/" in normalized or "\\" in normalized or "\x00" in normalized:
+            raise ValueError(f"文件名只能包含一个路径片段: {name!r}")
+        return normalized
 
     @staticmethod
     def _content_revision(raw_content: bytes) -> str:

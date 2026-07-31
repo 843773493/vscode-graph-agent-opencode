@@ -1,3 +1,4 @@
+import { expect, test } from "bun:test";
 import type { LLMRequestLogRecord } from "../../types/backend";
 import {
   buildUpstreamAttemptDisplay,
@@ -7,8 +8,23 @@ import {
   normalizeRequestLogJsonForDisplay,
 } from "../requestLogDisplay";
 
+function requestLog(
+  overrides: Partial<LLMRequestLogRecord>,
+): LLMRequestLogRecord {
+  return {
+    session_id: "ses_request_log_fixture",
+    timestamp: 0,
+    file_name: "request-log.json",
+    file_path: "/tmp/request-log.json",
+    request: {},
+    response: {},
+    upstream: {},
+    ...overrides,
+  };
+}
+
 test("buildUpstreamAttemptDisplay exposes merged upstream payloads", () => {
-  const log = {
+  const log = requestLog({
     upstream: {
       attempts: [
         {
@@ -22,7 +38,7 @@ test("buildUpstreamAttemptDisplay exposes merged upstream payloads", () => {
         },
       ],
     },
-  } as LLMRequestLogRecord;
+  });
 
   expect(buildUpstreamAttemptDisplay(log)).toEqual([
     {
@@ -43,7 +59,7 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-const multiCustomToolLog = {
+const multiCustomToolLog = requestLog({
   timestamp: 1,
   session_id: "ses_multi_custom_tool",
   file_path: "/tmp/request-log.json",
@@ -85,7 +101,7 @@ const multiCustomToolLog = {
     ],
   },
   response: { result: [] },
-} as LLMRequestLogRecord;
+});
 
 const requestKeyFlow = buildRequestLogKeyFlow([multiCustomToolLog]);
 assert(
@@ -101,7 +117,7 @@ assert(
   "请求日志应按 tool_call_id 把 beta 结果归因给 beta_tool",
 );
 
-const splitResultLog = {
+const splitResultLog = requestLog({
   timestamp: 1,
   session_id: "ses_split_custom_tool",
   file_path: "/tmp/result-log.json",
@@ -120,8 +136,8 @@ const splitResultLog = {
     ],
   },
   response: { result: [] },
-} as LLMRequestLogRecord;
-const splitCallLog = {
+});
+const splitCallLog = requestLog({
   timestamp: 2,
   session_id: "ses_split_custom_tool",
   file_path: "/tmp/call-log.json",
@@ -144,7 +160,7 @@ const splitCallLog = {
       },
     ],
   },
-} as LLMRequestLogRecord;
+});
 const splitRequestKeyFlow = buildRequestLogKeyFlow([splitResultLog, splitCallLog]);
 assert(
   splitRequestKeyFlow.customToolResults.some(
@@ -153,7 +169,7 @@ assert(
   "请求日志应先收集全部 tool_call_id 映射，再归因跨请求文件的扩展工具结果",
 );
 
-const retryAfterInvalidInvocationLog = {
+const retryAfterInvalidInvocationLog = requestLog({
   timestamp: 3,
   session_id: "ses_retry_after_invalid_invocation",
   file_path: "/tmp/retry-after-invalid-invocation.json",
@@ -196,7 +212,7 @@ const retryAfterInvalidInvocationLog = {
     ],
   },
   response: { result: [] },
-} as LLMRequestLogRecord;
+});
 const retryKeyFlow = buildRequestLogKeyFlow([retryAfterInvalidInvocationLog]);
 assert(
   retryKeyFlow.customToolResults.some(
@@ -217,7 +233,7 @@ assert(
   "已知的入口校验错误和成功结果都不应显示为 unknown_custom_tool",
 );
 
-const malformedArgumentLog = {
+const malformedArgumentLog = requestLog({
   timestamp: 2,
   session_id: "ses_malformed_argument",
   file_path: "/tmp/malformed-request-log.json",
@@ -240,14 +256,14 @@ const malformedArgumentLog = {
       },
     ],
   },
-} as LLMRequestLogRecord;
+});
 const malformedDisplay = buildRequestLogDisplay(malformedArgumentLog);
 assert(
   malformedDisplay.calledToolNames.includes("invoke_custom_tool"),
   "请求日志遇到不完整 JSON 参数时不应崩溃，应退回显示固定入口",
 );
 
-const replayLog = {
+const replayLog = requestLog({
   timestamp: 4,
   session_id: "ses_request_replay",
   file_path: "/tmp/request-replay.json",
@@ -288,7 +304,7 @@ const replayLog = {
     },
   },
   response: { result: [] },
-} as LLMRequestLogRecord;
+});
 
 const replayDisplay = buildRequestReplayDisplay(replayLog);
 assert(!replayDisplay.legacy, "新日志应读取后端记录的 Prompt 来源，而不是退回旧日志模式");

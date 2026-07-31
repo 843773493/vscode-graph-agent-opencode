@@ -7,10 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
-from app.core.session_paths import (
-    physical_display_segment,
-    validate_generator_physical_segment,
-)
+from app.core.session_paths import validate_generator_physical_segment
 from app.gateway.control.schemas import (
     GenerationRunDTO,
     GenerationRunListDTO,
@@ -150,9 +147,7 @@ class SessionGeneratorStore:
             )
             for segment in payload.naming.path_template
         ]
-        session_path_segment = (
-            f"{physical_display_segment(title)}--<session-id后8位>"
-        )
+        session_path_segment = "<session-id>"
         placement_prefix: str | None = None
         if payload.placement is not None:
             if payload.placement.kind == "workspace":
@@ -165,10 +160,7 @@ class SessionGeneratorStore:
                 )
             else:
                 placement_prefix = f"<会话文件夹:{payload.placement.folder_id}>"
-        physical_folder_segments = [
-            f"{physical_display_segment(segment)}--<folder-id后8位>"
-            for segment in path_segments
-        ]
+        physical_folder_segments = ["<folder-id>" for _ in path_segments]
         return GeneratorPlacementPreviewDTO(
             title=title,
             path_segments=path_segments,

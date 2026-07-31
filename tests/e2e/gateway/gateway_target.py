@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from configs.boxteam import SSH_KEY_NAME, install_development_ssh_assets
-
+from configs.boxteam import SSH_KEY_NAME, install_gateway_development_assets
 
 READY_TIMEOUT_SECONDS = 60
 TARGET_READY_TIMEOUT_SECONDS = 240
@@ -53,7 +52,8 @@ def build_remote_pair_command(
         # TODO: 获得 VMware Windows 资源后执行真实联邦配对 E2E。
         python = f"{target.python_environment}\\Scripts\\python.exe"
         return (
-            f'powershell -NoProfile -Command "Set-Location \'{target.repository_path}\'; '
+            'powershell -NoProfile -Command "'
+            f"Set-Location '{target.repository_path}'; "
             f"$env:BOXTEAM_HOME='{remote_boxteam_home}'; "
             f"$env:BOXTEAM_GATEWAY_ROOT='{remote_boxteam_home}\\state\\gateway'; "
             f"& '{python}' -m app.gateway.federation_pairing\""
@@ -76,7 +76,7 @@ def _require_linux_target(target: GatewaySshTarget, operation: str) -> None:
 def install_gateway_ssh_assets_for_e2e(workspace_root: Path) -> Path:
     project_root = Path.cwd().resolve()
     test_home = workspace_root.parent / "artifacts" / "home"
-    install_development_ssh_assets(project_root=project_root, home=test_home)
+    install_gateway_development_assets(project_root=project_root, home=test_home)
     return test_home / ".ssh" / SSH_KEY_NAME
 
 
@@ -111,10 +111,13 @@ def start_remote_backend_via_ssh(
     _require_linux_target(target, "启动远端工作区后端")
     clear_remote_listeners(target, [remote_backend_port])
     log_dir = f"{remote_workspace_path}/.boxteam/logs"
-    remote_config_path = f"{remote_workspace_path}/.boxteam/boxteam.jsonc"
-    remote_schema_path = f"{remote_workspace_path}/.boxteam/config.schema.jsonc"
+    remote_boxteam_home = f"{remote_workspace_path}.boxteam-home"
+    remote_config_root = f"{remote_boxteam_home}/config"
+    remote_config_path = f"{remote_workspace_path}/.boxteam/workspace.jsonc"
+    remote_schema_path = f"{remote_workspace_path}/.boxteam/workspace_config.jsonc"
     test_config_source = f"{target.repository_path}/configs/tests/default.jsonc"
-    config_schema_source = f"{target.repository_path}/configs/config.jsonc"
+    config_schema_source = f"{target.repository_path}/configs/workspace_config.jsonc"
+    quoted_remote_schema_path = shlex.quote(remote_schema_path)
     env_parts = [
         f"{key}={shlex.quote(value)}" for key, value in (extra_env or {}).items()
     ]
@@ -122,12 +125,17 @@ def start_remote_backend_via_ssh(
         [
             "set -e;",
             f"mkdir -p {shlex.quote(log_dir)};",
+            f"mkdir -p {shlex.quote(remote_config_root)};",
             f"cp {shlex.quote(test_config_source)} {shlex.quote(remote_config_path)};",
-            f"cp {shlex.quote(config_schema_source)} {shlex.quote(remote_schema_path)};",
+            f"cp {shlex.quote(config_schema_source)} {quoted_remote_schema_path};",
+            f"cp {target.repository_path}/configs/workspace.jsonc",
+            f"{shlex.quote(remote_config_root + '/workspace.jsonc')};",
+            f"cp {target.repository_path}/configs/workspace_config.jsonc",
+            f"{shlex.quote(remote_config_root + '/workspace_config.jsonc')};",
             f"cd {shlex.quote(target.repository_path)};",
             f"WORKSPACE_ROOT={shlex.quote(remote_workspace_path)}",
+            f"BOXTEAM_HOME={shlex.quote(remote_boxteam_home)}",
             f"BOXTEAM_PROJECT_ROOT={shlex.quote(target.repository_path)}",
-            f"BOXTEAM_USER_CONFIG_PATH={shlex.quote(remote_config_path)}",
             *env_parts,
             "PYTHONUNBUFFERED=1",
             f"UV_PROJECT_ENVIRONMENT={shlex.quote(target.python_environment)}",
@@ -178,8 +186,8 @@ def start_remote_gateway_via_ssh(
         ],
     )
     remote_config_root = f"{remote_boxteam_home}/config"
-    remote_config_path = f"{remote_config_root}/boxteam.jsonc"
-    remote_schema_path = f"{remote_config_root}/config.schema.jsonc"
+    gateway_root = shlex.quote(f"{remote_boxteam_home}/state/gateway")
+    python_executable = shlex.quote(f"{target.python_environment}/bin/python")
     command = " ".join(
         [
             "set -e;",
@@ -188,16 +196,19 @@ def start_remote_gateway_via_ssh(
             f"mkdir -p {shlex.quote(remote_config_root)}",
             f"{shlex.quote(remote_boxteam_home)}/logs",
             f"{shlex.quote(remote_workspace_path)};",
-            f"cp {target.repository_path}/configs/tests/default.jsonc",
-            f"{shlex.quote(remote_config_path)};",
-            f"cp {target.repository_path}/configs/config.jsonc",
-            f"{shlex.quote(remote_schema_path)};",
+            f"cp {target.repository_path}/configs/gateway.jsonc",
+            f"{shlex.quote(remote_config_root + '/gateway.jsonc')};",
+            f"cp {target.repository_path}/configs/gateway_config.jsonc",
+            f"{shlex.quote(remote_config_root + '/gateway_config.jsonc')};",
+            f"cp {target.repository_path}/configs/workspace.jsonc",
+            f"{shlex.quote(remote_config_root + '/workspace.jsonc')};",
+            f"cp {target.repository_path}/configs/workspace_config.jsonc",
+            f"{shlex.quote(remote_config_root + '/workspace_config.jsonc')};",
             f"cd {shlex.quote(target.repository_path)};",
             f"BOXTEAM_HOME={shlex.quote(remote_boxteam_home)}",
-            f"BOXTEAM_GATEWAY_ROOT={shlex.quote(remote_boxteam_home + '/state/gateway')}",
-            f"BOXTEAM_USER_CONFIG_PATH={shlex.quote(remote_config_path)}",
+            f"BOXTEAM_GATEWAY_ROOT={gateway_root}",
             f"BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT={shlex.quote(remote_workspace_path)}",
-            f"BOXTEAM_PYTHON_BIN={shlex.quote(target.python_environment + '/bin/python')}",
+            f"BOXTEAM_PYTHON_BIN={python_executable}",
             "BOXTEAM_NODE_BIN=/usr/local/bin/node",
             "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium",
             "PYTHONUNBUFFERED=1",

@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.prompting import internal_message_factory
 
 
 def build_user_interrupt_reminder(
@@ -78,10 +79,18 @@ def append_system_reminder_checkpoint(
             )
         )
 
+    prepared_reminder = internal_message_factory.build(
+        kind="checkpoint_reminder",
+        control=reminder,
+        metadata={
+            **response_metadata,
+            "checkpoint_source": checkpoint_source,
+        },
+    )
     messages.append(
         HumanMessage(
-            content=f"<system_reminder>\n{reminder}\n</system_reminder>",
-            response_metadata=response_metadata,
+            content=prepared_reminder.content,
+            response_metadata=prepared_reminder.metadata,
         )
     )
 

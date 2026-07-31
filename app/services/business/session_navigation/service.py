@@ -3,10 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
-import tempfile
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import TypeVar
 
 from app.abstractions.job_service import JobServiceProtocol
@@ -15,7 +12,6 @@ from app.core.session_paths import (
     FOLDER_MANIFEST_NAME,
     SessionPathResolver,
     SessionPhysicalNode,
-    physical_display_segment,
 )
 from app.schemas.public_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -27,7 +23,6 @@ from app.schemas.public_v2.session_navigation import (
     SessionFolderCreateRequest,
     SessionFolderUpdateRequest,
 )
-from app.schemas.public_v2.session import SessionUpdateRequest
 from app.services.business.session_service import SessionService
 from app.services.business.session_resource_service import SessionResourceService
 
@@ -36,19 +31,17 @@ T = TypeVar("T")
 
 
 class SessionCatalogService:
-    """把物理会话目录树投影为可分页、可搜索的目录 API。"""
+    """把权威会话索引投影为可分页、可搜索的目录 API。"""
 
     def __init__(
         self,
         *,
         session_service: SessionService,
-        index_path: Path,
         job_service: JobServiceProtocol | None = None,
         background_task_registry: BackgroundTaskRegistry | None = None,
     ) -> None:
         self._session_service = session_service
         self._path_resolver: SessionPathResolver = session_service.path_resolver
-        self._index_path = index_path
         self._job_service = job_service
         self._background_task_registry = background_task_registry
         self._session_resource_service: SessionResourceService | None = None
@@ -69,7 +62,7 @@ class SessionCatalogService:
     def _on_session_changed(self, action: str, session_id: str) -> None:
         self.invalidate()
 
-    async def rebuild(self) -> SessionCatalogPageDTO:
+    async def refresh(self) -> SessionCatalogPageDTO:
         self._path_resolver.refresh()
         self.invalidate()
         nodes, revision = await self._snapshot(force=True)
@@ -252,14 +245,10 @@ class SessionCatalogService:
                 node_id,
                 SessionFolderUpdateRequest(parent_folder_id=parent_node_id),
             )
-        if parent is not None and parent.kind == "session":
-            await self._session_service.update(
-                node_id,
-                SessionUpdateRequest(parent_session_id=parent.node_id),
-            )
-        else:
-            target_folder_id = parent.node_id if parent is not None else None
-            await self._session_service.move_to_folder(node_id, target_folder_id)
+        await self._session_service.move_session(
+            node_id,
+            parent.node_id if parent is not None else None,
+        )
         self.invalidate()
         return await self.breadcrumb(node_id)
 
@@ -271,7 +260,7 @@ class SessionCatalogService:
     ) -> str | None:
         parent_node_id = parent_folder_id
         for raw_segment in path_segments:
-            segment = physical_display_segment(raw_segment)
+            segment = raw_segment.strip()
             if not segment:
                 raise ValueError("会话目录路径段不能为空")
             nodes = self._path_resolver.list_nodes()
@@ -280,7 +269,7 @@ class SessionCatalogService:
                 for node in nodes
                 if node.kind == "folder"
                 and node.parent_node_id == parent_node_id
-                and physical_display_segment(node.name) == segment
+                and node.name == segment
             ]
             if len(matches) > 1:
                 raise RuntimeError(
@@ -495,7 +484,6 @@ class SessionCatalogService:
         nodes_by_id = {node.node_id: node for node in nodes}
         self._validate_parent_graph(nodes, nodes_by_id)
         revision = self._revision(nodes)
-        self._save_index(nodes, revision)
         self._cached_nodes = nodes
         self._cached_revision = revision
         self._cached_physical_revision = physical_revision
@@ -520,32 +508,6 @@ class SessionCatalogService:
             created_at=node.created_at,
             updated_at=node.updated_at,
         )
-
-    def _save_index(self, nodes: list[SessionCatalogNodeDTO], revision: str) -> None:
-        self._index_path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{self._index_path.name}.",
-            dir=self._index_path.parent,
-        )
-        temporary_path = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                json.dump(
-                    {
-                        "schema_version": 2,
-                        "revision": revision,
-                        "nodes": [node.model_dump(mode="json") for node in nodes],
-                    },
-                    file,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                file.write("\n")
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temporary_path, self._index_path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
 
     @staticmethod
     def _validate_parent_graph(

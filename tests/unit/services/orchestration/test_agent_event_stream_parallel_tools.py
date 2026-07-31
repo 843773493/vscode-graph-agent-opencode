@@ -7,11 +7,14 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables.config import ensure_config, var_child_runnable_config
+from langgraph.types import Command
 
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
+from app.schemas.event import ModelTokenUsagePayload
 from app.services.orchestration.agent_event_stream_processor import (
+    last_model_token_usage,
     process_agent_event_stream,
 )
 
@@ -82,6 +85,73 @@ class RecordingSessionChangesService:
 
     async def record_tool_file_edit(self, **kwargs: Any) -> None:
         self.recorded.append(kwargs)
+
+
+def test_last_model_token_usage_keeps_last_execution_request() -> None:
+    first = ModelTokenUsagePayload(
+        input_tokens=100,
+        output_tokens=20,
+        total_tokens=120,
+        cache_read_input_tokens=80,
+        model_calls=1,
+        reported_model_calls=1,
+    )
+    last = ModelTokenUsagePayload(
+        input_tokens=140,
+        output_tokens=10,
+        total_tokens=150,
+        cache_read_input_tokens=0,
+        model_calls=1,
+        reported_model_calls=1,
+    )
+
+    assert last_model_token_usage([first, last]) == last
+
+
+@pytest.mark.asyncio
+async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -> None:
+    events = [
+        {
+            "event": "on_custom_event",
+            "name": "boxteam_model_failed",
+            "data": {
+                "provider_id": "primary",
+                "model": "big-pickle",
+                "error_type": "RateLimitError",
+                "error": "Rate limit exceeded",
+            },
+            "metadata": {},
+        }
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_model_failed",
+        turn_id="job_model_failed",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+    )
+
+    assert published == [
+        (
+            EventType.MODEL_FAILED,
+            {
+                "provider_id": "primary",
+                "model": "big-pickle",
+                "error_type": "RateLimitError",
+                "error": "Rate limit exceeded",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -490,6 +560,67 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
 
 
 @pytest.mark.asyncio
+async def test_command_tool_output_extracts_nested_tool_message(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_todos",
+            "name": "write_todos",
+            "data": {"input": {"todos": []}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_todos",
+            "name": "write_todos",
+            "data": {
+                "output": Command(
+                    update={
+                        "todos": [],
+                        "messages": [
+                            ToolMessage(
+                                content="Updated todo list",
+                                tool_call_id="call_todos",
+                                name="write_todos",
+                            )
+                        ],
+                    }
+                )
+            },
+            "metadata": {},
+        },
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_command_tool",
+        turn_id="job_command_tool",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+    )
+
+    assert [event_type for event_type, _payload in published] == [
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_END,
+    ]
+    assert published[1][1]["tool_call_id"] == "call_todos"
+    assert published[1][1]["result"] == "Updated todo list"
+    assert result.successful_tool_calls[0].tool_name == "write_todos"
+
+
+@pytest.mark.asyncio
 async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
     tmp_path: Path,
     session_changes_service: FakeSessionChangesService,
@@ -729,7 +860,7 @@ async def test_resumed_authoritative_text_part_is_started_once_and_keeps_all_tex
 
 
 @pytest.mark.asyncio
-async def test_model_stream_usage_is_aggregated_across_calls(
+async def test_model_stream_usage_keeps_only_last_call(
     tmp_path: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
@@ -806,12 +937,12 @@ async def test_model_stream_usage_is_aggregated_across_calls(
 
     assert result.final_text == "OK"
     assert result.token_usage.model_dump() == {
-        "input_tokens": 240,
-        "output_tokens": 30,
-        "total_tokens": 270,
-        "cache_read_input_tokens": 180,
-        "model_calls": 2,
-        "reported_model_calls": 2,
+        "input_tokens": 140,
+        "output_tokens": 10,
+        "total_tokens": 150,
+        "cache_read_input_tokens": 100,
+        "model_calls": 1,
+        "reported_model_calls": 1,
     }
 
 

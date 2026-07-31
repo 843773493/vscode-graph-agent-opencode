@@ -2,138 +2,33 @@ import {
   useCallback,
   useEffect,
   useRef,
-  type Dispatch,
-  type SetStateAction,
 } from "react";
 import {
-  getSession,
   SessionStreamIdleTimeoutError,
   streamSessionEvents,
   TraceCursorGoneError,
-  type SessionStreamEvent,
-} from "../api";
-import { listPendingRequests } from "../pendingRequestsApi";
-import { cloneMaps } from "../state/appStateMaps";
-import {
-  updateAttachmentSummariesFromTraces,
-} from "../state/attachments";
-import {
-  conversationMatchesTraceEvent,
-  writePendingSnapshot,
-  writePendingList,
-} from "../state/conversations";
-import {
-  appendReceivedEvents,
-  buildTraceEvent,
-  dedupeTraceEvents,
-  isJobTerminalTraceType,
-  isTerminalTraceType,
-  terminalStatusForEvent,
-  tracePayloadString,
-} from "../state/traceEvents";
-import { replaceSessionMetadata } from "../state/session/sessions";
-import { sessionScopeKey } from "../state/session/sessionScope";
-import type { AppState, ConversationView } from "../types/frontend";
+} from "../api/sessionTraceStream";
+import { isJobTerminalTraceType } from "../state/traceEvents";
+import type { SessionStreamEvent } from "../types/backend";
 import {
   ACTIVE_JOB_RECONCILE_INTERVAL_MS,
+  ACTIVE_JOB_STALE_PROBE_INTERVAL_MS,
+  ACTIVE_JOB_TRACE_STALE_MS,
   SESSION_STREAM_IDLE_TIMEOUT_MS,
   WORKSPACE_SESSION_FALLBACK_REFRESH_MS,
   sessionStreamReconnectDelay,
 } from "./sessionEventStreamPolicy";
+import { waitForReconnect } from "./waitForReconnect";
+import { reconcileActiveJob } from "./sessionJobReconciliation";
 import {
-  fetchWorkspaceSessionListSnapshot,
-  isCurrentWorkspaceSessionListSnapshot,
-} from "./workspaceSessionListRefresh";
+  flushSessionStreamEventBatch,
+} from "./sessionEventStream/batchUpdates";
 import {
-  recoverTraceSnapshot,
-  waitForReconnect,
-} from "./sessionEventStreamRecovery";
-import {
-  reconcileActiveJob,
-  refreshTerminalSession,
-} from "./sessionJobReconciliation";
+  refreshWorkspaceSessionList,
+  type SetAppState,
+} from "./sessionEventStream/sessionRefresh";
 
-type SetAppState = Dispatch<SetStateAction<AppState>>;
-
-function sessionListsMatch(
-  left: AppState["sessions"],
-  right: AppState["sessions"],
-): boolean {
-  return left.length === right.length && left.every((session, index) => {
-    const candidate = right[index];
-    return candidate !== undefined
-      && session.session_id === candidate.session_id
-      && session.updated_at === candidate.updated_at;
-  });
-}
-
-async function refreshSessionMetadata(
-  apiPort: number,
-  sessionId: string,
-  workspaceId: string | null,
-  sessionCacheKey: string,
-  setState: SetAppState,
-  announceAutoTitle: boolean = true,
-) {
-  const updatedSession = await getSession(apiPort, sessionId, workspaceId);
-  setState((prev) => {
-    if (workspaceId && prev.currentSessionWorkspaceId !== workspaceId) {
-      return prev;
-    }
-    const next = replaceSessionMetadata(prev, updatedSession, workspaceId);
-    next.currentSessionWorkspaceId = workspaceId ?? next.currentSessionWorkspaceId;
-    if (
-      announceAutoTitle &&
-      prev.currentSession?.session_id === updatedSession.session_id
-    ) {
-      next.status = `已自动命名会话: ${updatedSession.title}`;
-    }
-    if (workspaceId) {
-      next.sessionGatewayWorkspaceById.set(sessionCacheKey, workspaceId);
-    }
-    return next;
-  });
-}
-
-async function refreshWorkspaceSessionList(
-  apiPort: number,
-  workspaceId: string | null,
-  setState: SetAppState,
-) {
-  if (!workspaceId) {
-    throw new Error("刷新委派子会话时缺少 workspace_id");
-  }
-  const snapshot = await fetchWorkspaceSessionListSnapshot(apiPort, workspaceId);
-  if (!isCurrentWorkspaceSessionListSnapshot(snapshot)) {
-    return;
-  }
-  setState((previous) => {
-    if (!isCurrentWorkspaceSessionListSnapshot(snapshot)) {
-      return previous;
-    }
-    const previousWorkspaceSessions =
-      previous.sessionsByWorkspace.get(workspaceId) ?? [];
-    if (sessionListsMatch(previousWorkspaceSessions, snapshot.sessions)) {
-      return previous;
-    }
-    const next = cloneMaps(previous);
-    const resolvedWorkspaceId = workspaceId;
-    next.sessionsByWorkspace.set(resolvedWorkspaceId, snapshot.sessions);
-    for (const session of snapshot.sessions) {
-      next.sessionGatewayWorkspaceById.set(
-        sessionScopeKey(resolvedWorkspaceId, session.session_id),
-        resolvedWorkspaceId,
-      );
-    }
-    if (
-      previous.activeGatewayWorkspaceId === resolvedWorkspaceId ||
-      previous.currentSessionWorkspaceId === resolvedWorkspaceId
-    ) {
-      next.sessions = snapshot.sessions;
-    }
-    return next;
-  });
-}
+export { planTurnRefreshes } from "./sessionEventStream/refreshPlan";
 
 export function useSessionEventStream({
   apiPort,
@@ -141,6 +36,10 @@ export function useSessionEventStream({
   workspaceId,
   sessionCacheKey,
   activeJobId,
+  timelineReady,
+  initialEventCursor,
+  refreshTurnDetails,
+  refreshTurnHistory,
   setState,
 }: {
   apiPort: number | null;
@@ -148,10 +47,21 @@ export function useSessionEventStream({
   workspaceId: string | null;
   sessionCacheKey: string | null;
   activeJobId: string | null;
+  timelineReady: boolean;
+  initialEventCursor: string | null;
+  refreshTurnDetails: (
+    turnIds: string[],
+    requestIdentity?: string | null,
+    refreshAfterInFlight?: boolean,
+  ) => Promise<void>;
+  refreshTurnHistory: () => void;
   setState: SetAppState;
 }) {
   const streamAbortRef = useRef<AbortController | null>(null);
-  const lastEventIdRef = useRef<string | null>(null);
+  const lastEventCursorRef = useRef<string | null>(null);
+  const lastBusinessEventAtRef = useRef<number>(Date.now());
+  const lastStaleProbeAtRef = useRef<number>(0);
+  const routeRevisionRef = useRef<string | null>(null);
 
   const abortCurrentStream = useCallback(() => {
     streamAbortRef.current?.abort();
@@ -159,7 +69,7 @@ export function useSessionEventStream({
   }, []);
 
   useEffect(() => {
-    if (!apiPort || !sessionId) {
+    if (!apiPort || !sessionId || !timelineReady) {
       abortCurrentStream();
       return;
     }
@@ -169,7 +79,10 @@ export function useSessionEventStream({
     streamAbortRef.current = controller;
     const targetWorkspaceId = workspaceId;
     const targetSessionCacheKey = sessionCacheKey ?? sessionId;
-    lastEventIdRef.current = null;
+    lastEventCursorRef.current = initialEventCursor;
+    lastBusinessEventAtRef.current = Date.now();
+    lastStaleProbeAtRef.current = 0;
+    routeRevisionRef.current = null;
     let sessionListRefreshInFlight = false;
     const refreshWorkspaceSessionsForStream = (force: boolean = false) => {
       if (
@@ -223,184 +136,20 @@ export function useSessionEventStream({
       if (events.length === 0 || controller.signal.aborted) {
         return;
       }
-      const traceEvents = events.map(buildTraceEvent);
-
-      setState((prev) => {
-        if (prev.currentSession?.session_id !== sessionId) {
-          return prev;
-        }
-        if (
-          targetWorkspaceId &&
-          prev.currentSessionWorkspaceId !== targetWorkspaceId
-        ) {
-          return prev;
-        }
-        const next = cloneMaps(prev);
-        next.traceEvents = dedupeTraceEvents([...next.traceEvents, ...traceEvents]);
-        updateAttachmentSummariesFromTraces(
-          next.sessionAttachmentSummaries,
-          sessionId,
-          traceEvents,
-        );
-        appendReceivedEvents(
-          next.eventQueuesBySession,
-          sessionId,
-          traceEvents,
-          "sse",
-          targetSessionCacheKey,
-        );
-
-        for (const [index, traceEvent] of traceEvents.entries()) {
-          const event = events[index];
-          const pendingList =
-            next.pendingConversations.get(targetSessionCacheKey) ?? [];
-          if (pendingList.length === 0) {
-            continue;
-          }
-          let pendingIndex = pendingList.findIndex((conversation) =>
-            conversationMatchesTraceEvent(conversation, traceEvent),
-          );
-          if (pendingIndex === -1 && pendingList.length === 1) {
-            pendingIndex = 0;
-          }
-          if (pendingIndex === -1) {
-            continue;
-          }
-
-          const pending = pendingList[pendingIndex];
-          const updatedPending: ConversationView = {
-            ...pending,
-            events: dedupeTraceEvents([...pending.events, traceEvent]),
-          };
-          if (event.type === "status_change") {
-            const status = tracePayloadString(traceEvent, "status");
-            updatedPending.status = status === "queued" ? "queued" : "running";
-          } else if (
-            [
-              "job_started",
-              "text_start",
-              "text_delta",
-              "text_end",
-              "tool_call_start",
-              "tool_call_end",
-            ].includes(event.type)
-          ) {
-            updatedPending.status = "running";
-          } else if (isTerminalTraceType(event.type)) {
-            updatedPending.status = terminalStatusForEvent(event.type);
-            updatedPending.pending = false;
-          }
-
-          const updatedPendingList = [...pendingList];
-          updatedPendingList[pendingIndex] = updatedPending;
-          writePendingList(
-            next.pendingConversations,
-            targetSessionCacheKey,
-            updatedPendingList,
-          );
-        }
-        return next;
+      flushSessionStreamEventBatch(events, {
+        apiPort,
+        sessionId,
+        workspaceId: targetWorkspaceId,
+        sessionCacheKey: targetSessionCacheKey,
+        refreshTurnDetails,
+        setState,
       });
-
-      const titleEventIndex = events.findIndex(
-        (event, index) =>
-          event.type === "status_change" &&
-          tracePayloadString(traceEvents[index], "reason") ===
-            "session_auto_title_updated",
-      );
-      if (titleEventIndex !== -1) {
-        void refreshSessionMetadata(
-          apiPort,
-          sessionId,
-          targetWorkspaceId,
-          targetSessionCacheKey,
-          setState,
-        ).catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          setState((latest) => ({
-            ...latest,
-            status: `刷新会话标题失败: ${message}`,
-          }));
-        });
-      }
-      const delegatedSessionCreated = events.some(
-        (event, index) =>
-          event.type === "tool_call_end" &&
-          tracePayloadString(traceEvents[index], "tool_name") === "task",
-      );
-      if (delegatedSessionCreated) {
-        void refreshWorkspaceSessionList(
-          apiPort,
-          targetWorkspaceId,
-          setState,
-        ).catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          setState((latest) => ({
-            ...latest,
-            status: `刷新委派子会话失败: ${message}`,
-          }));
-        });
-      }
-      const pendingQueueChanged = events.some(
-        (event, index) =>
-          event.type === "status_change"
-          && tracePayloadString(traceEvents[index], "reason").startsWith(
-            "pending_request",
-          ),
-      );
-      if (pendingQueueChanged) {
-        void listPendingRequests(
-          apiPort,
-          sessionId,
-          targetWorkspaceId,
-        ).then((snapshot) => {
-          setState((latest) => {
-            const next = cloneMaps(latest);
-            writePendingSnapshot(
-              next.pendingConversations,
-              next.activeJobIdsBySession,
-              snapshot,
-              targetSessionCacheKey,
-            );
-            return next;
-          });
-        }).catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          setState((latest) => ({
-            ...latest,
-            status: `刷新待处理消息失败: ${message}`,
-          }));
-        });
-      }
-      let terminalEventIndex = -1;
-      for (let index = events.length - 1; index >= 0; index -= 1) {
-        if (isJobTerminalTraceType(events[index].type)) {
-          terminalEventIndex = index;
-          break;
-        }
-      }
-      if (terminalEventIndex !== -1) {
-        void refreshTerminalSession(
-          apiPort,
-          sessionId,
-          targetWorkspaceId,
-          targetSessionCacheKey,
-          traceEvents[terminalEventIndex] ?? null,
-          setState,
-        ).catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          setState((latest) => ({
-            ...latest,
-            status: `刷新失败: ${message}`,
-          }));
-        });
-      }
     };
 
-    const enqueueStreamEvent = (event: SessionStreamEvent) => {
-      if (event.event_id) {
-        lastEventIdRef.current = event.event_id;
-      }
+    const enqueueStreamEvent = (event: SessionStreamEvent, cursor: string) => {
+      lastBusinessEventAtRef.current = Date.now();
+      lastStaleProbeAtRef.current = 0;
+      lastEventCursorRef.current = cursor;
       pendingStreamEvents.push(event);
       if (isJobTerminalTraceType(event.type)) {
         flushStreamEvents();
@@ -412,52 +161,33 @@ export function useSessionEventStream({
     };
 
     const connect = async () => {
-      let snapshotLoaded = false;
       let reconnectAttempt = 0;
-      while (!controller.signal.aborted && !snapshotLoaded) {
-        try {
-          const recovered = await recoverTraceSnapshot(
-            apiPort,
-            sessionId,
-            targetWorkspaceId,
-            targetSessionCacheKey,
-            setState,
-            "事件历史加载完成",
-          );
-          lastEventIdRef.current = recovered.lastEventId;
-          await refreshSessionMetadata(
-            apiPort,
-            sessionId,
-            targetWorkspaceId,
-            targetSessionCacheKey,
-            setState,
-            false,
-          );
-          snapshotLoaded = true;
-          reconnectAttempt = 0;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          setState((prev) => ({
-            ...prev,
-            status: `加载事件历史失败，正在重试: ${message}`,
-          }));
-          await waitForReconnect(
-            controller.signal,
-            sessionStreamReconnectDelay(reconnectAttempt),
-          );
-          reconnectAttempt += 1;
-        }
-      }
-
       while (!controller.signal.aborted) {
         try {
           await streamSessionEvents(apiPort, sessionId, {
             workspaceId: targetWorkspaceId,
-            afterEventId: lastEventIdRef.current,
+            afterCursor: lastEventCursorRef.current,
             signal: controller.signal,
             onEvent: enqueueStreamEvent,
             onActivity: () => {
               reconnectAttempt = 0;
+            },
+            onConnected: (routeRevision) => {
+              const previousRevision = routeRevisionRef.current;
+              routeRevisionRef.current = routeRevision;
+              if (previousRevision !== routeRevision) {
+                lastBusinessEventAtRef.current = Date.now();
+              }
+              if (
+                previousRevision
+                && routeRevision
+                && previousRevision !== routeRevision
+              ) {
+                setState((previous) => ({
+                  ...previous,
+                  status: "工作区后端已换代，正在恢复实时事件流",
+                }));
+              }
             },
             idleTimeoutMs: SESSION_STREAM_IDLE_TIMEOUT_MS,
           });
@@ -466,27 +196,12 @@ export function useSessionEventStream({
             return;
           }
           if (error instanceof TraceCursorGoneError) {
-            try {
-              const recovered = await recoverTraceSnapshot(
-                apiPort,
-                sessionId,
-                targetWorkspaceId,
-                targetSessionCacheKey,
-                setState,
-                "事件游标已恢复，正在继续接收",
-              );
-              lastEventIdRef.current = recovered.lastEventId;
-              reconnectAttempt = 0;
-            } catch (recoveryError) {
-              const message =
-                recoveryError instanceof Error
-                  ? recoveryError.message
-                  : String(recoveryError);
-              setState((prev) => ({
-                ...prev,
-                status: `恢复事件历史失败: ${message}`,
-              }));
-            }
+            setState((prev) => ({
+              ...prev,
+              status: "事件游标已失效，正在重新加载有界 Turn bootstrap",
+            }));
+            refreshTurnHistory();
+            return;
           } else {
             const message = error instanceof Error ? error.message : String(error);
             setState((prev) => ({
@@ -529,9 +244,13 @@ export function useSessionEventStream({
   }, [
     abortCurrentStream,
     apiPort,
+    initialEventCursor,
+    refreshTurnDetails,
+    refreshTurnHistory,
     sessionCacheKey,
     sessionId,
     setState,
+    timelineReady,
     workspaceId,
   ]);
 
@@ -547,12 +266,20 @@ export function useSessionEventStream({
 
     let reconciliationInFlight = false;
     const reconcile = () => {
+      const now = Date.now();
       if (
         reconciliationInFlight
         || document.visibilityState === "hidden"
+        || now - lastBusinessEventAtRef.current < ACTIVE_JOB_TRACE_STALE_MS
+        || (
+          lastStaleProbeAtRef.current > 0
+          && now - lastStaleProbeAtRef.current
+            < ACTIVE_JOB_STALE_PROBE_INTERVAL_MS
+        )
       ) {
         return;
       }
+      lastStaleProbeAtRef.current = now;
       reconciliationInFlight = true;
       void reconcileActiveJob(
         apiPort,
@@ -560,8 +287,20 @@ export function useSessionEventStream({
         workspaceId,
         sessionCacheKey,
         activeJobId,
+        (turnIds) => refreshTurnDetails(turnIds, null, true),
         setState,
-      ).catch((error: unknown) => {
+        {
+          afterCursor: lastEventCursorRef.current,
+        },
+      ).then((result) => {
+        if (result.lastEventCursor) {
+          lastEventCursorRef.current = result.lastEventCursor;
+        }
+        if (result.recoveredEventCount > 0) {
+          lastBusinessEventAtRef.current = Date.now();
+          lastStaleProbeAtRef.current = 0;
+        }
+      }).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         setState((latest) => ({
           ...latest,
@@ -591,6 +330,7 @@ export function useSessionEventStream({
   }, [
     activeJobId,
     apiPort,
+    refreshTurnDetails,
     sessionCacheKey,
     sessionId,
     setState,

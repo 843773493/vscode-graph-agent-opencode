@@ -56,7 +56,7 @@ async def test_job_service_restores_accepted_pending_requests(
         "queued after restart",
         message_id="msg_queued",
         message_created_at="2026-07-17T00:00:01+00:00",
-        pending_kind="queued",
+        dispatch_mode="queued",
     )
 
     second = _service(sessions_dir)

@@ -594,6 +594,52 @@ body > #root {
   padding: 0;
 }
 
+.goal-card {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 7px;
+  background: var(--vscode-input-background);
+}
+
+.goal-card-heading,
+.goal-card-actions,
+.goal-card-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.goal-card-heading {
+  justify-content: space-between;
+}
+
+.goal-card-heading span,
+.goal-card-metrics {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.goal-card-objective {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.goal-card-actions button {
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+
+.goal-card-error {
+  color: var(--vscode-errorForeground);
+  font-size: 11px;
+}
+
 .composer-surface {
   border-left: 0;
   border-right: 0;

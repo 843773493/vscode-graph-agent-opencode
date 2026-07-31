@@ -23,11 +23,13 @@ class SessionArtifactBackend(FilesystemBackend):
 
     def _resolve_path(self, key: str) -> Path:
         virtual_path = Path(key.lstrip("/"))
-        if not virtual_path.parts or ".." in virtual_path.parts:
+        if not virtual_path.parts:
+            return self.cwd
+        if ".." in virtual_path.parts:
             raise ValueError(f"会话产物虚拟路径无效: {key}")
         session_id = virtual_path.parts[0]
         try:
-            session_root = self._path_resolver.resolve_session_dir(session_id)
+            session_root = self._path_resolver.resolve_session_node(session_id)
         except KeyError as error:
             raise FileNotFoundError(
                 f"会话产物路径引用了不存在的稳定 ID: {session_id}"

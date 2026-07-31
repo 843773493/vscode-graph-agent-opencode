@@ -88,7 +88,47 @@ async def test_workspace_backend_writes_startup_trace_and_config_reload_logs(
             start_offset=reload_offset,
         )
 
-        failure_offset = len(first_reload_log)
+        legacy_custom_tools = config["agents"]["default"]["tools"]["custom"]
+        config.pop("config_version", None)
+        config["agents"]["default"]["tools"]["custom"] = [
+            (
+                {
+                    "name": "read_context",
+                    "factory": (
+                        "app.agents.tools.session_history:"
+                        "create_read_session_recent_text_messages_tool"
+                    ),
+                }
+                if item.get("tool_id") == "read_context"
+                else item
+            )
+            for item in legacy_custom_tools
+        ]
+        migration_offset = len(first_reload_log)
+        config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        await _wait_for_log_entry(
+            log_path=log_path,
+            marker="配置源迁移成功",
+            process=e2e_backend_process,
+            start_offset=migration_offset,
+        )
+        config = commentjson.loads(config_path.read_text(encoding="utf-8"))
+        assert config["config_version"] == 4
+        migrated_tool_ids = {
+            item.get("tool_id")
+            for item in config["agents"]["default"]["tools"]["custom"]
+        }
+        assert migrated_tool_ids >= {
+            "read_context"
+        }
+        reload_status = await client.get("/api/v1/config/reload-status")
+        assert reload_status.status_code == 200, reload_status.text
+        assert reload_status.json()["data"]["healthy"] is True
+
+        failure_offset = len(log_path.read_text(encoding="utf-8"))
         config_path.write_text("{ invalid jsonc", encoding="utf-8")
         failure_log = await _wait_for_log_entry(
             log_path=log_path,

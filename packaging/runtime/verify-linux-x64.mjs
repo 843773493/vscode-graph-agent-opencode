@@ -20,7 +20,7 @@ const installRoot = path.join(verificationRoot, "installed");
 const relocatedRoot = path.join(verificationRoot, "relocated");
 const boxteamHome = path.join(verificationRoot, "home");
 const emptyPath = path.join(verificationRoot, "empty-path");
-const gatewayUrl = "http://127.0.0.1:8014";
+const gatewayUrl = "http://127.0.0.1:8114";
 const headers = {};
 
 function run(command, args, options = {}) {
@@ -110,7 +110,7 @@ async function stopLauncher(child) {
   }
 }
 
-async function verifyRunningProduct(child) {
+async function verifyRunningProduct(child, readLauncherOutput) {
   const rootResponse = await fetch(`${gatewayUrl}/`);
   if (!rootResponse.ok || !(await rootResponse.text()).includes("root")) {
     throw new Error("安装版 Gateway 未提供打包 Web UI");
@@ -162,17 +162,21 @@ async function verifyRunningProduct(child) {
     throw new Error(`安全重启后端失败: ${JSON.stringify(restartPayload)}`);
   }
 
-  child.kill("SIGTERM");
+  child.kill("SIGINT");
   const [exitCode, signal] = await Promise.race([
     once(child, "exit"),
     new Promise((_, reject) =>
       setTimeout(() => reject(new Error("Launcher 关闭超时")), 45_000),
     ),
   ]);
-  if (![0, 128].includes(exitCode) && signal !== "SIGTERM") {
+  if (exitCode !== 0 || signal !== null) {
     throw new Error(
       `Launcher 关闭结果异常: exit=${String(exitCode)} signal=${String(signal)}`,
     );
+  }
+  const launcherOutput = readLauncherOutput();
+  if (/Traceback|KeyboardInterrupt|CancelledError/.test(launcherOutput)) {
+    throw new Error(`Launcher Ctrl+C 输出包含异常堆栈:\n${launcherOutput}`);
   }
 }
 
@@ -229,20 +233,35 @@ async function main() {
   const child = spawn(nodeExecutable, [launcherEntry, "--no-open"], {
     cwd: relocatedRoot,
     env: environment,
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
     // 隔离验证进程组，避免测试清理信号被外层命令执行器解释为自身退出。
     detached: process.platform !== "win32",
   });
+  let launcherOutput = "";
+  for (const stream of [child.stdout, child.stderr]) {
+    stream?.on("data", (chunk) => {
+      const text = String(chunk);
+      launcherOutput += text;
+      process.stdout.write(text);
+    });
+  }
   try {
     await waitForGateway(child);
-    await verifyRunningProduct(child);
+    await verifyRunningProduct(child, () => launcherOutput);
   } finally {
     await stopLauncher(child);
   }
 
-  const configPath = path.join(boxteamHome, "config", "boxteam.jsonc");
-  if (!existsSync(configPath)) {
-    throw new Error(`首次启动未生成用户配置: ${configPath}`);
+  for (const name of [
+    "gateway.jsonc",
+    "gateway_config.jsonc",
+    "workspace.jsonc",
+    "workspace_config.jsonc",
+  ]) {
+    const configPath = path.join(boxteamHome, "config", name);
+    if (!existsSync(configPath)) {
+      throw new Error(`首次启动未生成配置资源: ${configPath}`);
+    }
   }
   const manifest = JSON.parse(
     readFileSync(
@@ -256,8 +275,13 @@ async function main() {
       "utf8",
     ),
   );
-  if (path.isAbsolute(manifest.python_executable)) {
-    throw new Error("runtime manifest 不得记录构建机 Python 绝对路径");
+  for (const resource of [
+    manifest.python_executable,
+    ...Object.values(manifest.config_resources),
+  ]) {
+    if (path.isAbsolute(resource)) {
+      throw new Error(`runtime manifest 不得记录构建机绝对路径: ${resource}`);
+    }
   }
   process.stdout.write(`relocation 验证通过: ${relocatedRoot}\n`);
 }

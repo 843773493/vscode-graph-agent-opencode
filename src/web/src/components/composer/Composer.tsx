@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT, getSessionCatalogBreadcrumb } from "../../api";
-import { useAppState } from "../../hooks";
+import { useComposerState } from "../../hooks";
 import { useComposerSlashCommands } from "../../hooks/useComposerSlashCommands";
 import { useComposerDraft } from "../../hooks/useComposerDraft";
 import { VIEW_OPTIONS } from "../../state/contentViews";
@@ -26,7 +26,21 @@ import ComposerSlashCommandMenu from "./ComposerSlashCommandMenu";
 import ComposerToolControl from "./ComposerToolControl";
 import ComposerViewControl from "./ComposerViewControl";
 import SessionNameDialog from "../SessionNameDialog";
+import WarmActionDialog from "../WarmActionDialog";
+import { useWarmConfirm } from "../WarmConfirmProvider";
 import WorkspaceSwitcher from "../workspace/WorkspaceSwitcher";
+import {
+  formatBrowserElementSelections,
+  parseBrowserElementSelectedMessage,
+  type BrowserElementSelection,
+} from "../../utils/browserElementSelection";
+import {
+  GOAL_STATUS_LABELS,
+  goalCanResume,
+  goalEditStatus,
+  goalNeedsReplacementConfirmation,
+  parseGoalSlashAction,
+} from "../../state/sessionGoal";
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) {
@@ -41,12 +55,15 @@ function insertLineBreak(value: string, start: number, end: number): string {
   return value.slice(0, start) + "\n" + value.slice(end);
 }
 
-export default function Composer() {
+function Composer() {
   const {
     state,
     setStatus,
     sendMessage,
     compactSession,
+    refreshGoal,
+    updateGoal,
+    clearGoal,
     interruptSession,
     switchAgent,
     switchModel,
@@ -57,12 +74,12 @@ export default function Composer() {
     startNewSessionDraft,
     renameSession,
     activateGatewayWorkspace,
-    addLocalGatewayWorkspace,
-    addSshGatewayWorkspace,
     updateUiSettings,
+    getLatestAssistantContent,
   } =
-    useAppState();
+    useComposerState();
   const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
+  const [browserElements, setBrowserElements] = useState<BrowserElementSelection[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [composerNotice, setComposerNotice] = useState("");
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
@@ -73,6 +90,8 @@ export default function Composer() {
   const [renameDialogSubmitting, setRenameDialogSubmitting] = useState(false);
   const [renameDialogError, setRenameDialogError] = useState<string | null>(null);
   const [newSessionFolderPath, setNewSessionFolderPath] = useState<string | null>(null);
+  const [goalEditOpen, setGoalEditOpen] = useState(false);
+  const confirm = useWarmConfirm();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
@@ -88,8 +107,11 @@ export default function Composer() {
   const [input, setInput] = useComposerDraft(currentWorkspaceId, currentSessionId);
   // TODO: 附件包含 data URL，后续使用 IndexedDB 恢复；本轮只持久化文本草稿。
   const previousSessionIdRef = useRef<string | null>(currentSessionCacheKey);
+  const visibleGoal = state.currentGoalSessionId === currentSessionId
+    ? state.currentGoal
+    : null;
 
-  const hasContent = input.trim().length > 0 || attachments.length > 0;
+  const hasContent = input.trim().length > 0 || attachments.length > 0 || browserElements.length > 0;
   const currentAgent =
     state.currentSession?.current_agent_id
     ?? state.agents.find((agent) => agent.workspace_default)?.agent_id
@@ -109,21 +131,9 @@ export default function Composer() {
   const currentView =
     VIEW_OPTIONS.find((option) => option.id === state.contentView) ??
     VIEW_OPTIONS[0];
-  const pendingConversations = state.currentSession
-    ? (state.pendingConversations.get(currentSessionCacheKey ?? state.currentSession.session_id) ?? [])
-    : [];
-  const hasCurrentSessionHistory =
-    Boolean(state.currentSession) &&
-    (state.messages.length > 0 ||
-      pendingConversations.length > 0 ||
-      state.currentSession?.title_source !== "default");
-  const showInterrupt = Boolean(
-    currentSessionCacheKey
-      && state.activeJobIdsBySession.get(currentSessionCacheKey),
-  );
-  const queuedCount = pendingConversations.filter(
-    (conversation) => conversation.pending && conversation.status === "queued",
-  ).length;
+  const hasCurrentSessionHistory = state.hasCurrentSessionHistory;
+  const showInterrupt = Boolean(state.currentActiveJobId);
+  const queuedCount = state.queuedPendingCount;
   const composerHint = useMemo(() => {
     if (showInterrupt) {
       return queuedCount > 0
@@ -148,6 +158,7 @@ export default function Composer() {
     }
     previousSessionIdRef.current = currentSessionCacheKey;
     setAttachments([]);
+    setBrowserElements([]);
     setAttachmentError("");
     setComposerNotice("");
     setAgentMenuOpen(false);
@@ -157,7 +168,37 @@ export default function Composer() {
     setRenameDialogOpen(false);
     setRenameDialogError(null);
     setRenameDialogSubmitting(false);
+    setGoalEditOpen(false);
   }, [currentSessionCacheKey]);
+
+  useEffect(() => {
+    const acceptBrowserElementSelection = (value: unknown) => {
+      const selection = parseBrowserElementSelectedMessage(value);
+      if (!selection || selection.workspaceId !== currentWorkspaceId) {
+        return;
+      }
+      setBrowserElements((current) => [
+        ...current.filter((item) =>
+          item.browserId !== selection.browserId || item.ref !== selection.ref
+        ),
+        selection,
+      ]);
+      setComposerNotice(`已添加页面元素 <${selection.tag}>`);
+      textareaRef.current?.focus();
+    };
+    const handleBrowserElementSelected = (event: MessageEvent<unknown>) => {
+      if (event.origin === window.location.origin) {
+        acceptBrowserElementSelection(event.data);
+      }
+    };
+    const channel = new BroadcastChannel("boxteam-browser-elements");
+    channel.addEventListener("message", (event) => acceptBrowserElementSelection(event.data));
+    window.addEventListener("message", handleBrowserElementSelected);
+    return () => {
+      window.removeEventListener("message", handleBrowserElementSelected);
+      channel.close();
+    };
+  }, [currentWorkspaceId]);
 
   useEffect(() => {
     if (hasCurrentSessionHistory || !currentSessionId || !currentWorkspaceId) {
@@ -252,6 +293,123 @@ export default function Composer() {
     setRenameDialogError(null);
   };
 
+  const runGoalMutation = async (
+    operation: () => Promise<unknown>,
+    successMessage: string,
+  ) => {
+    setAttachmentError("");
+    try {
+      await operation();
+      setComposerNotice(successMessage);
+      setStatus(successMessage);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setAttachmentError(`Goal 操作失败：${message}`);
+      throw error;
+    }
+  };
+
+  const createGoal = async (objective: string) => {
+    if (visibleGoal && goalNeedsReplacementConfirmation(visibleGoal.status)) {
+      const confirmed = await confirm({
+        title: "替换当前 Goal？",
+        message: `当前 Goal“${visibleGoal.objective}”尚未完成。替换后将以新目标继续。`,
+        confirmText: "替换 Goal",
+        danger: true,
+      });
+      if (!confirmed) {
+        setComposerNotice("已保留当前 Goal");
+        return;
+      }
+    }
+
+    let targetSession = state.currentSession;
+    const targetWorkspaceId = currentWorkspaceId;
+    if (!targetSession) {
+      targetSession = await createSession(objective.slice(0, 80));
+    }
+    await runGoalMutation(
+      () => updateGoal(
+        { objective, status: "active", replace: true },
+        { sessionId: targetSession.session_id, workspaceId: targetWorkspaceId },
+      ),
+      "Goal 已开始",
+    );
+  };
+
+  const pauseGoal = async () => {
+    if (!visibleGoal || visibleGoal.status !== "active") {
+      throw new Error("只有进行中的 Goal 可以暂停");
+    }
+    await runGoalMutation(() => updateGoal({ status: "paused" }), "Goal 已暂停");
+  };
+
+  const resumeGoal = async () => {
+    if (!visibleGoal || !goalCanResume(visibleGoal.status)) {
+      throw new Error("当前 Goal 不可恢复");
+    }
+    await runGoalMutation(() => updateGoal({ status: "active" }), "Goal 已恢复");
+  };
+
+  const clearCurrentGoal = async (requireConfirmation: boolean) => {
+    if (!visibleGoal) {
+      throw new Error("当前会话没有 Goal");
+    }
+    if (requireConfirmation) {
+      const confirmed = await confirm({
+        title: "清除当前 Goal？",
+        message: `将清除“${visibleGoal.objective}”的 Goal 状态。`,
+        confirmText: "清除 Goal",
+        danger: true,
+      });
+      if (!confirmed) {
+        return;
+      }
+    }
+    await runGoalMutation(clearGoal, "Goal 已清除");
+  };
+
+  const runGoalCommand = (args: string) => {
+    const action = parseGoalSlashAction(args);
+    const command = async () => {
+      switch (action.kind) {
+        case "show": {
+          if (!state.currentSession) {
+            setComposerNotice("当前新会话还没有 Goal；输入 /goal <目标> 开始");
+            return;
+          }
+          const goal = await refreshGoal();
+          setComposerNotice(goal
+            ? `Goal：${GOAL_STATUS_LABELS[goal.status]} · ${goal.objective}`
+            : "当前会话没有 Goal；输入 /goal <目标> 开始");
+          return;
+        }
+        case "edit":
+          if (!visibleGoal) {
+            throw new Error("当前会话没有可编辑的 Goal");
+          }
+          setGoalEditOpen(true);
+          return;
+        case "pause":
+          await pauseGoal();
+          return;
+        case "resume":
+          await resumeGoal();
+          return;
+        case "clear":
+          await clearCurrentGoal(false);
+          return;
+        case "create":
+          await createGoal(action.objective);
+      }
+    };
+    void command().catch((error: unknown) => {
+      setAttachmentError(
+        `Goal 操作失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  };
+
   const {
     slashQuery,
     matchingSlashCommands,
@@ -260,7 +418,9 @@ export default function Composer() {
     submitSlashInput,
   } = useComposerSlashCommands({
     input,
-    state,
+    currentSession: state.currentSession,
+    compactLoading: state.compactLoading,
+    getLatestAssistantContent,
     setInput,
     setAttachments,
     setAttachmentError,
@@ -275,6 +435,7 @@ export default function Composer() {
     renameCurrentSession,
     switchContentView,
     compactSession,
+    runGoalCommand,
   });
 
   useEffect(() => {
@@ -287,14 +448,19 @@ export default function Composer() {
     }
 
     const typedContent = input.trim();
-    if (!typedContent && attachments.length === 0) {
+    if (!typedContent && attachments.length === 0 && browserElements.length === 0) {
       return;
     }
 
-    const content = typedContent || MEDIA_ONLY_PROMPT;
+    const elementContext = formatBrowserElementSelections(browserElements);
+    const content = [typedContent || (attachments.length > 0 ? MEDIA_ONLY_PROMPT : ""), elementContext]
+      .filter(Boolean)
+      .join("\n\n");
     const sentAttachments = attachments;
+    const sentBrowserElements = browserElements;
     setInput("");
     setAttachments([]);
+    setBrowserElements([]);
     setAttachmentError("");
     setComposerNotice("");
     void sendMessage(
@@ -307,8 +473,9 @@ export default function Composer() {
       })),
       queue,
     ).catch((error: unknown) => {
-      setInput(content);
+      setInput(typedContent);
       setAttachments(sentAttachments);
+      setBrowserElements(sentBrowserElements);
       setAttachmentError(
         `发送失败：${error instanceof Error ? error.message : String(error)}`,
       );
@@ -376,6 +543,7 @@ export default function Composer() {
   const handleClear = () => {
     setInput("");
     setAttachments([]);
+    setBrowserElements([]);
     setAttachmentError("");
     setComposerNotice("");
   };
@@ -505,14 +673,10 @@ export default function Composer() {
                 新会话位于
               </span>
               <WorkspaceSwitcher
-                apiPort={state.apiPort ?? DEFAULT_BACKEND_PORT}
                 workspaces={state.gatewayWorkspaces}
                 activeWorkspaceId={state.activeGatewayWorkspaceId}
-                recentLocalWorkspacePaths={state.uiSettings.recent_local_workspace_paths}
                 switching={state.workspaceSwitching}
                 onActivate={activateNewSessionWorkspace}
-                onAddLocal={addLocalGatewayWorkspace}
-                onAddSsh={addSshGatewayWorkspace}
               />
               {newSessionFolderPath ? (
                 <span
@@ -568,6 +732,30 @@ export default function Composer() {
                 notice={composerNotice}
                 onRemove={handleRemoveAttachment}
               />
+              {browserElements.length > 0 ? (
+                <div className="composer-browser-elements" aria-label="已选择的浏览器元素">
+                  {browserElements.map((element) => (
+                    <div className="composer-browser-element" key={`${element.browserId}:${element.ref}`}>
+                      <span className="codicon codicon-symbol-interface" aria-hidden="true" />
+                      <span className="composer-browser-element-name" title={`${element.selector}\n${element.url}`}>
+                        {`<${element.tag}> ${element.text || element.ref}`}
+                      </span>
+                      <button
+                        type="button"
+                        className="composer-attachment-remove"
+                        aria-label={`移除页面元素 ${element.text || element.ref}`}
+                        onClick={() => setBrowserElements((current) =>
+                          current.filter((item) =>
+                            item.browserId !== element.browserId || item.ref !== element.ref
+                          )
+                        )}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
             <div className="composer-actions sessions-chat-toolbar">
               <div className="composer-actions-left">
@@ -674,6 +862,31 @@ export default function Composer() {
         onCancel={closeRenameDialog}
         onSubmit={submitRenameDialog}
       />
+      <WarmActionDialog
+        open={goalEditOpen && visibleGoal !== null}
+        title="编辑 Goal"
+        description="编辑已完成的 Goal 会重新激活；预算仍不足时会继续保持受限，其他状态保持不变。"
+        inputLabel="目标"
+        initialValue={visibleGoal?.objective ?? ""}
+        inputMaxLength={4000}
+        inputMultiline
+        confirmText="保存 Goal"
+        onClose={() => setGoalEditOpen(false)}
+        onConfirm={async (objective) => {
+          if (!visibleGoal) {
+            throw new Error("当前 Goal 已不存在");
+          }
+          await runGoalMutation(
+            () => updateGoal({
+              objective,
+              status: goalEditStatus(visibleGoal.status),
+            }),
+            "Goal 已更新",
+          );
+        }}
+      />
     </>
   );
 }
+
+export default React.memo(Composer);

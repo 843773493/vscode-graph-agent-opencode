@@ -16,6 +16,7 @@ SESSION_ALLOCATION_MARKER_NAME = ".boxteam-session-allocating.json"
 SESSION_ALLOCATION_TEMP_PREFIX = ".boxteam-session-allocating-"
 PHYSICAL_LAYOUT_VERSION = 1
 _INVALID_SEGMENT_CHARS = re.compile(r"[<>:\"/\\|?*\x00-\x1f]")
+_STABLE_ID_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
 _WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -37,8 +38,11 @@ class SessionPhysicalNode:
     updated_at: datetime
 
 def physical_segment(name: str, stable_id: str) -> str:
-    normalized = physical_display_segment(name)
-    return f"{normalized}--{stable_id[-8:]}"
+    """返回由稳定 ID 独占的物理路径段；显示名不得参与路径。"""
+    del name
+    if _STABLE_ID_SEGMENT.fullmatch(stable_id) is None:
+        raise ValueError(f"稳定 ID 不能作为物理路径段: {stable_id!r}")
+    return stable_id
 
 def physical_display_segment(name: str) -> str:
     """返回物理路径段的显示名部分，预留固定稳定 ID 后缀空间。"""
@@ -54,18 +58,10 @@ def physical_display_segment(name: str) -> str:
     return normalized
 
 def validate_generator_physical_segment(value: str) -> None:
-    """校验生成器路径模板渲染值；与物理路径规范化共用平台规则。"""
-    if not value or value in {".", ".."}:
+    """校验生成器显示名；显示名不再参与物理路径。"""
+    normalized = value.strip()
+    if not normalized or normalized in {".", ".."}:
         raise ValueError(f"命名路径段非法: {value!r}")
-    if _INVALID_SEGMENT_CHARS.search(value):
-        raise ValueError(f"命名路径段包含跨平台非法字符: {value!r}")
-    if Path(value).is_absolute():
-        raise ValueError(f"命名路径段不能是绝对路径: {value!r}")
-    stem = value.split(".", maxsplit=1)[0].upper()
-    if stem in _WINDOWS_RESERVED_NAMES:
-        raise ValueError(f"命名路径段是平台保留名称: {value!r}")
-    if value.endswith((" ", ".")):
-        raise ValueError(f"命名路径段不能以空格或点结尾: {value!r}")
 
 def display_name_from_segment(segment: str, stable_id: str) -> str:
     for suffix in (f"--{stable_id}", f"--{stable_id[-8:]}"):

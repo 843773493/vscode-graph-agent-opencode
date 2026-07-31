@@ -1,41 +1,42 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-import time
 from typing import Any
 
 from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
-from app.core.job_context import set_active_tool_name, set_interruptible_phase
-from app.core.job_event_bus import EventType
-from app.core.session_interrupt_state import SessionInterruptState
+from app.abstractions.session_changes import (
+    FileEditSnapshot,
+    SessionChangesRecorderProtocol,
+    StoredFileEdit,
+)
+from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
 from app.agents.tools.apply_patch import (
     APPLY_PATCH_TOOL_NAME,
     load_apply_patch_journal_from_result,
 )
+from app.core.job_context import set_active_tool_name, set_interruptible_phase
+from app.core.job_event_bus import EventType
+from app.core.session_interrupt_state import SessionInterruptState
+from app.schemas.event import ModelTokenUsagePayload
+from app.services.infrastructure.tool_output_store import (
+    ToolOutputStore,
+    extract_tool_output_reference,
+)
 from app.services.mapping.agent_content_mapper import (
     AgentStreamContentPart,
     extract_agent_stream_content_parts,
-)
-from app.abstractions.session_changes import (
-    FileEditSnapshot,
-    SessionChangesRecorderProtocol,
-    StoredFileEdit,
 )
 from app.services.orchestration.agent_stream_helpers import (
     extract_tool_result_text,
     is_tracked_chat_model_event,
     normalize_tool_args,
 )
-from app.services.infrastructure.tool_output_store import (
-    ToolOutputStore,
-    extract_tool_output_reference,
-)
-from app.schemas.event import ModelTokenUsagePayload
-
 
 FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", APPLY_PATCH_TOOL_NAME}
 TEXT_DELTA_FLUSH_CHARS = 128
@@ -58,6 +59,37 @@ def _model_end_contains_tool_calls(value: object) -> bool:
         return any(_model_end_contains_tool_calls(item) for item in value)
     message = getattr(value, "message", None)
     return message is not None and message is not value and _model_end_contains_tool_calls(message)
+
+
+def _tool_message_from_output(
+    output: object,
+    *,
+    execution_id: str,
+    tool_name: str,
+) -> ToolMessage:
+    if isinstance(output, ToolMessage):
+        return output
+    if isinstance(output, Command):
+        update = output.update
+        messages = update.get("messages") if isinstance(update, Mapping) else None
+        if isinstance(messages, Sequence) and not isinstance(
+            messages, (str, bytes, bytearray)
+        ):
+            tool_messages = [
+                message for message in messages if isinstance(message, ToolMessage)
+            ]
+            if len(tool_messages) == 1:
+                return tool_messages[0]
+            raise TypeError(
+                "工具结束事件的 Command 必须包含且只包含一个 ToolMessage: "
+                f"execution_id={execution_id} tool={tool_name} "
+                f"tool_message_count={len(tool_messages)}"
+            )
+    raise TypeError(
+        "工具结束事件必须返回带 tool_call_id 的 ToolMessage，或包含该消息的 Command: "
+        f"execution_id={execution_id} tool={tool_name} "
+        f"output_type={type(output).__name__}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,31 +164,17 @@ def _stream_chunk_token_usage(chunk: object) -> ModelTokenUsagePayload | None:
     )
 
 
-def combine_model_token_usage(
+def last_model_token_usage(
     usages: Sequence[ModelTokenUsagePayload],
 ) -> ModelTokenUsagePayload:
-    model_calls = sum(usage.model_calls for usage in usages)
-    reported_model_calls = sum(usage.reported_model_calls for usage in usages)
-    cache_is_complete = (
-        model_calls > 0
-        and model_calls == reported_model_calls
-        and all(
-            usage.cache_read_input_tokens is not None
-            for usage in usages
+    """返回最后一次实际模型请求的 token 统计，不跨请求累计。"""
+    return next(
+        (
+            usage.model_copy(deep=True)
+            for usage in reversed(usages)
             if usage.model_calls > 0
-        )
-    )
-    return ModelTokenUsagePayload(
-        input_tokens=sum(usage.input_tokens for usage in usages),
-        output_tokens=sum(usage.output_tokens for usage in usages),
-        total_tokens=sum(usage.total_tokens for usage in usages),
-        cache_read_input_tokens=(
-            sum(usage.cache_read_input_tokens or 0 for usage in usages)
-            if cache_is_complete
-            else None
         ),
-        model_calls=model_calls,
-        reported_model_calls=reported_model_calls,
+        ModelTokenUsagePayload(),
     )
 
 
@@ -274,11 +292,11 @@ def _apply_patch_snapshots_from_result(
         before_exists = raw_snapshot.get("before_exists")
         before_content = raw_snapshot.get("before_content")
         if not isinstance(file_path, str):
-            raise RuntimeError("apply_patch journal 快照缺少 file_path")
+            raise TypeError("apply_patch journal 快照缺少 file_path")
         if not isinstance(before_exists, bool):
-            raise RuntimeError(f"apply_patch journal 快照 {file_path} 缺少 before_exists")
+            raise TypeError(f"apply_patch journal 快照 {file_path} 缺少 before_exists")
         if not isinstance(before_content, str):
-            raise RuntimeError(f"apply_patch journal 快照 {file_path} 缺少 before_content")
+            raise TypeError(f"apply_patch journal 快照 {file_path} 缺少 before_content")
         snapshots.append(
             session_changes_service.build_snapshot(
                 file_path=file_path,
@@ -341,6 +359,7 @@ async def process_agent_event_stream(
     successful_tool_calls: list[SuccessfulToolCall] = []
     completed_custom_tool_names: list[str] = []
     tracked_model_run_ids: set[str] = set()
+    tracked_model_run_order: list[str] = []
     model_usage_by_run_id: dict[str, ModelTokenUsagePayload] = {}
     tool_output_store = ToolOutputStore(workspace_root=workspace_root)
     stream_config = _build_isolated_stream_config(
@@ -349,6 +368,12 @@ async def process_agent_event_stream(
         job_id=turn_id,
     )
     yielded = False
+
+    def track_model_run(run_id: str) -> None:
+        if run_id in tracked_model_run_ids:
+            return
+        tracked_model_run_ids.add(run_id)
+        tracked_model_run_order.append(run_id)
 
     async def flush_text_delta() -> None:
         nonlocal pending_text_delta_chunks, last_text_delta_flush_at
@@ -409,7 +434,7 @@ async def process_agent_event_stream(
             )
         current_text = existing.get(text_key)
         if not isinstance(current_text, str):
-            raise RuntimeError(f"模型流 part 缺少 {text_key}: part_id={part.part_id}")
+            raise TypeError(f"模型流 part 缺少 {text_key}: part_id={part.part_id}")
         existing[text_key] = current_text + part.text
         if part.extras:
             existing_extras = existing.get("extras")
@@ -473,7 +498,14 @@ async def process_agent_event_stream(
             and event_type.startswith("on_chat_model_")
             and is_tracked_chat_model_event(name)
         )
-        if is_model_event or event_type in {"on_tool_start", "on_tool_end"}:
+        is_model_failed_event = (
+            event_type == "on_custom_event" and name == MODEL_FAILED_CUSTOM_EVENT
+        )
+        if (
+            is_model_event
+            or is_model_failed_event
+            or event_type in {"on_tool_start", "on_tool_end"}
+        ):
             _validate_stream_event_identity(
                 metadata,
                 session_id=session_id,
@@ -482,13 +514,19 @@ async def process_agent_event_stream(
                 name=name,
             )
 
+        if is_model_failed_event:
+            if not isinstance(data, dict):
+                raise TypeError("模型失败自定义事件 data 必须是 dict")
+            await publish(EventType.MODEL_FAILED, dict(data))
+            continue
+
         if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
             await close_current_text_part()
             latest_model_part_order.clear()
             latest_model_parts.clear()
             model_run_id = _event_run_id(event)
             if model_run_id:
-                tracked_model_run_ids.add(model_run_id)
+                track_model_run(model_run_id)
             model_name = metadata.get("ls_model_name") or "unknown_model"
             await publish(
                 EventType.LLM_REQUEST,
@@ -508,7 +546,7 @@ async def process_agent_event_stream(
                 model_run_id = _event_run_id(event)
                 if not model_run_id:
                     raise RuntimeError("带 usage_metadata 的模型流事件缺少 run_id")
-                tracked_model_run_ids.add(model_run_id)
+                track_model_run(model_run_id)
                 model_usage_by_run_id[model_run_id] = chunk_token_usage
             chunk_message = getattr(chunk, "message", None)
             if chunk_message is not None:
@@ -616,12 +654,11 @@ async def process_agent_event_stream(
                     f"tool={name or 'unknown_tool'}"
                 )
             raw_output = data.get("output")
-            if not isinstance(raw_output, ToolMessage):
-                raise TypeError(
-                    "工具结束事件必须返回带 tool_call_id 的 ToolMessage: "
-                    f"execution_id={run_id} tool={display_context.tool_name} "
-                    f"output_type={type(raw_output).__name__}"
-                )
+            raw_output = _tool_message_from_output(
+                raw_output,
+                execution_id=run_id,
+                tool_name=display_context.tool_name,
+            )
             tool_call_id = raw_output.tool_call_id
             if not isinstance(tool_call_id, str) or not tool_call_id:
                 raise RuntimeError(
@@ -725,10 +762,14 @@ async def process_agent_event_stream(
     else:
         await flush_text_delta()
 
-    usage_parts = list(model_usage_by_run_id.values())
-    missing_usage_calls = len(tracked_model_run_ids) - len(model_usage_by_run_id)
-    if missing_usage_calls > 0:
-        usage_parts.append(ModelTokenUsagePayload(model_calls=missing_usage_calls))
+    if tracked_model_run_order:
+        last_model_run_id = tracked_model_run_order[-1]
+        token_usage = model_usage_by_run_id.get(
+            last_model_run_id,
+            ModelTokenUsagePayload(model_calls=1),
+        )
+    else:
+        token_usage = ModelTokenUsagePayload()
 
     return AgentEventStreamResult(
         final_text="".join(collected_text_parts).strip(),
@@ -739,6 +780,6 @@ async def process_agent_event_stream(
         last_tool_result_text=last_tool_result_text,
         successful_tool_calls=tuple(successful_tool_calls),
         completed_custom_tool_names=tuple(completed_custom_tool_names),
-        token_usage=combine_model_token_usage(usage_parts),
+        token_usage=token_usage,
         yielded=yielded,
     )

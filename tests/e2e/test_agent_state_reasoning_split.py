@@ -73,7 +73,7 @@ async def test_agent_state_keeps_reasoning_and_final_text_separate(
     assert traces_response.status_code == 200
     text_start_part_ids = {
         trace["part_id"]
-        for trace in traces_response.json()["data"]
+        for trace in traces_response.json()["data"]["items"]
         if trace.get("type") == "text_start"
     }
     assert first_assistant_content[0]["id"] in text_start_part_ids

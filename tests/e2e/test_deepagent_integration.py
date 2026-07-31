@@ -113,7 +113,7 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
     assert traces_response.status_code == 200
-    traces = traces_response.json()["data"]
+    traces = traces_response.json()["data"]["items"]
     assert isinstance(traces, list)
     persisted_types = [trace.get("type") for trace in traces]
     print(f"\n=== 持久化轨迹类型: {persisted_types} ===")

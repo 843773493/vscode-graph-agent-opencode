@@ -54,7 +54,7 @@ def _resolve_attachment_file(file_id: str, workspace_root: Path | None) -> Path:
     resolver = get_session_path_resolver(
         resolved_workspace_root / ".boxteam" / "sessions"
     )
-    return safe_join(resolver.resolve_session_dir(session_id), relative_path)
+    return safe_join(resolver.resolve_session_node(session_id), relative_path)
 
 
 def _attachment_content_type(attachment: AttachmentRef, file_path: Path) -> str:

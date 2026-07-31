@@ -1,5 +1,8 @@
 import React from "react";
-import type { ConversationTokenUsage } from "../../types/frontend";
+import type {
+  ConversationModelUsage,
+  ConversationTokenUsage,
+} from "../../types/frontend";
 
 const RESPONSE_ACTIONS = [
   // TODO: 接入后端反馈接口后，实现点赞状态持久化与撤销。
@@ -36,11 +39,13 @@ async function writeClipboardText(text: string): Promise<void> {
 export default function ResponseActionToolbar({
   responseText,
   tokenUsage,
+  modelUsage,
   canRegenerate,
   onRegenerate,
 }: {
   responseText: string;
   tokenUsage: ConversationTokenUsage | null;
+  modelUsage: ConversationModelUsage | null;
   canRegenerate: boolean;
   onRegenerate: () => void;
 }): React.ReactNode {
@@ -85,7 +90,7 @@ export default function ResponseActionToolbar({
   );
   const tokenUsageTitle = tokenUsage
     ? [
-        `总 token：${numberFormatter.format(tokenUsage.totalTokens)}`,
+        `最后一次模型请求总 token：${numberFormatter.format(tokenUsage.totalTokens)}`,
         `输入：${numberFormatter.format(tokenUsage.inputTokens)}`,
         `输出：${numberFormatter.format(tokenUsage.outputTokens)}`,
         tokenUsage.cacheReadInputTokens === null
@@ -94,6 +99,10 @@ export default function ResponseActionToolbar({
         `模型调用：${tokenUsage.reportedModelCalls}/${tokenUsage.modelCalls}`,
       ].join("；")
     : "";
+  const modelUsageTitle = modelUsage
+    ? `最后一次请求模型：${modelUsage.finalModelId}`
+    : "";
+  const usageTitle = [modelUsageTitle, tokenUsageTitle].filter(Boolean).join("；");
 
   return (
     <div className="chat-response-actions" role="toolbar" aria-label="回复操作">
@@ -146,19 +155,29 @@ export default function ResponseActionToolbar({
       <span className="chat-response-action-status" aria-live="polite">
         {copyState === "idle" ? "" : copyLabel}
       </span>
-      {tokenUsage ? (
+      {tokenUsage || modelUsage ? (
         <span
           className="chat-response-token-usage"
-          title={tokenUsageTitle}
-          aria-label={tokenUsageTitle}
+          title={usageTitle}
+          aria-label={usageTitle}
         >
-          <span>总计 {numberFormatter.format(tokenUsage.totalTokens)}</span>
-          <span aria-hidden="true">·</span>
-          <span>
-            缓存 {tokenUsage.cacheReadInputTokens === null
-              ? "—"
-              : numberFormatter.format(tokenUsage.cacheReadInputTokens)}
-          </span>
+          {modelUsage ? (
+            <span className="chat-response-model-id">
+              模型 {modelUsage.finalModelId}
+            </span>
+          ) : null}
+          {modelUsage && tokenUsage ? <span aria-hidden="true">·</span> : null}
+          {tokenUsage ? (
+            <>
+              <span>本次 {numberFormatter.format(tokenUsage.totalTokens)}</span>
+              <span aria-hidden="true">·</span>
+              <span>
+                缓存 {tokenUsage.cacheReadInputTokens === null
+                  ? "—"
+                  : numberFormatter.format(tokenUsage.cacheReadInputTokens)}
+              </span>
+            </>
+          ) : null}
         </span>
       ) : null}
     </div>

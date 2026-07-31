@@ -59,7 +59,7 @@ def test_build_custom_tools_passes_each_spec_options_to_factory(
         return create_test_tool_2(context)
 
     monkeypatch.setattr(
-        "app.agents.custom_tools._load_factory",
+        "app.agents.custom_tools.load_custom_tool_factory",
         lambda _factory_path: fake_factory,
     )
 
@@ -73,6 +73,14 @@ def test_build_custom_tools_passes_each_spec_options_to_factory(
 
 def test_custom_tool_spec_names_reads_names_from_config_spec() -> None:
     assert custom_tool_spec_names([TEST_TOOL_SPEC]) == {"test_tool_2"}
+
+
+def test_builtin_tool_id_resolves_current_factory_and_preserves_stable_config() -> None:
+    specs = parse_custom_tool_specs([{"tool_id": "read_context"}])
+
+    assert specs[0].name == "read_context"
+    assert specs[0].factory_path.endswith(":create_read_context_tool")
+    assert specs[0].to_config() == {"tool_id": "read_context"}
 
 
 def test_custom_tool_spec_parser_strips_fields_and_copies_options() -> None:
@@ -154,7 +162,7 @@ def test_build_custom_tools_rejects_hidden_runtime_injection(
         return value
 
     monkeypatch.setattr(
-        "app.agents.custom_tools._load_factory",
+        "app.agents.custom_tools.load_custom_tool_factory",
         lambda _factory_path: lambda _context: test_tool_2,
     )
 

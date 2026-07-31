@@ -10,26 +10,14 @@ from app.gateway.managed_workspaces import (
     remove_direct_managed_workspace,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
 @pytest.mark.asyncio
 async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     workspace_root = tmp_path / "created" / "workspace"
-
-    async def start_runtime(**_: object) -> WorkspaceRuntime:
-        return WorkspaceRuntime(
-            service_urls={"workspace_api": "http://127.0.0.1:41234"}
-        )
-
-    monkeypatch.setattr(
-        "app.gateway.managed_workspaces.start_managed_local_workspace_runtime",
-        start_runtime,
-    )
 
     target = await create_direct_managed_workspace(
         registry=registry,
@@ -43,6 +31,9 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     assert workspace_root.is_dir()
     assert target.name == "Remote project"
     assert target.managed is True
+    assert target.backend_url == ""
+    assert registry.has_runtime(target.workspace_id) is False
+    assert (await registry.list_dtos())[0].status == "offline"
     assert registry.resolve(target.workspace_id).root_path == str(workspace_root)
 
     registry.upsert(

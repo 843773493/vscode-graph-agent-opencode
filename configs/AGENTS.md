@@ -1,12 +1,12 @@
 # 目录用途
 
-`configs/` 存放配置模板、JSON Schema、用户配置生成器和仅供测试使用的配置样例。
+`configs/` 存放 Gateway/Workspace 静态配置模板、独立 JSON Schema、安装迁移代码和测试配置样例。
 
 # 可修改内容
 
-- 可以维护 `configs.boxteam` 配置生成入口、基础模板和配置 schema。
+- 可以维护 `configs.boxteam` 配置安装入口、静态模板和配置 schema。
 - 可以维护 `configs/tests/` 下由 E2E fixture 复制到隔离工作区的测试配置。
-- 可以通过显式开发安装参数选择性加入测试工具、Gateway 测试工作区等开发配置。
+- 可以维护完整的 `gateway_dev.jsonc`、`workspace_dev.jsonc` 开发模板。
 
 # 不可修改内容
 
@@ -17,8 +17,8 @@
 
 # 规范
 
-- 用户级配置输出到 `${BOXTEAM_HOME:-~/.boxteams}/config/boxteam.jsonc`，schema 与配置文件放在同一目录。
-- 工作区级配置固定为 `${workspace_abs_path}/.boxteam/boxteam.jsonc`，并覆盖用户级同名配置项。
-- 使用 `uv run python -m configs.boxteam` 调用配置生成器，不从源码文件位置向上推导项目根目录。
+- 用户级配置输出到 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc` 与 `workspace.jsonc`，各自 schema 与配置文件放在同一目录。
+- 工作区级配置固定为 `${workspace_abs_path}/.boxteam/workspace.jsonc`，并覆盖用户级 Workspace 配置同名项；Gateway 不读取工作区配置。
+- 使用 `uv run python -m configs.boxteam` 调用配置安装器，不从源码文件位置向上推导项目根目录。
 - 默认生成最小模型配置；只有用户明确要求或官方接口验证为必需时才添加请求参数覆盖。
-- 生成器写入前必须执行既定迁移；配置安装属于显式的整文件重建，必须使用原子替换并在失败时给出明确的源、目标和处理建议。
+- 布局迁移必须在启动服务前完成；配置安装属于显式的整文件重建，必须使用原子替换并在失败时给出明确的源、目标和处理建议。

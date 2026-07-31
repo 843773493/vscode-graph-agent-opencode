@@ -319,7 +319,6 @@ async updateSessionAgent(sessionId, agentId) {
 
 ### 类别3：混合状态
 - pendingTurns：本地乐观显示，但需要后端确认后移除
-- autoContinueEnabled：前端UI状态，但需同步到后端Session配置
 
 **处理方式**：先乐观显示，API成功/失败后修正。
 

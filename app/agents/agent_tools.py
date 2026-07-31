@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool
 
@@ -11,13 +11,15 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
+from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tools.apply_patch import create_apply_patch_tool
 from app.agents.tools.background import (
     create_background_message_collection_tool,
     create_monitor_session_agent_end_tool,
     create_system_time_emitter_tool,
 )
-from app.agents.tools.apply_patch import create_apply_patch_tool
 from app.agents.tools.collaboration import build_agent_collaboration_tools
+from app.agents.tools.goal import create_goal_tools
 from app.agents.tools.python_execution import (
     create_python_execution_tool,
     get_python_executable,
@@ -27,9 +29,11 @@ from app.agents.tools.session_subagent import create_session_subagent_tool
 from app.agents.tools.team import create_team_tools
 from app.agents.tools.terminal import create_persistent_terminal_tool
 from app.agents.tools.testing import create_test_tool
-from app.agents.tool_invocation_context import ToolInvocationContext
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
+
+if TYPE_CHECKING:
+    from app.services.business.session_goal_service import SessionGoalService
 
 
 def build_default_tools(
@@ -50,6 +54,7 @@ def build_default_tools(
     terminal_manager_client: TerminalManagerClient | None = None,
     invocation_context: ToolInvocationContext | None = None,
     workspace_root: Path | None = None,
+    goal_service: SessionGoalService | None = None,
     include_test_tools: bool = False,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
@@ -103,6 +108,8 @@ def build_default_tools(
             invocation_context=invocation_context,
         ),
     ]
+    if goal_service is not None:
+        tools.extend(create_goal_tools(session_id=session_id, goal_service=goal_service))
     if include_test_tools:
         tools.insert(0, create_test_tool())
     return tools

@@ -20,6 +20,15 @@ export interface VisibleWorkspaceNode {
 export const WORKSPACE_SECTION_RECENT_LIMIT = 10;
 const RECENT_SECTION_DAYS = 7;
 
+export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
+  const lines = [workspace.name];
+  if (workspace.connection_kind === 'remote_gateway') {
+    lines.push(`hostname: ${workspace.remote?.host ?? '<连接信息不可用>'}`);
+  }
+  lines.push(`root_path: ${workspace.root_path}`);
+  return lines.join('\n');
+}
+
 function sessionSortTime(session: Session, sortMode: SessionSortMode): number {
   const value = sortMode === 'updated' ? session.updated_at : session.created_at;
   const time = new Date(value || '').getTime();

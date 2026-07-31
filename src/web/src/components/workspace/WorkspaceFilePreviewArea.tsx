@@ -1,6 +1,7 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { SessionFileChange, WorkspaceFileContent } from "../../types/backend";
 import type { WorkspaceFileSelection } from "../../utils/workspaceFileReferences";
+import WorkspaceMarkdownPreview from "./preview/WorkspaceMarkdownPreview";
 
 export type WorkspacePreviewTab =
   | (WorkspaceFileContent & {
@@ -38,6 +39,8 @@ interface WorkspaceFilePreviewAreaProps {
   visible: boolean;
   flexRatio: number;
   maximized: boolean;
+  apiPort: number;
+  workspaceId: string | null;
   tabs: WorkspacePreviewTab[];
   activePath: string | null;
   loadingPath: string | null;
@@ -54,6 +57,7 @@ interface WorkspaceFilePreviewAreaProps {
   onDraftChange: (content: string) => void;
   onCancelEdit: () => void;
   onSaveEdit: () => Promise<void>;
+  onOpenWorkspacePath: (path: string) => Promise<void>;
 }
 
 function formatFileSize(size: number): string {
@@ -102,6 +106,8 @@ export default function WorkspaceFilePreviewArea({
   visible,
   flexRatio,
   maximized,
+  apiPort,
+  workspaceId,
   tabs,
   activePath,
   loadingPath,
@@ -118,9 +124,13 @@ export default function WorkspaceFilePreviewArea({
   onDraftChange,
   onCancelEdit,
   onSaveEdit,
+  onOpenWorkspacePath,
 }: WorkspaceFilePreviewAreaProps) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const editorLineNumbersRef = useRef<HTMLDivElement | null>(null);
+  const [markdownSourcePaths, setMarkdownSourcePaths] = useState<Set<string>>(
+    () => new Set(),
+  );
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? tabs[0] ?? null;
   const activeDiffLines =
     activeTab?.previewType === "session-diff"
@@ -135,6 +145,10 @@ export default function WorkspaceFilePreviewArea({
     ? editingActiveFile ? draftContent : activeTab.content
     : "";
   const activeEditorLines = lineRows(activeEditorContent);
+  const markdownActiveFile = activeTab?.previewType === "file" &&
+    activeTab.language === "markdown";
+  const markdownSourceVisible = activeTab?.previewType === "file" &&
+    markdownSourcePaths.has(activeTab.path);
 
   useEffect(() => {
     if (activeTab?.previewType !== "file" || !activeTab.selection) {
@@ -160,6 +174,10 @@ export default function WorkspaceFilePreviewArea({
       editorRef.current?.focus();
     }
   }, [editingActiveFile]);
+
+  useEffect(() => {
+    setMarkdownSourcePaths(new Set());
+  }, [workspaceId]);
 
   return (
     <section
@@ -251,6 +269,34 @@ export default function WorkspaceFilePreviewArea({
                 <span className="workspace-preview-meta">
                   {activeTab.language} · {formatFileSize(activeTab.size)}
                 </span>
+                {markdownActiveFile ? (
+                  <div className="workspace-preview-mode-switch" role="group" aria-label="Markdown 查看方式">
+                    <button
+                      type="button"
+                      className={markdownSourceVisible ? "active" : ""}
+                      aria-pressed={markdownSourceVisible}
+                      onClick={() => setMarkdownSourcePaths((current) => {
+                        const next = new Set(current);
+                        next.add(activeTab.path);
+                        return next;
+                      })}
+                    >
+                      源码
+                    </button>
+                    <button
+                      type="button"
+                      className={!markdownSourceVisible ? "active" : ""}
+                      aria-pressed={!markdownSourceVisible}
+                      onClick={() => setMarkdownSourcePaths((current) => {
+                        const next = new Set(current);
+                        next.delete(activeTab.path);
+                        return next;
+                      })}
+                    >
+                      预览
+                    </button>
+                  </div>
+                ) : null}
                 {editingActiveFile ? (
                   <>
                     {hasUnsavedEdit ? (
@@ -287,7 +333,15 @@ export default function WorkspaceFilePreviewArea({
                 ) : null}
               </div>
             </div>
-            <div className="workspace-preview-text-editor-shell">
+            {markdownActiveFile && !markdownSourceVisible ? (
+              <WorkspaceMarkdownPreview
+                apiPort={apiPort}
+                workspaceId={workspaceId}
+                path={activeTab.path}
+                content={activeEditorContent}
+                onOpenWorkspacePath={onOpenWorkspacePath}
+              />
+            ) : <div className="workspace-preview-text-editor-shell">
               <div
                 ref={editorLineNumbersRef}
                 className="workspace-preview-text-editor-line-numbers"
@@ -340,7 +394,7 @@ export default function WorkspaceFilePreviewArea({
                   });
                 }}
               />
-            </div>
+            </div>}
           </>
         ) : activeTab?.previewType === "terminal" ? (
           <>

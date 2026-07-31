@@ -12,14 +12,15 @@ from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config_service import ConfigService
 
 
-def _write_boxteam_config(tmp_path: Path, config: dict) -> Path:
-    config_path = tmp_path / "boxteam.jsonc"
+def _write_workspace_config(tmp_path: Path, config: dict) -> Path:
+    config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     return config_path
 
 
 def _base_config() -> dict:
     return {
+        "config_version": 1,
         "llm": {
             "providers": [
                 {
@@ -55,29 +56,31 @@ def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
             "auth": {"type": "oauth", "method": "chatgpt"},
         }
     )
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
 
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    service.validate_boxteam_config()
+    service.validate_workspace_config()
     assert service.get_llm_provider("backup_4")["auth"]["method"] == "chatgpt"
 
 
 def test_config_rejects_provider_without_api_key_or_oauth(tmp_path: Path):
     config = _base_config()
     del config["llm"]["providers"][0]["api_key"]
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
 
     with pytest.raises(jsonschema.ValidationError, match="api_key"):
         ConfigService(
             config_dir=Path.cwd() / "configs",
             config_path=config_path,
-        ).validate_boxteam_config()
+        ).validate_workspace_config()
 
 
 @pytest.mark.asyncio
-async def test_get_public_config_resolves_default_model_from_agent_provider(tmp_path: Path):
-    config_path = _write_boxteam_config(tmp_path, _base_config())
+async def test_get_public_config_resolves_default_model_from_agent_provider(
+    tmp_path: Path,
+):
+    config_path = _write_workspace_config(tmp_path, _base_config())
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     result = await service.get()
@@ -99,7 +102,7 @@ async def test_update_public_config_uses_runtime_overrides(tmp_path: Path):
         "ignored_paths": ["node_modules"],
         "auto_summarize": False,
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     result = await service.update(
@@ -125,7 +128,7 @@ async def test_update_public_config_uses_runtime_overrides(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_update_public_config_null_clears_runtime_override(tmp_path: Path):
-    config_path = _write_boxteam_config(tmp_path, _base_config())
+    config_path = _write_workspace_config(tmp_path, _base_config())
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     await service.update(ConfigUpdateRequest(default_model="runtime-model"))
@@ -136,13 +139,17 @@ async def test_update_public_config_null_clears_runtime_override(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_get_public_config_fails_when_default_agent_provider_is_missing(tmp_path: Path):
+async def test_get_public_config_fails_when_default_agent_provider_is_missing(
+    tmp_path: Path,
+):
     config = _base_config()
     config["agents"]["default"]["model"]["primary_provider"] = "missing"
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    with pytest.raises(ValueError, match="default agent 引用了不存在的 provider: missing"):
+    with pytest.raises(
+        ValueError, match="default agent 引用了不存在的 provider: missing"
+    ):
         await service.get()
 
 
@@ -151,24 +158,14 @@ def test_get_agent_tool_config_reads_custom_tools(tmp_path: Path):
     config["agents"]["default"]["tools"] = {
         "denylist": [],
         "confirmation_required": [],
-        "custom": [
-            {
-                "name": "test_tool_2",
-                "factory": "app.agents.tools.testing:create_test_tool_2",
-            }
-        ],
+        "custom": [{"tool_id": "test_tool_2"}],
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     result = service.get_agent_tool_config("default")
 
-    assert result["custom"] == [
-        {
-            "name": "test_tool_2",
-            "factory": "app.agents.tools.testing:create_test_tool_2",
-        }
-    ]
+    assert result["custom"] == [{"tool_id": "test_tool_2"}]
 
 
 def test_get_agent_tool_config_resolves_all_minus_allowlist(tmp_path: Path):
@@ -177,7 +174,7 @@ def test_get_agent_tool_config_resolves_all_minus_allowlist(tmp_path: Path):
         "denylist": ["all"],
         "allowlist": ["read_file"],
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     result = service.get_agent_tool_config("default")
@@ -197,12 +194,10 @@ def test_discovered_mcp_tools_participate_in_policy_and_confirmation(
         "allowlist": ["mcp__mini__echo"],
         "confirmation_required": ["mcp__mini__echo"],
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    service.set_mcp_tool_names(
-        frozenset({"mcp__mini__echo", "mcp__mini__increment"})
-    )
+    service.set_mcp_tool_names(frozenset({"mcp__mini__echo", "mcp__mini__increment"}))
     policy = service.resolve_agent_tool_policy("default")
 
     assert "mcp__mini__echo" in policy.enabled_names
@@ -217,7 +212,7 @@ def test_discovered_mcp_tools_reject_unknown_configured_tool(tmp_path: Path) -> 
     config["agents"]["default"]["tools"] = {
         "denylist": ["mcp__missing__tool"],
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     with pytest.raises(ValueError, match="mcp__missing__tool"):
@@ -229,7 +224,7 @@ def test_config_loading_fails_on_delegation_dependency_conflict(tmp_path: Path):
     config["agents"]["default"]["tools"] = {
         "denylist": ["send_message_to_session"],
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     with pytest.raises(
@@ -239,7 +234,14 @@ def test_config_loading_fails_on_delegation_dependency_conflict(tmp_path: Path):
         service.list_agents()
 
 
-def test_extension_selector_can_restore_one_custom_tool(tmp_path: Path):
+def test_extension_selector_can_restore_one_custom_tool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "app.services.infrastructure.config_service.load_custom_tool_factory",
+        lambda _factory_path: object(),
+    )
     config = _base_config()
     config["agents"]["default"]["tools"] = {
         "denylist": ["extensions"],
@@ -249,7 +251,7 @@ def test_extension_selector_can_restore_one_custom_tool(tmp_path: Path):
             {"name": "fetch_webpage", "factory": "example:create_fetch_webpage"},
         ],
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     policy = service.resolve_agent_tool_policy("default")
@@ -257,7 +259,14 @@ def test_extension_selector_can_restore_one_custom_tool(tmp_path: Path):
     assert policy.enabled_extension_names == frozenset({"web_search"})
 
 
-def test_config_service_normalizes_custom_tool_specs(tmp_path: Path):
+def test_config_service_normalizes_custom_tool_specs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "app.services.infrastructure.config_service.load_custom_tool_factory",
+        lambda _factory_path: object(),
+    )
     config = _base_config()
     config["agents"]["default"]["tools"] = {
         "custom": [
@@ -268,7 +277,7 @@ def test_config_service_normalizes_custom_tool_specs(tmp_path: Path):
             }
         ]
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     tool_config = service.get_agent_tool_config("default")
@@ -292,7 +301,7 @@ def test_config_loading_rejects_duplicate_normalized_custom_tool_names(
             {"name": " web_search ", "factory": "example:create_other"},
         ]
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     with pytest.raises(ValueError, match="重复扩展工具名: web_search"):
@@ -301,17 +310,15 @@ def test_config_loading_rejects_duplicate_normalized_custom_tool_names(
 
 def test_workspace_config_overrides_user_global_config(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     global_config = _base_config()
     global_config["logger"]["level"] = "warning"
-    global_path = tmp_path / "home" / ".boxteam" / "boxteam.jsonc"
+    global_path = tmp_path / "home" / ".boxteam" / "workspace.jsonc"
     global_path.parent.mkdir(parents=True)
     global_path.write_text(json.dumps(global_config), encoding="utf-8")
-    monkeypatch.setenv("BOXTEAM_USER_CONFIG_PATH", str(global_path))
 
     workspace_root = tmp_path / "workspace"
-    workspace_config = workspace_root / ".boxteam" / "boxteam.jsonc"
+    workspace_config = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_config.parent.mkdir(parents=True)
     workspace_config.write_text(
         json.dumps(
@@ -327,7 +334,11 @@ def test_workspace_config_overrides_user_global_config(
         encoding="utf-8",
     )
 
-    service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=workspace_root)
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=global_path,
+        workspace_root=workspace_root,
+    )
 
     assert service.list_agents()["default"]["name"] == "Workspace Override"
     assert service.list_agents()["default"]["model"]["primary_provider"] == "primary"
@@ -337,7 +348,7 @@ def test_workspace_config_overrides_user_global_config(
 def test_logger_level_is_normalized_and_validated(tmp_path: Path) -> None:
     config = _base_config()
     config["logger"]["level"] = " warning "
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     assert service.get_logger_level() == "WARNING"
@@ -355,7 +366,7 @@ def test_logger_level_is_normalized_and_validated(tmp_path: Path) -> None:
 def test_logger_pretty_is_read_and_validated(tmp_path: Path) -> None:
     config = _base_config()
     config["logger"]["pretty"] = False
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     assert service.get_logger_pretty() is False
@@ -386,10 +397,10 @@ def test_custom_tool_options_schema_accepts_embedding_config(tmp_path: Path) -> 
             }
         ]
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    service.validate_boxteam_config()
+    service.validate_workspace_config()
 
 
 def test_get_llm_provider_only_resolves_selected_provider_secret(
@@ -408,7 +419,7 @@ def test_get_llm_provider_only_resolves_selected_provider_secret(
     )
     monkeypatch.delenv("TEST_API_KEY", raising=False)
     monkeypatch.setenv("EMBEDDING_API_KEY", "embedding-secret")
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     provider = service.get_llm_provider("embedding")
@@ -430,10 +441,10 @@ def test_provider_request_override_schema_accepts_raw_completion_parameters(
             },
         }
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    service.validate_boxteam_config()
+    service.validate_workspace_config()
 
 
 def test_agent_runtime_omits_unspecified_generation_parameters(
@@ -441,7 +452,7 @@ def test_agent_runtime_omits_unspecified_generation_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
-    config_path = _write_boxteam_config(tmp_path, _base_config())
+    config_path = _write_workspace_config(tmp_path, _base_config())
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     runtime = service.get_agent_runtime_config("default")
@@ -449,6 +460,24 @@ def test_agent_runtime_omits_unspecified_generation_parameters(
     assert "temperature" not in runtime
     assert "top_p" not in runtime
     assert "max_output_tokens" not in runtime
+    assert runtime["require_delegated_report"] is False
+
+
+def test_agent_runtime_can_require_delegated_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    config["agents"]["default"]["execution"] = {
+        "require_delegated_report": True,
+    }
+    config_path = _write_workspace_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+
+    runtime = service.get_agent_runtime_config("default")
+
+    assert runtime["require_delegated_report"] is True
 
 
 def test_agent_runtime_places_session_provider_first(
@@ -467,7 +496,7 @@ def test_agent_runtime_places_session_provider_first(
         }
     )
     config["agents"]["default"]["model"]["fallback_providers"] = ["backup"]
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     runtime = service.get_agent_runtime_config(
@@ -512,7 +541,7 @@ def test_workspace_session_defaults_are_persisted_without_changing_static_config
             "fallback_providers": ["backup"],
         },
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
@@ -533,12 +562,9 @@ def test_workspace_session_defaults_are_persisted_without_changing_static_config
     assert restored.get_default_agent_id() == "default"
     assert restored.resolve_agent_provider_id("coder") == "primary"
     persisted = json.loads(
-        (
-            workspace_root
-            / ".boxteam"
-            / "settings"
-            / "session_defaults.json"
-        ).read_text(encoding="utf-8")
+        (workspace_root / ".boxteam" / "settings" / "session_defaults.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert persisted == {
         "schema_version": 1,
@@ -554,14 +580,14 @@ def test_provider_request_override_schema_rejects_legacy_extra_body(
     config["llm"]["providers"][0]["request_options"] = {
         "extra_body": {"reasoning": True}
     }
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     with pytest.raises(jsonschema.ValidationError):
-        service.validate_boxteam_config()
+        service.validate_workspace_config()
 
 
-def test_gateway_config_schema_accepts_remote_gateway(tmp_path: Path):
+def test_workspace_schema_rejects_gateway_section(tmp_path: Path):
     config = _base_config()
     config["gateway"] = {
         "workspaces": [
@@ -577,40 +603,13 @@ def test_gateway_config_schema_accepts_remote_gateway(tmp_path: Path):
             }
         ]
     }
-    config_path = _write_boxteam_config(tmp_path, config)
-    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
-
-    service.validate_boxteam_config()
-
-
-@pytest.mark.parametrize(
-    ("invalid_fields", "expected_path"),
-    [
-        ({"remote_gateway_port": 0}, ["gateway", "workspaces", 0, "remote_gateway_port"]),
-        ({"unexpected": True}, ["gateway", "workspaces", 0]),
-    ],
-)
-def test_gateway_config_schema_rejects_invalid_workspace(
-    tmp_path: Path,
-    invalid_fields: dict[str, object],
-    expected_path: list[str | int],
-):
-    config = _base_config()
-    workspace = {
-        "host": "127.0.0.1",
-        "username": "root",
-        "private_key_path": "id_ed25519",
-        "kind": "remote_gateway",
-        **invalid_fields,
-    }
-    config["gateway"] = {"workspaces": [workspace]}
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     with pytest.raises(jsonschema.ValidationError) as error_info:
-        service.validate_boxteam_config()
+        service.validate_workspace_config()
 
-    assert list(error_info.value.absolute_path) == expected_path
+    assert list(error_info.value.absolute_path) == []
 
 
 @pytest.mark.asyncio
@@ -620,7 +619,7 @@ async def test_config_uses_stable_snapshot_until_reload(
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config = _base_config()
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     original_snapshot = service.get_snapshot()
@@ -639,9 +638,9 @@ async def test_config_uses_stable_snapshot_until_reload(
 @pytest.mark.asyncio
 async def test_reload_ignores_shadowed_lower_priority_change(tmp_path: Path) -> None:
     global_config = _base_config()
-    global_path = _write_boxteam_config(tmp_path, global_config)
+    global_path = _write_workspace_config(tmp_path, global_config)
     workspace_root = tmp_path / "workspace"
-    workspace_config_path = workspace_root / ".boxteam" / "boxteam.jsonc"
+    workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_config_path.parent.mkdir(parents=True)
     workspace_config_path.write_text(
         json.dumps({"logger": {"level": "warning"}}),
@@ -661,64 +660,13 @@ async def test_reload_ignores_shadowed_lower_priority_change(tmp_path: Path) -> 
     assert service.get_revision() == original_revision
 
 
-def test_development_overlay_applies_before_workspace_override(
-    tmp_path: Path,
-) -> None:
-    user_path = _write_boxteam_config(tmp_path, _base_config())
-    overlay_path = tmp_path / "development.overlay.jsonc"
-    overlay_path.write_text(
-        json.dumps(
-            {
-                "development": {"test_tools": True},
-                "logger": {"level": "debug"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    workspace_root = tmp_path / "workspace"
-    workspace_path = workspace_root / ".boxteam" / "boxteam.jsonc"
-    workspace_path.parent.mkdir(parents=True)
-    workspace_path.write_text(
-        json.dumps({"logger": {"level": "warning"}}),
-        encoding="utf-8",
-    )
-
-    service = ConfigService(
-        config_dir=Path.cwd() / "configs",
-        config_path=user_path,
-        workspace_root=workspace_root,
-        overlay_paths=(overlay_path,),
-    )
-
-    assert service.development_test_tools_enabled() is True
-    assert service.get_logger_level() == "WARNING"
-    assert service.get_snapshot().source_paths == (
-        user_path,
-        overlay_path,
-        workspace_path,
-    )
-
-
-def test_missing_development_overlay_fails_explicitly(tmp_path: Path) -> None:
-    user_path = _write_boxteam_config(tmp_path, _base_config())
-    missing_overlay = tmp_path / "missing.jsonc"
-    service = ConfigService(
-        config_dir=Path.cwd() / "configs",
-        config_path=user_path,
-        overlay_paths=(missing_overlay,),
-    )
-
-    with pytest.raises(FileNotFoundError, match="配置 overlay 不存在"):
-        service.validate_boxteam_config()
-
-
 @pytest.mark.asyncio
 async def test_same_revision_reload_refreshes_active_source_paths(
     tmp_path: Path,
 ) -> None:
-    global_path = _write_boxteam_config(tmp_path, _base_config())
+    global_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
-    workspace_config_path = workspace_root / ".boxteam" / "boxteam.jsonc"
+    workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_config_path.parent.mkdir(parents=True)
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
@@ -741,9 +689,9 @@ async def test_reload_workspace_config_deletion_falls_back_to_user_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
-    user_path = _write_boxteam_config(tmp_path, _base_config())
+    user_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
-    workspace_config_path = workspace_root / ".boxteam" / "boxteam.jsonc"
+    workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_config_path.parent.mkdir(parents=True)
     workspace_config_path.write_text(
         json.dumps(
@@ -778,7 +726,7 @@ async def test_invalid_reload_retains_last_valid_snapshot_and_exposes_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
-    config_path = _write_boxteam_config(tmp_path, _base_config())
+    config_path = _write_workspace_config(tmp_path, _base_config())
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_revision = service.get_revision()
     config_path.write_text("{ invalid", encoding="utf-8")
@@ -800,11 +748,43 @@ async def test_invalid_reload_retains_last_valid_snapshot_and_exposes_error(
 
 
 @pytest.mark.asyncio
+async def test_reload_rejects_missing_custom_factory_and_retains_snapshot(
+    tmp_path: Path,
+) -> None:
+    config = _base_config()
+    config_path = _write_workspace_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+    original_revision = service.get_revision()
+    config["agents"]["default"]["tools"] = {
+        "custom": [
+            {
+                "name": "missing_tool",
+                "factory": "missing_package.tools:create_missing_tool",
+            }
+        ]
+    }
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="扩展工具预检失败"):
+        await service.reload()
+
+    assert service.get_revision() == original_revision
+    status = service.get_reload_status()
+    assert status.healthy is False
+    assert "missing_package.tools:create_missing_tool" in (status.last_error or "")
+    rejected = json.loads(config_path.read_text(encoding="utf-8"))
+    assert rejected["config_version"] == 1
+    assert rejected["agents"]["default"]["tools"]["custom"][0]["factory"] == (
+        "missing_package.tools:create_missing_tool"
+    )
+
+
+@pytest.mark.asyncio
 async def test_candidate_applier_failure_prevents_snapshot_commit(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_revision = service.get_revision()
     config["agents"]["default"]["instructions"]["system_prompt"] = "candidate"
@@ -828,7 +808,7 @@ async def test_restart_required_failure_exposes_changed_sections(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_revision = service.get_revision()
     config["logger"]["level"] = "debug"
@@ -856,7 +836,7 @@ async def test_pinned_snapshot_survives_await_and_runtime_reload(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config_path = _write_boxteam_config(tmp_path, config)
+    config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_snapshot = service.get_snapshot()
     config["llm"]["providers"][0]["model"] = "model-b"
@@ -878,7 +858,7 @@ async def test_watcher_detects_workspace_config_creation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
-    config_path = _write_boxteam_config(tmp_path, _base_config())
+    config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
     (workspace_root / ".boxteam").mkdir(parents=True)
     service = ConfigService(
@@ -890,9 +870,11 @@ async def test_watcher_detects_workspace_config_creation(
 
     await service.start_watching()
     try:
-        workspace_config_path = workspace_root / ".boxteam" / "boxteam.jsonc"
+        workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
         workspace_config_path.write_text(
-            json.dumps({"agents": {"default": {"instructions": {"system_prompt": "hot"}}}}),
+            json.dumps(
+                {"agents": {"default": {"instructions": {"system_prompt": "hot"}}}}
+            ),
             encoding="utf-8",
         )
         for _ in range(40):
@@ -909,7 +891,7 @@ async def test_watcher_detects_workspace_config_creation(
 async def test_watcher_does_not_create_missing_user_config_directory(
     tmp_path: Path,
 ) -> None:
-    missing_config_path = tmp_path / "missing-user-config" / "boxteam.jsonc"
+    missing_config_path = tmp_path / "missing-user-config" / "workspace.jsonc"
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=missing_config_path,

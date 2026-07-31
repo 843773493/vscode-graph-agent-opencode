@@ -1,7 +1,7 @@
 ---
 name: browser-control
-description: 当用户要求打开或操控浏览器页面，或要求调用 clickElement、dragElement、handleDialog、hoverElement、navigatePage、openBrowserPage、readPage、runPlaywrightCode、screenshotPage、typeInPage 这些浏览器扩展工具时，读取本 skill。
-allowed-tools: openBrowserPage, readPage, screenshotPage, navigatePage, clickElement, typeInPage, hoverElement, dragElement, handleDialog, runPlaywrightCode
+description: 当用户要求列出、打开或操控浏览器页面、查询当前后台浏览器网站，或要求调用 clickElement、dragElement、handleDialog、hoverElement、listBrowserPage、navigatePage、openBrowserPage、readPage、runPlaywrightCode、screenshotPage、typeInPage 这些浏览器扩展工具时，读取本 skill。
+allowed-tools: listBrowserPage, openBrowserPage, readPage, screenshotPage, navigatePage, clickElement, typeInPage, hoverElement, dragElement, handleDialog, runPlaywrightCode
 ---
 
 # browser 控制扩展工具
@@ -19,13 +19,28 @@ allowed-tools: openBrowserPage, readPage, screenshotPage, navigatePage, clickEle
 }
 ```
 
-工具返回中的 `pageId` 就是可附加浏览器资源 ID。资源视图会显示该浏览器资源，用户可以从资源卡片打开并默认 attach 到页面。
+工具返回中的 `pageId` 是可附加浏览器实例 ID。一个实例可以包含多个标签页；`readPage` 返回 `active_page_id` 和 `pages`，其它页面工具默认操作当前活动标签页。资源视图会显示该浏览器资源，用户可以从资源卡片打开并默认 attach。
+
+用户和模型默认可以共享操作同一浏览器。所有操作都进入统一队列，结果中的 `operation_revision` 是已完成操作的单调版本号。如果工具返回“用户锁定了浏览器”，不要重试或绕过锁；告诉用户当前不能操作，等待用户解锁后再继续。
 
 如果任意浏览器工具返回的页面状态中包含 `pending_dialog` 或 `pending_file_chooser`，必须先调用 `handleDialog` 处理该对话框，再继续后续页面操作。
 
 当只是为了验证工具链或构造临时测试页面时，优先把完整 HTML 编码成 `data:text/html;charset=utf-8,...` 传给 `openBrowserPage`。不要假设 `http://127.0.0.1:<临时端口>/...` 对浏览器管理器进程可达；只有用户明确说明该服务已经在浏览器管理器所在机器上启动时，才使用这类本地端口 URL。
 
+当用户询问当前 Session 已有哪些浏览器、正在浏览什么网站或需要先获得 `pageId` 时，必须先调用只读的 `listBrowserPage`。不要使用 `grep`、`read_file` 或其它文件系统工具读取 `.boxteam/browser-manager/browsers.json`；该状态文件不是模型工具接口，可能包含已删除记录、过期状态和内部字段。
+
 ## 工具 schema
+
+### listBrowserPage
+
+只读列出当前 Session 中未删除的浏览器页面。该工具不需要参数，不会创建、唤醒、导航或修改页面；返回的 `pages[].pageId` 可继续传给 `readPage`。
+
+```json
+{
+  "tool_name": "listBrowserPage",
+  "arguments": {}
+}
+```
 
 ### openBrowserPage
 
@@ -43,7 +58,7 @@ allowed-tools: openBrowserPage, readPage, screenshotPage, navigatePage, clickEle
 
 ### readPage
 
-读取页面文本和可交互元素。返回的元素行包含 `ref`，后续可直接用这个 `ref` 操控元素。
+读取当前活动标签页的文本和可交互元素。返回的元素行包含 `ref`，后续可直接用这个 `ref` 操控元素。`ref` 绑定 `document_revision`；页面导航或动态节点移除后若提示 ref 失效，应立即重新调用 `readPage`，不要重复提交旧 ref。
 
 ```json
 {
@@ -152,7 +167,7 @@ allowed-tools: openBrowserPage, readPage, screenshotPage, navigatePage, clickEle
 
 ### navigatePage
 
-跳转 URL、后退、前进或刷新。`type=url` 时的 `url` 支持完整 URL、裸域名和本地裸地址。
+跳转 URL、后退、前进、刷新，或管理标签页。`type=url` 时的 `url` 支持完整 URL、裸域名和本地裸地址。
 
 ```json
 {
@@ -165,7 +180,7 @@ allowed-tools: openBrowserPage, readPage, screenshotPage, navigatePage, clickEle
 }
 ```
 
-`type` 可取 `url`、`back`、`forward`、`reload`。
+`type` 可取 `url`、`back`、`forward`、`reload`、`new_tab`、`activate_tab`、`close_tab`。后两者必须传 `tabId`；标签页 ID 来自 `readPage.pages[].page_id`。`new_tab` 可选传 `url`。
 
 ### screenshotPage
 

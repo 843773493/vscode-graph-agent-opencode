@@ -4,13 +4,17 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import re
 
+from app.agents.builtin_tool_registry import resolve_builtin_tool_factory
+
 
 _CUSTOM_TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
 _FACTORY_PATH_PATTERN = re.compile(
     r"^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*:"
     r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$"
 )
-_SUPPORTED_FIELDS = frozenset({"name", "factory", "options", "description"})
+_SUPPORTED_FIELDS = frozenset(
+    {"tool_id", "name", "factory", "options", "description"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,12 +25,14 @@ class ParsedCustomToolSpec:
     factory_path: str
     options: dict[str, object]
     description: str | None = None
+    tool_id: str | None = None
 
     def to_config(self) -> dict[str, object]:
-        result: dict[str, object] = {
-            "name": self.name,
-            "factory": self.factory_path,
-        }
+        result: dict[str, object]
+        if self.tool_id is not None:
+            result = {"tool_id": self.tool_id}
+        else:
+            result = {"name": self.name, "factory": self.factory_path}
         if self.options:
             result["options"] = dict(self.options)
         if self.description is not None:
@@ -55,14 +61,29 @@ def parse_custom_tool_spec(
             f"{context} 包含不支持的字段: {', '.join(sorted(unknown_fields))}"
         )
 
-    name = _stripped_string(raw_spec.get("name"), field=f"{context}.name")
+    raw_tool_id = raw_spec.get("tool_id")
+    has_tool_id = raw_tool_id is not None
+    has_custom_identity = "name" in raw_spec or "factory" in raw_spec
+    if has_tool_id == has_custom_identity:
+        raise ValueError(
+            f"{context} 必须且只能声明 tool_id，或同时声明 name 与 factory"
+        )
+
+    tool_id: str | None = None
+    if has_tool_id:
+        tool_id = _stripped_string(raw_tool_id, field=f"{context}.tool_id")
+        name = tool_id
+        factory_path = resolve_builtin_tool_factory(tool_id)
+    else:
+        name = _stripped_string(raw_spec.get("name"), field=f"{context}.name")
+        factory_path = _stripped_string(
+            raw_spec.get("factory"),
+            field=f"{context}.factory",
+        )
+
     if not _CUSTOM_TOOL_NAME_PATTERN.fullmatch(name):
         raise ValueError(f"{context}.name 格式无效: {name!r}")
 
-    factory_path = _stripped_string(
-        raw_spec.get("factory"),
-        field=f"{context}.factory",
-    )
     if not _FACTORY_PATH_PATTERN.fullmatch(factory_path):
         raise ValueError(
             f"{context}.factory 必须使用 'module.path:factory_name' 格式，"
@@ -89,6 +110,7 @@ def parse_custom_tool_spec(
         factory_path=factory_path,
         options=dict(options),
         description=description,
+        tool_id=tool_id,
     )
 
 

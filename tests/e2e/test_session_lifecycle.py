@@ -43,7 +43,7 @@ async def test_session_information_uses_backend_authoritative_paths(
     assert information["workspace"]["root_path"] == expected_root
     expected_session_dir = get_session_path_resolver(
         Path(expected_root) / ".boxteam" / "sessions"
-    ).resolve_session_dir(session["session_id"])
+    ).resolve_session_node(session["session_id"])
     assert information["storage_path"] == str(
         expected_session_dir
     )

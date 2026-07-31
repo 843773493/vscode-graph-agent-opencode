@@ -22,6 +22,7 @@ from app.agents.tools.browser import (
     create_drag_element_tool,
     create_handle_dialog_tool,
     create_hover_element_tool,
+    create_list_browser_page_tool,
     create_navigate_page_tool,
     create_open_browser_page_tool,
     create_read_page_tool,
@@ -36,6 +37,7 @@ from tests.e2e.processes import (
     wait_for_http_ok,
 )
 from tests.e2e.utils import prepare_e2e_workspace
+from tests.e2e.utils import get_trace_payload, last_assistant_message, wait_for_job_done
 
 
 CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
@@ -127,6 +129,8 @@ async def _recv_ws_type(websocket, expected_type: str) -> dict[str, object]:
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
         raw = await asyncio.wait_for(websocket.recv(), timeout=max(deadline - time.monotonic(), 0.1))
+        if not isinstance(raw, str):
+            continue
         message = json.loads(raw)
         if message.get("type") == expected_type:
             return message
@@ -262,6 +266,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     session_id = create_session_response.json()["data"]["session_id"]
     context = _tool_context(session_id)
 
+    list_pages = create_list_browser_page_tool(context)
     open_page = create_open_browser_page_tool(context)
     read_page = create_read_page_tool(context)
     type_in_page = create_type_in_page_tool(context)
@@ -280,9 +285,63 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     assert page_id.startswith("browser_")
     assert "attach_url" not in opened
 
+    listed = _json_tool_result(await list_pages.ainvoke({}))
+    listed_page = next(
+        page for page in listed["pages"] if page["pageId"] == page_id
+    )
+    assert listed_page["url"] == _browser_test_data_url()
+    assert listed_page["status"] == "running"
+    assert "attach_url" not in listed_page
+    assert "checkpoint" not in listed_page
+
     summary = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
     assert "BoxTeam Browser Tool Test" in str(summary["summary"])
     assert "Apply" in str(summary["summary"])
+
+    await run_playwright_code.ainvoke(
+        {
+            "pageId": page_id,
+            "code": (
+                "const popup = await context.newPage();"
+                "await popup.setContent('<title>Popup Tab</title><p>popup</p>');"
+                "return popup.url();"
+            ),
+            "timeoutMs": 5000,
+        }
+    )
+    popup_state = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
+    assert len(popup_state["pages"]) == 2
+    popup_tab_id = str(popup_state["active_page_id"])
+    assert popup_tab_id != page_id
+    assert "Popup Tab" in {str(page["title"]) for page in popup_state["pages"]}
+
+    activated = _json_tool_result(
+        await navigate_page.ainvoke(
+            {"pageId": page_id, "type": "activate_tab", "tabId": page_id}
+        )
+    )
+    assert activated["active_page_id"] == page_id
+    closed_popup = _json_tool_result(
+        await navigate_page.ainvoke(
+            {"pageId": page_id, "type": "close_tab", "tabId": popup_tab_id}
+        )
+    )
+    assert len(closed_popup["pages"]) == 1
+
+    new_tab = _json_tool_result(
+        await navigate_page.ainvoke({"pageId": page_id, "type": "new_tab"})
+    )
+    assert str(new_tab["created_page_id"]).startswith("page_")
+    await navigate_page.ainvoke(
+        {
+            "pageId": page_id,
+            "type": "close_tab",
+            "tabId": str(new_tab["created_page_id"]),
+        }
+    )
+    await navigate_page.ainvoke(
+        {"pageId": page_id, "type": "activate_tab", "tabId": page_id}
+    )
 
     await type_in_page.ainvoke(
         {
@@ -364,10 +423,21 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     assert image_path.exists()
     assert image_path.is_relative_to(Path(e2e_workspace_root_path).resolve())
 
+    before_reload = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
+    stale_apply_ref = next(
+        str(item["ref"])
+        for item in before_reload["refs"]
+        if item.get("text") == "Apply"
+    )
     reloaded = _json_tool_result(
         await navigate_page.ainvoke({"pageId": page_id, "type": "reload"})
     )
     assert reloaded["browser_id"] == page_id
+    stale_started_at = time.monotonic()
+    with pytest.raises(RuntimeError) as stale_error:
+        await click_element.ainvoke({"pageId": page_id, "ref": stale_apply_ref})
+    assert time.monotonic() - stale_started_at < 1
+    assert "请重新调用 readPage" in str(stale_error.value)
 
     bare_local_url = f"127.0.0.1:{frontend_port}/health"
     bare_navigation = _json_tool_result(
@@ -407,6 +477,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     skill_path = Path(e2e_workspace_root_path) / ".boxteam" / "skills" / "browser-control" / "SKILL.md"
     skill_text = skill_path.read_text(encoding="utf-8")
     for tool_name in [
+        "listBrowserPage",
         "openBrowserPage",
         "readPage",
         "clickElement",
@@ -438,10 +509,85 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
 
 
 @pytest.mark.asyncio
+async def test_agent_lists_current_browser_website_through_documented_tool(
+    browser_manager_processes: tuple[int, int],
+    client: httpx.AsyncClient,
+):
+    create_session_response = await client.post(
+        "/api/v1/sessions",
+        json={"title": "Browser Website Discovery E2E"},
+    )
+    assert create_session_response.status_code == 200
+    session_id = create_session_response.json()["data"]["session_id"]
+    context = _tool_context(session_id)
+    open_page = create_open_browser_page_tool(context)
+    opened = _json_tool_result(
+        await open_page.ainvoke(
+            {
+                "url": (
+                    "data:text/html;charset=utf-8,"
+                    "%3Ctitle%3EBOXTEAM_BROWSER_DISCOVERY_E2E%3C/title%3E"
+                    "%3Cmain%3Ehttps%3A%2F%2Fbrowser-discovery.example%2F%3C/main%3E"
+                ),
+                "forceNew": True,
+            }
+        )
+    )
+    page_id = str(opened["pageId"])
+
+    message_response = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "message": {
+                "content": "你看看当前后台连接的浏览器网站是什么。"
+            },
+            "run": {"mode": "single_agent", "agent_id": "default"},
+        },
+    )
+    assert message_response.status_code == 200, message_response.text
+    job_id = message_response.json()["data"]["job_id"]
+    job_data = await wait_for_job_done(client, job_id, max_attempts=120)
+    assert job_data["status"] in {"completed", "succeeded"}
+
+    traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
+    assert traces_response.status_code == 200
+    traces = traces_response.json()["data"]["items"]
+    tool_starts = [
+        trace
+        for trace in traces
+        if trace.get("type") == "tool_call_start"
+    ]
+    tool_names = [get_trace_payload(trace).get("tool_name") for trace in tool_starts]
+    assert "listBrowserPage" in tool_names
+    assert all(
+        not (
+            get_trace_payload(trace).get("tool_name") in {"grep", "read_file"}
+            and "browser-manager/browsers.json"
+            in json.dumps(get_trace_payload(trace).get("args", {}), ensure_ascii=False)
+        )
+        for trace in tool_starts
+    )
+
+    messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")
+    assert messages_response.status_code == 200
+    answer = last_assistant_message(messages_response.json()["data"]["items"])
+    assert (
+        "BOXTEAM_BROWSER_DISCOVERY_E2E" in answer
+        or "browser-discovery.example" in answer
+    )
+
+    listed = _json_tool_result(
+        await create_list_browser_page_tool(context).ainvoke({})
+    )
+    assert any(page["pageId"] == page_id for page in listed["pages"])
+
+
+@pytest.mark.asyncio
 async def test_browser_open_failure_is_exposed_as_failed_resource(
     browser_manager_processes: tuple[int, int],
     client: httpx.AsyncClient,
 ):
+    browser_backend_port, _browser_frontend_port = browser_manager_processes
     create_session_response = await client.post(
         "/api/v1/sessions",
         json={"title": "Browser Open Failure E2E"},
@@ -455,7 +601,8 @@ async def test_browser_open_failure_is_exposed_as_failed_resource(
             {"url": "http://127.0.0.1:9/boxteam-browser-open-failure"}
         )
 
-    assert "浏览器管理器请求失败" in str(exc_info.value)
+    assert "page.goto" in str(exc_info.value)
+    assert "ERR_UNSAFE_PORT" in str(exc_info.value)
     resources_response = await client.get(f"/api/v1/sessions/{session_id}/resources")
     assert resources_response.status_code == 200
     resources = resources_response.json()["data"]["items"]
@@ -463,6 +610,17 @@ async def test_browser_open_failure_is_exposed_as_failed_resource(
     assert failed_browser["status"] == "failed"
     assert failed_browser["available_actions"] == ["delete"]
     assert "page.goto" in failed_browser["metadata"]["error_message"]
+
+    delete_request = Request(
+        f"http://127.0.0.1:{browser_backend_port}/api/browsers/"
+        f"{failed_browser['resource_id']}",
+        method="DELETE",
+    )
+    with urlopen(delete_request, timeout=5) as response:
+        assert response.status == 200
+        deleted = json.loads(response.read())["data"]
+    assert deleted["deleted"] is True
+    assert deleted["browser"]["status"] == "deleted"
 
 
 @pytest.mark.asyncio

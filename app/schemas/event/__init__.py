@@ -9,6 +9,7 @@
 
 from datetime import datetime
 from typing import Any, Literal, Optional, Self, Union
+
 from pydantic import BaseModel, Field, model_validator
 
 # ============= 1. 基础事件结构（所有事件的公共字段） =============
@@ -56,6 +57,18 @@ class JobCreatedPayload(BaseModel):
     session_id: str
     message: str
     agent_id: str
+    message_id: str | None = None
+    attachments: list[Any] = Field(default_factory=list)
+    message_created_at: datetime | None = None
+    message_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobMergedPayload(BaseModel):
+    """多个排队 steering Job 合并为一次实际执行。"""
+
+    session_id: str
+    merged_job_ids: list[str] = Field(min_length=1)
+    source_message_ids: list[str] = Field(min_length=2)
 
 
 class JobStartedPayload(BaseModel):
@@ -101,8 +114,17 @@ class AgentStepPayload(BaseModel):
     phase: str | None = None
 
 
+class GoalUpdatedPayload(BaseModel):
+    session_id: str
+    goal: dict[str, Any]
+
+
+class GoalClearedPayload(BaseModel):
+    session_id: str
+
+
 class ModelTokenUsagePayload(BaseModel):
-    """一次用户回复内所有模型调用的累计 token 统计。"""
+    """最后一次模型请求的 token 统计。"""
 
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
@@ -184,6 +206,14 @@ class LLMRequestPayload(BaseModel):
     timestamp: int
 
 
+class ModelFailedPayload(BaseModel):
+    """单个候选模型调用失败事件的 payload。"""
+    provider_id: str
+    model: str
+    error_type: str
+    error: str
+
+
 class SessionInterruptedPayload(BaseModel):
     """SESSION_INTERRUPTED 事件的 payload"""
     session_id: str
@@ -223,6 +253,13 @@ class JobCreatedEvent(BaseEvent):
     payload: JobCreatedPayload
 
 
+class JobMergedEvent(BaseEvent):
+    """排队 Job 已合并到 event.job_id 指向的实际执行 Turn。"""
+
+    type: Literal["job_merged"] = "job_merged"
+    payload: JobMergedPayload
+
+
 class JobStartedEvent(BaseEvent):
     """任务已开始事件"""
     type: Literal["job_started"] = "job_started"
@@ -251,6 +288,16 @@ class StatusChangeEvent(BaseEvent):
     """状态变更事件"""
     type: Literal["status_change"] = "status_change"
     payload: StatusChangePayload
+
+
+class GoalUpdatedEvent(BaseEvent):
+    type: Literal["goal_updated"] = "goal_updated"
+    payload: GoalUpdatedPayload
+
+
+class GoalClearedEvent(BaseEvent):
+    type: Literal["goal_cleared"] = "goal_cleared"
+    payload: GoalClearedPayload
 
 
 class AgentStartEvent(BaseEvent):
@@ -295,6 +342,12 @@ class LLMRequestEvent(BaseEvent):
     payload: LLMRequestPayload
 
 
+class ModelFailedEvent(BaseEvent):
+    """单个候选模型调用失败事件。"""
+    type: Literal["model_failed"] = "model_failed"
+    payload: ModelFailedPayload
+
+
 class SessionInterruptedEvent(BaseEvent):
     """session 被用户打断事件"""
     type: Literal["session_interrupted"] = "session_interrupted"
@@ -334,11 +387,14 @@ class TextEndEvent(BaseEvent):
 Event = Union[
     MessageCreatedEvent,
     JobCreatedEvent,
+    JobMergedEvent,
     JobStartedEvent,
     JobCompletedEvent,
     JobCancelledEvent,
     JobFailedEvent,
     StatusChangeEvent,
+    GoalUpdatedEvent,
+    GoalClearedEvent,
     AgentStartEvent,
     AgentStepEvent,
     AgentEndEvent,
@@ -346,6 +402,7 @@ Event = Union[
     ToolCallEndEvent,
     ErrorEvent,
     LLMRequestEvent,
+    ModelFailedEvent,
     SessionInterruptedEvent,
     TextStartEvent,
     TextDeltaEvent,

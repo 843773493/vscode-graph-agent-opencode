@@ -162,7 +162,7 @@ class SessionChangesStore:
         target.write_text(changeset.model_dump_json(indent=2), encoding="utf-8")
 
     def _session_changes_dir(self, session_id: str) -> Path:
-        return self._path_resolver.resolve_session_dir(session_id) / "changes"
+        return self._path_resolver.resolve_session_node(session_id) / "changes"
 
     def _ensure_changes_dir(self, session_id: str) -> Path:
         changes_dir = self._session_changes_dir(session_id)

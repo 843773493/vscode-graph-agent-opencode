@@ -1,4 +1,4 @@
 interface:
   display_name: "真实用户体验审查者"
   short_description: "从真实用户视角审查应用交互体验"
-  default_prompt: "Use $real-user-ux-auditor to audit this app from a real user's perspective."
+  default_prompt: "Use $real-user-ux-auditor to audit this app from its user-visible entry. Create required objects through the UI, observe immediate/loading/final states, verify the first real action and one recovery path, then report coverage and omissions without modifying code."

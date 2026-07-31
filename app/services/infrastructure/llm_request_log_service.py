@@ -20,7 +20,7 @@ class LLMRequestLogService:
         self._path_resolver = path_resolver or SessionPathResolver(sessions_dir)
 
     def list_session_logs(self, session_id: str) -> list[LLMRequestLogRecordDTO]:
-        session_dir = self._path_resolver.resolve_session_dir(session_id) / "logs" / "llm_requests"
+        session_dir = self._path_resolver.resolve_session_node(session_id) / "logs" / "llm_requests"
         if not session_dir.exists():
             return []
         if not session_dir.is_dir():

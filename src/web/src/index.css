@@ -617,6 +617,7 @@ body > #root {
   justify-content: space-between;
   gap: 10px;
 }
+
 .composer-copy {
   flex: 1 1 auto;
   width: 100%;
@@ -649,6 +650,31 @@ body > #root {
   flex-wrap: wrap;
   gap: 8px;
   padding: 6px 4px 0;
+}
+.composer-browser-elements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 4px 0;
+}
+.composer-browser-element {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(360px, 100%);
+  min-height: 32px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--vscode-input-background), var(--vscode-focusBorder) 9%);
+  color: var(--vscode-input-foreground);
+}
+.composer-browser-element-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
 }
 .composer-attachment {
   display: flex;

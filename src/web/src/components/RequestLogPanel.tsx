@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { formatDateTime } from "../utils/format";
 import { prettyJson } from "../utils/jsonDisplay";
 import {
@@ -15,6 +15,13 @@ import {
   type UpstreamAttemptDisplay,
 } from "../state/requestLogDisplay";
 import type { LLMRequestLogRecord } from "../types/backend";
+
+export const INITIAL_VISIBLE_REQUEST_LOG_COUNT = 10;
+export const OLDER_REQUEST_LOG_BATCH_SIZE = 10;
+const LOAD_OLDER_SCROLL_THRESHOLD = 32;
+const useClientLayoutEffect = typeof window === "undefined"
+  ? React.useEffect
+  : React.useLayoutEffect;
 
 function RequestLogKeyFlowSummary({
   readSkills,
@@ -415,23 +422,84 @@ export default function RequestLogPanel({
   error,
   loadedAt,
   sessionId,
+  active,
 }: {
   logs: LLMRequestLogRecord[];
   loading: boolean;
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
+  active: boolean;
 }) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
+  const shouldScrollToLatestRef = useRef(true);
+  const stickToLatestRef = useRef(true);
+  const [visibleCount, setVisibleCount] = useState(
+    INITIAL_VISIBLE_REQUEST_LOG_COUNT,
+  );
   const displayLogs = [...logs].sort(
     (left, right) =>
-      new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime(),
+      new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
   );
-  const chronologicalIndexes = new Map(
-    [...logs]
-      .sort((left, right) => left.timestamp - right.timestamp)
-      .map((log, index) => [log, index]),
-  );
+  const firstVisibleIndex = Math.max(displayLogs.length - visibleCount, 0);
+  const renderedLogs = displayLogs.slice(firstVisibleIndex);
+  const hasOlderLogs = firstVisibleIndex > 0;
   const keyFlow = buildRequestLogKeyFlow(logs);
+
+  useClientLayoutEffect(() => {
+    if (!active) {
+      return;
+    }
+    setVisibleCount(INITIAL_VISIBLE_REQUEST_LOG_COUNT);
+    shouldScrollToLatestRef.current = true;
+    stickToLatestRef.current = true;
+  }, [active, sessionId]);
+
+  useClientLayoutEffect(() => {
+    if (!active) {
+      return;
+    }
+    const list = listRef.current;
+    if (!list) {
+      return;
+    }
+    const restore = restoreScrollRef.current;
+    if (restore) {
+      list.scrollTop = list.scrollHeight - restore.height + restore.top;
+      restoreScrollRef.current = null;
+      return;
+    }
+    if (shouldScrollToLatestRef.current || stickToLatestRef.current) {
+      list.scrollTop = list.scrollHeight;
+      shouldScrollToLatestRef.current = false;
+    }
+  }, [active, displayLogs.length, sessionId, visibleCount]);
+
+  const handleListScroll = useCallback(() => {
+    const list = listRef.current;
+    if (!list) {
+      return;
+    }
+    stickToLatestRef.current =
+      list.scrollHeight - list.scrollTop - list.clientHeight <= LOAD_OLDER_SCROLL_THRESHOLD;
+    if (list.scrollTop > LOAD_OLDER_SCROLL_THRESHOLD) {
+      return;
+    }
+    setVisibleCount((current) => {
+      if (current >= displayLogs.length) {
+        return current;
+      }
+      restoreScrollRef.current = {
+        height: list.scrollHeight,
+        top: list.scrollTop,
+      };
+      return Math.min(
+        current + OLDER_REQUEST_LOG_BATCH_SIZE,
+        displayLogs.length,
+      );
+    });
+  }, [displayLogs.length]);
 
   // 请求视图是逐次审计模型输入、输出和请求组成来源的入口。
   // 大体积 Prompt、工具 schema 与 JSON 必须按层级懒展开；不要恢复成默认渲染全部内容，
@@ -442,7 +510,8 @@ export default function RequestLogPanel({
         <div className="panel-title">请求视图</div>
         <div className="panel-header-meta">
           <span>{logs.length} 条请求响应日志</span>
-          <span>最新优先，编号按真实请求顺序</span>
+          <span>已显示 {renderedLogs.length}</span>
+          <span>早期在上，最新在下</span>
           <span>{sessionId || "无会话"}</span>
           {loadedAt ? <span>读取于 {formatDateTime(loadedAt)}</span> : null}
         </div>
@@ -452,13 +521,22 @@ export default function RequestLogPanel({
       {error ? <div className="empty-state">LLM 请求响应日志加载失败：{error}</div> : null}
 
       {!error && displayLogs.length > 0 ? (
-        <div className="panel-list">
+        <div
+          className="panel-list"
+          ref={listRef}
+          onScroll={handleListScroll}
+        >
+          {hasOlderLogs ? (
+            <div className="request-log-load-older" role="status">
+              向上滚动加载更早请求
+            </div>
+          ) : null}
           <RequestLogKeyFlowSummary {...keyFlow} />
-          {displayLogs.map((log, index) => (
+          {renderedLogs.map((log, index) => (
             <RequestLogCard
               key={`${log.file_path}-${log.timestamp}-${index}`}
               log={log}
-              chronologicalIndex={chronologicalIndexes.get(log) ?? index}
+              chronologicalIndex={firstVisibleIndex + index}
             />
           ))}
         </div>

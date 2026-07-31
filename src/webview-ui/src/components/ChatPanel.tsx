@@ -403,6 +403,12 @@ function TimelineCard({ item, index }: { item: TimelineItem; index: number }): R
 
   if (item.kind === 'message') {
     const isUser = item.role === 'user';
+    const internalDisplayKind = item.metadata.internal_display_kind;
+    const internalTitle = internalDisplayKind === 'delegated_task'
+      ? '委派任务'
+      : internalDisplayKind === 'generated_session_result'
+        ? '会话生成'
+        : null;
     const assistantParsed = item.role === 'assistant' ? normalizeAssistantPayload(item.content) : null;
     const thought = assistantParsed?.thought?.trim() || '';
     const response = assistantParsed?.response?.trim() || item.content.trim() || '';
@@ -410,7 +416,7 @@ function TimelineCard({ item, index }: { item: TimelineItem; index: number }): R
 
     return (
       <EventCard
-        title={isUser ? '用户消息' : 'Assistant 消息'}
+        title={internalTitle ?? (isUser ? '用户消息' : 'Assistant 消息')}
         kind={isUser ? 'system' : 'response'}
         tone={isUser ? 'running' : 'done'}
         time={displayTime(item.createdAt)}
@@ -445,7 +451,9 @@ interface ChatPanelProps {
   expandDetails: boolean;
 }
 
-function normalizeTraceEventKind(eventType: string): TimelineItem['kind'] {
+function normalizeTraceEventKind(
+  eventType: string,
+): ReturnType<typeof normalizeTraceData>['kind'] {
   const type = String(eventType ?? '').toLowerCase();
   if (type === 'error') {
     return 'error';

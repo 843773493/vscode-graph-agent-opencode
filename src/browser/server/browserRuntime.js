@@ -14,6 +14,9 @@ export function browserLaunchOptions() {
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
   return {
     headless: true,
+    handleSIGINT: false,
+    handleSIGTERM: false,
+    handleSIGHUP: false,
     args: browserLaunchArgs(),
     ...(executablePath ? { executablePath } : {}),
   };

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Dispatch, SetStateAction } from "react";
+import { getSessionTurnDetails } from "../api/sessionTurnHistory";
 
 import type {
   AppState,
@@ -11,8 +12,16 @@ import type {
   PendingRequestList,
   Session,
   TraceEvent,
+  TurnDetailBatchRequest,
 } from "../types/backend";
 import { reconcileActiveJob } from "./sessionJobReconciliation";
+import {
+  applyTurnDetails,
+  createSessionTurnTimeline,
+  decideTurnProjectionEpoch,
+  upsertTurn,
+  writeTurnTimelineCache,
+} from "../state/session/turnTimeline";
 
 const originalFetch = globalThis.fetch;
 const SESSION_ID = "ses_reconciliation";
@@ -74,8 +83,45 @@ function completedTrace(): TraceEvent {
   };
 }
 
+function textDeltaTrace(): TraceEvent {
+  return {
+    event_id: "evt_text_delta_recovered",
+    part_id: "part_recovered",
+    session_id: SESSION_ID,
+    job_id: ACTIVE_JOB_ID,
+    type: "text_delta",
+    phase: "text",
+    title: "文本流",
+    content: "增量回复",
+    timestamp: "2026-07-24T00:00:30Z",
+    raw: {
+      payload: { kind: "markdown", text: "增量回复" },
+    },
+  };
+}
+
 function appState(): AppState {
   const currentSession = session();
+  const turnTimeline = upsertTurn(
+    {
+      ...createSessionTurnTimeline(SESSION_CACHE_KEY, 1),
+      phase: "ready",
+      projectionEpoch: 1,
+    },
+    {
+      turn_id: ACTIVE_JOB_ID,
+      job_id: ACTIVE_JOB_ID,
+      session_id: SESSION_ID,
+      ordinal: 1,
+      revision: 1,
+      status: "running",
+      created_at: "2026-07-24T00:00:00Z",
+      updated_at: "2026-07-24T00:00:30Z",
+      items_view: "summary",
+      user_messages: [],
+      response_preview: "",
+    },
+  );
   return {
     apiPort: 49_100,
     gatewayWorkspaces: [],
@@ -112,11 +158,7 @@ function appState(): AppState {
     sessionAttachmentSummaries: new Map(),
     currentSession,
     currentSessionWorkspaceId: WORKSPACE_ID,
-    messages: [],
-    messageHistoryNextCursor: null,
-    messageHistoryHasMore: false,
-    messageHistoryLoadingOlder: false,
-    messageHistoryError: null,
+    turnTimelinesBySession: new Map([[SESSION_CACHE_KEY, turnTimeline]]),
     traceEvents: [],
     llmRequestLogs: [],
     llmRequestLogsLoadedAt: null,
@@ -133,12 +175,14 @@ function appState(): AppState {
     sessionResourcesLoading: false,
     sessionResourcesError: null,
     eventQueuesBySession: new Map(),
+    sessionTraceHistoryBySession: new Map(),
     pendingConversations: new Map([
       [SESSION_CACHE_KEY, [pendingConversation()]],
     ]),
     activeJobIdsBySession: new Map([
       [SESSION_CACHE_KEY, ACTIVE_JOB_ID],
     ]),
+    unreadSessionKeys: new Set(),
     status: "正在处理",
     error: null,
     isBootstrapping: false,
@@ -152,6 +196,10 @@ function appState(): AppState {
     agentStateError: null,
     compactLoading: false,
     lastCompactResult: null,
+    currentGoal: null,
+    currentGoalSessionId: null,
+    goalLoading: false,
+    goalError: null,
   };
 }
 
@@ -191,12 +239,14 @@ function installMockBackend({
   },
   traces = [],
   messages = [assistantMessage()],
+  turnProjectionEpoch = 1,
 }: {
   port: number;
   activeJob: Job;
   pendingSnapshot?: PendingRequestList;
   traces?: TraceEvent[];
   messages?: Message[];
+  turnProjectionEpoch?: number;
 }): string[] {
   const businessRequests: string[] = [];
   globalThis.fetch = Object.assign(
@@ -226,6 +276,27 @@ function installMockBackend({
           has_more: false,
         });
       }
+      if (url.pathname === `/api/v1/sessions/${SESSION_ID}/turns/details`) {
+        return apiResponse({
+          projection_epoch: turnProjectionEpoch,
+          items: [{
+            turn_id: ACTIVE_JOB_ID,
+            job_id: ACTIVE_JOB_ID,
+            session_id: SESSION_ID,
+            ordinal: 1,
+            revision: 2,
+            status: activeJob.status,
+            created_at: "2026-07-24T00:00:00Z",
+            updated_at: "2026-07-24T00:01:00Z",
+            completed_at: "2026-07-24T00:01:00Z",
+            items_view: "full",
+            user_messages: [],
+            response_preview: messages[0]?.content ?? "",
+            final_response: messages[0]?.content ?? "",
+            items: traces,
+          }],
+        });
+      }
       if (url.pathname === `/api/v1/sessions/${SESSION_ID}`) {
         return apiResponse(session());
       }
@@ -250,14 +321,51 @@ function stateHarness(initialState: AppState): {
   };
 }
 
+function turnDetailRefresher(
+  port: number,
+  harness: ReturnType<typeof stateHarness>,
+): (turnIds: string[]) => Promise<void> {
+  return async (turnIds) => {
+    const batch = await getSessionTurnDetails(
+      port,
+      SESSION_ID,
+      turnIds as TurnDetailBatchRequest["turn_ids"],
+      WORKSPACE_ID,
+    );
+    harness.setState((latest) => {
+      const timeline = latest.turnTimelinesBySession.get(SESSION_CACHE_KEY);
+      if (!timeline) return latest;
+      const epochDecision = decideTurnProjectionEpoch(
+        timeline.projectionEpoch,
+        batch.projection_epoch,
+      );
+      if (epochDecision === "discard_older") return latest;
+      if (epochDecision === "refresh_bootstrap") {
+        return {
+          ...latest,
+          sessionHistoryReloadNonce: latest.sessionHistoryReloadNonce + 1,
+        };
+      }
+      return {
+        ...latest,
+        turnTimelinesBySession: writeTurnTimelineCache(
+          latest.turnTimelinesBySession,
+          SESSION_CACHE_KEY,
+          applyTurnDetails(timeline, batch),
+        ),
+      };
+    });
+  };
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
 describe("运行中 Job 对账", () => {
-  test("Job 与终态 Trace 一致时恢复 Trace、消息并清除转圈", async () => {
+  test("Job 终态以 Turn detail 原位更新并清除转圈", async () => {
     const port = 49_100;
-    installMockBackend({
+    const requests = installMockBackend({
       port,
       activeJob: job("completed"),
       traces: [completedTrace()],
@@ -270,20 +378,25 @@ describe("运行中 Job 对账", () => {
       WORKSPACE_ID,
       SESSION_CACHE_KEY,
       ACTIVE_JOB_ID,
+      turnDetailRefresher(port, harness),
       harness.setState,
     );
 
-    expect(harness.current().traceEvents.map((event) => event.event_id)).toEqual(
-      ["evt_job_completed"],
-    );
+    expect(harness.current().traceEvents).toEqual([]);
     expect(harness.current().activeJobIdsBySession.has(SESSION_CACHE_KEY)).toBe(
       false,
     );
-    expect(harness.current().messages).toHaveLength(1);
-    expect(harness.current().status).toBe("回复已完成");
+    const turn = harness.current().turnTimelinesBySession
+      .get(SESSION_CACHE_KEY)?.turnsById[ACTIVE_JOB_ID];
+    expect(turn?.revision).toBe(2);
+    expect(turn && "final_response" in turn ? turn.final_response : null).toBe(
+      "恢复后的回复",
+    );
+    expect(harness.current().status).toBe("任务已完成");
+    expect(requests.filter((path) => path.endsWith("/turns/details"))).toHaveLength(1);
   });
 
-  test("终态 Trace 丢失时仍以 completed Job 刷新消息并清除转圈", async () => {
+  test("终态 Trace 丢失时仍以 completed Job 刷新 Turn 并清除转圈", async () => {
     const port = 49_101;
     const requests = installMockBackend({
       port,
@@ -298,6 +411,7 @@ describe("运行中 Job 对账", () => {
       WORKSPACE_ID,
       SESSION_CACHE_KEY,
       ACTIVE_JOB_ID,
+      turnDetailRefresher(port, harness),
       harness.setState,
     );
 
@@ -307,17 +421,72 @@ describe("运行中 Job 对账", () => {
     expect(harness.current().pendingConversations.has(SESSION_CACHE_KEY)).toBe(
       false,
     );
-    expect(harness.current().messages.map((item) => item.content)).toEqual([
+    const turn = harness.current().turnTimelinesBySession
+      .get(SESSION_CACHE_KEY)?.turnsById[ACTIVE_JOB_ID];
+    expect(turn && "final_response" in turn ? turn.final_response : null).toBe(
       "恢复后的回复",
-    ]);
+    );
     expect(harness.current().status).toBe("任务已完成");
     expect(requests).toEqual([
       `/api/v1/jobs/${ACTIVE_JOB_ID}`,
       `/api/v1/sessions/${SESSION_ID}/pending-requests`,
-      `/api/v1/sessions/${SESSION_ID}/traces?tail_limit=2000`,
-      `/api/v1/sessions/${SESSION_ID}/messages?limit=40`,
       `/api/v1/sessions/${SESSION_ID}`,
+      `/api/v1/sessions/${SESSION_ID}/turns/details`,
     ]);
+  });
+
+  test("终态 detail 来自未来 epoch 时不合并并通过 reloadNonce 请求 bootstrap", async () => {
+    const port = 49_106;
+    installMockBackend({
+      port,
+      activeJob: job("completed"),
+      turnProjectionEpoch: 2,
+    });
+    const harness = stateHarness(appState());
+
+    await reconcileActiveJob(
+      port,
+      SESSION_ID,
+      WORKSPACE_ID,
+      SESSION_CACHE_KEY,
+      ACTIVE_JOB_ID,
+      turnDetailRefresher(port, harness),
+      harness.setState,
+    );
+
+    const turn = harness.current().turnTimelinesBySession
+      .get(SESSION_CACHE_KEY)?.turnsById[ACTIVE_JOB_ID];
+    expect(turn?.revision).toBe(1);
+    expect(turn && "final_response" in turn).toBe(false);
+    expect(harness.current().sessionHistoryReloadNonce).toBe(1);
+    expect(harness.current().status).toBe("任务已完成");
+  });
+
+  test("后台会话任务完整结束后标记为未读", async () => {
+    const port = 49_105;
+    installMockBackend({
+      port,
+      activeJob: job("completed"),
+      traces: [completedTrace()],
+    });
+    const initialState = appState();
+    initialState.currentSession = null;
+    const harness = stateHarness(initialState);
+
+    await reconcileActiveJob(
+      port,
+      SESSION_ID,
+      WORKSPACE_ID,
+      SESSION_CACHE_KEY,
+      ACTIVE_JOB_ID,
+      turnDetailRefresher(port, harness),
+      harness.setState,
+    );
+
+    expect(harness.current().activeJobIdsBySession.has(SESSION_CACHE_KEY)).toBe(
+      false,
+    );
+    expect(harness.current().unreadSessionKeys.has(SESSION_CACHE_KEY)).toBe(true);
   });
 
   test("失败 Job 在缺少终态 Trace 时显示后端错误并清除转圈", async () => {
@@ -336,6 +505,7 @@ describe("运行中 Job 对账", () => {
       WORKSPACE_ID,
       SESSION_CACHE_KEY,
       ACTIVE_JOB_ID,
+      turnDetailRefresher(port, harness),
       harness.setState,
     );
 
@@ -360,11 +530,46 @@ describe("运行中 Job 对账", () => {
       WORKSPACE_ID,
       SESSION_CACHE_KEY,
       ACTIVE_JOB_ID,
+      turnDetailRefresher(port, harness),
       harness.setState,
     );
 
     expect(requests).toEqual([`/api/v1/jobs/${ACTIVE_JOB_ID}`]);
     expect(harness.current()).toBe(initialState);
+  });
+
+  test("SSE 业务事件停滞时不回读完整或增量 Trace", async () => {
+    const port = 49_106;
+    const requests = installMockBackend({
+      port,
+      activeJob: job("running"),
+      traces: [textDeltaTrace()],
+    });
+    const harness = stateHarness(appState());
+
+    const result = await reconcileActiveJob(
+      port,
+      SESSION_ID,
+      WORKSPACE_ID,
+      SESSION_CACHE_KEY,
+      ACTIVE_JOB_ID,
+      turnDetailRefresher(port, harness),
+      harness.setState,
+      {
+        afterCursor: "evt_previous",
+      },
+    );
+
+    expect(requests).toEqual([
+      `/api/v1/jobs/${ACTIVE_JOB_ID}`,
+    ]);
+    expect(result).toEqual({
+      jobStatus: "running",
+      lastEventCursor: "evt_previous",
+      recoveredEventCount: 0,
+    });
+    expect(harness.current().traceEvents).toEqual([]);
+    expect(harness.current().status).toBe("正在处理");
   });
 
   test("Job 已终止但 pending 仍标记运行中时透明报错", async () => {
@@ -387,6 +592,7 @@ describe("运行中 Job 对账", () => {
         WORKSPACE_ID,
         SESSION_CACHE_KEY,
         ACTIVE_JOB_ID,
+        turnDetailRefresher(port, harness),
         harness.setState,
       ),
     ).rejects.toThrow("Job 已终止但会话仍标记为运行中");

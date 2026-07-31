@@ -14,11 +14,13 @@ class TraceEventDTO(BaseModel):
     type: Literal[
         "agent_start",
         "llm_request",
+        "model_failed",
         "tool_call_start",
         "tool_call_end",
         "agent_end",
         "error",
         "job_created",
+        "job_merged",
         "job_started",
         "job_completed",
         "job_cancelled",
@@ -30,8 +32,10 @@ class TraceEventDTO(BaseModel):
         "text_end",
         "message_created",
         "session_interrupted",
+        "goal_updated",
+        "goal_cleared",
     ]
-    phase: Literal["agent", "llm", "tool", "error", "job", "text", "system", "status", "message", "session"]
+    phase: Literal["agent", "llm", "tool", "error", "job", "text", "system", "status", "message", "session", "goal"]
     title: str
     content: str
     status: Optional[str] = None

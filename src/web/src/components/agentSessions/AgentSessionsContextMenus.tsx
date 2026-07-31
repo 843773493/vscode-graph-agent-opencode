@@ -19,6 +19,9 @@ export interface WorkspaceContextMenu {
   name: string;
   parentWorkspaceId: string | null;
   removable: boolean;
+  managed: boolean;
+  systemDefault: boolean;
+  status: "ready" | "offline";
   x: number;
   y: number;
 }
@@ -53,6 +56,8 @@ interface AgentSessionsContextMenusProps {
   onRenameWorkspace: (workspaceId: string) => void;
   onCopyWorkspaceInformation: (workspaceId: string) => Promise<void>;
   onRemoveWorkspace: (workspaceId: string, name: string) => void;
+  onStartWorkspace: (workspaceId: string) => Promise<void>;
+  onStopWorkspace: (workspaceId: string) => Promise<void>;
   onStatusChange: (message: string) => void;
 }
 
@@ -72,6 +77,8 @@ export default function AgentSessionsContextMenus({
   onRenameWorkspace,
   onCopyWorkspaceInformation,
   onRemoveWorkspace,
+  onStartWorkspace,
+  onStopWorkspace,
   onStatusChange,
 }: AgentSessionsContextMenusProps) {
   const handleCopySessionId = () => {
@@ -274,9 +281,31 @@ export default function AgentSessionsContextMenus({
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
+          {workspaceMenu.managed && !workspaceMenu.systemDefault ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const target = workspaceMenu;
+                onCloseWorkspaceMenu();
+                const action = target.status === "offline" ? onStartWorkspace : onStopWorkspace;
+                void action(target.workspaceId).catch((error: unknown) => {
+                  onStatusChange(
+                    `${target.status === "offline" ? "启动" : "关闭"}工作区失败: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                });
+              }}
+            >
+              <span className={`codicon ${workspaceMenu.status === "offline" ? "codicon-play" : "codicon-debug-stop"} agent-sessions-menu-item-icon`} aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">
+                {workspaceMenu.status === "offline" ? "启动工作区" : "关闭工作区"}
+              </span>
+            </button>
+          ) : null}
           <button
             type="button"
             role="menuitem"
+            disabled={workspaceMenu.status === "offline"}
             onClick={() => {
               const target = workspaceMenu;
               onCloseWorkspaceMenu();
@@ -295,6 +324,7 @@ export default function AgentSessionsContextMenus({
           <button
             type="button"
             role="menuitem"
+            disabled={workspaceMenu.status === "offline"}
             onClick={() => {
               const target = workspaceMenu;
               onCloseWorkspaceMenu();

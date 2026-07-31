@@ -42,11 +42,12 @@ class SessionCreateRequest(BaseModel):
 
 
 class SessionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: Optional[str] = None
     agent_id: Optional[str] = None
     provider_id: Optional[str] = None
     title_source: Optional[TitleSource] = None
-    parent_session_id: Optional[str] = None
 
 
 class SessionDTO(TimestampedDTO):
@@ -127,24 +128,6 @@ class SessionInformationSnapshotDTO(BaseModel):
     trace: SessionInformationTraceDTO
     resources: list[SessionInformationResourceDTO] = Field(default_factory=list)
     recent_errors: list[SessionInformationErrorDTO] = Field(default_factory=list)
-
-
-class SessionAutoContinueStartRequest(BaseModel):
-    poll_interval_seconds: float = 1.0
-
-
-class SessionAutoContinueStatusDTO(BaseModel):
-    session_id: str
-    enabled: bool
-    task_id: Optional[str]
-    task_status: str
-    poll_interval_seconds: Optional[float]
-    started_at: Optional[datetime]
-    forwarded_count: int
-    last_forwarded_at: Optional[datetime]
-    last_trigger_event_id: Optional[str]
-    last_trigger_job_id: Optional[str]
-    last_enqueued_job_id: Optional[str]
 
 
 class DeleteSessionResultDTO(BaseModel):

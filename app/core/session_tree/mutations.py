@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from app.core.session_tree.support import (
     _atomic_write_bytes,
     _atomic_write_json,
     _process_identity,
+    _parse_datetime,
     _read_json_object,
     physical_segment,
 )
@@ -55,6 +57,8 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                     temporary / SESSION_ALLOCATION_MARKER_NAME,
                     {
                         "session_id": session_id,
+                        "parent_node_id": parent_node_id,
+                        "title": title,
                         "created_at": datetime.now(UTC).isoformat(),
                         "pid": os.getpid(),
                         "process_identity": _process_identity(os.getpid()),
@@ -94,7 +98,21 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                     "注册会话时 manifest ID 不匹配: "
                     f"expected={session_id}, actual={manifest.get('session_id')}"
                 )
+            parent_node_id = marker.get("parent_node_id")
+            if parent_node_id is not None and not isinstance(parent_node_id, str):
+                raise RuntimeError(f"注册会话时分配标记父节点非法: {marker_path}")
+            node = SessionPhysicalNode(
+                node_id=session_id,
+                kind="session",
+                path=resolved_session_dir,
+                parent_node_id=parent_node_id,
+                name=str(manifest.get("title") or marker.get("title") or "未命名"),
+                created_at=_parse_datetime(manifest.get("created_at"), manifest_path),
+                updated_at=_parse_datetime(manifest.get("updated_at"), manifest_path),
+            )
             marker_path.unlink()
+            self._nodes[session_id] = node
+            self._write_index_locked()
             self._refresh_locked()
             return self.get_node(session_id)
 
@@ -115,6 +133,8 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
         created_at: datetime | None = None,
     ) -> SessionPhysicalNode:
         with self._lock:
+            if not name:
+                raise ValueError("会话文件夹显示名不能为空")
             self._ensure_loaded()
             self._refresh_if_navigation_changed_locked()
             resolved_folder_id = folder_id or create_prefixed_id("fld")
@@ -130,6 +150,16 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                 folder_id=resolved_folder_id,
                 created_at=timestamp,
             )
+            self._nodes[resolved_folder_id] = SessionPhysicalNode(
+                node_id=resolved_folder_id,
+                kind="folder",
+                path=target,
+                parent_node_id=parent_node_id,
+                name=name,
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+            self._write_index_locked()
             self._refresh_locked()
             return self.get_node(resolved_folder_id)
 
@@ -143,33 +173,38 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
         with self._lock:
             self._ensure_loaded()
             node = self.get_node(node_id)
+            if node.kind != "folder":
+                raise ValueError(
+                    f"move_node 只允许移动会话文件夹，会话必须走 relocate_session: {node_id}"
+                )
             self._assert_node_mutable(node_id)
             self._assert_parent_mutable(parent_node_id)
             if parent_node_id == node_id:
                 raise ValueError(f"节点不能移动到自身下: {node_id}")
             if parent_node_id is not None:
                 self._assert_not_descendant(node_id, parent_node_id)
-            if node.kind == "session":
-                declared_parent_session_id = _read_json_object(
-                    node.path / SESSION_MANIFEST_NAME
-                ).get("parent_session_id")
-                target_parent_session_id = self.nearest_session_ancestor(
-                    parent_node_id
-                )
-                if declared_parent_session_id != target_parent_session_id:
-                    raise ValueError(
-                        "会话跨父会话移动必须同时更新 parent_session_id: "
-                        f"session_id={node_id}, declared={declared_parent_session_id}, "
-                        f"target={target_parent_session_id}"
-                    )
             parent_path = self._parent_path(parent_node_id)
             target_name = physical_segment(name or node.name, node.node_id)
             target = parent_path / target_name
-            if target == node.path:
+            target_display_name = name or node.name
+            if not target_display_name:
+                raise ValueError("会话文件夹显示名不能为空")
+            if target == node.path and target_display_name == node.name:
                 return node
             if target.exists():
-                raise FileExistsError(f"会话物理节点目标已存在: {target}")
-            os.replace(node.path, target)
+                if target != node.path:
+                    raise FileExistsError(f"会话物理节点目标已存在: {target}")
+            source = node.path
+            if target != source:
+                os.replace(source, target)
+            self._relocate_index_subtree_locked(
+                node_id=node_id,
+                source=source,
+                target=target,
+                parent_node_id=parent_node_id,
+                name=target_display_name,
+            )
+            self._write_index_locked()
             self._refresh_locked()
             return self.get_node(node_id)
 
@@ -178,10 +213,9 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
         *,
         session_id: str,
         parent_node_id: str | None,
-        name: str,
         manifest: dict[str, object],
     ) -> SessionPhysicalNode:
-        """把会话子树与 manifest 作为一个受锁操作迁移。"""
+        """显式移动会话子树并更新 manifest，不改变物理节点名称。"""
         with self._lock:
             self._ensure_loaded()
             node = self.get_node(session_id)
@@ -207,23 +241,34 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                 )
 
             parent_path = self._parent_path(parent_node_id)
-            target = parent_path / physical_segment(name, session_id)
+            target = parent_path / node.path.name
             if target.exists() and target != node.path:
                 raise FileExistsError(f"会话物理节点目标已存在: {target}")
 
             source = node.path
             original_manifest = (source / SESSION_MANIFEST_NAME).read_bytes()
+            original_nodes = dict(self._nodes)
             moved = target != source
             try:
                 if moved:
                     os.replace(source, target)
                 _atomic_write_json(target / SESSION_MANIFEST_NAME, manifest)
+                self._relocate_index_subtree_locked(
+                    node_id=session_id,
+                    source=source,
+                    target=target,
+                    parent_node_id=parent_node_id,
+                    name=str(manifest.get("title") or node.name),
+                )
+                self._write_index_locked()
                 self._refresh_locked()
                 return self.get_node(session_id)
             except BaseException:
+                self._nodes = original_nodes
                 if moved and target.exists() and not source.exists():
                     os.replace(target, source)
                 _atomic_write_bytes(source / SESSION_MANIFEST_NAME, original_manifest)
+                self._write_index_locked()
                 self._refresh_locked()
                 raise
 
@@ -321,6 +366,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                 ).read_bytes()
                 for session_id in expected_parents
             }
+            original_nodes = dict(self._nodes)
             moved = target != source
             try:
                 if moved:
@@ -330,9 +376,18 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                         target / session_relative_paths[session_id] / SESSION_MANIFEST_NAME,
                         manifest,
                     )
+                self._relocate_index_subtree_locked(
+                    node_id=folder_id,
+                    source=source,
+                    target=target,
+                    parent_node_id=parent_node_id,
+                    name=name,
+                )
+                self._write_index_locked()
                 self._refresh_locked()
                 return self.get_node(folder_id)
             except BaseException:
+                self._nodes = original_nodes
                 if moved and target.exists() and not source.exists():
                     os.replace(target, source)
                 for session_id, content in original_manifests.items():
@@ -340,6 +395,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                         source / session_relative_paths[session_id] / SESSION_MANIFEST_NAME,
                         content,
                     )
+                self._write_index_locked()
                 self._refresh_locked()
                 raise
 
@@ -418,4 +474,26 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                     created_at=node.created_at,
                 )
                 raise
+            self._nodes.pop(folder_id)
+            self._write_index_locked()
             self._refresh_locked()
+
+    def delete_session_subtree(self, session_id: str) -> list[str]:
+        """删除完整会话子树，并在同一 resolver 临界区更新权威索引。"""
+        with self._lock:
+            self._ensure_loaded()
+            node = self.get_node(session_id)
+            if node.kind != "session":
+                raise RuntimeError(f"节点不是会话: {session_id}")
+            subtree_ids = self._subtree_node_ids(session_id)
+            descendant_session_ids = sorted(
+                node_id
+                for node_id in subtree_ids
+                if node_id != session_id and self._nodes[node_id].kind == "session"
+            )
+            shutil.rmtree(node.path)
+            for node_id in subtree_ids:
+                self._nodes.pop(node_id, None)
+            self._write_index_locked()
+            self._refresh_locked()
+            return descendant_session_ids

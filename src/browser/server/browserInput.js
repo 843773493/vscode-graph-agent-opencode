@@ -68,17 +68,113 @@ export async function dispatchPointer(cdpSession, message) {
     type: typeByAction[message.action],
     x: message.x,
     y: message.y,
-    button: message.action === "move" || message.action === "wheel" ? "none" : message.button,
+    button: message.action === "wheel" ? "none" : message.button,
     modifiers: modifierBitmask(message.modifiers),
+    buttons: message.buttons ?? 0,
   };
+  if (message.action !== "wheel" && (message.buttons ?? 0) > 0) {
+    params.force = 0.5;
+  }
   if (message.action === "down" || message.action === "up") {
-    params.clickCount = 1;
+    params.clickCount = message.clickCount ?? 1;
   }
   if (message.action === "wheel") {
     params.deltaX = message.deltaX;
     params.deltaY = message.deltaY;
   }
   await cdpSession.send("Input.dispatchMouseEvent", params);
+}
+
+export class BrowserPointerController {
+  constructor() {
+    this.cdpSession = null;
+    this.pressedButton = "none";
+    this.dragData = null;
+    this.dragEntered = false;
+    this.interceptingDrags = false;
+    this.lastPoint = { x: 0, y: 0 };
+    this.onDragIntercepted = (event) => {
+      this.dragData = event.data;
+    };
+  }
+
+  async dispatch(cdpSession, message) {
+    if (this.cdpSession && this.cdpSession !== cdpSession) {
+      await this.reset();
+    }
+    this.cdpSession = cdpSession;
+    this.lastPoint = { x: message.x, y: message.y };
+
+    if (message.action === "down") {
+      this.pressedButton = message.button;
+      await dispatchPointer(cdpSession, message);
+      return;
+    }
+
+    if (message.action === "move" && this.pressedButton === "left") {
+      await this.ensureDragInterception();
+      if (this.dragData) {
+        await this.dispatchDragMove(message);
+        return;
+      }
+      await dispatchPointer(cdpSession, { ...message, button: "left" });
+      return;
+    }
+
+    if (message.action === "up") {
+      if (this.dragData) {
+        if (!this.dragEntered) {
+          await this.dispatchDragEvent("dragEnter", message);
+        }
+        await this.dispatchDragEvent("drop", message);
+      } else {
+        await dispatchPointer(cdpSession, message);
+      }
+      await this.reset();
+      return;
+    }
+
+    await dispatchPointer(cdpSession, message);
+  }
+
+  async ensureDragInterception() {
+    if (this.interceptingDrags) {
+      return;
+    }
+    this.cdpSession.on("Input.dragIntercepted", this.onDragIntercepted);
+    await this.cdpSession.send("Input.setInterceptDrags", { enabled: true });
+    this.interceptingDrags = true;
+  }
+
+  async dispatchDragMove(message) {
+    if (!this.dragEntered) {
+      await this.dispatchDragEvent("dragEnter", message);
+      this.dragEntered = true;
+    }
+    await this.dispatchDragEvent("dragOver", message);
+  }
+
+  async dispatchDragEvent(type, message) {
+    await this.cdpSession.send("Input.dispatchDragEvent", {
+      type,
+      x: message.x,
+      y: message.y,
+      data: this.dragData,
+      modifiers: modifierBitmask(message.modifiers),
+    });
+  }
+
+  async reset() {
+    if (this.cdpSession && this.interceptingDrags) {
+      this.cdpSession.off("Input.dragIntercepted", this.onDragIntercepted);
+      await this.cdpSession.send("Input.setInterceptDrags", { enabled: false });
+    }
+    this.cdpSession = null;
+    this.pressedButton = "none";
+    this.dragData = null;
+    this.dragEntered = false;
+    this.interceptingDrags = false;
+  }
 }
 
 export async function dispatchKey(cdpSession, message) {

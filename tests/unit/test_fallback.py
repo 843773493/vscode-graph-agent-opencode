@@ -37,6 +37,7 @@ def mock_dependencies():
         "top_p": 1.0,
         "max_output_tokens": 1024,
         "system_prompt": "test",
+        "require_delegated_report": False,
     }
     config_service.get_agent_tool_config.return_value = {"denylist": []}
     config_service.resolve_agent_tool_policy.return_value.enabled_names = frozenset(
@@ -249,9 +250,49 @@ def test_session_question_reply_requires_matching_communication_id():
 
 
 @pytest.mark.asyncio
+async def test_delegated_report_is_not_enforced_by_default(mock_dependencies):
+    service = _make_service(mock_dependencies)
+    stream_result = AgentEventStreamResult(
+        final_text="普通文本结果",
+        final_text_part_id="part_default_optional",
+        latest_model_content_blocks=(),
+        last_tool_result_text="",
+    )
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            new=AsyncMock(return_value=stream_result),
+        ) as process,
+    ):
+        result = await service.run_step(
+            session_id="ses_child",
+            message="委派任务",
+            agent_id="test_agent",
+            job_id="job_child",
+            message_id="msg_child",
+            message_created_at="2026-07-16T00:00:00+00:00",
+            message_metadata={
+                "source": "session_subagent_delegation",
+                "parent_session_id": "ses_parent",
+            },
+        )
+
+    assert result == "普通文本结果"
+    process.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
     mock_dependencies,
 ):
+    mock_dependencies["config_service"].get_agent_runtime_config.return_value[
+        "require_delegated_report"
+    ] = True
     service = _make_service(mock_dependencies)
     stream_results = [
         AgentEventStreamResult(
@@ -298,6 +339,9 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
 async def test_delegated_progress_only_cannot_replace_final_result(
     mock_dependencies,
 ):
+    mock_dependencies["config_service"].get_agent_runtime_config.return_value[
+        "require_delegated_report"
+    ] = True
     service = _make_service(mock_dependencies)
     progress_call = SuccessfulToolCall(
         "send_message_to_session",
@@ -420,6 +464,9 @@ async def test_delegated_child_relays_cross_session_updates_to_its_parent(
     incoming_kind,
 ):
     deps = mock_dependencies
+    deps["config_service"].get_agent_runtime_config.return_value[
+        "require_delegated_report"
+    ] = True
     delegated_session = MagicMock()
     delegated_session.delegation.parent_session_id = "ses_parent"
     session_service = MagicMock()

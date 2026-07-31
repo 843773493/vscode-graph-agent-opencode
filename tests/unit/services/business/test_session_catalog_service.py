@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TypeVar
@@ -47,30 +48,22 @@ async def test_catalog_cache_detects_manual_physical_move(
     source_folder = resolver.create_folder(name="原目录", parent_node_id=None)
     target_folder = resolver.create_folder(name="目标目录", parent_node_id=None)
     session_dir = session_bundle_factory(sessions_root, "ses_manual_catalog")
-    resolver.move_node(
-        node_id="ses_manual_catalog",
+    resolver.relocate_session(
+        session_id="ses_manual_catalog",
         parent_node_id=source_folder.node_id,
+        manifest=json.loads((session_dir / "session.json").read_text(encoding="utf-8")),
     )
-    catalog = SessionCatalogService(
-        session_service=session_service,
-        index_path=tmp_path / "index.json",
-    )
+    catalog = SessionCatalogService(session_service=session_service)
     first = await catalog.export_index()
     first_node = next(
         node for node in first.items if node.node_id == "ses_manual_catalog"
     )
     moved_path = target_folder.path / session_dir.name
-    resolver.resolve_session_dir("ses_manual_catalog").replace(moved_path)
+    resolver.resolve_session_node("ses_manual_catalog").replace(moved_path)
 
-    second = await catalog.export_index()
-    second_node = next(
-        node for node in second.items if node.node_id == "ses_manual_catalog"
-    )
-
-    assert first.revision != second.revision
     assert first_node.parent_node_id == source_folder.node_id
-    assert second_node.parent_node_id == target_folder.node_id
-    assert second_node.storage_relative_path.endswith(session_dir.name)
+    with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
+        await catalog.export_index()
 
 
 @pytest.mark.asyncio
@@ -89,14 +82,17 @@ async def test_moving_folder_uses_idle_guard_for_every_descendant_session(
     session_ids = ["ses_guard_alpha", "ses_guard_beta"]
     for session_id in session_ids:
         session_bundle_factory(sessions_root, session_id)
-        resolver.move_node(
-            node_id=session_id,
+        session_dir = resolver.resolve_session_node(session_id)
+        resolver.relocate_session(
+            session_id=session_id,
             parent_node_id=nested.node_id,
+            manifest=json.loads(
+                (session_dir / "session.json").read_text(encoding="utf-8")
+            ),
         )
     job_service = _JobService()
     catalog = SessionCatalogService(
         session_service=session_service,
-        index_path=tmp_path / "index.json",
         job_service=job_service,
     )
 
@@ -124,10 +120,7 @@ async def test_deep_search_builds_breadcrumbs_only_for_returned_page(
             parent_node_id=parent_id,
         )
         parent_id = folder.node_id
-    catalog = SessionCatalogService(
-        session_service=session_service,
-        index_path=tmp_path / "index.json",
-    )
+    catalog = SessionCatalogService(session_service=session_service)
     breadcrumb_calls = 0
     original = SessionCatalogService._breadcrumb_items
 

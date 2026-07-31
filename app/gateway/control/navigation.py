@@ -10,6 +10,7 @@ from app.gateway.control.schemas import (
     WorkspaceNavigationBreadcrumbDTO,
     WorkspaceNavigationNodeDTO,
     WorkspaceNavigationNodeUpdateRequest,
+    WorkspaceNavigationPlacementRequest,
     WorkspaceNavigationReorderRequest,
     WorkspaceNavigationTreeDTO,
 )
@@ -99,6 +100,51 @@ class WorkspaceNavigationStore:
         }
         for node in siblings:
             node.position = position_by_id[node.node_id]
+        return self._persist(nodes, targets)
+
+    def place(
+        self,
+        payload: WorkspaceNavigationPlacementRequest,
+        targets: tuple[WorkspaceTarget, ...],
+    ) -> WorkspaceNavigationTreeDTO:
+        nodes = self.list_tree(targets).nodes
+        node = self._require_node(nodes, payload.node_id)
+        previous_parent_node_id = node.parent_node_id
+        if payload.parent_node_id is not None:
+            parent = self._require_node(nodes, payload.parent_node_id)
+            if parent.kind != "workspace_folder":
+                raise ValueError("导航节点只能挂在工作区文件夹下")
+
+        node.parent_node_id = payload.parent_node_id
+        self._validate(nodes, {target.workspace_id for target in targets})
+
+        siblings = self._siblings_in_position_order(
+            nodes,
+            payload.parent_node_id,
+            excluding_node_id=node.node_id,
+        )
+        if payload.mode == "last":
+            insertion_index = len(siblings)
+        else:
+            target = self._require_node(nodes, payload.target_node_id or "")
+            if target.parent_node_id != payload.parent_node_id:
+                raise ValueError(
+                    "排序目标不在目标父节点下: "
+                    f"target={target.node_id}, parent={payload.parent_node_id}"
+                )
+            target_index = next(
+                index
+                for index, sibling in enumerate(siblings)
+                if sibling.node_id == target.node_id
+            )
+            insertion_index = target_index + (1 if payload.mode == "after" else 0)
+        siblings.insert(insertion_index, node)
+        self._renumber(siblings)
+
+        if previous_parent_node_id != payload.parent_node_id:
+            self._renumber(
+                self._siblings_in_position_order(nodes, previous_parent_node_id)
+            )
         return self._persist(nodes, targets)
 
     def delete_folder(
@@ -303,6 +349,28 @@ class WorkspaceNavigationStore:
         nodes: list[WorkspaceNavigationNodeDTO],
     ) -> list[WorkspaceNavigationNodeDTO]:
         return sorted(nodes, key=lambda node: (node.parent_node_id or "", node.position, node.node_id))
+
+    @staticmethod
+    def _siblings_in_position_order(
+        nodes: list[WorkspaceNavigationNodeDTO],
+        parent_node_id: str | None,
+        *,
+        excluding_node_id: str | None = None,
+    ) -> list[WorkspaceNavigationNodeDTO]:
+        return sorted(
+            (
+                node
+                for node in nodes
+                if node.parent_node_id == parent_node_id
+                and node.node_id != excluding_node_id
+            ),
+            key=lambda node: (node.position, node.node_id),
+        )
+
+    @staticmethod
+    def _renumber(nodes: list[WorkspaceNavigationNodeDTO]) -> None:
+        for position, node in enumerate(nodes):
+            node.position = position
 
     @staticmethod
     def _revision(nodes: list[WorkspaceNavigationNodeDTO]) -> str:

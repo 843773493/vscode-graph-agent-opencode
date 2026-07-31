@@ -66,7 +66,7 @@ class BackgroundTaskHistoryStore:
         if not session_id or "/" in session_id or "\\" in session_id:
             raise ValueError(f"非法 session_id: {session_id!r}")
         return (
-            self._path_resolver.resolve_session_dir(session_id)
+            self._path_resolver.resolve_session_node(session_id)
             / "resources"
             / "background_tasks.json"
         )

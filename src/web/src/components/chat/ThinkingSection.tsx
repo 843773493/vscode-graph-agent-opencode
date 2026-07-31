@@ -19,7 +19,7 @@ function collapsedPreview(items: WorkItem[]): string {
         ? `${latest.toolName} 执行失败`
         : `已运行 ${latest.toolName}`;
   }
-  const plain = latest.text
+  const plain = latest.text.slice(0, 512)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/[*_`>#-]/g, " ")
     .replace(/\s+/g, " ")
@@ -41,7 +41,7 @@ function compactWorkText(item: Extract<WorkItem, { kind: "aggregated_text" }>): 
     : item.text;
 }
 
-export default function ThinkingSection({
+function ThinkingSection({
   items,
   active,
   showRawDetails,
@@ -100,3 +100,5 @@ export default function ThinkingSection({
     </section>
   );
 }
+
+export default React.memo(ThinkingSection);

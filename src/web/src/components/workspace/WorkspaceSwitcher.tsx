@@ -1,22 +1,12 @@
 import { useMemo, useRef, useState } from "react";
-import type {
-  AddLocalGatewayWorkspaceRequest,
-  AddSshGatewayWorkspaceRequest,
-  GatewayWorkspace,
-} from "../../types/backend";
-import WorkspaceLocalDialog from "./WorkspaceLocalDialog";
-import WorkspaceSshDialog from "./WorkspaceSshDialog";
+import type { GatewayWorkspace } from "../../types/backend";
 import AnchoredOverlay from "../AnchoredOverlay";
 
 interface WorkspaceSwitcherProps {
-  apiPort: number;
   workspaces: GatewayWorkspace[];
   activeWorkspaceId: string | null;
-  recentLocalWorkspacePaths: string[];
   switching: boolean;
   onActivate: (workspaceId: string) => Promise<void>;
-  onAddLocal: (payload: AddLocalGatewayWorkspaceRequest) => Promise<void>;
-  onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
 }
 
 function workspaceLabel(workspace: GatewayWorkspace | undefined): string {
@@ -37,33 +27,17 @@ function workspaceKindLabel(workspace: GatewayWorkspace | undefined): string {
 }
 
 export default function WorkspaceSwitcher({
-  apiPort,
   workspaces,
   activeWorkspaceId,
-  recentLocalWorkspacePaths,
   switching,
   onActivate,
-  onAddLocal,
-  onAddSsh,
 }: WorkspaceSwitcherProps) {
   const [open, setOpen] = useState(false);
-  const [localDialogOpen, setLocalDialogOpen] = useState(false);
-  const [sshDialogOpen, setSshDialogOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.workspace_id === activeWorkspaceId),
     [activeWorkspaceId, workspaces],
   );
-
-  const handleAddLocal = () => {
-    setOpen(false);
-    setLocalDialogOpen(true);
-  };
-
-  const handleAddSsh = () => {
-    setOpen(false);
-    setSshDialogOpen(true);
-  };
 
   return (
     <>
@@ -98,7 +72,8 @@ export default function WorkspaceSwitcher({
                   type="button"
                   className={`workspace-switcher-item${workspace.workspace_id === activeWorkspaceId ? " active" : ""}`}
                   role="menuitem"
-                  title={workspace.connection_error ?? undefined}
+                  title={workspace.status === "offline" ? "请在会话工作台右击工作区并启动" : workspace.connection_error ?? undefined}
+                  disabled={switching || workspace.status === "offline"}
                   onClick={() => {
                     setOpen(false);
                     if (workspace.workspace_id !== activeWorkspaceId) {
@@ -117,28 +92,9 @@ export default function WorkspaceSwitcher({
                 </button>
               ))}
             </div>
-            <div className="workspace-switcher-menu-actions">
-              <button type="button" onClick={handleAddLocal}>添加本机工作区</button>
-              <button type="button" onClick={handleAddSsh}>连接远程 Gateway</button>
-            </div>
           </div>
         </AnchoredOverlay>
       </div>
-      <WorkspaceLocalDialog
-        open={localDialogOpen}
-        apiPort={apiPort}
-        workspaces={workspaces}
-        activeWorkspaceId={activeWorkspaceId}
-        recentLocalWorkspacePaths={recentLocalWorkspacePaths}
-        onClose={() => setLocalDialogOpen(false)}
-        onSubmit={onAddLocal}
-      />
-      <WorkspaceSshDialog
-        open={sshDialogOpen}
-        apiPort={apiPort}
-        onClose={() => setSshDialogOpen(false)}
-        onSubmit={onAddSsh}
-      />
     </>
   );
 }

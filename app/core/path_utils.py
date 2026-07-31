@@ -27,12 +27,34 @@ def get_user_config_root() -> Path:
     return get_boxteam_home() / "config"
 
 
-def get_user_config_path() -> Path:
-    """获取用户级全局配置文件。"""
-    configured_path = os.environ.get("BOXTEAM_USER_CONFIG_PATH")
-    if configured_path:
-        return Path(configured_path).expanduser().resolve()
-    return get_user_config_root() / "boxteam.jsonc"
+def get_user_gateway_config_path() -> Path:
+    """获取 Gateway 用户级控制面配置文件。"""
+    return get_user_config_root() / "gateway.jsonc"
+
+
+def get_user_workspace_config_path() -> Path:
+    """获取 Workspace Backend 用户级业务配置文件。"""
+    return get_user_config_root() / "workspace.jsonc"
+
+
+def get_user_gateway_schema_path() -> Path:
+    """获取安装后的 Gateway 配置 schema。"""
+    return get_user_config_root() / "gateway_config.jsonc"
+
+
+def get_user_workspace_schema_path() -> Path:
+    """获取安装后的 Workspace 配置 schema。"""
+    return get_user_config_root() / "workspace_config.jsonc"
+
+
+def get_workspace_config_path(workspace_root: Path) -> Path:
+    """获取显式工作区的业务配置覆盖文件。"""
+    return workspace_root.expanduser().resolve() / ".boxteam" / "workspace.jsonc"
+
+
+def get_user_env_path() -> Path:
+    """获取用户级统一环境配置文件。"""
+    return get_user_config_root() / ".env"
 
 
 def get_user_workspace_root() -> Path:
@@ -53,7 +75,10 @@ def get_gateway_root() -> Path:
 
 
 def get_workspace_root() -> Path:
-    """获取工作区根目录。优先从 WORKSPACE_ROOT 环境变量读取，未设置时回退到用户级持久工作区根目录。"""
+    """获取工作区根目录。
+
+    优先从 WORKSPACE_ROOT 环境变量读取，未设置时回退到用户级持久工作区根目录。
+    """
     workspace_root = os.environ.get("WORKSPACE_ROOT")
     if not workspace_root:
         return get_user_workspace_root()
@@ -89,14 +114,18 @@ def get_session_path_resolver(
     resolved_root = (sessions_root or get_sessions_dir()).resolve()
     return _cached_session_path_resolver(str(resolved_root))
 
+
 def get_logs_dir() -> Path:
     return get_boxteam_root() / "logs"
+
 
 def get_artifacts_dir() -> Path:
     return get_boxteam_root() / "artifacts"
 
+
 def get_cache_dir() -> Path:
     return get_boxteam_root() / "cache"
+
 
 def get_session_changes_dir(session_id: str) -> Path:
     """获取某个会话的可读文件变更记录目录。"""
@@ -124,31 +153,31 @@ def initialize_directories() -> None:
 def safe_join(base_path: Path, *paths: str) -> Path:
     """
     Safely join paths and prevent directory traversal attacks.
-    
+
     Args:
         base_path: Base directory to restrict access to
         *paths: Path components to join
-        
+
     Returns:
         Resolved absolute path
-        
+
     Raises:
         ForbiddenError: If path traversal is detected
     """
     base = base_path.resolve()
     joined = base.joinpath(*paths).resolve()
-    
+
     # 确保生成的路径仍然在基础目录范围内
     if not str(joined).startswith(str(base) + os.sep) and joined != base:
         raise ForbiddenError("Path traversal detected")
-    
+
     return joined
 
 
 def get_session_path(session_id: str) -> Path:
     """通过稳定 ID 解析会话当前所在的物理目录。"""
     try:
-        return get_session_path_resolver().resolve_session_dir(session_id)
+        return get_session_path_resolver().resolve_session_node(session_id)
     except KeyError as error:
         raise FileNotFoundError(f"会话物理目录不存在: {session_id}") from error
 

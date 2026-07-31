@@ -41,6 +41,14 @@ class _Orchestrator:
         index = len(self.calls)
         return SimpleNamespace(message_id=f"msg_{index}", job_id=f"job_{index}")
 
+    async def create_and_run_internal(self, session_id: str, message, **kwargs):
+        return await self.create_and_run(
+            session_id,
+            message.content,
+            metadata=message.metadata,
+            **kwargs,
+        )
+
 
 class _SubagentService:
     def __init__(self, session_service: _SessionService) -> None:

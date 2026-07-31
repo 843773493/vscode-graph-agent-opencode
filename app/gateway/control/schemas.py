@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
-
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from croniter import croniter
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from croniter import croniter
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 WorkspaceNavigationNodeKind = Literal["workspace_folder", "workspace_ref"]
+WorkspaceNavigationPlacementMode = Literal["before", "after", "last"]
 
 
 class WorkspaceNavigationNodeDTO(BaseModel):
@@ -65,6 +65,25 @@ class WorkspaceNavigationReorderRequest(BaseModel):
 
     parent_node_id: str | None = None
     node_ids: list[str] = Field(min_length=1)
+
+
+class WorkspaceNavigationPlacementRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str = Field(min_length=1)
+    parent_node_id: str | None = None
+    mode: WorkspaceNavigationPlacementMode
+    target_node_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_target(self) -> WorkspaceNavigationPlacementRequest:
+        if self.mode in {"before", "after"} and self.target_node_id is None:
+            raise ValueError(f"{self.mode} placement 缺少 target_node_id")
+        if self.mode == "last" and self.target_node_id is not None:
+            raise ValueError("last placement 不应包含 target_node_id")
+        if self.node_id == self.target_node_id:
+            raise ValueError("导航节点不能相对自身排序")
+        return self
 
 
 class SessionLocatorDTO(BaseModel):

@@ -1,22 +1,27 @@
+import json
 import os
 import tempfile
-import json
 from datetime import UTC, datetime
 from pathlib import Path
+
 import pytest
+
+from app.core.exceptions import ForbiddenError
 from app.core.path_utils import (
     get_boxteam_home,
     get_gateway_root,
     get_session_path,
     get_user_config_root,
+    get_user_gateway_config_path,
+    get_user_gateway_schema_path,
+    get_user_workspace_config_path,
     get_user_workspace_root,
+    get_user_workspace_schema_path,
     initialize_directories,
     safe_join,
-    validate_workspace_path,
 )
-from app.core.exceptions import ForbiddenError
-from app.core.storage_migration import migrate_user_storage_layout
 from app.core.session_paths import SessionPathResolver, physical_segment
+from app.core.storage_migration import migrate_user_storage_layout
 
 
 class TestPathUtils:
@@ -45,7 +50,10 @@ class TestPathUtils:
             with pytest.raises(ForbiddenError, match="Path traversal detected"):
                 safe_join(self.base_path, "..\\windows\\system32")
         else:
-            assert safe_join(self.base_path, "..\\windows\\system32").parent == self.base_path
+            assert (
+                safe_join(self.base_path, "..\\windows\\system32").parent
+                == self.base_path
+            )
 
     def test_safe_join_absolute_path_attack(self):
         """测试绝对路径攻击防护"""
@@ -56,7 +64,10 @@ class TestPathUtils:
             with pytest.raises(ForbiddenError, match="Path traversal detected"):
                 safe_join(self.base_path, "C:\\windows\\system32")
         else:
-            assert safe_join(self.base_path, "C:\\windows\\system32").parent == self.base_path
+            assert (
+                safe_join(self.base_path, "C:\\windows\\system32").parent
+                == self.base_path
+            )
 
     def test_safe_join_symlink_attack(self):
         """测试符号链接攻击防护"""
@@ -88,7 +99,9 @@ class TestPathUtils:
         try:
             # 重新导入以刷新环境变量
             from importlib import reload
+
             import app.core.path_utils
+
             reload(app.core.path_utils)
             from app.core.path_utils import validate_workspace_path
 
@@ -115,11 +128,13 @@ class TestPathUtils:
 
         initialize_directories()
         resolver = get_session_path_resolver()
-        folder = resolver.create_folder(name="项目会话", parent_node_id=None)
+        folder_name = '项目/会话:*?"<>'
+        session_title = '测试/会话:*?"<>'
+        folder = resolver.create_folder(name=folder_name, parent_node_id=None)
         session_id = "ses_test_session_12345678"
         session_dir = resolver.allocate_session_dir(
             session_id=session_id,
-            title="测试会话",
+            title=session_title,
             parent_node_id=folder.node_id,
         )
         now = datetime.now(UTC).isoformat()
@@ -127,7 +142,7 @@ class TestPathUtils:
             json.dumps(
                 {
                     "session_id": session_id,
-                    "title": "测试会话",
+                    "title": session_title,
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -141,8 +156,14 @@ class TestPathUtils:
 
         assert path == session_dir
         assert path.parent == folder.path
-        assert path.name == "测试会话--12345678"
+        assert folder.path.name == folder.node_id
+        assert path.name == session_id
         assert path != workspace_root / ".boxteam" / "sessions" / session_id
+        stored_index = json.loads(resolver.index_path.read_text(encoding="utf-8"))
+        assert stored_index["schema_version"] == 3
+        names_by_id = {node["node_id"]: node["name"] for node in stored_index["nodes"]}
+        assert names_by_id[folder.node_id] == folder_name
+        assert names_by_id[session_id] == session_title
 
     def test_get_session_path_rejects_unknown_session(self, tmp_path, monkeypatch):
         workspace_root = tmp_path / "workspace"
@@ -151,6 +172,17 @@ class TestPathUtils:
 
         with pytest.raises(FileNotFoundError, match="会话物理目录不存在"):
             get_session_path("ses_missing")
+
+    def test_resolver_rejects_rebuilding_deleted_authoritative_index(self, tmp_path):
+        sessions_root = tmp_path / ".boxteam" / "sessions"
+        resolver = SessionPathResolver(sessions_root)
+        resolver.initialize()
+        resolver.create_folder(name="保留目录", parent_node_id=None)
+        assert resolver.authority_marker_path.is_file()
+        resolver.index_path.unlink()
+
+        with pytest.raises(RuntimeError, match="拒绝根据磁盘目录重建"):
+            SessionPathResolver(sessions_root).initialize()
 
     def test_get_session_path_detects_manual_directory_move(
         self,
@@ -188,7 +220,8 @@ class TestPathUtils:
 
         source.replace(target)
 
-        assert get_session_path(session_id) == target
+        with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
+            get_session_path(session_id)
 
     def test_safe_join_case_sensitivity(self):
         """测试大小写敏感路径处理"""
@@ -198,7 +231,7 @@ class TestPathUtils:
 
         result = safe_join(self.base_path, "testdir")
         # 在Windows上不区分大小写，在Linux上区分
-        if os.name == 'nt':
+        if os.name == "nt":
             assert result.resolve() == mixed_dir.resolve()
         else:
             assert result != mixed_dir
@@ -216,14 +249,16 @@ class TestPathUtils:
         assert result.name == special_path
 
     def test_physical_segment_is_windows_safe_and_stable(self):
-        assert physical_segment("CON", "fld_12345678") == "_CON--12345678"
-        assert physical_segment('日报<>:"/\\|?*', "ses_abcdefgh") == (
-            "日报_________--abcdefgh"
-        )
-        assert physical_segment("名称. ", "ses_12345678") == "名称--12345678"
+        assert physical_segment("CON", "fld_12345678") == "fld_12345678"
+        assert physical_segment('日报<>:"/\\|?*', "ses_abcdefgh") == "ses_abcdefgh"
+        assert physical_segment("名称. ", "ses_12345678") == "ses_12345678"
 
-    def test_get_user_workspace_root_uses_hidden_directory_under_home(self):
+    def test_get_user_workspace_root_uses_hidden_directory_under_home(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
         """测试用户级持久工作区根目录命名"""
+        monkeypatch.delenv("BOXTEAM_HOME")
         root = get_user_workspace_root()
         assert root.name == "boxteam_workspace"
         assert root.parent == Path.home().resolve() / ".boxteams"
@@ -236,15 +271,27 @@ class TestPathUtils:
 
         assert get_boxteam_home() == boxteam_home.resolve()
         assert get_user_config_root() == boxteam_home.resolve() / "config"
+        assert get_user_gateway_config_path() == boxteam_home / "config/gateway.jsonc"
+        assert get_user_gateway_schema_path() == (
+            boxteam_home / "config/gateway_config.jsonc"
+        )
+        assert get_user_workspace_config_path() == (
+            boxteam_home / "config/workspace.jsonc"
+        )
+        assert get_user_workspace_schema_path() == (
+            boxteam_home / "config/workspace_config.jsonc"
+        )
         assert get_gateway_root() == boxteam_home.resolve() / "state" / "gateway"
         assert get_user_workspace_root() == boxteam_home.resolve() / "boxteam_workspace"
 
-    def test_initialize_directories_migrates_session_related_files(self, tmp_path, monkeypatch):
+    def test_initialize_directories_migrates_session_related_files(
+        self, tmp_path, monkeypatch
+    ):
         workspace_root = tmp_path / "workspace"
         monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
         session_id = "ses_migrate"
         boxteam_root = workspace_root / ".boxteam"
-        session_root = boxteam_root / "sessions" / session_id
+        session_root = boxteam_root / "sessions" / "迁移会话--migrate"
         session_root.mkdir(parents=True)
         now = datetime.now(UTC).isoformat()
         (session_root / "session.json").write_text(
@@ -277,7 +324,9 @@ class TestPathUtils:
         (legacy_checkpoint / "checkpoints.jsonl").write_text("{}\n", encoding="utf-8")
         legacy_trace = boxteam_root / "logs" / "traces"
         legacy_trace.mkdir(parents=True)
-        (legacy_trace / f"trace_{session_id}.jsonl").write_text("{}\n", encoding="utf-8")
+        (legacy_trace / f"trace_{session_id}.jsonl").write_text(
+            "{}\n", encoding="utf-8"
+        )
         orphaned_checkpoint = boxteam_root / "checkpoints" / "ses_orphaned"
         orphaned_checkpoint.mkdir(parents=True)
         (orphaned_checkpoint / "checkpoints.jsonl").write_text("{}\n", encoding="utf-8")
@@ -294,12 +343,8 @@ class TestPathUtils:
             )
         )
         assert migrated_references == {
-            "file_id": (
-                f"boxteam-session://{session_id}/attachments/legacy.png"
-            ),
-            "read_path": (
-                f"/session-artifacts/{session_id}/tool-results/legacy.txt"
-            ),
+            "file_id": (f"boxteam-session://{session_id}/attachments/legacy.png"),
+            "read_path": (f"/session-artifacts/{session_id}/tool-results/legacy.txt"),
         }
         assert not legacy_checkpoint.exists()
         assert (
@@ -365,8 +410,10 @@ class TestPathUtils:
         resolver = SessionPathResolver(sessions_root)
         resolver.initialize()
 
-        parent_path = resolver.resolve_session_dir(parent_id)
-        child_path = resolver.resolve_session_dir(child_id)
+        parent_path = resolver.resolve_session_node(parent_id)
+        child_path = resolver.resolve_session_node(child_id)
+        assert parent_path.is_absolute()
+        assert child_path.is_absolute()
         assert child_path.parent == parent_path / "children"
         assert resolver.get_node(child_id).parent_node_id == parent_id
         migrated_child_manifest = json.loads(
@@ -375,9 +422,7 @@ class TestPathUtils:
         assert migrated_child_manifest["context_source_session_id"] == parent_id
         migration_record = json.loads(
             (
-                sessions_root.parent
-                / "migrations"
-                / "session-physical-parents-v2.json"
+                sessions_root.parent / "migrations" / "session-physical-parents-v2.json"
             ).read_text(encoding="utf-8")
         )
         assert migration_record["status"] == "completed"
@@ -387,7 +432,7 @@ class TestPathUtils:
             json.dumps(migrated_child_manifest, ensure_ascii=False),
             encoding="utf-8",
         )
-        with pytest.raises(RuntimeError, match="与物理祖先不一致"):
+        with pytest.raises(RuntimeError, match="与权威索引父关系不一致"):
             resolver.refresh()
 
     def test_resolver_detects_manual_session_manifest_update(
@@ -422,7 +467,7 @@ class TestPathUtils:
         manifest["updated_at"] = datetime.now(UTC).isoformat()
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-        assert resolver.get_node(session_id).name == "人工修改后"
+        assert resolver.get_node(session_id).name == "修改前"
         assert resolver.revision > revision_before
 
     def test_resolver_recovers_empty_stale_allocation_directory(self, tmp_path):

@@ -179,6 +179,8 @@ async def create_message_and_run(
 ):
     try:
         result = await session_orchestrator.create_message(session_id, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except JobAdmissionClosedError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return APIResponse(message="ok", data=result, request_id=request_id)

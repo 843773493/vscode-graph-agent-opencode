@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type {
   SessionChangeset,
   SessionChangesetListItem,
@@ -7,7 +8,7 @@ import type {
 import SessionChangesTree from "./SessionChangesTree";
 import WorkspaceFileTree from "./WorkspaceFileTree";
 
-export type WorkspaceAuxiliaryTab = "changes" | "files";
+export type WorkspaceAuxiliaryTab = "changes" | "files" | "resources";
 
 interface WorkspaceAuxiliaryPanelProps {
   visible: boolean;
@@ -17,6 +18,7 @@ interface WorkspaceAuxiliaryPanelProps {
   workspaceId: string | null;
   workspaceName: string;
   workspaceRoot: string;
+  sessionId: string;
   activeFilePath: string | null;
   sessionChangesets: SessionChangesetListItem[];
   selectedChangesetId: string | null;
@@ -29,6 +31,7 @@ interface WorkspaceAuxiliaryPanelProps {
   expandedFileTreePaths: string[];
   onExpandedFileTreePathsChange: (paths: string[]) => void;
   onTabChange: (tab: WorkspaceAuxiliaryTab) => void;
+  resourcePanel: ReactNode;
   onToggleSearch: () => void;
   onCollapseAll: () => void;
   onSelectSessionChangeset: (changesetId: string) => void;
@@ -50,6 +53,7 @@ export default function WorkspaceAuxiliaryPanel({
   workspaceId,
   workspaceName,
   workspaceRoot,
+  sessionId,
   activeFilePath,
   sessionChangesets,
   selectedChangesetId,
@@ -62,6 +66,7 @@ export default function WorkspaceAuxiliaryPanel({
   expandedFileTreePaths,
   onExpandedFileTreePathsChange,
   onTabChange,
+  resourcePanel,
   onToggleSearch,
   onCollapseAll,
   onSelectSessionChangeset,
@@ -93,8 +98,15 @@ export default function WorkspaceAuxiliaryPanel({
           >
             文件
           </button>
+          <button
+            type="button"
+            className={tab === "resources" ? "active" : ""}
+            onClick={() => onTabChange("resources")}
+          >
+            运行与连接
+          </button>
         </nav>
-        <div className="auxiliary-title-actions" aria-label="文件视图操作">
+        {tab !== "resources" ? <div className="auxiliary-title-actions" aria-label="文件视图操作">
           <button
             type="button"
             className={`auxiliary-icon-button${searchOpen ? " active" : ""}`}
@@ -113,7 +125,7 @@ export default function WorkspaceAuxiliaryPanel({
           >
             <span className="auxiliary-action-icon collapse-all" aria-hidden="true" />
           </button>
-        </div>
+        </div> : null}
       </header>
       <div
         className={`auxiliary-view-body auxiliary-changes-body${
@@ -155,10 +167,12 @@ export default function WorkspaceAuxiliaryPanel({
         hidden={tab !== "files"}
       >
           <WorkspaceFileTree
+            active={visible && tab === "files"}
             apiPort={apiPort}
             workspaceId={workspaceId}
             workspaceName={workspaceName}
             workspaceRoot={workspaceRoot}
+            sessionId={sessionId}
             activeFilePath={activeFilePath}
             searchOpen={searchOpen}
             collapseVersion={collapseVersion}
@@ -167,6 +181,14 @@ export default function WorkspaceAuxiliaryPanel({
             onOpenFile={onOpenFile}
             onStatusChange={onStatusChange}
           />
+      </div>
+      <div
+        className={`auxiliary-view-body auxiliary-resources-body${
+          tab === "resources" ? "" : " preserve-mounted-hidden"
+        }`}
+        hidden={tab !== "resources"}
+      >
+        {resourcePanel}
       </div>
     </aside>
   );

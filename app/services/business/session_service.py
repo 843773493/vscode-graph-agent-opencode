@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.exceptions import NotFoundError
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_paths import SessionPathResolver, SessionPhysicalNode
+from app.schemas.public_v2.common import CursorPage
 from app.schemas.public_v2.session import (
     DeleteSessionResultDTO,
     SessionControlResultDTO,
@@ -21,8 +20,8 @@ from app.schemas.public_v2.session import (
     SessionDelegationDTO,
     SessionDTO,
     SessionGenerationOriginDTO,
-    SessionListResultDTO,
     SessionKind,
+    SessionListResultDTO,
     SessionUpdateRequest,
     TitleSource,
 )
@@ -77,7 +76,9 @@ class SessionService:
 
     async def get(self, session_id: str) -> SessionDTO:
         try:
-            session_file = self._path_resolver.resolve_session_dir(session_id) / "session.json"
+            session_file = (
+                self._path_resolver.resolve_session_node(session_id) / "session.json"
+            )
         except KeyError as error:
             raise NotFoundError(f"Session {session_id} not found") from error
         if not session_file.is_file():
@@ -88,12 +89,18 @@ class SessionService:
 
         session = SessionDTO.model_validate(data)
         if session.current_provider_id is None:
-            session.current_provider_id = self._config_service.resolve_agent_provider_id(
-                session.current_agent_id
+            session.current_provider_id = (
+                self._config_service.resolve_agent_provider_id(session.current_agent_id)
             )
         return session
 
-    async def list(self, workspace_id: Optional[str] = None, skip: int = 0, limit: int = 100, cursor: Optional[str] = None) -> SessionListResultDTO:
+    async def list(
+        self,
+        workspace_id: str | None = None,
+        skip: int = 0,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> SessionListResultDTO:
         sessions = []
         for node in self._path_resolver.list_nodes():
             if node.kind != "session":
@@ -111,7 +118,7 @@ class SessionService:
             sessions.append(session)
 
         sessions.sort(key=lambda s: s.created_at, reverse=True)
-        paginated = sessions[skip:skip+limit]
+        paginated = sessions[skip : skip + limit]
 
         return SessionListResultDTO(items=paginated, total=len(sessions), cursor=None)
 
@@ -200,7 +207,7 @@ class SessionService:
         parent_node_id: str | None = None,
     ) -> SessionDTO:
         session_id = create_prefixed_id("ses")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if self._config_service is None:
             raise RuntimeError("SessionService 未绑定 ConfigService")
         config_service = self._config_service
@@ -247,7 +254,7 @@ class SessionService:
             delegation=delegation,
             generation_origin=generation_origin,
             created_at=now,
-            updated_at=now
+            updated_at=now,
         )
 
         session_dir = self._path_resolver.allocate_session_dir(
@@ -280,13 +287,17 @@ class SessionService:
             raise ValueError(f"会话不是委派子会话: {session_id}")
         existing.delegation.start_status = status
         existing.delegation.start_error = error
-        existing.updated_at = datetime.now(timezone.utc)
-        session_file = self._path_resolver.resolve_session_dir(session_id) / "session.json"
+        existing.updated_at = datetime.now(UTC)
+        session_file = (
+            self._path_resolver.resolve_session_node(session_id) / "session.json"
+        )
         self._write_session_file(session_file, existing)
         self._notify_changed("update", session_id)
         return existing
 
-    async def update(self, session_id: str, session: SessionUpdateRequest) -> SessionDTO:
+    async def update(
+        self, session_id: str, session: SessionUpdateRequest
+    ) -> SessionDTO:
         existing = await self.get(session_id)
 
         if session.agent_id is not None:
@@ -308,24 +319,6 @@ class SessionService:
             )
         update_data.pop("provider_id", None)
 
-        if "parent_session_id" in update_data:
-            requested_parent_id = update_data["parent_session_id"]
-            if (
-                existing.kind != "normal"
-                and requested_parent_id is not None
-                and requested_parent_id != existing.parent_session_id
-            ):
-                raise ValueError(
-                    f"{existing.kind} 会话不能改绑到另一个父会话；请新建会话"
-                )
-            await self._validate_parent_session(
-                session_id=session_id,
-                workspace_id=existing.workspace_id,
-                parent_session_id=requested_parent_id,
-            )
-            if requested_parent_id is None and existing.kind == "context_fork":
-                update_data["kind"] = "normal"
-
         for key, value in update_data.items():
             if key == "agent_id":
                 existing.current_agent_id = value
@@ -337,84 +330,26 @@ class SessionService:
         if "title" in update_data and "title_source" not in update_data:
             existing.title_source = "user"
 
-        existing.updated_at = datetime.now(timezone.utc)
+        existing.updated_at = datetime.now(UTC)
 
-        should_rename_physical_node = (
-            "title" in update_data and existing.title_source != "auto"
-        )
-        should_relocate_parent = "parent_session_id" in update_data
-
-        async def persist_update() -> None:
-            session_dir = self._path_resolver.resolve_session_dir(session_id)
-            if should_relocate_parent or should_rename_physical_node:
-                current_node = self._path_resolver.get_node(session_id)
-                target_parent_node_id = current_node.parent_node_id
-                if should_relocate_parent:
-                    requested_parent_id = existing.parent_session_id
-                    if requested_parent_id is not None:
-                        target_parent_node_id = requested_parent_id
-                    else:
-                        target_parent_node_id = self._unbound_target_node_id(
-                            current_node.parent_node_id
-                        )
-                        existing.parent_session_id = (
-                            self._path_resolver.nearest_session_ancestor(
-                                target_parent_node_id
-                            )
-                        )
-                moved = self._path_resolver.relocate_session(
-                    session_id=session_id,
-                    parent_node_id=target_parent_node_id,
-                    name=existing.title,
-                    manifest=existing.model_dump(mode="json"),
-                )
-                session_dir = moved.path
-            else:
-                self._write_session_file(session_dir / "session.json", existing)
-                self._path_resolver.refresh()
-
-        requires_physical_move = should_relocate_parent or should_rename_physical_node
-        affected_session_ids = self._path_resolver.descendant_session_ids(
-            session_id,
-            include_self=True,
-        )
-        if requires_physical_move and self._job_service is not None:
-            await self._job_service.run_sessions_idle_operation(
-                affected_session_ids,
-                persist_update,
-            )
-        else:
-            await persist_update()
+        session_dir = self._path_resolver.resolve_session_node(session_id)
+        self._write_session_file(session_dir / "session.json", existing)
+        self._path_resolver.update_node_name(session_id, existing.title)
         self._notify_changed("update", session_id)
         return existing
 
-    def _unbound_target_node_id(self, current_parent_node_id: str | None) -> str | None:
-        current_id = current_parent_node_id
-        visited: set[str] = set()
-        while current_id is not None:
-            if current_id in visited:
-                raise RuntimeError(f"物理目录索引包含循环: {current_id}")
-            visited.add(current_id)
-            node = self._path_resolver.get_node(current_id)
-            if node.kind == "session":
-                return node.parent_node_id
-            nearest_parent = self._path_resolver.nearest_session_ancestor(current_id)
-            if nearest_parent is None:
-                return current_id
-            current_id = node.parent_node_id
-        return None
-
-    async def move_to_folder(
+    async def move_session(
         self,
         session_id: str,
-        folder_id: str | None,
+        parent_node_id: str | None,
     ) -> SessionDTO:
+        """显式移动会话物理子树，并同步最近物理父会话。"""
         existing = await self.get(session_id)
-        if folder_id is not None:
-            folder = self._path_resolver.get_node(folder_id)
-            if folder.kind != "folder":
-                raise ValueError(f"目标节点不是会话文件夹: {folder_id}")
-        target_parent_session_id = self._path_resolver.nearest_session_ancestor(folder_id)
+        if parent_node_id is not None:
+            self._path_resolver.get_node(parent_node_id)
+        target_parent_session_id = self._path_resolver.nearest_session_ancestor(
+            parent_node_id
+        )
         await self._validate_parent_session(
             session_id=session_id,
             workspace_id=existing.workspace_id,
@@ -425,19 +360,16 @@ class SessionService:
             and target_parent_session_id is not None
             and target_parent_session_id != existing.parent_session_id
         ):
-            raise ValueError(
-                f"{existing.kind} 会话不能移动到另一个父会话的目录下"
-            )
+            raise ValueError(f"{existing.kind} 会话不能移动到另一个父会话的目录下")
         if existing.kind == "context_fork" and target_parent_session_id is None:
             existing.kind = "normal"
         existing.parent_session_id = target_parent_session_id
-        existing.updated_at = datetime.now(timezone.utc)
+        existing.updated_at = datetime.now(UTC)
 
         async def move() -> None:
             self._path_resolver.relocate_session(
                 session_id=session_id,
-                parent_node_id=folder_id,
-                name=existing.title,
+                parent_node_id=parent_node_id,
                 manifest=existing.model_dump(mode="json"),
             )
 
@@ -455,6 +387,17 @@ class SessionService:
         self._notify_changed("update", session_id)
         return existing
 
+    async def move_to_folder(
+        self,
+        session_id: str,
+        folder_id: str | None,
+    ) -> SessionDTO:
+        if folder_id is not None:
+            folder = self._path_resolver.get_node(folder_id)
+            if folder.kind != "folder":
+                raise ValueError(f"目标节点不是会话文件夹: {folder_id}")
+        return await self.move_session(session_id, folder_id)
+
     async def relocate_folder_tree(
         self,
         *,
@@ -463,9 +406,11 @@ class SessionService:
         name: str,
     ) -> SessionPhysicalNode:
         """准备文件夹子树中的会话父关系，再交给 resolver 原子移动。"""
-        expected_parents = self._path_resolver.expected_session_parents_after_folder_move(
-            folder_id=folder_id,
-            parent_node_id=parent_node_id,
+        expected_parents = (
+            self._path_resolver.expected_session_parents_after_folder_move(
+                folder_id=folder_id,
+                parent_node_id=parent_node_id,
+            )
         )
         manifests: dict[str, dict[str, object]] = {}
         changed_session_ids: list[str] = []
@@ -487,12 +432,12 @@ class SessionService:
                 )
             if existing.parent_session_id != expected_parent_id:
                 existing.parent_session_id = expected_parent_id
-                existing.updated_at = datetime.now(timezone.utc)
+                existing.updated_at = datetime.now(UTC)
                 changed_session_ids.append(session_id)
             if existing.kind == "context_fork" and expected_parent_id is None:
                 existing.kind = "normal"
                 if session_id not in changed_session_ids:
-                    existing.updated_at = datetime.now(timezone.utc)
+                    existing.updated_at = datetime.now(UTC)
                     changed_session_ids.append(session_id)
             manifests[session_id] = existing.model_dump(mode="json")
 
@@ -541,16 +486,14 @@ class SessionService:
         cascade: bool = False,
     ) -> DeleteSessionResultDTO:
         try:
-            session_dir = self._path_resolver.resolve_session_dir(session_id)
+            session_dir = self._path_resolver.resolve_session_node(session_id)
         except KeyError as error:
             raise NotFoundError(f"Session {session_id} not found") from error
 
         physical_children = self._path_resolver.child_nodes(session_id)
         descendant_session_ids = self._path_resolver.descendant_session_ids(session_id)
         if physical_children and not cascade:
-            child_ids = ",".join(
-                sorted(child.node_id for child in physical_children)
-            )
+            child_ids = ",".join(sorted(child.node_id for child in physical_children))
             raise RuntimeError(
                 "会话包含物理子树，必须显式确认级联删除: "
                 f"session_id={session_id}, children={child_ids}"
@@ -558,8 +501,12 @@ class SessionService:
         if not session_dir.exists():
             raise NotFoundError(f"Session {session_id} not found")
 
-        shutil.rmtree(session_dir)
-        self._path_resolver.refresh()
+        deleted_descendant_ids = self._path_resolver.delete_session_subtree(session_id)
+        if deleted_descendant_ids != descendant_session_ids:
+            raise RuntimeError(
+                "删除会话子树结果与权威索引预检不一致: "
+                f"expected={descendant_session_ids}, actual={deleted_descendant_ids}"
+            )
         for descendant_session_id in descendant_session_ids:
             self._notify_changed("delete", descendant_session_id)
         self._notify_changed("delete", session_id)
@@ -588,33 +535,52 @@ class SessionService:
         finally:
             temporary_path.unlink(missing_ok=True)
 
-    async def control(self, session_id: str, action: str, payload: dict = None) -> SessionControlResultDTO:
+    async def control(
+        self, session_id: str, action: str, payload: dict = None
+    ) -> SessionControlResultDTO:
         await self.get(session_id)
-        return SessionControlResultDTO(session_id=session_id, action=action, status="executed")
+        return SessionControlResultDTO(
+            session_id=session_id, action=action, status="executed"
+        )
 
     async def list_trace_events(
         self,
         session_id: str,
-        after_event_id: str | None = None,
-        tail_limit: int | None = None,
-    ) -> list[TraceEventDTO]:
+        *,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> CursorPage[TraceEventDTO]:
         await self.get(session_id)
-        events = self._trace_event_store.read_events(
+        page = self._trace_event_store.read_trace_page(
             session_id,
-            after_event_id,
-            tail_limit,
+            cursor=cursor,
+            limit=limit,
         )
         mapper = TraceEventMapper()
-        return mapper.map_many([event.model_dump() for event in events], session_id=session_id)
+        return CursorPage(
+            items=mapper.map_many(
+                [event.model_dump() for event in page.events],
+                session_id=session_id,
+            ),
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+        )
 
-    async def ensure_trace_cursor(self, session_id: str, after_event_id: str | None) -> None:
+    async def ensure_trace_cursor(
+        self, session_id: str, after_event_id: str | None
+    ) -> None:
         await self.get(session_id)
         self._trace_event_store.ensure_cursor(session_id, after_event_id)
 
-    async def stream_trace_events(self, session_id: str, after_event_id: str | None = None):
+    async def stream_trace_events(
+        self, session_id: str, after_event_id: str | None = None
+    ):
         await self.get(session_id)
         mapper = TraceEventMapper()
-        async for event in self._trace_event_store.stream_events(session_id, after_event_id):
-            dto = mapper.map_one(event.model_dump(), session_id=session_id)
+        async for record in self._trace_event_store.stream_events(
+            session_id,
+            after_event_id,
+        ):
+            dto = mapper.map_one(record.event.model_dump(), session_id=session_id)
             if dto is not None:
-                yield dto
+                yield dto, record.cursor

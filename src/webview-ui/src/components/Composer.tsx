@@ -1,5 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppState } from '../hooks';
+import type { SessionGoalStatus } from '../types/backend';
+
+const GOAL_STATUS_LABELS: Record<SessionGoalStatus, string> = {
+  active: '进行中',
+  paused: '已暂停',
+  blocked: '已阻塞',
+  usage_limited: '用量受限',
+  budget_limited: '预算已用尽',
+  complete: '已完成',
+};
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) return;
@@ -16,7 +26,7 @@ function isSendShortcut(event: React.KeyboardEvent<HTMLTextAreaElement>): boolea
 }
 
 export default function Composer() {
-  const { state, sendMessage } = useAppState();
+  const { state, sendMessage, updateGoal, clearGoal, setStatus } = useAppState();
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -32,12 +42,70 @@ export default function Composer() {
     resizeTextarea(textareaRef.current);
   }, [input]);
 
+  const runGoalCommand = useCallback(async (rawArgs: string) => {
+    const args = rawArgs.trim();
+    const goal = state.currentGoal;
+    if (!args) {
+      setStatus(goal
+        ? `Goal：${GOAL_STATUS_LABELS[goal.status]} · ${goal.objective}`
+        : '当前会话没有 Goal；输入 /goal <目标> 开始');
+      return;
+    }
+
+    switch (args.toLowerCase()) {
+      case 'pause':
+        if (!goal) throw new Error('当前会话没有 Goal');
+        await updateGoal({ status: 'paused' });
+        return;
+      case 'resume':
+        if (!goal) throw new Error('当前会话没有 Goal');
+        if (!['paused', 'blocked', 'usage_limited'].includes(goal.status)) {
+          throw new Error(`当前状态 ${GOAL_STATUS_LABELS[goal.status]} 不能继续`);
+        }
+        await updateGoal({ status: 'active' });
+        return;
+      case 'clear':
+        if (!goal) throw new Error('当前会话没有 Goal');
+        if (window.confirm('清除当前 Goal？该操作不会删除会话消息。')) {
+          await clearGoal();
+        }
+        return;
+      case 'edit': {
+        if (!goal) throw new Error('当前会话没有 Goal');
+        const objective = window.prompt('编辑 Goal', goal.objective)?.trim();
+        if (!objective) return;
+        const status = goal.status === 'complete' || goal.status === 'budget_limited'
+          ? 'active'
+          : goal.status;
+        await updateGoal({ objective, status });
+        return;
+      }
+      default:
+        if (
+          goal
+          && goal.status !== 'complete'
+          && !window.confirm('当前 Goal 尚未完成，是否替换为新 Goal？')
+        ) {
+          return;
+        }
+        await updateGoal({ objective: args, status: 'active', replace: true });
+    }
+  }, [clearGoal, setStatus, state.currentGoal, updateGoal]);
+
+  const runGoalAction = useCallback((action: () => Promise<void> | Promise<unknown>) => {
+    void action().catch(error => setStatus(`Goal 操作失败：${error instanceof Error ? error.message : String(error)}`));
+  }, [setStatus]);
+
   const handleSend = useCallback(() => {
     const content = input.trim();
     if (!content || isGenerating) return;
     setInput('');
+    if (content === '/goal' || content.startsWith('/goal ')) {
+      runGoalAction(() => runGoalCommand(content.slice('/goal'.length)));
+      return;
+    }
     sendMessage(content);
-  }, [input, isGenerating, sendMessage]);
+  }, [input, isGenerating, runGoalAction, runGoalCommand, sendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Enter') return;
@@ -59,6 +127,32 @@ export default function Composer() {
 
   return (
     <footer className="composer">
+      {state.currentGoal ? (
+        <section className="goal-card" aria-label="当前 Goal">
+          <div className="goal-card-heading">
+            <strong>Goal</strong>
+            <span>{GOAL_STATUS_LABELS[state.currentGoal.status]}</span>
+          </div>
+          <div className="goal-card-objective">{state.currentGoal.objective}</div>
+          <div className="goal-card-metrics">
+            token {state.currentGoal.tokens_used}
+            {state.currentGoal.token_budget === null ? '' : ` / ${state.currentGoal.token_budget}`}
+            {' · '}{state.currentGoal.time_used_seconds}s
+          </div>
+          <div className="goal-card-actions">
+            {state.currentGoal.status === 'active' ? (
+              <button type="button" disabled={state.goalLoading} onClick={() => runGoalAction(() => updateGoal({ status: 'paused' }))}>暂停</button>
+            ) : ['paused', 'blocked', 'usage_limited'].includes(state.currentGoal.status) ? (
+              <button type="button" disabled={state.goalLoading} onClick={() => runGoalAction(() => updateGoal({ status: 'active' }))}>继续</button>
+            ) : null}
+            <button type="button" disabled={state.goalLoading} onClick={() => runGoalAction(() => runGoalCommand('edit'))}>编辑</button>
+            <button type="button" disabled={state.goalLoading} onClick={() => runGoalAction(() => runGoalCommand('clear'))}>清除</button>
+          </div>
+          {state.goalError ? <div className="goal-card-error">{state.goalError}</div> : null}
+        </section>
+      ) : state.goalError ? (
+        <div className="goal-card goal-card-error">Goal 同步失败：{state.goalError}</div>
+      ) : null}
       <div className="composer-context-row" aria-label="输入上下文">
         <span className="context-chip">@workspace</span>
         <span className="context-chip">#current-file</span>

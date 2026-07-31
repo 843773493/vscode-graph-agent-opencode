@@ -1,17 +1,29 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_artifact_service, get_event_service, get_job_service, get_request_id, verify_local_token
+from app.abstractions.job_service import JobServiceProtocol
+from app.api.deps import (
+    get_artifact_service,
+    get_event_service,
+    get_job_service,
+    get_request_id,
+    verify_local_token,
+)
 from app.schemas.event import Event
 from app.schemas.public_v2.artifact import ArtifactDTO
-
 from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
-from app.abstractions.job_service import JobServiceProtocol
+from app.schemas.public_v2.job import (
+    JobControlRequest,
+    JobControlResponseDTO,
+    JobDTO,
+    StepDTO,
+)
+from app.schemas.public_v2.session_interaction import SessionExecutionSseDTO
+from app.schemas.public_v2.sse import sse_responses
+from app.services.event_service import EventService, JobEventCursorGoneError
 from app.services.infrastructure.artifact_service import ArtifactService
-from app.services.event_service import EventService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -27,7 +39,9 @@ async def get_job(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{job_id}/steps", response_model=APIResponse[list[StepDTO]], summary="获取任务步骤")
+@router.get(
+    "/{job_id}/steps", response_model=APIResponse[list[StepDTO]], summary="获取任务步骤"
+)
 async def list_job_steps(
     job_id: str,
     _: str = Depends(verify_local_token),
@@ -38,7 +52,9 @@ async def list_job_steps(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{job_id}/events", response_model=APIResponse[list[Event]], summary="获取任务事件")
+@router.get(
+    "/{job_id}/events", response_model=APIResponse[list[Event]], summary="获取任务事件"
+)
 async def list_job_events(
     job_id: str,
     after: str | None = None,
@@ -51,14 +67,42 @@ async def list_job_events(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{job_id}/events/stream", summary="订阅任务事件流")
+@router.get(
+    "/{job_id}/events/stream",
+    response_class=StreamingResponse,
+    summary="订阅任务事件流",
+    responses=sse_responses(
+        "SSE Job 观察事件流",
+        {"*": SessionExecutionSseDTO},
+    ),
+)
 async def stream_job_events(
     job_id: str,
     request: Request,
+    after_event_id: str | None = Query(default=None),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     event_service: EventService = Depends(get_event_service),
 ):
+    if after_event_id and last_event_id and after_event_id != last_event_id:
+        raise HTTPException(
+            status_code=409,
+            detail="after_event_id 与 Last-Event-ID 不一致",
+        )
+    cursor = last_event_id or after_event_id
+    try:
+        await event_service.ensure_cursor(job_id, cursor)
+    except JobEventCursorGoneError as error:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "job_event_cursor_gone",
+                "message": str(error),
+                "job_id": job_id,
+                "event_id": error.event_id,
+            },
+        ) from error
     subscriber_metadata = {
         "request_id": request_id,
         "client_host": request.client.host if request.client else "",
@@ -68,6 +112,7 @@ async def stream_job_events(
     async def event_generator():
         async for chunk in event_service.stream_sse(
             job_id,
+            after_event_id=cursor,
             subscriber_metadata=subscriber_metadata,
         ):
             yield chunk
@@ -75,7 +120,11 @@ async def stream_job_events(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.post("/{job_id}/control", response_model=APIResponse[JobControlResponseDTO], summary="控制任务")
+@router.post(
+    "/{job_id}/control",
+    response_model=APIResponse[JobControlResponseDTO],
+    summary="控制任务",
+)
 async def control_job(
     job_id: str,
     payload: JobControlRequest,
@@ -87,7 +136,11 @@ async def control_job(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{job_id}/artifacts", response_model=APIResponse[list[ArtifactDTO]], summary="获取任务产物列表")
+@router.get(
+    "/{job_id}/artifacts",
+    response_model=APIResponse[list[ArtifactDTO]],
+    summary="获取任务产物列表",
+)
 async def list_job_artifacts(
     job_id: str,
     _: str = Depends(verify_local_token),

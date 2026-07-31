@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const workspaceRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
@@ -11,9 +12,74 @@ const isWindows = process.platform === 'win32';
 const pydantic2tsExecutable = isWindows
 	? path.join(workspaceRoot, '.venv', 'Scripts', 'pydantic2ts.exe')
 	: path.join(workspaceRoot, '.venv', 'bin', 'pydantic2ts');
+const pythonExecutable = isWindows
+	? path.join(workspaceRoot, '.venv', 'Scripts', 'python.exe')
+	: path.join(workspaceRoot, '.venv', 'bin', 'python');
 const json2tsExecutable = isWindows
 	? path.join(workspaceRoot, 'node_modules', '.bin', 'json2ts.cmd')
 	: path.join(workspaceRoot, 'node_modules', '.bin', 'json2ts');
+
+async function generateSseRuntimeValidators() {
+	const webRequire = createRequire(path.join(workspaceRoot, 'src', 'web', 'package.json'));
+	const Ajv = webRequire('ajv').default;
+	const standaloneCode = webRequire('ajv/dist/standalone').default;
+	const schemaPath = path.join(outputDir, 'sse_runtime_schemas.json');
+	const payload = JSON.parse(await readFile(schemaPath, 'utf8'));
+	if (!payload || typeof payload !== 'object' || !payload.schemas) {
+		throw new Error(`SSE runtime schema 文件结构无效: ${schemaPath}`);
+	}
+	const ajv = new Ajv({
+		allErrors: true,
+		strict: false,
+		validateFormats: false,
+		code: { esm: true, source: true },
+	});
+	const exportsByName = {};
+	for (const [name, schema] of Object.entries(payload.schemas)) {
+		const schemaId = schema?.$id;
+		if (typeof schemaId !== 'string' || !schemaId) {
+			throw new Error(`SSE runtime schema 缺少 $id: ${name}`);
+		}
+		ajv.addSchema(schema, schemaId);
+		exportsByName[`validate${name}`] = schemaId;
+	}
+	const outputPath = path.join(workspaceRoot, 'src', 'shared', 'sseRuntimeValidators.js');
+	const declarationPath = path.join(workspaceRoot, 'src', 'shared', 'sseRuntimeValidators.d.ts');
+	const validatorSource = standaloneCode(ajv, exportsByName).replace(
+		/const (\w+) = require\("([^"]+)"\)\.default;/g,
+		'import $1 from "$2";',
+	).replace(
+		/import (\w+) from "ajv\/dist\/runtime\/ucs2length";/g,
+		`const $1 = (value) => {
+	let length = 0;
+	let position = 0;
+	while (position < value.length) {
+		length += 1;
+		const first = value.charCodeAt(position++);
+		if (first >= 0xd800 && first <= 0xdbff && position < value.length) {
+			const second = value.charCodeAt(position);
+			if (second >= 0xdc00 && second <= 0xdfff) position += 1;
+		}
+	}
+	return length;
+};`,
+	);
+	if (validatorSource.includes('require(') || validatorSource.includes('from "ajv/')) {
+		throw new Error('生成的 SSE runtime validator 仍依赖 Ajv runtime');
+	}
+	await writeFile(
+		outputPath,
+		`// 该文件由程序生成，请勿手写。\n${validatorSource}\n`,
+		'utf8',
+	);
+	await writeFile(
+		declarationPath,
+		`// 该文件由程序生成，请勿手写。\n${Object.keys(exportsByName)
+			.map((name) => `export const ${name}: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };`)
+			.join('\n')}\n`,
+		'utf8',
+	);
+}
 
 function runCommand(command, args, options = {}) {
 	return new Promise((resolve, reject) => {
@@ -73,6 +139,17 @@ async function ensureGeneratedHeader(filePath) {
 	await writeFile(filePath, `${header}${content}`, 'utf8');
 }
 
+async function appendGeneratedTypeAliases(moduleName, filePath) {
+	if (moduleName !== 'session_interaction') {
+		return;
+	}
+	const content = await readFile(filePath, 'utf8');
+	const alias = '\nexport type SessionExecutionEventDTO = SessionExecutionSseDTO["event"];\n';
+	if (!content.includes(alias.trim())) {
+		await writeFile(filePath, `${content.trimEnd()}${alias}`, 'utf8');
+	}
+}
+
 async function main() {
 	await ensurePathExists(path.join(workspaceRoot, 'pyproject.toml'), 'Python 项目文件');
 	await ensurePathExists(path.join(workspaceRoot, 'package.json'), '前端项目文件');
@@ -100,7 +177,14 @@ async function main() {
 			json2tsExecutable,
 		]);
 		await ensureGeneratedHeader(outputFile);
+		await appendGeneratedTypeAliases(moduleName, outputFile);
 	}
+
+	await runCommand(pythonExecutable, [
+		'-m',
+		'scripts.export_sse_runtime_schemas',
+	]);
+	await generateSseRuntimeValidators();
 
 	const indexLines = [
 		'// 该文件由程序生成，请勿手写。',
@@ -138,8 +222,10 @@ async function main() {
 		"export type { TeamBoardDTO, TeamEventDTO, TeamListDTO, TeamMemberDTO, TeamMemberOperationDTO, TeamTaskDTO, TeamTaskOperationDTO } from './team';",
 		"export type { ToolDTO, ToolSelectionChange, ToolSelectionPatchRequest } from './tool';",
 		"export type { ToolTestAttemptDTO, ToolTestProviderResultDTO, ToolTestRunDTO, ToolTestRunListDTO, ToolTestStartRequest } from './tool_test';",
+		"export type { SseErrorDTO } from './sse';",
 		"export type { TraceEventDTO } from './trace';",
-		"export type { WorkspaceContextDTO, WorkspaceDTO, WorkspaceFileContentDTO, WorkspaceFileListDTO, WorkspaceFileNodeDTO, WorkspaceFileUpdateRequest } from './workspace';",
+		"export type { SessionTurnBootstrapDTO, StaleTurnCursorErrorDTO, TurnAttachmentDTO, TurnCursorDTO, TurnDetailBatchDTO, TurnDetailBatchRequest, TurnDetailDTO, TurnJobSummaryDTO, TurnPageDTO, TurnProjectionCorruptedErrorDTO, TurnSummaryDTO, TurnUserMessageDTO, TurnUserMessageSummaryDTO } from './turn';",
+		"export type { WorkspaceContextDTO, WorkspaceDTO, WorkspaceFileChangeBatchDTO, WorkspaceFileChangeDTO, WorkspaceFileContentDTO, WorkspaceFileListDTO, WorkspaceFileNodeDTO, WorkspaceFileUpdateRequest, WorkspaceFileWatchRequest } from './workspace';",
 	];
 	await writeFile(path.join(outputDir, 'index.ts'), `${indexLines.join('\n')}\n`, 'utf8');
 }

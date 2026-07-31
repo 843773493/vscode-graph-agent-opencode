@@ -1,12 +1,10 @@
-import { getJob, getSession, listMessages } from "../api";
+import { getJob, getSession } from "../api";
 import { listPendingRequests } from "../pendingRequestsApi";
-import { updateAttachmentSummariesFromMessages } from "../state/attachments";
 import {
   removePendingForTraceEvent,
   writePendingSnapshot,
 } from "../state/conversations";
 import {
-  isJobTerminalTraceType,
   terminalStatusTextForEvent,
 } from "../state/traceEvents";
 import { replaceSessionMetadata } from "../state/session/sessions";
@@ -16,8 +14,9 @@ import type {
   PendingRequestList,
   TraceEvent,
 } from "../types/backend";
+import type { AppState } from "../types/frontend";
 import type { SetAppState } from "./contentViewLoaderTypes";
-import { recoverTraceSnapshot } from "./sessionEventStreamRecovery";
+import { sessionScopeKey } from "../state/session/sessionScope";
 
 const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
   "completed",
@@ -26,6 +25,28 @@ const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
   "cancelled",
   "timed_out",
 ]);
+
+export interface ActiveJobReconciliationResult {
+  jobStatus: JobStatus;
+  lastEventCursor: string | null;
+  recoveredEventCount: number;
+}
+
+function sessionIsActivelyViewed(
+  state: AppState,
+  sessionCacheKey: string,
+): boolean {
+  const currentSessionId = state.currentSession?.session_id;
+  const currentWorkspaceId = state.currentSessionWorkspaceId;
+  if (!currentSessionId || !currentWorkspaceId) {
+    return false;
+  }
+  if (sessionScopeKey(currentWorkspaceId, currentSessionId) !== sessionCacheKey) {
+    return false;
+  }
+  return typeof document === "undefined"
+    || (document.visibilityState === "visible" && document.hasFocus());
+}
 
 function terminalStatusTextForJob(job: Job | undefined): string {
   if (!job) {
@@ -51,12 +72,16 @@ export async function refreshTerminalSession(
   workspaceId: string | null,
   sessionCacheKey: string,
   terminalTraceEvent: TraceEvent | null,
+  refreshTurnDetails: (turnIds: string[]) => Promise<void>,
   setState: SetAppState,
   knownPendingSnapshot?: PendingRequestList,
   knownTerminalJob?: Job,
 ) {
-  const [messages, updatedSession, pendingSnapshot] = await Promise.all([
-    listMessages(apiPort, sessionId, workspaceId),
+  const terminalTurnId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
+  const [, updatedSession, pendingSnapshot] = await Promise.all([
+    terminalTurnId
+      ? refreshTurnDetails([terminalTurnId])
+      : Promise.resolve(),
     getSession(apiPort, sessionId, workspaceId),
     knownPendingSnapshot
       ? Promise.resolve(knownPendingSnapshot)
@@ -82,18 +107,19 @@ export async function refreshTerminalSession(
       pendingSnapshot,
       sessionCacheKey,
     );
+    if (
+      !pendingSnapshot.active_job_id
+      && (pendingSnapshot.requests?.length ?? 0) === 0
+    ) {
+      if (sessionIsActivelyViewed(latest, sessionCacheKey)) {
+        latestNext.unreadSessionKeys.delete(sessionCacheKey);
+      } else {
+        latestNext.unreadSessionKeys.add(sessionCacheKey);
+      }
+    }
     if (latest.currentSession?.session_id !== sessionId) {
       return latestNext;
     }
-    latestNext.messages = messages.items;
-    latestNext.messageHistoryNextCursor = messages.next_cursor ?? null;
-    latestNext.messageHistoryHasMore = messages.has_more ?? false;
-    latestNext.messageHistoryLoadingOlder = false;
-    latestNext.messageHistoryError = null;
-    updateAttachmentSummariesFromMessages(
-      latestNext.sessionAttachmentSummaries,
-      latestNext.messages,
-    );
     latestNext.status = terminalTraceEvent
       ? terminalStatusTextForEvent(terminalTraceEvent.type)
       : terminalStatusTextForJob(knownTerminalJob);
@@ -107,43 +133,41 @@ export async function reconcileActiveJob(
   workspaceId: string | null,
   sessionCacheKey: string,
   activeJobId: string,
+  refreshTurnDetails: (turnIds: string[]) => Promise<void>,
   setState: SetAppState,
-) {
+  options?: {
+    afterCursor?: string | null;
+  },
+): Promise<ActiveJobReconciliationResult> {
   const job = await getJob(apiPort, activeJobId, workspaceId);
   if (!TERMINAL_JOB_STATUSES.has(job.status)) {
-    return;
+    return {
+      jobStatus: job.status,
+      lastEventCursor: options?.afterCursor ?? null,
+      recoveredEventCount: 0,
+    };
   }
 
-  const [pendingSnapshot, recovered] = await Promise.all([
-    listPendingRequests(apiPort, sessionId, workspaceId),
-    recoverTraceSnapshot(
-      apiPort,
-      sessionId,
-      workspaceId,
-      sessionCacheKey,
-      setState,
-      "已通过运行状态对账恢复事件历史",
-    ),
-  ]);
+  const pendingSnapshot = await listPendingRequests(apiPort, sessionId, workspaceId);
   if (pendingSnapshot.active_job_id === activeJobId) {
     throw new Error(
       `Job 已终止但会话仍标记为运行中: job_id=${activeJobId} status=${job.status}`,
     );
   }
-  const terminalTraceEvent = [...recovered.traceEvents]
-    .reverse()
-    .find(
-      (event) =>
-        event.job_id === activeJobId && isJobTerminalTraceType(event.type),
-    );
   await refreshTerminalSession(
     apiPort,
     sessionId,
     workspaceId,
     sessionCacheKey,
-    terminalTraceEvent ?? null,
+    null,
+    refreshTurnDetails,
     setState,
     pendingSnapshot,
     job,
   );
+  return {
+    jobStatus: job.status,
+    lastEventCursor: options?.afterCursor ?? null,
+    recoveredEventCount: 0,
+  };
 }

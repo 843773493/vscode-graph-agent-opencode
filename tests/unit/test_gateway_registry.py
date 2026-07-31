@@ -168,8 +168,34 @@ def test_registry_v5_migrates_managed_local_id_to_stable_root_id(
     assert registry.active_workspace_id == expected_id
     assert registry.resolve(expected_id).name == "Managed"
     persisted = json.loads(storage_path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 7
+    assert persisted["schema_version"] == 8
     assert persisted["active_workspace_id"] == expected_id
+
+
+def test_registry_persists_browser_manager_url_for_gateway_restart(
+    tmp_path: Path,
+) -> None:
+    storage_path = tmp_path / "gateway.json"
+    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="gw_browser_survival",
+            name="Browser survival",
+            root_path="/workspace/browser-survival",
+            backend_url="http://127.0.0.1:41000",
+            connection_kind="local",
+            managed=True,
+            local_service_urls={
+                "browser_manager": "http://127.0.0.1:41002"
+            },
+        )
+    )
+
+    restored = GatewayWorkspaceRegistry(storage_path=storage_path)
+
+    assert restored.resolve("gw_browser_survival").local_service_urls == {
+        "browser_manager": "http://127.0.0.1:41002"
+    }
 
 
 @pytest.fixture

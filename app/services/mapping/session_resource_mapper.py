@@ -115,9 +115,23 @@ class SessionResourceMapper:
             "pending_file_chooser": browser.get("pending_file_chooser"),
             "release_reason": browser.get("release_reason"),
             "error_message": browser.get("error_message"),
+            "resource_state": browser.get("resource_state"),
+            "resource_policy": browser.get("resource_policy"),
+            "resource_protection_reasons": browser.get("resource_protection_reasons"),
+            "resource_hard_protection_reasons": browser.get("resource_hard_protection_reasons"),
+            "resource_soft_protection_reasons": browser.get("resource_soft_protection_reasons"),
+            "resource_protections": browser.get("resource_protections"),
+            "resource_transition_reason": browser.get("resource_transition_reason"),
+            "resource_transition_error": browser.get("resource_transition_error"),
+            "frozen_at": browser.get("frozen_at"),
+            "discarded_at": browser.get("discarded_at"),
+            "last_wake_at": browser.get("last_wake_at"),
+            "runtime_generation": browser.get("runtime_generation"),
+            "stream_metrics": browser.get("stream_metrics"),
+            "checkpoint": browser.get("checkpoint"),
         }
         if status == "lost":
-            metadata["status_note"] = "浏览器管理器重启后无法重新 attach 旧页面，请重新打开页面。"
+            metadata["status_note"] = "浏览器运行时或恢复检查点已断开，无法重新 attach，请查看错误信息。"
         elif status == "closed":
             metadata["status_note"] = "浏览器页面已关闭，仅保留历史记录，当前不可 attach。"
         elif status == "deleted":

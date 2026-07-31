@@ -38,7 +38,7 @@
 
 - 查询结果：`JobDTO`、`SessionDTO`、`MessageDTO`
 - 批量列表：通过 `CursorPage[T]` 包装
-- 状态对象：`SessionAutoContinueStatusDTO`
+- 状态对象：`RuntimeStatusDTO`
 - 操作响应：`JobControlResponseDTO`、`ConfigDTO`
 
 ---
@@ -106,7 +106,7 @@ class MessageCreateRequest(BaseModel):    # 创建消息（已存在 MessageCrea
 ```python
 class JobControlRequest(BaseModel):        # 作业控制（暂停/恢复/取消等）
 class ToolInvokeRequest(BaseModel):       # 工具调用
-class SessionAutoContinueStartRequest(BaseModel):  # 启动自动继续
+class SessionGoalSetRequest(BaseModel):           # 设置会话目标
 ```
 
 **特点**：
@@ -149,7 +149,7 @@ class JobControlResponseDTO(BaseModel):    # 控制操作结果（当前为 JobC
 **示例**：
 
 ```python
-class SessionAutoContinueStatusDTO(BaseModel):   # 会话自动继续状态
+class RuntimeStatusDTO(BaseModel):               # 运行时状态
 class ConfigDTO(BaseModel):                     # 系统配置
 ```
 
@@ -229,9 +229,9 @@ POST   /api/v1/jobs/{id}/retry       → JobRetryRequest → JobRetryResponseDTO
 # 工具调用
 POST   /api/v1/tools/{id}/invoke     → ToolInvokeRequest → ToolInvokeResponseDTO
 
-# 自动继续
-POST   /api/v1/sessions/{id}/auto-continue/start
-    → SessionAutoContinueStartRequest → SessionAutoContinueStatusDTO
+# 会话 Goal
+PUT    /api/v1/sessions/{id}/goal
+    → SessionGoalSetRequest → SessionGoalDTO
 ```
 
 ### 5.3 流式端点

@@ -4,7 +4,7 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   scrollbar-gutter: stable;
   container-type: inline-size;
 }
@@ -102,13 +102,22 @@
 }
 
 .agent-state-raw {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   min-height: 0;
   margin: 0 12px 12px;
   border: var(--surface-border);
   border-radius: 6px;
   overflow: hidden;
   background: var(--vscode-editor-background);
+}
+
+.agent-state-raw:not([open]) {
+  flex: 0 0 auto;
+}
+
+.agent-state-raw[open] {
+  display: flex;
+  flex-direction: column;
 }
 
 .agent-state-raw summary {
@@ -120,7 +129,9 @@
 }
 
 .agent-state-jsonl {
-  max-height: min(42vh, 520px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   box-sizing: border-box;
   margin: 0;
   padding: 12px;
@@ -331,17 +342,6 @@
   font-size: 11px;
   color: var(--vscode-descriptionForeground);
   word-break: break-all;
-}
-
-.agent-state-raw {
-  border-top: var(--surface-border);
-  padding-top: 6px;
-}
-
-.agent-state-raw summary {
-  cursor: pointer;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
 }
 
 .agent-state-fallback {

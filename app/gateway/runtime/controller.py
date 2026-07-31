@@ -6,22 +6,26 @@ from typing import Literal
 
 import httpx
 
-from app.gateway.auth import LOCAL_TOKEN
 from app.core.path_utils import get_gateway_root
+from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.remote_gateway import (
+    reconnect_remote_gateway,
+    refresh_remote_gateway_projections,
+)
 from app.gateway.runtime.local_workspace import (
     restart_managed_workspace_backend,
     start_managed_local_workspace_runtime,
 )
 from app.gateway.runtime.process import wait_for_http_ok
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.schemas import (
     GatewayRuntimeBlockerDTO,
     GatewayRuntimeRestartResultDTO,
+    GatewayRuntimeStateResultDTO,
     GatewayWorkspaceListDTO,
 )
-from app.gateway.remote_gateway import reconnect_remote_gateway
 
 
 class GatewayWorkspaceRuntimeController:
@@ -40,6 +44,88 @@ class GatewayWorkspaceRuntimeController:
         self._drain_timeout_seconds = drain_timeout_seconds
         self._drain_poll_interval_seconds = drain_poll_interval_seconds
         self._locks: dict[str, asyncio.Lock] = {}
+
+    async def start_managed_backend(
+        self,
+        workspace_id: str,
+        *,
+        request_id: str,
+    ) -> GatewayRuntimeStateResultDTO:
+        async with self._lock(workspace_id):
+            target = self._registry.resolve(workspace_id)
+            if target.connection_kind == "remote_gateway":
+                return await self._delegated_runtime_state(
+                    target,
+                    "start",
+                    request_id=request_id,
+                )
+            if target.connection_kind != "local" or not target.managed:
+                raise ValueError("只有 Gateway 托管的本地工作区可以启动后端")
+            if self._registry.has_runtime(workspace_id):
+                raise ValueError(f"工作区后端已经启动: {target.name}")
+            workspace_root = Path(target.root_path).expanduser().resolve()
+            if not workspace_root.is_dir():
+                raise FileNotFoundError(f"工作区目录不存在: {workspace_root}")
+            runtime = await start_managed_local_workspace_runtime(
+                project_root=self._project_root,
+                workspace_root=workspace_root,
+                log_dir=self._log_dir,
+                reusable_service_urls=target.local_service_urls,
+            )
+            target.backend_url = runtime.service_urls["workspace_api"]
+            target.local_service_urls = {
+                "browser_manager": runtime.service_urls["browser_manager"]
+            }
+            target.connection_error = None
+            self._registry.upsert(target, runtime=runtime, activate=False)
+            return await self._state_result(workspace_id, "started")
+
+    async def stop_managed_backend(
+        self,
+        workspace_id: str,
+        *,
+        request_id: str,
+    ) -> GatewayRuntimeStateResultDTO:
+        async with self._lock(workspace_id):
+            target = self._registry.resolve(workspace_id)
+            if target.connection_kind == "remote_gateway":
+                return await self._delegated_runtime_state(
+                    target,
+                    "stop",
+                    request_id=request_id,
+                )
+            target, _ = self._managed_local_target(workspace_id)
+            if target.system_default or not target.removable:
+                raise PermissionError(f"默认工作区不能关闭: {target.name}")
+            await self._runtime_action(
+                target.backend_url,
+                "/api/v1/runtime/drain",
+                request_id=request_id,
+            )
+            deadline = asyncio.get_running_loop().time() + self._drain_timeout_seconds
+            blockers: list[GatewayRuntimeBlockerDTO] = []
+            while True:
+                runtime_status = await self._runtime_status(
+                    target.backend_url,
+                    request_id=request_id,
+                )
+                blockers = self._parse_blockers(runtime_status.get("blockers"))
+                if not blockers:
+                    break
+                if asyncio.get_running_loop().time() >= deadline:
+                    await self._runtime_action(
+                        target.backend_url,
+                        "/api/v1/runtime/drain/cancel",
+                        request_id=request_id,
+                    )
+                    return await self._state_result(
+                        workspace_id,
+                        "blocked",
+                        blockers=blockers,
+                    )
+                await asyncio.sleep(self._drain_poll_interval_seconds)
+            self._registry.stop_managed_runtime(workspace_id)
+            return await self._state_result(workspace_id, "stopped")
 
     async def safe_restart_managed_backend(
         self,
@@ -152,6 +238,7 @@ class GatewayWorkspaceRuntimeController:
             workspace_root=Path(target.root_path),
             log_dir=self._log_dir,
         )
+        self._registry.invalidate_route(target.workspace_id)
         target.connection_error = None
         self._registry.upsert(target, activate=False)
 
@@ -219,6 +306,23 @@ class GatewayWorkspaceRuntimeController:
             workspace_id=workspace_id,
             status=status,
             forced=forced,
+            blockers=blockers or [],
+            workspaces=GatewayWorkspaceListDTO(
+                active_workspace_id=self._registry.active_workspace_id,
+                items=await self._registry.list_dtos(),
+            ),
+        )
+
+    async def _state_result(
+        self,
+        workspace_id: str,
+        status: Literal["started", "stopped", "blocked"],
+        *,
+        blockers: list[GatewayRuntimeBlockerDTO] | None = None,
+    ) -> GatewayRuntimeStateResultDTO:
+        return GatewayRuntimeStateResultDTO(
+            workspace_id=workspace_id,
+            status=status,
             blockers=blockers or [],
             workspaces=GatewayWorkspaceListDTO(
                 active_workspace_id=self._registry.active_workspace_id,
@@ -327,6 +431,51 @@ class GatewayWorkspaceRuntimeController:
             blockers=blockers,
         )
 
+    async def _delegated_runtime_state(
+        self,
+        target: WorkspaceTarget,
+        action: Literal["start", "stop"],
+        *,
+        request_id: str,
+    ) -> GatewayRuntimeStateResultDTO:
+        if not target.managed:
+            raise ValueError("远程 Gateway 报告该工作区不是托管目标")
+        connection_id = target.remote_gateway_connection_id
+        remote_workspace_id = target.remote_workspace_id
+        if connection_id is None or remote_workspace_id is None:
+            raise RuntimeError("远程投影工作区缺少所属 Gateway 信息")
+        credential = FederationCredentialStore(
+            storage_path=get_gateway_root() / "credentials" / "federation.json"
+        ).get(connection_id)
+        async with httpx.AsyncClient(timeout=45) as client:
+            response = await client.post(
+                (
+                    f"{self._registry.remote_gateway_url(connection_id)}"
+                    f"/api/gateway/workspaces/{remote_workspace_id}/runtime/{action}"
+                ),
+                headers={
+                    "X-BoxTeam-Federation-Token": credential.token,
+                    "X-Request-ID": request_id,
+                },
+            )
+            response.raise_for_status()
+        data = self._response_data(response)
+        status = data.get("status")
+        if status not in {"started", "stopped", "blocked"}:
+            raise RuntimeError(
+                f"远程 Gateway 返回未知工作区状态: {status}"
+            )
+        blockers = self._parse_blockers(data.get("blockers"))
+        await refresh_remote_gateway_projections(
+            registry=self._registry,
+            connection_id=connection_id,
+        )
+        return await self._state_result(
+            target.workspace_id,
+            status,
+            blockers=blockers,
+        )
+
 
 async def reconnect_gateway_workspace(
     *,
@@ -354,8 +503,12 @@ async def reconnect_gateway_workspace(
             project_root=project_root,
             workspace_root=Path(target.root_path),
             log_dir=log_dir,
+            reusable_service_urls=target.local_service_urls,
         )
         target.backend_url = runtime.service_urls["workspace_api"]
+        target.local_service_urls = {
+            "browser_manager": runtime.service_urls["browser_manager"]
+        }
     else:
         await wait_for_http_ok(f"{target.backend_url.rstrip('/')}/api/v1/health")
         runtime = WorkspaceRuntime(service_urls={"workspace_api": target.backend_url})

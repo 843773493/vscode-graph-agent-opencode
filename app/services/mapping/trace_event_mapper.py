@@ -11,12 +11,14 @@ class TraceEventMapper:
         "agent_start",
         "agent_step",
         "llm_request",
+        "model_failed",
         "tool_call_start",
         "tool_call_end",
         "agent_end",
         "error",
         "message_created",
         "job_created",
+        "job_merged",
         "job_started",
         "job_completed",
         "job_cancelled",
@@ -26,6 +28,8 @@ class TraceEventMapper:
         "text_delta",
         "text_end",
         "session_interrupted",
+        "goal_updated",
+        "goal_cleared",
     }
 
     def map_many(self, events: list[dict[str, Any]], session_id: str = "") -> list[TraceEventDTO]:
@@ -92,6 +96,9 @@ class TraceEventMapper:
             return "message", "用户消息已创建", payload.get("content") or "用户消息已记录", "completed", None
         if event_type == "job_created":
             return "job", "任务已创建", payload.get("message") or "任务已创建，准备执行", "running", None
+        if event_type == "job_merged":
+            merged_count = len(payload.get("merged_job_ids") or [])
+            return "job", "任务已合并", f"已合并 {merged_count} 个排队任务", "running", None
         if event_type == "job_started":
             return "job", "任务已开始", payload.get("message") or "任务已开始执行", "running", None
         if event_type == "job_completed":
@@ -104,6 +111,11 @@ class TraceEventMapper:
             status = payload.get("status") or "状态变更"
             reason = payload.get("reason") or ""
             return "status", str(status), str(reason or "状态已更新"), "running", None
+        if event_type == "goal_updated":
+            goal = payload.get("goal") or {}
+            return "goal", "Goal 已更新", str(goal.get("objective") or "Goal 状态已更新"), str(goal.get("status") or "active"), None
+        if event_type == "goal_cleared":
+            return "goal", "Goal 已清除", "当前会话 Goal 已清除", "completed", None
         if event_type == "agent_start":
             return "agent", "开始执行", payload.get("message") or "agent 启动，准备处理用户请求", "running", None
         if event_type == "agent_step":
@@ -112,6 +124,18 @@ class TraceEventMapper:
         if event_type == "llm_request":
             model = payload.get("model") or "未知模型"
             return "llm", "模型请求", f"正在请求模型：{model}", "running", None
+        if event_type == "model_failed":
+            model = payload.get("model") or "未知模型"
+            provider_id = payload.get("provider_id") or "未知 provider"
+            error_type = payload.get("error_type") or "ModelError"
+            error = payload.get("error") or "模型调用失败"
+            return (
+                "llm",
+                "模型调用失败",
+                f"{provider_id}/{model}：{error_type}: {error}",
+                "failed",
+                None,
+            )
         if event_type == "tool_call_start":
             tool_name = payload.get("tool_name") or payload.get("name") or "未知工具"
             return "tool", "调用工具", f"正在调用 {tool_name}", "running", tool_name

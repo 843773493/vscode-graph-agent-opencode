@@ -1,39 +1,32 @@
 from __future__ import annotations
 
-from configs.cli import (
-    DEVELOPMENT_ASSETS_ENV,
-    GATEWAY_E2E_WORKSPACE_ENV,
-    main,
-)
-from configs.defaults import build_boxteam_config
-from configs.development_assets import (
+from configs.cli import GATEWAY_DEVELOPMENT_ASSETS_ENV, main
+from configs.gateway_development_assets import (
     SSH_BLOCK_BEGIN,
     SSH_BLOCK_END,
     SSH_HOST_ALIAS,
     SSH_KEY_NAME,
     SSH_KNOWN_HOSTS_NAME,
-    install_development_ssh_assets,
+    install_gateway_development_assets,
 )
 from configs.installer import (
-    initialize_boxteam_config,
-    install_config_schema,
-    write_boxteam_config,
+    ConfigurationInstallation,
+    install_source_development_configuration,
+    install_user_configuration,
 )
 
 __all__ = [
-    "DEVELOPMENT_ASSETS_ENV",
-    "GATEWAY_E2E_WORKSPACE_ENV",
+    "GATEWAY_DEVELOPMENT_ASSETS_ENV",
     "SSH_BLOCK_BEGIN",
     "SSH_BLOCK_END",
     "SSH_HOST_ALIAS",
     "SSH_KEY_NAME",
     "SSH_KNOWN_HOSTS_NAME",
-    "build_boxteam_config",
-    "initialize_boxteam_config",
-    "install_config_schema",
-    "install_development_ssh_assets",
+    "ConfigurationInstallation",
+    "install_gateway_development_assets",
+    "install_source_development_configuration",
+    "install_user_configuration",
     "main",
-    "write_boxteam_config",
 ]
 
 

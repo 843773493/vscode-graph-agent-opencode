@@ -85,8 +85,10 @@
 2. 工作区业务数据必须存储在独立的 `${workspace_abs_path}/.boxteam/` 目录中；不得把会话、检查点、工具结果或 Agent 日志写入全局目录。
 3. Gateway 管理多个工作区的注册表、激活状态、SSH 重连信息和自身日志属于全局控制面数据，不得存放在默认工作区或任意工作区的 `.boxteam/` 中。
 4. 同一会话的 manifest、检查点、LLM 请求日志、Trace、后台任务、上下文历史、变更和工具结果必须统一聚合在 `${workspace_abs_path}/.boxteam/sessions/` 物理目录树中的同一个会话节点目录；保留的 `children/` 目录只承载物理子会话树，不属于父会话自身的附属数据。
-5. `.boxteam/sessions/{session_id}/` 不再是允许依赖的固定路径；会话节点可以位于任意合法的文件夹或父会话 `children/` 边界下，业务代码必须通过稳定 ID 和统一路径解析器取得当前物理路径。
-6. 会话物理目录树是会话位置和父子组织的唯一权威来源；`parent_session_id` 必须与最近的物理祖先会话一致，目录索引只能是可重建缓存，不得新增或继续维护一套与物理树并行写入的虚拟文件夹关系。
+5. `.boxteam/sessions/{session_id}/` 只描述根级会话的物理形态，不是允许业务代码拼接的固定定位方式；会话可以位于文件夹或父会话 `children/` 边界下，必须通过稳定 ID 和统一路径解析器取得绝对路径。
+6. 会话与会话文件夹的物理目录名必须分别严格等于 `session_id` 与 `folder_id`，显示名只存入权威目录索引，不得参与路径命名。
+7. `${workspace_abs_path}/.boxteam/navigation/session-catalog-index.json` 是会话位置和父子组织的唯一权威来源；物理树是受索引约束的存储结果。软件操作必须同步更新索引和物理目录；检测到绕过软件修改目录结构时必须明确报错，不得扫描磁盘并静默吸收改动。
+8. `parent_session_id` 必须与权威索引中最近的祖先会话一致；不得再维护第二套父子关系或把索引降级为可重建缓存。
 
 ### 架构原则
 
@@ -142,8 +144,8 @@
 
 1. 对所有 JS/TS 相关工具使用 `bun`。
 2. 对所有 Python 相关工具使用 `uv`。
-3. 用户级配置位于 `${BOXTEAM_HOME:-~/.boxteams}/config/boxteam.jsonc`，配置 schema 与其同目录；使用 `python -m configs.boxteam` 生成或安装配置。
-4. 工作区级配置位于 `${workspace_abs_path}/.boxteam/boxteam.jsonc`，其有效配置覆盖用户级配置中的同名项。
+3. Gateway 配置位于 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc`；Workspace 用户配置位于同目录 `workspace.jsonc`，两者 schema 与配置文件同目录；使用 `python -m configs.boxteam` 安装或迁移配置。
+4. 工作区级配置位于 `${workspace_abs_path}/.boxteam/workspace.jsonc`，其有效配置覆盖用户级 `workspace.jsonc` 中的同名项；Gateway 不得读取该文件。
 5. 工作区后端初始化只能创建当前显式工作区的 `.boxteam/` 数据目录，不得顺带创建用户默认工作区或修改 Gateway 全局状态。
 
 ## 代理协作

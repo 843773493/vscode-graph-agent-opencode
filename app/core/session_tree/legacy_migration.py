@@ -155,7 +155,7 @@ class SessionLegacyLayoutMigrationSupport:
                 operations=operations,
                 migration_path=migration_path,
             )
-            self.refresh()
+            self._scan_physical_tree_locked()
             archived_navigation: str | None = None
             if legacy_navigation_path.exists():
                 archive_path = migration_dir / "session-folders-v1.json"

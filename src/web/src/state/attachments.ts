@@ -1,4 +1,4 @@
-import type { AttachmentRef, Message, TraceEvent } from "../types/backend";
+import type { AttachmentRef, TraceEvent } from "../types/backend";
 import type { SessionAttachmentSummary } from "../types/frontend";
 import { rawTracePayload } from "./traceEvents";
 
@@ -39,23 +39,6 @@ export function updateSessionAttachmentSummary(
     names: Array.from(names).slice(0, 3),
     latestAt: createdAt ?? previous?.latestAt ?? null,
   });
-}
-
-export function updateAttachmentSummariesFromMessages(
-  summaries: Map<string, SessionAttachmentSummary>,
-  messages: Message[],
-) {
-  for (const message of messages) {
-    if (message.role !== "user") {
-      continue;
-    }
-    updateSessionAttachmentSummary(
-      summaries,
-      message.session_id,
-      message.attachments ?? [],
-      message.created_at ?? null,
-    );
-  }
 }
 
 export function updateAttachmentSummariesFromTraces(

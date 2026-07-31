@@ -28,17 +28,9 @@ export function initializeUserConfiguration({
       .filter(Boolean)
       .join(path.delimiter),
   };
-  if (runtime.distribution !== "source-development") {
-    childEnvironment.BOXTEAM_INSTALL_DEVELOPMENT_ASSETS = "0";
-    childEnvironment.BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE = "0";
-  }
-  const configArgs =
-    runtime.distribution === "source-development"
-      ? ["--project-root", runtime.applicationRoot, ...args]
-      : args;
   const result = spawnSyncImpl(
     runtime.pythonExecutable,
-    ["-m", "configs.boxteam", ...configArgs],
+    ["-m", "configs.boxteam", ...args],
     {
       cwd: runtime.applicationRoot,
       env: childEnvironment,

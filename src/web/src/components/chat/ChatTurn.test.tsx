@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ConversationView } from "../../types/frontend";
-import ChatTurn from "./ChatTurn";
+import ChatTurn, {
+  areChatTurnPropsEqual,
+  type ChatTurnProps,
+} from "./ChatTurn";
 
 const pendingActionProps = {
   onUpdatePending: async () => {},
@@ -56,12 +60,147 @@ function conversation(
     status,
     jobId: "job_1",
     pending: false,
-    source: "messages",
+    source: "turn",
+  };
+}
+
+const replayTurn = async () => {};
+
+function chatTurnProps(value: ConversationView): ChatTurnProps {
+  return {
+    ...mediaProps,
+    conversation: value,
+    showRawDetails: false,
+    isLastTurn: false,
+    sessionBusy: false,
+    onReplayTurn: replayTurn,
+    ...pendingActionProps,
   };
 }
 
 
 describe("ChatTurn 轮次动作", () => {
+  test("其他 Turn revision 更新时已完成 Turn 不重新渲染", () => {
+    let renderCount = 0;
+    const MemoProbe = React.memo(
+      ({ value }: { value: ChatTurnProps }) => {
+        renderCount += 1;
+        return <span>{value.conversation.conversationId}</span>;
+      },
+      (previous, next) => areChatTurnPropsEqual(previous.value, next.value),
+    );
+    const first = conversation("done");
+    first.turnId = "job_1";
+    first.turnRevision = 4;
+    first.turnItemsView = "full";
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(<MemoProbe value={chatTurnProps(first)} />);
+    });
+    const reconstructed = conversation("done");
+    reconstructed.turnId = "job_1";
+    reconstructed.turnRevision = 4;
+    reconstructed.turnItemsView = "full";
+    act(() => {
+      renderer!.update(<MemoProbe value={chatTurnProps(reconstructed)} />);
+    });
+    expect(renderCount).toBe(1);
+
+    const revised = { ...reconstructed, turnRevision: 5 };
+    act(() => {
+      renderer!.update(<MemoProbe value={chatTurnProps(revised)} />);
+    });
+    expect(renderCount).toBe(2);
+    renderer!.unmount();
+  });
+
+  test("活动 Turn 同 revision 的 streaming 更新不会被 memo 阻挡", () => {
+    const previous = conversation("running", "text_delta");
+    previous.turnId = "job_1";
+    previous.turnRevision = 2;
+    previous.turnItemsView = "full";
+    const next = {
+      ...previous,
+      events: [
+        ...previous.events,
+        { ...previous.events[0], event_id: "evt_2" },
+      ],
+    };
+
+    expect(areChatTurnPropsEqual(
+      chatTurnProps(previous),
+      chatTurnProps(next),
+    )).toBe(false);
+  });
+
+  test("bounded detail 只有 text_end 时直接展示完整正文", () => {
+    const value = conversation("done");
+    value.assistantMessages = [];
+    value.events = [{
+      ...value.events[0],
+      event_id: "evt_bounded_end",
+      part_id: "part_bounded_end",
+      type: "text_end",
+      payload: { kind: "markdown", text: "Turn detail 最终正文" },
+    }];
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain("Turn detail 最终正文");
+    expect(html).not.toContain("尚未开始");
+  });
+
+  test("晚加入 SSE 的 startless delta 先作为活动正文展示", () => {
+    const value = conversation("running");
+    value.assistantMessages = [];
+    value.events = [{
+      ...value.events[0],
+      event_id: "evt_joined_delta",
+      part_id: "part_joined_delta",
+      type: "text_delta",
+      payload: { kind: "markdown", text: "已接入的流式片段" },
+    }];
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain("已接入的流式片段");
+    expect(html).not.toContain("尚未开始");
+  });
+
+  test("Turn summary 先展示预览并禁止基于截断内容操作", () => {
+    const value = conversation("done");
+    value.turnId = "job_1";
+    value.turnRevision = 1;
+    value.turnItemsView = "summary";
+    value.userMessage = {
+      ...value.userMessage!,
+      metadata: { source: "turn_projection", summary: true },
+    };
+    value.assistantMessages = [{
+      ...value.assistantMessages![0],
+      content: "最新 Turn 预览",
+      metadata: { source: "turn_projection", summary: true },
+    }];
+
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        {...mediaProps}
+        conversation={value}
+        showRawDetails={false}
+        isLastTurn
+        sessionBusy={false}
+        onReplayTurn={async () => {}}
+        {...pendingActionProps}
+      />,
+    );
+
+    expect(html).toContain("最新 Turn 预览");
+    expect(html).toContain("正在加载完整内容");
+    expect(html).not.toContain("编辑并从此处继续");
+    expect(html).not.toContain("重新生成最后回复");
+  });
+
   test("最后一个完成轮次展示内联编辑和重新生成入口", () => {
     const html = renderToStaticMarkup(
       <ChatTurn
@@ -169,5 +308,55 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).toContain('title="编辑"');
     expect(html).toContain('title="立即发送"');
     expect(html).toContain('title="从队列撤回"');
+  });
+
+  test("内部委派任务使用专用展示且不允许编辑或重新生成", () => {
+    const value = conversation("done");
+    value.userMessage = {
+      ...value.userMessage!,
+      content: "检查认证模块",
+      metadata: { internal_display_kind: "delegated_task" },
+    };
+
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        {...mediaProps}
+        conversation={value}
+        showRawDetails={false}
+        isLastTurn
+        sessionBusy={false}
+        onReplayTurn={async () => {}}
+        {...pendingActionProps}
+      />,
+    );
+
+    expect(html).toContain("委派任务");
+    expect(html).toContain("检查认证模块");
+    expect(html).not.toContain("编辑并从此处继续");
+    expect(html).not.toContain("重新生成最后回复");
+  });
+
+  test("生成分支回报显示为内部会话生成状态", () => {
+    const value = conversation("done");
+    value.userMessage = {
+      ...value.userMessage!,
+      content: "生成分支已结束，主会话正在处理返回结果。",
+      metadata: { internal_display_kind: "generated_session_result" },
+    };
+
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        {...mediaProps}
+        conversation={value}
+        showRawDetails={false}
+        isLastTurn
+        sessionBusy={false}
+        onReplayTurn={async () => {}}
+        {...pendingActionProps}
+      />,
+    );
+
+    expect(html).toContain("会话生成");
+    expect(html).not.toContain("generated_session_result");
   });
 });

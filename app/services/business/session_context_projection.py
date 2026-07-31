@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from app.prompting.validation import internal_prompt_metadata
 from app.schemas.public_v2.session import SessionDTO
 from app.schemas.public_v2.session_context import (
     SessionContextInclude,
@@ -63,10 +64,16 @@ def visible_text(record: dict[str, object]) -> str:
 
 def is_effective_user(record: dict[str, object]) -> bool:
     text = visible_text(record)
+    response_metadata = record.get("response_metadata")
+    is_internal = (
+        internal_prompt_metadata(response_metadata)
+        if isinstance(response_metadata, dict)
+        else None
+    )
     return (
         record_role(record) == "user"
         and bool(text)
-        and not text.lstrip().startswith("<system_reminder>")
+        and is_internal is None
     )
 
 

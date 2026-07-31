@@ -175,6 +175,15 @@ async def test_interrupt_text_phase_then_send_second_message(client: httpx.Async
     assert "文本生成" in str(reminder_records[-1].get("content", ""))
     assert reminder_records[-1]["response_metadata"]["source"] == "user_interrupt"
     assert reminder_records[-1]["response_metadata"]["user_initiated"] is True
+    assert reminder_records[-1]["response_metadata"]["structured_prompt_kind"] == (
+        "checkpoint_reminder"
+    )
+    assert (
+        reminder_records[-1]["response_metadata"][
+            "structured_prompt_schema_version"
+        ]
+        == 2
+    )
 
     assistant_records = [record for record in records if record.get("role") == "assistant"]
     assert all(
@@ -243,6 +252,15 @@ async def test_interrupt_tool_phase_then_send_second_message(client: httpx.Async
     assert "emit_system_time_messages" in str(reminder_records[-1].get("content", ""))
     assert reminder_records[-1]["response_metadata"]["source"] == "user_interrupt"
     assert reminder_records[-1]["response_metadata"]["user_initiated"] is True
+    assert reminder_records[-1]["response_metadata"]["structured_prompt_kind"] == (
+        "checkpoint_reminder"
+    )
+    assert (
+        reminder_records[-1]["response_metadata"][
+            "structured_prompt_schema_version"
+        ]
+        == 2
+    )
 
     assistant_records = [record for record in records if record.get("role") == "assistant"]
     assert all(

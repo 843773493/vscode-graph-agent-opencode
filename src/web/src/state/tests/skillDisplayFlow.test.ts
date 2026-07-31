@@ -101,7 +101,7 @@ const conversation: ConversationView = {
   status: "done",
   jobId: "job_skill_display",
   pending: false,
-  source: "messages",
+  source: "turn",
 };
 
 const items = buildTraceTimelineItems([conversation]);

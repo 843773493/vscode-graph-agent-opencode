@@ -45,12 +45,12 @@ def _prepare_workspace(path: Path, name: str) -> Path:
 
 
 def _copy_workspace_config(source_workspace: Path, target_workspace: Path) -> None:
-    target_config = target_workspace / ".boxteam" / "boxteam.jsonc"
+    target_config = target_workspace / ".boxteam" / "workspace.jsonc"
     target_config.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_workspace / ".boxteam" / "boxteam.jsonc", target_config)
+    shutil.copy2(source_workspace / ".boxteam" / "workspace.jsonc", target_config)
     shutil.copy2(
-        source_workspace / ".boxteam" / "config.schema.jsonc",
-        target_config.parent / "config.schema.jsonc",
+        source_workspace / ".boxteam" / "workspace_config.jsonc",
+        target_config.parent / "workspace_config.jsonc",
     )
 
 

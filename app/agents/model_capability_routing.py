@@ -6,6 +6,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse
+from langchain_core.callbacks.manager import adispatch_custom_event, dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
@@ -19,8 +20,24 @@ from app.agents.provider_capabilities import (
 @dataclass(frozen=True)
 class ProviderModelCandidate:
     provider_id: str
+    model_id: str
     model: BaseChatModel
     capabilities: frozenset[ProviderCapability]
+
+
+MODEL_FAILED_CUSTOM_EVENT = "boxteam_model_failed"
+
+
+def _failure_payload(
+    candidate: ProviderModelCandidate,
+    error: Exception,
+) -> dict[str, str]:
+    return {
+        "provider_id": candidate.provider_id,
+        "model": candidate.model_id,
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
 
 
 class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -66,6 +83,10 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                 return handler(request.override(model=candidate.model))
             except Exception as error:
                 last_error = error
+                dispatch_custom_event(
+                    MODEL_FAILED_CUSTOM_EVENT,
+                    _failure_payload(candidate, error),
+                )
         if last_error is None:
             raise RuntimeError("模型能力路由没有产生可执行候选")
         raise last_error
@@ -81,6 +102,10 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                 return await handler(request.override(model=candidate.model))
             except Exception as error:
                 last_error = error
+                await adispatch_custom_event(
+                    MODEL_FAILED_CUSTOM_EVENT,
+                    _failure_payload(candidate, error),
+                )
         if last_error is None:
             raise RuntimeError("模型能力路由没有产生可执行候选")
         raise last_error
@@ -92,8 +117,10 @@ def build_provider_model_candidate(
     model: BaseChatModel,
 ) -> ProviderModelCandidate:
     provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
+    model_id = str(provider.get("model") or provider_id)
     return ProviderModelCandidate(
         provider_id=provider_id,
+        model_id=model_id,
         model=model,
         capabilities=frozenset(parse_provider_capabilities(provider)),
     )

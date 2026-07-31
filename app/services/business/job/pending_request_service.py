@@ -9,6 +9,7 @@ from app.schemas.public_v2.pending_request import (
     PendingRequestDTO,
     PendingRequestListDTO,
     PendingRequestOrderItem,
+    PendingRequestSummaryListDTO,
 )
 from app.services.business.job.pending_queue import JobPendingQueue
 from app.services.business.job.pending_request_controller import (
@@ -48,6 +49,16 @@ class JobPendingRequestService:
 
     async def list(self, session_id: str) -> PendingRequestListDTO:
         return await self._controller.list(session_id)
+
+    async def list_summaries(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> PendingRequestSummaryListDTO:
+        if session_id in self._loaded_sessions or self._store is None:
+            return await self._controller.list_summaries(session_id, limit=limit)
+        return await self._store.load_summaries(session_id, limit=limit)
 
     async def update(
         self,

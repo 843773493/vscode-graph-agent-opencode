@@ -1,37 +1,42 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.abstractions.session_subagent import SessionSubagentProtocol
-from app.abstractions.team import TeamCoordinationProtocol
-from app.agents.agent_factory import create_runtime_deep_agent_for_session, resolve_agent_id
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
-from app.agents.model_tool_schema import export_model_tool_json_schema
-from app.agents.policy import catalog_group_for_tool, custom_tool_spec_names
-from app.agents.skill_runtime import discover_workspace_custom_tool_skill_map
-from app.services.infrastructure.config_service import ConfigService
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_registry import BackgroundTaskRegistry
-from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
-from app.services.infrastructure.browser_manager_client import BrowserManagerClient
-from langchain_core.tools import BaseTool
 from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
+from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_subagent import SessionSubagentProtocol
+from app.abstractions.team import TeamCoordinationProtocol
+from app.agents.agent_factory import (
+    create_runtime_deep_agent_for_session,
+    resolve_agent_id,
+)
+from app.agents.graph_tool_adapter import extract_agent_tools_by_name
+from app.agents.model_tool_schema import export_model_tool_json_schema
+from app.agents.policy import catalog_group_for_tool, custom_tool_spec_names
+from app.agents.skill_runtime import discover_workspace_custom_tool_skill_map
+from app.core.background_message_bus import BackgroundMessageBus
+from app.core.background_task_registry import BackgroundTaskRegistry
+from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
+    from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
 
 
 class AgentRuntimeDependencyProvider(Protocol):
+    def get_goal_service(self) -> SessionGoalService: ...
     def get_message_service(self) -> "MessageService": ...
 
     def get_session_service(self) -> "SessionService": ...
@@ -87,6 +92,7 @@ def build_session_agent_runtime(
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
         job_service=dependency_provider.get_job_service(),
+        goal_service=dependency_provider.get_goal_service(),
         message_service=dependency_provider.get_message_service(),
         session_service=dependency_provider.get_session_service(),
         session_orchestrator=dependency_provider.get_session_orchestrator(),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
@@ -10,6 +11,7 @@ from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.schemas import AddSshWorkspaceRequest
 from app.gateway.ssh_command import build_ssh_command
 from app.gateway.ssh_config import list_user_ssh_hosts, resolve_user_ssh_host
+from app.gateway.ssh_connections import resolve_ssh_connection_request
 
 
 @pytest.fixture
@@ -100,12 +102,29 @@ def test_ssh_command_preserves_config_alias_and_explicit_connection(
     assert "-p" in explicit_command
 
 
-def test_add_ssh_request_requires_exactly_one_configured_connection_source():
+def test_add_ssh_request_accepts_selection_or_complete_manual_connection():
     selected = AddSshWorkspaceRequest(
         ssh_config_host="dev",
         remote_gateway_port=8014,
     )
     assert selected.ssh_config_host == "dev"
+    manual = AddSshWorkspaceRequest(
+        name="GPU 主机",
+        host="dev.example.com",
+        port=2222,
+        username="developer",
+        private_key_path="~/.ssh/id_ed25519",
+        remote_gateway_port=8014,
+    )
+    assert manual.host == "dev.example.com"
+    assert manual.port == 2222
+    resolved_manual = resolve_ssh_connection_request(
+        manual,
+        Mock(spec=GatewayWorkspaceRegistry),
+    )
+    assert resolved_manual.host == "dev.example.com"
+    assert resolved_manual.username == "developer"
+    assert resolved_manual.private_key_path == "~/.ssh/id_ed25519"
 
     with pytest.raises(ValidationError, match="必须且只能选择"):
         AddSshWorkspaceRequest(remote_gateway_port=8014)
@@ -115,8 +134,15 @@ def test_add_ssh_request_requires_exactly_one_configured_connection_source():
             ssh_config_host="dev",
             remote_gateway_port=8014,
         )
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+    with pytest.raises(ValidationError, match="必须提供主机、用户名和私钥路径"):
         AddSshWorkspaceRequest(
+            host="dev.example.com",
+            username="developer",
+            remote_gateway_port=8014,
+        )
+    with pytest.raises(ValidationError, match="必须且只能选择"):
+        AddSshWorkspaceRequest(
+            ssh_config_host="dev",
             host="dev.example.com",
             username="developer",
             private_key_path="~/.ssh/id_ed25519",

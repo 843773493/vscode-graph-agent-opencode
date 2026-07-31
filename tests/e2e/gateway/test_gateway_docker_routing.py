@@ -238,7 +238,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
 
         close_gateway_process(gateway)
         gateway = None
-        config_path = local_workspace / ".boxteam" / "boxteam.jsonc"
+        config_path = local_workspace / ".boxteam" / "workspace.jsonc"
         config_payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
         config_payload["gateway"] = {"workspaces": []}
         config_path.write_text(

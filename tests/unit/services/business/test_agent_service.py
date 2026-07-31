@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -8,21 +7,14 @@ import pytest
 from app.agents.policy import DEFAULT_AGENT_TOOL_NAMES
 from app.services.business.agent_service import AgentService
 from app.services.infrastructure.config_service import ConfigService
-from configs.boxteam import build_boxteam_config
 
 
 @pytest.mark.asyncio
 async def test_generated_agents_display_same_effective_tools_as_policy(
     tmp_path: Path,
 ) -> None:
-    config_path = tmp_path / "boxteam.jsonc"
-    config_path.write_text(
-        json.dumps(
-            build_boxteam_config(development_assets=False),
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    config_path = tmp_path / "workspace.jsonc"
+    config_path.write_bytes(Path("configs/workspace.jsonc").read_bytes())
     config_service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,

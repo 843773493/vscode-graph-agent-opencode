@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import json
-
+from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import (
     BeforeSubagentStart,
     GENERAL_PURPOSE_SUBAGENT,
     SessionStoreProtocol,
     SessionSubagentAccepted,
+)
+from app.prompting import (
+    PromptSection,
+    internal_message_factory,
 )
 
 
@@ -34,6 +37,7 @@ class SessionSubagentService:
         subagent_type: str,
         title: str | None = None,
         trusted_context: dict[str, object] | None = None,
+        untrusted_instructions: str | None = None,
         before_start: BeforeSubagentStart | None = None,
     ) -> SessionSubagentAccepted:
         normalized_description = description.strip()
@@ -77,7 +81,7 @@ class SessionSubagentService:
                     "委派子会话已创建，但启动前准备失败: "
                     f"child_session_id={child_session.session_id} error={error}"
                 ) from error
-        delegation_content = self._build_delegation_content(
+        delegation_message = self._build_delegation_message(
             parent_session_id=parent_session_id,
             parent_agent_id=parent_agent_id,
             parent_job_id=parent_job_id,
@@ -86,19 +90,12 @@ class SessionSubagentService:
             subagent_type=subagent_type,
             description=normalized_description,
             trusted_context=dict(trusted_context or {}),
+            untrusted_instructions=untrusted_instructions,
         )
         try:
-            accepted = await self._session_orchestrator.create_and_run(
+            accepted = await self._session_orchestrator.create_and_run_internal(
                 child_session.session_id,
-                delegation_content,
-                metadata={
-                    "source": "session_subagent_delegation",
-                    "parent_session_id": parent_session_id,
-                    "parent_job_id": parent_job_id,
-                    "parent_tool_call_id": parent_tool_call_id,
-                    "subagent_type": subagent_type,
-                    "trusted_context": dict(trusted_context or {}),
-                },
+                delegation_message,
             )
         except Exception as error:
             await self._session_service.set_delegation_start_result(
@@ -136,7 +133,33 @@ class SessionSubagentService:
         subagent_type: str,
         description: str,
         trusted_context: dict[str, object],
+        untrusted_instructions: str | None = None,
     ) -> str:
+        return SessionSubagentService._build_delegation_message(
+            parent_session_id=parent_session_id,
+            parent_agent_id=parent_agent_id,
+            parent_job_id=parent_job_id,
+            parent_tool_call_id=parent_tool_call_id,
+            child_session_id=child_session_id,
+            subagent_type=subagent_type,
+            description=description,
+            trusted_context=trusted_context,
+            untrusted_instructions=untrusted_instructions,
+        ).content
+
+    @staticmethod
+    def _build_delegation_message(
+        *,
+        parent_session_id: str,
+        parent_agent_id: str,
+        parent_job_id: str,
+        parent_tool_call_id: str,
+        child_session_id: str,
+        subagent_type: str,
+        description: str,
+        trusted_context: dict[str, object],
+        untrusted_instructions: str | None = None,
+    ) -> PreparedInternalMessage:
         metadata = {
             "type": "subagent_delegation",
             "parent_session_id": parent_session_id,
@@ -153,16 +176,31 @@ class SessionSubagentService:
                 "kinds": ["question", "progress", "result"],
             },
         }
-        return (
-            "<system_reminder>\n"
-            f"{json.dumps(metadata, ensure_ascii=False, indent=2)}\n"
-            "你是由父 Agent 创建的独立子会话。不要假设本会话的普通最终回复会自动返回父 Agent。\n"
-            "需要提问、汇报进度或提交最终结果时，必须调用 send_message_to_session，"
-            "target_session_id 使用上面的可信值，simulate_user=false；"
-            "提问用 kind=question，进度用 kind=progress，最终结果用 kind=result。\n"
-            "父子会话采用异步轮次通信；消息可能在目标会话当前任务结束后才开始处理。\n"
-            "</system_reminder>\n"
-            "<delegated_task>\n"
-            f"{description}\n"
-            "</delegated_task>"
+        return internal_message_factory.build(
+            kind="delegated_task",
+            control=(
+                "你是由父 Agent 创建的独立子会话。不要假设本会话的普通最终回复会自动返回父 Agent。\n"
+                "需要提问、汇报进度或提交最终结果时，必须调用 send_message_to_session，"
+                "target_session_id 使用 control_context 中的可信值，simulate_user=false；"
+                "提问用 kind=question，进度用 kind=progress，最终结果用 kind=result。\n"
+                "父子会话采用异步轮次通信；消息可能在目标会话当前任务结束后才开始处理。"
+            ),
+            sections=(
+                PromptSection("control_context", metadata),
+                PromptSection("delegated_task", description),
+                *(
+                    (PromptSection("untrusted_instructions", untrusted_instructions),)
+                    if untrusted_instructions
+                    else ()
+                ),
+            ),
+            metadata={
+                "source": "session_subagent_delegation",
+                "parent_session_id": parent_session_id,
+                "parent_job_id": parent_job_id,
+                "parent_tool_call_id": parent_tool_call_id,
+                "subagent_type": subagent_type,
+                "trusted_context": trusted_context,
+            },
+            display_content=description,
         )

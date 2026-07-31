@@ -22,9 +22,10 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.runtime import Runtime
 
-from app.core.path_utils import get_workspace_root
 from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
 from app.agents.workspace_backend import build_workspace_backend
+from app.core.path_utils import get_workspace_root
+from app.prompting import PromptSection, internal_message_factory
 
 WORKSPACE_AGENTS_FILE = "AGENTS.md"
 WORKSPACE_SKILLS_SOURCE = "/.boxteam/skills"
@@ -67,14 +68,18 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
     def _format_agents_text(content: str) -> str:
         if not content:
             return ""
+        section = internal_message_factory.render_system_prompt_section(
+            PromptSection(
+                "workspace_agents_md",
+                content,
+                attributes={"path": "/AGENTS.md"},
+            )
+        )
         return (
             "## Workspace AGENTS.md\n\n"
             "以下内容自动加载自当前工作区根目录 `AGENTS.md`。"
             "它是本地工作区指令；若与更高优先级系统/开发者指令冲突，"
-            "以后者为准。\n\n"
-            "<workspace_agents_md path=\"/AGENTS.md\">\n"
-            f"{content}\n"
-            "</workspace_agents_md>"
+            f"以后者为准。\n\n{section}"
         )
 
     @staticmethod
@@ -146,6 +151,13 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
 
     @staticmethod
     def _build_change_reminder(previous: str, current: str) -> str:
+        return WorkspaceAgentsMiddleware._build_change_message(
+            previous,
+            current,
+        ).content
+
+    @staticmethod
+    def _build_change_message(previous: str, current: str):
         diff = "".join(
             difflib.unified_diff(
                 previous.splitlines(keepends=True),
@@ -156,16 +168,25 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
         )
         if not diff:
             raise RuntimeError("AGENTS.md 内容变化但没有生成差异")
-        return (
-            "<system_reminder>\n"
-            "工作区根目录 AGENTS.md 在当前会话期间发生变化。为保持模型提示缓存，"
-            "本轮不会替换 system prompt 中已加载的完整版本；以下增量变更从现在起生效。"
-            "会话上下文完成压缩后，当前工作区的最新完整 AGENTS.md 将重新加载到 "
-            "system prompt。\n\n"
-            "<workspace_agents_md_change path=\"/AGENTS.md\">\n"
-            f"{diff}"
-            "</workspace_agents_md_change>\n"
-            "</system_reminder>"
+        return internal_message_factory.build(
+            kind="workspace_agents_change",
+            control=(
+                "工作区根目录 AGENTS.md 在当前会话期间发生变化。为保持模型提示缓存，"
+                "本轮不会替换 system prompt 中已加载的完整版本；"
+                "以下增量变更从现在起生效。会话上下文完成压缩后，"
+                "当前工作区的最新完整 AGENTS.md 将重新加载到 system prompt。"
+            ),
+            sections=(
+                PromptSection(
+                    "workspace_agents_md_change",
+                    diff,
+                    attributes={"path": "/AGENTS.md"},
+                ),
+            ),
+            metadata={
+                "source": "workspace_agents_change",
+                "path": "/AGENTS.md",
+            },
         )
 
     def before_model(
@@ -200,7 +221,7 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
         if current_content == previous_content:
             return None
 
-        reminder = self._build_change_reminder(previous_content, current_content)
+        reminder = self._build_change_message(previous_content, current_content)
         return {
             "_workspace_agents_snapshot": {
                 **snapshot,
@@ -208,11 +229,8 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
             },
             "messages": [
                 HumanMessage(
-                    content=reminder,
-                    response_metadata={
-                        "source": "workspace_agents_change",
-                        "path": "/AGENTS.md",
-                    },
+                    content=reminder.content,
+                    response_metadata=reminder.metadata,
                 )
             ],
         }

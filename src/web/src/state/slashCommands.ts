@@ -112,6 +112,12 @@ export const COMPOSER_SLASH_COMMANDS: SlashCommandOption[] = [
     description: "Compact the current session.",
   },
   {
+    id: "goal",
+    command: "/goal",
+    title: "持久目标",
+    description: "查看或设置目标；支持 edit、pause、resume、clear。",
+  },
+  {
     id: "agent",
     command: "/agent",
     title: "选择 Agent",

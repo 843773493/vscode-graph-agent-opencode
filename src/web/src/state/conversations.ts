@@ -1,143 +1,168 @@
-import type {
-  AttachmentRef,
-  Message,
-  PendingRequestList,
-  TraceEvent,
-} from "../types/backend";
+import type { Message, PendingRequestList, TraceEvent } from "../types/backend";
 import type { AppState, ConversationView } from "../types/frontend";
+import { isTurnDetail, type TurnRecord } from "./session/turnTimeline";
 import {
   dedupeTraceEvents,
   isJobTerminalTraceType,
   isTerminalTraceType,
-  rawTracePayload,
   terminalStatusForEvent,
   traceJobId,
   tracePayloadString,
 } from "./traceEvents";
 
-function groupMessagesIntoConversations(
-  messages: Message[],
-): ConversationView[] {
-  const conversations: ConversationView[] = [];
-  let current: ConversationView | null = null;
-  const seenUserMessageIds = new Set<string>();
+export const PENDING_CONVERSATION_EVENT_LIMIT = 512;
 
-  for (const message of messages) {
-    if (message.role === "user") {
-      const messageId = message.message_id;
-      if (seenUserMessageIds.has(messageId)) {
-        continue;
-      }
-      seenUserMessageIds.add(messageId);
-      current = {
-        conversationId: messageId,
-        sessionId: message.session_id,
-        userMessage: message,
-        assistantMessages: [],
-        events: [],
-        status: "done",
-        jobId: String(message.metadata?.job_id ?? "") || null,
-        pending: false,
-        source: "messages",
-      };
-      conversations.push(current);
+function compactPendingConversationEvents(
+  events: TraceEvent[],
+  limit: number = PENDING_CONVERSATION_EVENT_LIMIT,
+): TraceEvent[] {
+  if (events.length <= limit) return events;
+  const provisionalTail = events.slice(-Math.floor(limit / 2));
+  const activePartIds = new Set(
+    provisionalTail.flatMap((event) =>
+      event.part_id && ["text_start", "text_delta", "text_end"].includes(event.type)
+        ? [event.part_id]
+        : [],
+    ),
+  );
+  const summarizedPartIds = [...new Set(events.flatMap((event) =>
+    event.type === "text_delta" && event.part_id && activePartIds.has(event.part_id)
+      ? [event.part_id]
+      : [],
+  ))].slice(-Math.floor(limit / 2));
+  if (summarizedPartIds.length === 0) return events.slice(-limit);
+
+  const tailBudget = limit - summarizedPartIds.length;
+  const prefix = events.slice(0, events.length - tailBudget);
+  const selectedParts = new Set(summarizedPartIds);
+  const summaries = new Map<string, { first: TraceEvent; last: TraceEvent; text: string }>();
+  for (const event of prefix) {
+    if (event.type !== "text_delta" || !event.part_id || !selectedParts.has(event.part_id)) {
       continue;
     }
-
-    if (!current) {
-      current = {
-        conversationId: message.message_id,
-        sessionId: message.session_id,
-        userMessage: null,
-        assistantMessages: [],
-        events: [],
-        status: "done",
-        jobId: String(message.metadata?.job_id ?? "") || null,
-        pending: false,
-        source: "messages",
-      };
-      conversations.push(current);
-    }
-    if (message.role === "assistant") {
-      current.assistantMessages = [...(current.assistantMessages ?? []), message];
-    }
+    const current = summaries.get(event.part_id);
+    const text = tracePayloadString(event, "text");
+    summaries.set(event.part_id, current
+      ? { ...current, last: event, text: current.text + text }
+      : { first: event, last: event, text });
   }
-
-  return conversations;
+  const compacted = [...summaries.entries()].map(([partId, summary]) => ({
+    ...summary.last,
+    event_id: `compacted:${partId}:${summary.last.event_id}`,
+    part_id: partId,
+    content: summary.text,
+    payload: { ...(summary.last.payload ?? {}), text: summary.text },
+    raw: summary.last.raw
+      ? {
+          ...summary.last.raw,
+          payload: { ...(summary.last.raw.payload ?? {}), text: summary.text },
+        }
+      : summary.last.raw,
+  }));
+  return [...compacted, ...events.slice(-tailBudget)];
 }
 
-function attachTraceEventsToConversations(
-  conversations: ConversationView[],
-  traceEvents: TraceEvent[],
-): ConversationView[] {
-  if (conversations.length === 0 || traceEvents.length === 0) {
-    return conversations;
+function turnConversationStatus(
+  turn: TurnRecord,
+): ConversationView["status"] {
+  if (turn.status === "accepted" || turn.status === "queued") {
+    return "queued";
   }
+  if (turn.status === "completed" || turn.status === "succeeded") {
+    return "done";
+  }
+  if (
+    turn.status === "failed"
+    || turn.status === "cancelled"
+    || turn.status === "timed_out"
+  ) {
+    return "error";
+  }
+  return "running";
+}
 
-  const dedupedEvents = dedupeTraceEvents(traceEvents);
-  interface MessageBoundary {
-    messageId: string;
-    jobId: string;
-    timestamp: number;
-  }
-  const boundaries: MessageBoundary[] = [];
-  for (const event of dedupedEvents) {
-    if (event.type === "message_created") {
-      const innerPayload = event.raw?.payload ?? event.payload ?? {};
-      const msgId =
-        typeof innerPayload.message_id === "string"
-          ? innerPayload.message_id
-          : "";
-      if (msgId) {
-        boundaries.push({
-          messageId: msgId,
-          jobId: traceJobId(event),
-          timestamp: new Date(event.timestamp).getTime(),
-        });
+function conversationFromTurn(turn: TurnRecord): ConversationView {
+  const userMessages = turn.user_messages ?? [];
+  const firstUserMessage = userMessages[0];
+  const userContent = userMessages.map((message) =>
+    "content" in message ? message.content : message.preview ?? "",
+  ).join("\n\n");
+  const attachments = isTurnDetail(turn)
+    ? userMessages.flatMap((message) =>
+      "attachments" in message ? message.attachments ?? [] : [],
+    )
+    : [];
+  const userMessage: Message | null = firstUserMessage
+    ? {
+        message_id: firstUserMessage.message_id,
+        session_id: turn.session_id,
+        role: "user",
+        content: userContent,
+        attachments,
+        metadata: {
+          ...("metadata" in firstUserMessage
+            ? firstUserMessage.metadata ?? {}
+            : {}),
+          source: "turn_projection",
+          job_id: turn.job_id,
+          turn_id: turn.turn_id,
+          turn_revision: turn.revision,
+          summary: !isTurnDetail(turn),
+        },
+        created_at: firstUserMessage.created_at,
+        updated_at: turn.updated_at,
       }
-    }
+    : null;
+  const assistantContent = isTurnDetail(turn)
+    ? turn.final_response ?? turn.response_preview ?? ""
+    : turn.response_preview ?? "";
+  const assistantMessages: Message[] = assistantContent
+    ? [{
+        message_id: `${turn.turn_id}:assistant`,
+        session_id: turn.session_id,
+        role: "assistant",
+        content: assistantContent,
+        attachments: [],
+        metadata: {
+          source: "turn_projection",
+          job_id: turn.job_id,
+          turn_id: turn.turn_id,
+          turn_revision: turn.revision,
+          summary: !isTurnDetail(turn),
+        },
+        created_at: turn.completed_at ?? turn.updated_at,
+        updated_at: turn.updated_at,
+      }]
+    : [];
+
+  return {
+    conversationId: turn.turn_id,
+    turnId: turn.turn_id,
+    turnRevision: turn.revision,
+    turnItemsView: isTurnDetail(turn) ? "full" : "summary",
+    sessionId: turn.session_id,
+    userMessage,
+    assistantMessages,
+    events: isTurnDetail(turn) ? (turn.items ?? []) as TraceEvent[] : [],
+    status: turnConversationStatus(turn),
+    jobId: turn.job_id,
+    pending: false,
+    source: "turn",
+  };
+}
+
+function turnTimelineConversations(
+  state: AppState,
+  sessionCacheKey: string,
+  sessionId: string,
+): ConversationView[] {
+  const timeline = state.turnTimelinesBySession?.get(sessionCacheKey);
+  if (!timeline) {
+    return [];
   }
-
-  const boundaryTs = boundaries.map((b) => b.timestamp);
-
-  return conversations.map((conversation) => {
-    const userMsgId = conversation.userMessage?.message_id ?? "";
-    const boundaryIndex = boundaries.findIndex(
-      (b) => b.messageId === userMsgId,
-    );
-    if (boundaryIndex === -1) {
-      return conversation;
-    }
-
-    const jobId = conversation.jobId ?? boundaries[boundaryIndex]?.jobId ?? "";
-    if (jobId) {
-      const convEvents = dedupedEvents.filter(
-        (event) => traceJobId(event) === jobId,
-      );
-      return {
-        ...conversation,
-        jobId,
-        events: convEvents,
-        status: statusForConversationEvents(convEvents, conversation.status),
-      };
-    }
-
-    const startTs = boundaryTs[boundaryIndex];
-    const endTs =
-      boundaryIndex + 1 < boundaryTs.length
-        ? boundaryTs[boundaryIndex + 1]
-        : Infinity;
-
-    const convEvents = dedupedEvents.filter((event) => {
-      const eventTs = new Date(event.timestamp).getTime();
-      return eventTs >= startTs && eventTs < endTs;
-    });
-
-    return {
-      ...conversation,
-      events: convEvents,
-      status: statusForConversationEvents(convEvents, conversation.status),
-    };
+  return timeline.orderedTurnIds.flatMap((turnId) => {
+    const turn = timeline.turnsById[turnId];
+    return turn?.session_id === sessionId ? [conversationFromTurn(turn)] : [];
   });
 }
 
@@ -260,6 +285,58 @@ export function conversationMatchesTraceEvent(
   return Boolean(eventMessageId && conversationMessageId === eventMessageId);
 }
 
+export function appendTraceEventsToPendingConversations(
+  map: Map<string, ConversationView[]>,
+  sessionId: string,
+  traceEvents: TraceEvent[],
+  mapKey: string = sessionId,
+  fallbackToSinglePending: boolean = false,
+): void {
+  let pendingList = map.get(mapKey) ?? [];
+  if (pendingList.length === 0 || traceEvents.length === 0) {
+    return;
+  }
+
+  const eventsByPendingIndex = new Map<number, TraceEvent[]>();
+  for (const traceEvent of traceEvents) {
+    let pendingIndex = pendingList.findIndex((conversation) =>
+      conversationMatchesTraceEvent(conversation, traceEvent),
+    );
+    if (
+      pendingIndex === -1
+      && fallbackToSinglePending
+      && pendingList.length === 1
+    ) {
+      pendingIndex = 0;
+    }
+    if (pendingIndex === -1) {
+      continue;
+    }
+    const matchedEvents = eventsByPendingIndex.get(pendingIndex) ?? [];
+    matchedEvents.push(traceEvent);
+    eventsByPendingIndex.set(pendingIndex, matchedEvents);
+  }
+
+  for (const [pendingIndex, matchedEvents] of eventsByPendingIndex) {
+    const pending = pendingList[pendingIndex];
+    const events = compactPendingConversationEvents(
+      dedupeTraceEvents([...pending.events, ...matchedEvents]),
+    );
+    const terminal = events.some((event) => isTerminalTraceType(event.type));
+    const updatedPending: ConversationView = {
+      ...pending,
+      events,
+      status: statusForConversationEvents(events, pending.status),
+      pending: terminal ? false : pending.pending,
+    };
+    const updatedPendingList = [...pendingList];
+    updatedPendingList[pendingIndex] = updatedPending;
+    pendingList = updatedPendingList;
+  }
+
+  writePendingList(map, sessionId, pendingList, mapKey);
+}
+
 export function traceEventsForConversation(
   traceEvents: TraceEvent[],
   conversation: ConversationView,
@@ -337,10 +414,27 @@ export function writePendingSnapshot(
   snapshot: PendingRequestList,
   mapKey: string = snapshot.session_id,
 ) {
+  const existingActiveConversation = snapshot.active_job_id
+    ? (pendingMap.get(mapKey) ?? []).find(
+        (conversation) => conversation.jobId === snapshot.active_job_id,
+      )
+    : undefined;
+  const snapshotConversations = pendingSnapshotToConversations(snapshot);
+  if (
+    snapshot.active_job_id
+    && !snapshotConversations.some(
+      (conversation) => conversation.jobId === snapshot.active_job_id,
+    )
+  ) {
+    snapshotConversations.push(
+      existingActiveConversation
+      ?? createActiveJobOverlay(snapshot.session_id, snapshot.active_job_id),
+    );
+  }
   writePendingList(
     pendingMap,
     snapshot.session_id,
-    pendingSnapshotToConversations(snapshot),
+    snapshotConversations,
     mapKey,
   );
   if (snapshot.active_job_id) {
@@ -348,6 +442,45 @@ export function writePendingSnapshot(
   } else {
     activeJobMap.delete(mapKey);
   }
+}
+
+function createActiveJobOverlay(
+  sessionId: string,
+  jobId: string,
+): ConversationView {
+  return {
+    conversationId: `active-job:${jobId}`,
+    sessionId,
+    userMessage: null,
+    assistantMessages: [],
+    events: [],
+    status: "running",
+    jobId,
+    pending: true,
+    pendingPosition: 0,
+    activeJobOverlay: true,
+    source: "pending",
+  };
+}
+
+export function syncActiveJobConversation(
+  map: Map<string, ConversationView[]>,
+  sessionId: string,
+  activeJobId: string | null,
+  mapKey: string = sessionId,
+): void {
+  const existing = map.get(mapKey) ?? [];
+  const retained = existing.filter(
+    (conversation) =>
+      !conversation.activeJobOverlay || conversation.jobId === activeJobId,
+  );
+  if (
+    activeJobId
+    && !retained.some((conversation) => conversation.jobId === activeJobId)
+  ) {
+    retained.push(createActiveJobOverlay(sessionId, activeJobId));
+  }
+  writePendingList(map, sessionId, retained, mapKey);
 }
 
 export function pendingSnapshotToConversations(
@@ -363,6 +496,7 @@ export function pendingSnapshotToConversations(
       content: request.content,
       attachments: request.attachments ?? [],
       metadata: {
+        ...request.message_metadata,
         source: "pending",
         job_id: request.job_id,
         pending_kind: request.kind,
@@ -402,104 +536,23 @@ export function removePendingForTraceEvent(
   );
 }
 
-function buildTraceOnlyConversations(
-  sessionId: string,
-  traceEvents: TraceEvent[],
-): ConversationView[] {
-  const conversations: ConversationView[] = [];
-  const seenMessageIds = new Set<string>();
-
-  for (const event of dedupeTraceEvents(traceEvents)) {
-    if (event.type !== "message_created") {
-      continue;
-    }
-
-    const payload = rawTracePayload(event);
-    const payloadSessionId =
-      typeof payload.session_id === "string" ? payload.session_id : sessionId;
-    const role = payload.role === "user" ? "user" : null;
-    if (payloadSessionId !== sessionId || role !== "user") {
-      continue;
-    }
-
-    const messageId =
-      typeof payload.message_id === "string"
-        ? payload.message_id
-        : event.event_id;
-    if (seenMessageIds.has(messageId)) {
-      continue;
-    }
-    seenMessageIds.add(messageId);
-    const content = typeof payload.content === "string" ? payload.content : "";
-    const timestamp =
-      typeof payload.created_at === "string"
-        ? payload.created_at
-        : event.timestamp;
-    const hasFailure = traceEvents.some(
-      (trace) =>
-        trace.job_id === event.job_id &&
-        ["job_failed", "job_cancelled", "session_interrupted"].includes(
-          trace.type,
-        ),
-    );
-    const hasCompletion = traceEvents.some(
-      (trace) =>
-        trace.job_id === event.job_id &&
-        ["agent_end", "job_completed"].includes(trace.type),
-    );
-
-    const attachments = Array.isArray(payload.attachments)
-      ? (payload.attachments as AttachmentRef[])
-      : [];
-
-    conversations.push({
-      conversationId: messageId,
-      sessionId,
-      userMessage: {
-        message_id: messageId,
-        session_id: sessionId,
-        role,
-        content,
-        attachments,
-        metadata: { source: "trace", job_id: event.job_id },
-        created_at: timestamp,
-        updated_at: timestamp,
-      },
-      assistantMessages: [],
-      events: [],
-      status: hasFailure ? "error" : hasCompletion ? "done" : "running",
-      jobId: event.job_id,
-      pending: false,
-      source: "messages",
-    });
-  }
-
-  return conversations;
-}
-
 export function getConversationsForSession(
   sessionId: string,
   state: AppState,
   sessionCacheKey: string = sessionId,
 ): ConversationView[] {
-  const messageConversations = groupMessagesIntoConversations(
-    state.messages.filter((message) => message.session_id === sessionId),
-  );
-  const conversations =
-    messageConversations.length > 0
-      ? messageConversations
-      : buildTraceOnlyConversations(sessionId, state.traceEvents);
-  const withTraceEvents = attachTraceEventsToConversations(
-    conversations,
-    state.traceEvents,
+  const turnConversations = turnTimelineConversations(
+    state,
+    sessionCacheKey,
+    sessionId,
   );
   const pendingList = state.pendingConversations.get(sessionCacheKey) ?? [];
 
   if (pendingList.length === 0) {
-    return dedupeConversationViews(withTraceEvents);
+    return dedupeConversationViews(turnConversations);
   }
 
-  const merged = [...withTraceEvents];
+  const merged = [...turnConversations];
   for (const pending of pendingList) {
     const matchedIndex = merged.findIndex((conversation) =>
       conversationsMatch(conversation, pending),

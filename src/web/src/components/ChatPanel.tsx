@@ -1,5 +1,5 @@
 import React from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { Virtuoso } from "react-virtuoso";
 import type {
   AttachmentRef,
   MessageReplayRequest,
@@ -8,23 +8,14 @@ import type {
   SessionChangesSummary,
 } from "../types/backend";
 import type { ConversationView } from "../types/frontend";
+import { conversationTurnKey } from "../state/session/turnDetailHydration";
+import type { TurnProjectionState } from "../state/session/turnTimeline";
+import ChatHistoryEmptyState from "./chat/ChatHistoryEmptyState";
+import ChatHistoryPageHeader from "./chat/ChatHistoryPageHeader";
 import ChatTurn from "./chat/ChatTurn";
 import ChatTurnErrorBoundary from "./chat/ChatTurnErrorBoundary";
-
-function conversationRenderKey(conversation: ConversationView): string {
-  const lastEvent = conversation.events[conversation.events.length - 1];
-  const assistantLength = (conversation.assistantMessages ?? []).reduce(
-    (total, message) => total + message.content.length,
-    0,
-  );
-  return [
-    conversation.conversationId,
-    conversation.status,
-    conversation.events.length,
-    lastEvent?.event_id ?? "",
-    assistantLength,
-  ].join(":");
-}
+import { useTurnVirtualScroller } from "./chat/useTurnVirtualScroller";
+import { useVisibleTurnDetailHydration } from "./chat/useVisibleTurnDetailHydration";
 
 export default function ChatPanel({
   apiPort,
@@ -34,8 +25,15 @@ export default function ChatPanel({
   hasActiveSession,
   hasOlderMessages,
   loadingOlderMessages,
+  historyLoading,
+  projectionState,
+  timelineGeneration,
+  projectionEpoch,
   historyError,
   onLoadOlderMessages,
+  loadingDetailTurnIds,
+  onLoadTurnDetails,
+  onRetryHistory,
   sessionChangeSummary,
   sessionChangesLoading,
   onOpenChanges,
@@ -53,8 +51,15 @@ export default function ChatPanel({
   hasActiveSession: boolean;
   hasOlderMessages: boolean;
   loadingOlderMessages: boolean;
+  historyLoading: boolean;
+  projectionState: TurnProjectionState;
+  timelineGeneration: number;
+  projectionEpoch: number | null;
   historyError: string | null;
   onLoadOlderMessages: () => Promise<void>;
+  loadingDetailTurnIds: readonly string[];
+  onLoadTurnDetails: (turnIds: string[]) => Promise<void>;
+  onRetryHistory: () => void;
   sessionChangeSummary?: SessionChangesSummary | null;
   sessionChangesLoading?: boolean;
   onOpenChanges?: () => void;
@@ -75,15 +80,33 @@ export default function ChatPanel({
   onReorderPending: (requests: PendingRequestOrderItem[]) => Promise<void>;
   onSendPendingImmediately: (messageId: string) => Promise<void>;
 }): React.ReactNode {
-  const streamRef = React.useRef<VirtuosoHandle | null>(null);
-  const scrollerRef = React.useRef<HTMLElement | null>(null);
-  const followsLatestRef = React.useRef(true);
-  const [showJumpToLatest, setShowJumpToLatest] = React.useState(false);
   const [draggedPendingId, setDraggedPendingId] = React.useState<string | null>(null);
   const [pendingActionError, setPendingActionError] = React.useState<string | null>(null);
   const [pendingActionRunning, setPendingActionRunning] = React.useState(false);
   const sessionId = conversations[0]?.sessionId ?? "empty";
-  const firstItemIndex = Math.max(0, 100_000 - conversations.length);
+  const {
+    bindScroller,
+    firstItemIndex,
+    followOutput,
+    handleAtBottomChange,
+    loadOlderPreservingAnchor,
+    scrollToLatest,
+    showJumpToLatest,
+    streamRef,
+  } = useTurnVirtualScroller({ conversations, sessionId, onLoadOlderMessages });
+  const {
+    detailHydrationError,
+    clearDetailHydrationError,
+    hydrateVisibleTurns,
+  } = useVisibleTurnDetailHydration({
+    sessionId,
+    timelineGeneration,
+    projectionEpoch,
+    conversations,
+    firstItemIndex,
+    loadingTurnIds: loadingDetailTurnIds,
+    onLoadTurnDetails,
+  });
   const sessionBusy = conversations.some(
     (conversation) => conversation.status === "running" || conversation.status === "queued",
   );
@@ -157,44 +180,29 @@ export default function ChatPanel({
     await onReorderPending(reordered);
   }, [draggedPendingId, onReorderPending, pendingRequests]);
 
-  const scrollToLatest = React.useCallback((behavior: "auto" | "smooth" = "auto") => {
-    if (!streamRef.current || conversations.length === 0) {
-      return;
-    }
-    streamRef.current.scrollToIndex({
-      index: firstItemIndex + conversations.length - 1,
-      align: "end",
-      behavior,
-    });
-    followsLatestRef.current = true;
-    setShowJumpToLatest(false);
-  }, [conversations.length, firstItemIndex]);
-
-  const loadOlderPreservingAnchor = React.useCallback(async () => {
-    const scroller = scrollerRef.current;
-    const scrollerTop = scroller?.getBoundingClientRect().top ?? 0;
-    const visibleTurns = scroller
-      ? Array.from(scroller.querySelectorAll<HTMLElement>("[data-conversation-id]"))
-        .filter((element) => element.getBoundingClientRect().bottom > scrollerTop)
-      : [];
-    const anchor = visibleTurns[0] ?? null;
-    const anchorId = anchor?.dataset.conversationId ?? null;
-    const anchorTop = anchor ? anchor.getBoundingClientRect().top - scrollerTop : null;
-
-    await onLoadOlderMessages();
-    if (!scroller || !anchorId || anchorTop === null) return;
-
-    await new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
-    });
-    const restoredAnchor = Array.from(
-      scroller.querySelectorAll<HTMLElement>("[data-conversation-id]"),
-    ).find((element) => element.dataset.conversationId === anchorId);
-    if (!restoredAnchor) return;
-    const restoredTop = restoredAnchor.getBoundingClientRect().top
-      - scroller.getBoundingClientRect().top;
-    scroller.scrollTop += restoredTop - anchorTop;
-  }, [onLoadOlderMessages]);
+  const updatePending = React.useCallback((
+    messageId: string,
+    content: string,
+    attachments?: AttachmentRef[],
+  ) => runPendingAction(
+    () => onUpdatePending(messageId, content, attachments),
+  ), [onUpdatePending, runPendingAction]);
+  const removePending = React.useCallback((messageId: string) => runPendingAction(
+    () => onRemovePending(messageId),
+  ), [onRemovePending, runPendingAction]);
+  const sendPendingImmediately = React.useCallback((messageId: string) => runPendingAction(
+    () => onSendPendingImmediately(messageId),
+  ), [onSendPendingImmediately, runPendingAction]);
+  const updatePendingKind = React.useCallback((
+    messageId: string,
+    kind: PendingRequestKind,
+  ) => runPendingAction(
+    () => changePendingKind(messageId, kind),
+  ), [changePendingKind, runPendingAction]);
+  const retryHistory = React.useCallback(() => {
+    clearDetailHydrationError();
+    onRetryHistory();
+  }, [clearDetailHydrationError, onRetryHistory]);
 
   return (
     <section className="chat-stream-shell">
@@ -204,23 +212,15 @@ export default function ChatPanel({
       >
       {conversations.length === 0 ? (
         hasActiveSession ? (
-          <div className="chat-stream-empty-history" role="status">
-            <div className="chat-stream-empty-title">该会话暂无历史消息</div>
-            <div className="chat-stream-empty-detail">
-              在下方输入任务，Assistant 的回复会显示在这里。
-            </div>
-            {sessionChangeSummary && sessionChangeSummary.files > 0 ? (
-              <button
-                type="button"
-                className="chat-stream-empty-action"
-                onClick={onOpenChanges}
-              >
-                本会话有 {sessionChangeSummary.files} 个文件变更待审查
-              </button>
-            ) : sessionChangesLoading ? (
-              <div className="chat-stream-empty-detail">正在检查会话文件变更...</div>
-            ) : null}
-          </div>
+          <ChatHistoryEmptyState
+            historyError={historyError}
+            historyLoading={historyLoading}
+            projectionState={projectionState}
+            onRetryHistory={retryHistory}
+            sessionChangeSummary={sessionChangeSummary}
+            sessionChangesLoading={sessionChangesLoading}
+            onOpenChanges={onOpenChanges}
+          />
         ) : (
           <div className="chat-stream-blank" aria-hidden="true" />
         )
@@ -228,35 +228,27 @@ export default function ChatPanel({
       <Virtuoso
         key={sessionId}
         ref={streamRef}
-        scrollerRef={(element) => {
-          scrollerRef.current = element instanceof HTMLElement ? element : null;
-        }}
+        scrollerRef={bindScroller}
         className="chat-stream chat-transcript chat-virtual-list"
         data={conversations}
         firstItemIndex={firstItemIndex}
-        initialTopMostItemIndex={firstItemIndex + conversations.length - 1}
-        computeItemKey={(_, conversation) => conversationRenderKey(conversation)}
-        followOutput={(isAtBottom) => (isAtBottom ? "auto" : false)}
-        atBottomStateChange={(atBottom) => {
-          followsLatestRef.current = atBottom;
-          setShowJumpToLatest(!atBottom);
-        }}
+        initialTopMostItemIndex={conversations.length - 1}
+        computeItemKey={(_, conversation) => conversationTurnKey(conversation)}
+        followOutput={followOutput}
+        atBottomStateChange={handleAtBottomChange}
+        rangeChanged={hydrateVisibleTurns}
         components={{
           Header: () => (
-            <div className="chat-history-page-header">
-              {hasOlderMessages ? (
-                <button
-                  type="button"
-                  disabled={loadingOlderMessages}
-                  onClick={() => void loadOlderPreservingAnchor().catch(() => undefined)}
-                >
-                  {loadingOlderMessages ? "正在加载更早消息…" : "加载更早消息"}
-                </button>
-              ) : (
-                <span>已到达会话起点</span>
-              )}
-              {historyError ? <span role="alert">{historyError}</span> : null}
-            </div>
+            <ChatHistoryPageHeader
+              projectionState={projectionState}
+              hasOlderMessages={hasOlderMessages}
+              loadingOlderMessages={loadingOlderMessages}
+              error={historyError ?? detailHydrationError}
+              onLoadOlder={() => {
+                void loadOlderPreservingAnchor().catch(() => undefined);
+              }}
+              onRetry={retryHistory}
+            />
           ),
           Footer: () => pendingActionError ? (
             <div className="chat-turn-action-error" role="alert">
@@ -265,7 +257,10 @@ export default function ChatPanel({
           ) : null,
         }}
         itemContent={(index, conversation) => (
-            <div className="chat-virtual-turn">
+            <div
+              className="chat-virtual-turn"
+              data-turn-id={conversationTurnKey(conversation)}
+            >
               {conversation.userMessage?.message_id === firstSteeringId ? (
                 <div className="chat-pending-divider">
                   <span>引导消息 · {pendingRequests.filter((item) => item.kind === "steering").length}</span>
@@ -344,18 +339,10 @@ export default function ChatPanel({
                     isLastTurn={index === firstItemIndex + conversations.length - 1}
                     sessionBusy={sessionBusy}
                     onReplayTurn={onReplayTurn}
-                    onUpdatePending={(...args) => runPendingAction(
-                      () => onUpdatePending(...args),
-                    )}
-                    onRemovePending={(messageId) => runPendingAction(
-                      () => onRemovePending(messageId),
-                    )}
-                    onSendPendingImmediately={(messageId) => runPendingAction(
-                      () => onSendPendingImmediately(messageId),
-                    )}
-                    onChangePendingKind={(messageId, kind) => runPendingAction(
-                      () => changePendingKind(messageId, kind),
-                    )}
+                    onUpdatePending={updatePending}
+                    onRemovePending={removePending}
+                    onSendPendingImmediately={sendPendingImmediately}
+                    onChangePendingKind={updatePendingKind}
                   />
                 </ChatTurnErrorBoundary>
               </div>

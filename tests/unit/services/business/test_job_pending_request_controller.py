@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from app.core.job_event_bus import JobEventBus
+from app.prompting import PromptSection, internal_message_factory
 from app.schemas.public_v2.common import JobStatus
 from app.schemas.public_v2.pending_request import PendingRequestOrderItem
 from app.services.business.job.service import JobService
@@ -66,7 +67,7 @@ async def test_pending_requests_support_edit_reorder_and_remove(monkeypatch):
         "steering",
         message_id="msg_steering",
         message_created_at="2026-07-17T00:00:02+00:00",
-        pending_kind="steering",
+        dispatch_mode="steering",
     )
 
     snapshot = await service.list_pending(session_id)
@@ -105,6 +106,44 @@ async def test_pending_requests_support_edit_reorder_and_remove(monkeypatch):
 
     after_remove = await service.remove_pending(session_id, "msg_steering")
     assert [item.message_id for item in after_remove.requests] == ["msg_queued"]
+
+
+@pytest.mark.asyncio
+async def test_pending_request_uses_safe_display_content(monkeypatch):
+    service = _service()
+    _prevent_background_execution(service, monkeypatch)
+    session_id = "session_internal_display"
+    await service.start_job(
+        session_id,
+        "<generated_session_result>内部结果</generated_session_result>",
+        message_id="msg_active",
+        message_created_at="2026-07-17T00:00:00+00:00",
+    )
+    prepared = internal_message_factory.build(
+        kind="generated_session_result",
+        control="处理生成结果。",
+        sections=(
+            PromptSection("control_context", {"secret_route": "ses_private"}),
+            PromptSection("generated_session_result", "内部结果"),
+        ),
+        metadata={"secret_route": "ses_private"},
+        display_content="生成分支已结束，主会话正在处理返回结果。",
+    )
+    await service.start_job(
+        session_id,
+        prepared.content,
+        message_id="msg_internal",
+        message_created_at="2026-07-17T00:00:01+00:00",
+        message_metadata=prepared.metadata,
+    )
+
+    snapshot = await service.list_pending(session_id)
+
+    assert snapshot.requests[0].content == (
+        "生成分支已结束，主会话正在处理返回结果。"
+    )
+    assert "generated_session_result" not in snapshot.requests[0].content
+    assert "secret_route" not in snapshot.requests[0].message_metadata
 
 
 @pytest.mark.asyncio

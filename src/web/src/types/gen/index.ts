@@ -33,5 +33,7 @@ export type { SessionNetworkWaitDTO, SessionObservationStateDTO, SessionStatusDT
 export type { TeamBoardDTO, TeamEventDTO, TeamListDTO, TeamMemberDTO, TeamMemberOperationDTO, TeamTaskDTO, TeamTaskOperationDTO } from './team';
 export type { ToolDTO, ToolSelectionChange, ToolSelectionPatchRequest } from './tool';
 export type { ToolTestAttemptDTO, ToolTestProviderResultDTO, ToolTestRunDTO, ToolTestRunListDTO, ToolTestStartRequest } from './tool_test';
+export type { SseErrorDTO } from './sse';
 export type { TraceEventDTO } from './trace';
-export type { WorkspaceContextDTO, WorkspaceDTO, WorkspaceFileContentDTO, WorkspaceFileListDTO, WorkspaceFileNodeDTO, WorkspaceFileUpdateRequest } from './workspace';
+export type { SessionTurnBootstrapDTO, StaleTurnCursorErrorDTO, TurnAttachmentDTO, TurnCursorDTO, TurnDetailBatchDTO, TurnDetailBatchRequest, TurnDetailDTO, TurnJobSummaryDTO, TurnPageDTO, TurnProjectionCorruptedErrorDTO, TurnSummaryDTO, TurnUserMessageDTO, TurnUserMessageSummaryDTO } from './turn';
+export type { WorkspaceContextDTO, WorkspaceDTO, WorkspaceFileChangeBatchDTO, WorkspaceFileChangeDTO, WorkspaceFileContentDTO, WorkspaceFileListDTO, WorkspaceFileNodeDTO, WorkspaceFileUpdateRequest, WorkspaceFileWatchRequest } from './workspace';

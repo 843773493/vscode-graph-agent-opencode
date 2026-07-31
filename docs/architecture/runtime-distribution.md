@@ -52,8 +52,11 @@ Gateway-to-Gateway 凭据与浏览器本地凭据分离，只存放在 `${BOXTEA
 ```text
 ${BOXTEAM_HOME}/
 ├── config/
-│   ├── boxteam.jsonc
-│   └── config.schema.jsonc
+│   ├── .env
+│   ├── gateway.jsonc
+│   ├── gateway_config.jsonc
+│   ├── workspace.jsonc
+│   └── workspace_config.jsonc
 ├── state/
 │   └── gateway/
 └── installations/
@@ -69,9 +72,10 @@ ${BOXTEAM_HOME}/
 
 - `boxteam config init` 只创建缺失配置。
 - `boxteam config init --force` 才允许整文件重建。
-- 普通 `boxteam start` 只验证和加载，不覆盖用户配置。
-- development profile 通过显式 overlay 提供测试工具，不污染 installed 配置。
-- 工作区配置覆盖用户配置；只有最终有效配置发生变化才触发 reload revision。
+- 普通 `boxteam start` 只初始化缺失配置，不覆盖已有用户配置。
+- `bun run dev` 在启动进程前把源码 `.env`、完整 Gateway 开发配置和完整 Workspace 开发配置安装到 development home。
+- development、源码安装和 npm 安装在运行期都只读取 `${BOXTEAM_HOME}/config/.env`、`gateway.jsonc`、`workspace.jsonc` 和显式工作区的 `.boxteam/workspace.jsonc`，不直接读取源码配置。
+- Gateway 只读取用户级 Gateway 配置；Workspace 配置覆盖用户级 Workspace 配置，只有最终有效配置发生变化才触发 reload revision。
 
 ## Runtime manifest
 
@@ -101,7 +105,7 @@ npm 发行版的 Node 来源为 `launcher`，即使用执行 `boxteam` 的 `proc
 
 ## 正式 Web UI
 
-development 模式由 Vite 8011 提供 HMR，并把 `/api` 转发到 Gateway 8014。installed 模式不启动 Vite；Gateway 在同一 origin 提供构建后的 Web UI。
+development 模式由 Vite 8011 提供 HMR，并把 `/api` 转发到 Gateway 8014。installed 模式不启动 Vite；Gateway 在 8114 端口通过同一 origin 提供构建后的 Web UI，避免与开发版 Gateway 冲突。
 
 静态资源和 SPA fallback 必须位于 API、SSE、WebSocket 与辅助代理路由之后。未知 `/api/*` 必须返回 API 错误，不能返回 `index.html`。
 

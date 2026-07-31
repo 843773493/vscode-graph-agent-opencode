@@ -4,14 +4,17 @@ import asyncio
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+
 import httpx
 
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.schemas import (
     GatewayConfigReloadStatusDTO,
     GatewayConnectionKind,
@@ -20,8 +23,6 @@ from app.gateway.schemas import (
     GatewayServiceStatusDTO,
     GatewayWorkspaceDTO,
 )
-from app.gateway.federation import RemoteGatewayConnection
-from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.service_types import GatewayServiceName
 from app.gateway.workspace_ids import (
     build_managed_local_workspace_id,
@@ -29,7 +30,7 @@ from app.gateway.workspace_ids import (
     is_legacy_workspace_id,
 )
 
-_REGISTRY_SCHEMA_VERSION = 7
+_REGISTRY_SCHEMA_VERSION = 8
 _UNSET = object()
 
 
@@ -48,7 +49,19 @@ class WorkspaceTarget:
     remote_gateway_connection_id: str | None = None
     remote_workspace_id: str | None = None
     remote_service_names: tuple[GatewayServiceName, ...] = ()
+    local_service_urls: dict[str, str] = field(default_factory=dict)
     connection_error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceRouteLease:
+    workspace_id: str
+    revision: int
+    invalidated: asyncio.Event
+
+    @property
+    def token(self) -> str:
+        return f"{self.workspace_id}:{self.revision}"
 
 
 class GatewayWorkspaceRegistry:
@@ -60,17 +73,29 @@ class GatewayWorkspaceRegistry:
         self._runtimes: dict[str, WorkspaceRuntime] = {}
         self._remote_gateway_connections: dict[str, RemoteGatewayConnection] = {}
         self._remote_gateway_runtimes: dict[str, WorkspaceRuntime] = {}
+        self._route_revisions: dict[str, int] = {}
+        self._route_change_events: dict[str, asyncio.Event] = {}
+        self._route_signatures: dict[str, tuple[object, ...]] = {}
         self._load()
+        self._route_signatures = {
+            workspace_id: self._route_signature(target)
+            for workspace_id, target in self._targets.items()
+        }
 
     @property
     def active_workspace_id(self) -> str | None:
         return self._active_workspace_id
 
-    def close(self) -> None:
+    def close(self, *, preserve_browser_managers: bool = False) -> None:
         errors: list[str] = []
+        for workspace_id in tuple(self._targets):
+            self.invalidate_route(workspace_id)
         for workspace_id, runtime in list(self._runtimes.items()):
             try:
-                runtime.close()
+                if preserve_browser_managers:
+                    runtime.close_for_gateway_restart()
+                else:
+                    runtime.close()
             except Exception as error:
                 errors.append(f"{workspace_id}: {error}")
         self._runtimes.clear()
@@ -90,12 +115,28 @@ class GatewayWorkspaceRegistry:
         runtime: WorkspaceRuntime | None = None,
         activate: bool = True,
     ) -> WorkspaceTarget:
+        route_signature = self._route_signature(target)
+        route_changed = (
+            target.workspace_id not in self._targets
+            or runtime is not None
+            or self._route_signatures.get(target.workspace_id) != route_signature
+        )
         self._targets[target.workspace_id] = target
         if runtime is not None:
             previous = self._runtimes.pop(target.workspace_id, None)
             if previous is not None:
+                previous_browser_url = previous.service_urls.get("browser_manager")
+                replacement_browser_url = runtime.service_urls.get("browser_manager")
+                if (
+                    previous_browser_url is not None
+                    and previous_browser_url == replacement_browser_url
+                ):
+                    previous.detach_process("browser_manager")
                 previous.close()
             self._runtimes[target.workspace_id] = runtime
+        self._route_signatures[target.workspace_id] = route_signature
+        if route_changed:
+            self.invalidate_route(target.workspace_id)
         if activate or self._active_workspace_id is None:
             self._active_workspace_id = target.workspace_id
         self._save()
@@ -110,12 +151,33 @@ class GatewayWorkspaceRegistry:
             raise RuntimeError(f"托管工作区缺少运行时: {workspace_id}")
         return runtime
 
+    def has_runtime(self, workspace_id: str) -> bool:
+        self.resolve(workspace_id)
+        return workspace_id in self._runtimes
+
+    def stop_managed_runtime(self, workspace_id: str) -> None:
+        target = self.resolve(workspace_id)
+        if target.connection_kind != "local" or not target.managed:
+            raise ValueError(f"工作区不属于当前 Gateway 的本地托管目标: {workspace_id}")
+        if target.system_default or not target.removable:
+            raise PermissionError(f"默认工作区不能关闭: {target.name}")
+        runtime = self._runtimes.pop(workspace_id, None)
+        if runtime is None:
+            raise ValueError(f"工作区后端尚未启动: {target.name}")
+        self.invalidate_route(workspace_id)
+        runtime.close()
+        target.connection_error = None
+        if self._active_workspace_id == workspace_id:
+            self._active_workspace_id = self._default_workspace_id()
+        self._save()
+
     def remove(self, workspace_id: str) -> None:
         target = self._targets.get(workspace_id)
         if target is None:
             raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
         if not target.removable or target.system_default:
             raise PermissionError(f"默认工作区不能删除: {target.name}")
+        self.invalidate_route(workspace_id)
         runtime = self._runtimes.pop(workspace_id, None)
         if runtime is not None:
             runtime.close()
@@ -123,6 +185,7 @@ class GatewayWorkspaceRegistry:
             if child.parent_workspace_id == workspace_id:
                 child.parent_workspace_id = None
         del self._targets[workspace_id]
+        self._route_signatures.pop(workspace_id, None)
         self._close_unused_remote_gateway(target.remote_gateway_connection_id)
         if self._active_workspace_id == workspace_id:
             self._active_workspace_id = self._default_workspace_id()
@@ -139,7 +202,9 @@ class GatewayWorkspaceRegistry:
             runtime = self._runtimes.pop(workspace_id, None)
             if runtime is not None:
                 runtime.close()
+            self.invalidate_route(workspace_id)
             del self._targets[workspace_id]
+            self._route_signatures.pop(workspace_id, None)
             changed = True
         if self._active_workspace_id not in self._targets:
             self._active_workspace_id = self._default_workspace_id()
@@ -155,7 +220,9 @@ class GatewayWorkspaceRegistry:
             runtime = self._runtimes.pop(workspace_id, None)
             if runtime is not None:
                 runtime.close()
+            self.invalidate_route(workspace_id)
             del self._targets[workspace_id]
+            self._route_signatures.pop(workspace_id, None)
             changed = True
         if self._active_workspace_id not in self._targets:
             self._active_workspace_id = keep_workspace_id
@@ -278,6 +345,38 @@ class GatewayWorkspaceRegistry:
             raise LookupError(f"Gateway 工作区不存在: {target_id}")
         return target
 
+    @staticmethod
+    def _route_signature(target: WorkspaceTarget) -> tuple[object, ...]:
+        return (
+            target.connection_kind,
+            target.backend_url.rstrip("/"),
+            target.remote_gateway_connection_id,
+            target.remote_workspace_id,
+        )
+
+    def route_lease(self, workspace_id: str) -> WorkspaceRouteLease:
+        self.resolve(workspace_id)
+        revision = self._route_revisions.get(workspace_id, 0)
+        invalidated = self._route_change_events.get(workspace_id)
+        if invalidated is None:
+            invalidated = asyncio.Event()
+            self._route_change_events[workspace_id] = invalidated
+        return WorkspaceRouteLease(
+            workspace_id=workspace_id,
+            revision=revision,
+            invalidated=invalidated,
+        )
+
+    def invalidate_route(self, workspace_id: str) -> None:
+        """使现有代理租约失效，强制长连接重新解析当前工作区路由。"""
+        self._route_revisions[workspace_id] = (
+            self._route_revisions.get(workspace_id, 0) + 1
+        )
+        previous = self._route_change_events.get(workspace_id)
+        if previous is not None:
+            previous.set()
+        self._route_change_events[workspace_id] = asyncio.Event()
+
     def upsert_remote_gateway(
         self,
         connection: RemoteGatewayConnection,
@@ -290,6 +389,12 @@ class GatewayWorkspaceRegistry:
             if previous is not None:
                 previous.close()
             self._remote_gateway_runtimes[connection.connection_id] = runtime
+            for target in self._targets.values():
+                if (
+                    target.remote_gateway_connection_id
+                    == connection.connection_id
+                ):
+                    self.invalidate_route(target.workspace_id)
         self._save()
 
     def remote_gateway_connection(
@@ -542,7 +647,11 @@ class GatewayWorkspaceRegistry:
                         )
                         if target.connection_kind == "remote_gateway"
                         else (
-                            "safe_restart_managed_backend"
+                            (
+                                "safe_restart_managed_backend"
+                                if runtime is not None
+                                else "start_managed_backend"
+                            )
                             if target.managed
                             else "probe_external_backend"
                         )
@@ -722,6 +831,15 @@ class GatewayWorkspaceRegistry:
                 )
             parent_workspace_ids[workspace_id] = raw_parent_workspace_id
             migrated = migrated or workspace_id != original_workspace_id
+            raw_local_service_urls = item.get("local_service_urls", {})
+            if not isinstance(raw_local_service_urls, dict) or not all(
+                isinstance(name, str) and isinstance(url, str)
+                for name, url in raw_local_service_urls.items()
+            ):
+                raise ValueError(
+                    "Gateway registry local_service_urls 必须是字符串映射: "
+                    f"workspace_id={original_workspace_id}"
+                )
             target = WorkspaceTarget(
                 workspace_id=workspace_id,
                 name=str(item["name"]),
@@ -744,6 +862,10 @@ class GatewayWorkspaceRegistry:
                     else None
                 ),
                 remote_service_names=tuple(item.get("remote_service_names", ())),
+                local_service_urls={
+                    str(name): str(url)
+                    for name, url in raw_local_service_urls.items()
+                },
                 connection_error=(
                     str(item["connection_error"])
                     if item.get("connection_error") is not None

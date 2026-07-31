@@ -51,7 +51,7 @@ class HistoricalTerminalRecordReader:
         terminal_id: str,
     ) -> str | None:
         trace_file = (
-            self._path_resolver.resolve_session_dir(session_id)
+            self._path_resolver.resolve_session_node(session_id)
             / "logs"
             / "traces"
             / "messages.jsonl"

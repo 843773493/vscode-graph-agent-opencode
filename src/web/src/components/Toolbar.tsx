@@ -102,8 +102,8 @@ export default function Toolbar({
               >
                 <span className="codicon codicon-server-environment" aria-hidden="true" />
                 <span className="workbench-view-menu-copy">
-                  <strong>Gateway 控制台</strong>
-                  <small>管理工作区、连接与路由</small>
+                  <strong>连接管理</strong>
+                  <small>管理远程 Gateway 与外部设备连接</small>
                 </span>
                 {workbenchView === "gateway" ? (
                   <span className="codicon codicon-check" aria-hidden="true" />

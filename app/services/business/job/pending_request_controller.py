@@ -12,8 +12,11 @@ from app.schemas.public_v2.pending_request import (
     PendingRequestKind,
     PendingRequestListDTO,
     PendingRequestOrderItem,
+    PendingRequestSummaryDTO,
+    PendingRequestSummaryListDTO,
 )
 from app.services.business.job.pending_queue import JobPendingQueue
+from app.services.business.message_display import project_message_for_display
 
 
 class PendingJob(Protocol):
@@ -65,17 +68,21 @@ class JobPendingRequestController:
     def _dto(job: PendingJob, position: int) -> PendingRequestDTO:
         if job.pending_kind is None:
             raise RuntimeError(f"待处理 Job 缺少 kind: job_id={job.job_id}")
+        display_projection = project_message_for_display(
+            job.message,
+            job.message_metadata,
+        )
         return PendingRequestDTO(
             job_id=job.job_id,
             message_id=job.message_id,
             session_id=job.session_id,
-            content=job.message,
+            content=display_projection.content,
             attachments=list(job.attachments),
             kind=job.pending_kind,
             position=position,
             agent_id=job.agent_id,
             message_created_at=job.message_created_at,
-            message_metadata=dict(job.message_metadata),
+            message_metadata=display_projection.metadata,
             created_at=job.created_at,
             updated_at=job.updated_at,
         )
@@ -83,6 +90,32 @@ class JobPendingRequestController:
     async def list(self, session_id: str) -> PendingRequestListDTO:
         async with self._lock:
             return self._snapshot_unlocked(session_id)
+
+    async def list_summaries(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> PendingRequestSummaryListDTO:
+        async with self._lock:
+            jobs = self._get_jobs()
+            job_ids = self._queue.ids(session_id)
+            summaries = [
+                PendingRequestSummaryDTO(
+                    job_id=jobs[job_id].job_id,
+                    message_id=jobs[job_id].message_id,
+                    updated_at=jobs[job_id].updated_at,
+                )
+                for job_id in job_ids[:limit]
+                if job_id in jobs
+            ]
+            return PendingRequestSummaryListDTO(
+                session_id=session_id,
+                active_job_id=self._get_current_jobs().get(session_id),
+                requests=summaries,
+                request_count=len(job_ids),
+                truncated=len(summaries) < len(job_ids),
+            )
 
     def _snapshot_unlocked(self, session_id: str) -> PendingRequestListDTO:
         jobs = self._get_jobs()
