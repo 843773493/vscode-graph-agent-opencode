@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import suppress
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 from app.api.deps import (
     get_request_id,
@@ -21,6 +23,7 @@ from app.schemas.public_v2.workspace import (
     WorkspaceFileChangeBatchDTO,
     WorkspaceFileChangeDTO,
     WorkspaceFileContentDTO,
+    WorkspaceFileCopyRequest,
     WorkspaceFileCreateRequest,
     WorkspaceFileListDTO,
     WorkspaceFilePasteRequest,
@@ -267,6 +270,35 @@ async def get_workspace_raw_file(
     )
 
 
+@router.get(
+    "/files/download",
+    response_class=FileResponse,
+    summary="下载工作区文件或目录",
+)
+async def download_workspace_file_entry(
+    path: str = Query(description="需要下载的文件或目录路径"),
+    scope: WorkspaceFileScope = Query(default="workspace"),
+    _: str = Depends(verify_local_token),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
+):
+    try:
+        target_path, filename, media_type, temporary = (
+            workspace_service.prepare_file_download(path=path, scope=scope)
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (IsADirectoryError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return FileResponse(
+        target_path,
+        media_type=media_type,
+        filename=filename,
+        content_disposition_type="attachment",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        background=BackgroundTask(os.unlink, target_path) if temporary else None,
+    )
+
+
 @router.put(
     "/files/content",
     response_model=APIResponse[WorkspaceFileContentDTO],
@@ -347,6 +379,77 @@ async def paste_workspace_file_entries(
             directory_path=path,
             scope=scope,
             source_paths=payload.source_paths,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except FileExistsError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except (NotADirectoryError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/files/copy",
+    response_model=APIResponse[WorkspaceFileListDTO],
+    summary="在工作区主机内复制文件或目录",
+)
+async def copy_workspace_file_entry(
+    payload: WorkspaceFileCopyRequest,
+    path: str = Query(default="", description="目标目录路径"),
+    scope: WorkspaceFileScope = Query(default="workspace"),
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
+):
+    try:
+        result = await workspace_service.copy_file_entry(
+            directory_path=path,
+            scope=scope,
+            source_path=payload.source_path,
+            source_scope=payload.source_scope,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except FileExistsError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except (NotADirectoryError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/files/upload",
+    response_model=APIResponse[WorkspaceFileListDTO],
+    summary="上传本地文件到工作区目录",
+)
+async def upload_workspace_file_entries(
+    files: list[UploadFile] = File(min_length=1, max_length=100),
+    relative_paths: list[str] = Form(min_length=1, max_length=100),
+    path: str = Query(default="", description="目标目录路径"),
+    scope: WorkspaceFileScope = Query(default="workspace"),
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
+):
+    if len(files) != len(relative_paths):
+        raise HTTPException(status_code=400, detail="上传文件与相对路径数量不一致")
+    try:
+        result = await workspace_service.upload_file_entries(
+            directory_path=path,
+            scope=scope,
+            entries=[
+                (relative_path, upload.file)
+                for upload, relative_path in zip(files, relative_paths, strict=True)
+            ],
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error

@@ -13,6 +13,7 @@ _ITEM_EVENT_TYPES = frozenset(
         "job_merged",
         "job_cancelled",
         "job_failed",
+        "agent_end",
         "text_start",
         "text_end",
         "tool_call_start",
@@ -37,10 +38,11 @@ def map_turn_item(
     if event.type not in _ITEM_EVENT_TYPES:
         return None
     raw = strip_inline_media(event.model_dump(mode="python"))
-    if event.type == "text_end" and isinstance(raw, dict):
+    if event.type in {"agent_end", "text_end"} and isinstance(raw, dict):
         payload = raw.get("payload")
         if isinstance(payload, dict):
-            raw = {**raw, "payload": {**payload, "text": ""}}
+            content_key = "final_text" if event.type == "agent_end" else "text"
+            raw = {**raw, "payload": {**payload, content_key: ""}}
     return trace_mapper.map_one(raw, session_id=session_id)
 
 

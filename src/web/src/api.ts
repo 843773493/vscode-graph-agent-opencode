@@ -28,6 +28,8 @@ export {
 export {
   addSessionFileTreeShortcut,
   applyFileTreeShortcutToWorkspace,
+  copyWorkspaceFileEntry,
+  createWorkspaceFileDownloadRequest,
   createWorkspaceFileEntry,
   decodeFileTreePath,
   filesystemFileTreePath,
@@ -39,6 +41,11 @@ export {
   removeSessionFileTreeShortcut,
   revealWorkspaceFileEntry,
   updateWorkspaceFileContent,
+  uploadWorkspaceFileEntries,
+} from "./api/workspaceFilesystem";
+export type {
+  WorkspaceFileDownloadRequest,
+  WorkspaceFileLocation,
 } from "./api/workspaceFilesystem";
 export {
   assignSessionCatalogFolder,

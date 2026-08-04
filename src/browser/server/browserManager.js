@@ -135,7 +135,7 @@ export class BrowserManager {
       }
       const canRecoverFromCheckpoint = (
         record.status === "running"
-        || (record.status === "lost" && record.release_reason === "browser_manager_startup_cleanup")
+        || record.status === "lost"
       ) && ["frozen", "discarded"].includes(record.resource_state);
       if (canRecoverFromCheckpoint) {
         const checkpoint = await this.stateStore.readCheckpoint(record.browser_id);

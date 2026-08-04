@@ -61,7 +61,14 @@
         },
         "capabilities": [
           "image_input"
-        ]
+        ],
+        "request_options": {
+          "overrides": {
+            "reasoning": {
+              "effort": "high"
+            }
+          }
+        }
       }
     ]
   },

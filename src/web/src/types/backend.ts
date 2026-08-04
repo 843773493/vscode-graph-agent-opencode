@@ -266,6 +266,40 @@ export interface GatewayWorkspaceList {
   items: GatewayWorkspace[];
 }
 
+export type GatewayPortForwardProtocol = "http" | "https" | "tcp";
+
+export type GatewayPortForwardStatus =
+  | "starting"
+  | "active"
+  | "error"
+  | "stopped";
+
+export interface GatewayPortForward {
+  forward_id: string;
+  workspace_id: string;
+  connection_id: string;
+  remote_host: string;
+  remote_port: number;
+  local_host: string;
+  local_port: number;
+  protocol: GatewayPortForwardProtocol;
+  label: string | null;
+  status: GatewayPortForwardStatus;
+  error: string | null;
+  local_url: string | null;
+}
+
+export interface GatewayPortForwardList {
+  items: GatewayPortForward[];
+}
+
+export interface CreateGatewayPortForwardRequest {
+  remote_port: number;
+  local_port?: number | null;
+  protocol: GatewayPortForwardProtocol;
+  label?: string | null;
+}
+
 export interface GatewayManagedWorkspace {
   workspace_id: string;
   name: string;
@@ -371,6 +405,15 @@ export interface GatewayRuntimeStateResult {
 export interface GatewayHealth {
   status: "ok";
   active_workspace_id: string | null;
+  process_id: number;
+  development_restart_available: boolean;
+}
+
+export interface DevelopmentRuntimeRestartResult {
+  status: "scheduled";
+  previous_process_id: number;
+  helper_process_id: number;
+  delay_ms: number;
 }
 
 interface AddSshGatewayWorkspaceRequestBase {
@@ -421,7 +464,7 @@ export interface WebUiLayoutSettings {
   workbench_view?: "sessions" | "gateway" | null;
   agent_sessions_panel_open?: boolean | null;
   auxiliary_visible?: boolean | null;
-  auxiliary_tab?: "changes" | "files" | "resources" | null;
+  auxiliary_tab?: "changes" | "files" | "automation" | "resources" | null;
   main_area_ratios?: WebUiMainAreaRatios | null;
   workspace_preview_visible?: boolean | null;
   workspace_preview_maximized?: boolean | null;
@@ -459,11 +502,63 @@ export interface WebUiGatewayConsoleSettings {
   view: "routing" | "managed";
 }
 
+export interface GatewayThemeBackground {
+  type: "remote" | "gateway_asset";
+  url?: string | null;
+  asset_id?: string | null;
+  position: string;
+  size: string;
+  repeat: "no-repeat" | "repeat" | "repeat-x" | "repeat-y" | "space" | "round";
+  appearance: "immersive" | "theme";
+  overlay: string;
+}
+
+export interface ResolvedGatewayTheme {
+  id: string;
+  label: string;
+  color_scheme: "light" | "dark";
+  tokens: Record<`--bt-${string}`, string>;
+  background_image_url?: string | null;
+}
+
+export interface GatewayThemeOption {
+  id: string;
+  label: string;
+  extends: "warm" | "green" | "blue";
+  source: "builtin" | "gateway_config";
+  preview_tokens: Record<string, string>;
+  background_image_url?: string | null;
+}
+
+export interface GatewayThemeCatalog {
+  current_theme_id: string;
+  items: GatewayThemeOption[];
+  current_theme: ResolvedGatewayTheme;
+}
+
+export interface GatewayUiAsset {
+  asset_id: string;
+  original_filename: string;
+  content_type: string;
+  size: number;
+  sha256: string;
+  imported_at: string;
+  url: string;
+  referenced_theme_ids: string[];
+}
+
+export interface WebUiThemeSettings {
+  theme_id: string;
+  background?: GatewayThemeBackground | null;
+  resolved_theme?: ResolvedGatewayTheme | null;
+}
+
 export interface WebUiSettings {
   layout: WebUiLayoutSettings;
   session_sidebar: WebUiSessionSidebarSettings;
   workspace_file_tree: WebUiWorkspaceFileTreeSettings;
   gateway_console: WebUiGatewayConsoleSettings;
+  theme: WebUiThemeSettings;
   recent_local_workspace_paths: string[];
 }
 
@@ -472,6 +567,7 @@ export interface WebUiSettingsUpdate {
   session_sidebar?: Partial<WebUiSessionSidebarSettings> | null;
   workspace_file_tree?: Partial<WebUiWorkspaceFileTreeSettings> | null;
   gateway_console?: Partial<WebUiGatewayConsoleSettings> | null;
+  theme?: Partial<WebUiThemeSettings> | null;
   recent_local_workspace_paths?: string[] | null;
 }
 
@@ -562,6 +658,12 @@ export interface SessionGeneratorDefinition {
   status: "ready" | "paused" | "blocked";
   status_reason?: string | null;
   revision: number;
+  trigger: {
+    type: "manual" | "interval" | "cron";
+    expression?: string | null;
+    interval_seconds?: number | null;
+    timezone: string;
+  };
   placement: {
     kind: "workspace" | "session" | "session_folder";
     workspace_id: string;

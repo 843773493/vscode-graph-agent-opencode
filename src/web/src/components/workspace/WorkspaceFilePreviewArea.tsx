@@ -187,6 +187,7 @@ export default function WorkspaceFilePreviewArea({
       hidden={!visible}
       style={{ flexBasis: 0, flexGrow: flexRatio }}
       aria-label="文件预览区"
+      data-bt-surface="workspace"
     >
       <header className="workspace-preview-tabs">
         <div className="workspace-preview-tab-strip">

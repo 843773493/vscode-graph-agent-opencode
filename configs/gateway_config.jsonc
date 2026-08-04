@@ -23,9 +23,84 @@
       "items": {
         "$ref": "#/$defs/remoteGateway"
       }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "theme": {
+          "$ref": "#/$defs/themeConfig"
+        }
+      }
     }
   },
   "$defs": {
+    "themeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_theme_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "default": "warm" },
+        "custom_themes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/customTheme" },
+          "default": []
+        }
+      }
+    },
+    "customTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "extends"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "extends": { "enum": ["warm", "green", "blue"] },
+        "color_scheme": { "enum": ["light", "dark"], "default": "light" },
+        "tokens": {
+          "type": "object",
+          "propertyNames": { "pattern": "^--bt-[a-z0-9-]+$" },
+          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        },
+        "background": { "$ref": "#/$defs/themeBackground" }
+      }
+    },
+    "themeBackground": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "url"],
+          "properties": {
+            "type": { "const": "remote" }, "url": { "type": "string", "minLength": 1 },
+            "position": { "type": "string", "default": "center" }, "size": { "type": "string", "default": "cover" },
+            "repeat": { "enum": ["no-repeat", "repeat", "repeat-x", "repeat-y", "space", "round"], "default": "no-repeat" },
+            "appearance": { "enum": ["immersive", "theme"], "default": "immersive" },
+            "overlay": { "type": "string", "default": "linear-gradient(180deg, rgb(17 19 24 / 0.08) 0%, rgb(17 19 24 / 0.16) 54%, rgb(17 19 24 / 0.44) 100%)" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "path"],
+          "properties": {
+            "type": { "const": "local_file" }, "path": { "type": "string", "minLength": 1 },
+            "position": { "type": "string", "default": "center" }, "size": { "type": "string", "default": "cover" },
+            "repeat": { "enum": ["no-repeat", "repeat", "repeat-x", "repeat-y", "space", "round"], "default": "no-repeat" },
+            "appearance": { "enum": ["immersive", "theme"], "default": "immersive" },
+            "overlay": { "type": "string", "default": "linear-gradient(180deg, rgb(17 19 24 / 0.08) 0%, rgb(17 19 24 / 0.16) 54%, rgb(17 19 24 / 0.44) 100%)" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "asset_id"],
+          "properties": {
+            "type": { "const": "gateway_asset" }, "asset_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "position": { "type": "string", "default": "center" }, "size": { "type": "string", "default": "cover" },
+            "repeat": { "enum": ["no-repeat", "repeat", "repeat-x", "repeat-y", "space", "round"], "default": "no-repeat" },
+            "appearance": { "enum": ["immersive", "theme"], "default": "immersive" },
+            "overlay": { "type": "string", "default": "linear-gradient(180deg, rgb(17 19 24 / 0.08) 0%, rgb(17 19 24 / 0.16) 54%, rgb(17 19 24 / 0.44) 100%)" }
+          }
+        }
+      ]
+    },
     "remoteGateway": {
       "type": "object",
       "additionalProperties": false,

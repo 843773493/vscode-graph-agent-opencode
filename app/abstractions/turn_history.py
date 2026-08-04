@@ -58,6 +58,7 @@ class TurnProjectionPublicationConflict(RuntimeError):
 class TurnProjectionWatermark(BaseModel):
     event_id: str | None = None
     source_offset: int = Field(default=0, ge=0)
+    projection_epoch: int = Field(ge=1)
 
 
 class TurnIndexedEvent(BaseModel):
@@ -190,6 +191,18 @@ class TurnHistoryStoreProtocol(Protocol):
 
     def projection_epoch(self, session_id: str) -> int: ...
 
+    def publication_watermark(self, session_id: str) -> TurnProjectionWatermark: ...
+
+    def visible_turn_ids_from_message(
+        self,
+        session_id: str,
+        message_id: str,
+    ) -> list[str]: ...
+
+    def truncate_from_message(self, session_id: str, message_id: str) -> int: ...
+
+    def projection_version(self, session_id: str) -> int: ...
+
     def event_cursor(self, session_id: str) -> str | None: ...
 
     def event_offset(self, session_id: str) -> int: ...
@@ -208,7 +221,12 @@ class TurnHistoryStoreProtocol(Protocol):
 
     def history_initialized(self, session_id: str) -> bool: ...
 
-    def mark_history_initialized(self, session_id: str) -> None: ...
+    def mark_history_initialized(
+        self,
+        session_id: str,
+        *,
+        projection_version: int,
+    ) -> None: ...
 
     def set_projection_status(
         self,

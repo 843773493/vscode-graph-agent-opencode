@@ -8,8 +8,11 @@ from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
-from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
-from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import (
+    HumanInTheLoopMiddleware,
+    InterruptOnConfig,
+    TodoListMiddleware,
+)
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -19,10 +22,7 @@ from app.agents.cache_preserving_summarization import (
     CompactConversationSchema,
     create_cache_preserving_summarization_middleware,
 )
-from app.agents.skill_runtime import (
-    append_skill_middlewares,
-    append_workspace_agents_middleware,
-)
+from app.agents.codex_read_tool import configure_codex_read_file_tool
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
@@ -34,6 +34,10 @@ from app.agents.middleware_prompts import (
     TODO_TOOL_DESCRIPTION,
 )
 from app.agents.request_replay_middleware import PromptReplayCaptureMiddleware
+from app.agents.skill_runtime import (
+    append_skill_middlewares,
+    append_workspace_agents_middleware,
+)
 from app.agents.structured_memory_middleware import StructuredMemoryMiddleware
 from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
@@ -43,8 +47,8 @@ from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 
-
 ToolDefinition = BaseTool | Callable[..., Any] | dict[str, Any]
+FILESYSTEM_INTERNAL_TOOL_DENYLIST = {"execute"}
 
 
 _PROMPT_REPLAY_LABELS = {
@@ -75,7 +79,9 @@ def _instrument_prompt_replay(
     if not logging_middleware:
         return middleware_stack
     if len(logging_middleware) > 1:
-        raise ValueError("LLMLoggingMiddleware 只能注册一次，否则同一次请求会产生重复日志")
+        raise ValueError(
+            "LLMLoggingMiddleware 只能注册一次，否则同一次请求会产生重复日志"
+        )
 
     request_middleware = [
         item for item in middleware_stack if not isinstance(item, LLMLoggingMiddleware)
@@ -119,7 +125,7 @@ def _filter_middleware_tools(middleware: Any, denylist: set[str]) -> None:
         return
 
     filtered_tools = filter_tools_by_name(list(middleware_tools), denylist)
-    setattr(middleware, "tools", filtered_tools)
+    middleware.tools = filtered_tools
 
 
 def _build_summarization_middleware(
@@ -176,9 +182,7 @@ def build_deep_agent_middleware(
         backend=backend,
         skills=resolved_skills,
         system_prompt=(
-            SKILLS_SYSTEM_PROMPT
-            if "read_file" not in resolved_tool_denylist
-            else None
+            SKILLS_SYSTEM_PROMPT if "read_file" not in resolved_tool_denylist else None
         ),
     )
     filesystem_middleware = FilesystemMiddleware(
@@ -188,7 +192,14 @@ def build_deep_agent_middleware(
         _permissions=permissions,
         tool_token_limit_before_evict=None,
     )
-    _filter_middleware_tools(filesystem_middleware, resolved_tool_denylist)
+    configure_codex_read_file_tool(
+        filesystem_middleware,
+        workspace_root=workspace_root,
+    )
+    _filter_middleware_tools(
+        filesystem_middleware,
+        resolved_tool_denylist | FILESYSTEM_INTERNAL_TOOL_DENYLIST,
+    )
     if filesystem_middleware.tools:
         deepagent_middleware.append(filesystem_middleware)
 
@@ -197,7 +208,8 @@ def build_deep_agent_middleware(
             *_build_summarization_middleware(
                 model,
                 backend,
-                compact_tool_enabled="compact_conversation" not in resolved_tool_denylist,
+                compact_tool_enabled="compact_conversation"
+                not in resolved_tool_denylist,
             ),
             PatchToolCallsMiddleware(),
             StructuredToolCallMiddleware(),

@@ -78,6 +78,13 @@ def test_middleware_uses_project_prompts_without_upstream_demo_agents(tmp_path):
     filesystem = _find_middleware(middleware, FilesystemMiddleware)
     assert filesystem._custom_system_prompt == FILESYSTEM_SYSTEM_PROMPT
     assert {tool.name: tool.description for tool in filesystem.tools} == FILESYSTEM_TOOL_DESCRIPTIONS
+    assert "execute" not in {tool.name for tool in filesystem.tools}
+    read_file = next(tool for tool in filesystem.tools if tool.name == "read_file")
+    assert set(read_file.args_schema.model_json_schema()["properties"]) == {
+        "path",
+        "line_offset",
+        "max_lines",
+    }
 
     compact = _find_middleware(middleware, SummarizationToolMiddleware)
     assert compact.system_prompt == COMPACT_CONVERSATION_SYSTEM_PROMPT
@@ -166,6 +173,6 @@ def test_team_system_prompt_forbids_polling_and_preserves_base_prompt():
 
     assert isinstance(prompt, SystemMessage)
     assert "base prompt" in prompt.text
-    assert "execute/sleep" in prompt.text
+    assert "exec_command/sleep" in prompt.text
     assert "get_team_board once" in prompt.text
     assert "never claim that the team board is pending" in prompt.text

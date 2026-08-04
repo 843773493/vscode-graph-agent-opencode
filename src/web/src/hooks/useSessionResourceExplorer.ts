@@ -24,7 +24,7 @@ import type {
   SessionCatalogPage,
   WorkspaceNavigationTree,
 } from "../types/backend";
-import { useSessionGeneratorResources } from "./sessionResourceExplorer/useSessionGeneratorResources";
+import type { SessionGeneratorResourcesController } from "./sessionResourceExplorer/useSessionGeneratorResources";
 import { changedCatalogWorkspaceIds } from "./sessionResourceExplorer/resourceTreeSync";
 
 export interface CatalogBranchState extends SessionCatalogPage {
@@ -74,6 +74,7 @@ export function useSessionResourceExplorer({
   workspaceNavigationSyncKey,
   catalogSyncKeys,
   catalogRefreshVersions,
+  generatorResources,
 }: {
   apiPort: number;
   activeWorkspaceId: string | null;
@@ -83,12 +84,12 @@ export function useSessionResourceExplorer({
   workspaceNavigationSyncKey: string;
   catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
+  generatorResources: SessionGeneratorResourcesController;
 }) {
   const [navigation, setNavigation] = useState<WorkspaceNavigationTree | null>(null);
   const navigationRef = useRef(navigation);
   navigationRef.current = navigation;
   const [navigationError, setNavigationError] = useState<string | null>(null);
-  const [resourceSyncError, setResourceSyncError] = useState<string | null>(null);
   const [branches, setBranches] = useState<Map<string, CatalogBranchState>>(new Map());
   const branchesRef = useRef(branches);
   branchesRef.current = branches;
@@ -106,7 +107,7 @@ export function useSessionResourceExplorer({
     updateGenerator,
     deleteGenerator,
     previewGenerator,
-  } = useSessionGeneratorResources(apiPort);
+  } = generatorResources;
   const currentSessionRevealKeyRef = useRef<string | null>(null);
   const currentSessionRevealRequestRef = useRef(0);
   const navigationRequestRef = useRef(0);
@@ -260,7 +261,6 @@ export function useSessionResourceExplorer({
       navigationPromise,
       catalogPromise,
     ]);
-    setResourceSyncError(null);
     return nextNavigation;
   }, [activeWorkspaceId, apiPort, loadBranch, refreshNavigation]);
 
@@ -364,10 +364,8 @@ export function useSessionResourceExplorer({
     if (!isExpanded && workspaceId) {
       const key = branchKey(workspaceId, parentNodeId);
       if (!branchesRef.current.has(key)) {
-        void loadBranch(workspaceId, parentNodeId).catch((error: unknown) => {
-          setResourceSyncError(
-            `加载会话目录失败: ${error instanceof Error ? error.message : String(error)}`,
-          );
+        void loadBranch(workspaceId, parentNodeId).catch(() => {
+          // loadBranch 已把错误保存在对应工作区分支中，由该分支提供恢复入口。
         });
       }
     }
@@ -628,12 +626,8 @@ export function useSessionResourceExplorer({
     }
     void Promise.all(
       changedWorkspaceIds.map(refreshCatalogWorkspace),
-    ).then(() => {
-      setResourceSyncError(null);
-    }).catch((error: unknown) => {
-      setResourceSyncError(
-        `同步会话目录失败: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    ).catch(() => {
+      // 每个失败分支都保留自己的可见错误，不能提升为整个资源树故障。
     });
   }, [catalogRefreshVersions, catalogSyncKeys, refreshCatalogWorkspace]);
 
@@ -665,11 +659,8 @@ export function useSessionResourceExplorer({
       return;
     }
     void Promise.all(changedWorkspaceIds.map(refreshCatalogWorkspace))
-      .then(() => setResourceSyncError(null))
-      .catch((error: unknown) => {
-        setResourceSyncError(
-          `同步生成会话失败: ${error instanceof Error ? error.message : String(error)}`,
-        );
+      .catch(() => {
+        // 每个失败分支都保留自己的可见错误，不能提升为整个资源树故障。
       });
   }, [generationRuns, refreshCatalogWorkspace]);
 
@@ -682,11 +673,8 @@ export function useSessionResourceExplorer({
     const key = branchKey(activeWorkspaceId, null);
     if (!branchesRef.current.has(key)) {
       void loadBranch(activeWorkspaceId, null)
-        .then(() => setResourceSyncError(null))
-        .catch((error: unknown) => {
-          setResourceSyncError(
-            `加载会话目录失败: ${error instanceof Error ? error.message : String(error)}`,
-          );
+        .catch(() => {
+          // loadBranch 已把错误保存在当前工作区分支中。
         });
     }
   }, [activeWorkspaceId, loadBranch]);
@@ -728,6 +716,8 @@ export function useSessionResourceExplorer({
 
   useEffect(() => {
     if (!activeWorkspaceId || !currentSessionId || !navigation) {
+      currentSessionRevealRequestRef.current += 1;
+      currentSessionRevealKeyRef.current = null;
       return;
     }
     const revealKey = `${activeWorkspaceId}:${currentSessionId}`;
@@ -767,7 +757,6 @@ export function useSessionResourceExplorer({
   return useMemo(() => ({
     navigation,
     navigationError,
-    resourceSyncError,
     branches,
     expandedIds,
     searchResults,
@@ -815,7 +804,6 @@ export function useSessionResourceExplorer({
     loadBranch,
     navigation,
     navigationError,
-    resourceSyncError,
     placeWorkspaceNode,
     moveSessionFolder,
     moveCatalogNode,

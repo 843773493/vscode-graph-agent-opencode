@@ -17,6 +17,17 @@ export interface VisibleWorkspaceNode {
   depth: number;
 }
 
+export interface WorkspaceFailurePresentation {
+  title: string;
+  message: string;
+  technicalDetail: string;
+}
+
+export interface WorkspaceStatusPresentation {
+  label: string;
+  title: string;
+}
+
 export const WORKSPACE_SECTION_RECENT_LIMIT = 10;
 const RECENT_SECTION_DAYS = 7;
 
@@ -27,6 +38,58 @@ export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
   }
   lines.push(`root_path: ${workspace.root_path}`);
   return lines.join('\n');
+}
+
+function remoteGatewayName(workspace: GatewayWorkspace): string {
+  return workspace.remote?.ssh_config_host
+    ?? workspace.remote?.name
+    ?? workspace.remote?.host
+    ?? '远程 Gateway';
+}
+
+export function workspaceFailurePresentation(
+  workspace: GatewayWorkspace | undefined,
+  error: string,
+): WorkspaceFailurePresentation {
+  if (workspace?.connection_kind === 'remote_gateway') {
+    return {
+      title: '无法读取远程工作区',
+      message: `远程 Gateway“${remoteGatewayName(workspace)}”当前未连接或暂时不可用。`,
+      technicalDetail: error,
+    };
+  }
+  return {
+    title: '无法读取工作区目录',
+    message: '该工作区的会话目录暂时不可用。',
+    technicalDetail: error,
+  };
+}
+
+export function workspaceStatusPresentation(
+  workspace: GatewayWorkspace,
+): WorkspaceStatusPresentation | null {
+  if (workspace.status !== 'offline') return null;
+  if (workspace.connection_kind === 'remote_gateway') {
+    const summary = `远程 Gateway“${remoteGatewayName(workspace)}”当前未连接。`;
+    return {
+      label: '连接失败',
+      title: workspace.connection_error
+        ? `${summary}\n技术详情：${workspace.connection_error}`
+        : summary,
+    };
+  }
+  if (workspace.managed) {
+    return {
+      label: '已停止',
+      title: workspace.connection_error
+        ? `工作区后端未运行。\n技术详情：${workspace.connection_error}`
+        : '工作区后端未运行，可通过右键菜单重新启动。',
+    };
+  }
+  return {
+    label: '不可用',
+    title: workspace.connection_error ?? '工作区当前不可用。',
+  };
 }
 
 function sessionSortTime(session: Session, sortMode: SessionSortMode): number {

@@ -37,10 +37,15 @@ def write_web_ui_settings(
 ) -> WebUISettingsDTO:
     settings_path = web_ui_settings_path(gateway_root)
     settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        settings.model_dump_json(indent=2),
+    temporary_path = settings_path.with_suffix(".json.tmp")
+    temporary_path.write_text(
+        settings.model_dump_json(
+            indent=2,
+            exclude={"theme": {"resolved_theme"}},
+        ),
         encoding="utf-8",
     )
+    temporary_path.replace(settings_path)
     return settings
 
 
@@ -59,6 +64,9 @@ def merge_web_ui_settings(
         if section is not None:
             section_patch = section.model_dump(exclude_unset=True)
             data[section_name] = {**data.get(section_name, {}), **section_patch}
+    if payload.theme is not None:
+        theme_patch = payload.theme.model_dump(exclude_unset=True)
+        data["theme"] = {**data.get("theme", {}), **theme_patch}
     if payload.recent_local_workspace_paths is not None:
         seen_paths: set[str] = set()
         recent_paths: list[str] = []

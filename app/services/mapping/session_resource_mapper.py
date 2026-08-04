@@ -130,8 +130,16 @@ class SessionResourceMapper:
             "stream_metrics": browser.get("stream_metrics"),
             "checkpoint": browser.get("checkpoint"),
         }
-        if status == "lost":
-            metadata["status_note"] = "浏览器运行时或恢复检查点已断开，无法重新 attach，请查看错误信息。"
+        if (
+            status == "lost"
+            and browser.get("resource_state") == "discarded"
+            and isinstance(browser.get("checkpoint"), dict)
+        ):
+            metadata["status_note"] = "浏览器已冷回收，恢复检查点可用，可以重新打开。"
+        elif status == "lost":
+            metadata["status_note"] = (
+                "浏览器运行时或恢复检查点已断开，无法恢复原浏览器。"
+            )
         elif status == "closed":
             metadata["status_note"] = "浏览器页面已关闭，仅保留历史记录，当前不可 attach。"
         elif status == "deleted":

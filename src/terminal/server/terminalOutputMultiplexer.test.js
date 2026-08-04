@@ -4,6 +4,27 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { TerminalOutputMultiplexer } from "./terminalOutputMultiplexer.js";
 
+test("模型输出游标按 sequence 增量读取且不受 UI ACK 影响", () => {
+  let sequence = 0;
+  const multiplexer = new TerminalOutputMultiplexer({
+    terminalId: "term_model_cursor",
+    getSequence: () => sequence,
+    getSnapshot: () => ({ buffer: "alpha beta" }),
+  });
+  sequence = 1;
+  multiplexer.recordAndBroadcast({ sequence, data: "alpha " });
+  sequence = 2;
+  multiplexer.recordAndBroadcast({ sequence, data: "beta" });
+
+  const first = multiplexer.readAfter(0);
+  const second = multiplexer.readAfter(first.sequence);
+
+  assert.equal(first.output, "alpha beta");
+  assert.equal(first.sequence, 2);
+  assert.equal(first.replayMode, "incremental");
+  assert.equal(second.output, "");
+});
+
 class FakeClient {
   constructor() {
     this.sent = [];

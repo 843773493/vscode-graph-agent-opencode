@@ -59,6 +59,8 @@ class TimelineEntry(BaseModel):
 
 class TurnManifest(BaseModel):
     schema_version: Literal[1] = 1
+    # TODO: 兼容未记录投影语义版本的既有 manifest；这些文件按 v1 触发重建。
+    projection_version: int = Field(default=1, ge=1)
     status: Literal["ready", "partial", "failed"] = "ready"
     projection_epoch: int = Field(default=1, ge=1)
     operation_generation: int = Field(default=1, ge=1)

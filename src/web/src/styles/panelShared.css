@@ -13,7 +13,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 0 12px;
-  border-bottom: var(--surface-border);
+  border-bottom: var(--bt-surface-border);
   flex: 0 0 auto;
   min-width: 0;
 }
@@ -34,7 +34,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
@@ -64,13 +64,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--vscode-editor-background);
+  background: var(--bt-surface-background);
 }
 
 .panel-view .panel-card {
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 8px;
-  background: var(--vscode-input-background);
+  background: var(--bt-input-background);
   padding: 10px;
   display: flex;
   flex-direction: column;
@@ -100,8 +100,8 @@
   flex: 0 0 auto;
   border-radius: 999px;
   padding: 2px 6px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
+  background: var(--bt-badge-background);
+  color: var(--bt-badge-foreground);
   font-size: 10px;
   font-weight: 600;
 }
@@ -124,16 +124,16 @@
 }
 
 .panel-view .panel-detail {
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
-  background: var(--vscode-editor-background);
+  background: var(--bt-surface-background);
   overflow: hidden;
 }
 
 .panel-view .panel-detail summary {
   cursor: pointer;
   padding: 6px 8px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
   user-select: none;
 }
@@ -144,9 +144,9 @@
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
   font-family: var(
-    --vscode-editor-font-family,
+    --bt-font-family-mono,
     ui-monospace,
     SFMono-Regular,
     Consolas,

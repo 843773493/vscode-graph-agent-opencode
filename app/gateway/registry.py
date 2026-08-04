@@ -30,7 +30,7 @@ from app.gateway.workspace_ids import (
     is_legacy_workspace_id,
 )
 
-_REGISTRY_SCHEMA_VERSION = 8
+_REGISTRY_SCHEMA_VERSION = 9
 _UNSET = object()
 
 
@@ -46,6 +46,7 @@ class WorkspaceTarget:
     managed: bool = False
     removable: bool = True
     system_default: bool = False
+    desired_running: bool = False
     remote_gateway_connection_id: str | None = None
     remote_workspace_id: str | None = None
     remote_service_names: tuple[GatewayServiceName, ...] = ()
@@ -90,20 +91,25 @@ class GatewayWorkspaceRegistry:
         errors: list[str] = []
         for workspace_id in tuple(self._targets):
             self.invalidate_route(workspace_id)
-        for workspace_id, runtime in list(self._runtimes.items()):
+
+        local_runtimes = list(self._runtimes.items())
+        remote_runtimes = list(self._remote_gateway_runtimes.items())
+        if preserve_browser_managers:
+            for _, runtime in local_runtimes:
+                runtime.detach_process("browser_manager")
+
+        for runtime_id, runtime in (*local_runtimes, *remote_runtimes):
             try:
-                if preserve_browser_managers:
-                    runtime.close_for_gateway_restart()
-                else:
-                    runtime.close()
+                runtime.request_terminate()
             except Exception as error:
-                errors.append(f"{workspace_id}: {error}")
+                errors.append(f"{runtime_id} 发送终止信号失败: {error}")
+
+        for runtime_id, runtime in (*local_runtimes, *remote_runtimes):
+            try:
+                runtime.wait_closed()
+            except Exception as error:
+                errors.append(f"{runtime_id}: {error}")
         self._runtimes.clear()
-        for connection_id, runtime in list(self._remote_gateway_runtimes.items()):
-            try:
-                runtime.close()
-            except Exception as error:
-                errors.append(f"{connection_id}: {error}")
         self._remote_gateway_runtimes.clear()
         if errors:
             raise RuntimeError("关闭 Gateway 托管进程失败: " + "; ".join(errors))
@@ -123,6 +129,8 @@ class GatewayWorkspaceRegistry:
         )
         self._targets[target.workspace_id] = target
         if runtime is not None:
+            if target.connection_kind == "local" and target.managed:
+                target.desired_running = True
             previous = self._runtimes.pop(target.workspace_id, None)
             if previous is not None:
                 previous_browser_url = previous.service_urls.get("browser_manager")
@@ -166,6 +174,7 @@ class GatewayWorkspaceRegistry:
             raise ValueError(f"工作区后端尚未启动: {target.name}")
         self.invalidate_route(workspace_id)
         runtime.close()
+        target.desired_running = False
         target.connection_error = None
         if self._active_workspace_id == workspace_id:
             self._active_workspace_id = self._default_workspace_id()
@@ -780,6 +789,7 @@ class GatewayWorkspaceRegistry:
         targets = payload.get("targets", [])
         if not isinstance(targets, list):
             raise ValueError(f"Gateway registry targets 必须是数组: {self._storage_path}")
+        persisted_active_id = payload.get("active_workspace_id")
         workspace_id_remap: dict[str, str] = {}
         parent_workspace_ids: dict[str, str | None] = {}
         migrated = schema_version < _REGISTRY_SCHEMA_VERSION
@@ -804,6 +814,22 @@ class GatewayWorkspaceRegistry:
                 )
             managed = bool(item.get("managed", False))
             system_default = bool(item.get("system_default", False))
+            if schema_version >= 9:
+                desired_running_value = item.get("desired_running", False)
+                if not isinstance(desired_running_value, bool):
+                    raise ValueError(
+                        "Gateway registry desired_running 必须是布尔值: "
+                        f"workspace_id={original_workspace_id}"
+                    )
+                desired_running = desired_running_value
+            else:
+                # TODO: schema<9 没有记录显式启动意图，只能可靠迁移当前激活的
+                # 本地托管工作区；完成一次性迁移后移除此兼容分支。
+                desired_running = (
+                    connection_kind == "local"
+                    and managed
+                    and original_workspace_id == persisted_active_id
+                )
             # TODO: 旧 12 位 Gateway ID 完成一次性迁移后，在下一个持久化格式大版本移除。
             workspace_id = self._migrate_legacy_workspace_id(
                 workspace_id=original_workspace_id,
@@ -851,6 +877,7 @@ class GatewayWorkspaceRegistry:
                 managed=managed,
                 removable=bool(item.get("removable", True)),
                 system_default=system_default,
+                desired_running=desired_running,
                 remote_gateway_connection_id=(
                     str(item["remote_gateway_connection_id"])
                     if item.get("remote_gateway_connection_id") is not None
@@ -904,10 +931,9 @@ class GatewayWorkspaceRegistry:
                 )
             self._targets[workspace_id].parent_workspace_id = parent_workspace_id
         self._validate_parent_graph()
-        active_id = payload.get("active_workspace_id")
         migrated_active_id = (
-            workspace_id_remap.get(active_id, active_id)
-            if isinstance(active_id, str)
+            workspace_id_remap.get(persisted_active_id, persisted_active_id)
+            if isinstance(persisted_active_id, str)
             else None
         )
         if migrated_active_id is not None and migrated_active_id in self._targets:

@@ -29,6 +29,7 @@ export default function ResourceTreeRow({
   onOpenTerminal,
   onOpenBrowser,
   onShowConversation,
+  onReplaceBrowser,
 }: {
   resource: SessionResource;
   selected: boolean;
@@ -42,6 +43,7 @@ export default function ResourceTreeRow({
   onOpenTerminal: (resourceId: string) => void;
   onOpenBrowser: (resourceId: string) => void;
   onShowConversation: (jobId?: string) => void;
+  onReplaceBrowser: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const rows = metadataRows(resource);
@@ -60,6 +62,10 @@ export default function ResourceTreeRow({
       onOpenBrowser(resource.resource_id);
       return;
     }
+    if (resource.kind === "browser" && resource.available_actions.includes("resume")) {
+      onControl(resource.kind, resource.resource_id, "resume");
+      return;
+    }
     if (resource.kind === "background_task") {
       const jobId = typeof resource.metadata.job_id === "string"
         ? resource.metadata.job_id
@@ -75,6 +81,7 @@ export default function ResourceTreeRow({
       className={`resource-tree-item${selected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
       data-resource-kind={resource.kind}
       data-resource-status={resource.status}
+      aria-busy={busy}
     >
       <div className="resource-tree-row">
         <button
@@ -92,6 +99,7 @@ export default function ResourceTreeRow({
         <button
           type="button"
           className="resource-tree-main"
+          disabled={busy}
           onClick={handleOpen}
           title={`${title} · ${description}`}
         >
@@ -134,9 +142,15 @@ export default function ResourceTreeRow({
                 disabled={busy}
                 onClick={() => onControl(resource.kind, resource.resource_id, action)}
               >
-                {actionLabel(resource, action)}
+                {busy ? "处理中…" : actionLabel(resource, action)}
               </button>
             ))}
+            {resource.kind === "browser" &&
+            (resource.status === "lost" || resource.available_actions.includes("resume")) ? (
+              <button type="button" className="resource-action-open" disabled={busy} onClick={onReplaceBrowser}>
+                新建替代浏览器
+              </button>
+            ) : null}
           </div>
           {rows.length > 0 ? (
             <details className="resource-details">

@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import threading
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TypeVar
 
 from app.abstractions.turn_history import (
     TurnHistoryStoreProtocol,
     TurnProjectionOperation,
-    TurnProjectionWatermark,
 )
 from app.schemas.event import Event
 from app.schemas.public_v2.common import JobStatus
@@ -28,6 +27,8 @@ from .presentation import (
 
 _ResultT = TypeVar("_ResultT")
 
+CURRENT_TURN_PROJECTION_VERSION = 2
+
 _PROJECTED_EVENT_TYPES = frozenset(
     {
         "job_created",
@@ -40,12 +41,15 @@ _PROJECTED_EVENT_TYPES = frozenset(
         "status_change",
         "text_start",
         "text_end",
+        "agent_end",
         "tool_call_start",
         "tool_call_end",
         "error",
         "session_interrupted",
     }
 )
+
+
 class TurnHistoryProjector:
     """把持久化 Job 语义事件增量投影为前端 Turn。"""
 
@@ -150,11 +154,39 @@ class TurnHistoryProjector:
                 event_id=event.event_id,
                 source_event_offset=source_offset,
                 mutations=[build_turn_mutation(current, updated, item)],
+                hidden_turn_ids=self._replayed_turn_ids(session_id, event),
             ),
         )
         if applied:
             return updated
         return self._store.get_turn(session_id, event.job_id)
+
+    def _replayed_turn_ids(self, session_id: str, event: Event) -> list[str]:
+        if event.type != "job_created":
+            return []
+        metadata = event.payload.message_metadata
+        if not isinstance(metadata, Mapping):
+            return []
+        replaced_message_id = metadata.get("replaced_message_id")
+        replay_action = metadata.get("replay_action")
+        if replay_action not in {"edit_and_continue", "regenerate", "retry_failed"}:
+            return []
+        if not isinstance(replaced_message_id, str) or not replaced_message_id:
+            raise ValueError(
+                "Replay Job 缺少 replaced_message_id: "
+                f"session_id={session_id}, job_id={event.job_id}"
+            )
+        truncated_epoch = metadata.get("turn_projection_epoch")
+        if (
+            isinstance(truncated_epoch, int)
+            and not isinstance(truncated_epoch, bool)
+            and truncated_epoch == self._store.projection_epoch(session_id)
+        ):
+            return []
+        return self._store.visible_turn_ids_from_message(
+            session_id,
+            replaced_message_id,
+        )
 
     def record_event(
         self,
@@ -179,6 +211,7 @@ class TurnHistoryProjector:
     ) -> int:
         with self._locks[session_id]:
             if destructive:
+                publication_base = self._store.publication_watermark(session_id)
                 staging = self._store.create_rebuild_staging(session_id)
                 staging_projector = TurnHistoryProjector(
                     staging,
@@ -190,22 +223,21 @@ class TurnHistoryProjector:
                         event,
                         source_offset=None,
                     )
-                current_cursor = self._store.event_cursor(session_id)
-                if current_cursor is not None:
+                if publication_base.event_id is not None:
                     staging.advance_event_cursor(
                         session_id,
-                        current_cursor,
-                        source_offset=self._store.event_offset(session_id),
+                        publication_base.event_id,
+                        source_offset=publication_base.source_offset,
                     )
                 staging.set_projection_status(session_id, "ready")
-                staging.mark_history_initialized(session_id)
+                staging.mark_history_initialized(
+                    session_id,
+                    projection_version=CURRENT_TURN_PROJECTION_VERSION,
+                )
                 self._store.publish_staging(
                     session_id,
                     staging,
-                    publication_base=TurnProjectionWatermark(
-                        event_id=current_cursor,
-                        source_offset=self._store.event_offset(session_id),
-                    ),
+                    publication_base=publication_base,
                 )
                 return self._store.turn_count(session_id)
             for event in events:

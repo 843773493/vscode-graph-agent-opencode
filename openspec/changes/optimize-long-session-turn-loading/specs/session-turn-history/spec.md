@@ -58,6 +58,43 @@ Turn 的 summary/header MUST 具有固定读取上限，并与完整 detail 在�
 - **WHEN** 客户端在历史回滚后使用旧投影 epoch 的 cursor
 - **THEN** API 返回可识别的 stale-cursor 错误，而不是静默返回其他页面
 
+### Requirement: Replay 同步回退模型上下文与 Turn 投影
+
+编辑并从此处继续、重新生成和失败重试 SHALL 以目标用户消息为边界同步截断模型 checkpoint 与 Turn 展示投影，并 SHALL 在 dispatch 新 Job 前原子隐藏目标 Turn 及其后缀。工作区文件修改 MUST NOT 被该操作撤销。
+
+#### Scenario: 编辑旧消息后继续
+
+- **WHEN** 用户编辑一个已有用户消息并确认从此处继续
+- **THEN** 新模型请求只包含目标消息之前的上下文和替换消息，聊天时间线不再展示目标 Turn 及其后续旧分支，并开始显示新的执行 Turn
+
+#### Scenario: 重建包含 replay 的历史
+
+- **WHEN** 系统从持久 Trace destructive rebuild 一个包含 replay 元数据的会话
+- **THEN** 重建投影继续隐藏被替换 Turn 及其旧后缀，不得使旧分支重新出现
+
+### Requirement: 破坏性投影发布拒绝过期 staging
+
+系统 SHALL 在同一投影锁内原子捕获 `projection_epoch`、事件 ID 与 source offset 作为 staging 发布基线，并 SHALL 在发布前同时校验三者。任一基线发生变化时，旧 staging MUST 明确冲突并放弃发布。
+
+#### Scenario: Migration staging 与 replay 使用相同事件水位
+
+- **WHEN** migration 捕获 staging 基线后，replay 在事件 ID 和 source offset 不变的情况下发布了更高投影 epoch
+- **THEN** migration staging 因 epoch 不匹配被拒绝，不得覆盖 replay 投影或复活旧分支
+
+### Requirement: 长历史 replay 遵守 detail 内存边界
+
+系统 SHALL 使用有界 summary/header 分页定位 replay 目标。隐藏大量 Turn 时 MUST 只读取和改写有界 header，并以有界缓冲流式复制 detail；系统 MUST NOT 为一次回退同时反序列化全部后缀 Turn 的正文、工具事件或 Trace items。
+
+#### Scenario: 编辑长会话的早期消息
+
+- **WHEN** 目标消息之后存在大量包含大型 Markdown 和工具 Trace 的 Turn
+- **THEN** replay 的内存占用不与全部后缀 detail 总量线性增长，且 bootstrap、分页和常规 SSE 的读取边界保持不变
+
+#### Scenario: 实时 replay 已完成显式截断
+
+- **WHEN** 新 replay Job 携带的截断 epoch 等于当前权威投影 epoch
+- **THEN** 增量 projector 不再重复扫描已隐藏的历史，而 destructive rebuild 仍能依据 replay 元数据恢复隐藏关系
+
 ### Requirement: Turn 更新可幂等合并
 每个 Turn SHALL 具有单调递增 revision，bootstrap、分页、详情、终态协调与 SSE SHALL 共享相同的 Turn 身份和 revision 语义。
 

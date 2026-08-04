@@ -1,0 +1,390 @@
+import asyncio
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from app.gateway.federation import build_projected_workspace_id
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    WorkspaceTarget,
+)
+from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.workspace_ids import (
+    build_managed_local_workspace_id,
+    build_workspace_id,
+)
+
+
+class _HealthResponse:
+    status_code = 200
+
+
+class _ConfigStatusResponse:
+    status_code = 200
+
+    @staticmethod
+    def json() -> dict[str, object]:
+        return {
+            "data": {
+                "healthy": False,
+                "revision": "revision-a",
+                "restart_required": True,
+                "reason": "restart_required",
+                "changed_sections": ["mcp"],
+                "last_error": "需要重启工作区后端",
+            }
+        }
+
+
+class _ConfigAwareHealthClient:
+    def __init__(self, *, timeout: int) -> None:
+        assert timeout == 2
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        return None
+
+    async def get(self, url: str, *, headers: dict[str, str]):
+        assert headers == {"X-Local-Token": "local-dev-token"}
+        if url.endswith("/api/v1/config/reload-status"):
+            return _ConfigStatusResponse()
+        return _HealthResponse()
+
+
+class _OrderedCloseProcess:
+    def __init__(self, name: str, events: list[str], process_count: int) -> None:
+        self._name = name
+        self._events = events
+        self._process_count = process_count
+
+    def request_terminate(self) -> None:
+        self._events.append(f"terminate:{self._name}")
+
+    def close(self, *, timeout_seconds: float = 8) -> None:
+        assert timeout_seconds == 8
+        assert len(
+            [event for event in self._events if event.startswith("terminate:")]
+        ) == self._process_count
+        self._events.append(f"close:{self._name}")
+
+    def detach(self) -> None:
+        self._events.append(f"detach:{self._name}")
+
+
+class _ConcurrentHealthClient:
+    active_requests = 0
+    peak_requests = 0
+
+    def __init__(self, *, timeout: int) -> None:
+        assert timeout == 2
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        return None
+
+    async def get(self, url: str, *, headers: dict[str, str]):
+        assert url.endswith("/api/v1/health")
+        assert headers == {"X-Local-Token": "local-dev-token"}
+        type(self).active_requests += 1
+        type(self).peak_requests = max(
+            type(self).peak_requests,
+            type(self).active_requests,
+        )
+        await asyncio.sleep(0.02)
+        type(self).active_requests -= 1
+        return _HealthResponse()
+
+
+def test_gateway_workspace_ids_use_32_hex_characters():
+    local_id = build_workspace_id(
+        "local",
+        "/workspace/project",
+        "http://127.0.0.1:8010",
+    )
+    remote_id = build_projected_workspace_id("rgw_test", "remote_workspace")
+
+    assert re.fullmatch(r"gw_[0-9a-f]{32}", local_id)
+    assert re.fullmatch(r"gw_[0-9a-f]{32}", remote_id)
+    assert local_id != remote_id
+
+
+def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    for index in range(2):
+        process = _OrderedCloseProcess(f"workspace-{index}", events, 2)
+        registry.upsert(
+            WorkspaceTarget(
+                workspace_id=f"workspace-{index}",
+                name=f"Workspace {index}",
+                root_path=f"/tmp/workspace-{index}",
+                backend_url=f"http://127.0.0.1:{8100 + index}",
+                connection_kind="local",
+            ),
+            runtime=WorkspaceRuntime(
+                service_urls={
+                    "workspace_api": f"http://127.0.0.1:{8100 + index}"
+                },
+                processes={"workspace_api": process},
+            ),
+            activate=index == 0,
+        )
+
+    registry.close()
+
+    assert events == [
+        "terminate:workspace-0",
+        "terminate:workspace-1",
+        "close:workspace-0",
+        "close:workspace-1",
+    ]
+
+
+def test_registry_migrates_legacy_workspace_ids_and_active_reference(tmp_path: Path):
+    storage_path = tmp_path / "gateway.json"
+    local_legacy_id = "gw_0123456789ab"
+    ssh_legacy_id = "gw_abcdef012345"
+    payload = {
+        "active_workspace_id": ssh_legacy_id,
+        "order_customized": True,
+        "targets": [
+            {
+                "workspace_id": local_legacy_id,
+                "name": "Local",
+                "root_path": "/workspace/local",
+                "backend_url": "http://127.0.0.1:8010",
+                "connection_kind": "local",
+                "managed": False,
+            },
+            {
+                "workspace_id": ssh_legacy_id,
+                "name": "Remote",
+                "root_path": "/workspace/remote",
+                "backend_url": "http://127.0.0.1:41000",
+                "connection_kind": "ssh",
+                "managed": True,
+                "ssh_connection": {
+                    "host": "remote.example.com",
+                    "port": 2222,
+                    "username": "developer",
+                    "private_key_path": "/home/user/.ssh/remote_ed25519",
+                    "remote_backend_host": "127.0.0.1",
+                    "remote_backend_port": 8010,
+                },
+            },
+        ],
+    }
+    storage_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SSH 直连后端注册记录"):
+        GatewayWorkspaceRegistry(storage_path=storage_path)
+
+
+def test_registry_v5_migrates_managed_local_id_to_stable_root_id(
+    tmp_path: Path,
+) -> None:
+    storage_path = tmp_path / "gateway.json"
+    root_path = "/workspace/managed"
+    old_id = build_workspace_id(
+        "local",
+        root_path,
+        "http://127.0.0.1:41000",
+    )
+    storage_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "active_workspace_id": old_id,
+                "targets": [
+                    {
+                        "workspace_id": old_id,
+                        "name": "Managed",
+                        "root_path": root_path,
+                        "backend_url": "http://127.0.0.1:41000",
+                        "connection_kind": "local",
+                        "managed": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
+    expected_id = build_managed_local_workspace_id(root_path)
+
+    assert registry.active_workspace_id == expected_id
+    assert registry.resolve(expected_id).name == "Managed"
+    persisted = json.loads(storage_path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == 9
+    assert persisted["active_workspace_id"] == expected_id
+    assert registry.resolve(expected_id).desired_running is True
+
+
+def test_registry_v8_only_migrates_active_managed_workspace_as_running(
+    tmp_path: Path,
+) -> None:
+    storage_path = tmp_path / "gateway.json"
+    storage_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 8,
+                "active_workspace_id": "active",
+                "targets": [
+                    {
+                        "workspace_id": workspace_id,
+                        "name": workspace_id,
+                        "root_path": f"/workspace/{workspace_id}",
+                        "backend_url": f"http://127.0.0.1:{port}",
+                        "connection_kind": "local",
+                        "managed": True,
+                    }
+                    for workspace_id, port in (
+                        ("active", 41000),
+                        ("stopped-with-stale-url", 42000),
+                    )
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
+
+    assert registry.resolve("active").desired_running is True
+    assert registry.resolve("stopped-with-stale-url").desired_running is False
+
+
+def test_registry_persists_browser_manager_url_for_gateway_restart(
+    tmp_path: Path,
+) -> None:
+    storage_path = tmp_path / "gateway.json"
+    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="gw_browser_survival",
+            name="Browser survival",
+            root_path="/workspace/browser-survival",
+            backend_url="http://127.0.0.1:41000",
+            connection_kind="local",
+            managed=True,
+            local_service_urls={
+                "browser_manager": "http://127.0.0.1:41002"
+            },
+        )
+    )
+
+    restored = GatewayWorkspaceRegistry(storage_path=storage_path)
+
+    assert restored.resolve("gw_browser_survival").local_service_urls == {
+        "browser_manager": "http://127.0.0.1:41002"
+    }
+    assert restored.resolve("gw_browser_survival").desired_running is False
+
+
+def test_registry_persists_managed_runtime_intent_until_explicit_stop(
+    tmp_path: Path,
+) -> None:
+    storage_path = tmp_path / "gateway.json"
+    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
+    target = WorkspaceTarget(
+        workspace_id="gw_restore",
+        name="Restore",
+        root_path=str(tmp_path),
+        backend_url="http://127.0.0.1:41000",
+        connection_kind="local",
+        managed=True,
+    )
+    registry.upsert(
+        target,
+        runtime=WorkspaceRuntime(
+            service_urls={"workspace_api": "http://127.0.0.1:41000"}
+        ),
+    )
+
+    assert registry.resolve(target.workspace_id).desired_running is True
+    assert GatewayWorkspaceRegistry(
+        storage_path=storage_path
+    ).resolve(target.workspace_id).desired_running is True
+
+    registry.stop_managed_runtime(target.workspace_id)
+
+    assert registry.resolve(target.workspace_id).desired_running is False
+    assert GatewayWorkspaceRegistry(
+        storage_path=storage_path
+    ).resolve(target.workspace_id).desired_running is False
+
+
+@pytest.fixture
+def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
+    result = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    for index in range(3):
+        result.upsert(
+            WorkspaceTarget(
+                workspace_id=f"workspace-{index}",
+                name=f"Workspace {index}",
+                root_path=f"/tmp/workspace-{index}",
+                backend_url=f"http://127.0.0.1:{8100 + index}",
+                connection_kind="local",
+            ),
+            runtime=WorkspaceRuntime(
+                service_urls={
+                    "workspace_api": f"http://127.0.0.1:{8100 + index}"
+                }
+            ),
+            activate=index == 0,
+        )
+    return result
+
+
+@pytest.mark.asyncio
+async def test_list_dtos_checks_workspace_health_concurrently(
+    registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _ConcurrentHealthClient.active_requests = 0
+    _ConcurrentHealthClient.peak_requests = 0
+    monkeypatch.setattr(
+        "app.gateway.registry.httpx.AsyncClient",
+        _ConcurrentHealthClient,
+    )
+
+    result = await registry.list_dtos()
+
+    assert [item.workspace_id for item in result] == [
+        "workspace-0",
+        "workspace-1",
+        "workspace-2",
+    ]
+    assert all(item.status == "ready" for item in result)
+    assert result[0].services["workspace_api"].local_port == 8100
+    assert result[0].services["workspace_api"].health_path == "/api/v1/health"
+    assert result[0].services["terminal_manager"].status == "unavailable"
+    assert _ConcurrentHealthClient.peak_requests == 3
+
+
+@pytest.mark.asyncio
+async def test_list_dtos_exposes_config_restart_requirement(
+    registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.gateway.registry.httpx.AsyncClient",
+        _ConfigAwareHealthClient,
+    )
+
+    result = await registry.list_dtos()
+
+    assert result[0].runtime_action == "probe_external_backend"
+    assert result[0].config_reload.available is True
+    assert result[0].config_reload.restart_required is True
+    assert result[0].config_reload.reason == "restart_required"
+    assert result[0].config_reload.changed_sections == ["mcp"]

@@ -4,6 +4,7 @@ import {
   readTextFromClipboard,
 } from "../../utils/clipboard";
 import AnchoredOverlay from "../AnchoredOverlay";
+import { useWarmConfirm } from "../WarmConfirmProvider";
 
 export interface SessionContextMenu {
   sessionId: string;
@@ -58,6 +59,7 @@ interface AgentSessionsContextMenusProps {
   onRemoveWorkspace: (workspaceId: string, name: string) => void;
   onStartWorkspace: (workspaceId: string) => Promise<void>;
   onStopWorkspace: (workspaceId: string) => Promise<void>;
+  startingWorkspaceIds: ReadonlySet<string>;
   onStatusChange: (message: string) => void;
 }
 
@@ -79,8 +81,11 @@ export default function AgentSessionsContextMenus({
   onRemoveWorkspace,
   onStartWorkspace,
   onStopWorkspace,
+  startingWorkspaceIds,
   onStatusChange,
 }: AgentSessionsContextMenusProps) {
+  const confirm = useWarmConfirm();
+
   const handleCopySessionId = () => {
     if (!sessionMenu) {
       return;
@@ -168,6 +173,39 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`复制工作区信息失败: ${message}`);
       });
   };
+
+  const handleStopWorkspace = () => {
+    if (!workspaceMenu) {
+      return;
+    }
+    const target = workspaceMenu;
+    onCloseWorkspaceMenu();
+    void confirm({
+      title: "关闭工作区",
+      message: `关闭工作区“${target.name || target.workspaceId}”的后端服务。该工作区中的会话将暂时离线，正在运行的任务和终端可能中断。稍后可以重新启动。`,
+      confirmText: "关闭",
+      danger: true,
+    }).then(async (confirmed) => {
+      if (confirmed) {
+        await onStopWorkspace(target.workspaceId);
+      }
+    }).catch((error: unknown) => {
+      onStatusChange(
+        `关闭工作区失败: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  };
+
+  const canStartWorkspace = Boolean(
+    workspaceMenu?.managed
+    && !workspaceMenu.systemDefault
+    && workspaceMenu.status === "offline",
+  );
+  const canStopWorkspace = Boolean(
+    workspaceMenu?.managed
+    && !workspaceMenu.systemDefault
+    && workspaceMenu.status === "ready",
+  );
 
   return (
     <>
@@ -281,31 +319,36 @@ export default function AgentSessionsContextMenus({
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
-          {workspaceMenu.managed && !workspaceMenu.systemDefault ? (
+          {canStartWorkspace ? (
             <button
               type="button"
               role="menuitem"
+              disabled={startingWorkspaceIds.has(workspaceMenu.workspaceId)}
               onClick={() => {
                 const target = workspaceMenu;
                 onCloseWorkspaceMenu();
-                const action = target.status === "offline" ? onStartWorkspace : onStopWorkspace;
-                void action(target.workspaceId).catch((error: unknown) => {
+                void onStartWorkspace(target.workspaceId).catch((error: unknown) => {
                   onStatusChange(
-                    `${target.status === "offline" ? "启动" : "关闭"}工作区失败: ${error instanceof Error ? error.message : String(error)}`,
+                    `启动工作区失败: ${error instanceof Error ? error.message : String(error)}`,
                   );
                 });
               }}
             >
-              <span className={`codicon ${workspaceMenu.status === "offline" ? "codicon-play" : "codicon-debug-stop"} agent-sessions-menu-item-icon`} aria-hidden="true" />
+              <span className={`codicon ${startingWorkspaceIds.has(workspaceMenu.workspaceId) ? "codicon-loading codicon-modifier-spin" : "codicon-play"} agent-sessions-menu-item-icon`} aria-hidden="true" />
               <span className="agent-sessions-menu-item-label">
-                {workspaceMenu.status === "offline" ? "启动工作区" : "关闭工作区"}
+                {startingWorkspaceIds.has(workspaceMenu.workspaceId)
+                  ? "正在启动"
+                  : "启动工作区"}
               </span>
             </button>
           ) : null}
           <button
             type="button"
             role="menuitem"
-            disabled={workspaceMenu.status === "offline"}
+            disabled={
+              workspaceMenu.status === "offline"
+              || startingWorkspaceIds.has(workspaceMenu.workspaceId)
+            }
             onClick={() => {
               const target = workspaceMenu;
               onCloseWorkspaceMenu();
@@ -355,11 +398,22 @@ export default function AgentSessionsContextMenus({
             <span className="codicon codicon-info agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">复制工作区信息</span>
           </button>
-          {workspaceMenu.removable ? (
+          {canStopWorkspace ? (
             <button
               type="button"
               role="menuitem"
               className="danger agent-sessions-menu-item-separated"
+              onClick={handleStopWorkspace}
+            >
+              <span className="codicon codicon-debug-stop agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">关闭工作区</span>
+            </button>
+          ) : null}
+          {workspaceMenu.removable ? (
+            <button
+              type="button"
+              role="menuitem"
+              className={`danger${canStopWorkspace ? "" : " agent-sessions-menu-item-separated"}`}
               onClick={() => {
                 const target = workspaceMenu;
                 onCloseWorkspaceMenu();

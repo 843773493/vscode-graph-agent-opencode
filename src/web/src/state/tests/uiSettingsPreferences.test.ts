@@ -15,6 +15,7 @@ const settings: WebUiSettings = {
   },
   workspace_file_tree: { expanded_paths_by_workspace: {} },
   gateway_console: { view: "managed" },
+  theme: { theme_id: "warm", background: null, resolved_theme: null },
   recent_local_workspace_paths: [],
 };
 

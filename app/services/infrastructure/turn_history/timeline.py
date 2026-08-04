@@ -84,8 +84,10 @@ class TurnTimeline:
                 f"actual={path.stat().st_size}"
             )
         if index.latest_turn_id is None:
-            if index.turn_count != 0 or index.latest_ordinal != 0:
-                raise RuntimeError("Turn 空索引包含非零计数或 ordinal")
+            if index.turn_count != 0:
+                raise RuntimeError("Turn 无可见尾锚但计数非零")
+            if index.latest_ordinal == 0 and index.timeline_size != 0:
+                raise RuntimeError("Turn 空时间线包含非零 committed size")
             return
         record = self._files.read_turn_header(
             session_id,

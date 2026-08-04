@@ -4,7 +4,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 export const STATE_FILE_NAME = "terminals.json";
 
 export class TerminalStateStore {
-  constructor({ workspaceRoot }) {
+  constructor({ workspaceRoot, workspaceId }) {
+    this.workspaceId = workspaceId;
     this.stateDir = path.join(workspaceRoot, ".boxteam", "terminal-manager");
     this.stateFile = path.join(this.stateDir, STATE_FILE_NAME);
   }
@@ -26,6 +27,12 @@ export class TerminalStateStore {
     }
 
     const parsed = JSON.parse(raw);
+    // TODO: 兼容迁移前没有 workspace_id 的终端状态文件。
+    if (parsed?.workspace_id && parsed.workspace_id !== this.workspaceId) {
+      throw new Error(
+        `终端状态文件工作区身份不匹配: expected=${this.workspaceId}, actual=${parsed.workspace_id}`,
+      );
+    }
     return Array.isArray(parsed?.terminals) ? parsed.terminals : [];
   }
 

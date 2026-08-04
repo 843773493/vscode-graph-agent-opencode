@@ -86,6 +86,11 @@ class WorkspaceFilePasteRequest(BaseModel):
     source_paths: list[str] = Field(min_length=1, max_length=100)
 
 
+class WorkspaceFileCopyRequest(BaseModel):
+    source_path: str = Field(min_length=1, max_length=4096)
+    source_scope: WorkspaceFileScope = "workspace"
+
+
 class WorkspaceFileWatchRequest(BaseModel):
     paths: list[str] = Field(default_factory=list, max_length=100)
 

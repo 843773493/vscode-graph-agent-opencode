@@ -124,22 +124,30 @@ class TurnOperationManager:
         operation: TurnProjectionOperation,
         index: TurnIndex,
     ) -> TurnIndex:
-        affected_turn_ids = {
-            *(mutation.turn_id for mutation in operation.mutations),
-            *operation.hidden_turn_ids,
-        }
+        mutation_turn_ids = {mutation.turn_id for mutation in operation.mutations}
         existing_records = {
             turn_id: self._files.read_turn_record(
                 session_id,
                 turn_id,
                 required=False,
             )
-            for turn_id in affected_turn_ids
+            for turn_id in mutation_turn_ids
+        }
+        hidden_headers = {
+            turn_id: self._files.read_turn_header(
+                session_id,
+                turn_id,
+                required=False,
+            )
+            for turn_id in operation.hidden_turn_ids
         }
         timeline_path = self._files.timeline_path(session_id)
         repair_index = index.timeline_size != timeline_path.stat().st_size or any(
             record is not None and operation.event_id == record.last_applied_event_id
             for record in existing_records.values()
+        ) or any(
+            header is not None and operation.event_id == header.last_applied_event_id
+            for header in hidden_headers.values()
         )
 
         for mutation in operation.mutations:
@@ -234,22 +242,20 @@ class TurnOperationManager:
             self._files.write_turn_record(session_id, record)
 
         for turn_id in operation.hidden_turn_ids:
-            record = existing_records.get(turn_id)
-            if record is None:
+            header = hidden_headers.get(turn_id)
+            if header is None:
                 raise KeyError(
                     f"待隐藏 Turn 不存在: session_id={session_id}, turn_id={turn_id}"
                 )
-            if operation.event_id == record.last_applied_event_id:
+            if operation.event_id == header.last_applied_event_id:
                 continue
-            if record.visible:
+            if header.visible:
                 index.turn_count -= 1
-            hidden_record = record.model_copy(
-                update={
-                    "visible": False,
-                    "last_applied_event_id": operation.event_id,
-                }
+            self._files.hide_turn_record(
+                session_id,
+                turn_id,
+                event_id=operation.event_id,
             )
-            self._files.write_turn_record(session_id, hidden_record)
 
         if repair_index:
             index = self._timeline.rebuild_index(

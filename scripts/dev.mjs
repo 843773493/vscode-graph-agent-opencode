@@ -12,6 +12,7 @@ import { once } from "node:events";
 import {
   spawnDetachedProcess,
   terminateDetachedProcess,
+  terminateProcessWithEscalation,
 } from "../packages/launcher/src/detached-process.mjs";
 import {
   resolveServiceLogPath,
@@ -54,6 +55,21 @@ const pythonBin = path.resolve(
 const nodeBin =
   process.env.NODE_BIN ?? (process.platform === "win32" ? "node.exe" : "node");
 const onlyLaunch = process.argv.slice(2).includes("--only-launch");
+const restartDelayArgument = process.argv
+  .slice(2)
+  .find((argument) => argument.startsWith("--restart-delay-ms="));
+const restartDelayMs = restartDelayArgument
+  ? Number(restartDelayArgument.slice("--restart-delay-ms=".length))
+  : 0;
+if (
+  !Number.isInteger(restartDelayMs) ||
+  restartDelayMs < 0 ||
+  restartDelayMs > 10_000
+) {
+  throw new Error(
+    `--restart-delay-ms 必须是 0 到 10000 的整数，实际为 ${String(restartDelayMs)}`,
+  );
+}
 const detachedReadyFile = process.env.BOXTEAM_DEV_READY_FILE ?? null;
 const host = "127.0.0.1";
 const ports = {
@@ -303,25 +319,16 @@ function launcherLockPid() {
   return Number.isInteger(payload.pid) && payload.pid > 0 ? payload.pid : null;
 }
 
-function processIsAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if (error?.code === "ESRCH") return false;
-    throw error;
-  }
-}
-
-async function waitForPreviousLauncherExit() {
+async function stopPreviousLauncher() {
   const pid = launcherLockPid();
-  if (pid === null || !processIsAlive(pid)) return;
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    if (!processIsAlive(pid)) return;
-    await Bun.sleep(250);
-  }
-  throw new Error(`旧 Launcher 未在端口清理后退出: pid=${pid}`);
+  if (pid === null) return;
+  process.stdout.write(`[dev] 正在停止旧 Launcher: pid=${pid}\n`);
+  await terminateProcessWithEscalation(pid, {
+    gracefulTimeoutMs: 15_000,
+    forceTimeoutMs: 5_000,
+    pollIntervalMs: 250,
+    sleepImpl: Bun.sleep,
+  });
 }
 
 async function main() {
@@ -335,14 +342,21 @@ async function main() {
     requirePath(targetPath, label);
   }
   mkdirSync(defaultWorkspaceRoot, { recursive: true });
+  await stopPreviousLauncher();
   await cleanDevelopmentPorts();
-  await waitForPreviousLauncherExit();
 
   const runtimeManifest = writeDevelopmentManifest();
   const environment = {
     ...process.env,
     BOXTEAM_HOME: boxteamHome,
     BOXTEAM_RUNTIME_MANIFEST: runtimeManifest,
+    BOXTEAM_DEVELOPMENT_RESTART_RUNNER: process.execPath,
+    BOXTEAM_DEVELOPMENT_RESTART_SCRIPT: path.join(
+      projectRoot,
+      "scripts",
+      "dev.mjs",
+    ),
+    BOXTEAM_DEVELOPMENT_RESTART_CWD: projectRoot,
     BOXTEAM_PYTHON_BIN: pythonBin,
     BOXTEAM_NODE_BIN: nodeBin,
     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultWorkspaceRoot,
@@ -362,7 +376,6 @@ async function main() {
     ...(detachedReadyFile === null ? {} : { [SERVICE_LOG_CAPTURED_ENV]: "1" }),
   };
   installDevelopmentConfiguration(environment);
-  const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
   const terminalFrontend = spawnProcess(
     nodeBin,
     [
@@ -411,11 +424,10 @@ async function main() {
     projectRoot,
     environment,
   );
-  const processes = [frontend, terminalFrontend, browserFrontend, launcher];
+  const processes = [terminalFrontend, browserFrontend, launcher];
 
   try {
     await Promise.all([
-      waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend"),
       waitForHttpOk(
         `http://${host}:${ports.gateway}/api/gateway/health`,
         "gateway",
@@ -429,6 +441,9 @@ async function main() {
         "browser frontend",
       ),
     ]);
+    const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
+    processes.push(frontend);
+    await waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend");
     if (detachedReadyFile !== null) {
       writeFileSync(
         detachedReadyFile,
@@ -480,6 +495,9 @@ async function main() {
 }
 
 if (onlyLaunch) {
+  if (restartDelayMs > 0) {
+    await Bun.sleep(restartDelayMs);
+  }
   await launchDetachedManager();
 } else {
   await main();

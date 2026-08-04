@@ -1,16 +1,16 @@
 .resource-panel {
   container-type: inline-size;
-  background: var(--vscode-agentsPanel-background);
+  background: var(--bt-panel-background);
 }
 
 .goal-manager {
   flex: 0 0 auto;
   margin: 8px;
   padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--vscode-button-background) 35%, var(--vscode-panel-border));
+  border: 1px solid color-mix(in srgb, var(--bt-button-background) 35%, var(--bt-border));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--vscode-button-background) 7%, var(--vscode-agentsPanel-background));
-  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--bt-button-background) 7%, var(--bt-panel-background));
+  color: var(--bt-text-primary);
 }
 
 .goal-manager-heading,
@@ -38,14 +38,14 @@
 }
 
 .goal-manager-title-row > .codicon {
-  color: var(--vscode-button-background);
+  color: var(--bt-button-background);
 }
 
 .goal-manager-status {
   padding: 2px 7px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent);
-  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--bt-button-background) 18%, transparent);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
@@ -60,7 +60,7 @@
 
 .goal-manager-metrics {
   flex-wrap: wrap;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
@@ -73,10 +73,10 @@
 .goal-manager-empty button {
   min-height: 24px;
   padding: 0 8px;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 5px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
+  background: var(--bt-badge-background);
+  color: var(--bt-badge-foreground);
   font: inherit;
   cursor: pointer;
 }
@@ -91,13 +91,13 @@
   justify-content: space-between;
   gap: 8px;
   padding-top: 9px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 12px;
 }
 
 .goal-manager-error {
   margin-top: 8px;
-  color: var(--vscode-errorForeground, #f48771);
+  color: var(--bt-status-danger);
   font-size: 11px;
 }
 
@@ -109,22 +109,22 @@
   justify-content: center;
   margin-left: 3px;
   border-radius: 9px;
-  background: color-mix(in srgb, var(--vscode-editor-foreground) 9%, transparent);
-  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--bt-text-primary) 9%, transparent);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
 .resource-attention-count {
-  color: var(--vscode-errorForeground);
+  color: var(--bt-status-danger);
 }
 
 .resource-icon-button,
 .resource-refresh-button,
 .resource-tree-actions button {
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 5px;
   background: transparent;
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -147,7 +147,7 @@
 .resource-icon-button:hover:not(:disabled),
 .resource-refresh-button:hover:not(:disabled),
 .resource-tree-actions button:hover:not(:disabled) {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .resource-icon-button:disabled,
@@ -179,10 +179,10 @@
   flex-direction: column;
   overflow: auto;
   padding: 5px;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 8px;
-  background: var(--vscode-agentsPanel-background);
-  box-shadow: var(--surface-shadow);
+  background: var(--bt-panel-background);
+  box-shadow: var(--bt-surface-shadow);
 }
 
 .resource-create-menu > button {
@@ -194,20 +194,20 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
   text-align: left;
   cursor: pointer;
 }
 
 .resource-create-menu > button:hover,
 .resource-create-menu > button:focus-visible {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
   outline: none;
 }
 
 .resource-create-menu > button > .codicon {
   padding-top: 2px;
-  color: #706752;
+  color: var(--bt-text-muted);
 }
 
 .resource-create-menu-copy {
@@ -222,7 +222,7 @@
 }
 
 .resource-create-menu-copy small {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -231,14 +231,35 @@
   flex: 0 0 auto;
   margin: 6px 8px 0;
   padding: 6px 8px;
-  overflow: hidden;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 5px;
-  background: color-mix(in srgb, var(--vscode-editor-foreground) 5%, transparent);
-  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--bt-text-primary) 5%, transparent);
+  color: var(--bt-text-muted);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+}
+
+.resource-notice > span {
+  display: block;
+}
+
+.resource-notice details {
+  margin-top: 4px;
+}
+
+.resource-notice summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--bt-text-primary);
+}
+
+.resource-notice code {
+  display: block;
+  max-height: 90px;
+  margin-top: 4px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .resource-tree {
@@ -246,7 +267,7 @@
   min-height: 0;
   overflow: auto;
   padding: 6px 6px 120px;
-  background: var(--vscode-agentsPanel-background);
+  background: var(--bt-panel-background);
 }
 
 .resource-tree-group + .resource-tree-group {
@@ -264,14 +285,14 @@
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
   text-align: left;
   cursor: pointer;
 }
 
 .resource-tree-group-row:hover,
 .resource-tree-group-row:focus-visible {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
   outline: none;
 }
 
@@ -284,21 +305,21 @@
 }
 
 .resource-tree-group-row > span:not(.codicon) {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
 .resource-tree-group-row small {
   min-width: 0;
   overflow: hidden;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .resource-tree-group-attention > .resource-tree-group-row {
-  color: var(--vscode-errorForeground);
+  color: var(--bt-status-danger);
 }
 
 .resource-tree-kind-heading {
@@ -308,7 +329,7 @@
   gap: 3px;
   align-items: center;
   padding-left: 22px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
@@ -318,7 +339,7 @@
 
 .resource-tree-kind-children {
   margin-left: 27px;
-  border-left: 1px solid color-mix(in srgb, var(--vscode-editor-foreground) 12%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--bt-text-primary) 12%, transparent);
   padding-left: 3px;
 }
 
@@ -328,12 +349,12 @@
 }
 
 .resource-tree-item.is-selected {
-  background: var(--vscode-list-activeSelectionBackground);
-  color: var(--vscode-list-activeSelectionForeground);
+  background: var(--bt-active-selection-background);
+  color: var(--bt-active-selection-foreground);
 }
 
 .resource-tree-item.is-expanded:not(.is-selected) {
-  background: color-mix(in srgb, var(--vscode-editor-foreground) 4%, transparent);
+  background: color-mix(in srgb, var(--bt-text-primary) 4%, transparent);
 }
 
 .resource-tree-row {
@@ -373,17 +394,17 @@
 
 .resource-tree-row:hover,
 .resource-tree-item:focus-within:not(.is-selected) .resource-tree-row {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
 }
 
 .resource-tree-chevron:focus-visible,
 .resource-tree-main:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
+  outline: 1px solid var(--bt-focus-border);
   outline-offset: -1px;
 }
 
 .resource-tree-kind {
-  color: #73694f;
+  color: var(--bt-text-muted);
   font-size: 14px;
 }
 
@@ -410,7 +431,7 @@
 
 .resource-tree-copy small {
   flex: 1 1 auto;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
@@ -419,8 +440,8 @@
   overflow: hidden;
   border-radius: 8px;
   padding: 1px 5px;
-  background: color-mix(in srgb, var(--vscode-editor-foreground) 8%, transparent);
-  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
+  color: var(--bt-text-muted);
   font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -428,23 +449,23 @@
 
 .resource-status-running,
 .resource-tree-item.is-selected .resource-tree-status {
-  color: #166534;
-  background: color-mix(in srgb, #22c55e 18%, transparent);
+  color: var(--bt-status-success);
+  background: color-mix(in srgb, var(--bt-status-success) 18%, transparent);
 }
 
 .resource-status-failed,
 .resource-status-lost {
-  color: #b91c1c;
-  background: color-mix(in srgb, #f87171 18%, transparent);
+  color: var(--bt-status-danger);
+  background: color-mix(in srgb, var(--bt-status-danger) 18%, transparent);
 }
 
 .resource-tree-detail {
   margin: 0 6px 6px 24px;
   padding: 7px 8px;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 5px;
-  background: var(--vscode-agentsPanel-background);
-  color: var(--vscode-editor-foreground);
+  background: var(--bt-panel-background);
+  color: var(--bt-text-primary);
 }
 
 .resource-tree-detail > p {
@@ -457,7 +478,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px 10px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
@@ -480,26 +501,26 @@
 
 .resource-action-delete,
 .resource-action-cancel {
-  color: #b91c1c;
-  border-color: color-mix(in srgb, #f87171 50%, var(--vscode-panel-border));
+  color: var(--bt-status-danger);
+  border-color: color-mix(in srgb, var(--bt-status-danger) 50%, var(--bt-border));
 }
 
 .resource-action-open {
-  color: #166534;
-  border-color: color-mix(in srgb, #22c55e 50%, var(--vscode-panel-border));
+  color: var(--bt-status-success);
+  border-color: color-mix(in srgb, var(--bt-status-success) 50%, var(--bt-border));
 }
 
 .resource-details {
   margin-top: 7px;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 5px;
-  background: color-mix(in srgb, var(--vscode-editor-background) 55%, transparent);
+  background: color-mix(in srgb, var(--bt-surface-background) 55%, transparent);
 }
 
 .resource-details summary {
   cursor: pointer;
   padding: 5px 7px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
@@ -511,7 +532,7 @@
   overflow: auto;
   margin: 0;
   padding: 7px;
-  border-top: var(--surface-border);
+  border-top: var(--bt-surface-border);
   font-size: 10px;
 }
 
@@ -520,7 +541,7 @@
 }
 
 .resource-detail-row dt {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 
 .resource-detail-row dd {

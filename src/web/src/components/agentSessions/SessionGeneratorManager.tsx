@@ -1,23 +1,37 @@
-import { useState } from "react";
-import type { SessionResourceExplorerController } from "../../hooks/useSessionResourceExplorer";
+import { useEffect, useState } from "react";
+import { listSessionCatalogChildren } from "../../api";
+import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type {
   GatewayWorkspace,
   GeneratorSessionStrategyMode,
 } from "../../types/backend";
 import WarmActionDialog from "../WarmActionDialog";
+import {
+  generatorStatusPresentation,
+  generatorStrategyLabel,
+  generatorTriggerLabel,
+} from "./sessionGeneratorPresentation";
 
 export default function SessionGeneratorManager({
-  explorer,
+  apiPort,
+  generatorResources,
   workspaces,
   activeWorkspaceId,
   currentSessionId,
   onStatusChange,
+  onOpenConnectionManager,
+  onReconnectWorkspace,
+  onStartWorkspace,
 }: {
-  explorer: SessionResourceExplorerController;
+  apiPort: number;
+  generatorResources: SessionGeneratorResourcesController;
   workspaces: GatewayWorkspace[];
   activeWorkspaceId: string | null;
   currentSessionId: string;
   onStatusChange: (message: string) => void;
+  onOpenConnectionManager: () => void;
+  onReconnectWorkspace: (workspaceId: string) => Promise<void>;
+  onStartWorkspace: (workspaceId: string) => Promise<void>;
 }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("定时会话任务");
@@ -37,6 +51,12 @@ export default function SessionGeneratorManager({
     generatorId: string;
     name: string;
   } | null>(null);
+  const [recoveringGeneratorIds, setRecoveringGeneratorIds] =
+    useState<Set<string>>(new Set());
+  const [sessionFolderChoices, setSessionFolderChoices] = useState<Array<{
+    folder_id: string;
+    name: string;
+  }>>([]);
 
   const reportError = (prefix: string, error: unknown) => {
     onStatusChange(`${prefix}: ${error instanceof Error ? error.message : String(error)}`);
@@ -63,13 +83,53 @@ export default function SessionGeneratorManager({
     resetDraft();
   };
 
-  const sessionFolderChoices = [...explorer.branches.entries()]
-    .filter(([key]) => key.startsWith(`${targetWorkspaceId}:`))
-    .flatMap(([_key, branch]) => branch.items)
-    .filter((node) => node.kind === "folder" && node.folder_id)
-    .filter((node, index, items) => items.findIndex(
-      (candidate) => candidate.folder_id === node.folder_id,
-    ) === index);
+  const recoverGenerator = async (
+    generatorId: string,
+    generatorName: string,
+    targetWorkspace: GatewayWorkspace | undefined,
+  ) => {
+    setRecoveringGeneratorIds((previous) => new Set(previous).add(generatorId));
+    try {
+      if (targetWorkspace?.connection_kind === "remote_gateway") {
+        await onReconnectWorkspace(targetWorkspace.workspace_id);
+      } else if (targetWorkspace?.status === "offline" && targetWorkspace.managed) {
+        await onStartWorkspace(targetWorkspace.workspace_id);
+      }
+      await generatorResources.updateGenerator(generatorId, { enabled: true });
+      onStatusChange(`已重新校验自动化：${generatorName}`);
+    } catch (error) {
+      reportError("恢复生成器失败", error);
+    } finally {
+      setRecoveringGeneratorIds((previous) => {
+        const next = new Set(previous);
+        next.delete(generatorId);
+        return next;
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!creating || !targetWorkspaceId) {
+      setSessionFolderChoices([]);
+      return;
+    }
+    let cancelled = false;
+    void listSessionCatalogChildren(apiPort, targetWorkspaceId)
+      .then((page) => {
+        if (cancelled) return;
+        setSessionFolderChoices(page.items.flatMap((node) => (
+          node.kind === "folder" && node.folder_id
+            ? [{ folder_id: node.folder_id, name: node.name }]
+            : []
+        )));
+      })
+      .catch(() => {
+        if (!cancelled) setSessionFolderChoices([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiPort, creating, targetWorkspaceId]);
 
   const submit = async () => {
     const workspaceId = targetWorkspaceId || activeWorkspaceId;
@@ -88,7 +148,7 @@ export default function SessionGeneratorManager({
     if (placementKind === "session_folder" && !targetFolderId) {
       throw new Error("挂载到会话文件夹时必须选择目标文件夹");
     }
-    await explorer.createGenerator({
+    await generatorResources.createGenerator({
       name: name.trim(),
       generator_type: { type_id: "builtin.agent_prompt", version: "1" },
       enabled: true,
@@ -129,60 +189,121 @@ export default function SessionGeneratorManager({
       config: { prompt: prompt.trim(), session_title: name.trim() },
     });
     closeDraft();
-    onStatusChange(`已创建会话生成器：${name.trim()}`);
+    onStatusChange(`已创建会话自动化：${name.trim()}`);
   };
 
   return (
     <>
-    <details className="session-generator-manager" data-testid="session-generator-manager">
-      <summary>自动生成会话 <span>{explorer.generators?.items.length ?? 0}</span></summary>
-      {explorer.generatorError ? <div className="session-resource-error" role="alert">{explorer.generatorError}</div> : null}
+    <section className="session-generator-manager" data-testid="session-generator-manager" aria-label="会话自动化">
+      <header className="session-automation-header">
+        <div>
+          <h2>会话自动化</h2>
+          <p>按计划创建、继续或分支会话。</p>
+        </div>
+        {!creating ? <button type="button" className="session-generator-create" onClick={() => {
+          resetDraft();
+          setCreating(true);
+        }}>新建自动化</button> : null}
+      </header>
+      <div className="session-automation-summary" aria-label="自动化状态摘要">
+        <span>{generatorResources.generators?.items.length ?? 0} 个自动化</span>
+        <span>{generatorResources.generators?.items.filter((item) => item.status === "ready").length ?? 0} 个正常</span>
+        <span className={generatorResources.generators?.items.some((item) => item.status === "blocked") ? "attention" : ""}>
+          {generatorResources.generators?.items.filter((item) => item.status === "blocked").length ?? 0} 个需要处理
+        </span>
+      </div>
+      {generatorResources.generatorError ? <div className="session-resource-error" role="alert">{generatorResources.generatorError}</div> : null}
       <div className="session-generator-list">
-        {explorer.generators?.items.map((generator) => {
-          const runs = explorer.generationRuns.get(generator.generator_id);
+        {generatorResources.generators?.items.map((generator) => {
+          const runs = generatorResources.generationRuns.get(generator.generator_id);
+          const targetWorkspace = workspaces.find(
+            (workspace) => workspace.workspace_id === generator.placement.workspace_id,
+          );
+          const status = generatorStatusPresentation(generator, targetWorkspace);
+          const recovering = recoveringGeneratorIds.has(generator.generator_id);
           return (
             <div className="session-generator-row" key={generator.generator_id}>
-              <span className="session-generator-summary">
-                <strong>{generator.name}</strong>
-                <small>{generator.session_strategy.mode} · {generator.status}</small>
-                {generator.status_reason ? <small className="session-resource-error">{generator.status_reason}</small> : null}
-              </span>
-              <span className="session-generator-actions">
+              <div className="session-generator-header">
+                <strong title={generator.name}>{generator.name}</strong>
+                <span className={`session-generator-status ${status.tone}`}>{status.label}</span>
+              </div>
+              <div className="session-generator-meta">
+                <span>{generatorStrategyLabel(generator.session_strategy.mode)}</span>
+                {targetWorkspace ? <span title={targetWorkspace.root_path}>目标：{targetWorkspace.name}</span> : null}
+                <span>{generatorTriggerLabel(generator.trigger)}</span>
+              </div>
+              {status.title && status.message ? (
+                <div className={`session-generator-notice ${status.tone}`} role={status.tone === "blocked" ? "alert" : "status"}>
+                  <strong>{status.title}</strong>
+                  <span>{status.message}</span>
+                  {status.technicalDetail ? (
+                    <details>
+                      <summary>查看技术详情</summary>
+                      <code>{status.technicalDetail}</code>
+                    </details>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="session-generator-actions">
                 <button
                   type="button"
+                  className="primary"
                   disabled={generator.status !== "ready"}
+                  title={generator.status === "ready" ? "立即运行自动化" : "请先恢复生成目标"}
                   onClick={() => {
-                    void explorer.runGenerator(generator.generator_id)
+                    void generatorResources.runGenerator(generator.generator_id)
                       .then((run) => onStatusChange(`生成任务 ${generator.name}: ${run.status}`))
                       .catch((error) => reportError("运行生成器失败", error));
                   }}
                 >运行</button>
                 <button
                   type="button"
-                  onClick={() => void explorer.refreshGenerationRuns(generator.generator_id)
+                  onClick={() => void generatorResources.refreshGenerationRuns(generator.generator_id)
                     .catch((error) => reportError("读取运行历史失败", error))}
                 >历史</button>
-                {generator.status === "blocked" ? (
+                {generator.status === "blocked" && targetWorkspace ? (
                   <button
                     type="button"
-                    onClick={() => void explorer.updateGenerator(
+                    className="recovery"
+                    disabled={recovering}
+                    onClick={() => void recoverGenerator(
                       generator.generator_id,
-                      { enabled: true },
-                    ).then(() => onStatusChange(`已重新校验生成器：${generator.name}`))
-                      .catch((error) => reportError("重新挂载生成器失败", error))}
-                  >重试挂载</button>
+                      generator.name,
+                      targetWorkspace,
+                    )}
+                  >
+                    {recovering
+                      ? "正在恢复…"
+                      : targetWorkspace?.connection_kind === "remote_gateway"
+                        ? "重新连接"
+                        : targetWorkspace?.status === "offline" && targetWorkspace.managed
+                          ? "启动工作区"
+                          : "重新校验"}
+                  </button>
                 ) : null}
-                <button
-                  type="button"
-                  aria-label={`删除生成器 ${generator.name}`}
-                  onClick={() => {
-                    setDeletingGenerator({
-                      generatorId: generator.generator_id,
-                      name: generator.name,
-                    });
-                  }}
-                >删除</button>
-              </span>
+                {generator.status === "blocked" && !targetWorkspace ? (
+                  <button type="button" className="recovery" onClick={onOpenConnectionManager}>处理问题</button>
+                ) : null}
+                {generator.status === "blocked" && targetWorkspace?.connection_kind === "remote_gateway" ? (
+                  <button type="button" onClick={onOpenConnectionManager}>连接管理</button>
+                ) : null}
+                <details className="session-generator-more">
+                  <summary aria-label={`更多生成器操作：${generator.name}`} title="更多操作">•••</summary>
+                  <div role="menu">
+                    <button
+                      type="button"
+                      className="danger"
+                      role="menuitem"
+                      onClick={() => {
+                        setDeletingGenerator({
+                          generatorId: generator.generator_id,
+                          name: generator.name,
+                        });
+                      }}
+                    >删除自动化</button>
+                  </div>
+                </details>
+              </div>
               {runs ? (
                 <div className="session-generator-runs" aria-label={`${generator.name} 运行历史`}>
                   {runs.length === 0 ? <small>暂无运行记录</small> : runs.slice(0, 5).map((run) => (
@@ -205,7 +326,7 @@ export default function SessionGeneratorManager({
       {creating ? (
         <form className="session-generator-form" onSubmit={(event) => {
           event.preventDefault();
-          void submit().catch((error) => reportError("创建生成器失败", error));
+          void submit().catch((error) => reportError("创建自动化失败", error));
         }}>
           <label>名称<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
           <label>提示词<textarea required value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="每次触发时让 Agent 执行什么？" /></label>
@@ -262,7 +383,7 @@ export default function SessionGeneratorManager({
           <label>目录模板（留空表示挂载文件夹）<input value={pathTemplate} onChange={(event) => setPathTemplate(event.target.value)} /></label>
           <div className="session-generator-preview">
             <button type="button" onClick={() => {
-              void explorer.previewGenerator({
+              void generatorResources.previewGenerator({
                 name: name.trim(),
                 naming: {
                   title_template: titleTemplate,
@@ -297,26 +418,23 @@ export default function SessionGeneratorManager({
             <button type="submit">创建</button>
           </div>
         </form>
-      ) : <button type="button" className="session-generator-create" onClick={() => {
-        resetDraft();
-        setCreating(true);
-      }}>新建生成器</button>}
-    </details>
+      ) : null}
+    </section>
     <WarmActionDialog
       open={deletingGenerator !== null}
-      title="删除会话生成器"
+      title="删除会话自动化"
       description={deletingGenerator
-        ? `删除生成器“${deletingGenerator.name}”？已有运行和生成会话不会删除。`
+        ? `删除自动化“${deletingGenerator.name}”？已有运行和生成会话不会删除。`
         : undefined}
       confirmText="删除"
       danger
       onClose={() => setDeletingGenerator(null)}
       onConfirm={async () => {
         if (!deletingGenerator) {
-          throw new Error("生成器删除目标已失效");
+          throw new Error("自动化删除目标已失效");
         }
-        await explorer.deleteGenerator(deletingGenerator.generatorId);
-        onStatusChange(`已删除生成器：${deletingGenerator.name}`);
+        await generatorResources.deleteGenerator(deletingGenerator.generatorId);
+        onStatusChange(`已删除自动化：${deletingGenerator.name}`);
       }}
     />
     </>

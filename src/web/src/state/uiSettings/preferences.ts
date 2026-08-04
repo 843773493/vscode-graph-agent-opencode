@@ -18,6 +18,7 @@ export function createDefaultWebUiSettings(): WebUiSettings {
     },
     workspace_file_tree: { expanded_paths_by_workspace: {} },
     gateway_console: { view: "routing" },
+    theme: { theme_id: "warm", background: null, resolved_theme: null },
     recent_local_workspace_paths: [],
   };
 }
@@ -39,6 +40,10 @@ export function normalizeWebUiSettings(
     gateway_console: {
       ...defaults.gateway_console,
       ...value.gateway_console,
+    },
+    theme: {
+      ...defaults.theme,
+      ...value.theme,
     },
     recent_local_workspace_paths: Array.isArray(value.recent_local_workspace_paths)
       ? value.recent_local_workspace_paths

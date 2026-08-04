@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import uuid
 from collections.abc import Mapping
@@ -11,7 +12,6 @@ from pathlib import Path
 from langchain_core.messages import ToolMessage
 
 from app.core.path_utils import get_session_path_resolver
-
 
 DEFAULT_MAX_OUTPUT_LINES = 2_000
 DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024
@@ -101,7 +101,7 @@ class ToolOutputStore:
             f"模型读取路径：{read_path}\n"
             "请先用 grep 搜索该路径，再用 read_file 按行分段读取。"
         )
-        preview = _bounded_preview(
+        preview = _bounded_structured_preview(
             text,
             marker=marker,
             max_lines=self._max_lines,
@@ -231,3 +231,56 @@ def _bounded_preview(
     head = _take_prefix_bytes(head, (available_bytes + 1) // 2)
     tail = _take_suffix_bytes(tail, available_bytes // 2)
     return f"{head.rstrip()}{separator}{marker}{separator}{tail.lstrip()}"
+
+
+def _bounded_structured_preview(
+    text: str,
+    *,
+    marker: str,
+    max_lines: int,
+    max_bytes: int,
+) -> str:
+    """截断工具输出，同时保持 JSON object 类型的工具结果仍可解析。"""
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return _bounded_preview(
+            text,
+            marker=marker,
+            max_lines=max_lines,
+            max_bytes=max_bytes,
+        )
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("output"), str):
+        return _bounded_preview(
+            text,
+            marker=marker,
+            max_lines=max_lines,
+            max_bytes=max_bytes,
+        )
+
+    output = payload["output"]
+    marker_bytes = len(("\n\n" + marker + "\n\n").encode("utf-8"))
+    lower_bound = marker_bytes + 1
+    upper_bound = max_bytes
+    best: str | None = None
+    while lower_bound <= upper_bound:
+        preview_budget = (lower_bound + upper_bound) // 2
+        candidate_payload = dict(payload)
+        candidate_payload["output"] = _bounded_preview(
+            output,
+            marker=marker,
+            max_lines=max_lines,
+            max_bytes=preview_budget,
+        )
+        candidate = json.dumps(candidate_payload, ensure_ascii=False)
+        if len(candidate.encode("utf-8")) <= max_bytes:
+            best = candidate
+            lower_bound = preview_budget + 1
+        else:
+            upper_bound = preview_budget - 1
+
+    if best is None:
+        raise ValueError("结构化工具输出的元数据超过最大预览字节数")
+    return best

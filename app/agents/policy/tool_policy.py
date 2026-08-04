@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-
 TOOL_POLICY_ALL = "all"
 TOOL_POLICY_EXTENSIONS = "extensions"
 TOOL_POLICY_SELECTORS = frozenset({TOOL_POLICY_ALL, TOOL_POLICY_EXTENSIONS})
@@ -17,7 +16,10 @@ DEFAULT_AGENT_TOOL_NAMES = frozenset(
         "emit_system_time_messages",
         "monitor_session_agent_end",
         "collect_background_messages",
-        "persistent_terminal",
+        "exec_command",
+        "write_stdin",
+        "list_terminal_sessions",
+        "kill_terminal",
         "send_message_to_session",
         "task",
         "create_team",
@@ -34,7 +36,6 @@ DEFAULT_AGENT_TOOL_NAMES = frozenset(
         "edit_file",
         "glob",
         "grep",
-        "execute",
         "compact_conversation",
     }
 )
@@ -64,12 +65,13 @@ def build_agent_tool_universe(
     extension_names: Iterable[str] = (),
     include_test_tools: bool = False,
 ) -> frozenset[str]:
-    resolved_extensions = _normalize_names(extension_names, field_name="extension_names")
+    resolved_extensions = _normalize_names(
+        extension_names, field_name="extension_names"
+    )
     reserved_extensions = resolved_extensions & TOOL_POLICY_SELECTORS
     if reserved_extensions:
         raise ValueError(
-            "扩展工具名称不能使用策略保留值: "
-            + ", ".join(sorted(reserved_extensions))
+            "扩展工具名称不能使用策略保留值: " + ", ".join(sorted(reserved_extensions))
         )
     universe = set(DEFAULT_AGENT_TOOL_NAMES)
     universe.update(resolved_extensions)
@@ -186,9 +188,7 @@ def _validate_selectors(
 ) -> None:
     unknown = selectors - universe - TOOL_POLICY_SELECTORS
     if unknown:
-        raise ValueError(
-            f"{context} 引用了不存在的工具: {', '.join(sorted(unknown))}"
-        )
+        raise ValueError(f"{context} 引用了不存在的工具: {', '.join(sorted(unknown))}")
 
 
 def _expand_selectors(

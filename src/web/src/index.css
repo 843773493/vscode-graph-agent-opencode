@@ -1,34 +1,3 @@
-:root {
-  color-scheme: light;
-  --vscode-font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
-  --vscode-font-size: 13px;
-  --vscode-font-weight: 400;
-  --vscode-editor-background: #f8fafc;
-  --vscode-editor-foreground: #111827;
-  --vscode-foreground: #111827;
-  --vscode-descriptionForeground: #64748b;
-  --vscode-panel-border: rgba(15, 23, 42, 0.12);
-  --vscode-list-hoverBackground: rgba(15, 23, 42, 0.06);
-  --vscode-badge-background: #e2e8f0;
-  --vscode-badge-foreground: #334155;
-  --vscode-button-background: #2563eb;
-  --vscode-button-foreground: #ffffff;
-  --vscode-icon-foreground: #475569;
-  --vscode-input-background: #ffffff;
-  --vscode-input-foreground: #111827;
-  --vscode-dropdown-background: #ffffff;
-  --vscode-dropdown-foreground: #111827;
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
-  font-weight: var(--vscode-font-weight);
-  --panel-radius: 14px;
-  --surface-gap: 10px;
-  --surface-border: 1px solid var(--vscode-panel-border);
-  --surface-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
-}
-
 * {
   box-sizing: border-box;
 }
@@ -39,8 +8,8 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--vscode-editor-background);
-  color: var(--vscode-editor-foreground);
+  background: var(--bt-page-background);
+  color: var(--bt-text-primary);
 }
 
 body {
@@ -76,18 +45,11 @@ body > #root {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background:
-    radial-gradient(
-      circle at top right,
-      rgba(37, 99, 235, 0.06),
-      transparent 38%
-    ),
-    radial-gradient(
-      circle at bottom left,
-      rgba(14, 165, 233, 0.05),
-      transparent 32%
-    ),
-    var(--vscode-editor-background);
+  background-color: var(--bt-page-background);
+  background-image: var(--bt-background-overlay), var(--bt-background-image);
+  background-position: center, var(--bt-background-position);
+  background-repeat: no-repeat, var(--bt-background-repeat);
+  background-size: cover, var(--bt-background-size);
 }
 
 .toolbar {
@@ -97,8 +59,8 @@ body > #root {
   gap: 10px;
   min-height: 38px;
   padding: 0;
-  border-bottom: var(--surface-border);
-  background: rgba(127, 127, 127, 0.03);
+  border-bottom: var(--bt-surface-border);
+  background: color-mix(in srgb, var(--bt-text-primary) 3%, transparent);
   backdrop-filter: blur(14px) saturate(1.08);
   flex: 0 0 auto;
   min-width: 0;
@@ -136,7 +98,7 @@ body > #root {
 .toolbar-subtitle,
 .toolbar-path {
   font-size: 10px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 .toolbar-subtitle,
 .toolbar-path {
@@ -149,18 +111,18 @@ body > #root {
 .toolbar-icon-button {
   border: 1px solid transparent;
   background: transparent;
-  color: var(--vscode-icon-foreground);
+  color: var(--bt-icon-foreground);
   height: 26px;
   padding: 0 10px;
   border-radius: 8px;
   cursor: pointer;
 }
 .toolbar-icon-button:hover {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
 }
 .toolbar-icon-primary {
-  border-color: var(--vscode-panel-border);
-  background: rgba(37, 99, 235, 0.08);
+  border-color: var(--bt-border);
+  background: color-mix(in srgb, var(--bt-accent) 8%, transparent);
 }
 
 .badge {
@@ -174,23 +136,23 @@ body > #root {
   line-height: 1;
 }
 .badge.neutral {
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
+  background: var(--bt-badge-background);
+  color: var(--bt-badge-foreground);
 }
 .badge.active {
-  background: rgba(37, 99, 235, 0.12);
-  color: var(--vscode-button-foreground);
-  border-color: rgba(37, 99, 235, 0.22);
+  background: color-mix(in srgb, var(--bt-accent) 12%, transparent);
+  color: var(--bt-button-foreground);
+  border-color: color-mix(in srgb, var(--bt-accent) 22%, transparent);
 }
 .badge.warning {
-  background: rgba(245, 158, 11, 0.12);
-  color: #b45309;
-  border-color: rgba(245, 158, 11, 0.24);
+  background: color-mix(in srgb, var(--bt-status-warning) 12%, transparent);
+  color: var(--bt-status-warning);
+  border-color: color-mix(in srgb, var(--bt-status-warning) 24%, transparent);
 }
 .badge.danger {
-  background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
-  border-color: rgba(239, 68, 68, 0.24);
+  background: color-mix(in srgb, var(--bt-status-danger) 12%, transparent);
+  color: var(--bt-status-danger);
+  border-color: color-mix(in srgb, var(--bt-status-danger) 24%, transparent);
 }
 
 .content {
@@ -223,8 +185,8 @@ body > #root {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-right: var(--surface-border);
-  background: rgba(127, 127, 127, 0.02);
+  border-right: var(--bt-surface-border);
+  background: color-mix(in srgb, var(--bt-text-primary) 2%, transparent);
   flex: 1 1 0;
 }
 .agent-sessions-panel-shell {
@@ -240,12 +202,12 @@ body > #root {
   justify-content: space-between;
   gap: 8px;
   padding: 0 12px;
-  border-bottom: var(--surface-border);
+  border-bottom: var(--bt-surface-border);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 .panel-body {
   min-height: 0;
@@ -263,7 +225,7 @@ body > #root {
 }
 .agent-sessions-section-title {
   margin: 0 0 6px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
   font-weight: 700;
 }
@@ -307,7 +269,7 @@ body > #root {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
   text-align: left;
   cursor: pointer;
 }
@@ -315,7 +277,7 @@ body > #root {
 .session-item:hover,
 .session-item.active,
 .session-item-focus {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
 }
 
 .agent-sessions-session-menu {
@@ -323,10 +285,10 @@ body > #root {
   max-height: min(70vh, 520px, var(--anchored-overlay-available-height, 520px));
   overflow: auto;
   padding: 4px;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--bt-border);
   border-radius: 8px;
-  background: var(--vscode-menu-background, var(--vscode-editor-background));
-  box-shadow: var(--surface-shadow);
+  background: var(--bt-menu-background);
+  box-shadow: var(--bt-surface-shadow);
 }
 
 .agent-sessions-session-menu button {
@@ -340,14 +302,14 @@ body > #root {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+  color: var(--bt-menu-foreground);
   text-align: left;
   cursor: pointer;
 }
 
 .agent-sessions-menu-item-icon {
   width: 18px;
-  color: #746d58;
+  color: var(--bt-text-muted);
   text-align: center;
 }
 
@@ -360,7 +322,7 @@ body > #root {
 
 .agent-sessions-session-menu button.agent-sessions-menu-item-separated {
   margin-top: 4px;
-  border-top: 1px solid rgba(106, 98, 75, 0.16);
+  border-top: 1px solid color-mix(in srgb, var(--bt-text-muted) 16%, transparent);
   border-radius: 0 0 6px 6px;
 }
 
@@ -369,16 +331,16 @@ body > #root {
 }
 
 .agent-sessions-session-menu button:hover {
-  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
-  color: var(--vscode-menu-selectionForeground, var(--vscode-editor-foreground));
+  background: var(--bt-menu-selection-background);
+  color: var(--bt-menu-selection-foreground);
 }
 
 .agent-sessions-session-menu button.danger {
-  color: var(--vscode-errorForeground);
+  color: var(--bt-status-danger);
 }
 
 .agent-sessions-session-menu button.danger:hover {
-  background: rgba(220, 38, 38, 0.14);
+  background: color-mix(in srgb, var(--bt-status-danger) 14%, transparent);
 }
 
 .agent-sessions-workspace-menu {
@@ -387,7 +349,7 @@ body > #root {
 
 .agent-sessions-menu-disabled-note {
   padding: 7px 9px;
-  color: #8d846f;
+  color: var(--bt-text-subtle);
   font-size: 12px;
   line-height: 16px;
 }
@@ -400,7 +362,7 @@ body > #root {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(44, 39, 29, 0.26);
+  background: color-mix(in srgb, var(--bt-text-primary) 26%, transparent);
 }
 
 .session-name-dialog {
@@ -409,11 +371,11 @@ body > #root {
   gap: 14px;
   width: min(380px, 100%);
   padding: 16px;
-  border: 1px solid var(--vscode-agentsPanel-border);
-  border-radius: var(--vscode-cornerRadius-large);
-  background: var(--vscode-menu-background, #fff8e6);
-  color: #39352b;
-  box-shadow: 0 22px 48px rgba(50, 45, 34, 0.28);
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-large);
+  background: var(--bt-menu-background);
+  color: var(--bt-text-primary);
+  box-shadow: 0 22px 48px color-mix(in srgb, var(--bt-text-primary) 28%, transparent);
 }
 
 .session-name-header,
@@ -440,21 +402,21 @@ body > #root {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #625b4b;
+  color: var(--bt-text-muted);
   cursor: pointer;
   font-size: 18px;
   line-height: 1;
 }
 
 .session-name-close:hover {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
 }
 
 .session-name-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  color: #625b4b;
+  color: var(--bt-text-muted);
   font-size: 12px;
 }
 
@@ -462,20 +424,20 @@ body > #root {
   width: 100%;
   height: 34px;
   padding: 0 10px;
-  border: 1px solid rgba(106, 98, 75, 0.24);
-  border-radius: var(--vscode-cornerRadius-small);
-  background: rgba(255, 251, 239, 0.72);
-  color: #39352b;
+  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 24%, transparent);
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-surface-raised) 72%, transparent);
+  color: var(--bt-text-primary);
   outline: none;
 }
 
 .session-name-field input:focus {
-  border-color: rgba(37, 99, 235, 0.52);
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+  border-color: color-mix(in srgb, var(--bt-accent) 52%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bt-accent) 14%, transparent);
 }
 
 .session-name-error {
-  color: #dc2626;
+  color: var(--bt-status-danger);
   font-size: 12px;
   line-height: 1.35;
 }
@@ -487,10 +449,10 @@ body > #root {
 .session-name-actions button {
   min-height: 30px;
   padding: 0 12px;
-  border: 1px solid rgba(106, 98, 75, 0.24);
-  border-radius: var(--vscode-cornerRadius-small);
-  background: rgba(255, 251, 239, 0.72);
-  color: #39352b;
+  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 24%, transparent);
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-surface-raised) 72%, transparent);
+  color: var(--bt-text-primary);
   cursor: pointer;
 }
 
@@ -502,9 +464,9 @@ body > #root {
 }
 
 .session-name-actions .session-name-confirm {
-  border-color: var(--vscode-button-background);
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
+  border-color: var(--bt-button-background);
+  background: var(--bt-button-background);
+  color: var(--bt-button-foreground);
 }
 
 .session-title-row,
@@ -537,13 +499,13 @@ body > #root {
 }
 
 .session-meta {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
 .session-attachment-badge {
-  color: var(--vscode-button-foreground) !important;
-  background: var(--vscode-button-background) !important;
+  color: var(--bt-button-foreground) !important;
+  background: var(--bt-button-background) !important;
 }
 
 .session-attachment-names {
@@ -551,7 +513,7 @@ body > #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
@@ -561,9 +523,9 @@ body > #root {
   flex-direction: column;
   gap: 6px;
   padding: 8px 10px;
-  border: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.2));
+  border: 1px solid var(--bt-border);
   border-radius: 10px;
-  background: var(--vscode-editor-background);
+  background: var(--bt-surface-background);
 }
 
 .event-card-head {
@@ -602,17 +564,17 @@ body > #root {
   display: flex;
   flex-direction: column;
   padding: 10px 12px;
-  border-top: var(--surface-border);
-  background: color-mix(in srgb, var(--vscode-editor-background), #fff 36%);
+  border-top: var(--bt-surface-border);
+  background: color-mix(in srgb, var(--bt-surface-background), var(--bt-surface-raised) 36%);
 }
 .composer-surface {
   width: 100%;
   min-height: 132px;
   padding: 12px;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--bt-border);
   border-radius: 20px;
-  background: var(--vscode-input-background);
-  box-shadow: var(--surface-shadow);
+  background: var(--bt-input-background);
+  box-shadow: var(--bt-surface-shadow);
   flex-direction: column;
   justify-content: space-between;
   gap: 10px;
@@ -633,7 +595,7 @@ body > #root {
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--vscode-input-foreground);
+  color: var(--bt-input-foreground);
   padding: 2px 4px;
   outline: none;
   line-height: 1.55;
@@ -664,10 +626,10 @@ body > #root {
   max-width: min(360px, 100%);
   min-height: 32px;
   padding: 4px 6px 4px 8px;
-  border: 1px solid var(--vscode-focusBorder);
+  border: 1px solid var(--bt-focus-border);
   border-radius: 7px;
-  background: color-mix(in srgb, var(--vscode-input-background), var(--vscode-focusBorder) 9%);
-  color: var(--vscode-input-foreground);
+  background: color-mix(in srgb, var(--bt-input-background), var(--bt-focus-border) 9%);
+  color: var(--bt-input-foreground);
 }
 .composer-browser-element-name {
   min-width: 0;
@@ -683,9 +645,9 @@ body > #root {
   max-width: min(280px, 100%);
   min-height: 48px;
   padding: 5px 8px 5px 5px;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--bt-border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--vscode-input-background), #fff 12%);
+  background: color-mix(in srgb, var(--bt-input-background), var(--bt-surface-raised) 12%);
 }
 .composer-attachment-thumb {
   width: 42px;
@@ -693,10 +655,10 @@ body > #root {
   flex: 0 0 42px;
   object-fit: cover;
   border-radius: 6px;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--bt-border);
 }
 .composer-attachment-video {
-  background: #000;
+  background: var(--bt-terminal-background);
 }
 .composer-attachment-name {
   min-width: 0;
@@ -704,7 +666,7 @@ body > #root {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  color: var(--vscode-input-foreground);
+  color: var(--bt-input-foreground);
 }
 .composer-attachment-remove {
   width: 22px !important;
@@ -716,13 +678,13 @@ body > #root {
 }
 .composer-attachment-error {
   padding: 4px 4px 0;
-  color: #dc2626;
+  color: var(--bt-status-danger);
   font-size: 11px;
   line-height: 1.35;
 }
 .composer-attachment-notice {
   padding: 4px 4px 0;
-  color: #15803d;
+  color: var(--bt-status-success);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -732,10 +694,10 @@ body > #root {
   overflow-y: auto;
   scrollbar-gutter: stable;
   padding: 6px;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--bt-border);
   border-radius: 8px;
-  background: var(--vscode-input-background);
-  box-shadow: var(--surface-shadow);
+  background: var(--bt-input-background);
+  box-shadow: var(--bt-surface-shadow);
 }
 .composer-slash-menu-item {
   display: grid;
@@ -748,7 +710,7 @@ body > #root {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--vscode-input-foreground);
+  color: var(--bt-input-foreground);
   text-align: left;
   cursor: pointer;
 }
@@ -761,14 +723,14 @@ body > #root {
   min-height: 38px;
   padding: 7px 8px;
   border-radius: 6px;
-  color: var(--vscode-disabledForeground);
+  color: var(--bt-text-disabled);
 }
 .composer-slash-menu-item:hover,
 .composer-slash-menu-item.active {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
 }
 .composer-slash-menu-item.disabled {
-  color: var(--vscode-disabledForeground);
+  color: var(--bt-text-disabled);
   cursor: default;
 }
 .composer-slash-menu-item.disabled:hover {
@@ -776,11 +738,11 @@ body > #root {
 }
 .composer-slash-menu-item.disabled .composer-slash-command,
 .composer-slash-menu-item.disabled .composer-slash-description {
-  color: var(--vscode-disabledForeground);
+  color: var(--bt-text-disabled);
 }
 .composer-slash-command {
   font-family: var(
-    --vscode-editor-font-family,
+    --bt-font-family-mono,
     ui-monospace,
     SFMono-Regular,
     Consolas,
@@ -788,7 +750,7 @@ body > #root {
     monospace
   );
   font-size: 13px;
-  color: var(--vscode-textLink-foreground);
+  color: var(--bt-link-foreground);
 }
 .composer-slash-copy {
   display: flex;
@@ -805,16 +767,16 @@ body > #root {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 .composer-slash-more {
   position: sticky;
   bottom: -6px;
   margin: 4px -6px -6px;
   padding: 5px 8px;
-  border-top: 1px solid var(--vscode-panel-border);
-  background: color-mix(in srgb, var(--vscode-input-background), #fff 8%);
-  color: var(--vscode-descriptionForeground);
+  border-top: 1px solid var(--bt-border);
+  background: color-mix(in srgb, var(--bt-input-background), var(--bt-surface-raised) 8%);
+  color: var(--bt-text-muted);
   font-size: 11px;
   line-height: 1.3;
   text-align: center;
@@ -825,7 +787,7 @@ body > #root {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 .composer-actions {
   display: flex;
@@ -863,9 +825,9 @@ body > #root {
   height: 32px;
   min-width: 32px;
   border-radius: 999px;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--bt-border);
   background: transparent;
-  color: var(--vscode-icon-foreground);
+  color: var(--bt-icon-foreground);
   cursor: pointer;
   padding: 0 10px;
   font: inherit;
@@ -876,7 +838,7 @@ body > #root {
   cursor: not-allowed;
 }
 .composer-actions button:hover:not(:disabled) {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
 }
 .composer-icon-button {
   width: 32px;
@@ -890,7 +852,7 @@ body > #root {
 .composer-view-button {
   background: color-mix(
     in srgb,
-    var(--vscode-list-hoverBackground),
+    var(--bt-hover-background),
     transparent 20%
   ) !important;
 }
@@ -902,10 +864,10 @@ body > #root {
   gap: 4px;
   width: min(220px, var(--anchored-overlay-available-width, 220px));
   padding: 6px;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--bt-border);
   border-radius: 12px;
-  background: var(--vscode-input-background);
-  box-shadow: var(--surface-shadow);
+  background: var(--bt-input-background);
+  box-shadow: var(--bt-surface-shadow);
   overflow: auto;
   max-height: min(70vh, 520px, var(--anchored-overlay-available-height, 520px));
 }
@@ -927,7 +889,7 @@ body > #root {
   gap: 4px !important;
   padding: 8px 10px !important;
   border-radius: 10px !important;
-  color: var(--vscode-editor-foreground) !important;
+  color: var(--bt-text-primary) !important;
   background: transparent !important;
   text-align: left;
 }
@@ -976,7 +938,7 @@ body > #root {
   pointer-events: auto;
 }
 .workspace-default .composer-workspace-default-button {
-  color: var(--vscode-charts-green);
+  color: var(--bt-status-success);
 }
 .composer-view-menu-item:hover,
 .composer-view-menu-item.active,
@@ -984,7 +946,7 @@ body > #root {
 .composer-agent-menu-item.active,
 .composer-model-menu-item:hover,
 .composer-model-menu-item.active {
-  background: var(--vscode-list-hoverBackground) !important;
+  background: var(--bt-hover-background) !important;
 }
 .composer-view-menu-label,
 .composer-agent-menu-label,
@@ -996,15 +958,15 @@ body > #root {
 .composer-view-menu-description,
 .composer-agent-menu-description,
 .composer-model-menu-description {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
   line-height: 1.35;
 }
 .composer-agent-button {
   min-width: 82px;
   max-width: 150px;
-  color: var(--vscode-button-foreground) !important;
-  background: var(--vscode-button-background) !important;
+  color: var(--bt-button-foreground) !important;
+  background: var(--bt-button-background) !important;
   border-color: transparent !important;
 }
 .composer-agent-label {
@@ -1017,25 +979,25 @@ body > #root {
   width: 34px;
   height: 34px !important;
   padding: 0 !important;
-  color: var(--vscode-button-foreground) !important;
-  background: var(--vscode-button-background) !important;
+  color: var(--bt-button-foreground) !important;
+  background: var(--bt-button-background) !important;
   border-color: transparent !important;
 }
 .interrupt-button {
-  background: #dc2626 !important;
-  color: #fff !important;
-  border-color: #b91c1c !important;
+  background: var(--bt-status-danger) !important;
+  color: var(--bt-text-on-strong) !important;
+  border-color: var(--bt-status-danger) !important;
 }
 .empty-state {
   padding: 24px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 .error-state {
   margin: 16px;
-  border: 1px solid rgba(239, 68, 68, 0.28);
+  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 28%, transparent);
   border-radius: 12px;
-  background: rgba(239, 68, 68, 0.08);
-  color: var(--vscode-editor-foreground);
+  background: color-mix(in srgb, var(--bt-status-danger) 8%, transparent);
+  color: var(--bt-text-primary);
 }
 .error-title {
   font-weight: 700;
@@ -1059,7 +1021,7 @@ body > #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 12px;
 }
 
@@ -1070,7 +1032,7 @@ body > #root {
   border-radius: 999px;
   padding: 0;
   background: transparent;
-  color: var(--vscode-foreground);
+  color: var(--bt-text-primary);
   cursor: pointer;
   flex: 0 0 auto;
   font-size: 12px;
@@ -1078,13 +1040,13 @@ body > #root {
 }
 
 .event-card-toggle:hover {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
 }
 
 .event-card-details {
   margin-top: 2px;
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 
 .event-card-details > summary {
@@ -1096,8 +1058,8 @@ body > #root {
   padding: 8px;
   overflow: auto;
   max-height: 220px;
-  background: var(--vscode-editor-background);
-  border: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.2));
+  background: var(--bt-surface-background);
+  border: 1px solid var(--bt-border);
   border-radius: 8px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1108,8 +1070,8 @@ body > #root {
   padding: 8px;
   overflow: auto;
   max-height: 260px;
-  background: var(--vscode-editor-background);
-  border: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.2));
+  background: var(--bt-surface-background);
+  border: 1px solid var(--bt-border);
   border-radius: 8px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1117,7 +1079,7 @@ body > #root {
 
 .event-card-content pre code {
   font-family: var(
-    --vscode-editor-font-family,
+    --bt-font-family-mono,
     ui-monospace,
     SFMono-Regular,
     Consolas,
@@ -1136,46 +1098,22 @@ body > #root {
 
 .event-card-content th,
 .event-card-content td {
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   padding: 5px 7px;
   text-align: left;
   vertical-align: top;
 }
 
-/* === VS Code Sessions Workbench replica layer === */
-:root {
-  --vscode-agents-background: #f2ecd9;
-  --vscode-agentsPanel-background: #fff8e8;
-  --vscode-agentsPanel-border: rgba(108, 96, 70, 0.24);
-  --vscode-agentsChatInput-background: #d8cfb9;
-  --vscode-agentsChatInput-border: rgba(92, 82, 58, 0.18);
-  --vscode-agentsChatInput-focusBorder: rgba(82, 95, 128, 0.62);
-  --vscode-agentsChatInput-foreground: #39352b;
-  --vscode-agentsChatInput-placeholderForeground: rgba(67, 62, 49, 0.54);
-  --vscode-toolbar-hoverBackground: rgba(72, 66, 51, 0.11);
-  --vscode-toolbar-activeBackground: rgba(72, 66, 51, 0.16);
-  --vscode-sideBarSectionHeader-background: rgba(72, 66, 51, 0.06);
-  --vscode-list-activeSelectionBackground: rgba(74, 84, 102, 0.14);
-  --vscode-list-activeSelectionForeground: #26231c;
-  --vscode-textLink-foreground: #2f6db5;
-  --vscode-disabledForeground: rgba(57, 53, 43, 0.42);
-  --vscode-cornerRadius-small: 4px;
-  --vscode-cornerRadius-medium: 6px;
-  --vscode-cornerRadius-large: 8px;
-  --vscode-agents-fontSize-heading2: 18px;
-  --vscode-agents-fontSize-label2: 11px;
-  --surface-shadow: 0 8px 24px rgba(61, 54, 38, 0.12);
-  --surface-border: 1px solid var(--vscode-agentsPanel-border);
-}
+/* === BoxTeam Sessions Workbench layer === */
 
 html,
 body {
-  background: var(--vscode-agents-background);
+  background: var(--bt-page-background);
 }
 
 .agent-sessions-workbench.app-shell {
-  background: var(--vscode-agents-background);
-  color: #39352b;
+  background-color: var(--bt-page-background);
+  color: var(--bt-text-primary);
 }
 
 .toolbar {
@@ -1222,8 +1160,8 @@ body {
   height: 26px;
   min-width: 26px;
   padding: 0 7px;
-  border-radius: var(--vscode-cornerRadius-small);
-  color: #5f5a4b;
+  border-radius: var(--bt-radius-small);
+  color: var(--bt-text-muted);
   font-size: 16px;
   line-height: 1;
   vertical-align: top;
@@ -1251,7 +1189,7 @@ body {
 .toolbar-update-button:hover,
 .auxiliary-icon-button:hover,
 .sidebar-icon-button:hover {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .toolbar-icon-button:disabled {
@@ -1274,13 +1212,13 @@ body {
   gap: 8px;
   width: min(640px, 100%);
   height: 26px;
-  border: 1px solid rgba(106, 98, 75, 0.23);
-  border-radius: var(--vscode-cornerRadius-large);
-  background: rgba(255, 251, 239, 0.52);
-  color: #726b59;
+  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 23%, transparent);
+  border-radius: var(--bt-radius-large);
+  background: color-mix(in srgb, var(--bt-surface-raised) 52%, transparent);
+  color: var(--bt-text-muted);
   font-size: 12px;
   line-height: 1;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 1px 0 var(--bt-highlight-soft);
 }
 
 .command-center-title {
@@ -1294,10 +1232,10 @@ body {
   flex: 0 0 auto;
   height: 24px;
   padding: 0 10px;
-  border: 1px solid rgba(106, 98, 75, 0.22);
-  border-radius: var(--vscode-cornerRadius-small);
-  background: #d8cda9;
-  color: #fff;
+  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 22%, transparent);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-surface-muted);
+  color: var(--bt-text-on-strong);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -1309,7 +1247,7 @@ body {
   height: 24px;
   border-color: transparent;
   background: transparent;
-  color: #6f6857;
+  color: var(--bt-text-muted);
 }
 
 .badge.neutral.toolbar-path {
@@ -1348,7 +1286,7 @@ body {
 .agent-sessions-panel {
   flex: 1 1 0;
   min-width: 0;
-  border-right: 1px solid rgba(106, 98, 75, 0.18);
+  border-right: 1px solid color-mix(in srgb, var(--bt-text-muted) 18%, transparent);
   background: transparent;
 }
 
@@ -1360,7 +1298,7 @@ body {
   min-height: 38px;
   padding: 0 10px;
   border-bottom: 0;
-  color: #4c4739;
+  color: var(--bt-text-primary);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
@@ -1404,10 +1342,10 @@ body {
   gap: 7px;
   height: 24px;
   padding: 0 9px;
-  border: 1px solid rgba(106, 98, 75, 0.22);
-  border-radius: var(--vscode-cornerRadius-small);
-  background: rgba(255, 251, 239, 0.58);
-  color: #3c382d;
+  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 22%, transparent);
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-surface-raised) 58%, transparent);
+  color: var(--bt-text-primary);
   font: inherit;
   cursor: pointer;
 }
@@ -1416,7 +1354,7 @@ body {
   padding: 0;
   border: 0;
   background: transparent;
-  color: #5f5949;
+  color: var(--bt-text-muted);
   font: inherit;
   font-size: 11px;
 }
@@ -1429,15 +1367,15 @@ body {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #625b4b;
+  color: var(--bt-text-muted);
   cursor: pointer;
 }
 
 .sidebar-icon-button.active,
 .auxiliary-icon-button.active {
-  background: var(--vscode-toolbar-activeBackground);
+  background: var(--bt-toolbar-active-background);
 }
 
 .auxiliary-title-actions {
@@ -1499,7 +1437,7 @@ body {
   top: 5px;
   width: 8px;
   height: 8px;
-  background: var(--vscode-agentsPanel-background);
+  background: var(--bt-panel-background);
 }
 
 .sessions-filter-menu {
@@ -1509,16 +1447,16 @@ body {
   width: min(190px, var(--anchored-overlay-available-width, 190px));
   max-height: min(70vh, 520px, var(--anchored-overlay-available-height, 520px));
   padding: 5px;
-  border: 1px solid var(--vscode-agentsPanel-border);
-  border-radius: var(--vscode-cornerRadius-large);
-  background: #fff8e8;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-large);
+  background: var(--bt-panel-background);
   overflow: auto;
-  box-shadow: 0 8px 24px rgba(61, 54, 38, 0.18);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--bt-text-primary) 18%, transparent);
 }
 
 .sessions-menu-group-title {
   padding: 4px 8px 2px;
-  color: #817865;
+  color: var(--bt-text-subtle);
   font-size: 11px;
   font-weight: 700;
 }
@@ -1526,16 +1464,16 @@ body {
 .sessions-menu-separator {
   height: 1px;
   margin: 4px 3px;
-  background: rgba(106, 98, 75, 0.16);
+  background: color-mix(in srgb, var(--bt-text-muted) 16%, transparent);
 }
 
 .sessions-filter-menu button {
   min-height: 26px;
   padding: 0 8px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #4d483b;
+  color: var(--bt-text-primary);
   text-align: left;
   font: inherit;
   font-size: 12px;
@@ -1544,7 +1482,7 @@ body {
 
 .sessions-filter-menu button:hover,
 .sessions-filter-menu button.active {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .sessions-search-box {
@@ -1552,23 +1490,23 @@ body {
   flex-direction: column;
   gap: 4px;
   padding: 0 2px 2px;
-  color: #706a5b;
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
 .sessions-search-box input {
   height: 26px;
   padding: 0 8px;
-  border: 1px solid var(--vscode-agentsPanel-border);
-  border-radius: var(--vscode-cornerRadius-small);
-  background: rgba(255, 251, 239, 0.68);
-  color: #39352b;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-surface-raised) 68%, transparent);
+  color: var(--bt-text-primary);
   font: inherit;
   outline: none;
 }
 
 .sessions-search-box input:focus {
-  border-color: var(--vscode-agentsChatInput-focusBorder);
+  border-color: var(--bt-chat-input-focus-border);
 }
 
 .agent-sessions-sidebar-groups {
@@ -1587,9 +1525,9 @@ body {
   min-height: 24px;
   padding: 0 2px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #595341;
+  color: var(--bt-text-muted);
   font: inherit;
   font-size: 12px;
   text-align: left;
@@ -1597,7 +1535,7 @@ body {
 }
 
 .agent-sessions-nav-row:hover {
-  color: #39352b;
+  color: var(--bt-text-primary);
   background: transparent;
 }
 
@@ -1607,20 +1545,20 @@ body {
   height: 18px;
   align-items: center;
   justify-content: center;
-  color: #746d58;
+  color: var(--bt-text-muted);
   font-size: 14px;
 }
 
 .agent-sessions-nav-count {
-  color: #958c77;
+  color: var(--bt-text-subtle);
   font-size: 11px;
 }
 
 .sessions-part-card {
   margin: 0;
-  border: 1px solid var(--vscode-agentsPanel-border);
-  border-radius: var(--vscode-cornerRadius-large);
-  background: var(--vscode-agentsPanel-background);
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-large);
+  background: var(--bt-panel-background);
 }
 
 .session-view-surface {
@@ -1662,10 +1600,10 @@ body {
   width: min(420px, 100%);
   margin: auto 0;
   padding: 18px 22px;
-  border: 1px solid rgba(106, 98, 75, 0.18);
+  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 18%, transparent);
   border-radius: 8px;
-  background: rgba(255, 251, 239, 0.68);
-  color: #5e5749;
+  background: color-mix(in srgb, var(--bt-surface-raised) 68%, transparent);
+  color: var(--bt-text-muted);
   text-align: center;
 }
 
@@ -1677,7 +1615,7 @@ body {
 
 .chat-stream-empty-detail {
   margin-top: 4px;
-  color: #7a7364;
+  color: var(--bt-text-subtle);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -1689,16 +1627,16 @@ body {
   margin-top: 12px;
   min-height: 28px;
   padding: 4px 10px;
-  border: 1px solid rgba(106, 98, 75, 0.22);
+  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 22%, transparent);
   border-radius: 6px;
-  background: rgba(255, 251, 239, 0.9);
-  color: #3f3a31;
+  background: color-mix(in srgb, var(--bt-surface-raised) 90%, transparent);
+  color: var(--bt-text-primary);
   font-size: 12px;
   cursor: pointer;
 }
 
 .chat-stream-empty-action:hover {
-  background: rgba(244, 235, 202, 0.9);
+  background: color-mix(in srgb, var(--bt-surface-muted) 90%, transparent);
 }
 
 .composer {
@@ -1731,7 +1669,7 @@ body {
 }
 
 .session-workspace-picker-label {
-  color: #706a5b;
+  color: var(--bt-text-muted);
   font-size: 18px;
   line-height: 1.25;
   white-space: nowrap;
@@ -1746,16 +1684,16 @@ body {
   height: 28px;
   padding: 3px 5px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #39352b;
+  color: var(--bt-text-primary);
   font: inherit;
   font-size: 18px;
   cursor: pointer;
 }
 
 .sessions-chat-picker-slot:hover {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .sessions-chat-picker-slot.fixed {
@@ -1774,7 +1712,7 @@ body {
 }
 
 .sessions-chat-dropdown-chevron {
-  color: #766f5e;
+  color: var(--bt-text-muted);
   font-size: 12px;
 }
 
@@ -1796,14 +1734,14 @@ body {
   flex-direction: column;
   min-height: 86px;
   overflow: visible;
-  border: 1px solid var(--vscode-agentsChatInput-border);
-  border-radius: var(--vscode-cornerRadius-large);
-  background: var(--vscode-agentsChatInput-background);
-  color: var(--vscode-agentsChatInput-foreground);
+  border: 1px solid var(--bt-chat-input-border);
+  border-radius: var(--bt-radius-large);
+  background: var(--bt-chat-input-background);
+  color: var(--bt-chat-input-foreground);
 }
 
 .new-chat-input-area:focus-within {
-  border-color: var(--vscode-agentsChatInput-focusBorder);
+  border-color: var(--bt-chat-input-focus-border);
 }
 
 .composer-copy.sessions-chat-editor {
@@ -1815,13 +1753,13 @@ body {
   min-height: 36px;
   max-height: 180px;
   padding: 0;
-  color: var(--vscode-agentsChatInput-foreground);
+  color: var(--bt-chat-input-foreground);
   font-size: 13px;
   line-height: 20px;
 }
 
 .composer textarea::placeholder {
-  color: var(--vscode-agentsChatInput-placeholderForeground);
+  color: var(--bt-chat-input-placeholder);
 }
 
 .sessions-chat-toolbar {
@@ -1843,14 +1781,14 @@ body {
   min-width: 20px;
   padding: 0 6px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #5d5748;
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
 .composer-actions button:hover:not(:disabled) {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .composer-icon-button,
@@ -1866,7 +1804,7 @@ body {
 }
 
 .composer-hint {
-  color: #706a5b;
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
@@ -1881,10 +1819,10 @@ body {
   max-width: 132px;
   height: 20px !important;
   padding: 0 7px !important;
-  border-radius: var(--vscode-cornerRadius-small) !important;
+  border-radius: var(--bt-radius-small) !important;
   border-color: transparent !important;
   background: transparent !important;
-  color: #39352b !important;
+  color: var(--bt-text-primary) !important;
 }
 
 .composer-model-pill {
@@ -1903,20 +1841,20 @@ body {
   flex: 0 0 auto;
   font-size: 12px;
   line-height: 1;
-  color: var(--vscode-icon-foreground);
+  color: var(--bt-icon-foreground);
 }
 
 .send-button {
   width: 30px;
   height: 30px !important;
   border-radius: 50% !important;
-  background: #9ebcf3 !important;
-  color: #fff !important;
+  background: var(--bt-accent-soft) !important;
+  color: var(--bt-text-on-strong) !important;
 }
 
 .interrupt-button {
   height: 26px !important;
-  background: #b94a48 !important;
+  background: var(--bt-status-danger) !important;
 }
 
 .composer-view-menu,
@@ -1924,9 +1862,9 @@ body {
 .composer-model-menu,
 .composer-slash-menu,
 .agent-sessions-session-menu {
-  border-radius: var(--vscode-cornerRadius-large);
-  background: #fff8e8;
-  box-shadow: 0 8px 24px rgba(61, 54, 38, 0.18);
+  border-radius: var(--bt-radius-large);
+  background: var(--bt-panel-background);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--bt-text-primary) 18%, transparent);
 }
 
 .composer-view-menu,
@@ -1945,8 +1883,8 @@ body {
 }
 
 .composer-attachment {
-  border-radius: var(--vscode-cornerRadius-large);
-  background: rgba(255, 251, 239, 0.45);
+  border-radius: var(--bt-radius-large);
+  background: color-mix(in srgb, var(--bt-surface-raised) 45%, transparent);
 }
 
 .event-card-body {
@@ -1966,17 +1904,17 @@ body {
   height: 8px;
   border-radius: 999px;
   flex: 0 0 auto;
-  background: var(--vscode-descriptionForeground);
+  background: var(--bt-text-muted);
 }
 
 .event-card-indicator-running {
-  background: #f59e0b;
+  background: var(--bt-status-warning);
 }
 .event-card-indicator-done {
-  background: #16a34a;
+  background: var(--bt-status-success);
 }
 .event-card-indicator-danger {
-  background: #dc2626;
+  background: var(--bt-status-danger);
 }
 
 .event-card-time {
@@ -1985,7 +1923,7 @@ body {
 
 .badge.neutral.event-card-time {
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 
 .conversation-marker,
@@ -2009,14 +1947,14 @@ body {
 .conversation-marker-line {
   flex: 1 1 auto;
   height: 1px;
-  background: var(--vscode-panel-border, rgba(127, 127, 127, 0.2));
+  background: var(--bt-border);
 }
 
 .conversation-marker-label {
   flex: 0 0 auto;
   font-size: 11px;
   font-weight: 600;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   text-transform: none;
   letter-spacing: normal;
   max-width: 60%;

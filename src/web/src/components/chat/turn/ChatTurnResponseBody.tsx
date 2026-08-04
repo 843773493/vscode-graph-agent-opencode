@@ -64,6 +64,15 @@ function ErrorPart({ item }: { item: Extract<TimelineItem, { kind: "trace" }> })
   );
 }
 
+function CancelledPart({ userInitiated }: { userInitiated: boolean }) {
+  return (
+    <div className="chat-inline-cancelled" role="status">
+      <span className="codicon codicon-debug-stop" aria-hidden="true" />
+      <span>{userInitiated ? "已由用户中断" : "任务已取消"}</span>
+    </div>
+  );
+}
+
 function ResponsePart({
   item,
   showRawDetails,
@@ -85,8 +94,13 @@ function ResponsePart({
   }
   if (
     item.kind === "trace"
-    && ["error", "job_failed", "job_cancelled", "session_interrupted"]
-      .includes(item.eventType)
+    && ["job_cancelled", "session_interrupted"].includes(item.eventType)
+  ) {
+    return <CancelledPart userInitiated={item.eventType === "session_interrupted"} />;
+  }
+  if (
+    item.kind === "trace"
+    && ["error", "job_failed"].includes(item.eventType)
   ) {
     return <ErrorPart item={item} />;
   }
@@ -148,13 +162,17 @@ export default function ChatTurnResponseBody({
     conversation.conversationId,
     running,
   );
+  const hasSessionInterrupted = parts.some((item) =>
+    item.kind === "trace" && item.eventType === "session_interrupted"
+  );
   const visibleParts = parts.filter((item) =>
     (item.kind === "aggregated_text"
       && (!preferPersistedResponse || item.partKind !== "markdown"))
     || item.kind === "aggregated_tool"
     || (item.kind === "trace"
       && ["error", "job_failed", "job_cancelled", "session_interrupted"]
-        .includes(item.eventType)),
+        .includes(item.eventType)
+      && !(hasSessionInterrupted && item.eventType === "job_cancelled")),
   );
   const renderGroups = buildRenderGroups(visibleParts);
   const finalTextPart = [...visibleParts].reverse().find(

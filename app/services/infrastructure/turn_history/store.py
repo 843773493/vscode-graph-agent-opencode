@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from app.abstractions.turn_history import (
     TurnHistoryStoreProtocol,
@@ -144,6 +145,105 @@ class TurnHistoryStore:
             manifest, _ = self._load_recovered(session_id)
             return manifest.projection_epoch
 
+    def publication_watermark(self, session_id: str) -> TurnProjectionWatermark:
+        with self._locks[session_id]:
+            manifest, _ = self._load_recovered(session_id)
+            return TurnProjectionWatermark(
+                event_id=manifest.last_event_id,
+                source_offset=manifest.last_event_offset,
+                projection_epoch=manifest.projection_epoch,
+            )
+
+    def visible_turn_ids_from_message(
+        self,
+        session_id: str,
+        message_id: str,
+    ) -> list[str]:
+        if not message_id:
+            raise ValueError("回退目标 message_id 不能为空")
+        with self._locks[session_id]:
+            manifest, index = self._load_recovered(session_id)
+            cursor: str | None = None
+            suffix_newest_first: list[str] = []
+            while True:
+                page = self._reader.list_summaries(
+                    session_id,
+                    manifest=manifest,
+                    index=index,
+                    limit=20,
+                    cursor=cursor,
+                )
+                for summary in page.items:
+                    suffix_newest_first.append(summary.turn_id)
+                    summary_message_ids = {
+                        *summary.source_message_ids,
+                        *(message.message_id for message in summary.user_messages),
+                    }
+                    target_found = message_id in summary_message_ids
+                    if (
+                        not target_found
+                        and (summary.sources_truncated or summary.user_messages_truncated)
+                    ):
+                        record = self._files.read_turn_record(
+                            session_id,
+                            summary.turn_id,
+                            required=True,
+                        )
+                        target_found = any(
+                            message.message_id == message_id
+                            for message in record.turn.user_messages
+                        )
+                    if target_found:
+                        return list(reversed(suffix_newest_first))
+                if not page.has_more or page.next_cursor is None:
+                    return []
+                cursor = page.next_cursor
+
+    def truncate_from_message(self, session_id: str, message_id: str) -> int:
+        """原子隐藏目标消息所在 Turn 及其后缀，并使旧分页 cursor 失效。"""
+        if not self.projection_exists(session_id):
+            return 0
+        with self._locks[session_id]:
+            manifest, _ = self._load_recovered(session_id)
+            hidden_turn_ids = self.visible_turn_ids_from_message(session_id, message_id)
+            if not hidden_turn_ids:
+                return 0
+
+            staging = TurnHistoryStore(
+                self._sessions_dir,
+                compaction_threshold=self._compaction_threshold,
+                directory_name=f".{self._directory_name}-replay-staging",
+                write_durability="publish",
+            )
+            staging.discard_projection(session_id)
+            shutil.copytree(
+                self._files.root(session_id),
+                staging._files.root(session_id),
+            )
+            staging.apply_operation(
+                session_id,
+                TurnProjectionOperation(
+                    event_id=f"session_turn_replay:{uuid4()}",
+                    hidden_turn_ids=hidden_turn_ids,
+                ),
+            )
+            staging.set_projection_status(session_id, "ready")
+            self.publish_staging(
+                session_id,
+                staging,
+                publication_base=TurnProjectionWatermark(
+                    event_id=manifest.last_event_id,
+                    source_offset=manifest.last_event_offset,
+                    projection_epoch=manifest.projection_epoch,
+                ),
+            )
+            return len(hidden_turn_ids)
+
+    def projection_version(self, session_id: str) -> int:
+        with self._locks[session_id]:
+            manifest, _ = self._load_recovered(session_id)
+            return manifest.projection_version
+
     def event_cursor(self, session_id: str) -> str | None:
         with self._locks[session_id]:
             manifest, _ = self._load_recovered(session_id)
@@ -194,10 +294,18 @@ class TurnHistoryStore:
             manifest, _ = self._load_recovered(session_id)
             return manifest.history_initialized
 
-    def mark_history_initialized(self, session_id: str) -> None:
+    def mark_history_initialized(
+        self,
+        session_id: str,
+        *,
+        projection_version: int,
+    ) -> None:
+        if projection_version < 1:
+            raise ValueError("Turn 投影版本必须是正整数")
         with self._locks[session_id]:
             manifest, _ = self._load_recovered(session_id)
             manifest.history_initialized = True
+            manifest.projection_version = projection_version
             manifest.updated_at = datetime.now(UTC)
             self._files.write_manifest(session_id, manifest)
 
@@ -247,6 +355,7 @@ class TurnHistoryStore:
                 publication_base=TurnProjectionWatermark(
                     event_id=manifest.last_event_id,
                     source_offset=manifest.last_event_offset,
+                    projection_epoch=manifest.projection_epoch,
                 ),
             )
 
@@ -295,7 +404,14 @@ class TurnHistoryStore:
             expected = publication_base or TurnProjectionWatermark(
                 event_id=staging_manifest.last_event_id,
                 source_offset=staging_manifest.last_event_offset,
+                projection_epoch=current_manifest.projection_epoch,
             )
+            if current_manifest.projection_epoch != expected.projection_epoch:
+                raise TurnProjectionPublicationConflict(
+                    "Turn staging 发布时投影 epoch 已变化: "
+                    f"session_id={session_id}, current={current_manifest.projection_epoch}, "
+                    f"expected={expected.projection_epoch}"
+                )
             if current_manifest.last_event_id != expected.event_id:
                 raise TurnProjectionPublicationConflict(
                     "Turn staging 发布时事件水位已变化: "

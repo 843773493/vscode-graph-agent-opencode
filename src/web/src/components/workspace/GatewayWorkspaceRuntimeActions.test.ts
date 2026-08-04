@@ -2,6 +2,7 @@ import {
   probeExternalGatewayWorkspace,
   reconnectGatewayWorkspace,
   forceRestartManagedGatewayWorkspaceBackend,
+  restartDevelopmentRuntime,
   safeRestartManagedGatewayWorkspaceBackend,
 } from "../../gatewayApi";
 
@@ -56,6 +57,7 @@ try {
   await forceRestartManagedGatewayWorkspaceBackend(8014, "gw/test");
   await reconnectGatewayWorkspace(8014, "gw/test");
   await probeExternalGatewayWorkspace(8014, "gw/test");
+  await restartDevelopmentRuntime(8014);
 } finally {
   globalThis.fetch = originalFetch;
 }
@@ -65,6 +67,7 @@ const expectedPaths = [
   "/api/gateway/workspaces/gw%2Ftest/runtime/restart-force",
   "/api/gateway/workspaces/gw%2Ftest/reconnect",
   "/api/gateway/workspaces/gw%2Ftest/probe",
+  "/api/gateway/runtime/restart-development",
 ];
 if (requestedPaths.join("\n") !== expectedPaths.join("\n")) {
   throw new Error(

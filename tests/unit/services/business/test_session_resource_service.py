@@ -62,6 +62,7 @@ class FakeBrowserManagerClient:
     def __init__(self, browsers: list[dict[str, object]] | None = None) -> None:
         self.browsers = browsers or []
         self.deleted_browser_ids: list[str] = []
+        self.woken_browser_ids: list[str] = []
 
     def attach_url(self, browser_id: str) -> str:
         return f"http://127.0.0.1:8016/?browserId={browser_id}"
@@ -94,6 +95,19 @@ class FakeBrowserManagerClient:
                 "created_at": "2026-07-05T01:02:03+00:00",
                 "updated_at": "2026-07-05T01:02:04+00:00",
             },
+        }
+
+    async def wake_browser(self, browser_id: str) -> dict[str, object]:
+        self.woken_browser_ids.append(browser_id)
+        return {
+            "browser_id": browser_id,
+            "session_id": "ses_test",
+            "status": "running",
+            "resource_state": "active",
+            "created_at": "2026-07-05T01:02:03+00:00",
+            "updated_at": "2026-07-05T01:02:05+00:00",
+            "title": "Restored page",
+            "url": "https://example.com/restored",
         }
 
 
@@ -204,6 +218,58 @@ def test_running_browser_resource_maps_identity_and_actions():
     assert resource.metadata["page_id"] == "browser_123"
     assert "attach_url" not in resource.metadata
     assert resource.available_actions == ["cancel", "delete"]
+
+
+@pytest.mark.asyncio
+async def test_cold_recycled_browser_exposes_resume_action():
+    browser = {
+        "browser_id": "browser_cold",
+        "session_id": "ses_test",
+        "status": "lost",
+        "resource_state": "discarded",
+        "checkpoint": {"version": 1, "browser_id": "browser_cold"},
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+    }
+    provider = BrowserResourceProvider(
+        browser_manager=FakeBrowserManagerClient(browsers=[browser]),
+        resource_mapper=_resource_mapper(),
+    )
+
+    resources = await provider.list_resources("ses_test")
+    resource = resources[0]
+
+    assert resource.available_actions == ["resume", "delete"]
+    assert "可以重新打开" in str(resource.metadata["status_note"])
+
+
+@pytest.mark.asyncio
+async def test_browser_provider_resumes_cold_recycled_browser():
+    browser = {
+        "browser_id": "browser_cold",
+        "session_id": "ses_test",
+        "status": "lost",
+        "resource_state": "discarded",
+        "checkpoint": {"version": 1, "browser_id": "browser_cold"},
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+    }
+    browser_manager = FakeBrowserManagerClient(browsers=[browser])
+    provider = BrowserResourceProvider(
+        browser_manager=browser_manager,
+        resource_mapper=_resource_mapper(),
+    )
+
+    result = await provider.control(
+        session_id="ses_test",
+        resource_id="browser_cold",
+        action="resume",
+    )
+
+    assert result.status == "running"
+    assert result.resource is not None
+    assert result.resource.available_actions == ["cancel", "delete"]
+    assert browser_manager.woken_browser_ids == ["browser_cold"]
 
 
 @pytest.mark.asyncio

@@ -133,11 +133,11 @@ export default function AgentSessionsWorkspaceGroups({
                 <span className="agent-sessions-workspace-name">{workspace.name}</span>
                 {workspace.status === 'offline' ? (
                   <span
-                    className="agent-sessions-workspace-status"
+                    className="codicon codicon-circle-filled agent-sessions-workspace-status offline-status-icon"
+                    role="img"
+                    aria-label="工作区离线"
                     title={workspace.connection_error ?? '工作区后端离线'}
-                  >
-                    离线
-                  </span>
+                  />
                 ) : null}
                 {removing ? (
                   <span className="agent-sessions-workspace-status removing-status">

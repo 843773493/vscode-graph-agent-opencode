@@ -116,4 +116,27 @@ export async function readFilePathTextFromClipboard(): Promise<string> {
     throw textError;
   }
 }
+
+export function readFilePathTextFromClipboardData(
+  clipboardData: Pick<DataTransfer, "types" | "getData"> | null,
+): string {
+  if (!clipboardData) {
+    throw new Error("浏览器粘贴事件没有提供剪贴板数据");
+  }
+  const preferredTypes = [
+    "x-special/gnome-copied-files",
+    "text/uri-list",
+    "text/plain",
+  ];
+  for (const type of preferredTypes) {
+    if (!Array.from(clipboardData.types).includes(type)) {
+      continue;
+    }
+    const text = clipboardData.getData(type).trim();
+    if (text) {
+      return text;
+    }
+  }
+  throw new Error("剪贴板中没有可粘贴的文件路径文本");
+}
 let lastWrittenText: string | null = null;

@@ -26,6 +26,7 @@ import WorkspaceRenameDialog from './workspace/WorkspaceRenameDialog';
 import WorkspaceAddDialog from './workspace/WorkspaceAddDialog';
 import AnchoredOverlay from './AnchoredOverlay';
 import WarmActionDialog from './WarmActionDialog';
+import type { SessionGeneratorResourcesController } from '../hooks/sessionResourceExplorer/useSessionGeneratorResources';
 import {
   WORKSPACE_SECTION_RECENT_LIMIT,
   buildTimeSections,
@@ -77,6 +78,7 @@ interface AgentSessionsPanelProps {
   onRemoveWorkspace: (workspaceId: string, workspaceName: string) => void;
   onAddWorkspace: (payload: AddManagedGatewayWorkspaceRequest) => Promise<void>;
   onOpenGatewayControl: () => void;
+  onReconnectWorkspace: (workspaceId: string) => Promise<void>;
   onStartWorkspace: (workspaceId: string) => Promise<void>;
   onStopWorkspace: (workspaceId: string) => Promise<void>;
   onRenameWorkspace: (workspaceId: string, name: string) => Promise<string>;
@@ -104,6 +106,7 @@ interface AgentSessionsPanelProps {
     workspaceId: string,
     deletedCurrentSession: boolean,
   ) => Promise<void>;
+  onInvalidateSessionCatalog: (workspaceId: string) => void;
   catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
   flexRatio: number;
@@ -117,6 +120,7 @@ interface AgentSessionsPanelProps {
   customizationsHeight: number;
   onCustomizationsCollapsedChange: (collapsed: boolean) => void;
   onCustomizationsHeightChange: (height: number, commit: boolean) => void;
+  generatorResources: SessionGeneratorResourcesController;
 }
 
 export default function AgentSessionsPanel({
@@ -140,6 +144,7 @@ export default function AgentSessionsPanel({
   onRemoveWorkspace,
   onAddWorkspace,
   onOpenGatewayControl,
+  onReconnectWorkspace,
   onStartWorkspace,
   onStopWorkspace,
   onRenameWorkspace,
@@ -154,6 +159,7 @@ export default function AgentSessionsPanel({
   onCreateSessionInFolder,
   onCreateSessionFolder,
   onSessionFolderDeleted,
+  onInvalidateSessionCatalog,
   catalogSyncKeys,
   catalogRefreshVersions,
   flexRatio,
@@ -163,6 +169,7 @@ export default function AgentSessionsPanel({
   customizationsHeight,
   onCustomizationsCollapsedChange,
   onCustomizationsHeightChange,
+  generatorResources,
 }: AgentSessionsPanelProps) {
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
   const [workspaceContextMenu, setWorkspaceContextMenu] =
@@ -176,6 +183,9 @@ export default function AgentSessionsPanel({
   } | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [workspaceAddOpen, setWorkspaceAddOpen] = useState(false);
+  const [startingWorkspaceIds, setStartingWorkspaceIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const filterMode = preferences.filterMode;
@@ -198,6 +208,26 @@ export default function AgentSessionsPanel({
   const [customizationNotice, setCustomizationNotice] = useState('');
   const filterButtonRef = useRef<HTMLButtonElement | null>(null);
   const cleanupCustomizationsResizeRef = useRef<(() => void) | null>(null);
+  const handleStartWorkspace = async (workspaceId: string) => {
+    setStartingWorkspaceIds((previous) => new Set(previous).add(workspaceId));
+    try {
+      await onStartWorkspace(workspaceId);
+      try {
+        await onRefreshWorkspaceSessions(workspaceId);
+      } catch (error) {
+        onStatusChange(
+          `工作区已启动，但刷新会话列表失败: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      onInvalidateSessionCatalog(workspaceId);
+    } finally {
+      setStartingWorkspaceIds((previous) => {
+        const next = new Set(previous);
+        next.delete(workspaceId);
+        return next;
+      });
+    }
+  };
   const filteredSessions = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
     const matchingSessions = sessions.filter((session) => {
@@ -346,7 +376,7 @@ export default function AgentSessionsPanel({
     onStatusChange('已折叠全部会话分组');
   };
   const showCustomizationNotice = (label: string) => {
-    const message = `${label} 由 VS Code Sessions 服务提供，Web 端暂未接入`;
+    const message = `${label} 需要桌面运行时提供，当前 Web 端暂未接入`;
     setCustomizationNotice(message);
     onStatusChange(message);
   };
@@ -388,6 +418,7 @@ export default function AgentSessionsPanel({
       className={`agent-sessions-panel${isOpen ? '' : ' preserve-mounted-hidden'}`}
       hidden={!isOpen}
       style={{ flexBasis: 0, flexGrow: flexRatio }}
+      data-bt-surface="chrome"
     >
       <div className="agent-sessions-panel-shell">
         <header className="panel-header agent-sessions-panel-header">
@@ -487,6 +518,7 @@ export default function AgentSessionsPanel({
               searchOpen={searchOpen}
               searchQuery={searchQuery}
               workspaceSwitching={workspaceSwitching}
+              startingWorkspaceIds={startingWorkspaceIds}
               onActivateWorkspace={onActivateWorkspace}
               onSetWorkspaceParent={onSetWorkspaceParent}
               onRefreshWorkspaceSessions={onRefreshWorkspaceSessions}
@@ -501,6 +533,10 @@ export default function AgentSessionsPanel({
               activeJobIdsBySession={activeJobIdsBySession}
               unreadSessionKeys={unreadSessionKeys}
               onRequestAddWorkspace={() => setWorkspaceAddOpen(true)}
+              onOpenConnectionManager={onOpenGatewayControl}
+              onReconnectWorkspace={onReconnectWorkspace}
+              onStartWorkspace={handleStartWorkspace}
+              generatorResources={generatorResources}
             />
           ) : null}
 
@@ -650,8 +686,9 @@ export default function AgentSessionsPanel({
           }}
           onCopyWorkspaceInformation={onCopyWorkspaceInformation}
           onRemoveWorkspace={onRemoveWorkspace}
-          onStartWorkspace={onStartWorkspace}
+          onStartWorkspace={handleStartWorkspace}
           onStopWorkspace={onStopWorkspace}
+          startingWorkspaceIds={startingWorkspaceIds}
           onStatusChange={onStatusChange}
         />
         <WorkspaceRenameDialog

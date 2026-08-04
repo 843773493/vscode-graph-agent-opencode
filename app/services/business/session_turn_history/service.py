@@ -18,6 +18,7 @@ from app.schemas.public_v2.turn import (
 )
 
 from .migration import SessionTurnHistoryMigrator
+from .projector import CURRENT_TURN_PROJECTION_VERSION
 
 _RECENT_MIGRATION_EVENT_LIMIT = 128
 _RECENT_MIGRATION_BYTE_LIMIT = 256 * 1024
@@ -161,6 +162,16 @@ class SessionTurnHistoryService:
         if self._store.projection_exists(
             session_id
         ) and self._store.history_initialized(session_id):
+            projection_version = self._store.projection_version(session_id)
+            if projection_version > CURRENT_TURN_PROJECTION_VERSION:
+                raise RuntimeError(
+                    "Turn 投影版本高于当前程序支持范围: "
+                    f"session_id={session_id}, projection_version={projection_version}, "
+                    f"supported={CURRENT_TURN_PROJECTION_VERSION}"
+                )
+            if projection_version < CURRENT_TURN_PROJECTION_VERSION:
+                self._store.set_projection_status(session_id, "partial")
+                return True
             if self._store.projection_status(session_id) == "partial":
                 return True
             recovery = self._trace_event_store.read_turn_recovery_batch(
@@ -242,5 +253,8 @@ class SessionTurnHistoryService:
             "partial" if has_older_events else "ready",
         )
         if not has_older_events:
-            self._store.mark_history_initialized(session_id)
+            self._store.mark_history_initialized(
+                session_id,
+                projection_version=CURRENT_TURN_PROJECTION_VERSION,
+            )
         return has_older_events

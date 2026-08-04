@@ -9,7 +9,6 @@ from app.abstractions.turn_history import (
     TurnLegacyMessageSourceProtocol,
     TurnMigrationSnapshot,
     TurnProjectionPublicationConflict,
-    TurnProjectionWatermark,
     TurnProjectorFactoryProtocol,
 )
 from app.schemas.event import (
@@ -20,6 +19,8 @@ from app.schemas.event import (
 )
 from app.schemas.public_v2.common import MessageRole
 from app.schemas.public_v2.message import MessageDTO
+
+from .projector import CURRENT_TURN_PROJECTION_VERSION
 
 
 class SessionTurnHistoryMigrator:
@@ -54,15 +55,9 @@ class SessionTurnHistoryMigrator:
             )
             if status == "ready":
                 return
-            publication_base = TurnProjectionWatermark(
-                event_id=await asyncio.to_thread(
-                    self._store.event_cursor,
-                    session_id,
-                ),
-                source_offset=await asyncio.to_thread(
-                    self._store.event_offset,
-                    session_id,
-                ),
+            publication_base = await asyncio.to_thread(
+                self._store.publication_watermark,
+                session_id,
             )
             await asyncio.to_thread(
                 self._trace_event_store.ensure_turn_index,
@@ -158,7 +153,10 @@ class SessionTurnHistoryMigrator:
         else:
             staging.projection_epoch(session_id)
         staging.set_projection_status(session_id, "ready")
-        staging.mark_history_initialized(session_id)
+        staging.mark_history_initialized(
+            session_id,
+            projection_version=CURRENT_TURN_PROJECTION_VERSION,
+        )
 
     def _legacy_events(
         self,

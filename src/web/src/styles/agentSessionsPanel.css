@@ -1,7 +1,7 @@
 .agent-sessions-no-chats {
   min-height: 22px;
   padding: 4px 10px 4px 30px;
-  color: #a0967d;
+  color: var(--bt-text-subtle);
   font-size: 11px;
   line-height: 14px;
   text-align: left;
@@ -35,7 +35,7 @@
   z-index: 2;
   height: 2px;
   border-radius: 999px;
-  background: #2d70ac;
+  background: var(--bt-accent);
 }
 
 .agent-sessions-workspace-section.drop-before::before {
@@ -55,7 +55,7 @@
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #4d4638;
+  color: var(--bt-text-muted);
   font: inherit;
   font-size: 12px;
   font-weight: 600;
@@ -63,7 +63,7 @@
 }
 
 .agent-sessions-workspace-row:hover {
-  color: #39352b;
+  color: var(--bt-text-primary);
   background: transparent;
 }
 
@@ -97,12 +97,12 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
 }
 
 .agent-sessions-workspace-action-button:hover,
 .agent-sessions-workspace-action-button:focus-visible {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
   outline: 0;
 }
 
@@ -112,7 +112,7 @@
 }
 
 .agent-sessions-workspace-chevron {
-  color: #746d58;
+  color: var(--bt-text-muted);
   font-size: 12px;
 }
 
@@ -131,18 +131,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #4d4638;
+  color: var(--bt-text-muted);
 }
 
 .agent-sessions-workspace-status {
   flex: 0 0 auto;
   margin-left: 5px;
-  color: #a0523d;
+  color: var(--bt-status-danger);
   font-size: 10px;
 }
 
+.agent-sessions-workspace-status.offline-status-icon {
+  color: var(--bt-status-danger);
+  line-height: 1;
+}
+
 .agent-sessions-workspace-status.removing-status {
-  color: #746d58;
+  color: var(--bt-text-muted);
 }
 
 .agent-sessions-workspace-actions {
@@ -157,9 +162,9 @@
   background: linear-gradient(
     90deg,
     transparent 0,
-    var(--vscode-agentsPanel-background) 10px
+    var(--bt-panel-background) 10px
   );
-  color: #6f684f;
+  color: var(--bt-text-muted);
   font-size: 13px;
   opacity: 0;
   pointer-events: none;
@@ -183,7 +188,7 @@
 
 .agent-sessions-workspace-empty {
   padding: 2px 0 6px 38px;
-  color: #a0967d;
+  color: var(--bt-text-subtle);
   font-size: 11px;
 }
 
@@ -193,9 +198,9 @@
   margin: 1px 10px 3px 0;
   padding: 0 8px 0 34px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #6f684f;
+  color: var(--bt-text-muted);
   font: inherit;
   font-size: 11px;
   text-align: left;
@@ -203,8 +208,8 @@
 }
 
 .agent-sessions-workspace-show-more-button:hover {
-  background: var(--vscode-list-hoverBackground);
-  color: #39352b;
+  background: var(--bt-hover-background);
+  color: var(--bt-text-primary);
 }
 
 .agent-sessions-list-section {
@@ -229,9 +234,9 @@
   margin: 2px 0 1px;
   padding: 0 2px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #77705f;
+  color: var(--bt-text-subtle);
   font-size: 12px;
   font-weight: 500;
   text-align: left;
@@ -240,13 +245,13 @@
 
 .agent-sessions-section-title:hover,
 .agent-sessions-section-title:focus-visible {
-  color: #4c4739;
-  background: var(--vscode-toolbar-hoverBackground);
+  color: var(--bt-text-primary);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .agent-sessions-section-chevron {
   flex: 0 0 14px;
-  color: #7b735f;
+  color: var(--bt-text-subtle);
   text-align: center;
 }
 
@@ -261,7 +266,7 @@
 .agent-sessions-section-count,
 .customization-count {
   flex: 0 0 auto;
-  color: #958c77;
+  color: var(--bt-text-subtle);
   font-size: 11px;
 }
 
@@ -274,17 +279,17 @@
   min-height: 26px;
   margin-top: 2px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #77705f;
+  color: var(--bt-text-subtle);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
 
 .session-show-more-button:hover {
-  background: var(--vscode-toolbar-hoverBackground);
-  color: #4c4739;
+  background: var(--bt-toolbar-hover-background);
+  color: var(--bt-text-primary);
 }
 
 .session-item {
@@ -307,18 +312,18 @@
 
 .session-kind-icon {
   flex: 0 0 14px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 13px;
   text-align: center;
 }
 
 .session-kind-icon.failed {
-  color: var(--vscode-errorForeground);
+  color: var(--bt-status-danger);
 }
 
-/* 对齐 VS Code Sessions：滚动条按需显示，不为未出现的滚动条永久预留空间。 */
+/* 滚动条按需显示，不为未出现的滚动条永久预留空间。 */
 .agent-sessions-panel-body {
-  scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+  scrollbar-color: var(--bt-scrollbar-background) transparent;
   scrollbar-gutter: auto;
   scrollbar-width: thin;
 }
@@ -333,19 +338,19 @@
 
 .agent-sessions-panel-body::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: var(--vscode-scrollbarSlider-background);
+  background: var(--bt-scrollbar-background);
 }
 
 .agent-sessions-panel-body::-webkit-scrollbar-thumb:hover {
-  background: var(--vscode-scrollbarSlider-hoverBackground);
+  background: var(--bt-scrollbar-hover-background);
 }
 
 .agent-sessions-panel .session-item:hover {
-  background: rgba(226, 219, 195, 0.62);
+  background: color-mix(in srgb, var(--bt-surface-muted) 62%, transparent);
 }
 
 .agent-sessions-panel .session-item.active {
-  background: rgba(211, 202, 174, 0.74);
+  background: color-mix(in srgb, var(--bt-surface-muted) 74%, transparent);
 }
 
 .agent-sessions-panel .session-item-focus:not(.active) {
@@ -355,7 +360,7 @@
 .session-title {
   flex: 1 1 auto;
   min-width: 0;
-  color: #39352b;
+  color: var(--bt-text-primary);
   font-size: 13px;
   line-height: 17px;
   overflow: hidden;
@@ -365,7 +370,7 @@
 
 .session-time {
   flex: 0 0 auto;
-  color: #77705f;
+  color: var(--bt-text-subtle);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -394,19 +399,19 @@
   justify-content: center;
   padding: 2px;
   border-radius: 4px;
-  color: #77705f;
+  color: var(--bt-text-subtle);
   cursor: pointer;
 }
 
 .session-tree-chevron:hover {
-  background: rgba(226, 219, 195, 0.72);
-  color: #39352b;
+  background: color-mix(in srgb, var(--bt-surface-muted) 72%, transparent);
+  color: var(--bt-text-primary);
 }
 
 .session-tree-children {
   margin-left: 12px;
   padding-left: 8px;
-  border-left: 1px solid rgba(106, 98, 75, 0.22);
+  border-left: 1px solid color-mix(in srgb, var(--bt-text-muted) 22%, transparent);
 }
 
 .sessions-customizations {
@@ -417,7 +422,7 @@
   margin: 0 10px;
   padding-top: 6px;
   overflow: hidden;
-  border-top: 1px solid rgba(106, 98, 75, 0.18);
+  border-top: 1px solid color-mix(in srgb, var(--bt-text-muted) 18%, transparent);
 }
 
 .sessions-customizations.collapsed {
@@ -449,7 +454,7 @@
 .agent-sessions-customizations-resize-sash:hover::after,
 .agent-sessions-customizations-resize-sash:focus-visible::after,
 body.is-customizations-resizing .agent-sessions-customizations-resize-sash::after {
-  background: rgba(74, 118, 199, 0.55);
+  background: color-mix(in srgb, var(--bt-accent) 55%, transparent);
 }
 
 body.is-customizations-resizing {
@@ -465,9 +470,9 @@ body.is-customizations-resizing {
   min-height: 28px;
   padding: 0 0 0 8px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #4c4739;
+  color: var(--bt-text-primary);
   text-align: left;
   font: inherit;
   font-size: 12px;
@@ -476,11 +481,11 @@ body.is-customizations-resizing {
 }
 
 .customizations-header:hover {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .customizations-header:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder, #2f6db5);
+  outline: 1px solid var(--bt-focus-border);
   outline-offset: -1px;
 }
 
@@ -492,8 +497,8 @@ body.is-customizations-resizing {
   width: 22px;
   height: 22px;
   margin-left: auto;
-  border-radius: var(--vscode-cornerRadius-small);
-  color: #7b735f;
+  border-radius: var(--bt-radius-small);
+  color: var(--bt-text-subtle);
   text-align: center;
   opacity: 0;
   visibility: hidden;
@@ -507,7 +512,7 @@ body.is-customizations-resizing {
 }
 
 .customizations-chevron:hover {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .customizations-title {
@@ -537,9 +542,9 @@ body.is-customizations-resizing {
   min-height: 28px;
   padding: 0 8px;
   border: 0;
-  border-radius: var(--vscode-cornerRadius-small);
+  border-radius: var(--bt-radius-small);
   background: transparent;
-  color: #4d483b;
+  color: var(--bt-text-primary);
   text-align: left;
   font: inherit;
   cursor: pointer;
@@ -551,20 +556,20 @@ body.is-customizations-resizing {
   height: 18px;
   align-items: center;
   justify-content: center;
-  color: #746d58;
+  color: var(--bt-text-muted);
   font-size: 14px;
 }
 
 .customization-link:hover {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: var(--bt-toolbar-hover-background);
 }
 
 .customization-notice {
   margin-top: 4px;
   padding: 6px 8px;
-  border-radius: var(--vscode-cornerRadius-small);
-  background: rgba(255, 251, 239, 0.58);
-  color: #706a5b;
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-surface-raised) 58%, transparent);
+  color: var(--bt-text-muted);
   font-size: 11px;
   line-height: 1.4;
 }

@@ -11,8 +11,8 @@ from tests.e2e.gateway.processes import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.e2e.http_stubs import generation_target_stub
-from tests.e2e.ports import e2e_port_block_for_file
+from tests.support.http_stubs import generation_target_stub
+from tests.support.ports import e2e_port_block_for_file
 
 
 def _node_for_workspace(nodes: list[dict[str, object]], workspace_id: str) -> dict[str, object]:

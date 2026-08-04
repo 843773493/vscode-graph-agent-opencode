@@ -14,7 +14,7 @@ import commentjson
 import httpx
 
 from configs.installer import install_user_configuration
-from tests.e2e.processes import (
+from tests.support.processes import (
     kill_process_on_port,
     resolve_workspace_python_executable,
     terminate_process,

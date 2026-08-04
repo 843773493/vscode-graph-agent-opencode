@@ -39,7 +39,7 @@ from tests.e2e.gateway.processes import (
     workspace_root_from_response,
     write_gateway_remote_gateway_config,
 )
-from tests.e2e.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_port_block_for_file
 
 
 @pytest.mark.asyncio

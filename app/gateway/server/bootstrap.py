@@ -44,6 +44,47 @@ def _default_workspace_root() -> Path:
     return root_path
 
 
+async def _restore_managed_local_runtimes(
+    *,
+    registry: GatewayWorkspaceRegistry,
+    default_workspace_id: str,
+    gateway_root: Path,
+) -> None:
+    for persisted_target in registry.targets():
+        if (
+            persisted_target.workspace_id == default_workspace_id
+            or persisted_target.connection_kind != "local"
+            or not persisted_target.managed
+            or not persisted_target.desired_running
+        ):
+            continue
+        target = registry.resolve(persisted_target.workspace_id)
+        workspace_root = Path(target.root_path).expanduser().resolve()
+        try:
+            if not workspace_root.is_dir():
+                raise FileNotFoundError(f"工作区目录不存在: {workspace_root}")
+            runtime = await start_managed_local_workspace_runtime(
+                project_root=get_project_root(),
+                workspace_root=workspace_root,
+                log_dir=gateway_root / "logs",
+                reusable_service_urls=target.local_service_urls,
+            )
+        except Exception as error:
+            target.connection_error = (
+                "Gateway 启动时恢复托管工作区失败: "
+                f"workspace_id={target.workspace_id}: {error}"
+            )
+            registry.upsert(target, activate=False)
+            logger.exception(target.connection_error)
+            continue
+        target.backend_url = runtime.service_urls["workspace_api"]
+        target.local_service_urls = {
+            "browser_manager": runtime.service_urls["browser_manager"]
+        }
+        target.connection_error = None
+        registry.upsert(target, runtime=runtime, activate=False)
+
+
 async def create_registry() -> GatewayWorkspaceRegistry:
     gateway_root = get_gateway_root()
     registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
@@ -105,6 +146,11 @@ async def create_registry() -> GatewayWorkspaceRegistry:
     )
     registry.remove_system_default_aliases(
         keep_workspace_id=default_workspace_id,
+    )
+    await _restore_managed_local_runtimes(
+        registry=registry,
+        default_workspace_id=default_workspace_id,
+        gateway_root=gateway_root,
     )
 
     # TODO: Gateway 配置热重载需要先为 registry 目标增加 config/manual/system

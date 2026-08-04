@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getGatewayHealth } from "../../gatewayApi";
+import {
+  getGatewayHealth,
+  restartDevelopmentRuntime,
+} from "../../gatewayApi";
 import type {
   AddSshGatewayWorkspaceRequest,
   GatewayHealth,
   GatewayWorkspace,
+  WebUiSettings,
+  WebUiSettingsUpdate,
 } from "../../types/backend";
 import { useWarmConfirm } from "../WarmConfirmProvider";
 import GatewayConnectionDialog from "./GatewayConnectionDialog";
 import GatewayInboundAccessPanel from "./GatewayInboundAccessPanel";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
+import GatewayThemeSettings from "./GatewayThemeSettings";
 
 export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
@@ -19,6 +25,8 @@ interface GatewayControlCenterProps {
   onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
   onRefresh: () => Promise<void>;
   onReconnect: (workspaceId: string) => Promise<void>;
+  uiSettings: WebUiSettings;
+  onUpdateUiSettings: (update: WebUiSettingsUpdate) => Promise<void>;
 }
 
 export default function GatewayControlCenter({
@@ -28,6 +36,8 @@ export default function GatewayControlCenter({
   onAddSsh,
   onRefresh,
   onReconnect,
+  uiSettings,
+  onUpdateUiSettings,
 }: GatewayControlCenterProps) {
   const confirm = useWarmConfirm();
   const [health, setHealth] = useState<GatewayHealth | null>(null);
@@ -39,7 +49,9 @@ export default function GatewayControlCenter({
     "ssh" | "external-device" | null
   >(null);
   const [reconnectingId, setReconnectingId] = useState<string | null>(null);
+  const [restartingDevelopment, setRestartingDevelopment] = useState(false);
   const [deviceRevision, setDeviceRevision] = useState(0);
+  const [activePage, setActivePage] = useState<"connections" | "theme">("connections");
 
   const loadHealth = useCallback(async () => {
     try {
@@ -75,6 +87,42 @@ export default function GatewayControlCenter({
     }
   };
 
+  const waitForRestartedGateway = async (previousProcessId: number) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      try {
+        const nextHealth = await getGatewayHealth(apiPort);
+        if (nextHealth.process_id !== previousProcessId) return;
+      } catch {
+        // 服务重启期间连接失败是预期状态；继续等待新 Gateway 就绪。
+      }
+    }
+    throw new Error("本机开发服务在 120 秒内未恢复，请检查 development-restart.log");
+  };
+
+  const handleDevelopmentRestart = async () => {
+    const accepted = await confirm({
+      title: "重启本机开发服务",
+      message:
+        "将重启 Web、Gateway、Terminal 前端和工作区运行时。当前页面会短暂断开，正在运行的 Agent 与终端可能被中断。",
+      confirmText: "确认重启",
+    });
+    if (!accepted) return;
+    setRestartingDevelopment(true);
+    setOperationError(null);
+    setOperationNotice("正在重启本机开发服务，恢复后将自动刷新页面…");
+    try {
+      const result = await restartDevelopmentRuntime(apiPort);
+      await waitForRestartedGateway(result.previous_process_id);
+      window.location.reload();
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : String(error));
+      setOperationNotice(null);
+      setRestartingDevelopment(false);
+    }
+  };
+
   const reconnect = async (workspace: GatewayWorkspace) => {
     if (!workspace.remote) {
       setOperationError(`远程连接 ${workspace.workspace_id} 缺少 Gateway 摘要`);
@@ -104,7 +152,7 @@ export default function GatewayControlCenter({
 
   return (
     <main className="gateway-control-shell">
-      <aside className="gateway-control-sidebar">
+      <aside className="gateway-control-sidebar" data-bt-surface="chrome">
         <div className="gateway-control-brand">
           <span className="codicon codicon-server-process" aria-hidden="true" />
           <div><strong>BoxTeam</strong><small>Local Control UI</small></div>
@@ -112,7 +160,7 @@ export default function GatewayControlCenter({
         <nav aria-label="Gateway 控制面导航">
           <section>
             <p>控制面</p>
-            <button type="button" className="active" aria-current="page">
+            <button type="button" className={activePage === "connections" ? "active" : undefined} aria-current={activePage === "connections" ? "page" : undefined} onClick={() => setActivePage("connections")}>
               <span className="codicon codicon-plug" aria-hidden="true" />
               连接管理
               <small>{remoteGatewayGroups.length}</small>
@@ -120,6 +168,7 @@ export default function GatewayControlCenter({
           </section>
           <section>
             <p>系统</p>
+            <button type="button" className={activePage === "theme" ? "active" : undefined} aria-current={activePage === "theme" ? "page" : undefined} onClick={() => setActivePage("theme")}><span className="codicon codicon-color-mode" aria-hidden="true" />主题设置</button>
             <button type="button" disabled><span className="codicon codicon-pulse" aria-hidden="true" />服务运行时</button>
             <button type="button" disabled><span className="codicon codicon-shield" aria-hidden="true" />连接与凭据</button>
             <button type="button" disabled><span className="codicon codicon-output" aria-hidden="true" />日志与诊断</button>
@@ -137,18 +186,36 @@ export default function GatewayControlCenter({
           <header className="gateway-control-header">
             <div>
               <span>本地控制面</span>
-              <h1 id="gateway-control-title">连接管理</h1>
-              <p>管理远程 Gateway、手机和其他外部设备的连接与授权。工作区请在会话工作台中管理。</p>
+              <h1 id="gateway-control-title">{activePage === "connections" ? "连接管理" : "主题设置"}</h1>
+              <p>{activePage === "connections" ? "管理远程 Gateway、手机和其他外部设备的连接与授权。工作区请在会话工作台中管理。" : "统一切换界面配色并管理网络或本地背景图片。"}</p>
             </div>
-            <div className="gateway-control-actions">
+            {activePage === "connections" ? <div className="gateway-control-actions">
+              {health?.development_restart_available ? (
+                <button
+                  type="button"
+                  className="danger-soft"
+                  disabled={restartingDevelopment}
+                  onClick={() => void handleDevelopmentRestart()}
+                >
+                  <span
+                    className={`codicon codicon-debug-restart${restartingDevelopment ? " codicon-modifier-spin" : ""}`}
+                    aria-hidden="true"
+                  />
+                  {restartingDevelopment ? "正在重启…" : "重启本机服务"}
+                </button>
+              ) : null}
               <button type="button" className="primary" onClick={() => setConnectionDialogMode("ssh")}>
                 <span className="codicon codicon-add" aria-hidden="true" />添加 SSH 连接
               </button>
               <button type="button" className="icon-only" aria-label="刷新连接" title="刷新连接" disabled={refreshing} onClick={() => void handleRefresh()}>
                 <span className={`codicon codicon-refresh${refreshing ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
               </button>
-            </div>
+            </div> : null}
           </header>
+
+          {activePage === "theme" ? (
+            <GatewayThemeSettings apiPort={apiPort} settings={uiSettings} onUpdateSettings={onUpdateUiSettings} />
+          ) : <>
 
           {gatewayError || healthError || operationError ? (
             <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>连接操作失败</strong><span>{gatewayError ?? healthError ?? operationError}</span></div></div>
@@ -199,6 +266,7 @@ export default function GatewayControlCenter({
             revision={deviceRevision}
             onAddDevice={() => setConnectionDialogMode("external-device")}
           />
+          </>}
         </div>
       </section>
 

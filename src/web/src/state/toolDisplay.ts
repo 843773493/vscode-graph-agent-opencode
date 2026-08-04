@@ -5,7 +5,6 @@ import { skillNameFromPath } from "../utils/skillPaths";
 type AggregatedToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 
 const ROUTINE_INTERNAL_TOOL_NAMES = new Set([
-  "execute",
   "glob",
   "grep",
   "ls",
@@ -85,43 +84,44 @@ function compactInline(value: string, maxLength = 120): string {
   return `${text.slice(0, maxLength)}...`;
 }
 
-function formatPersistentTerminalToolContent(item: AggregatedToolItem): string | null {
-  if (item.toolName !== "persistent_terminal") {
+function formatTerminalToolContent(item: AggregatedToolItem): string | null {
+  if (item.toolName !== "exec_command" && item.toolName !== "write_stdin") {
     return null;
   }
 
   const inputRecord = parseJsonRecord(item.rawStart.args) ?? {};
   const resultRecord = parseJsonRecord(item.rawEnd.result) ?? {};
-  const terminalRecord = parseJsonRecord(resultRecord.terminal);
-  const terminalId =
-    fieldText(resultRecord, "terminal_id") ||
-    fieldText(terminalRecord ?? {}, "terminal_id");
-  const status = fieldText(resultRecord, "status");
-  const terminalStatus =
-    fieldText(terminalRecord ?? {}, "status") ||
-    (terminalId ? "终端会话仍保留，可从后台连接面板打开" : "");
-  const output =
-    fieldText(resultRecord, "output") || fieldText(resultRecord, "recent_output");
-  const displaySummary = fieldText(resultRecord, "display_summary");
+  const terminalId = fieldText(resultRecord, "chunk_id") ||
+    fieldText(resultRecord, "session_id") ||
+    fieldText(inputRecord, "session_id");
+  const runningSessionId = fieldText(resultRecord, "session_id");
+  const exitCode = fieldText(resultRecord, "exit_code");
+  const status = runningSessionId ? "running" : exitCode ? "completed" : "";
+  const output = fieldText(resultRecord, "output");
 
   const sections = [
-    displaySummary ? `**摘要**\n${displaySummary}` : "",
     "**输入参数**",
     toolFieldLines([
-      ["动作", fieldText(inputRecord, "action") || "run_command"],
-      ["命令", fieldText(inputRecord, "command")],
-      ["终端 UUID", fieldText(inputRecord, "terminal_id")],
-      ["超时", fieldText(inputRecord, "timeout_seconds")],
-      ["工作目录", fieldText(inputRecord, "cwd")],
+      ["命令", fieldText(inputRecord, "cmd")],
+      ["Session ID", fieldText(inputRecord, "session_id")],
+      ["写入字符", fieldText(inputRecord, "chars")],
+      ["前台等待", fieldText(inputRecord, "yield_time_ms")],
+      ["输出上限", fieldText(inputRecord, "max_output_tokens")],
+      ["工作目录", fieldText(inputRecord, "workdir")],
+      ["Shell", fieldText(inputRecord, "shell")],
+      ["PTY", fieldText(inputRecord, "tty")],
+      ["Login shell", fieldText(inputRecord, "login")],
     ]),
     "",
     "**执行结果**",
     toolFieldLines([
       ["命令状态", status ? commandStatusLabel(status) : ""],
-      ["终端状态", terminalStatus],
+      ["Session ID", runningSessionId ? markdownCode(runningSessionId) : ""],
       ["终端 UUID", terminalId ? markdownCode(terminalId) : ""],
-      ["退出码", fieldText(resultRecord, "exit_code")],
-      ["命令", fieldText(resultRecord, "command")],
+      ["退出码", exitCode],
+      ["Chunk ID", fieldText(resultRecord, "chunk_id")],
+      ["原始 token 数", fieldText(resultRecord, "original_token_count")],
+      ["耗时（秒）", fieldText(resultRecord, "wall_time_seconds")],
     ]),
     terminalId
       ? "说明：命令完成不代表终端关闭；可从后台连接面板重新打开终端。"
@@ -132,19 +132,20 @@ function formatPersistentTerminalToolContent(item: AggregatedToolItem): string |
   return sections.join("\n\n") || null;
 }
 
-function persistentTerminalCollapsedText(item: AggregatedToolItem): string | null {
-  if (item.toolName !== "persistent_terminal") {
+function terminalToolCollapsedText(item: AggregatedToolItem): string | null {
+  if (item.toolName !== "exec_command" && item.toolName !== "write_stdin") {
     return null;
   }
   const resultRecord = parseJsonRecord(item.rawEnd.result) ?? {};
-  const status = fieldText(resultRecord, "status");
-  if (status === "completed" && fieldText(resultRecord, "terminal_id")) {
+  if (fieldText(resultRecord, "session_id")) {
+    return item.toolName === "write_stdin"
+      ? "已写入，命令仍在运行"
+      : "命令仍在运行，终端可 attach";
+  }
+  if (fieldText(resultRecord, "exit_code")) {
     return "命令已完成，终端仍可打开";
   }
-  if (status === "background") {
-    return "命令仍在运行，终端可 attach";
-  }
-  return "持久终端工具已返回";
+  return "命令工具已返回，终端仍可打开";
 }
 
 function skillNames(item: AggregatedToolItem): string[] {
@@ -213,13 +214,13 @@ function formatCustomInvocationToolContent(item: AggregatedToolItem): string | n
 }
 
 export function formatToolCardContent(item: AggregatedToolItem): string | null {
-  return formatPersistentTerminalToolContent(item) ??
+  return formatTerminalToolContent(item) ??
     formatCustomToolSkillContent(item) ??
     formatCustomInvocationToolContent(item);
 }
 
 export function toolCollapsedText(item: AggregatedToolItem): string {
-  const terminalText = persistentTerminalCollapsedText(item);
+  const terminalText = terminalToolCollapsedText(item);
   if (terminalText) {
     return terminalText;
   }

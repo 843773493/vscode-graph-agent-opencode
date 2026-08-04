@@ -1,190 +1,377 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import shlex
-from typing import Any, Literal
+from time import monotonic
+from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
+from app.agents.tools.terminal_contract import (
+    DEFAULT_EXEC_YIELD_TIME_MS,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_WRITE_STDIN_YIELD_TIME_MS,
+    clean_terminal_delta,
+    effective_yield_time_ms,
+    extract_command_output,
+    tool_output,
+    truncate_output,
+    validate_max_output_tokens,
+)
 from app.core.identifier import create_uuid_hex
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 
-def _extract_command_output(
+def _command_for_shell(
     *,
-    buffer: str,
-    previous_buffer: str,
-    start_marker: str,
-    done_marker: str,
-) -> tuple[bool, str, int | None]:
-    if buffer.startswith(previous_buffer):
-        new_output = buffer[len(previous_buffer):]
-    else:
-        new_output = buffer
+    cmd: str,
+    workdir: str | None,
+    shell: str | None,
+    login: bool,
+) -> str:
+    shell_command = shlex.quote(shell) if shell else '"${SHELL:-/bin/bash}"'
+    shell_flag = "-lc" if login else "-c"
+    invocation = f"{shell_command} {shell_flag} {shlex.quote(cmd)}"
+    if workdir is None:
+        return invocation
+    return f"cd -- {shlex.quote(workdir)} && {invocation}"
 
-    normalized_output = new_output.replace("\r\n", "\n").replace("\r", "\n")
-    done_matches = list(
-        re.finditer(rf"^{re.escape(done_marker)}:(\d+)\s*$", normalized_output, re.MULTILINE)
-    )
-    if not done_matches:
-        return False, new_output, None
 
-    done_match = done_matches[-1]
-    start_matches = list(
-        re.finditer(
-            rf"^{re.escape(start_marker)}\s*$",
-            normalized_output[: done_match.start()],
-            re.MULTILINE,
+async def _get_owned_terminal(
+    *,
+    terminal_client: TerminalManagerClient,
+    terminal_id: str,
+    owner_session_id: str,
+) -> dict[str, Any]:
+    terminal = await terminal_client.get_terminal(terminal_id)
+    if terminal.get("session_id") != owner_session_id:
+        raise ValueError(
+            "session_id 不属于当前 Agent 会话: "
+            f"session_id={terminal_id}, owner_session_id={owner_session_id}"
         )
-    )
-    if start_matches:
-        output = normalized_output[start_matches[-1].end(): done_match.start()]
-    else:
-        output = normalized_output[: done_match.start()]
-    exit_code = int(done_match.group(1))
-    return True, output.strip(), exit_code
+    return terminal
 
 
-def create_persistent_terminal_tool(
+async def _read_pending_output(
+    *,
+    terminal_client: TerminalManagerClient,
+    terminal_id: str,
+) -> tuple[str, dict[str, Any]]:
+    read = await terminal_client.read_terminal(terminal_id)
+    output = read.get("output")
+    terminal = read.get("terminal")
+    if not isinstance(output, str) or not isinstance(terminal, dict):
+        raise TypeError(f"终端输出读取结果无效: terminal_id={terminal_id}")
+    omitted_before_sequence = read.get("omitted_before_sequence")
+    if omitted_before_sequence is not None:
+        output = (
+            "[... 早期终端输出已超出重放窗口，以下为当前缓冲区快照 ...]\n"
+            f"{output}"
+        )
+    return output, terminal
+
+
+def create_exec_command_tool(
     session_id: str,
     agent_id: str = "default",
     *,
     terminal_client: TerminalManagerClient,
 ) -> BaseTool:
-    """创建持久终端工具，命令超时后终端继续留在后台运行。"""
+    """创建 Codex 风格的持久终端命令工具。"""
 
-    @tool("persistent_terminal")
-    async def persistent_terminal(
-        action: Literal["run_command", "write_input", "snapshot", "kill"] = "run_command",
-        command: str | None = None,
-        terminal_id: str | None = None,
-        input_text: str | None = None,
-        timeout_seconds: int = 10,
-        cwd: str | None = None,
+    @tool("exec_command")
+    async def exec_command(
+        cmd: str,
+        workdir: str | None = None,
+        tty: bool = False,
+        yield_time_ms: int = DEFAULT_EXEC_YIELD_TIME_MS,
+        max_output_tokens: int | None = None,
+        shell: str | None = None,
+        login: bool = True,
     ) -> dict[str, Any]:
-        """管理一个可 attach 的持久终端。run_command 超时后不会杀进程，终端可从资源面板重新打开。"""
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds 必须大于 0")
+        """运行命令；未在等待窗口内结束时返回可供 write_stdin 使用的 session_id。"""
+        if not cmd.strip():
+            raise ValueError("cmd 不能为空")
+        if shell is not None and not shell.strip():
+            raise ValueError("shell 不能为空")
+        if "\x00" in (shell or ""):
+            raise ValueError("shell 不能包含空字符")
+        validate_max_output_tokens(max_output_tokens)
+        resolved_yield_time_ms = effective_yield_time_ms(yield_time_ms)
+        started_at = monotonic()
 
-        if action == "snapshot":
-            if not terminal_id:
-                raise ValueError("snapshot 需要 terminal_id")
-            return await terminal_client.get_terminal(terminal_id)
-
-        if action == "kill":
-            if not terminal_id:
-                raise ValueError("kill 需要 terminal_id")
-            return await terminal_client.kill_terminal(terminal_id)
-
-        if action == "write_input":
-            if not terminal_id:
-                raise ValueError("write_input 需要 terminal_id")
-            if input_text is None:
-                raise ValueError("write_input 需要 input_text")
-            return await terminal_client.write_terminal(
-                terminal_id=terminal_id,
-                data=input_text,
-                source="agent",
-            )
-
-        if action != "run_command":
-            raise ValueError(f"未知 persistent_terminal action: {action}")
-        if not command or not command.strip():
-            raise ValueError("run_command 需要 command")
-
-        if terminal_id:
-            terminal = await terminal_client.get_terminal(terminal_id)
-        else:
-            existing_terminals = terminal_client.list_terminals_from_state(session_id)
-            terminal = next(
-                (
-                    existing
-                    for existing in existing_terminals
-                    if existing.get("status") == "running"
-                ),
-                None,
-            )
-            if terminal is None:
-                terminal = await terminal_client.create_terminal(
-                    session_id=session_id,
-                    title=f"{agent_id} terminal",
-                    cwd=cwd,
-                )
-            terminal_id = str(terminal["terminal_id"])
-
-        previous_buffer = str(terminal.get("buffer") or "")
+        terminal = await terminal_client.create_terminal(
+            session_id=session_id,
+            title=f"{agent_id} terminal",
+            agent_id=agent_id,
+            cwd=workdir,
+        )
+        terminal_id = str(terminal["terminal_id"])
         run_id = create_uuid_hex()
         start_marker = f"__BOXTEAM_CMD_START_{run_id}__"
         done_marker = f"__BOXTEAM_CMD_DONE_{run_id}__"
+        shell_command = _command_for_shell(
+            cmd=cmd,
+            workdir=workdir,
+            shell=shell,
+            login=login,
+        )
+        # TODO: 兼容 Codex 参数；BoxTeam 为保证 session_id 可 attach，底层始终分配 PTY。
+        _ = tty
         wrapped_command = (
             f"printf '\\n{start_marker}\\n'; "
-            f"bash -lc {shlex.quote(command)}; "
+            f"{shell_command}; "
             f"__boxteam_rc=$?; "
             f"printf '\\n{done_marker}:%s\\n' \"$__boxteam_rc\"\r"
         )
-        await terminal_client.write_terminal(
-            terminal_id=terminal_id,
-            data=wrapped_command,
-            source="agent",
-            command=command,
-        )
+        try:
+            await terminal_client.write_terminal(
+                terminal_id=terminal_id,
+                data=wrapped_command,
+                source="agent",
+                command=cmd,
+            )
+        except BaseException as write_error:
+            try:
+                await terminal_client.delete_terminal(terminal_id)
+            except BaseException as cleanup_error:
+                raise RuntimeError(
+                    "终端命令写入失败且清理 execution 也失败: "
+                    f"terminal_id={terminal_id}, write_error={write_error}, "
+                    f"cleanup_error={cleanup_error}"
+                ) from cleanup_error
+            raise
 
-        deadline = asyncio.get_running_loop().time() + timeout_seconds
-        latest_terminal = terminal
-        while asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.25)
-            latest_terminal = await terminal_client.get_terminal(terminal_id)
-            completed, output, exit_code = _extract_command_output(
-                buffer=str(latest_terminal.get("buffer") or ""),
-                previous_buffer=previous_buffer,
+        deadline = asyncio.get_running_loop().time() + resolved_yield_time_ms / 1000
+        consumed_output = ""
+        while True:
+            pending_output, _latest_terminal = await _read_pending_output(
+                terminal_client=terminal_client,
+                terminal_id=terminal_id,
+            )
+            consumed_output += pending_output
+            completed, raw_output, exit_code = extract_command_output(
+                buffer=consumed_output,
                 start_marker=start_marker,
                 done_marker=done_marker,
             )
             if completed:
-                return {
-                    "status": "completed",
-                    "terminal_id": terminal_id,
-                    "session_id": session_id,
-                    "command": command,
-                    "exit_code": exit_code,
-                    "output": output,
-                    "display_summary": (
-                        f"终端 ID: {terminal_id}\n"
-                        f"会话 ID: {session_id}\n"
-                        f"命令状态: 已完成，退出码 {exit_code}\n"
-                        "使用方式: 从后台连接面板打开终端后，可继续发送命令。"
-                    ),
-                    "message": (
-                        "命令已完成，终端会话仍保留，可从后台连接面板打开并继续发送命令。"
-                    ),
-                }
+                await terminal_client.delete_terminal(terminal_id)
+                return tool_output(
+                    terminal_id=terminal_id,
+                    wall_time_seconds=monotonic() - started_at,
+                    output=raw_output,
+                    max_output_tokens=max_output_tokens,
+                    exit_code=exit_code,
+                    running=False,
+                )
+            remaining_seconds = deadline - asyncio.get_running_loop().time()
+            if remaining_seconds <= 0:
+                break
+            await asyncio.sleep(min(0.25, remaining_seconds))
 
-        completed, output, _ = _extract_command_output(
-            buffer=str(latest_terminal.get("buffer") or ""),
-            previous_buffer=previous_buffer,
+        _, raw_output, _ = extract_command_output(
+            buffer=consumed_output,
             start_marker=start_marker,
             done_marker=done_marker,
         )
-        if completed:
-            raise RuntimeError("终端命令完成状态解析出现不一致，请重试 snapshot 查看终端状态")
+        try:
+            await terminal_client.mark_terminal_backgrounded(terminal_id)
+        except BaseException as background_error:
+            try:
+                await terminal_client.delete_terminal(terminal_id)
+            except BaseException as cleanup_error:
+                raise RuntimeError(
+                    "终端后台注册失败且清理 execution 也失败: "
+                    f"terminal_id={terminal_id}, background_error={background_error}, "
+                    f"cleanup_error={cleanup_error}"
+                ) from cleanup_error
+            raise
+        return tool_output(
+            terminal_id=terminal_id,
+            wall_time_seconds=monotonic() - started_at,
+            output=raw_output,
+            max_output_tokens=max_output_tokens,
+            running=True,
+        )
 
+    return exec_command
+
+
+def create_write_stdin_tool(
+    session_id: str,
+    *,
+    terminal_client: TerminalManagerClient,
+) -> BaseTool:
+    """创建 Codex 风格的持续终端交互工具。"""
+
+    owner_session_id = session_id
+
+    @tool("write_stdin")
+    async def write_stdin(
+        session_id: str,
+        chars: str = "",
+        yield_time_ms: int = DEFAULT_WRITE_STDIN_YIELD_TIME_MS,
+        max_output_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """向 exec_command 返回的 session_id 写入字符；空字符用于轮询后台命令。"""
+        validate_max_output_tokens(max_output_tokens)
+        resolved_yield_time_ms = effective_yield_time_ms(
+            yield_time_ms,
+            empty_poll=not chars,
+        )
+        started_at = monotonic()
+        terminal = await _get_owned_terminal(
+            terminal_client=terminal_client,
+            terminal_id=session_id,
+            owner_session_id=owner_session_id,
+        )
+        if (
+            terminal.get("status") != "running"
+            and terminal.get("last_command_status") != "completed"
+        ):
+            raise ValueError(
+                f"终端未运行: session_id={session_id}, status={terminal.get('status')}"
+                f", release_reason={terminal.get('release_reason')}"
+            )
+        command_status = terminal.get("last_command_status")
+        if chars and command_status not in {None, "running"}:
+            raise ValueError(
+                f"命令已经结束，不能继续写入: session_id={session_id}, "
+                f"command_status={command_status}"
+            )
+
+        consumed_output, latest_terminal = await _read_pending_output(
+            terminal_client=terminal_client,
+            terminal_id=session_id,
+        )
+        if chars:
+            await terminal_client.write_terminal(
+                terminal_id=session_id,
+                data=chars,
+                source="agent",
+            )
+
+        deadline = asyncio.get_running_loop().time() + resolved_yield_time_ms / 1000
+        while latest_terminal.get("last_command_status") == "running":
+            remaining_seconds = deadline - asyncio.get_running_loop().time()
+            if remaining_seconds <= 0:
+                break
+            await asyncio.sleep(min(0.25, remaining_seconds))
+            pending_output, latest_terminal = await _read_pending_output(
+                terminal_client=terminal_client,
+                terminal_id=session_id,
+            )
+            consumed_output += pending_output
+            if latest_terminal.get("last_command_status") != "running":
+                break
+
+        output = clean_terminal_delta(consumed_output, latest_terminal)
+        latest_command_status = latest_terminal.get("last_command_status")
+        user_owned_shell = latest_terminal.get("last_command") is None
+        running = latest_command_status == "running" or user_owned_shell
+        raw_exit_code = latest_terminal.get("last_command_exit_code")
+        exit_code = raw_exit_code if isinstance(raw_exit_code, int) else None
+        result = tool_output(
+            terminal_id=session_id,
+            wall_time_seconds=monotonic() - started_at,
+            output=output,
+            max_output_tokens=max_output_tokens,
+            exit_code=exit_code,
+            running=running,
+        )
+        if not running:
+            await terminal_client.delete_terminal(session_id)
+        return result
+
+    return write_stdin
+
+
+def create_list_terminal_sessions_tool(
+    session_id: str,
+    *,
+    terminal_client: TerminalManagerClient,
+) -> BaseTool:
+    """创建当前 Agent Session 的终端执行列表工具。"""
+
+    @tool("list_terminal_sessions")
+    async def list_terminal_sessions(
+        include_completed: bool = False,
+    ) -> dict[str, Any]:
+        """列出当前 Agent Session 拥有的终端执行；默认只返回活动执行。"""
+        terminals = await terminal_client.list_terminals(session_id=session_id)
+        active_statuses = {"created", "running"}
+        visible = [
+            terminal
+            for terminal in terminals
+            if include_completed or terminal.get("status") in active_statuses
+        ]
+        if include_completed:
+            visible = visible[:64]
         return {
-            "status": "background",
-            "terminal_id": terminal_id,
-            "session_id": session_id,
-            "command": command,
-            "display_summary": (
-                f"终端 ID: {terminal_id}\n"
-                f"会话 ID: {session_id}\n"
-                "命令状态: 仍在后台运行\n"
-                "使用方式: 从后台连接面板打开终端后，可继续发送命令。"
-            ),
-            "message": (
-                "命令仍在运行，已保留为可 attach 的后台终端，可从后台连接面板打开。"
-            ),
-            "recent_output": output,
-            "terminal": latest_terminal,
+            "sessions": [
+                {
+                    "session_id": terminal.get("terminal_id"),
+                    "terminal_id": terminal.get("terminal_id"),
+                    "status": terminal.get("status"),
+                    "command_status": terminal.get("last_command_status"),
+                    "command": terminal.get("last_command"),
+                    "cwd": terminal.get("cwd"),
+                    "created_at": terminal.get("created_at"),
+                    "last_used_at": terminal.get("last_used_at"),
+                    "release_reason": terminal.get("release_reason"),
+                }
+                for terminal in visible
+            ]
         }
 
-    return persistent_terminal
+    return list_terminal_sessions
+
+
+def create_kill_terminal_tool(
+    session_id: str,
+    *,
+    terminal_client: TerminalManagerClient,
+) -> BaseTool:
+    """创建终止当前 Agent Session 所属终端执行的工具。"""
+
+    owner_session_id = session_id
+
+    @tool("kill_terminal")
+    async def kill_terminal(session_id: str) -> dict[str, Any]:
+        """终止 exec_command 返回的 session_id 及其完整进程树。"""
+        terminal = await _get_owned_terminal(
+            terminal_client=terminal_client,
+            terminal_id=session_id,
+            owner_session_id=owner_session_id,
+        )
+        pending_output, _ = await _read_pending_output(
+            terminal_client=terminal_client,
+            terminal_id=session_id,
+        )
+        if terminal.get("status") == "running":
+            killed = await terminal_client.kill_terminal(
+                session_id,
+                reason="model_requested",
+            )
+            killed_terminal = killed.get("terminal")
+            if isinstance(killed_terminal, dict):
+                terminal = killed_terminal
+        final_output, _ = await _read_pending_output(
+            terminal_client=terminal_client,
+            terminal_id=session_id,
+        )
+        output, original_token_count = truncate_output(
+            pending_output + final_output,
+            DEFAULT_MAX_OUTPUT_TOKENS,
+        )
+        return {
+            "session_id": session_id,
+            "terminal_id": session_id,
+            "status": terminal.get("status"),
+            "release_reason": terminal.get("release_reason") or "model_requested",
+            "original_token_count": original_token_count,
+            "output": output,
+        }
+
+    return kill_terminal

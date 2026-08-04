@@ -1,7 +1,7 @@
 .request-log-load-older {
   flex: 0 0 auto;
   padding: 2px 8px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
   text-align: center;
 }
@@ -16,8 +16,8 @@
 .request-log-card {
   border-color: color-mix(
     in srgb,
-    var(--vscode-button-background) 38%,
-    var(--vscode-panel-border)
+    var(--bt-button-background) 38%,
+    var(--bt-border)
   );
 }
 
@@ -63,12 +63,12 @@
 
 .request-log-card-heading > :last-child {
   margin-left: auto;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
 .request-log-card-stats {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
@@ -80,10 +80,10 @@
 .request-replay-component > .request-log-collapse-summary > span:not(:first-child),
 .request-replay-tools > .request-log-collapse-summary > span:not(:first-child),
 .request-replay-tool > .request-log-collapse-summary > span {
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 999px;
   padding: 1px 6px;
-  background: color-mix(in srgb, var(--vscode-editor-background) 82%, transparent);
+  background: color-mix(in srgb, var(--bt-surface-background) 82%, transparent);
   line-height: 1.5;
 }
 
@@ -91,12 +91,12 @@
   display: grid;
   gap: 8px;
   padding: 9px 10px 10px;
-  border-top: var(--surface-border);
+  border-top: var(--bt-surface-border);
 }
 
 .request-log-key-flow {
-  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
-  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 64%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bt-focus-border) 42%, var(--bt-border));
+  background: color-mix(in srgb, var(--bt-hover-background) 64%, transparent);
 }
 
 .request-log-key-flow > .request-log-collapse-summary,
@@ -109,7 +109,7 @@
 .request-log-summary-title,
 .request-replay-component-title {
   min-width: 0;
-  color: var(--vscode-foreground);
+  color: var(--bt-text-primary);
   font-weight: 700;
 }
 
@@ -132,10 +132,10 @@
   align-items: start;
   gap: 8px;
   min-width: 0;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
   padding: 8px;
-  background: var(--vscode-editor-background);
+  background: var(--bt-surface-background);
 }
 
 .request-log-flow-index {
@@ -145,8 +145,8 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  color: var(--vscode-badge-foreground);
-  background: var(--vscode-badge-background);
+  color: var(--bt-badge-foreground);
+  background: var(--bt-badge-background);
   font-size: 10px;
   font-weight: 700;
 }
@@ -165,12 +165,12 @@
 
 .request-log-key-flow-list li > div > span {
   margin-bottom: 4px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
 .request-log-key-flow-list strong {
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -178,10 +178,10 @@
 
 .request-log-summary {
   min-width: 0;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
   padding: 8px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -190,7 +190,7 @@
 
 .request-log-summary-label {
   margin-bottom: 4px;
-  color: var(--vscode-foreground);
+  color: var(--bt-text-primary);
   font-size: 11px;
   font-weight: 700;
 }
@@ -200,9 +200,9 @@
 .request-log-upstream {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
+  border: 1px solid color-mix(in srgb, var(--bt-focus-border) 42%, var(--bt-border));
   border-radius: 7px;
-  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 62%, transparent);
+  background: color-mix(in srgb, var(--bt-hover-background) 62%, transparent);
 }
 
 .request-log-called-tools > .request-log-collapse-summary,
@@ -212,7 +212,7 @@
 .request-replay-component > .request-log-collapse-summary,
 .request-replay-tools > .request-log-collapse-summary,
 .request-replay-tool > .request-log-collapse-summary {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
@@ -230,24 +230,24 @@
 
 .request-log-tool-chip {
   min-width: 0;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
   padding: 4px 6px;
-  background: var(--vscode-editor-background);
-  color: var(--vscode-foreground);
+  background: var(--bt-surface-background);
+  color: var(--bt-text-primary);
   font-size: 11px;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
 .request-log-tool-chip.called {
-  border-color: color-mix(in srgb, var(--vscode-focusBorder) 48%, var(--vscode-panel-border));
-  background: color-mix(in srgb, var(--vscode-button-background) 18%, var(--vscode-editor-background));
+  border-color: color-mix(in srgb, var(--bt-focus-border) 48%, var(--bt-border));
+  background: color-mix(in srgb, var(--bt-button-background) 18%, var(--bt-surface-background));
 }
 
 .request-log-tool-empty {
   padding: 0 8px 8px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
@@ -269,19 +269,19 @@
 .request-log-upstream-attempt {
   min-width: 0;
   overflow: hidden;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
-  background: var(--vscode-editor-background);
+  background: var(--bt-surface-background);
 }
 
 .request-log-upstream-attempt > .request-log-collapse-summary {
   padding: 7px 8px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
 .request-log-upstream-attempt > .request-log-collapse-summary > :not(:first-child) {
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 999px;
   padding: 1px 6px;
 }
@@ -305,11 +305,11 @@
 }
 
 .request-log-upstream-error {
-  color: var(--vscode-errorForeground);
+  color: var(--bt-status-danger);
 }
 
 .request-log-legacy {
-  color: var(--vscode-editorWarning-foreground);
+  color: var(--bt-status-warning);
 }
 
 .request-replay-list {
@@ -321,9 +321,9 @@
 .request-replay-tool {
   min-width: 0;
   overflow: hidden;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
-  background: var(--vscode-editor-background);
+  background: var(--bt-surface-background);
 }
 
 .request-replay-component > .request-log-collapse-summary,
@@ -348,7 +348,7 @@
   max-height: min(56vh, 640px);
   margin: 0;
   overflow: auto;
-  border-top: var(--surface-border);
+  border-top: var(--bt-surface-border);
   border-radius: 0;
   padding: 8px;
   white-space: pre-wrap;

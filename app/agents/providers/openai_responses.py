@@ -86,6 +86,11 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     if isinstance(response_item, dict):
                         content.append(_without_server_state(response_item))
                         continue
+                if block_type == "reasoning":
+                    # store=false 时，只有 provider 服务端 ID、没有加密内容的
+                    # reasoning item 无法跨请求安全回放。LangChain 会把内部
+                    # provider_part_id 提升成 Responses 顶层字段，上游不接受。
+                    continue
                 if block_type in {"text", "output_text"}:
                     text_block: dict[str, Any] = {
                         "type": "text",
@@ -96,7 +101,13 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     content.append(text_block)
                     continue
                 content.append(_without_server_state(block))
-            prepared.append(message.model_copy(update={"content": content}))
+            has_tool_calls = bool(
+                message.tool_calls
+                or message.additional_kwargs.get("tool_calls")
+                or message.additional_kwargs.get("function_call")
+            )
+            if content or has_tool_calls:
+                prepared.append(message.model_copy(update={"content": content}))
         return prepared
 
     @staticmethod

@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.processes import (
+from tests.support.processes import (
     kill_process_on_port,
     terminate_process,
     wait_for_http_ok,

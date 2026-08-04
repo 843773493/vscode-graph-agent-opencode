@@ -15,6 +15,7 @@ import { WorkspaceFileReferenceProvider } from "./components/workspace/Workspace
 import WorkspaceAuxiliaryPanel, {
   type WorkspaceAuxiliaryTab,
 } from "./components/workspace/WorkspaceAuxiliaryPanel";
+import WorkspacePortForwardPanel from "./components/workspace/WorkspacePortForwardPanel";
 import {
   useCallback,
   useEffect,
@@ -35,6 +36,8 @@ import {
   useAppState,
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
+import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
+import SessionGeneratorManager from "./components/agentSessions/SessionGeneratorManager";
 import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
 import { createSessionConnection } from "./gatewayApi";
 import {
@@ -68,6 +71,7 @@ export default function AppShell() {
     state,
     createSession,
     selectSession,
+    openWorkspaceSession,
     startNewSessionDraft,
     forkSessionContext,
     renameSession,
@@ -149,6 +153,9 @@ export default function AppShell() {
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
+  const activeSessionWorkspace = state.gatewayWorkspaces.find(
+    (workspace) => workspace.workspace_id === activeSessionWorkspaceId,
+  ) ?? null;
   const activeSessionCacheKey =
     activeSession && activeSessionWorkspaceId
       ? sessionScopeKey(activeSessionWorkspaceId, activeSession.session_id)
@@ -269,6 +276,10 @@ export default function AppShell() {
     state.eventQueuesBySession,
   ]);
   const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+  const generatorResources = useSessionGeneratorResources(resolvedApiPort);
+  const automationIssueCount = generatorResources.generators?.items.filter(
+    (generator) => generator.status === "blocked",
+  ).length ?? 0;
   const sortedSessions = useMemo(
     () => [...state.sessions].sort(
       (a, b) =>
@@ -660,11 +671,7 @@ export default function AppShell() {
     workspaceId: string,
     sessionId: string,
   ) => {
-    if (workspaceId !== state.activeGatewayWorkspaceId) {
-      await activateGatewayWorkspace(workspaceId, sessionId);
-      return;
-    }
-    selectSession(sessionId);
+    await openWorkspaceSession(workspaceId, sessionId);
   };
   const handleRemoveWorkspace = (workspaceId: string, workspaceName: string) => {
     const label = workspaceName || workspaceId;
@@ -932,6 +939,7 @@ export default function AppShell() {
       <div
       className={`app-shell agent-sessions-workbench shell-gradient-background ${agentSessionsVisible ? "agent-sessions-open" : "agent-sessions-closed"}`}
       data-agent-sessions-open={String(agentSessionsVisible)}
+      data-bt-surface="canvas"
     >
       <Toolbar
         sessionTitle={
@@ -956,6 +964,7 @@ export default function AppShell() {
           workbenchView === "gateway" ? "" : " preserve-mounted-hidden"
         }`}
         hidden={workbenchView !== "gateway"}
+        data-bt-surface="layout"
       >
         <GatewayControlCenter
           apiPort={resolvedApiPort}
@@ -964,6 +973,8 @@ export default function AppShell() {
           onAddSsh={addSshGatewayWorkspace}
           onRefresh={refreshGatewayState}
           onReconnect={reconnectGatewayWorkspace}
+          uiSettings={state.uiSettings}
+          onUpdateUiSettings={updateUiSettings}
         />
       </div>
       <main
@@ -971,6 +982,7 @@ export default function AppShell() {
           workbenchView === "sessions" ? "" : " preserve-mounted-hidden"
         }`}
         hidden={workbenchView !== "sessions"}
+        data-bt-surface="layout"
       >
         <div
           className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${previewVisible ? "" : " preview-collapsed"}${previewMaximized ? " preview-maximized" : ""}`}
@@ -978,7 +990,11 @@ export default function AppShell() {
           <AgentSessionsPanel
             apiPort={resolvedApiPort}
             sessions={sortedSessions}
-            currentSessionId={activeSession?.session_id ?? ""}
+            currentSessionId={
+              state.currentSessionWorkspaceId === state.activeGatewayWorkspaceId
+                ? activeSession?.session_id ?? ""
+                : ""
+            }
             onSelectSession={selectSession}
             onRenameSession={handleRenameSession}
             onDeleteSession={handleDeleteSession}
@@ -996,6 +1012,7 @@ export default function AppShell() {
             onRemoveWorkspace={handleRemoveWorkspace}
             onAddWorkspace={addManagedGatewayWorkspace}
             onOpenGatewayControl={() => handleWorkbenchViewChange("gateway")}
+            onReconnectWorkspace={reconnectGatewayWorkspace}
             onStartWorkspace={startManagedGatewayWorkspaceBackend}
             onStopWorkspace={stopManagedGatewayWorkspaceBackend}
             onRenameWorkspace={renameGatewayWorkspace}
@@ -1010,6 +1027,7 @@ export default function AppShell() {
             onCreateSessionInFolder={handleCreateSessionInFolder}
             onCreateSessionFolder={handleCreateSessionFolder}
             onSessionFolderDeleted={handleSessionFolderDeleted}
+            onInvalidateSessionCatalog={invalidateSessionCatalog}
             catalogSyncKeys={sessionCatalogSyncKeys}
             catalogRefreshVersions={sessionCatalogRefreshVersions}
             flexRatio={mainAreaRatios.agent_sessions}
@@ -1031,6 +1049,7 @@ export default function AppShell() {
                 persistLayoutSettings({ customizations_height: height });
               }
             }}
+            generatorResources={generatorResources}
           />
           {agentSessionsVisible ? (
             <button
@@ -1044,6 +1063,7 @@ export default function AppShell() {
           ) : null}
           <section
             className="chat-panel sessions-part-card"
+            data-bt-surface="workspace"
             style={{ flexBasis: 0, flexGrow: mainAreaRatios.chat }}
           >
             <div className="session-view-surface">
@@ -1142,6 +1162,27 @@ export default function AppShell() {
               }));
             }}
             onTabChange={handleAuxiliaryTabChange}
+            automationIssueCount={automationIssueCount}
+            automationPanel={(
+              <SessionGeneratorManager
+                apiPort={resolvedApiPort}
+                generatorResources={generatorResources}
+                workspaces={state.gatewayWorkspaces}
+                activeWorkspaceId={state.activeGatewayWorkspaceId}
+                currentSessionId={activeSession?.session_id ?? ""}
+                onStatusChange={setStatus}
+                onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
+                onReconnectWorkspace={reconnectGatewayWorkspace}
+                onStartWorkspace={startManagedGatewayWorkspaceBackend}
+              />
+            )}
+            portForwardPanel={(
+              <WorkspacePortForwardPanel
+                apiPort={resolvedApiPort}
+                workspace={activeSessionWorkspace}
+                active={auxiliaryVisible && auxiliaryTab === "resources"}
+              />
+            )}
             resourcePanel={(
               <ResourcePanel
                 resources={state.sessionResources}

@@ -1,3 +1,5 @@
+import { installTerminalUserActions } from "./terminalUserActions.js";
+
 const params = new URLSearchParams(window.location.search);
 const terminalId = params.get("terminalId");
 const workspaceId = params.get("workspaceId");
@@ -12,11 +14,18 @@ document.documentElement.classList.toggle("embedded-terminal", params.get("embed
 const terminalIdElement = document.querySelector("#terminal-id");
 const statusLine = document.querySelector("#status-line");
 const attachToggle = document.querySelector("#attach-toggle");
+const searchTerminalButton = document.querySelector("#search-terminal");
 const refreshSnapshotButton = document.querySelector("#refresh-snapshot");
 const terminateButton = document.querySelector("#terminate-terminal");
 const deleteButton = document.querySelector("#delete-terminal");
 const attachToggleLabel = attachToggle.querySelector(".sr-only");
 const terminalContainer = document.querySelector("#terminal");
+const terminalSearchBar = document.querySelector("#terminal-search-bar");
+const terminalSearchInput = document.querySelector("#terminal-search-input");
+const terminalSearchResult = document.querySelector("#terminal-search-result");
+const terminalSearchPrevious = document.querySelector("#terminal-search-previous");
+const terminalSearchNext = document.querySelector("#terminal-search-next");
+const terminalSearchClose = document.querySelector("#terminal-search-close");
 const agentForm = document.querySelector("#agent-form");
 const agentInput = document.querySelector("#agent-input");
 const agentSubmitButton = agentForm.querySelector("button");
@@ -34,7 +43,9 @@ const terminal = new window.Terminal({
   },
 });
 const fitAddon = new window.FitAddon.FitAddon();
+const searchAddon = new window.SearchAddon.SearchAddon();
 terminal.loadAddon(fitAddon);
+terminal.loadAddon(searchAddon);
 terminal.open(terminalContainer);
 fitAddon.fit();
 
@@ -456,6 +467,23 @@ terminal.onData((data) => {
     return;
   }
   send({ type: "input", data });
+});
+
+installTerminalUserActions({
+  terminal,
+  searchAddon,
+  elements: {
+    searchButton: searchTerminalButton,
+    searchBar: terminalSearchBar,
+    searchInput: terminalSearchInput,
+    searchResult: terminalSearchResult,
+    searchPrevious: terminalSearchPrevious,
+    searchNext: terminalSearchNext,
+    searchClose: terminalSearchClose,
+  },
+  getAttached: () => attached,
+  setStatus,
+  resizeTerminal: resizeRemote,
 });
 
 window.addEventListener("resize", resizeRemote);

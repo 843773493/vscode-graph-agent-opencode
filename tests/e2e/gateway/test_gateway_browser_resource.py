@@ -41,8 +41,8 @@ from tests.e2e.gateway.terminal_manager import (
     close_terminal_frontend_process,
     start_terminal_frontend_process,
 )
-from tests.e2e.ports import e2e_port_block_for_file
-from tests.e2e.processes import kill_process_on_port
+from tests.support.ports import e2e_port_block_for_file
+from tests.support.processes import kill_process_on_port
 
 
 async def _receive_websocket_type(websocket, expected_type: str) -> dict[str, object]:

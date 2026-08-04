@@ -38,7 +38,7 @@ export default function Toolbar({
   };
 
   return (
-    <header className="toolbar">
+    <header className="toolbar" data-bt-surface="chrome">
       <div className="toolbar-group toolbar-group-left">
         <button type="button" className="toolbar-icon-button" title="Web 端暂无导航历史" aria-label="后退" disabled>
           ‹

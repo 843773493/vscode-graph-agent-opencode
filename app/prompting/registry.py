@@ -315,6 +315,7 @@ INTERNAL_MESSAGE_KIND_SPECS = (
     ),
     InternalMessageKindSpec("empty_response_retry", frozenset({"control_context"})),
     InternalMessageKindSpec("tool_test_retry", frozenset()),
+    InternalMessageKindSpec("terminal_execution_completed", frozenset()),
     InternalMessageKindSpec("compaction_summary_instruction", frozenset()),
     InternalMessageKindSpec("compaction_retry_marker", frozenset()),
 )

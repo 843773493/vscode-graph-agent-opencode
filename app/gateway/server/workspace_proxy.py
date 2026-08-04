@@ -7,16 +7,15 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from app.core.trace_middleware import get_request_id
 from app.core.path_utils import get_gateway_root
-from app.gateway.auth import GatewayAuthContext, LOCAL_TOKEN, verify_gateway_access
+from app.core.trace_middleware import get_request_id
+from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceRouteLease,
     WorkspaceTarget,
 )
-
 
 router = APIRouter()
 
@@ -119,6 +118,14 @@ async def _stream_proxy_response(
         await response.aclose()
 
 
+async def _stream_proxy_body(response: httpx.Response) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in response.aiter_bytes():
+            yield chunk
+    finally:
+        await response.aclose()
+
+
 async def _proxy_workspace_request(
     path: str,
     request: Request,
@@ -152,11 +159,16 @@ async def _proxy_workspace_request(
         else f"{target.backend_url.rstrip('/')}/api/v1/{path}"
     )
     client = _http_client(request)
+    request_content = (
+        request.stream()
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        else None
+    )
     forwarded = client.build_request(
         request.method,
         target_url,
         params=request.query_params,
-        content=await request.body(),
+        content=request_content,
         headers=_proxy_headers(
             request,
             target,
@@ -180,11 +192,9 @@ async def _proxy_workspace_request(
             media_type=media_type,
             headers=headers,
         )
-    content = await response.aread()
     headers = _response_headers(response)
-    await response.aclose()
-    return Response(
-        content=content,
+    return StreamingResponse(
+        _stream_proxy_body(response),
         status_code=response.status_code,
         headers=headers,
         media_type=media_type,

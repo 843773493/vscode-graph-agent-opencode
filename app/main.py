@@ -116,10 +116,12 @@ async def lifespan(_: FastAPI):
                 reconciled_jobs,
             )
         await container.session_generation_service.start()
+        await container.terminal_steering_service.start()
         await container.goal_runtime_service.resume_active_goals()
         try:
             yield
         finally:
+            await container.terminal_steering_service.shutdown()
             await container.session_generation_service.shutdown()
             await container.job_event_bus.unregister_durable_listener(
                 container.goal_runtime_service.on_event

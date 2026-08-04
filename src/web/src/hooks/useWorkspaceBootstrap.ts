@@ -8,6 +8,7 @@ import { getGatewayUiSettings, listGatewayWorkspaces } from "../gatewayApi";
 import { readLastSessionId, writeCachedUiSettings } from "../state/storage";
 import { sessionScopeKey } from "../state/session/sessionScope";
 import type { SetAppState } from "./contentViewLoaderTypes";
+import { loadAndApplyResolvedGatewayTheme } from "../theme";
 import {
   fetchWorkspaceSessionListSnapshot,
   isCurrentWorkspaceSessionListSnapshot,
@@ -30,10 +31,12 @@ const initialBootstrapRequests = new Map<
 async function loadWorkspaceBootstrap(
   apiPort: number,
 ): Promise<WorkspaceBootstrapPayload> {
-  const [gatewayWorkspaces, uiSettings] = await Promise.all([
-    listGatewayWorkspaces(apiPort),
-    getGatewayUiSettings(apiPort),
-  ]);
+  const uiSettings = await getGatewayUiSettings(apiPort);
+  if (!uiSettings.theme.resolved_theme) {
+    throw new Error("Gateway UI Settings 缺少已解析主题");
+  }
+  await loadAndApplyResolvedGatewayTheme(uiSettings.theme.resolved_theme);
+  const gatewayWorkspaces = await listGatewayWorkspaces(apiPort);
   const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
   const [workspace, workspaceSessionResults, agents] = await Promise.all([
     getWorkspace(apiPort, activeWorkspaceId),

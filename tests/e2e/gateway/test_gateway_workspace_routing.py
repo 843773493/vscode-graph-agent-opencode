@@ -29,8 +29,8 @@ from tests.e2e.gateway.processes import (
     start_gateway_process,
     workspace_root_from_response,
 )
-from tests.e2e.ports import e2e_port_block_for_file
-from tests.e2e.processes import (
+from tests.support.ports import e2e_port_block_for_file
+from tests.support.processes import (
     close_backend_process,
     start_backend_process,
 )

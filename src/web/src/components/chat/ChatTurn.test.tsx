@@ -151,6 +151,32 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("尚未开始");
   });
 
+  test("用户中断显示为中性状态且不重复渲染取消事件", () => {
+    const value = conversation("error", "session_interrupted");
+    value.assistantMessages = [];
+    value.events.push({
+      ...value.events[0],
+      event_id: "evt_cancelled",
+      type: "job_cancelled",
+    });
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain("已由用户中断");
+    expect(html).not.toContain("运行失败");
+    expect(html.match(/已由用户中断/g)?.length).toBe(1);
+  });
+
+  test("非用户中断的取消事件使用通用取消文案", () => {
+    const value = conversation("error", "job_cancelled");
+    value.assistantMessages = [];
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain("任务已取消");
+    expect(html).not.toContain("运行失败");
+  });
+
   test("晚加入 SSE 的 startless delta 先作为活动正文展示", () => {
     const value = conversation("running");
     value.assistantMessages = [];

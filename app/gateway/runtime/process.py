@@ -20,6 +20,7 @@ from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
 
 GATEWAY_PROCESS_READY_TIMEOUT_SECONDS = 45
+WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS = 2
 DEFAULT_SSH_TUNNEL_PORT_MIN = 41000
 DEFAULT_SSH_TUNNEL_PORT_MAX = 41999
 
@@ -81,6 +82,13 @@ class ManagedProcess:
                 return
         else:
             self.process.kill()
+
+
+@dataclass(frozen=True, slots=True)
+class SshLocalForwardSpec:
+    local_port: int
+    remote_host: str
+    remote_port: int
 
 
 @dataclass(slots=True)
@@ -160,7 +168,7 @@ def allocate_local_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _bindable_local_port(port: int) -> bool:
+def is_local_port_available(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         try:
             sock.bind(("127.0.0.1", port))
@@ -205,7 +213,7 @@ def allocate_local_port_in_range(start: int, end: int) -> int:
     ports = list(range(start, end + 1))
     random.SystemRandom().shuffle(ports)
     for port in ports:
-        if _bindable_local_port(port):
+        if is_local_port_available(port):
             return port
     raise RuntimeError(f"端口范围内没有可用本地端口: {start}-{end}")
 
@@ -228,17 +236,24 @@ def resolve_python_executable(_: Path) -> Path:
     return Path(sys.executable).absolute()
 
 
-async def wait_for_http_ok(url: str, process: subprocess.Popen[str] | None = None) -> None:
+async def wait_for_http_ok(
+    url: str,
+    process: subprocess.Popen[str] | None = None,
+) -> None:
     deadline = asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
     last_error: Exception | None = None
     async with httpx.AsyncClient(timeout=2) as client:
         while asyncio.get_running_loop().time() < deadline:
             if process is not None and process.poll() is not None:
                 raise RuntimeError(
-                    f"进程提前退出: pid={process.pid}, returncode={process.returncode}, url={url}"
+                    "进程提前退出: "
+                    f"pid={process.pid}, returncode={process.returncode}, url={url}"
                 )
             try:
-                response = await client.get(url, headers={"X-Local-Token": "local-dev-token"})
+                response = await client.get(
+                    url,
+                    headers={"X-Local-Token": "local-dev-token"},
+                )
                 if response.status_code == 200:
                     return
                 last_error = RuntimeError(
@@ -249,7 +264,10 @@ async def wait_for_http_ok(url: str, process: subprocess.Popen[str] | None = Non
             await asyncio.sleep(0.5)
 
     detail = f"，最后错误: {last_error}" if last_error else ""
-    raise TimeoutError(f"目标服务在 {GATEWAY_PROCESS_READY_TIMEOUT_SECONDS} 秒内未就绪: {url}{detail}")
+    raise TimeoutError(
+        f"目标服务在 {GATEWAY_PROCESS_READY_TIMEOUT_SECONDS} 秒内未就绪: "
+        f"{url}{detail}"
+    )
 
 
 def start_local_backend_process(
@@ -289,6 +307,8 @@ def start_local_backend_process(
             str(port),
             "--log-level",
             "warning",
+            "--timeout-graceful-shutdown",
+            str(WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS),
         ]
     )
     log_store = ProcessLogStore(log_dir)
@@ -314,6 +334,7 @@ def start_local_node_service_process(
     *,
     project_root: Path,
     workspace_root: Path,
+    workspace_id: str,
     service: str,
     port: int,
     log_dir: Path,
@@ -342,6 +363,8 @@ def start_local_node_service_process(
             str(port),
             "--workspace-root",
             str(workspace_root),
+            "--workspace-id",
+            workspace_id,
             "--frontend-url",
             os.environ.get(
                 (
@@ -395,7 +418,9 @@ def start_ssh_tunnel_process(
         host=host,
         port=port,
         username=username,
-        private_key_path=str(private_key_path) if private_key_path is not None else None,
+        private_key_path=(
+            str(private_key_path) if private_key_path is not None else None
+        ),
         ssh_config_host=ssh_config_host,
         extra_arguments=forward_arguments,
     )
@@ -417,3 +442,108 @@ def start_ssh_tunnel_process(
         log_path,
     )
     return ManagedProcess(process=process, log_file=log_file)
+
+
+def _assert_ssh_config_has_no_forwards(
+    *,
+    host: str,
+    port: int,
+    username: str,
+    private_key_path: Path | None,
+    ssh_config_host: str | None,
+) -> None:
+    command = build_ssh_command(
+        host=host,
+        port=port,
+        username=username,
+        private_key_path=(
+            str(private_key_path) if private_key_path is not None else None
+        ),
+        ssh_config_host=ssh_config_host,
+        extra_arguments=["-G"],
+    )
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "ssh -G 没有输出"
+        raise RuntimeError(f"无法检查 SSH 有效配置: {detail}")
+    forwarding_keys = {"localforward", "remoteforward", "dynamicforward"}
+    configured = sorted(
+        {
+            line.split(maxsplit=1)[0].lower()
+            for line in result.stdout.splitlines()
+            if line.strip() and line.split(maxsplit=1)[0].lower() in forwarding_keys
+        }
+    )
+    if configured:
+        destination = ssh_config_host or f"{username}@{host}:{port}"
+        raise ValueError(
+            "SSH 有效配置包含转发指令，无法为每条工作区转发启动独立进程: "
+            f"destination={destination}, options={','.join(configured)}。"
+            "请创建一个不含 LocalForward/RemoteForward/DynamicForward 的专用 Host "
+            "别名；ProxyJump、IdentityFile 等连接配置可以保留。"
+        )
+
+
+def start_workspace_ssh_port_forward_process(
+    *,
+    host: str,
+    port: int,
+    username: str,
+    private_key_path: Path | None,
+    ssh_config_host: str | None,
+    forward: SshLocalForwardSpec,
+    log_dir: Path,
+    forward_id: str,
+) -> tuple[ManagedProcess, Path]:
+    _assert_ssh_config_has_no_forwards(
+        host=host,
+        port=port,
+        username=username,
+        private_key_path=private_key_path,
+        ssh_config_host=ssh_config_host,
+    )
+    forward_arguments = [
+        "-N",
+        "-T",
+        "-L",
+        (
+            f"127.0.0.1:{forward.local_port}:"
+            f"{forward.remote_host}:{forward.remote_port}"
+        ),
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+    ]
+    command = build_ssh_command(
+        host=host,
+        port=port,
+        username=username,
+        private_key_path=(
+            str(private_key_path) if private_key_path is not None else None
+        ),
+        ssh_config_host=ssh_config_host,
+        extra_arguments=forward_arguments,
+    )
+    log_store = ProcessLogStore(log_dir)
+    log_path = log_store.path_for(f"ssh-port-forward-{forward_id}.log")
+    log_file = log_store.open(log_path.name)
+    process = _spawn_logged_process(command, log_file=log_file)
+    logger.info(
+        "启动工作区 SSH 端口转发: pid=%s destination=%s local_port=%s "
+        "remote_port=%s log=%s",
+        process.pid,
+        ssh_config_host or host,
+        forward.local_port,
+        forward.remote_port,
+        log_path,
+    )
+    return ManagedProcess(process=process, log_file=log_file), log_path

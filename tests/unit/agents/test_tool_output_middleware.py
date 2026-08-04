@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from langchain_core.messages import ToolMessage
@@ -37,10 +38,7 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
         tmp_path / ".boxteam" / "sessions",
         session_id,
     )
-    content = "\n".join(
-        f"large-line-{index:04d}: {'内容' * 20}"
-        for index in range(80)
-    )
+    content = "\n".join(f"large-line-{index:04d}: {'内容' * 20}" for index in range(80))
     store = ToolOutputStore(
         workspace_root=tmp_path,
         max_lines=20,
@@ -80,9 +78,10 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     assert reference["tool_call_id"] == "call-large"
     assert reference["byte_count"] == len(content.encode("utf-8"))
     assert reference["line_count"] == 80
-    assert reference["content_sha256"] == hashlib.sha256(
-        content.encode("utf-8")
-    ).hexdigest()
+    assert (
+        reference["content_sha256"]
+        == hashlib.sha256(content.encode("utf-8")).hexdigest()
+    )
     output_path = session_dir / "tool-results" / output_name
     assert output_path.parent == session_dir / "tool-results"
     assert output_path.read_text(encoding="utf-8") == content
@@ -120,6 +119,42 @@ def test_tool_output_store_reuses_identical_tool_call_output(
 
     assert first.content == second.content
     assert extract_tool_output_reference(first) == extract_tool_output_reference(second)
+
+
+def test_tool_output_store_keeps_large_exec_command_result_valid_json(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_id = "ses_exec_command"
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
+    full_payload = {
+        "chunk_id": "term_large",
+        "exit_code": 0,
+        "output": "\n".join(f"line-{index}: 内容" for index in range(500)),
+        "wall_time_seconds": 0.5,
+    }
+    store = ToolOutputStore(
+        workspace_root=tmp_path,
+        max_lines=20,
+        max_bytes=1_024,
+    )
+
+    result = store.bound(
+        session_id=session_id,
+        tool_name="exec_command",
+        tool_call_id="call-exec-command",
+        message=ToolMessage(
+            content=json.dumps(full_payload, ensure_ascii=False),
+            tool_call_id="call-exec-command",
+        ),
+    )
+
+    assert isinstance(result.content, str)
+    assert len(result.content.encode("utf-8")) <= 1_024
+    preview_payload = json.loads(result.content)
+    assert preview_payload["chunk_id"] == "term_large"
+    assert preview_payload["exit_code"] == 0
+    assert "工具输出过大" in preview_payload["output"]
 
 
 def test_tool_output_middleware_uses_custom_target_name(

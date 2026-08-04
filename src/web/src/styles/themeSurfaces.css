@@ -1,0 +1,87 @@
+/* 顶层布局只在这里绑定语义表面角色，业务组件不自行决定背景图显露程度。 */
+html,
+body,
+.app-shell[data-bt-surface="canvas"],
+.agent-sessions-workbench.app-shell {
+  background-color: var(--bt-canvas-background);
+}
+
+[data-bt-surface="chrome"],
+.toolbar,
+.agent-sessions-panel,
+.gateway-control-sidebar {
+  background: var(--bt-chrome-surface);
+  backdrop-filter: var(--bt-chrome-backdrop-filter);
+}
+
+[data-bt-surface="workspace"],
+.sessions-part-card,
+.auxiliary-panel,
+.workspace-preview-panel {
+  background: var(--bt-workspace-surface);
+  backdrop-filter: var(--bt-workspace-backdrop-filter);
+}
+
+.content.sessions-workbench-grid,
+.gateway-view-slot,
+[data-bt-surface="layout"],
+.gateway-control-shell,
+.gateway-control-main {
+  background: transparent;
+}
+
+[data-bt-surface="panel"],
+.resource-panel,
+.gateway-control-content,
+.gateway-local-connection-card,
+.gateway-remote-connection-list article,
+.gateway-theme-section,
+.gateway-theme-config-help {
+  background: var(--bt-panel-surface);
+}
+
+/* 辅助区标签页与滚动列表是工作区的布局后代，不能重新铺满内容面板底色。 */
+.auxiliary-panel > .auxiliary-view-body,
+.auxiliary-resources-body > .resource-panel,
+.auxiliary-resources-body .panel-list,
+.auxiliary-resources-body .resource-tree,
+.auxiliary-resources-body .empty-state,
+.auxiliary-automation-body > .session-generator-manager {
+  background: transparent;
+}
+
+.workbench-view-menu,
+.sessions-filter-menu,
+.composer-view-menu,
+.composer-agent-menu,
+.composer-model-menu,
+.composer-slash-menu,
+.agent-sessions-session-menu,
+.workspace-action-menu,
+.workspace-dialog,
+.workspace-add-panel,
+.session-name-dialog,
+.warm-confirm-dialog,
+.gateway-connection-dialog,
+.gateway-workspace-menu > div {
+  background: var(--bt-floating-surface);
+  backdrop-filter: var(--bt-surface-backdrop-filter);
+}
+
+.workspace-preview-code-scroll,
+.workspace-preview-text-editor-shell,
+.workspace-preview-text-editor,
+.workspace-markdown-preview,
+.workspace-preview-code-table,
+.workspace-preview-terminal-frame,
+.terminal-frame,
+pre code {
+  background-color: var(--bt-critical-surface);
+}
+
+@media (max-width: 760px) {
+  .agent-sessions-panel,
+  .auxiliary-panel {
+    background: var(--bt-chrome-surface);
+  }
+}

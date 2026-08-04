@@ -32,13 +32,18 @@ class WorkspaceRuntime:
         self.detach_process("browser_manager")
         self.close()
 
-    def close(self) -> None:
+    def request_terminate(self) -> None:
         errors: list[str] = []
         for name in reversed(tuple(self.processes)):
             try:
                 self.processes[name].request_terminate()
             except Exception as error:
                 errors.append(f"{name} 发送终止信号失败: {error}")
+        if errors:
+            raise RuntimeError("关闭工作区运行时失败: " + "; ".join(errors))
+
+    def wait_closed(self) -> None:
+        errors: list[str] = []
         for name in reversed(tuple(self.processes)):
             try:
                 timeout_seconds = 120 if name == "browser_manager" else 8
@@ -46,5 +51,18 @@ class WorkspaceRuntime:
             except Exception as error:
                 errors.append(f"{name}: {error}")
         self.processes.clear()
+        if errors:
+            raise RuntimeError("关闭工作区运行时失败: " + "; ".join(errors))
+
+    def close(self) -> None:
+        errors: list[str] = []
+        try:
+            self.request_terminate()
+        except Exception as error:
+            errors.append(str(error))
+        try:
+            self.wait_closed()
+        except Exception as error:
+            errors.append(str(error))
         if errors:
             raise RuntimeError("关闭工作区运行时失败: " + "; ".join(errors))

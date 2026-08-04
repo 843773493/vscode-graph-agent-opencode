@@ -81,6 +81,7 @@ export default function ResourcePanel({
 }) {
   const [busyResourceId, setBusyResourceId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [noticeTechnicalDetails, setNoticeTechnicalDetails] = useState("");
   const [openedTerminalId, setOpenedTerminalId] = useState<string | null>(null);
   const [openedBrowserId, setOpenedBrowserId] = useState<string | null>(null);
   const [openGroups, setOpenGroups] = useState(DEFAULT_GROUP_OPEN);
@@ -104,6 +105,7 @@ export default function ResourcePanel({
     if (!terminal || terminal.status === "running") {
       return;
     }
+    setNoticeTechnicalDetails("");
     setNotice(
       `终端 ${openedTerminalId} ${statusLabel(terminal.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
     );
@@ -121,6 +123,7 @@ export default function ResourcePanel({
     if (!browser || browser.status === "running") {
       return;
     }
+    setNoticeTechnicalDetails("");
     setNotice(
       `浏览器 ${openedBrowserId} ${statusLabel(browser.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
     );
@@ -133,11 +136,18 @@ export default function ResourcePanel({
     action: SessionResourceAction,
   ) => {
     if (action === "delete") {
+      const targetLabel = kind === "terminal"
+        ? "终端"
+        : kind === "browser"
+          ? "浏览器"
+          : "后台任务";
       const confirmed = await confirm({
-        title: kind === "terminal" ? "删除终端" : "删除后台连接",
+        title: `删除${targetLabel}`,
         message: kind === "terminal"
           ? `确认删除终端 ${resourceId}？删除后当前终端不可再 attach，只保留历史记录。`
-          : `确认删除后台连接 ${resourceId}？`,
+          : kind === "browser"
+            ? `确认删除浏览器 ${resourceId}？删除后无法恢复该页面，只保留历史记录。`
+            : `确认删除后台任务 ${resourceId}？`,
         confirmText: "删除",
         danger: true,
       });
@@ -147,6 +157,7 @@ export default function ResourcePanel({
     }
     setBusyResourceId(resourceId);
     setNotice("");
+    setNoticeTechnicalDetails("");
     setOpenedTerminalId(null);
     setOpenedBrowserId(null);
     void onControl(kind, resourceId, action)
@@ -154,15 +165,21 @@ export default function ResourcePanel({
         if (action === "delete" && (kind === "terminal" || kind === "browser")) {
           await onCloseResourcePreview(kind, resourceId);
         }
-        setNotice(`已执行 ${actionLabelForKind(kind, action)}: ${resourceId}`);
+        if (action === "resume" && kind === "browser") {
+          handleOpenBrowser(resourceId);
+        }
+        setNoticeTechnicalDetails("");
+        setNotice(`已${actionLabelForKind(kind, action)}${kindLabel(kind)}：${resourceId}`);
       })
       .catch((controlError: unknown) => {
+        const technicalDetails = controlError instanceof Error
+          ? controlError.message
+          : String(controlError);
+        setNoticeTechnicalDetails(technicalDetails);
         setNotice(
-          `操作失败: ${
-            controlError instanceof Error
-              ? controlError.message
-              : String(controlError)
-          }`,
+          kind === "browser" && action === "resume"
+            ? "重新打开失败：恢复检查点不可用或浏览器服务未就绪。你可以重试，或新建替代浏览器；原记录仍保留。"
+            : `未能${actionLabelForKind(kind, action)}。请重试；问题持续时可查看技术详情。`,
         );
       })
       .finally(() => {
@@ -190,14 +207,19 @@ export default function ResourcePanel({
       if (navigator.clipboard) {
         void navigator.clipboard
           .writeText(resourceId)
-          .then(() => setNotice(`已复制 UUID: ${resourceId}`))
+          .then(() => {
+            setNoticeTechnicalDetails("");
+            setNotice(`已复制 UUID: ${resourceId}`);
+          })
           .catch(() => {
             fallbackCopy();
+            setNoticeTechnicalDetails("");
             setNotice(`已复制 UUID: ${resourceId}`);
           });
         return;
       }
       fallbackCopy();
+      setNoticeTechnicalDetails("");
       setNotice(`已复制 UUID: ${resourceId}`);
     } catch (copyError) {
       setNotice(
@@ -215,6 +237,7 @@ export default function ResourcePanel({
     }
     setOpenedTerminalId(resourceId);
     onOpenTerminalPreview(resourceId);
+    setNoticeTechnicalDetails("");
     setNotice(`已在预览区连接终端: ${resourceId}`);
   };
   const handleOpenBrowser = (resourceId: string) => {
@@ -224,12 +247,14 @@ export default function ResourcePanel({
     }
     setOpenedBrowserId(resourceId);
     onOpenBrowserPreview(resourceId);
+    setNoticeTechnicalDetails("");
     setNotice(`已在预览区连接浏览器: ${resourceId}`);
   };
   const handleCreateConnection = (kind: CreatableSessionConnectionKind) => {
     setCreateMenuOpen(false);
     setCreatingKind(kind);
     setNotice("");
+    setNoticeTechnicalDetails("");
     void onCreateConnection(kind)
       .then(() => {
         const option = CREATABLE_SESSION_CONNECTIONS.find(
@@ -240,10 +265,9 @@ export default function ResourcePanel({
         );
       })
       .catch((createError: unknown) => {
-        setNotice(
-          `新建连接失败: ${
-            createError instanceof Error ? createError.message : String(createError)
-          }`,
+        setNotice("新建连接失败。请确认当前工作区仍在线后重试。");
+        setNoticeTechnicalDetails(
+          createError instanceof Error ? createError.message : String(createError),
         );
       })
       .finally(() => setCreatingKind(null));
@@ -326,7 +350,17 @@ export default function ResourcePanel({
       </div>
 
       {/* 这里只承载可重新 attach 的持久资源；一次性 Agent job 仍属于对话或事件视图。 */}
-      {notice ? <div className="resource-notice">{notice}</div> : null}
+      {notice ? (
+        <div className="resource-notice" role="status">
+          <span>{notice}</span>
+          {noticeTechnicalDetails ? (
+            <details>
+              <summary>技术详情</summary>
+              <code>{noticeTechnicalDetails}</code>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
       {loading ? <div className="empty-state">正在读取后台连接...</div> : null}
       {error && !waitingForFirstMessage ? (
         <div className="empty-state">后台连接加载失败：{error}</div>
@@ -386,6 +420,7 @@ export default function ResourcePanel({
                               onOpenTerminal={handleOpenTerminal}
                               onOpenBrowser={handleOpenBrowser}
                               onShowConversation={onShowConversation}
+                              onReplaceBrowser={() => handleCreateConnection("browser")}
                             />
                           ))}
                         </div>

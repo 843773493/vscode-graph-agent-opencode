@@ -136,7 +136,9 @@ export class TerminalSession {
   constructor({ record, manager }) {
     this.manager = manager;
     this.id = record.terminal_id;
+    this.workspaceId = record.workspace_id || manager.workspaceId;
     this.sessionId = record.session_id;
+    this.ownerAgentId = record.owner_agent_id || null;
     this.title = record.title || "Persistent Terminal";
     this.command = record.command || resolveShell();
     this.args = Array.isArray(record.args) ? record.args : shellArgs();
@@ -145,6 +147,7 @@ export class TerminalSession {
     this.rows = record.rows || 30;
     this.createdAt = record.created_at || nowIso();
     this.updatedAt = record.updated_at || this.createdAt;
+    this.lastUsedAt = record.last_used_at || this.updatedAt;
     this.startedAt = record.started_at || null;
     this.endedAt = record.ended_at || null;
     this.status = record.status || "created";
@@ -156,6 +159,13 @@ export class TerminalSession {
     this.processStartTime = record.process_start_time ?? null;
     this.releaseReason = record.release_reason ?? null;
     this.sequence = record.sequence || 0;
+    this.modelOutputSequence = record.model_output_sequence || 0;
+    this.commandStartSequence = record.command_start_sequence ?? null;
+    this.modelBackgrounded = record.model_backgrounded || false;
+    this.completionObservedByModel = record.completion_observed_by_model || false;
+    this.steeringDispatching = record.steering_dispatching || false;
+    this.steeringDispatched = record.steering_dispatched || false;
+    this.completionEventId = record.completion_event_id || null;
     this.buffer = record.buffer || "";
     this.lastCommand = record.last_command || null;
     this.lastCommandStatus = record.last_command_status || null;
@@ -210,6 +220,18 @@ export class TerminalSession {
         this.lastCommandStatus = "completed";
         this.lastCommandExitCode = exitCode;
         this.lastCommandCompletedAt = nowIso();
+        this.completionEventId =
+          this.completionEventId || `terminal_completed:${this.id}:${this.sequence}`;
+        void this.terminateForRelease({
+          status: "completed",
+          commandStatus: "completed",
+          reason: "command_completed",
+        }).catch((error) => {
+          console.error(
+            `[terminal-session] 命令完成后释放隐藏 PTY 失败: terminal_id=${this.id}`,
+            error,
+          );
+        });
       }
       this.touch();
       void this.manager.persist();
@@ -334,7 +356,7 @@ export class TerminalSession {
   }
 
   async attach(client, { afterSequence = null } = {}) {
-    this.touch();
+    this.touchUsage();
     try {
       await this.outputMultiplexer.attach(client, {
         afterSequence,
@@ -358,12 +380,31 @@ export class TerminalSession {
     this.outputMultiplexer.acknowledge(client, sequence);
   }
 
+  async readModelOutput() {
+    this.touchUsage();
+    const read = this.outputMultiplexer.readAfter(this.modelOutputSequence);
+    this.modelOutputSequence = read.sequence;
+    if (this.lastCommandStatus === "completed") {
+      this.completionObservedByModel = true;
+    }
+    this.touch();
+    await this.manager.persist();
+    return {
+      terminal: this.snapshot(),
+      output: read.output,
+      sequence: read.sequence,
+      replay_mode: read.replayMode,
+      omitted_before_sequence: read.omittedBeforeSequence,
+    };
+  }
+
   write(data, { source = "user", command = null } = {}) {
     if (!this.ptyProcess || this.status !== "running" || this.releasePromise) {
       throw new Error(`终端未运行: terminal_id=${this.id}, status=${this.status}`);
     }
     if (command) {
       const markers = commandMarkersFromInput(data);
+      this.commandStartSequence = this.sequence;
       this.lastCommand = command;
       this.lastCommandStatus = "running";
       this.lastCommandExitCode = null;
@@ -371,6 +412,11 @@ export class TerminalSession {
       this.lastCommandCompletedAt = null;
       this.lastCommandStartMarker = markers.startMarker;
       this.lastCommandDoneMarker = markers.doneMarker;
+      this.modelBackgrounded = false;
+      this.completionObservedByModel = false;
+      this.steeringDispatching = false;
+      this.steeringDispatched = false;
+      this.completionEventId = null;
     } else {
       const label = inputLabel(data);
       if (label) {
@@ -380,7 +426,7 @@ export class TerminalSession {
       }
     }
     this.ptyProcess.write(data);
-    this.touch();
+    this.touchUsage();
     this.broadcast({
       type: "input",
       terminalId: this.id,
@@ -472,11 +518,11 @@ export class TerminalSession {
     await isolatedPty?.shutdown();
   }
 
-  async kill() {
+  async kill({ reason = "terminal_cancel" } = {}) {
     return await this.terminateForRelease({
       status: "terminated",
       commandStatus: "terminated",
-      reason: "terminal_cancel",
+      reason,
     });
   }
 
@@ -517,6 +563,40 @@ export class TerminalSession {
     this.updatedAt = nowIso();
   }
 
+  touchUsage() {
+    this.lastUsedAt = nowIso();
+    this.updatedAt = this.lastUsedAt;
+  }
+
+  markModelBackgrounded() {
+    this.modelBackgrounded = true;
+    this.touchUsage();
+  }
+
+  claimSteering() {
+    const claimable = new Set(["running", "completed"]).has(this.status)
+      && this.modelBackgrounded
+      && this.lastCommandStatus === "completed"
+      && !this.completionObservedByModel
+      && !this.steeringDispatching
+      && !this.steeringDispatched;
+    if (!claimable) {
+      return false;
+    }
+    this.steeringDispatching = true;
+    this.touch();
+    return true;
+  }
+
+  finishSteering({ dispatched }) {
+    if (!this.steeringDispatching) {
+      throw new Error(`终端 execution 没有待完成的 steering claim: ${this.id}`);
+    }
+    this.steeringDispatching = false;
+    this.steeringDispatched = dispatched;
+    this.touch();
+  }
+
   broadcast(message) {
     this.outputMultiplexer.broadcast(message);
   }
@@ -524,7 +604,9 @@ export class TerminalSession {
   snapshot() {
     return {
       terminal_id: this.id,
+      workspace_id: this.workspaceId,
       session_id: this.sessionId,
+      owner_agent_id: this.ownerAgentId,
       title: this.title,
       command: this.command,
       args: this.args,
@@ -534,6 +616,7 @@ export class TerminalSession {
       status: this.status,
       created_at: this.createdAt,
       updated_at: this.updatedAt,
+      last_used_at: this.lastUsedAt,
       started_at: this.startedAt,
       ended_at: this.endedAt,
       exit_code: this.exitCode,
@@ -545,6 +628,13 @@ export class TerminalSession {
       os_pid: this.osPid,
       pty_worker_pid: this.ptyProcess?.workerPid ?? null,
       sequence: this.sequence,
+      model_output_sequence: this.modelOutputSequence,
+      command_start_sequence: this.commandStartSequence,
+      model_backgrounded: this.modelBackgrounded,
+      completion_observed_by_model: this.completionObservedByModel,
+      steering_dispatching: this.steeringDispatching,
+      steering_dispatched: this.steeringDispatched,
+      completion_event_id: this.completionEventId,
       buffer: this.buffer,
       display_buffer: displayBuffer(this.buffer),
       last_command: this.lastCommand,

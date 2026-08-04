@@ -119,6 +119,97 @@ export async function pasteWorkspaceFileEntries(
   return encodeWorkspaceFileList(result, location.scope);
 }
 
+export interface WorkspaceFileLocation {
+  path: string;
+  scope: "workspace" | "filesystem";
+}
+
+export async function copyWorkspaceFileEntry(
+  port: number,
+  directoryPath: string,
+  source: WorkspaceFileLocation,
+  workspaceId?: string | null,
+): Promise<WorkspaceFileList> {
+  const destination = decodeFileTreePath(directoryPath);
+  const query = new URLSearchParams({
+    path: destination.path,
+    scope: destination.scope,
+  });
+  const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
+    port,
+    `/api/v1/workspace/files/copy?${query.toString()}`,
+    {
+      method: "POST",
+      headers: workspaceHeader(workspaceId),
+      body: JSON.stringify({
+        source_path: source.path,
+        source_scope: source.scope,
+      }),
+    },
+  ));
+  return encodeWorkspaceFileList(result, destination.scope);
+}
+
+export async function uploadWorkspaceFileEntries(
+  port: number,
+  directoryPath: string,
+  files: readonly File[],
+  workspaceId?: string | null,
+): Promise<WorkspaceFileList> {
+  if (files.length === 0) {
+    throw new Error("没有需要上传的本地文件");
+  }
+  const localToken = await getGatewayToken(port);
+  const destination = decodeFileTreePath(directoryPath);
+  const query = new URLSearchParams({
+    path: destination.path,
+    scope: destination.scope,
+  });
+  const body = new FormData();
+  for (const file of files) {
+    body.append("files", file, file.name);
+    body.append("relative_paths", file.webkitRelativePath || file.name);
+  }
+  const response = await fetch(
+    `${getApiBaseUrl(port)}/api/v1/workspace/files/upload?${query.toString()}`,
+    {
+      method: "POST",
+      headers: { "X-Local-Token": localToken, ...workspaceHeader(workspaceId) },
+      body,
+    },
+  );
+  if (!response.ok) {
+    const payload = await response.clone().json().catch(() => null) as {
+      detail?: string;
+    } | null;
+    throw new Error(`上传本地文件失败: ${payload?.detail ?? `HTTP ${response.status}`}`);
+  }
+  const result = unwrapApiData(await response.json() as APIResponse<WorkspaceFileList>);
+  return encodeWorkspaceFileList(result, destination.scope);
+}
+
+export interface WorkspaceFileDownloadRequest {
+  url: string;
+  headers: Record<string, string>;
+  suggestedName: string;
+}
+
+export async function createWorkspaceFileDownloadRequest(
+  port: number,
+  path: string,
+  suggestedName: string,
+  workspaceId?: string | null,
+): Promise<WorkspaceFileDownloadRequest> {
+  const localToken = await getGatewayToken(port);
+  const location = decodeFileTreePath(path);
+  const query = new URLSearchParams({ path: location.path, scope: location.scope });
+  return {
+    url: `${getApiBaseUrl(port)}/api/v1/workspace/files/download?${query.toString()}`,
+    headers: { "X-Local-Token": localToken, ...workspaceHeader(workspaceId) },
+    suggestedName,
+  };
+}
+
 export async function revealWorkspaceFileEntry(
   port: number,
   path: string,

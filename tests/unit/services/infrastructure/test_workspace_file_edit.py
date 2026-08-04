@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import codecs
+import io
 import os
 import shutil
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -280,6 +282,69 @@ async def test_file_manager_pastes_multiple_paths_and_rejects_overwrite(
             scope="workspace",
             source_paths=[str(source_file)],
         )
+
+
+@pytest.mark.asyncio
+async def test_file_manager_copies_workspace_entry_by_scoped_path(
+    file_manager_service: tuple[WorkspaceService, Path, Path],
+) -> None:
+    service, project_root, _ = file_manager_service
+    source = project_root / "source.txt"
+    source.write_text("workspace copy\n", encoding="utf-8")
+    target = project_root / "target"
+    target.mkdir()
+
+    listing = await service.copy_file_entry(
+        directory_path="target",
+        scope="workspace",
+        source_path="source.txt",
+        source_scope="workspace",
+    )
+
+    assert [item.name for item in listing.items] == ["source.txt"]
+    assert (target / "source.txt").read_text(encoding="utf-8") == "workspace copy\n"
+
+
+@pytest.mark.asyncio
+async def test_file_manager_uploads_multiple_files_with_relative_paths(
+    file_manager_service: tuple[WorkspaceService, Path, Path],
+) -> None:
+    service, project_root, _ = file_manager_service
+
+    listing = await service.upload_file_entries(
+        directory_path="",
+        scope="workspace",
+        entries=[
+            ("notes.txt", io.BytesIO(b"notes\n")),
+            ("assets/logo.bin", io.BytesIO(b"\x00\x01logo")),
+        ],
+    )
+
+    assert [item.name for item in listing.items] == ["assets", "notes.txt"]
+    assert (project_root / "notes.txt").read_bytes() == b"notes\n"
+    assert (project_root / "assets/logo.bin").read_bytes() == b"\x00\x01logo"
+
+
+def test_file_manager_prepares_directory_download_as_zip(
+    file_manager_service: tuple[WorkspaceService, Path, Path],
+) -> None:
+    service, project_root, _ = file_manager_service
+    directory = project_root / "bundle"
+    directory.mkdir()
+    (directory / "readme.txt").write_text("download\n", encoding="utf-8")
+
+    archive_path, filename, media_type, temporary = service.prepare_file_download(
+        path="bundle",
+        scope="workspace",
+    )
+    try:
+        assert filename == "bundle.zip"
+        assert media_type == "application/zip"
+        assert temporary is True
+        with zipfile.ZipFile(archive_path) as archive:
+            assert archive.read("bundle/readme.txt") == b"download\n"
+    finally:
+        archive_path.unlink(missing_ok=True)
 
 
 def test_file_manager_reveals_path_with_host_file_manager(

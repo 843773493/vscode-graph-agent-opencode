@@ -1,5 +1,6 @@
 import http from "node:http";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { WebSocket, WebSocketServer } from "ws";
 import { TerminalManager, resolveWorkspaceRoot } from "./terminalManager.js";
@@ -113,6 +114,17 @@ function resolveRequiredWorkspaceRoot(args) {
   return resolved;
 }
 
+function resolveWorkspaceId(args, workspaceRoot) {
+  const configured = args.get("workspace-id") || process.env.BOXTEAM_WORKSPACE_ID;
+  if (typeof configured === "string" && configured.trim() !== "" && configured !== "true") {
+    return configured.trim();
+  }
+  const digest = createHash("sha256")
+    .update(`local-managed\n${workspaceRoot}`, "utf8")
+    .digest("hex");
+  return `gw_${digest.slice(0, 32)}`;
+}
+
 function wsClient(socket) {
   return {
     sendRaw(message) {
@@ -151,6 +163,7 @@ async function main() {
   const host = args.get("host") || process.env.BOXTEAM_TERMINAL_HOST || DEFAULT_HOST;
   const port = Number(args.get("port") || process.env.BOXTEAM_TERMINAL_BACKEND_PORT || DEFAULT_PORT);
   const workspaceRoot = resolveRequiredWorkspaceRoot(args);
+  const workspaceId = resolveWorkspaceId(args, workspaceRoot);
   const terminalFrontendBaseUrl =
     args.get("frontend-url") ||
     process.env.BOXTEAM_TERMINAL_FRONTEND_URL ||
@@ -158,6 +171,7 @@ async function main() {
 
   const manager = new TerminalManager({
     workspaceRoot,
+    workspaceId,
     terminalFrontendBaseUrl,
   });
   await manager.init();
@@ -178,6 +192,7 @@ async function main() {
       if (request.method === "GET" && pathname === "/health") {
         sendJson(response, 200, {
           ok: true,
+          workspace_id: workspaceId,
           workspace_root: workspaceRoot,
           terminal_count: manager.list().length,
         });
@@ -194,7 +209,9 @@ async function main() {
       if (request.method === "POST" && pathname === "/api/terminals") {
         const payload = await readJson(request);
         const terminal = await manager.create({
+          workspaceId: payload.workspace_id,
           sessionId: payload.session_id,
+          agentId: payload.agent_id,
           title: payload.title,
           cwd: payload.cwd,
           cols: payload.cols,
@@ -243,6 +260,36 @@ async function main() {
           return;
         }
 
+        if (request.method === "POST" && action === "read") {
+          sendJson(response, 200, { data: await manager.read(terminalId) });
+          return;
+        }
+
+        if (request.method === "POST" && action === "background") {
+          sendJson(response, 200, {
+            data: await manager.markModelBackgrounded(terminalId),
+          });
+          return;
+        }
+
+        if (request.method === "POST" && action === "claim-steering") {
+          sendJson(response, 200, { data: await manager.claimSteering(terminalId) });
+          return;
+        }
+
+        if (request.method === "POST" && action === "finish-steering") {
+          const payload = await readJson(request);
+          if (typeof payload.dispatched !== "boolean") {
+            throw new Error("dispatched 必须是布尔值");
+          }
+          sendJson(response, 200, {
+            data: await manager.finishSteering(terminalId, {
+              dispatched: payload.dispatched,
+            }),
+          });
+          return;
+        }
+
         if (request.method === "POST" && action === "resize") {
           const payload = await readJson(request);
           const terminal = await manager.resize(
@@ -255,7 +302,16 @@ async function main() {
         }
 
         if (request.method === "POST" && action === "kill") {
-          sendJson(response, 200, { data: await manager.kill(terminalId) });
+          const payload = await readJson(request);
+          const reason = payload.reason || "terminal_cancel";
+          if (!new Set(["terminal_cancel", "model_requested"]).has(reason)) {
+            throw new Error(`不支持的终端终止原因: ${reason}`);
+          }
+          sendJson(response, 200, {
+            data: await manager.kill(terminalId, {
+              reason,
+            }),
+          });
           return;
         }
 
@@ -372,6 +428,7 @@ async function main() {
   server.listen(port, host, () => {
     console.log(`[terminal-backend] listening on http://${host}:${port}`);
     console.log(`[terminal-backend] workspace ${workspaceRoot}`);
+    console.log(`[terminal-backend] workspace_id ${workspaceId}`);
   });
 
   let shuttingDown = false;

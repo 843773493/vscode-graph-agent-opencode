@@ -22,6 +22,9 @@ export function actionLabelForKind(
   if (kind === "browser" && action === "cancel") {
     return "关闭";
   }
+  if (kind === "browser" && action === "resume") {
+    return "重新打开";
+  }
   return ACTION_LABELS[action];
 }
 
@@ -40,6 +43,9 @@ export function resourceActionStatusLabel(
   }
   if (kind === "browser" && action === "delete") {
     return "删除浏览器";
+  }
+  if (kind === "browser" && action === "resume") {
+    return "重新打开浏览器";
   }
   return actionLabelForKind(kind, action);
 }
@@ -152,6 +158,14 @@ export function isPreviewedResource(
   return resourcePreviewPath(resource) === activePreviewPath;
 }
 
+export function isRecoverableBrowser(resource: SessionResource): boolean {
+  return resource.kind === "browser"
+    && ["running", "lost"].includes(resource.status)
+    && metadataString(resource, "resource_state") === "discarded"
+    && typeof resource.metadata.checkpoint === "object"
+    && resource.metadata.checkpoint !== null;
+}
+
 export function resourceAttentionGroup(
   resource: SessionResource,
   activePreviewPath: string | null,
@@ -164,6 +178,9 @@ export function resourceAttentionGroup(
     resource.metadata.pending_dialog || resource.metadata.pending_file_chooser,
   );
 
+  if (isRecoverableBrowser(resource)) {
+    return "sleeping";
+  }
   if (["failed", "lost"].includes(resource.status) || needsUserAction) {
     return "attention";
   }
@@ -288,6 +305,9 @@ export function resourceTreeDescription(resource: SessionResource): string {
 }
 
 export function resourceTreeStatus(resource: SessionResource): string {
+  if (isRecoverableBrowser(resource)) {
+    return "已冷回收";
+  }
   if (resource.status !== "running") {
     return statusLabel(resource.status);
   }
@@ -460,6 +480,8 @@ export function resourceStateSummary(resource: SessionResource): string | null {
     const browserStatus =
       resource.status === "running"
         ? "浏览器页面运行中"
+        : isRecoverableBrowser(resource)
+          ? "浏览器页面可重新打开"
         : resource.status === "lost"
           ? "浏览器页面已断开"
           : resource.status === "closed"

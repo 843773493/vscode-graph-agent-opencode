@@ -4,6 +4,8 @@ import App from './App';
 import { AppProvider } from './hooks';
 import WarmConfirmProvider from './components/WarmConfirmProvider';
 import '@vscode/codicons/dist/codicon.css';
+import { installBoxTeamThemeRuntime } from './theme';
+import './styles/theme.css';
 import './index.css';
 import './styles/panelShared.css';
 import './styles/agentState.css';
@@ -17,6 +19,8 @@ import './styles/workbenchLayout.css';
 import './styles/toolControl.css';
 import './styles/chatMessages.css';
 import './styles/gatewayConsole.css';
+import './styles/portForwardPanel.css';
+import './styles/themeSurfaces.css';
 
 declare global {
   interface Window {
@@ -29,6 +33,8 @@ const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error('找不到前端挂载节点 #root');
 }
+
+installBoxTeamThemeRuntime();
 
 const root = window.__graphAgentRoot ?? ReactDOM.createRoot(rootElement);
 window.__graphAgentRoot = root;

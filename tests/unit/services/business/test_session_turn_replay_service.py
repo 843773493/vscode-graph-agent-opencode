@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -16,8 +16,7 @@ from app.schemas.public_v2.message import MessageReplayRequest, MessageRunAccept
 from app.services.business.message_service import MessageService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 
-
-NOW = datetime(2026, 7, 16, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 16, tzinfo=UTC)
 
 
 def _metadata(message_id: str) -> dict[str, object]:
@@ -113,6 +112,18 @@ class RecordingDispatcher:
         )
 
 
+class RecordingTurnHistoryStore:
+    def __init__(self) -> None:
+        self.truncated: list[tuple[str, str]] = []
+
+    def truncate_from_message(self, session_id: str, message_id: str) -> int:
+        self.truncated.append((session_id, message_id))
+        return 1
+
+    def projection_epoch(self, session_id: str) -> int:
+        return 2
+
+
 async def _put_checkpoint(
     saver: FileSystemCheckpointSaver,
     config: dict,
@@ -194,6 +205,7 @@ async def _build_service(tmp_path, session_bundle_factory, jobs: list[JobDTO]):
         },
     )
     dispatcher = RecordingDispatcher(saver)
+    turn_history_store = RecordingTurnHistoryStore()
     session_service = SimpleNamespace(
         get=lambda session_id: None,
     )
@@ -208,8 +220,9 @@ async def _build_service(tmp_path, session_bundle_factory, jobs: list[JobDTO]):
         session_service=session_service,
         job_service=FakeJobService(jobs),
         dispatcher=dispatcher,
+        turn_history_store=turn_history_store,
     )
-    return service, saver, dispatcher
+    return service, saver, dispatcher, turn_history_store
 
 
 @pytest.mark.asyncio
@@ -217,7 +230,7 @@ async def test_edit_first_turn_removes_all_following_turns(
     tmp_path,
     session_bundle_factory,
 ) -> None:
-    service, saver, dispatcher = await _build_service(
+    service, saver, dispatcher, turn_history_store = await _build_service(
         tmp_path,
         session_bundle_factory,
         [_job("msg_1", JobStatus.completed, job_id="job_1"), _job("msg_2", JobStatus.completed)],
@@ -235,6 +248,7 @@ async def test_edit_first_turn_removes_all_following_turns(
 
     assert result.workspace_changes_reverted is False
     assert result.removed_message_count == 4
+    assert turn_history_store.truncated == [("ses_replay", "msg_1")]
     assert dispatcher.pre_dispatch_message_ids == []
     assert dispatcher.dispatched_message_id not in dispatcher.pre_dispatch_message_ids
     latest = await saver.aget_tuple(build_checkpoint_config("ses_replay"))
@@ -254,7 +268,7 @@ async def test_regenerate_last_reply_reuses_original_prompt(
     tmp_path,
     session_bundle_factory,
 ) -> None:
-    service, _, dispatcher = await _build_service(
+    service, _, dispatcher, _ = await _build_service(
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
@@ -280,7 +294,7 @@ async def test_retry_failed_clears_partial_tool_messages(
     session_bundle_factory,
     failure_status: JobStatus,
 ) -> None:
-    service, saver, dispatcher = await _build_service(
+    service, saver, dispatcher, _ = await _build_service(
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", failure_status)],
@@ -316,7 +330,7 @@ async def test_retry_requires_failed_or_timed_out_job(
     tmp_path,
     session_bundle_factory,
 ) -> None:
-    service, _, _ = await _build_service(
+    service, _, _, _ = await _build_service(
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
@@ -338,7 +352,7 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(
     tmp_path,
     session_bundle_factory,
 ) -> None:
-    service, saver, dispatcher = await _build_service(
+    service, saver, dispatcher, _ = await _build_service(
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.running)],
@@ -368,7 +382,7 @@ async def test_replay_requires_explicit_context_only_acknowledgement(
     tmp_path,
     session_bundle_factory,
 ) -> None:
-    service, _, _ = await _build_service(
+    service, _, _, _ = await _build_service(
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],

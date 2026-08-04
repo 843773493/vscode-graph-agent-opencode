@@ -7,8 +7,18 @@ import {
 import { writeCachedUiSettings } from "../state/storage";
 import type { WebUiSettings, WebUiSettingsUpdate } from "../types/backend";
 import type { SetAppState } from "./contentViewLoaderTypes";
+import { loadAndApplyResolvedGatewayTheme } from "../theme";
 
-function applyUiSettings(setState: SetAppState, settings: WebUiSettings): void {
+async function applyUiSettings(setState: SetAppState, settings: WebUiSettings): Promise<void> {
+  if (!settings.theme.resolved_theme) {
+    throw new Error("Gateway UI Settings 缺少已解析主题");
+  }
+  let themeLoadError: unknown = null;
+  try {
+    await loadAndApplyResolvedGatewayTheme(settings.theme.resolved_theme);
+  } catch (error) {
+    themeLoadError = error;
+  }
   setState((previous) => ({
     ...previous,
     uiSettings: settings,
@@ -17,6 +27,7 @@ function applyUiSettings(setState: SetAppState, settings: WebUiSettings): void {
       settings.layout.agent_sessions_panel_open
       ?? previous.agentSessionsPanelOpen,
   }));
+  if (themeLoadError) throw themeLoadError;
 }
 
 export function useUiSettingsController({
@@ -47,13 +58,13 @@ export function useUiSettingsController({
         const updatedSettings = await updateGatewayUiSettings(resolvedApiPort, payload);
         latestSettingsRef.current = updatedSettings;
         writeCachedUiSettings(updatedSettings);
-        applyUiSettings(setState, updatedSettings);
+        await applyUiSettings(setState, updatedSettings);
       } catch (updateError) {
         try {
           const reloadedSettings = await getGatewayUiSettings(resolvedApiPort);
           latestSettingsRef.current = reloadedSettings;
           writeCachedUiSettings(reloadedSettings);
-          applyUiSettings(setState, reloadedSettings);
+          await applyUiSettings(setState, reloadedSettings);
         } catch (reloadError) {
           throw new Error(
             `页面设置保存失败，且重新读取 Gateway 设置失败：保存错误=${String(updateError)}；读取错误=${String(reloadError)}`,

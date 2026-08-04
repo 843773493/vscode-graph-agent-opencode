@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend
+from deepagents.backends import CompositeBackend, FilesystemBackend
 
 from app.core.path_utils import get_session_path_resolver, safe_join
 from app.core.session_paths import SessionPathResolver
@@ -58,7 +58,7 @@ class SessionArtifactBackend(FilesystemBackend):
 
 def build_workspace_backend(workspace_root: Path) -> CompositeBackend:
     """构建统一的 DeepAgents 工作区后端，并隔离框架运行产物。"""
-    workspace_files = LocalShellBackend(
+    workspace_files = FilesystemBackend(
         root_dir=str(workspace_root),
         virtual_mode=True,
     )

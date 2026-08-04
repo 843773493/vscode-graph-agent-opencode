@@ -141,3 +141,7 @@ export function useSessionGeneratorResources(apiPort: number) {
     updateGenerator,
   ]);
 }
+
+export type SessionGeneratorResourcesController = ReturnType<
+  typeof useSessionGeneratorResources
+>;

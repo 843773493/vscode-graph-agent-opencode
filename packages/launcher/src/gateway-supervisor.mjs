@@ -5,6 +5,8 @@ const GATEWAY_HOST = "127.0.0.1";
 const DEVELOPMENT_GATEWAY_PORT = 8014;
 const INSTALLED_GATEWAY_PORT = 8114;
 const GATEWAY_READY_TIMEOUT_MS = 90_000;
+const GATEWAY_CONNECTION_DRAIN_TIMEOUT_SECONDS = 2;
+const GATEWAY_SHUTDOWN_TIMEOUT_MS = 10_000;
 function forwardedSignals(platform) {
   return platform === "win32"
     ? ["SIGINT", "SIGTERM", "SIGBREAK"]
@@ -89,6 +91,8 @@ export function spawnGateway({
       endpoint.host,
       "--port",
       String(endpoint.port),
+      "--timeout-graceful-shutdown",
+      String(GATEWAY_CONNECTION_DRAIN_TIMEOUT_SECONDS),
     ],
     {
       cwd: runtime.applicationRoot,
@@ -116,24 +120,36 @@ export function installSignalForwarding(
   child,
   processObject = process,
   platform = process.platform,
+  {
+    shutdownTimeoutMs = GATEWAY_SHUTDOWN_TIMEOUT_MS,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+    stderr = process.stderr,
+  } = {},
 ) {
   const listeners = new Map();
   let forwarded = false;
+  let forceTimer = null;
   for (const signal of forwardedSignals(platform)) {
     const listener = () => {
-      if (
-        !forwarded &&
-        child.exitCode === null &&
-        child.signalCode === null
-      ) {
+      if (!forwarded && child.exitCode === null && child.signalCode === null) {
         forwarded = true;
         child.kill(signal === "SIGBREAK" ? "SIGTERM" : signal);
+        forceTimer = setTimeoutImpl(() => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          stderr.write(
+            `boxteam: Gateway 未在 ${shutdownTimeoutMs}ms 内退出，发送 SIGKILL\n`,
+          );
+          child.kill("SIGKILL");
+        }, shutdownTimeoutMs);
+        forceTimer?.unref?.();
       }
     };
     processObject.on(signal, listener);
     listeners.set(signal, listener);
   }
   return () => {
+    if (forceTimer !== null) clearTimeoutImpl(forceTimer);
     for (const [signal, listener] of listeners) {
       processObject.off(signal, listener);
     }
@@ -188,7 +204,12 @@ export async function superviseGateway({
 
   const child = spawnGateway({ runtime, environment, spawnImpl });
   const removeOutputForwarding = forwardGatewayOutput(child, stdout, stderr);
-  const removeSignalHandlers = installSignalForwarding(child, processObject);
+  const removeSignalHandlers = installSignalForwarding(
+    child,
+    processObject,
+    process.platform,
+    { stderr },
+  );
   const exitResult = once(child, "exit");
   const closeResult = once(child, "close");
   try {

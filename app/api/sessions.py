@@ -300,7 +300,7 @@ async def list_session_resources(
 ):
     try:
         result = await session_resource_service.list(session_id)
-    except ValueError as exc:
+    except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)
 

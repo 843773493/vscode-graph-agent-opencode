@@ -15,7 +15,7 @@ from tests.e2e.gateway.processes import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.e2e.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_port_block_for_file
 
 
 @pytest.mark.asyncio

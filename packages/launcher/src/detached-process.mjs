@@ -44,3 +44,86 @@ export function terminateDetachedProcess(pid) {
     if (error?.code !== "ESRCH") throw error;
   }
 }
+
+function processIsAlive(pid, killImpl) {
+  try {
+    killImpl(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForProcessExit({
+  pid,
+  timeoutMs,
+  pollIntervalMs,
+  killImpl,
+  sleepImpl,
+  nowImpl,
+}) {
+  const deadline = nowImpl() + timeoutMs;
+  while (nowImpl() < deadline) {
+    if (!processIsAlive(pid, killImpl)) return true;
+    await sleepImpl(Math.min(pollIntervalMs, deadline - nowImpl()));
+  }
+  return !processIsAlive(pid, killImpl);
+}
+
+export async function terminateProcessWithEscalation(
+  pid,
+  {
+    gracefulTimeoutMs = 15_000,
+    forceTimeoutMs = 5_000,
+    pollIntervalMs = 100,
+    killImpl = process.kill,
+    sleepImpl = (delayMs) =>
+      new Promise((resolve) => setTimeout(resolve, delayMs)),
+    nowImpl = Date.now,
+  } = {},
+) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new TypeError(`process pid 无效: ${String(pid)}`);
+  }
+  if (!processIsAlive(pid, killImpl)) return;
+
+  try {
+    killImpl(pid, "SIGTERM");
+  } catch (error) {
+    if (error?.code === "ESRCH") return;
+    throw error;
+  }
+  if (
+    await waitForProcessExit({
+      pid,
+      timeoutMs: gracefulTimeoutMs,
+      pollIntervalMs,
+      killImpl,
+      sleepImpl,
+      nowImpl,
+    })
+  ) {
+    return;
+  }
+
+  try {
+    killImpl(pid, "SIGKILL");
+  } catch (error) {
+    if (error?.code === "ESRCH") return;
+    throw error;
+  }
+  if (
+    await waitForProcessExit({
+      pid,
+      timeoutMs: forceTimeoutMs,
+      pollIntervalMs,
+      killImpl,
+      sleepImpl,
+      nowImpl,
+    })
+  ) {
+    return;
+  }
+  throw new Error(`进程在 SIGKILL 后仍未退出: pid=${pid}`);
+}

@@ -3,7 +3,7 @@
   display: flex;
   min-height: 0;
   flex-direction: column;
-  color: var(--vscode-foreground);
+  color: var(--bt-text-primary);
 }
 
 .session-resource-toolbar {
@@ -27,8 +27,8 @@
 .session-resource-toolbar button:hover,
 .session-resource-actions button:hover,
 .session-resource-load-more:hover,
-.session-generator-manager button:hover {
-  background: var(--vscode-list-hoverBackground);
+.session-generator-manager button:hover:not(:disabled) {
+  background: var(--bt-hover-background);
 }
 
 .session-resource-root-drop-target {
@@ -46,7 +46,7 @@
 }
 
 .session-resource-root-drop-target:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
+  outline: 1px solid var(--bt-focus-border);
   outline-offset: -1px;
 }
 
@@ -68,12 +68,19 @@
 }
 
 .session-resource-row:hover,
-.session-resource-row.current {
-  background: var(--vscode-list-hoverBackground);
+.session-resource-row.active-workspace {
+  background: var(--bt-hover-background);
 }
 
-.session-resource-row.current {
-  box-shadow: inset 2px 0 var(--vscode-button-background);
+.session-resource-row.workspace.active-workspace {
+  font-weight: 650;
+}
+
+.session-resource-row.current-session {
+  margin: 1px 4px;
+  background: var(--bt-active-selection-background);
+  box-shadow: inset 3px 0 var(--bt-button-background);
+  color: var(--bt-active-selection-foreground);
 }
 
 .session-resource-row[draggable="true"] {
@@ -89,10 +96,10 @@
 .session-resource-root-drop-target.drop-inside {
   background: color-mix(
     in srgb,
-    var(--vscode-list-activeSelectionBackground) 68%,
+    var(--bt-active-selection-background) 68%,
     transparent
   );
-  outline: 1px solid var(--vscode-focusBorder);
+  outline: 1px solid var(--bt-focus-border);
   outline-offset: -1px;
 }
 
@@ -109,10 +116,10 @@
   z-index: 20;
   height: 3px;
   border-radius: 999px;
-  background: var(--vscode-button-background, #0e639c);
+  background: var(--bt-button-background);
   box-shadow:
-    0 0 0 1px var(--vscode-editor-background),
-    0 0 5px color-mix(in srgb, var(--vscode-button-background, #0e639c) 75%, transparent);
+    0 0 0 1px var(--bt-surface-background),
+    0 0 5px color-mix(in srgb, var(--bt-button-background) 75%, transparent);
   content: "";
   pointer-events: none;
 }
@@ -139,7 +146,28 @@
   place-items: center;
   border: 0;
   background: transparent;
-  color: var(--vscode-icon-foreground);
+  color: var(--bt-icon-foreground);
+}
+
+.session-resource-main-action {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-resource-opening-icon {
+  flex: 0 0 auto;
+  color: var(--bt-progress-background);
 }
 
 .session-resource-label {
@@ -169,7 +197,7 @@
 }
 
 .session-activity-indicator.running {
-  color: var(--vscode-progressBar-background, #0078d4);
+  color: var(--bt-progress-background);
   font-size: 13px;
 }
 
@@ -177,7 +205,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--vscode-progressBar-background, #0078d4);
+  background: var(--bt-progress-background);
   content: "";
 }
 
@@ -191,12 +219,12 @@
   min-width: 0;
   height: 23px;
   flex: 1 1 auto;
-  border: 1px solid var(--vscode-focusBorder);
+  border: 1px solid var(--bt-focus-border);
   border-radius: 3px;
   padding: 1px 5px;
   outline: 0;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
+  background: var(--bt-input-background);
+  color: var(--bt-input-foreground);
   font: inherit;
 }
 
@@ -219,27 +247,119 @@
 .session-resource-state,
 .session-resource-error {
   padding: 5px 12px 5px 30px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 12px;
 }
 
 .session-resource-error {
-  color: #b42318;
+  color: var(--bt-status-danger);
 }
 
-.session-resource-badge {
-  border-radius: 999px;
-  padding: 1px 5px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
+.session-resource-workspace-status {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  margin-left: 5px;
+  color: var(--bt-status-danger);
   font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.session-resource-workspace-status i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.session-resource-error-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  margin: 3px 8px 6px 30px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 24%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bt-status-danger) 6%, transparent);
+  color: var(--bt-text-primary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.session-resource-error-card.global {
+  margin-left: 8px;
+}
+
+.session-resource-error-card > strong {
+  color: var(--bt-status-danger);
+  font-size: 12px;
+}
+
+.session-resource-error-card > span {
+  color: var(--bt-text-muted);
+}
+
+.session-resource-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.session-resource-error-actions button {
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid var(--bt-button-border);
+  border-radius: 4px;
+  background: var(--bt-button-secondary-background);
+  color: var(--bt-button-secondary-foreground);
+  cursor: pointer;
+  font: inherit;
+}
+
+.session-resource-error-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.session-resource-error-card details {
+  min-width: 0;
+  color: var(--bt-text-muted);
+}
+
+.session-resource-error-card summary {
+  cursor: pointer;
+}
+
+.session-resource-error-card code {
+  display: block;
+  max-height: 120px;
+  margin-top: 4px;
+  overflow: auto;
+  color: var(--bt-status-danger);
+  font-family: var(--bt-font-family-mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.session-resource-starting-icon {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  color: var(--bt-progress-background);
+  font-size: 12px;
+  line-height: 1;
 }
 
 .session-resource-load-more {
   width: calc(100% - 24px);
   margin: 2px 12px;
   padding: 5px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   text-align: left;
 }
 
@@ -267,7 +387,7 @@
 }
 
 .session-resource-search-result:hover {
-  background: var(--vscode-list-hoverBackground);
+  background: var(--bt-hover-background);
 }
 
 .session-resource-search-result strong,
@@ -279,7 +399,7 @@
 
 .session-resource-search-result span,
 .session-resource-offline-summary {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
@@ -288,39 +408,165 @@
 }
 
 .session-generator-manager {
-  margin: 8px;
-  border-top: 1px solid var(--vscode-panel-border);
-  padding-top: 7px;
+  min-height: 100%;
+  padding: 12px;
 }
 
-.session-generator-manager > summary {
-  cursor: pointer;
+.session-automation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-automation-header h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.session-automation-header p {
+  margin: 3px 0 0;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.session-automation-header .session-generator-create {
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--bt-button-background);
+  background: var(--bt-button-background);
+  color: var(--bt-button-foreground);
+}
+
+.session-automation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin-top: 12px;
+  padding: 8px 0;
+  border-block: 1px solid var(--bt-border);
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.session-automation-summary .attention {
+  color: var(--bt-status-danger);
   font-weight: 650;
-}
-
-.session-generator-manager > summary span {
-  margin-left: 4px;
-  color: var(--vscode-descriptionForeground);
 }
 
 .session-generator-list,
 .session-generator-form {
   display: grid;
   gap: 7px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .session-generator-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 5px;
-  border-radius: 5px;
-  background: var(--vscode-list-hoverBackground);
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--bt-border) 72%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bt-hover-background) 72%, transparent);
 }
 
-.session-generator-summary,
+.session-generator-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.session-generator-header > strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-generator-status {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.session-generator-status.ready {
+  background: color-mix(in srgb, var(--bt-status-success) 14%, transparent);
+  color: var(--bt-status-success);
+}
+
+.session-generator-status.paused {
+  background: color-mix(in srgb, var(--bt-status-warning) 14%, transparent);
+  color: var(--bt-status-warning);
+}
+
+.session-generator-status.blocked {
+  background: color-mix(in srgb, var(--bt-status-danger) 12%, transparent);
+  color: var(--bt-status-danger);
+}
+
+.session-generator-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.session-generator-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-generator-notice {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bt-status-danger) 6%, transparent);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.session-generator-notice > strong {
+  color: var(--bt-status-danger);
+  font-size: 11px;
+}
+
+.session-generator-notice > span {
+  color: var(--bt-text-muted);
+}
+
+.session-generator-notice summary {
+  color: var(--bt-text-muted);
+  cursor: pointer;
+}
+
+.session-generator-notice code {
+  display: block;
+  max-height: 100px;
+  margin-top: 3px;
+  overflow: auto;
+  color: var(--bt-status-danger);
+  font-family: var(--bt-font-family-mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .session-generator-form label {
   display: grid;
   min-width: 0;
@@ -329,16 +575,84 @@
 
 .session-generator-actions {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  align-items: center;
   gap: 4px;
 }
 
+.session-generator-actions > button {
+  min-height: 25px;
+  padding: 3px 7px;
+  border: 1px solid var(--bt-border);
+}
+
+.session-generator-actions > button.primary:not(:disabled) {
+  background: var(--bt-button-background);
+  color: var(--bt-button-foreground);
+}
+
+.session-generator-actions > button.recovery {
+  border-color: var(--bt-focus-border);
+  color: var(--bt-link-foreground);
+}
+
+.session-generator-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.session-generator-more {
+  position: relative;
+  margin-left: auto;
+}
+
+.session-generator-more > summary {
+  display: grid;
+  width: 28px;
+  height: 25px;
+  place-items: center;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+
+.session-generator-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-generator-more[open] > summary,
+.session-generator-more > summary:hover {
+  background: var(--bt-hover-background);
+}
+
+.session-generator-more > div {
+  position: absolute;
+  right: 0;
+  z-index: 40;
+  min-width: 110px;
+  padding: 4px;
+  border: 1px solid var(--bt-menu-border);
+  border-radius: 5px;
+  background: var(--bt-menu-background);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--bt-text-primary) 18%, transparent);
+}
+
+.session-generator-more button {
+  width: 100%;
+  padding: 5px 7px;
+  text-align: left;
+}
+
+.session-generator-more button.danger {
+  color: var(--bt-status-danger);
+}
+
 .session-generator-runs {
-  grid-column: 1 / -1;
   display: grid;
   gap: 4px;
-  border-top: 1px solid var(--vscode-panel-border);
+  border-top: 1px solid var(--bt-border);
   padding-top: 5px;
 }
 
@@ -346,23 +660,23 @@
   display: grid;
   gap: 2px;
   min-width: 0;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   overflow-wrap: anywhere;
 }
 
 .session-generator-row small {
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 
 .session-generator-form input,
 .session-generator-form textarea,
 .session-generator-form select {
   width: 100%;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--bt-border);
   border-radius: 5px;
   padding: 5px 7px;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
+  background: var(--bt-input-background);
+  color: var(--bt-input-foreground);
   font: inherit;
 }
 
@@ -384,7 +698,7 @@
 
 .session-generator-preview code {
   overflow-wrap: anywhere;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 

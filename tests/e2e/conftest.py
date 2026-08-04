@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from collections.abc import AsyncIterator, Generator, Sequence
 from hashlib import sha1
@@ -10,8 +9,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.e2e.ports import e2e_port_block_for_file
-from tests.e2e.processes import close_backend_process, start_backend_process
+from tests.support.paths import e2e_output_root_for_test
+from tests.support.ports import e2e_port_block_for_file
+from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.workspaces import (
+    install_e2e_workspace_config,
+    prepare_default_e2e_workspace,
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -31,28 +35,14 @@ def is_debug() -> bool:
 @pytest.fixture(scope="module")
 def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     project_root = Path.cwd().resolve()
-    tests_root = project_root / "tests" / "e2e"
-    test_file_path = Path(request.node.fspath).resolve()
-    relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
-    workspace_root = project_root / "out" / "tests" / "e2e" / relative_test_path / "workspace"
-
-    default_workspace_root = project_root / "asset" / "default_test_workspace"
-    if workspace_root.exists():
-        shutil.rmtree(workspace_root)
-    workspace_root.mkdir(parents=True, exist_ok=True)
-
-    for item in default_workspace_root.iterdir():
-        target = workspace_root / item.name
-        if target.exists():
-            if target.is_dir():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-        if item.is_dir():
-            shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
-
+    output_root = e2e_output_root_for_test(
+        Path(request.node.fspath),
+        project_root=project_root,
+    )
+    workspace_root = prepare_default_e2e_workspace(
+        workspace_root=output_root / "workspace",
+        template_root=project_root / "asset" / "default_test_workspace",
+    )
     return str(workspace_root)
 
 
@@ -66,15 +56,10 @@ def e2e_workspace_config_path(
     e2e_workspace_root_path: str,
     e2e_config_path: str,
 ) -> str:
-    source_path = Path(e2e_config_path).resolve()
-    if not source_path.is_file():
-        raise FileNotFoundError(f"E2E 配置不存在: {source_path}")
-    target_path = Path(e2e_workspace_root_path) / ".boxteam" / "workspace.jsonc"
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, target_path)
-    shutil.copy2(
-        Path.cwd().resolve() / "configs" / "workspace_config.jsonc",
-        target_path.parent / "workspace_config.jsonc",
+    target_path = install_e2e_workspace_config(
+        workspace_root=Path(e2e_workspace_root_path),
+        config_path=Path(e2e_config_path),
+        schema_path=Path.cwd().resolve() / "configs" / "workspace_config.jsonc",
     )
     return str(target_path)
 

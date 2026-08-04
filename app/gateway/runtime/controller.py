@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal
 
@@ -35,12 +36,14 @@ class GatewayWorkspaceRuntimeController:
         registry: GatewayWorkspaceRegistry,
         project_root: Path,
         log_dir: Path,
+        on_registry_reconciled: Callable[[], Awaitable[None]] | None = None,
         drain_timeout_seconds: float = 30,
         drain_poll_interval_seconds: float = 0.25,
     ) -> None:
         self._registry = registry
         self._project_root = project_root
         self._log_dir = log_dir
+        self._on_registry_reconciled = on_registry_reconciled
         self._drain_timeout_seconds = drain_timeout_seconds
         self._drain_poll_interval_seconds = drain_poll_interval_seconds
         self._locks: dict[str, asyncio.Lock] = {}
@@ -343,6 +346,7 @@ class GatewayWorkspaceRuntimeController:
                 connection_id=target.remote_gateway_connection_id,
                 log_dir=self._log_dir,
             )
+            await self._reconcile_registry_dependents()
 
     async def probe_external_backend(self, workspace_id: str) -> None:
         async with self._lock(workspace_id):
@@ -470,11 +474,16 @@ class GatewayWorkspaceRuntimeController:
             registry=self._registry,
             connection_id=connection_id,
         )
+        await self._reconcile_registry_dependents()
         return await self._state_result(
             target.workspace_id,
             status,
             blockers=blockers,
         )
+
+    async def _reconcile_registry_dependents(self) -> None:
+        if self._on_registry_reconciled is not None:
+            await self._on_registry_reconciled()
 
 
 async def reconnect_gateway_workspace(

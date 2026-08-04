@@ -39,15 +39,16 @@
 
 - 删除重复测试：完整 session 流在 `test_api_endpoints.py` 和 `test_full_e2e.py` 中重复，保留一个语义最完整的版本。
 - 每个文件使用独立端口和工作区，避免共享状态。
-- 保持现有 helper 函数（`wait_for_job_done`、`normalize_text` 等）在 `utils.py` 中。
+- 共享 helper 按职责位于 `tests/support/`：`wait_for_job_done` 在
+  `api_waiters.py`，`normalize_text` 在 `assertions.py`。
 - 重命名后的文件职责单一，命名清晰。
 
 ## 最终文件列表
 
-- `tests/e2e/test_session_lifecycle.py`
-- `tests/e2e/test_job_scheduling.py`
-- `tests/e2e/test_agent_execution.py`
-- `tests/e2e/test_agent_capabilities.py`
+- `tests/e2e/backend/sessions/test_session_lifecycle.py`
+- `tests/e2e/backend/jobs/test_job_scheduling.py`
+- `tests/e2e/backend/agents/test_agent_execution.py`
+- `tests/e2e/backend/agents/test_agent_capabilities.py`
 
 ## 实施步骤
 

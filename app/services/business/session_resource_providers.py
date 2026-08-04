@@ -258,6 +258,17 @@ class BrowserResourceProvider:
                 status=resource.status,
                 resource=resource,
             )
+        if action == "resume":
+            result = await self._browser_manager.wake_browser(resource_id)
+            resource = self._to_resource(dict(result))
+            return SessionResourceControlResultDTO(
+                session_id=session_id,
+                resource_id=resource_id,
+                kind=self.kind,
+                action=action,
+                status=resource.status,
+                resource=resource,
+            )
         if action == "delete":
             result = await self._browser_manager.delete_browser(resource_id)
             deleted_browser = result.get("browser") if isinstance(result, dict) else None
@@ -295,5 +306,9 @@ class BrowserResourceProvider:
         status = str(browser.get("status") or "unknown")
         return self._resource_mapper.browser_to_resource(
             browser,
-            available_actions=browser_available_actions(status),
+            available_actions=browser_available_actions(
+                status,
+                resource_state=str(browser.get("resource_state") or ""),
+                has_checkpoint=isinstance(browser.get("checkpoint"), dict),
+            ),
         )

@@ -10,6 +10,7 @@ import type {
   GatewayRuntimeRestartResult,
   GatewayRuntimeStateResult,
   GatewayHealth,
+  DevelopmentRuntimeRestartResult,
   GatewayDirectoryList,
   GatewayManagedWorkspaceList,
   UpdateGatewayWorkspaceRequest,
@@ -17,6 +18,8 @@ import type {
   SshConnectionOptionList,
   WebUiSettings,
   WebUiSettingsUpdate,
+  GatewayThemeCatalog,
+  GatewayUiAsset,
   GatewaySessionSearchResults,
   GenerationRun,
   GenerationRunList,
@@ -24,6 +27,8 @@ import type {
   SessionGeneratorDefinition,
   SessionGeneratorList,
   WorkspaceNavigationTree,
+  CreateGatewayPortForwardRequest,
+  GatewayPortForwardList,
 } from "./types/backend";
 import { HttpRequestError, requestJson, unwrapApiData } from "./api";
 import type { CreatableSessionConnectionKind } from "./types/frontend";
@@ -102,6 +107,18 @@ export async function getGatewayHealth(port: number): Promise<GatewayHealth> {
   );
 }
 
+export async function restartDevelopmentRuntime(
+  port: number,
+): Promise<DevelopmentRuntimeRestartResult> {
+  return unwrapApiData(
+    await requestJson<APIResponse<DevelopmentRuntimeRestartResult>>(
+      port,
+      "/api/gateway/runtime/restart-development",
+      { method: "POST" },
+    ),
+  );
+}
+
 export async function listGatewayWorkspaces(
   port: number,
 ): Promise<GatewayWorkspaceList> {
@@ -109,6 +126,60 @@ export async function listGatewayWorkspaces(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
       port,
       "/api/gateway/workspaces",
+    ),
+  );
+}
+
+export async function listWorkspacePortForwards(
+  port: number,
+  workspaceId: string,
+): Promise<GatewayPortForwardList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayPortForwardList>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/port-forwards`,
+    ),
+  );
+}
+
+export async function createWorkspacePortForward(
+  port: number,
+  workspaceId: string,
+  payload: CreateGatewayPortForwardRequest,
+): Promise<GatewayPortForwardList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayPortForwardList>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/port-forwards`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  );
+}
+
+export async function deleteWorkspacePortForward(
+  port: number,
+  workspaceId: string,
+  forwardId: string,
+): Promise<GatewayPortForwardList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayPortForwardList>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}`,
+      { method: "DELETE" },
+    ),
+  );
+}
+
+export async function reconnectWorkspacePortForward(
+  port: number,
+  workspaceId: string,
+  forwardId: string,
+): Promise<GatewayPortForwardList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayPortForwardList>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}/reconnect`,
+      { method: "POST", body: "{}" },
     ),
   );
 }
@@ -556,6 +627,48 @@ export async function updateGatewayUiSettings(
       },
     ),
   );
+}
+
+export async function getGatewayThemes(port: number): Promise<GatewayThemeCatalog> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayThemeCatalog>>(port, "/api/gateway/themes"),
+  );
+}
+
+export async function listGatewayUiAssets(port: number): Promise<GatewayUiAsset[]> {
+  const result = unwrapApiData(
+    await requestJson<APIResponse<{ items: GatewayUiAsset[] }>>(
+      port,
+      "/api/gateway/ui-assets",
+    ),
+  );
+  return result.items;
+}
+
+export async function uploadGatewayUiAsset(
+  port: number,
+  file: File,
+): Promise<GatewayUiAsset> {
+  const body = new FormData();
+  body.append("file", file);
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayUiAsset>>(
+      port,
+      "/api/gateway/ui-assets",
+      { method: "POST", body },
+    ),
+  );
+}
+
+export async function deleteGatewayUiAsset(port: number, assetId: string): Promise<GatewayUiAsset[]> {
+  const result = unwrapApiData(
+    await requestJson<APIResponse<{ items: GatewayUiAsset[] }>>(
+      port,
+      `/api/gateway/ui-assets/${encodeURIComponent(assetId)}`,
+      { method: "DELETE" },
+    ),
+  );
+  return result.items;
 }
 
 export async function browseGatewayLocalDirectories(

@@ -1,5 +1,11 @@
 {
   "$schema": "./gateway_config.jsonc",
   "config_version": 1,
-  "workspaces": []
+  "workspaces": [],
+  "ui": {
+    "theme": {
+      "default_theme_id": "warm",
+      "custom_themes": []
+    }
+  }
 }

@@ -27,7 +27,12 @@ from app.agents.tools.python_execution import (
 from app.agents.tools.session_messaging import create_send_message_to_session_tool
 from app.agents.tools.session_subagent import create_session_subagent_tool
 from app.agents.tools.team import create_team_tools
-from app.agents.tools.terminal import create_persistent_terminal_tool
+from app.agents.tools.terminal import (
+    create_exec_command_tool,
+    create_kill_terminal_tool,
+    create_list_terminal_sessions_tool,
+    create_write_stdin_tool,
+)
 from app.agents.tools.testing import create_test_tool
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
@@ -88,9 +93,21 @@ def build_default_tools(
             agent_id=agent_id,
             background_message_bus=background_message_bus,
         ),
-        create_persistent_terminal_tool(
+        create_exec_command_tool(
             session_id=session_id,
             agent_id=agent_id,
+            terminal_client=terminal_manager_client,
+        ),
+        create_write_stdin_tool(
+            session_id=session_id,
+            terminal_client=terminal_manager_client,
+        ),
+        create_list_terminal_sessions_tool(
+            session_id=session_id,
+            terminal_client=terminal_manager_client,
+        ),
+        create_kill_terminal_tool(
+            session_id=session_id,
             terminal_client=terminal_manager_client,
         ),
         *build_agent_collaboration_tools(
@@ -109,24 +126,29 @@ def build_default_tools(
         ),
     ]
     if goal_service is not None:
-        tools.extend(create_goal_tools(session_id=session_id, goal_service=goal_service))
+        tools.extend(
+            create_goal_tools(session_id=session_id, goal_service=goal_service)
+        )
     if include_test_tools:
         tools.insert(0, create_test_tool())
     return tools
 
 
 __all__ = [
-    "build_default_tools",
     "build_agent_collaboration_tools",
+    "build_default_tools",
     "create_apply_patch_tool",
     "create_background_message_collection_tool",
+    "create_exec_command_tool",
+    "create_kill_terminal_tool",
+    "create_list_terminal_sessions_tool",
     "create_monitor_session_agent_end_tool",
-    "create_persistent_terminal_tool",
     "create_python_execution_tool",
     "create_send_message_to_session_tool",
     "create_session_subagent_tool",
     "create_system_time_emitter_tool",
     "create_team_tools",
     "create_test_tool",
+    "create_write_stdin_tool",
     "get_python_executable",
 ]

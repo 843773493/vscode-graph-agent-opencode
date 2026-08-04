@@ -39,6 +39,20 @@
 - **WHEN** 用户只打开聊天视图并切换该会话
 - **THEN** 网络请求不包含无上限的 Trace 读取，事件视图未打开时不传输完整事件历史
 
+### Requirement: 取消终态与运行失败具有不同语义
+
+客户端 SHALL 将用户主动 `session_interrupted` 显示为中性“已由用户中断”状态，将其他 `job_cancelled` 显示为“任务已取消”；取消事件 MUST NOT 使用运行失败文案或错误样式。只有真实 `error` 与 `job_failed` SHALL 显示为运行失败。
+
+#### Scenario: 用户点击中断生成
+
+- **WHEN** 同一 Turn 依次收到 `session_interrupted` 与伴随的 `job_cancelled`
+- **THEN** 时间线只显示一次“已由用户中断”，不显示“运行失败”或重复取消状态
+
+#### Scenario: 非用户触发的任务取消
+
+- **WHEN** Turn 只有 `job_cancelled` 而没有 `session_interrupted`
+- **THEN** 时间线显示“任务已取消”，不显示“已由用户中断”或“运行失败”
+
 ### Requirement: 长历史体验具备可重复验收
 项目 SHALL 提供隔离工作区 E2E，覆盖大量完整 Turn、大型 Markdown、慢 bootstrap、向前分页、实时更新和上下文压缩，并 SHALL 验证 Composer 先可用、最新 Turn 优先和 cursor 稳定。
 

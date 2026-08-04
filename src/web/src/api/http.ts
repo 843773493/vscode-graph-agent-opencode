@@ -171,14 +171,15 @@ export async function requestJson<T>(
 
   try {
     const localToken = await awaitWithAbort(getGatewayToken(port), abortState.signal);
+    const requestHeaders = new Headers(normalizeHeaders(headers));
+    requestHeaders.set("X-Local-Token", localToken);
+    if (!(fetchInit.body instanceof FormData)) {
+      requestHeaders.set("Content-Type", "application/json");
+    }
     const response = await awaitWithAbort(
       fetch(`${getApiBaseUrl(port)}${path}`, {
         ...fetchInit,
-        headers: {
-          "Content-Type": "application/json",
-          "X-Local-Token": localToken,
-          ...normalizeHeaders(headers),
-        },
+        headers: requestHeaders,
         signal: abortState.signal,
       }),
       abortState.signal,

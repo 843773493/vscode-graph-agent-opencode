@@ -50,7 +50,7 @@ async def test_subscribe_all_receives_all_events():
 
 **Step 2: 运行测试确认失败**
 
-Run: `pytest tests/unit/core/test_job_event_bus.py::test_subscribe_all_receives_all_events -v`
+Run: `uv run pytest tests/unit/core/test_job_event_bus.py -v`
 Expected: FAIL `AttributeError: 'JobEventBus' object has no attribute 'subscribe_all'`
 
 **Step 3: 实现协议与全局订阅**
@@ -102,7 +102,7 @@ if self._listener_count > 0:
 
 **Step 4: 运行测试确认通过**
 
-Run: `pytest tests/unit/core/test_job_event_bus.py -v`
+Run: `uv run pytest tests/unit/core/test_job_event_bus.py -v`
 Expected: PASS
 
 **Step 5: Commit**
@@ -156,7 +156,7 @@ async def test_store_append_and_stream(tmp_path: Path):
 
 **Step 2: 运行测试确认失败**
 
-Run: `pytest tests/unit/services/infrastructure/test_trace_event_store.py::test_store_append_and_stream -v`
+Run: `uv run pytest tests/unit/services/infrastructure/test_trace_event_store.py -v`
 Expected: FAIL `ModuleNotFoundError: No module named 'app.services.infrastructure.trace_event_store'`
 
 **Step 3: 实现 TraceEventStore**
@@ -230,7 +230,7 @@ class TraceEventStore:
 
 **Step 4: 运行测试确认通过**
 
-Run: `pytest tests/unit/services/infrastructure/test_trace_event_store.py -v`
+Run: `uv run pytest tests/unit/services/infrastructure/test_trace_event_store.py -v`
 Expected: PASS
 
 **Step 5: Commit**
@@ -291,7 +291,7 @@ async def test_recorder_persists_job_events(tmp_path: Path):
 
 **Step 2: 运行测试确认失败**
 
-Run: `pytest tests/unit/services/orchestration/test_trace_event_recorder.py::test_recorder_persists_job_events -v`
+Run: `uv run pytest tests/unit/services/infrastructure/test_trace_event_recorder.py::test_recorder_persists_job_events -v`
 Expected: FAIL `ModuleNotFoundError`
 
 **Step 3: 实现 TraceEventRecorder**
@@ -388,7 +388,7 @@ def build_app_container() -> AppContainer:
 
 **Step 5: 运行测试确认通过**
 
-Run: `pytest tests/unit/services/orchestration/test_trace_event_recorder.py -v`
+Run: `uv run pytest tests/unit/services/infrastructure/test_trace_event_recorder.py -v`
 Expected: PASS
 
 **Step 6: Commit**
@@ -458,9 +458,8 @@ def _get_job_id(self, runtime: Runtime[Any]) -> str:
 
 **Step 6: 运行相关测试**
 
-Run: `pytest tests/unit/agents/test_agent_middleware.py -v`（如果有）
-如果无单元测试，运行：
-Run: `pytest tests/e2e/test_deepagent_integration.py -v -s`
+若当前中间件实现存在对应单元测试，先运行该文件；当前可执行的回归命令为：
+Run: `uv run pytest tests/e2e/backend/agents/test_deepagent_integration.py -v -s`
 Expected: 当前测试可能仍通过，但 trace 文件现在由 recorder 写入。
 
 **Step 7: Commit**
@@ -536,7 +535,7 @@ async def stream_session_traces(...):
 
 **Step 5: 运行测试**
 
-Run: `pytest tests/e2e/test_deepagent_integration.py -v -s`
+Run: `uv run pytest tests/e2e/backend/agents/test_deepagent_integration.py -v -s`
 Expected: 可能通过（因为测试最后拉 traces），也可能因返回格式改变而失败。
 
 **Step 6: Commit**
@@ -552,7 +551,7 @@ git commit -m "feat(sessions): serve unified events from TraceEventStore"
 
 **Files:**
 - Modify: `app/api/sessions.py`
-- Test: `tests/e2e/test_deepagent_integration.py`
+- Test: `tests/e2e/backend/agents/test_deepagent_integration.py`
 
 **Step 1: 在 sessions.py 增加新端点**
 
@@ -573,7 +572,7 @@ async def stream_session_events(
 
 **Step 2: 重构 e2e 测试使用新接口**
 
-修改 `tests/e2e/test_deepagent_integration.py`：
+修改 `tests/e2e/backend/agents/test_deepagent_integration.py`：
 
 ```python
 async with client.stream("GET", f"/api/v1/sessions/{session_id}/events/stream") as stream_response:
@@ -619,13 +618,13 @@ assert "2333" in tool_end["payload"]["result"] or "2333" in json.dumps(tool_end[
 
 **Step 4: 运行 e2e 测试**
 
-Run: `pytest tests/e2e/test_deepagent_integration.py -v -s`
+Run: `uv run pytest tests/e2e/backend/agents/test_deepagent_integration.py -v -s`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add app/api/sessions.py tests/e2e/test_deepagent_integration.py
+git add app/api/sessions.py tests/e2e/backend/agents/test_deepagent_integration.py
 git commit -m "feat(api): add /sessions/{id}/events/stream and update e2e test"
 ```
 
@@ -661,7 +660,7 @@ async def list_job_events(...):
 
 **Step 3: 运行测试**
 
-Run: `pytest tests/e2e/ -v -s`
+Run: `uv run pytest tests/e2e/ -v -s`
 Expected: PASS
 
 **Step 4: Commit**
@@ -677,7 +676,7 @@ git commit -m "refactor(jobs): list_job_events returns unified Event list"
 
 **Step 1: 运行全量测试**
 
-Run: `pytest tests/e2e/test_deepagent_integration.py tests/unit/ -v`
+Run: `uv run pytest tests/e2e/backend/agents/test_deepagent_integration.py tests/unit/ -v`
 Expected: PASS
 
 **Step 2: 如果失败，使用 systematic-debugging 定位**

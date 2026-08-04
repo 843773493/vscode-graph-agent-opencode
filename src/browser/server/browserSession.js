@@ -531,8 +531,9 @@ export class BrowserSession extends EventEmitter {
     return await this.runResourceTransition(async () => {
       if (!["frozen", "discarded"].includes(this.record.resource_state)) return this.snapshot();
       const previousState = this.record.resource_state;
+      const previousStatus = this.record.status;
       if (previousState === "frozen") this.assertRunning();
-      if (previousState === "discarded" && this.record.status !== "running") {
+      if (previousState === "discarded" && !["running", "lost"].includes(this.record.status)) {
         throw new Error(`已冷回收的浏览器状态非法: browser_id=${this.id}, status=${this.record.status}`);
       }
       this.record.resource_state = "restoring";
@@ -554,6 +555,7 @@ export class BrowserSession extends EventEmitter {
           }
         }
       } catch (error) {
+        this.record.status = previousStatus;
         this.record.resource_state = previousState;
         this.record.resource_transition_error = error instanceof Error ? error.message : String(error);
         await this.manager.persist();
@@ -561,6 +563,9 @@ export class BrowserSession extends EventEmitter {
         throw error;
       }
       this.lastFrame = null;
+      this.record.status = "running";
+      this.record.ended_at = null;
+      this.record.error_message = null;
       this.cachedProtectionReasons = [];
       this.cachedHardProtectionReasons = [];
       this.cachedSoftProtectionReasons = [];

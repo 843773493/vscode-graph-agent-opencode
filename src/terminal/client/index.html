@@ -29,6 +29,16 @@
             <span class="sr-only">连接终端</span>
           </button>
           <button
+            id="search-terminal"
+            class="icon-button terminal-icon-button"
+            type="button"
+            title="搜索终端内容（Ctrl+F / ⌘F）"
+            aria-label="搜索终端内容"
+          >
+            <span class="button-icon codicon codicon-search" aria-hidden="true"></span>
+            <span class="sr-only">搜索终端内容</span>
+          </button>
+          <button
             id="refresh-snapshot"
             class="icon-button terminal-icon-button"
             type="button"
@@ -61,7 +71,29 @@
         </div>
       </header>
       <section id="status-line" class="status-line">等待连接</section>
-      <section id="terminal" class="terminal"></section>
+      <section class="terminal-stage">
+        <section id="terminal-search-bar" class="terminal-search-bar" hidden>
+          <input
+            id="terminal-search-input"
+            type="search"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="搜索终端内容"
+            placeholder="搜索终端内容"
+          />
+          <span id="terminal-search-result" class="terminal-search-result" aria-live="polite"></span>
+          <button id="terminal-search-previous" class="icon-button terminal-icon-button" type="button" title="上一个匹配" aria-label="上一个匹配">
+            <span class="button-icon codicon codicon-arrow-up" aria-hidden="true"></span>
+          </button>
+          <button id="terminal-search-next" class="icon-button terminal-icon-button" type="button" title="下一个匹配" aria-label="下一个匹配">
+            <span class="button-icon codicon codicon-arrow-down" aria-hidden="true"></span>
+          </button>
+          <button id="terminal-search-close" class="icon-button terminal-icon-button" type="button" title="关闭搜索" aria-label="关闭搜索">
+            <span class="button-icon codicon codicon-close" aria-hidden="true"></span>
+          </button>
+        </section>
+        <section id="terminal" class="terminal"></section>
+      </section>
       <form id="agent-form" class="agent-form">
         <input id="agent-input" type="text" autocomplete="off" placeholder="从网页向终端写入命令" />
         <button
@@ -78,6 +110,7 @@
     <script src="./config.js"></script>
     <script src="./vendor/xterm/xterm.js"></script>
     <script src="./vendor/xterm/addon-fit.js"></script>
+    <script src="./vendor/xterm/addon-search.js"></script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

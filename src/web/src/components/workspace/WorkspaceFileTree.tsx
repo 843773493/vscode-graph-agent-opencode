@@ -10,6 +10,8 @@ import { Virtuoso } from "react-virtuoso";
 import {
   addSessionFileTreeShortcut,
   applyFileTreeShortcutToWorkspace,
+  copyWorkspaceFileEntry,
+  createWorkspaceFileDownloadRequest,
   createWorkspaceFileEntry,
   decodeFileTreePath,
   DEFAULT_BACKEND_PORT,
@@ -19,6 +21,7 @@ import {
   pasteWorkspaceFileEntries,
   removeSessionFileTreeShortcut,
   revealWorkspaceFileEntry,
+  uploadWorkspaceFileEntries,
 } from "../../api";
 import type {
   FileTreeShortcut,
@@ -26,10 +29,16 @@ import type {
   WorkspaceFileList,
   WorkspaceFileNode,
 } from "../../types/backend";
+import type { WorkspaceFileLocation } from "../../api";
 import {
   copyTextToClipboard,
+  readFilePathTextFromClipboardData,
   readFilePathTextFromClipboard,
 } from "../../utils/clipboard";
+import {
+  filesFromClipboardData,
+  getFileTransferHost,
+} from "../../utils/fileTransferHost";
 import {
   WORKSPACE_FILE_CHANGES_EVENT,
   type WorkspaceFileChangesEventDetail,
@@ -76,9 +85,37 @@ interface FileTreeContextMenu {
   y: number;
 }
 
+interface WorkspaceClipboardEntry {
+  location: WorkspaceFileLocation;
+  absolutePath: string;
+  label: string;
+  workspaceId: string | null;
+}
+
 interface DirectoryRequest {
   controller: AbortController;
   promise: Promise<boolean>;
+}
+
+export async function runCurrentAndDefaultShortcutMutation(
+  updateCurrentSession: () => Promise<SessionFileTreeSettings>,
+  updateWorkspaceDefault: () => Promise<SessionFileTreeSettings>,
+  recoverAuthoritativeState: () => Promise<void>,
+): Promise<SessionFileTreeSettings> {
+  try {
+    await updateCurrentSession();
+    return await updateWorkspaceDefault();
+  } catch (mutationError) {
+    try {
+      await recoverAuthoritativeState();
+    } catch (recoveryError) {
+      throw new AggregateError(
+        [mutationError, recoveryError],
+        "快捷路径组合操作失败，且重新同步后端状态失败",
+      );
+    }
+    throw mutationError;
+  }
 }
 
 function fileIcon(node: WorkspaceFileNode): string {
@@ -234,6 +271,10 @@ export default function WorkspaceFileTree({
   const [searchQuery, setSearchQuery] = useState("");
   const [settings, setSettings] = useState<SessionFileTreeSettings | null>(null);
   const [contextMenu, setContextMenu] = useState<FileTreeContextMenu | null>(null);
+  const [copiedEntry, setCopiedEntry] = useState<WorkspaceClipboardEntry | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadTargetRef = useRef<FileTreeContextMenu | null>(null);
   const lastCollapseVersionRef = useRef(collapseVersion);
   const restoredExpandedPathsRef = useRef(restoredExpandedPaths);
   const directoryRequestsRef = useRef<Map<string, DirectoryRequest>>(new Map());
@@ -778,12 +819,33 @@ export default function WorkspaceFileTree({
     onStatusChange(`已创建${kind === "file" ? "文件" : "文件夹"}: ${name}`);
   };
 
-  const pasteEntries = async (target: FileTreeContextMenu) => {
+  const pasteEntries = async (
+    target: FileTreeContextMenu,
+    clipboardText?: string,
+  ) => {
     const directoryPath = contextTargetDirectory(target);
     try {
       const sourcePaths = parseClipboardFilePaths(
-        await readFilePathTextFromClipboard(),
+        clipboardText ?? await readFilePathTextFromClipboard(),
       );
+      if (
+        copiedEntry
+        && sourcePaths.length === 1
+        && sourcePaths[0] === copiedEntry.absolutePath
+      ) {
+        if (copiedEntry.workspaceId !== workspaceId) {
+          throw new Error("暂不支持跨工作区粘贴，请在来源工作区下载后再上传");
+        }
+        const result = await copyWorkspaceFileEntry(
+          port,
+          directoryPath,
+          copiedEntry.location,
+          workspaceId,
+        );
+        replaceDirectory(result);
+        onStatusChange(`已粘贴: ${copiedEntry.label}`);
+        return;
+      }
       const result = await pasteWorkspaceFileEntries(
         port,
         directoryPath,
@@ -798,25 +860,91 @@ export default function WorkspaceFileTree({
     }
   };
 
+  const uploadEntries = async (
+    target: FileTreeContextMenu,
+    files: readonly File[],
+  ) => {
+    const directoryPath = contextTargetDirectory(target);
+    try {
+      const result = await uploadWorkspaceFileEntries(
+        port,
+        directoryPath,
+        files,
+        workspaceId,
+      );
+      replaceDirectory(result);
+      onStatusChange(`已上传 ${files.length} 个本地文件`);
+    } catch (error) {
+      await loadDirectory(directoryPath, true);
+      throw error;
+    }
+  };
+
+  const copyEntryToClipboard = async (target: FileTreeContextMenu) => {
+    const location = decodeFileTreePath(target.treePath);
+    setCopiedEntry({
+      location,
+      absolutePath: target.absolutePath,
+      label: target.label,
+      workspaceId,
+    });
+    await copyTextToClipboard(target.absolutePath);
+    onStatusChange(`已复制文件: ${target.absolutePath}`);
+  };
+
   useEffect(() => {
     if (!contextMenu) {
       return;
     }
-    const handlePasteShortcut = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "v") {
+    const handlePaste = (event: ClipboardEvent) => {
+      event.preventDefault();
+      const target = contextMenu;
+      setContextMenu(null);
+      const files = filesFromClipboardData(event.clipboardData);
+      if (files.length > 0) {
+        void uploadEntries(target, files).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          onStatusChange(`上传本地文件失败: ${message}`);
+        });
+        return;
+      }
+      let clipboardText: string;
+      try {
+        clipboardText = readFilePathTextFromClipboardData(event.clipboardData);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        onStatusChange(`粘贴失败: ${message}`);
+        return;
+      }
+      void pasteEntries(target, clipboardText).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        onStatusChange(`粘贴失败: ${message}`);
+      });
+    };
+    const handleCopyShortcut = (event: KeyboardEvent) => {
+      if (
+        !(event.ctrlKey || event.metaKey)
+        || event.key.toLowerCase() !== "c"
+        || contextMenu.treePath === ROOT_PATH
+        || contextMenu.treePath === FILESYSTEM_ROOT_PATH
+      ) {
         return;
       }
       event.preventDefault();
       const target = contextMenu;
       setContextMenu(null);
-      void pasteEntries(target).catch((error: unknown) => {
+      void copyEntryToClipboard(target).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        onStatusChange(`粘贴失败: ${message}`);
+        onStatusChange(`复制文件失败: ${message}`);
       });
     };
-    window.addEventListener("keydown", handlePasteShortcut);
-    return () => window.removeEventListener("keydown", handlePasteShortcut);
-  }, [contextMenu]);
+    window.addEventListener("paste", handlePaste);
+    window.addEventListener("keydown", handleCopyShortcut);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+      window.removeEventListener("keydown", handleCopyShortcut);
+    };
+  }, [contextMenu, copiedEntry]);
 
   const runContextAction = (
     target: FileTreeContextMenu,
@@ -824,9 +952,12 @@ export default function WorkspaceFileTree({
     action: () => Promise<unknown>,
   ) => {
     setContextMenu(null);
+    setActionError(null);
     void action().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      onStatusChange(`${failurePrefix}: ${message}`);
+      const failureMessage = `${failurePrefix}: ${message}`;
+      setActionError(failureMessage);
+      onStatusChange(failureMessage);
     });
   };
 
@@ -844,41 +975,73 @@ export default function WorkspaceFileTree({
     onStatusChange(`已添加会话快捷路径: ${label}`);
   };
 
-  const addShortcutToNewSessions = async (treePath: string, label: string) => {
+  const refreshShortcutSettings = async () => {
     if (!sessionId) {
-      throw new Error("设置新会话默认快捷路径需要当前会话");
+      throw new Error("刷新快捷路径需要当前会话");
     }
-    const path = absolutePathForTreePath(treePath);
-    const workspaceSettings = await applyFileTreeShortcutToWorkspace(
-      port,
-      sessionId,
-      path,
-      label,
-      workspaceId,
-    );
-    acceptFileTreeSettings(workspaceSettings);
-    onStatusChange(`已将 ${label} 添加为新会话默认快捷路径`);
+    const result = await getSessionFileTreeSettings(port, sessionId, workspaceId);
+    acceptFileTreeSettings(result);
   };
 
-  const applyShortcutToNewSessions = async (shortcut: FileTreeShortcut) => {
+  const addAbsoluteShortcutAndDefault = async (path: string, label: string) => {
     if (!sessionId) {
-      throw new Error("设置新会话默认快捷路径需要当前会话");
+      throw new Error("添加当前会话和新会话默认快捷路径需要当前会话");
     }
-    const result = await applyFileTreeShortcutToWorkspace(
-      port,
-      sessionId,
-      shortcut.path,
-      shortcut.label,
-      workspaceId,
+    const result = await runCurrentAndDefaultShortcutMutation(
+      () => addSessionFileTreeShortcut(
+        port,
+        sessionId,
+        { path, label },
+        workspaceId,
+      ),
+      () => applyFileTreeShortcutToWorkspace(
+        port,
+        sessionId,
+        path,
+        label,
+        workspaceId,
+      ),
+      refreshShortcutSettings,
     );
     acceptFileTreeSettings(result);
-    onStatusChange(`已将 ${shortcut.label} 设为新会话默认快捷路径`);
+    onStatusChange(`已将 ${label} 添加到当前会话，并设为新会话默认快捷路径`);
   };
 
-  const removeShortcut = async (
-    path: string,
-    source: "session" | "workspace",
-  ) => {
+  const addShortcutAndDefault = async (treePath: string, label: string) => {
+    await addAbsoluteShortcutAndDefault(
+      absolutePathForTreePath(treePath),
+      label,
+    );
+  };
+
+  const removeShortcutAndDefault = async (shortcut: FileTreeShortcut) => {
+    if (!sessionId) {
+      throw new Error("删除当前会话和新会话默认快捷路径需要当前会话");
+    }
+    const result = await runCurrentAndDefaultShortcutMutation(
+      () => removeSessionFileTreeShortcut(
+        port,
+        sessionId,
+        shortcut.path,
+        "session",
+        workspaceId,
+      ),
+      () => removeSessionFileTreeShortcut(
+        port,
+        sessionId,
+        shortcut.path,
+        "workspace",
+        workspaceId,
+      ),
+      refreshShortcutSettings,
+    );
+    acceptFileTreeSettings(result);
+    onStatusChange(
+      `已从当前会话和新会话默认快捷路径中删除: ${shortcut.path}`,
+    );
+  };
+
+  const removeShortcut = async (path: string) => {
     if (!sessionId) {
       throw new Error("删除快捷路径需要当前会话");
     }
@@ -886,15 +1049,11 @@ export default function WorkspaceFileTree({
       port,
       sessionId,
       path,
-      source,
+      "session",
       workspaceId,
     );
     acceptFileTreeSettings(result);
-    onStatusChange(
-      source === "workspace"
-        ? `已从新会话默认快捷路径中删除: ${path}`
-        : `已删除会话快捷路径: ${path}`,
-    );
+    onStatusChange(`已删除会话快捷路径: ${path}`);
   };
 
   const handleNodeClick = (node: WorkspaceFileNode) => {
@@ -1164,6 +1323,19 @@ export default function WorkspaceFileTree({
           />
         </div>
       ) : null}
+      {actionError ? (
+        <div className="files-tree-action-error" role="alert">
+          <span className="codicon codicon-error" aria-hidden="true" />
+          <span>{actionError}</span>
+          <button
+            type="button"
+            aria-label="关闭文件操作错误"
+            onClick={() => setActionError(null)}
+          >
+            <span className="codicon codicon-close" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
       <div className="files-tree-root" role="tree" aria-label="工作区文件树">
         {visibleRows.length > FILE_TREE_VIRTUALIZATION_THRESHOLD ? (
           <Virtuoso
@@ -1247,6 +1419,26 @@ export default function WorkspaceFileTree({
           </>
         )}
       </div>
+      <input
+        ref={uploadInputRef}
+        type="file"
+        multiple
+        hidden
+        aria-label="上传本地文件"
+        onChange={(event) => {
+          const target = uploadTargetRef.current;
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = "";
+          uploadTargetRef.current = null;
+          if (!target || files.length === 0) {
+            return;
+          }
+          void uploadEntries(target, files).catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            onStatusChange(`上传本地文件失败: ${message}`);
+          });
+        }}
+      />
       {contextMenu ? (
         <AnchoredOverlay
           open
@@ -1277,7 +1469,36 @@ export default function WorkspaceFileTree({
             <div className="files-tree-context-separator" role="separator" />
             <button type="button" role="menuitem" onClick={() => {
               const target = contextMenu;
-              runContextAction(target, "粘贴失败", () => pasteEntries(target));
+              setContextMenu(null);
+              uploadTargetRef.current = target;
+              uploadInputRef.current?.click();
+            }}>
+              <span className="codicon codicon-cloud-upload agent-sessions-menu-item-icon" aria-hidden="true" />
+              <span className="agent-sessions-menu-item-label">上传本地文件</span>
+            </button>
+            {contextMenu.treePath !== ROOT_PATH
+              && contextMenu.treePath !== FILESYSTEM_ROOT_PATH ? (
+                <button type="button" role="menuitem" onClick={() => {
+                  const target = contextMenu;
+                  setContextMenu(null);
+                  void copyEntryToClipboard(target)
+                    .catch((error: unknown) => {
+                      const message = error instanceof Error ? error.message : String(error);
+                      onStatusChange(`复制文件失败: ${message}`);
+                    });
+                }}>
+                  <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
+                  <span className="agent-sessions-menu-item-label">复制</span>
+                  <span className="files-tree-context-keybinding">Ctrl+C</span>
+                </button>
+              ) : null}
+            <button type="button" role="menuitem" onClick={() => {
+              const target = contextMenu;
+              runContextAction(
+                target,
+                "粘贴失败",
+                () => pasteEntries(target, copiedEntry?.absolutePath),
+              );
             }}>
               <span className="codicon codicon-clippy agent-sessions-menu-item-icon" aria-hidden="true" />
               <span className="agent-sessions-menu-item-label">粘贴</span>
@@ -1291,7 +1512,7 @@ export default function WorkspaceFileTree({
                   runContextAction(
                     target,
                     "删除快捷路径失败",
-                    () => removeShortcut(target.absolutePath, "session"),
+                    () => removeShortcut(target.absolutePath),
                   );
                 }}>
                   <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
@@ -1303,11 +1524,11 @@ export default function WorkspaceFileTree({
                   type="button"
                   className="files-tree-context-apply"
                   title={defaultShortcutPaths.has(contextMenu.absolutePath)
-                    ? "从新会话默认快捷路径中移除；只影响之后创建的会话"
-                    : "添加为新会话默认快捷路径；只影响之后创建的会话"}
+                    ? "从当前会话和新会话默认快捷路径中删除"
+                    : "添加到当前会话，并设为新会话默认快捷路径"}
                   aria-label={defaultShortcutPaths.has(contextMenu.absolutePath)
-                    ? `从新会话默认快捷路径中移除 ${contextMenu.label}`
-                    : `将 ${contextMenu.label} 添加为新会话默认快捷路径`}
+                    ? `从当前会话和新会话默认快捷路径中删除 ${contextMenu.label}`
+                    : `将 ${contextMenu.label} 添加到当前会话并设为新会话默认快捷路径`}
                   onClick={() => {
                     const target = shortcuts.find(
                       (item) => item.path === contextMenu.absolutePath,
@@ -1321,11 +1542,11 @@ export default function WorkspaceFileTree({
                       return;
                     }
                     const action = isDefault
-                      ? removeShortcut(target.path, "workspace")
-                      : applyShortcutToNewSessions(target);
+                      ? removeShortcutAndDefault(target)
+                      : addAbsoluteShortcutAndDefault(target.path, target.label);
                     void action.catch((error: unknown) => {
                       const message = error instanceof Error ? error.message : String(error);
-                      onStatusChange(`更新新会话默认快捷路径失败: ${message}`);
+                      onStatusChange(`更新当前会话和新会话默认快捷路径失败: ${message}`);
                     });
                   }}
                 >
@@ -1353,14 +1574,14 @@ export default function WorkspaceFileTree({
                 <button
                   type="button"
                   className="files-tree-context-apply"
-                  title="添加为新会话默认快捷路径；只影响之后创建的会话"
-                  aria-label={`将 ${contextMenu.label} 添加为新会话默认快捷路径`}
+                  title="添加到当前会话，并设为新会话默认快捷路径"
+                  aria-label={`将 ${contextMenu.label} 添加到当前会话并设为新会话默认快捷路径`}
                   onClick={() => {
                     const target = contextMenu;
                     runContextAction(
                       target,
-                      "添加新会话默认快捷路径失败",
-                      () => addShortcutToNewSessions(target.treePath, target.label),
+                      "添加当前会话和新会话默认快捷路径失败",
+                      () => addShortcutAndDefault(target.treePath, target.label),
                     );
                   }}
                 >
@@ -1382,6 +1603,31 @@ export default function WorkspaceFileTree({
               <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
               <span className="agent-sessions-menu-item-label">复制路径</span>
             </button>
+            {contextMenu.treePath !== ROOT_PATH
+              && contextMenu.treePath !== FILESYSTEM_ROOT_PATH ? (
+                <button type="button" role="menuitem" onClick={() => {
+                  const target = contextMenu;
+                  runContextAction(
+                    target,
+                    "下载失败",
+                    async () => {
+                      const request = await createWorkspaceFileDownloadRequest(
+                        port,
+                        target.treePath,
+                        target.kind === "directory"
+                          ? `${target.label}.zip`
+                          : target.label,
+                        workspaceId,
+                      );
+                      await getFileTransferHost().downloadWorkspaceFile(request);
+                      onStatusChange(`已开始下载: ${target.label}`);
+                    },
+                  );
+                }}>
+                  <span className="codicon codicon-cloud-download agent-sessions-menu-item-icon" aria-hidden="true" />
+                  <span className="agent-sessions-menu-item-label">下载</span>
+                </button>
+              ) : null}
             <button type="button" role="menuitem" onClick={() => {
               const target = contextMenu;
               runContextAction(

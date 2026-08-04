@@ -76,6 +76,10 @@ import {
   selectComposerState,
   type ComposerStateSnapshot,
 } from "./state/composerState";
+import {
+  createLatestSerialTaskQueue,
+  createSerialTaskQueue,
+} from "./hooks/serialTaskQueue";
 
 export { getConversationsForSession } from "./state/conversations";
 export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
@@ -192,6 +196,7 @@ interface AppContextType {
   interruptSession: () => void;
   selectSession: (sessionId: string) => void;
   selectWorkspaceSession: (workspaceId: string, sessionId: string) => void;
+  openWorkspaceSession: (workspaceId: string, sessionId: string) => Promise<void>;
   createSession: (
     title?: string,
     workspaceId?: string | null,
@@ -319,6 +324,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const latestStateRef = useRef(state);
   latestStateRef.current = state;
+  const workspaceActivationQueueRef = useRef(createSerialTaskQueue());
+  const workspaceSessionSelectionQueueRef = useRef(createLatestSerialTaskQueue());
   const currentSessionId = state.currentSession?.session_id ?? null;
   const defaultGatewayWorkspaceId =
     state.gatewayWorkspaces.find((workspace) => workspace.system_default)
@@ -615,31 +622,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [refreshSessions]);
 
   const activateGatewayWorkspace = useCallback(
-    async (workspaceId: string, preferredSessionId?: string | null) => {
+    (workspaceId: string, preferredSessionId?: string | null) => {
       const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      invalidateWorkspaceRefreshes();
       resetWorkspaceScopedState();
-      try {
-        await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
-        await finishWorkspaceRefresh(preferredSessionId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => ({
-          ...prev,
-          workspaceSwitching: false,
-          gatewayError: message,
-          error: message,
-          status: "工作区切换失败",
-          isBootstrapping: false,
-        }));
-        throw error;
-      }
+      return workspaceActivationQueueRef.current.enqueue(async () => {
+        try {
+          await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
+          await finishWorkspaceRefresh(preferredSessionId);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((prev) => ({
+            ...prev,
+            workspaceSwitching: false,
+            gatewayError: message,
+            error: message,
+            status: "工作区切换失败",
+            isBootstrapping: false,
+          }));
+          throw error;
+        }
+      });
     },
     [
       finishWorkspaceRefresh,
+      invalidateWorkspaceRefreshes,
       resetWorkspaceScopedState,
       state.apiPort,
     ],
   );
+
+  const openWorkspaceSession = useCallback((workspaceId: string, sessionId: string) => {
+    return workspaceSessionSelectionQueueRef.current.enqueue(async () => {
+      const latestState = latestStateRef.current;
+      if (
+        workspaceId !== latestState.activeGatewayWorkspaceId
+        || latestState.workspaceSwitching
+      ) {
+        await activateGatewayWorkspace(workspaceId, sessionId);
+        return;
+      }
+      selectSession(sessionId);
+    });
+  }, [activateGatewayWorkspace, selectSession]);
 
   const refreshGatewayState = useCallback(async () => {
     setState((prev) => ({
@@ -716,18 +741,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     async (workspaceId: string) => {
       const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
       setState((prev) => ({ ...prev, gatewayError: null, status: "正在启动工作区" }));
+      let result;
       try {
-        const result = await apiStartManagedGatewayWorkspaceBackend(
+        result = await apiStartManagedGatewayWorkspaceBackend(
           resolvedApiPort,
           workspaceId,
         );
-        setState((prev) => ({
-          ...prev,
-          gatewayWorkspaces: result.workspaces.items,
-          activeGatewayWorkspaceId: result.workspaces.active_workspace_id,
-          status: "工作区已启动",
-        }));
-        await finishWorkspaceRefresh(currentSessionId);
       } catch (error) {
         try {
           await refreshGatewayState();
@@ -737,6 +756,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const message = error instanceof Error ? error.message : String(error);
         setState((prev) => ({ ...prev, gatewayError: message, error: message, status: `启动工作区失败: ${message}` }));
         throw error;
+      }
+      setState((prev) => ({
+        ...prev,
+        gatewayWorkspaces: result.workspaces.items,
+        activeGatewayWorkspaceId: result.workspaces.active_workspace_id,
+        gatewayError: null,
+        error: null,
+        status: "工作区已启动",
+      }));
+      try {
+        await finishWorkspaceRefresh(currentSessionId);
+      } catch (error) {
+        const message = `工作区已启动，但刷新 Gateway 状态失败: ${error instanceof Error ? error.message : String(error)}`;
+        setState((prev) => ({
+          ...prev,
+          workspaceSwitching: false,
+          gatewayError: message,
+          error: message,
+          status: message,
+        }));
       }
     },
     [currentSessionId, finishWorkspaceRefresh, refreshGatewayState, state.apiPort],
@@ -1204,6 +1243,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       interruptSession: interruptSessionCallback,
       selectSession,
       selectWorkspaceSession,
+      openWorkspaceSession,
       createSession,
       forkSessionContext,
       startNewSessionDraft,
@@ -1262,6 +1302,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       interruptSessionCallback,
       selectSession,
       selectWorkspaceSession,
+      openWorkspaceSession,
       createSession,
       forkSessionContext,
       startNewSessionDraft,

@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import codecs
-import heapq
 import hashlib
+import heapq
 import json
 import mimetypes
 import os
@@ -13,8 +13,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import BinaryIO
 
 from app.core.path_utils import (
     get_runtime_workspace_root,
@@ -525,6 +527,168 @@ class WorkspaceService:
             else:
                 shutil.copy2(source, destination)
         return await self.list_files(path=display_path, scope=scope)
+
+    async def copy_file_entry(
+        self,
+        *,
+        directory_path: str,
+        scope: WorkspaceFileScope,
+        source_path: str,
+        source_scope: WorkspaceFileScope,
+    ) -> WorkspaceFileListDTO:
+        source, source_display_path = self._resolve_file_tree_path(
+            source_path,
+            scope=source_scope,
+            allow_empty=False,
+        )
+        if source.is_symlink():
+            raise ValueError(f"暂不支持复制符号链接: {source_display_path}")
+        if not source.exists():
+            raise FileNotFoundError(f"复制来源不存在: {source_display_path}")
+        if not source.is_file() and not source.is_dir():
+            raise ValueError(f"复制来源不是文件或目录: {source_display_path}")
+
+        target_directory, display_path = self._resolve_file_tree_path(
+            directory_path,
+            scope=scope,
+            allow_empty=True,
+        )
+        if not target_directory.exists():
+            raise FileNotFoundError(f"目标目录不存在: {display_path or '.'}")
+        if not target_directory.is_dir():
+            raise NotADirectoryError(f"目标路径不是目录: {display_path or '.'}")
+        if source.is_dir() and target_directory.is_relative_to(source):
+            raise ValueError(f"不能把目录复制到自身内部: {source_display_path}")
+
+        destination = target_directory / source.name
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(f"复制目标已存在: {destination}")
+
+        def copy_entry() -> None:
+            staging_root = Path(
+                tempfile.mkdtemp(prefix=f".{source.name}-copy-", dir=target_directory)
+            )
+            staged = staging_root / source.name
+            try:
+                if source.is_dir():
+                    shutil.copytree(source, staged)
+                else:
+                    shutil.copy2(source, staged)
+                os.replace(staged, destination)
+            finally:
+                shutil.rmtree(staging_root, ignore_errors=True)
+
+        await asyncio.to_thread(copy_entry)
+        return await self.list_files(path=display_path, scope=scope)
+
+    async def upload_file_entries(
+        self,
+        *,
+        directory_path: str,
+        scope: WorkspaceFileScope,
+        entries: list[tuple[str, BinaryIO]],
+    ) -> WorkspaceFileListDTO:
+        target_directory, display_path = self._resolve_file_tree_path(
+            directory_path,
+            scope=scope,
+            allow_empty=True,
+        )
+        if not target_directory.exists():
+            raise FileNotFoundError(f"上传目标目录不存在: {display_path or '.'}")
+        if not target_directory.is_dir():
+            raise NotADirectoryError(f"上传目标路径不是目录: {display_path or '.'}")
+        if not entries:
+            raise ValueError("上传内容不能为空")
+
+        destinations: list[tuple[Path, BinaryIO]] = []
+        unique_destinations: set[Path] = set()
+        for relative_path, stream in entries:
+            normalized = relative_path.replace("\\", "/").strip("/")
+            parts = normalized.split("/") if normalized else []
+            if not parts or any(part in {"", ".", ".."} for part in parts):
+                raise ValueError(f"上传文件相对路径无效: {relative_path}")
+            destination = safe_join(target_directory, normalized)
+            if destination in unique_destinations:
+                raise FileExistsError(f"上传内容包含重复路径: {normalized}")
+            if destination.exists() or destination.is_symlink():
+                raise FileExistsError(f"上传目标已存在: {destination}")
+            unique_destinations.add(destination)
+            destinations.append((destination, stream))
+
+        created_files: list[Path] = []
+        created_directories: list[Path] = []
+
+        def write_entries() -> None:
+            try:
+                for destination, stream in destinations:
+                    missing_parents: list[Path] = []
+                    parent = destination.parent
+                    while parent != target_directory and not parent.exists():
+                        missing_parents.append(parent)
+                        parent = parent.parent
+                    for missing_parent in reversed(missing_parents):
+                        missing_parent.mkdir()
+                        created_directories.append(missing_parent)
+                    with destination.open("xb") as output:
+                        created_files.append(destination)
+                        shutil.copyfileobj(stream, output)
+            except BaseException:
+                for created_file in reversed(created_files):
+                    created_file.unlink(missing_ok=True)
+                for created_directory in reversed(created_directories):
+                    created_directory.rmdir()
+                raise
+
+        await asyncio.to_thread(write_entries)
+        return await self.list_files(path=display_path, scope=scope)
+
+    def prepare_file_download(
+        self,
+        *,
+        path: str,
+        scope: WorkspaceFileScope,
+    ) -> tuple[Path, str, str, bool]:
+        target, display_path = self._resolve_file_tree_path(
+            path,
+            scope=scope,
+            allow_empty=False,
+        )
+        if target.is_symlink():
+            raise ValueError(f"暂不支持下载符号链接: {display_path}")
+        if not target.exists():
+            raise FileNotFoundError(f"下载路径不存在: {display_path}")
+        if target.is_file():
+            media_type, _ = mimetypes.guess_type(target.name)
+            return target, target.name, media_type or "application/octet-stream", False
+        if not target.is_dir():
+            raise ValueError(f"下载路径不是文件或目录: {display_path}")
+
+        temporary_fd, temporary_name = tempfile.mkstemp(
+            prefix=f"{target.name or 'workspace'}-",
+            suffix=".zip",
+        )
+        os.close(temporary_fd)
+        temporary_path = Path(temporary_name)
+        try:
+            with zipfile.ZipFile(
+                temporary_path,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                for child in sorted(target.rglob("*")):
+                    if child.is_symlink():
+                        raise ValueError(f"下载目录包含暂不支持的符号链接: {child}")
+                    archive_name = Path(target.name) / child.relative_to(target)
+                    archive.write(child, archive_name)
+        except BaseException:
+            temporary_path.unlink(missing_ok=True)
+            raise
+        return (
+            temporary_path,
+            f"{target.name or 'workspace'}.zip",
+            "application/zip",
+            True,
+        )
 
     def reveal_file_entry(
         self,

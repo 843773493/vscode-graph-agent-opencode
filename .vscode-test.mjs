@@ -7,13 +7,15 @@ const vscodeE2eWorkspace = path.resolve(
   'out',
   'tests',
   'e2e',
+  'clients',
   'vscode',
+  'extension.test',
   'workspace',
 );
 mkdirSync(vscodeE2eWorkspace, { recursive: true });
 
 export default defineConfig({
-  files: './tests/e2e/vscode/**/*.test.js',
+  files: './tests/e2e/clients/vscode/**/*.test.js',
   version: 'stable',
   launchArgs: [
     '--disable-extensions',

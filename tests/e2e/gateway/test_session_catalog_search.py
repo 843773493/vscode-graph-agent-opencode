@@ -12,9 +12,9 @@ from tests.e2e.gateway.processes import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.e2e.http_stubs import generation_target_stub
-from tests.e2e.ports import e2e_port_block_for_file
-from tests.e2e.processes import close_backend_process, start_backend_process
+from tests.support.http_stubs import generation_target_stub
+from tests.support.ports import e2e_port_block_for_file
+from tests.support.processes import close_backend_process, start_backend_process
 
 
 @pytest.mark.asyncio

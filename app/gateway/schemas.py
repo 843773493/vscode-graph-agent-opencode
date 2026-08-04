@@ -4,9 +4,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
+
 GatewayConnectionKind = Literal["local", "remote_gateway"]
 GatewayWorkspaceStatus = Literal["ready", "offline"]
 GatewayServiceStatus = Literal["ready", "offline", "unavailable"]
+PortForwardProtocol = Literal["http", "https", "tcp"]
+PortForwardStatus = Literal["starting", "active", "error", "stopped"]
 GatewayRuntimeAction = Literal[
     "start_managed_backend",
     "safe_restart_managed_backend",
@@ -26,16 +30,47 @@ class GatewayServiceStatusDTO(BaseModel):
     error: str | None = None
 
 
+class CreatePortForwardRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    remote_port: int = Field(ge=1, le=65535)
+    local_port: int | None = Field(default=None, ge=1, le=65535)
+    protocol: PortForwardProtocol = "http"
+    label: str | None = Field(default=None, max_length=120)
+
+
+class PortForwardDTO(BaseModel):
+    forward_id: str
+    workspace_id: str
+    connection_id: str
+    remote_host: Literal["127.0.0.1"]
+    remote_port: int
+    local_host: Literal["127.0.0.1"]
+    local_port: int
+    protocol: PortForwardProtocol
+    label: str | None
+    status: PortForwardStatus
+    error: str | None
+    local_url: str | None
+
+
+class PortForwardListDTO(BaseModel):
+    items: list[PortForwardDTO]
+
+
 class GatewayConfigReloadStatusDTO(BaseModel):
     available: bool = False
     healthy: bool | None = None
     revision: str | None = None
     restart_required: bool = False
-    reason: Literal[
-        "invalid_config",
-        "restart_required",
-        "apply_failed",
-    ] | None = None
+    reason: (
+        Literal[
+            "invalid_config",
+            "restart_required",
+            "apply_failed",
+        ]
+        | None
+    ) = None
     changed_sections: list[str] = Field(default_factory=list)
     last_error: str | None = None
     error: str | None = None
@@ -245,7 +280,9 @@ AddSshWorkspaceRequest = AddRemoteGatewayRequest
 
 
 class ReorderGatewayWorkspacesRequest(BaseModel):
-    workspace_ids: list[str] = Field(description="按目标展示顺序排列的全部 Gateway 工作区 ID")
+    workspace_ids: list[str] = Field(
+        description="按目标展示顺序排列的全部 Gateway 工作区 ID"
+    )
 
 
 class UpdateGatewayWorkspaceRequest(BaseModel):
@@ -273,6 +310,15 @@ class ActivateGatewayWorkspaceResultDTO(BaseModel):
 class GatewayHealthDTO(BaseModel):
     status: Literal["ok"] = "ok"
     active_workspace_id: str | None = None
+    process_id: int = Field(gt=0)
+    development_restart_available: bool = False
+
+
+class DevelopmentRuntimeRestartDTO(BaseModel):
+    status: Literal["scheduled"] = "scheduled"
+    previous_process_id: int = Field(gt=0)
+    helper_process_id: int = Field(gt=0)
+    delay_ms: int = Field(ge=0)
 
 
 class WebUIMainAreaRatiosDTO(BaseModel):
@@ -286,7 +332,7 @@ class WebUILayoutSettingsDTO(BaseModel):
     workbench_view: Literal["sessions", "gateway"] | None = None
     agent_sessions_panel_open: bool | None = None
     auxiliary_visible: bool | None = None
-    auxiliary_tab: Literal["changes", "files", "resources"] | None = None
+    auxiliary_tab: Literal["changes", "files", "automation", "resources"] | None = None
     main_area_ratios: WebUIMainAreaRatiosDTO | None = None
     workspace_preview_visible: bool | None = None
     workspace_preview_maximized: bool | None = None
@@ -297,14 +343,17 @@ class WebUILayoutSettingsDTO(BaseModel):
     )
     customizations_collapsed: bool | None = None
     customizations_height: int | None = Field(default=None, ge=80, le=520)
-    content_view: Literal[
-        "default",
-        "events",
-        "requests",
-        "changes",
-        "resources",
-        "agent",
-    ] | None = None
+    content_view: (
+        Literal[
+            "default",
+            "events",
+            "requests",
+            "changes",
+            "resources",
+            "agent",
+        ]
+        | None
+    ) = None
     pending_message_default_action: Literal["steering", "queued"] | None = None
 
 
@@ -357,6 +406,83 @@ class WebUIGatewayConsoleSettingsDTO(BaseModel):
     view: Literal["routing", "managed"] = "routing"
 
 
+class GatewayThemeBackgroundDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    type: Literal["remote", "gateway_asset"]
+    url: str | None = None
+    asset_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    position: str = Field(default="center", min_length=1, max_length=120)
+    size: str = Field(default="cover", min_length=1, max_length=120)
+    repeat: Literal["no-repeat", "repeat", "repeat-x", "repeat-y", "space", "round"] = (
+        "no-repeat"
+    )
+    appearance: Literal["immersive", "theme"] = "immersive"
+    overlay: str = Field(
+        default=DEFAULT_THEME_BACKGROUND_OVERLAY,
+        min_length=1,
+        max_length=1000,
+    )
+
+    @model_validator(mode="after")
+    def validate_source(self) -> GatewayThemeBackgroundDTO:
+        if self.type == "remote":
+            if not self.url or self.asset_id is not None:
+                raise ValueError("remote 背景必须只提供 url")
+        elif not self.asset_id or self.url is not None:
+            raise ValueError("gateway_asset 背景必须只提供 asset_id")
+        return self
+
+
+class ResolvedGatewayThemeDTO(BaseModel):
+    id: str
+    label: str
+    color_scheme: Literal["light", "dark"]
+    tokens: dict[str, str]
+    background_image_url: str | None = None
+
+
+class GatewayThemeOptionDTO(BaseModel):
+    id: str
+    label: str
+    extends: Literal["warm", "green", "blue"]
+    source: Literal["builtin", "gateway_config"]
+    preview_tokens: dict[str, str]
+    background_image_url: str | None = None
+
+
+class GatewayThemeCatalogDTO(BaseModel):
+    current_theme_id: str
+    items: list[GatewayThemeOptionDTO]
+    current_theme: ResolvedGatewayThemeDTO
+
+
+class GatewayUIAssetDTO(BaseModel):
+    asset_id: str
+    original_filename: str
+    content_type: str
+    size: int
+    sha256: str
+    imported_at: str
+    url: str
+    referenced_theme_ids: list[str] = Field(default_factory=list)
+
+
+class GatewayUIAssetListDTO(BaseModel):
+    items: list[GatewayUIAssetDTO] = Field(default_factory=list)
+
+
+class WebUIThemeSettingsDTO(BaseModel):
+    theme_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    background: GatewayThemeBackgroundDTO | None = None
+    resolved_theme: ResolvedGatewayThemeDTO | None = None
+
+
+class WebUIThemeSettingsUpdateDTO(BaseModel):
+    theme_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    background: GatewayThemeBackgroundDTO | None = None
+
+
 class WebUISettingsDTO(BaseModel):
     layout: WebUILayoutSettingsDTO = Field(default_factory=WebUILayoutSettingsDTO)
     session_sidebar: WebUISessionSidebarSettingsDTO = Field(
@@ -368,6 +494,7 @@ class WebUISettingsDTO(BaseModel):
     gateway_console: WebUIGatewayConsoleSettingsDTO = Field(
         default_factory=WebUIGatewayConsoleSettingsDTO
     )
+    theme: WebUIThemeSettingsDTO = Field(default_factory=WebUIThemeSettingsDTO)
     recent_local_workspace_paths: list[str] = Field(default_factory=list)
 
 
@@ -376,6 +503,7 @@ class WebUISettingsUpdateDTO(BaseModel):
     session_sidebar: WebUISessionSidebarSettingsDTO | None = None
     workspace_file_tree: WebUIWorkspaceFileTreeSettingsDTO | None = None
     gateway_console: WebUIGatewayConsoleSettingsDTO | None = None
+    theme: WebUIThemeSettingsUpdateDTO | None = None
     recent_local_workspace_paths: list[str] | None = None
 
 

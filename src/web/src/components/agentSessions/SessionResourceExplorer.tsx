@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type ReactNode } from "react";
+import { useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useSessionResourceExplorer } from "../../hooks/useSessionResourceExplorer";
 import type {
   GatewayWorkspace,
@@ -6,9 +6,13 @@ import type {
   SessionCatalogNode,
   WorkspaceNavigationNode,
 } from "../../types/backend";
-import SessionGeneratorManager from "./SessionGeneratorManager";
+import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import SessionActivityIndicator from "./SessionActivityIndicator";
-import { workspaceHoverTitle } from "./agentSessionsUtils";
+import {
+  workspaceFailurePresentation,
+  workspaceHoverTitle,
+  workspaceStatusPresentation,
+} from "./agentSessionsUtils";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   decideSessionResourceDrop,
@@ -35,6 +39,7 @@ interface SessionResourceExplorerProps {
   searchOpen: boolean;
   searchQuery: string;
   workspaceSwitching: boolean;
+  startingWorkspaceIds: ReadonlySet<string>;
   onActivateWorkspace: (workspaceId: string) => Promise<void>;
   onSetWorkspaceParent: (
     workspaceId: string,
@@ -58,6 +63,10 @@ interface SessionResourceExplorerProps {
   activeJobIdsBySession: ReadonlyMap<string, string>;
   unreadSessionKeys: ReadonlySet<string>;
   onRequestAddWorkspace: () => void;
+  onOpenConnectionManager: () => void;
+  onReconnectWorkspace: (workspaceId: string) => Promise<void>;
+  onStartWorkspace: (workspaceId: string) => Promise<void>;
+  generatorResources: SessionGeneratorResourcesController;
 }
 
 function Chevron({ expanded }: { expanded: boolean }) {
@@ -77,6 +86,7 @@ export default function SessionResourceExplorer({
   searchOpen,
   searchQuery,
   workspaceSwitching,
+  startingWorkspaceIds,
   onActivateWorkspace,
   onSetWorkspaceParent,
   onRefreshWorkspaceSessions,
@@ -91,6 +101,10 @@ export default function SessionResourceExplorer({
   activeJobIdsBySession,
   unreadSessionKeys,
   onRequestAddWorkspace,
+  onOpenConnectionManager,
+  onReconnectWorkspace,
+  onStartWorkspace,
+  generatorResources,
 }: SessionResourceExplorerProps): ReactNode {
   const [actionError, setActionError] = useState<string | null>(null);
   const [folderMenu, setFolderMenu] = useState<SessionFolderContextMenu | null>(null);
@@ -103,6 +117,13 @@ export default function SessionResourceExplorer({
   const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
   const [dropTargetZone, setDropTargetZone] =
     useState<SessionResourceDropZone | null>(null);
+  const [recoveringWorkspaceIds, setRecoveringWorkspaceIds] =
+    useState<Set<string>>(new Set());
+  const openingSessionRequestSequenceRef = useRef(0);
+  const [openingSession, setOpeningSession] = useState<{
+    requestSequence: number;
+    sessionKey: string;
+  } | null>(null);
   const explorer = useSessionResourceExplorer({
     apiPort,
     activeWorkspaceId,
@@ -112,6 +133,7 @@ export default function SessionResourceExplorer({
     workspaceNavigationSyncKey: buildWorkspaceNavigationSyncKey(workspaces),
     catalogSyncKeys,
     catalogRefreshVersions,
+    generatorResources,
   });
   const workspacesById = new Map(
     workspaces.map((workspace) => [workspace.workspace_id, workspace]),
@@ -422,16 +444,58 @@ export default function SessionResourceExplorer({
     if (!branch) {
       return <div className="session-resource-state">等待加载…</div>;
     }
+    const workspace = workspacesById.get(workspaceId);
+    const recoverWorkspace = async () => {
+      setRecoveringWorkspaceIds((previous) => new Set(previous).add(workspaceId));
+      try {
+        if (workspace?.connection_kind === "remote_gateway") {
+          await onReconnectWorkspace(workspaceId);
+        } else if (workspace?.status === "offline" && workspace.managed) {
+          await onStartWorkspace(workspaceId);
+        }
+        await explorer.loadBranch(workspaceId, parentNodeId);
+      } catch (recoveryError) {
+        onStatusChange(
+          `恢复工作区失败: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+        );
+      } finally {
+        setRecoveringWorkspaceIds((previous) => {
+          const next = new Set(previous);
+          next.delete(workspaceId);
+          return next;
+        });
+      }
+    };
+    const recovering = recoveringWorkspaceIds.has(workspaceId);
+    const failure = branch.error
+      ? workspaceFailurePresentation(workspace, branch.error)
+      : null;
     return (
       <ul className="session-resource-list" role="group">
         {branch.items.map((node) => renderCatalogNode(workspaceId, node, depth))}
         {branch.loading ? <li className="session-resource-state">正在加载…</li> : null}
-        {branch.error ? (
-          <li className="session-resource-error" role="alert">
-            {branch.error}
-            <button type="button" onClick={() => void explorer.loadBranch(workspaceId, parentNodeId).catch(() => undefined)}>
-              重试
-            </button>
+        {failure ? (
+          <li className="session-resource-error-card" role="alert">
+            <strong>{failure.title}</strong>
+            <span>{failure.message}</span>
+            <div className="session-resource-error-actions">
+              <button type="button" disabled={recovering} onClick={() => void recoverWorkspace()}>
+                {recovering
+                  ? "正在恢复…"
+                  : workspace?.connection_kind === "remote_gateway"
+                    ? "重新连接 Gateway"
+                    : workspace?.status === "offline" && workspace.managed
+                      ? "启动工作区"
+                      : "重新加载目录"}
+              </button>
+              {workspace?.connection_kind === "remote_gateway" ? (
+                <button type="button" onClick={onOpenConnectionManager}>连接管理</button>
+              ) : null}
+            </div>
+            <details>
+              <summary>查看技术详情</summary>
+              <code>{failure.technicalDetail}</code>
+            </details>
           </li>
         ) : null}
         {!branch.loading && !branch.error && branch.items.length === 0 ? (
@@ -465,6 +529,27 @@ export default function SessionResourceExplorer({
     const sessionCacheKey = node.session_id
       ? sessionScopeKey(workspaceId, node.session_id)
       : null;
+    const opening = sessionCacheKey !== null
+      && sessionCacheKey === openingSession?.sessionKey;
+    const openNode = () => {
+      if (isFolder) {
+        explorer.toggleExpanded(expansionId, workspaceId, node.node_id);
+        return;
+      }
+      if (!node.session_id || !sessionCacheKey) {
+        throw new Error(`会话目录节点缺少会话 ID: ${node.node_id}`);
+      }
+      const targetSessionKey = sessionCacheKey;
+      const requestSequence = ++openingSessionRequestSequenceRef.current;
+      setOpeningSession({ requestSequence, sessionKey: targetSessionKey });
+      void Promise.resolve(onSelectSession(workspaceId, node.session_id))
+        .catch((error) => handleError("打开会话失败", error))
+        .finally(() => {
+          setOpeningSession((current) => (
+            current?.requestSequence === requestSequence ? null : current
+          ));
+        });
+    };
     const target: SessionResourceDropTarget = isFolder
       ? { kind: "session_folder", nodeId: node.node_id, workspaceId }
       : {
@@ -477,7 +562,7 @@ export default function SessionResourceExplorer({
     return (
       <li key={node.node_id} role="treeitem" aria-expanded={canExpand ? expanded : undefined}>
         <div
-          className={`session-resource-row${isCurrent ? " current" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          className={`session-resource-row${isCurrent ? " current-session" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
           aria-current={isCurrent ? "true" : undefined}
           aria-grabbed={dragItem?.nodeId === node.node_id}
           draggable
@@ -542,28 +627,30 @@ export default function SessionResourceExplorer({
               <Chevron expanded={expanded} />
             </button>
           ) : <span className="session-resource-chevron-spacer" />}
-          <span className={`codicon ${isFolder ? "codicon-folder" : "codicon-comment-discussion"}`} aria-hidden="true" />
           <button
             type="button"
-            className="session-resource-label"
+            className="session-resource-main-action"
             data-session-id={!isFolder ? node.session_id : undefined}
             title={node.storage_relative_path || node.name}
-            onClick={() => {
-              if (isFolder) {
-                explorer.toggleExpanded(expansionId, workspaceId, node.node_id);
-              } else if (node.session_id) {
-                void Promise.resolve(onSelectSession(workspaceId, node.session_id)).catch((error) => handleError("打开会话失败", error));
-              }
-            }}
+            aria-busy={opening || undefined}
+            onClick={openNode}
           >
-            {node.name}
+            <span className={`codicon ${isFolder ? "codicon-folder" : "codicon-comment-discussion"}`} aria-hidden="true" />
+            <span className="session-resource-label">{node.name}</span>
+            {opening ? (
+              <span
+                className="codicon codicon-loading codicon-modifier-spin session-resource-opening-icon"
+                role="img"
+                aria-label="正在打开会话"
+              />
+            ) : null}
+            {!isFolder && sessionCacheKey && !opening ? (
+              <SessionActivityIndicator
+                running={activeJobIdsBySession.has(sessionCacheKey)}
+                unread={unreadSessionKeys.has(sessionCacheKey)}
+              />
+            ) : null}
           </button>
-          {!isFolder && sessionCacheKey ? (
-            <SessionActivityIndicator
-              running={activeJobIdsBySession.has(sessionCacheKey)}
-              unread={unreadSessionKeys.has(sessionCacheKey)}
-            />
-          ) : null}
         </div>
         {canExpand && expanded ? renderCatalogBranch(workspaceId, node.node_id, depth + 1) : null}
       </li>
@@ -579,6 +666,10 @@ export default function SessionResourceExplorer({
     const hoverTitle = workspace ? workspaceHoverTitle(workspace) : node.name;
     const expanded = explorer.expandedIds.has(`workspace:${workspaceId}`);
     const active = workspaceId === activeWorkspaceId;
+    const starting = startingWorkspaceIds.has(workspaceId);
+    const statusPresentation = workspace
+      ? workspaceStatusPresentation(workspace)
+      : null;
     const target: SessionResourceDropTarget = {
       kind: "workspace",
       nodeId: node.node_id,
@@ -591,10 +682,11 @@ export default function SessionResourceExplorer({
     return (
       <li key={node.node_id} role="treeitem" aria-expanded={expanded}>
         <div
-          className={`session-resource-row workspace${active ? " current" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          className={`session-resource-row workspace${active ? " active-workspace" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          aria-current={active ? "location" : undefined}
           title={hoverTitle}
           aria-grabbed={dragItem?.nodeId === node.node_id}
-          draggable={!workspaceSwitching}
+          draggable={!workspaceSwitching && !starting}
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
           data-testid={`workspace-node-${workspaceId}`}
           onDragStart={(event) => startDrag(event, {
@@ -620,6 +712,7 @@ export default function SessionResourceExplorer({
             type="button"
             className="session-resource-chevron"
             aria-label={`${expanded ? "折叠" : "展开"}工作区 ${node.name}`}
+            disabled={starting}
             onClick={() => explorer.toggleExpanded(`workspace:${workspaceId}`, workspaceId, null)}
           >
             <Chevron expanded={expanded} />
@@ -629,19 +722,36 @@ export default function SessionResourceExplorer({
             type="button"
             className="session-resource-label workspace-label"
             title={hoverTitle}
-            disabled={workspaceSwitching || workspace?.status === "offline"}
+            disabled={workspaceSwitching || starting || workspace?.status === "offline"}
             onClick={() => void onActivateWorkspace(workspaceId).catch((error) => handleError("切换工作区失败", error))}
           >
             {node.name}
           </button>
-          {workspace?.status === "offline" ? <span className="session-resource-badge">离线</span> : null}
+          {starting ? (
+            <span
+              className="codicon codicon-loading codicon-modifier-spin session-resource-starting-icon"
+              role="img"
+              aria-label="工作区正在启动"
+              title="正在启动工作区"
+            />
+          ) : statusPresentation ? (
+            <span
+              className="session-resource-workspace-status offline"
+              role="status"
+              aria-label={`工作区状态：${statusPresentation.label}`}
+              title={statusPresentation.title}
+            >
+              <i aria-hidden="true" />
+              {statusPresentation.label}
+            </span>
+          ) : null}
         </div>
         {expanded && childWorkspaces.length > 0 ? (
           <ul className="session-resource-list" role="group">
             {childWorkspaces.map((child) => renderWorkspace(child, depth + 1))}
           </ul>
         ) : null}
-        {expanded ? renderCatalogBranch(workspaceId, null, depth + 1) : null}
+        {expanded && !starting ? renderCatalogBranch(workspaceId, null, depth + 1) : null}
       </li>
     );
   };
@@ -851,8 +961,21 @@ export default function SessionResourceExplorer({
           <button type="button" onClick={() => setActionError(null)}>关闭</button>
         </div>
       ) : null}
-      {explorer.navigationError ? <div className="session-resource-error" role="alert">{explorer.navigationError}</div> : null}
-      {explorer.resourceSyncError ? <div className="session-resource-error" role="alert">{explorer.resourceSyncError}</div> : null}
+      {explorer.navigationError ? (
+        <div className="session-resource-error-card global" role="alert">
+          <strong>无法加载工作区列表</strong>
+          <span>工作区导航暂时不可用。</span>
+          <div className="session-resource-error-actions">
+            <button type="button" onClick={() => void explorer.refreshNavigation().catch(() => undefined)}>
+              重新加载工作区列表
+            </button>
+          </div>
+          <details>
+            <summary>查看技术详情</summary>
+            <code>{explorer.navigationError}</code>
+          </details>
+        </div>
+      ) : null}
       {!explorer.navigation && !explorer.navigationError ? <div className="session-resource-state">正在加载工作区目录…</div> : null}
       <ul
         className={`session-resource-list navigation-root${dropTargetClass("navigation_root")}`}
@@ -880,13 +1003,6 @@ export default function SessionResourceExplorer({
           : null}
         {(navigationChildren.get(null) ?? []).map((node) => renderNavigationNode(node, 0))}
       </ul>
-      <SessionGeneratorManager
-        explorer={explorer}
-        workspaces={workspaces}
-        activeWorkspaceId={activeWorkspaceId}
-        currentSessionId={currentSessionId}
-        onStatusChange={onStatusChange}
-      />
     </section>
     <SessionResourceOverlays
       workspaceFolderMenu={workspaceFolderMenu}

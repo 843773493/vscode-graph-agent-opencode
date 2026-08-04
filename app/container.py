@@ -106,6 +106,7 @@ from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.services.orchestration.job_execution_service import JobExecutionService
 from app.services.orchestration.session_subagent_service import SessionSubagentService
 from app.services.orchestration.session_title_service import SessionTitleService
+from app.services.orchestration.terminal_steering_service import TerminalSteeringService
 from app.tool_testing import ToolTestRegistry, ToolTestService, ToolTestStore
 
 
@@ -228,6 +229,7 @@ class AppContainer:
     context_compaction_service: ContextCompactionService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
+    terminal_steering_service: TerminalSteeringService
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
     session_subagent_service: SessionSubagentService
@@ -399,6 +401,10 @@ def build_app_container(
         job_event_bus=job_event_bus,
     )
     dependency_provider.set_session_orchestrator(session_orchestrator)
+    terminal_steering_service = TerminalSteeringService(
+        terminal_client=terminal_manager_client,
+        session_orchestrator=session_orchestrator,
+    )
     session_catalog_service = SessionCatalogService(
         session_service=session_service,
         job_service=job_service,
@@ -433,6 +439,7 @@ def build_app_container(
         session_service=session_service,
         job_service=job_service,
         dispatcher=session_orchestrator,
+        turn_history_store=turn_history_store,
     )
 
     agent_service = AgentService(config_service=config_service)
@@ -552,6 +559,7 @@ def build_app_container(
         context_compaction_service=context_compaction_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
+        terminal_steering_service=terminal_steering_service,
         session_catalog_service=session_catalog_service,
         session_generation_service=session_generation_service,
         session_subagent_service=session_subagent_service,

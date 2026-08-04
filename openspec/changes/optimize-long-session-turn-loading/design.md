@@ -114,6 +114,8 @@ cursor 是不透明编码，内部包含 `projection_epoch`、`anchor_turn_id`�
 
 已完成历史来自 Turn store；当前活动 Job 的未持久化细节从 Job/EventBus 状态合并。bootstrap 捕获事件水位后返回 `event_cursor`，前端从该水位订阅 SSE，并按照 event ID 与 Turn revision 去重。SSE `id` 是与业务 event ID 分离的 transport cursor，携带可有界校验的 Trace byte range；收到任意 `text_delta` 后的重连都不得扫描完整 Trace。即使 bootstrap、详情请求和 SSE 乱序到达，也不得覆盖较新的状态。
 
+终态展示必须区分失败与取消：`session_interrupted` 表示用户主动中断，使用中性“已由用户中断”状态；只有真实 `error`/`job_failed` 才使用运行失败样式。伴随用户中断产生的 `job_cancelled` 不得重复渲染第二个取消状态。
+
 ### 5. Composer 与时间线状态物理解耦
 
 Composer 使用独立 Context/store selector，只订阅当前 workspace/session、草稿、附件、发送/控制状态和必要配置。切换会话时同步按 scope 读取草稿，Composer DOM 保持挂载；历史 loading、分页、Trace 和文本 delta 不进入其订阅值。
@@ -128,6 +130,16 @@ Turn summary 和 detail 到达时先提交轻量文本/骨架；超过固定阈�
 
 会话切换不再调用无 `tail_limit` 的完整 Trace 恢复。主聊天只消费 bootstrap/SSE 所需的有界事件；事件面板打开时使用自身 cursor 分页。现有完整 Trace 文件继续作为诊断数据保留。
 
+### 8. 破坏性 replay 同步回退上下文与展示投影
+
+编辑并从此处继续、重新生成和失败重试先确认会话无活动 Job，再以目标用户消息为边界追加截断后的模型 checkpoint，并在 dispatch 新 Job 前原子发布隐藏目标 Turn 及其后缀的新展示投影。前端收到 replay 响应后重新 bootstrap；新投影 epoch 使旧分页 cursor 明确 stale，缓存不会继续展示已退出上下文的旧分支。工作区文件修改不参与该回退。
+
+破坏性发布的 compare-and-swap 基线必须在同一个 Turn store 锁内原子捕获 `projection_epoch`、业务 `event_id` 与 `source_offset`。migration、显式重建和 replay staging 发布时必须同时校验三者；即使 Trace 水位未变化，只要 epoch 已由另一次回退或重排推进，旧 staging 也必须冲突并放弃发布，不能使旧分支复活。
+
+回退定位使用固定上限 summary/header 分页。隐藏后缀时只读取并改写 Turn header，detail 部分以有界缓冲流式复制，不得把全部历史正文、工具事件和 Trace items 同时反序列化进内存。实时 replay Job 携带已发布的 `turn_projection_epoch`，当它与权威投影一致时跳过第二次历史扫描；从 Trace 执行 destructive rebuild 时 staging epoch 不同，仍按 replay 元数据重建隐藏关系，保证重建不会复活旧分支。
+
+当回退隐藏全部可见 Turn 时，索引允许 `latest_turn_id = null`、`turn_count = 0`，但保留已有 timeline 的 `latest_ordinal` 与 committed size，以保证后续新 Turn 的 ordinal 继续单调递增。
+
 ## Risks / Trade-offs
 
 - [没有轻量 index 且尾行超预算的旧 Trace] → bootstrap 先返回 Composer 可用的 `partial` shell，后台流式迁移完成后再发布最新 Turn；不得为满足 latest-first 同步解析超大 JSON 行。新写入会话通过 append-time index 保持 latest-first。
@@ -138,6 +150,8 @@ Turn summary 和 detail 到达时先提交轻量文本/骨架；超过固定阈�
 - [延迟 Markdown 会先显示轻量或有界格式化预览] → 保持文本、复制和滚动可用；超大正文由用户明确展开，避免后台解析造成输入卡顿和滚动跳动。
 - [前端状态拆分增加协调复杂度] → 所有业务更新仍由后端对象/revision 驱动，使用单一 upsert reducer 和选择代数测试约束。
 - [新投影增加磁盘数据] → 只持久化展示所需语义事件并定期压实，不复制完整 text delta 与完整 Trace。
+- [后台 migration/rebuild 与 replay 同水位竞态] → staging CAS 同时校验投影 epoch 与事件水位；旧 staging 检测到任一基线变化后明确冲突并丢弃。
+- [编辑靠前消息需要隐藏大量 Turn] → 隐藏路径只处理有界 header 并流式复制 detail，避免完整历史常驻内存。当前原子发布仍需 `copytree` 复制整棵派生投影，因此 replay 的磁盘 I/O 和临时空间与投影总字节数相关；该成本只发生在显式破坏性操作，不进入 bootstrap、分页、详情水合或常规 SSE 路径。
 
 ## Migration Plan
 

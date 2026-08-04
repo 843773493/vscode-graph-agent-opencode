@@ -8,7 +8,7 @@ import type {
 import SessionChangesTree from "./SessionChangesTree";
 import WorkspaceFileTree from "./WorkspaceFileTree";
 
-export type WorkspaceAuxiliaryTab = "changes" | "files" | "resources";
+export type WorkspaceAuxiliaryTab = "changes" | "files" | "automation" | "resources";
 
 interface WorkspaceAuxiliaryPanelProps {
   visible: boolean;
@@ -32,6 +32,9 @@ interface WorkspaceAuxiliaryPanelProps {
   onExpandedFileTreePathsChange: (paths: string[]) => void;
   onTabChange: (tab: WorkspaceAuxiliaryTab) => void;
   resourcePanel: ReactNode;
+  automationPanel: ReactNode;
+  automationIssueCount: number;
+  portForwardPanel: ReactNode;
   onToggleSearch: () => void;
   onCollapseAll: () => void;
   onSelectSessionChangeset: (changesetId: string) => void;
@@ -67,6 +70,9 @@ export default function WorkspaceAuxiliaryPanel({
   onExpandedFileTreePathsChange,
   onTabChange,
   resourcePanel,
+  automationPanel,
+  automationIssueCount,
+  portForwardPanel,
   onToggleSearch,
   onCollapseAll,
   onSelectSessionChangeset,
@@ -81,6 +87,7 @@ export default function WorkspaceAuxiliaryPanel({
       className={`auxiliary-panel${visible ? "" : " preserve-mounted-hidden"}`}
       hidden={!visible}
       style={{ flexBasis: 0, flexGrow: flexRatio }}
+      data-bt-surface="workspace"
     >
       <header className="auxiliary-titlebar">
         <nav className="auxiliary-tabs" aria-label="会话详情">
@@ -100,13 +107,25 @@ export default function WorkspaceAuxiliaryPanel({
           </button>
           <button
             type="button"
+            className={tab === "automation" ? "active" : ""}
+            onClick={() => onTabChange("automation")}
+          >
+            自动化
+            {automationIssueCount > 0 ? (
+              <span className="auxiliary-tab-badge" aria-label={`${automationIssueCount} 个需要处理`}>
+                {automationIssueCount}
+              </span>
+            ) : null}
+          </button>
+          <button
+            type="button"
             className={tab === "resources" ? "active" : ""}
             onClick={() => onTabChange("resources")}
           >
             运行与连接
           </button>
         </nav>
-        {tab !== "resources" ? <div className="auxiliary-title-actions" aria-label="文件视图操作">
+        {tab === "changes" || tab === "files" ? <div className="auxiliary-title-actions" aria-label="文件视图操作">
           <button
             type="button"
             className={`auxiliary-icon-button${searchOpen ? " active" : ""}`}
@@ -132,6 +151,7 @@ export default function WorkspaceAuxiliaryPanel({
           tab === "changes" ? "" : " preserve-mounted-hidden"
         }`}
         hidden={tab !== "changes"}
+        data-bt-surface="layout"
       >
           <SessionChangesTree
             changesets={sessionChangesets}
@@ -165,6 +185,7 @@ export default function WorkspaceAuxiliaryPanel({
           tab === "files" ? "" : " preserve-mounted-hidden"
         }`}
         hidden={tab !== "files"}
+        data-bt-surface="layout"
       >
           <WorkspaceFileTree
             active={visible && tab === "files"}
@@ -183,11 +204,22 @@ export default function WorkspaceAuxiliaryPanel({
           />
       </div>
       <div
+        className={`auxiliary-view-body auxiliary-automation-body${
+          tab === "automation" ? "" : " preserve-mounted-hidden"
+        }`}
+        hidden={tab !== "automation"}
+        data-bt-surface="layout"
+      >
+        {automationPanel}
+      </div>
+      <div
         className={`auxiliary-view-body auxiliary-resources-body${
           tab === "resources" ? "" : " preserve-mounted-hidden"
         }`}
         hidden={tab !== "resources"}
+        data-bt-surface="layout"
       >
+        {portForwardPanel}
         {resourcePanel}
       </div>
     </aside>

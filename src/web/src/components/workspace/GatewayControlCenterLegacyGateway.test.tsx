@@ -2,6 +2,7 @@ import { renderToString } from "react-dom/server";
 import type { GatewayWorkspace } from "../../types/backend";
 import WarmConfirmProvider from "../WarmConfirmProvider";
 import GatewayControlCenter from "./GatewayControlCenter";
+import { createDefaultWebUiSettings } from "../../state/uiSettings/preferences";
 
 const legacyWorkspace: GatewayWorkspace = {
   workspace_id: "gw_legacy",
@@ -29,6 +30,8 @@ const html = renderToString(
       onAddSsh={noop}
       onRefresh={noop}
       onReconnect={noop}
+      uiSettings={createDefaultWebUiSettings()}
+      onUpdateUiSettings={noop}
     />
   </WarmConfirmProvider>,
 );

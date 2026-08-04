@@ -11,6 +11,7 @@ import type {
   GatewayDeviceAccessAddress,
   SshConnectionOption,
 } from "../../types/backend";
+import { copyTextToClipboard } from "../../utils/clipboard";
 
 type ConnectionPage = "ssh-select" | "ssh-manual" | "external-device" | "device-info";
 type ConnectionDialogMode = "ssh" | "external-device";
@@ -263,12 +264,8 @@ export default function GatewayConnectionDialog({
 
   const copyConnectionInfo = async () => {
     if (!createdDevice) return;
-    if (!navigator.clipboard) {
-      setError("当前浏览器不支持剪贴板，请手动复制连接信息");
-      return;
-    }
     try {
-      await navigator.clipboard.writeText(connectionInfoText(createdDevice));
+      await copyTextToClipboard(connectionInfoText(createdDevice));
       setCopied(true);
     } catch (copyError) {
       setError(copyError instanceof Error ? copyError.message : String(copyError));

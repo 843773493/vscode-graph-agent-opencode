@@ -74,11 +74,13 @@ describe("gateway supervisor", () => {
     });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].args.slice(-4)).toEqual([
+    expect(calls[0].args.slice(-6)).toEqual([
       "--host",
       "127.0.0.1",
       "--port",
       "8114",
+      "--timeout-graceful-shutdown",
+      "2",
     ]);
     expect(calls[0].options.env.BOXTEAM_GATEWAY_URL).toBe(
       "http://127.0.0.1:8114",
@@ -125,6 +127,29 @@ describe("gateway supervisor", () => {
     processObject.emit("SIGBREAK");
 
     expect(child.killedWith).toEqual(["SIGTERM"]);
+  });
+
+  test("Gateway 优雅关闭超时后强制退出", () => {
+    const child = fakeChild();
+    const processObject = new EventEmitter();
+    const callbacks = [];
+    const errors = [];
+    const remove = installSignalForwarding(child, processObject, "linux", {
+      shutdownTimeoutMs: 10,
+      setTimeoutImpl(callback) {
+        callbacks.push(callback);
+        return { unref() {} };
+      },
+      clearTimeoutImpl() {},
+      stderr: { write: (value) => errors.push(String(value)) },
+    });
+
+    processObject.emit("SIGTERM");
+    callbacks[0]();
+    remove();
+
+    expect(child.killedWith).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(errors.join("")).toContain("Gateway 未在 10ms 内退出");
   });
 
   test("将 Gateway 输出转发到 Launcher 输出流", () => {

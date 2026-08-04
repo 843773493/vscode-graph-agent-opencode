@@ -16,7 +16,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 0 12px;
-  border-bottom: var(--surface-border);
+  border-bottom: var(--bt-surface-border);
   flex: 0 0 auto;
   min-width: 0;
 }
@@ -36,7 +36,7 @@
   gap: 8px;
   flex: 0 1 auto;
   min-width: 0;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -49,10 +49,10 @@
 .agent-state-debug-note {
   margin: 8px 12px;
   padding: 8px 10px;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
-  background: var(--vscode-editor-inactiveSelectionBackground);
-  color: var(--vscode-descriptionForeground);
+  background: var(--bt-selection-muted-background);
+  color: var(--bt-text-muted);
   font-size: 12px;
   line-height: 1.5;
   flex: 0 0 auto;
@@ -69,10 +69,10 @@
 
 .agent-state-summary div {
   min-width: 0;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
   padding: 8px;
-  background: var(--vscode-input-background);
+  background: var(--bt-input-background);
 }
 
 .agent-state-summary span,
@@ -84,14 +84,14 @@
 
 .agent-state-summary span {
   margin-bottom: 4px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
 .agent-state-summary strong {
   max-height: 7.5em;
   overflow: auto;
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
   font-size: 12px;
 }
 
@@ -105,10 +105,10 @@
   flex: 1 1 auto;
   min-height: 0;
   margin: 0 12px 12px;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 6px;
   overflow: hidden;
-  background: var(--vscode-editor-background);
+  background: var(--bt-surface-background);
 }
 
 .agent-state-raw:not([open]) {
@@ -123,8 +123,8 @@
 .agent-state-raw summary {
   cursor: pointer;
   padding: 8px 10px;
-  color: var(--vscode-descriptionForeground);
-  background: var(--vscode-input-background);
+  color: var(--bt-text-muted);
+  background: var(--bt-input-background);
   font-size: 12px;
 }
 
@@ -138,10 +138,10 @@
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--vscode-editor-background);
-  color: var(--vscode-editor-foreground);
+  background: var(--bt-surface-background);
+  color: var(--bt-text-primary);
   font-family: var(
-    --vscode-editor-font-family,
+    --bt-font-family-mono,
     ui-monospace,
     SFMono-Regular,
     Consolas,
@@ -160,13 +160,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--vscode-editor-background);
+  background: var(--bt-surface-background);
 }
 
 .agent-state-card {
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
   border-radius: 8px;
-  background: var(--vscode-input-background);
+  background: var(--bt-input-background);
   padding: 10px;
   display: flex;
   flex-direction: column;
@@ -194,7 +194,7 @@
 .agent-state-role {
   font-size: 12px;
   font-weight: 700;
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
 }
 
 .agent-state-type,
@@ -207,8 +207,8 @@
   border-radius: 999px;
   padding: 2px 7px;
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--vscode-editor-foreground) 7%, transparent);
+  color: var(--bt-text-muted);
+  background: color-mix(in srgb, var(--bt-text-primary) 7%, transparent);
 }
 
 .agent-state-blocks,
@@ -224,8 +224,8 @@
 .agent-state-tool,
 .agent-state-attachment {
   border-radius: 6px;
-  border: var(--surface-border);
-  background: color-mix(in srgb, var(--vscode-editor-background) 78%, transparent);
+  border: var(--bt-surface-border);
+  background: color-mix(in srgb, var(--bt-surface-background) 78%, transparent);
   overflow: hidden;
   min-width: 0;
 }
@@ -236,7 +236,7 @@
   gap: 6px;
   padding: 7px 8px;
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
 }
 
 .agent-state-attachment span {
@@ -245,7 +245,7 @@
 }
 
 .agent-state-attachment-name {
-  color: var(--vscode-editor-foreground);
+  color: var(--bt-text-primary);
   font-weight: 700;
 }
 
@@ -263,7 +263,7 @@
   flex: 0 0 64px;
   object-fit: cover;
   border-radius: 6px;
-  border: var(--surface-border);
+  border: var(--bt-surface-border);
 }
 
 .agent-state-image-meta {
@@ -271,7 +271,7 @@
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   font-size: 11px;
 }
 
@@ -283,15 +283,15 @@
 }
 
 .agent-state-block.block-image {
-  border-color: color-mix(in srgb, var(--vscode-focusBorder) 45%, var(--vscode-panel-border));
+  border-color: color-mix(in srgb, var(--bt-focus-border) 45%, var(--bt-border));
 }
 
 .agent-state-block-label {
   padding: 5px 8px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--vscode-descriptionForeground);
-  border-bottom: var(--surface-border);
+  color: var(--bt-text-muted);
+  border-bottom: var(--bt-surface-border);
 }
 
 .agent-state-block pre,
@@ -303,7 +303,7 @@
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(
-    --vscode-editor-font-family,
+    --bt-font-family-mono,
     ui-monospace,
     SFMono-Regular,
     Consolas,
@@ -315,17 +315,17 @@
 }
 
 .agent-state-block.block-reasoning {
-  border-color: color-mix(in srgb, #b45309 45%, transparent);
+  border-color: color-mix(in srgb, var(--bt-status-warning) 45%, transparent);
 }
 
 .agent-state-block.block-reasoning .agent-state-block-label {
-  color: #b45309;
+  color: var(--bt-status-warning);
 }
 
 .agent-state-tool-head {
   justify-content: space-between;
   padding: 6px 8px;
-  border-bottom: var(--surface-border);
+  border-bottom: var(--bt-surface-border);
 }
 
 .agent-state-tool-name {
@@ -335,12 +335,12 @@
   white-space: nowrap;
   font-size: 12px;
   font-weight: 700;
-  color: var(--vscode-button-background);
+  color: var(--bt-button-background);
 }
 
 .agent-state-tool-result-id {
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--bt-text-muted);
   word-break: break-all;
 }
 

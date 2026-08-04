@@ -163,6 +163,35 @@ class TurnHistoryFiles:
             header_line + record.turn.model_dump_json().encode("utf-8"),
         )
 
+    def hide_turn_record(
+        self,
+        session_id: str,
+        turn_id: str,
+        *,
+        event_id: str,
+    ) -> TurnRecordHeader:
+        """只改写有界 header，流式复制 detail，避免回退时解析大型 Turn。"""
+        path = self.turn_record_path(session_id, turn_id)
+        if not path.is_file():
+            raise KeyError(f"Turn 不存在: session_id={session_id}, turn_id={turn_id}")
+        temp_path = path.with_name(
+            f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        with path.open("rb") as source:
+            current = self._read_turn_header_line(source, path=path)
+            hidden = current.model_copy(
+                update={"visible": False, "last_applied_event_id": event_id}
+            )
+            header_line = hidden.model_dump_json().encode("utf-8") + b"\n"
+            if len(header_line) > MAX_TURN_HEADER_BYTES:
+                raise RuntimeError(f"Turn header 超过固定读取上限: {path}")
+            with temp_path.open("wb") as target:
+                target.write(header_line)
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+                self.flush_stream(target)
+        os.replace(temp_path, path)
+        return current
+
     @staticmethod
     def _read_turn_header_line(stream: BinaryIO, *, path: Path) -> TurnRecordHeader:
         line = stream.readline(MAX_TURN_HEADER_BYTES + 1)

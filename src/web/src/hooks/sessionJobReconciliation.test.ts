@@ -148,6 +148,7 @@ function appState(): AppState {
       },
       workspace_file_tree: { expanded_paths_by_workspace: {} },
       gateway_console: { view: "routing" },
+      theme: { theme_id: "warm", background: null, resolved_theme: null },
       recent_local_workspace_paths: [],
     },
     uiSettingsLoaded: true,

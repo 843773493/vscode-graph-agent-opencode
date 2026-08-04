@@ -3,6 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionResource } from "../types/backend";
 import {
+  actionLabelForKind,
   groupSessionResources,
   resourceAttentionGroup,
   resourceTreeStatus,
@@ -64,6 +65,17 @@ describe("后台连接目录", () => {
       status: "closed",
       metadata: { resource_state: "background" },
     }))).toBe("已关闭");
+    const recoverable = resource(7, {
+      status: "lost",
+      available_actions: ["resume", "delete"],
+      metadata: {
+        resource_state: "discarded",
+        checkpoint: { version: 1 },
+      },
+    });
+    expect(resourceAttentionGroup(recoverable, null)).toBe("sleeping");
+    expect(resourceTreeStatus(recoverable)).toBe("已冷回收");
+    expect(actionLabelForKind("browser", "resume")).toBe("重新打开");
   });
 
   test("20 个资源默认仅渲染活动目录单行，历史与挂起资源折叠", () => {

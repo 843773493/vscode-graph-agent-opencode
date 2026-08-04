@@ -1,0 +1,1031 @@
+{
+  "workspace_id": "gw_terminal_history_test",
+  "workspace_root": "/data/hyf/20260629_agent/vscode-graph-agent-opencode/src/terminal/server",
+  "updated_at": "2026-08-01T13:20:45.678Z",
+  "terminals": [
+    {
+      "terminal_id": "term_2",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_3",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_4",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_5",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_6",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_7",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_8",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_9",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_10",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_11",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_12",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_13",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_14",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_15",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_16",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_17",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_18",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_19",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_20",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_21",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_22",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_23",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_24",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_25",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_26",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_27",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_28",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_29",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_30",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_31",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_32",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_33",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_34",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_35",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_36",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_37",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_38",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_39",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_40",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_41",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_42",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_43",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_44",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_45",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_46",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_47",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_48",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_49",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_50",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_51",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_52",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_53",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_54",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_55",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_56",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_57",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_58",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_59",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_60",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_61",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_62",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_63",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_64",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_65",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_66",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_67",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_68",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_69",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_70",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_71",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_72",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_73",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_74",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_75",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_76",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_77",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_78",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_79",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_80",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_81",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_82",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_83",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_84",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_85",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_86",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_87",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_88",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_89",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_90",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_91",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_92",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_93",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_94",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_95",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_96",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_97",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_98",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_99",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_100",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_101",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_102",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_103",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_104",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_105",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_106",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_107",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_108",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_109",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_110",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_111",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_112",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_113",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_114",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_115",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_116",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_117",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_118",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_119",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_120",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_121",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_122",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_123",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_124",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_125",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_126",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_127",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_128",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_129",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_130",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_131",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_132",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_133",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_134",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_135",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_136",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_137",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_138",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_139",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_140",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_141",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_142",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_143",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_144",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_145",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_146",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_147",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_148",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_149",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_150",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_151",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_152",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_153",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_154",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_155",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_156",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_157",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_158",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_159",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_160",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_161",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_162",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_163",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_164",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_165",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_166",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_167",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_168",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_169",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_170",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_171",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_172",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_173",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_174",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_175",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_176",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_177",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_178",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_179",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_180",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_181",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_182",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_183",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_184",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_185",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_186",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_187",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_188",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_189",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_190",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_191",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_192",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_193",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_194",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_195",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_196",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_197",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_198",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_199",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_200",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_201",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_202",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_203",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_204",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_205",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_206",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_207",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_208",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_209",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_210",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_211",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_212",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_213",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_214",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_215",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_216",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_217",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_218",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_219",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_220",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_221",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_222",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_223",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_224",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_225",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_226",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_227",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_228",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_229",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_230",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_231",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_232",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_233",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_234",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_235",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_236",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_237",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_238",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_239",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_240",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_241",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_242",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_243",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_244",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_245",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_246",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_247",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_248",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_249",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_250",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_251",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_252",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_253",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_254",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_255",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_256",
+      "status": "deleted"
+    },
+    {
+      "terminal_id": "term_257",
+      "status": "deleted"
+    }
+  ]
+}

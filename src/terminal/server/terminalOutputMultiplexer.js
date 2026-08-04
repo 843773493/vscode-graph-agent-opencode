@@ -27,6 +27,50 @@ export class TerminalOutputMultiplexer {
     return this.clients.size;
   }
 
+  readAfter(afterSequence) {
+    const currentSequence = this.getSequence();
+    if (!Number.isInteger(afterSequence) || afterSequence < 0) {
+      throw new Error(
+        `终端输出游标无效: terminal_id=${this.terminalId}, sequence=${afterSequence}`,
+      );
+    }
+    if (afterSequence > currentSequence) {
+      throw new Error(
+        `终端输出游标超过最新输出: terminal_id=${this.terminalId}, sequence=${afterSequence}, current_sequence=${currentSequence}`,
+      );
+    }
+    if (afterSequence === currentSequence) {
+      return {
+        output: "",
+        sequence: currentSequence,
+        replayMode: "incremental",
+        omittedBeforeSequence: null,
+      };
+    }
+
+    const earliestSequence = this.outputEvents[0]?.sequence ?? currentSequence + 1;
+    const canReplay = afterSequence >= earliestSequence - 1;
+    if (canReplay) {
+      return {
+        output: this.outputEvents
+          .filter((event) => event.sequence > afterSequence)
+          .map((event) => event.data)
+          .join(""),
+        sequence: currentSequence,
+        replayMode: "incremental",
+        omittedBeforeSequence: null,
+      };
+    }
+
+    const snapshot = this.getSnapshot();
+    return {
+      output: snapshot.buffer || "",
+      sequence: currentSequence,
+      replayMode: "snapshot",
+      omittedBeforeSequence: earliestSequence,
+    };
+  }
+
   async attach(client, { afterSequence = null, beforeNotify = null } = {}) {
     const state = {
       acknowledgedSequence: 0,

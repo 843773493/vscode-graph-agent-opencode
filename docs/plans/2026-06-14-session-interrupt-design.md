@@ -224,7 +224,7 @@ async def interrupt_session(
 6. `app/services/business/session_interrupt_service.py`：新增打断服务。
 7. `app/api/deps.py`：新增依赖注入。
 8. `app/api/sessions.py`：新增 `POST /{session_id}/interrupt`。
-9. `tests/e2e/test_session_interrupt.py`：两个 E2E 测试：
+9. `tests/e2e/backend/jobs/test_session_interrupt.py`：两个 E2E 测试：
    - 在 assistant text 阶段打断，验证 `<system_reminder>` 追加到最后一条 assistant 消息末尾。
    - 在 tool_call 阶段打断，验证 `<system_reminder>` 追加到最后一条 tool 消息末尾。
 

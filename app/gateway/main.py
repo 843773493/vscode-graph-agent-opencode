@@ -8,8 +8,9 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.core.env import get_project_root, load_boxteam_env
 from app.core.logging_config import configure_application_logging
@@ -53,6 +54,12 @@ from app.gateway.remote_gateway import (
     register_remote_gateway,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.development_restart import (
+    RESTART_DELAY_MS,
+    resolve_development_restart_command,
+    start_development_restart,
+)
+from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.process import (
     wait_for_http_ok,
 )
@@ -63,6 +70,7 @@ from app.gateway.schemas import (
     AddRemoteGatewayRequest,
     CreateFederationManagedWorkspaceRequest,
     CreateGatewayManagedWorkspaceRequest,
+    DevelopmentRuntimeRestartDTO,
     FederationProtocolManifestDTO,
     FederationWorkspaceDTO,
     FederationWorkspaceListDTO,
@@ -75,6 +83,9 @@ from app.gateway.schemas import (
     GatewayManagedWorkspaceListDTO,
     GatewayRuntimeRestartResultDTO,
     GatewayRuntimeStateResultDTO,
+    GatewayThemeCatalogDTO,
+    GatewayUIAssetDTO,
+    GatewayUIAssetListDTO,
     GatewayWorkspaceListDTO,
     ReorderGatewayWorkspacesRequest,
     SshConnectionOptionListDTO,
@@ -83,11 +94,30 @@ from app.gateway.schemas import (
     WebUISettingsUpdateDTO,
 )
 from app.gateway.server.bootstrap import create_registry
+from app.gateway.server.port_forwarding import (
+    get_port_forward_manager,
+)
+from app.gateway.server.port_forwarding import (
+    router as port_forwards_router,
+)
 from app.gateway.server.static_ui import install_static_web_ui
 from app.gateway.server.workspace_proxy import router as workspace_proxy_router
 from app.gateway.ssh_connections import (
     list_ssh_connection_options,
     resolve_ssh_connection_request,
+)
+from app.gateway.theme import (
+    MAX_UI_ASSET_BYTES,
+    delete_ui_asset,
+    import_ui_asset,
+    list_ui_assets,
+    load_validated_theme_config,
+    referenced_asset_ids,
+    resolve_settings_theme,
+    resolve_theme,
+    resolve_ui_asset,
+    synchronize_theme_asset_references,
+    theme_catalog,
 )
 from app.gateway.ui_settings import (
     merge_web_ui_settings,
@@ -104,10 +134,14 @@ def _gateway_root() -> Path:
 
 
 def _preserve_browser_managers_on_shutdown() -> bool:
-    raw = os.environ.get(
-        "BOXTEAM_GATEWAY_PRESERVE_BROWSER_MANAGERS_ON_SHUTDOWN",
-        "true",
-    ).strip().lower()
+    raw = (
+        os.environ.get(
+            "BOXTEAM_GATEWAY_PRESERVE_BROWSER_MANAGERS_ON_SHUTDOWN",
+            "true",
+        )
+        .strip()
+        .lower()
+    )
     if raw not in {"true", "false"}:
         raise RuntimeError(
             "BOXTEAM_GATEWAY_PRESERVE_BROWSER_MANAGERS_ON_SHUTDOWN "
@@ -132,9 +166,7 @@ def _scan_local_directories(
 ) -> tuple[list[GatewayDirectoryEntryDTO], bool]:
     with os.scandir(root_path) as directory_iterator:
         directories = [
-            entry
-            for entry in directory_iterator
-            if entry.is_dir(follow_symlinks=False)
+            entry for entry in directory_iterator if entry.is_dir(follow_symlinks=False)
         ]
     directories.sort(key=lambda entry: (entry.name.lower(), entry.name))
     entries = [
@@ -260,10 +292,18 @@ async def lifespan(app: FastAPI):
     logger.info("Gateway 日志已初始化: gateway_root=%s", _gateway_root())
     registry = await create_registry()
     app.state.registry = registry
+    app.state.port_forward_manager = SshPortForwardManager(
+        registry=registry,
+        storage_path=_gateway_root() / "port-forwards.json",
+        log_dir=_gateway_root() / "logs",
+    )
+    await app.state.port_forward_manager.reconcile_workspaces()
+    await app.state.port_forward_manager.restore()
     app.state.workspace_runtime_controller = GatewayWorkspaceRuntimeController(
         registry=registry,
         project_root=get_project_root(),
         log_dir=_gateway_root() / "logs",
+        on_registry_reconciled=(app.state.port_forward_manager.reconcile_workspaces),
     )
     app.state.http_client = httpx.AsyncClient(timeout=None)
     app.state.workspace_navigation_store = WorkspaceNavigationStore(
@@ -308,15 +348,37 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         if scheduler_started:
+            logger.info("Gateway 正在停止会话生成器调度器")
             await app.state.session_generator_scheduler.stop()
         if catalog_search_started:
+            logger.info("Gateway 正在停止会话目录索引同步器")
             await app.state.session_catalog_search_service.stop()
         if coordinator_started:
+            logger.info("Gateway 正在停止会话生成协调器")
             await app.state.session_generator_coordinator.stop()
+        logger.info("Gateway 正在关闭 HTTP 连接池")
         await app.state.http_client.aclose()
-        registry.close(
-            preserve_browser_managers=_preserve_browser_managers_on_shutdown()
-        )
+        shutdown_errors: list[Exception] = []
+        logger.info("Gateway 正在关闭 SSH 端口转发")
+        try:
+            await app.state.port_forward_manager.close()
+        except Exception as error:
+            shutdown_errors.append(error)
+            logger.exception("Gateway 关闭 SSH 端口转发失败")
+        logger.info("Gateway 正在关闭托管工作区运行时")
+        try:
+            registry.close(
+                preserve_browser_managers=(_preserve_browser_managers_on_shutdown())
+            )
+        except Exception as error:
+            shutdown_errors.append(error)
+            logger.exception("Gateway 关闭托管工作区运行时失败")
+        if shutdown_errors:
+            raise RuntimeError(
+                "Gateway lifespan 清理失败: "
+                + "; ".join(str(error) for error in shutdown_errors)
+            ) from shutdown_errors[0]
+        logger.info("Gateway lifespan 清理完成")
 
 
 app = FastAPI(
@@ -365,7 +427,40 @@ async def health(
         raise RuntimeError("会话生成器调度器尚未初始化")
     scheduler.assert_healthy()
     return APIResponse(
-        data=GatewayHealthDTO(active_workspace_id=registry.active_workspace_id),
+        data=GatewayHealthDTO(
+            active_workspace_id=registry.active_workspace_id,
+            process_id=os.getpid(),
+            development_restart_available=(
+                resolve_development_restart_command() is not None
+            ),
+        ),
+        request_id=request_id,
+    )
+
+
+@app.post(
+    "/api/gateway/runtime/restart-development",
+    response_model=APIResponse[DevelopmentRuntimeRestartDTO],
+)
+async def restart_development_runtime(
+    auth: GatewayAuthContext = Depends(verify_gateway_access),
+    request_id: str = Depends(get_request_id),
+):
+    if auth.kind != "local":
+        raise HTTPException(status_code=403, detail="远程 Gateway 无权重启本机开发服务")
+    command = resolve_development_restart_command()
+    if command is None:
+        raise HTTPException(status_code=409, detail="当前不是可重启的源码开发环境")
+    helper_process_id = start_development_restart(
+        command,
+        log_path=_gateway_root() / "logs" / "development-restart.log",
+    )
+    return APIResponse(
+        data=DevelopmentRuntimeRestartDTO(
+            previous_process_id=os.getpid(),
+            helper_process_id=helper_process_id,
+            delay_ms=RESTART_DELAY_MS,
+        ),
         request_id=request_id,
     )
 
@@ -385,6 +480,7 @@ async def local_credential(
         data={"token": get_gateway_local_token()},
         request_id=request_id,
     )
+
 
 @app.get("/api/gateway/workspaces", response_model=APIResponse[GatewayWorkspaceListDTO])
 async def list_workspaces(
@@ -459,10 +555,7 @@ async def federation_workspaces(
         if target.connection_kind == "local"
     ]
     excluded = [
-        (
-            f"{target.workspace_id}: bounded federation "
-            "不导出从其他 Gateway 导入的工作区"
-        )
+        (f"{target.workspace_id}: bounded federation 不导出从其他 Gateway 导入的工作区")
         for target in registry.targets()
         if target.connection_kind == "remote_gateway"
     ]
@@ -576,6 +669,7 @@ async def gateway_managed_workspaces(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     if gateway_connection_id is not None:
         try:
@@ -590,6 +684,7 @@ async def gateway_managed_workspaces(
                 registry=registry,
                 connection_id=gateway_connection_id,
             )
+            await port_forward_manager.reconcile_workspaces()
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except httpx.HTTPStatusError as error:
@@ -638,6 +733,7 @@ async def create_gateway_managed_workspace(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     connection_id = payload.gateway_connection_id
     remote_data: dict[str, object] | None = None
@@ -668,6 +764,7 @@ async def create_gateway_managed_workspace(
                 registry=registry,
                 connection_id=connection_id,
             )
+            await port_forward_manager.reconcile_workspaces()
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except (FileNotFoundError, ValueError) as error:
@@ -705,6 +802,7 @@ async def remove_gateway_managed_workspace(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     remote_data: dict[str, object] | None = None
     try:
@@ -725,6 +823,7 @@ async def remove_gateway_managed_workspace(
                 registry=registry,
                 connection_id=gateway_connection_id,
             )
+            await port_forward_manager.reconcile_workspaces()
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except LookupError as error:
@@ -759,10 +858,16 @@ async def get_web_ui_settings(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
 ):
-    return APIResponse(
-        data=read_web_ui_settings(_gateway_root()),
-        request_id=request_id,
-    )
+    gateway_root = _gateway_root()
+    try:
+        settings = resolve_settings_theme(
+            read_web_ui_settings(gateway_root),
+            config=load_validated_theme_config(gateway_root=gateway_root),
+            gateway_root=gateway_root,
+        )
+    except (OSError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=settings, request_id=request_id)
 
 
 @app.put("/api/gateway/ui-settings", response_model=APIResponse[WebUISettingsDTO])
@@ -771,8 +876,144 @@ async def update_web_ui_settings(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
 ):
+    gateway_root = _gateway_root()
+    config = load_validated_theme_config(gateway_root=gateway_root)
+    try:
+        if payload.theme is not None:
+            current = read_web_ui_settings(gateway_root)
+            theme_id = (
+                payload.theme.theme_id
+                or current.theme.theme_id
+                or config.default_theme_id
+            )
+            background = (
+                payload.theme.background
+                if "background" in payload.theme.model_fields_set
+                else current.theme.background
+            )
+            resolve_theme(
+                theme_id,
+                config=config,
+                gateway_root=gateway_root,
+                background_override=background,
+            )
+        updated = merge_web_ui_settings(payload, gateway_root=gateway_root)
+        resolved = resolve_settings_theme(
+            updated, config=config, gateway_root=gateway_root
+        )
+    except (OSError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=resolved, request_id=request_id)
+
+
+@app.get("/api/gateway/themes", response_model=APIResponse[GatewayThemeCatalogDTO])
+async def get_gateway_themes(
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    gateway_root = _gateway_root()
+    try:
+        catalog = theme_catalog(
+            read_web_ui_settings(gateway_root),
+            config=load_validated_theme_config(gateway_root=gateway_root),
+            gateway_root=gateway_root,
+        )
+    except (OSError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=catalog, request_id=request_id)
+
+
+@app.get("/api/gateway/ui-assets", response_model=APIResponse[GatewayUIAssetListDTO])
+async def get_gateway_ui_assets(
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    gateway_root = _gateway_root()
+    try:
+        synchronize_theme_asset_references(
+            load_validated_theme_config(gateway_root=gateway_root),
+            read_web_ui_settings(gateway_root),
+            gateway_root=gateway_root,
+        )
+        assets = list_ui_assets(gateway_root)
+    except (OSError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(
-        data=merge_web_ui_settings(payload, gateway_root=_gateway_root()),
+        data=GatewayUIAssetListDTO(items=assets),
+        request_id=request_id,
+    )
+
+
+@app.post("/api/gateway/ui-assets", response_model=APIResponse[GatewayUIAssetDTO])
+async def upload_gateway_ui_asset(
+    file: UploadFile = File(),
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    content = await file.read(MAX_UI_ASSET_BYTES + 1)
+    try:
+        asset = import_ui_asset(
+            content,
+            original_filename=file.filename or "background",
+            gateway_root=_gateway_root(),
+            declared_content_type=file.content_type,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=asset, request_id=request_id)
+
+
+@app.get("/api/gateway/ui-assets/{asset_id}", response_class=FileResponse)
+async def get_gateway_ui_asset(asset_id: str):
+    try:
+        path, asset = resolve_ui_asset(asset_id, gateway_root=_gateway_root())
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return FileResponse(
+        path,
+        media_type=asset.content_type,
+        filename=asset.original_filename,
+        headers={
+            "ETag": f'"{asset.sha256}"',
+            "Cache-Control": "public, max-age=31536000, immutable",
+        },
+        content_disposition_type="inline",
+    )
+
+
+@app.delete(
+    "/api/gateway/ui-assets/{asset_id}",
+    response_model=APIResponse[GatewayUIAssetListDTO],
+)
+async def remove_gateway_ui_asset(
+    asset_id: str,
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    gateway_root = _gateway_root()
+    try:
+        references = referenced_asset_ids(
+            load_validated_theme_config(gateway_root=gateway_root),
+            read_web_ui_settings(gateway_root),
+            gateway_root=gateway_root,
+        ).get(asset_id, [])
+    except (OSError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if references:
+        raise HTTPException(
+            status_code=409,
+            detail=f"背景资源正在被主题引用，不能删除: {', '.join(references)}",
+        )
+    try:
+        delete_ui_asset(asset_id, gateway_root=gateway_root)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return APIResponse(
+        data=GatewayUIAssetListDTO(items=list_ui_assets(gateway_root)),
         request_id=request_id,
     )
 
@@ -902,9 +1143,7 @@ async def add_local_workspace(
                 connection_kind="local",
                 managed=False,
             ),
-            runtime=WorkspaceRuntime(
-                service_urls={"workspace_api": backend_url}
-            ),
+            runtime=WorkspaceRuntime(service_urls={"workspace_api": backend_url}),
             activate=False,
         )
     return APIResponse(
@@ -925,6 +1164,7 @@ async def add_remote_gateway(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     try:
         connection = resolve_ssh_connection_request(payload, registry)
@@ -943,6 +1183,7 @@ async def add_remote_gateway(
             remote_gateway_port=connection.remote_gateway_port,
             activate=False,
         )
+        await port_forward_manager.reconcile_workspaces()
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(
@@ -1249,8 +1490,10 @@ async def remove_workspace(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     try:
+        await port_forward_manager.remove_workspace(workspace_id)
         registry.remove(workspace_id)
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
@@ -1269,6 +1512,7 @@ async def remove_workspace(
 # `/api/gateway/workspaces/{id}/runtime/*` 等更具体的控制面路由。
 app.include_router(gateway_control_router)
 app.include_router(device_connections_router)
+app.include_router(port_forwards_router)
 app.include_router(auxiliary_proxy_router)
 app.include_router(workspace_proxy_router)
 

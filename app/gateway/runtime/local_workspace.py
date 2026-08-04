@@ -13,6 +13,7 @@ from app.gateway.runtime.process import (
     wait_for_http_ok,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 
 
 async def _adopt_browser_manager(
@@ -45,7 +46,7 @@ async def _adopt_browser_manager(
         )
     process_id = payload.get("process_id")
     if isinstance(process_id, bool) or not isinstance(process_id, int):
-        raise RuntimeError(
+        raise TypeError(
             f"持久化 Browser Manager 健康响应缺少 process_id: url={service_url}"
         )
     return AdoptedManagedProcess(pid=process_id)
@@ -59,6 +60,7 @@ async def start_managed_local_workspace_runtime(
     backend_debug_port: int | None = None,
     reusable_service_urls: dict[str, str] | None = None,
 ) -> WorkspaceRuntime:
+    workspace_id = build_managed_local_workspace_id(str(workspace_root.resolve()))
     allocated_ports: set[int] = set()
 
     def next_port() -> int:
@@ -99,6 +101,7 @@ async def start_managed_local_workspace_runtime(
         terminal = start_local_node_service_process(
             project_root=project_root,
             workspace_root=workspace_root,
+            workspace_id=workspace_id,
             service="terminal",
             port=terminal_port,
             log_dir=log_dir,
@@ -108,6 +111,7 @@ async def start_managed_local_workspace_runtime(
             browser = start_local_node_service_process(
                 project_root=project_root,
                 workspace_root=workspace_root,
+                workspace_id=workspace_id,
                 service="browser",
                 port=browser_port,
                 log_dir=log_dir,

@@ -10,7 +10,10 @@ import {
 import os from "node:os";
 import path from "node:path";
 
-import { terminateDetachedProcess } from "./detached-process.mjs";
+import {
+  terminateDetachedProcess,
+  terminateProcessWithEscalation,
+} from "./detached-process.mjs";
 
 const temporaryRoots = [];
 const detachedPids = [];
@@ -89,4 +92,56 @@ describe("detached process", () => {
       expect(statSync(logPath).mode & 0o777).toBe(0o600);
     },
   );
+
+  test("优雅停止成功时不发送 SIGKILL", async () => {
+    let alive = true;
+    const signals = [];
+    const killImpl = (_pid, signal) => {
+      if (signal === 0) {
+        if (!alive) {
+          throw Object.assign(new Error("不存在"), { code: "ESRCH" });
+        }
+        return;
+      }
+      signals.push(signal);
+      if (signal === "SIGTERM") alive = false;
+    };
+
+    await terminateProcessWithEscalation(1234, {
+      gracefulTimeoutMs: 10,
+      forceTimeoutMs: 10,
+      pollIntervalMs: 1,
+      killImpl,
+      sleepImpl: async () => {},
+    });
+
+    expect(signals).toEqual(["SIGTERM"]);
+  });
+
+  test("优雅停止超时后发送 SIGKILL", async () => {
+    let alive = true;
+    let now = 0;
+    const signals = [];
+    await terminateProcessWithEscalation(1234, {
+      gracefulTimeoutMs: 10,
+      forceTimeoutMs: 10,
+      pollIntervalMs: 5,
+      killImpl(_pid, signal) {
+        if (signal === 0) {
+          if (!alive) {
+            throw Object.assign(new Error("不存在"), { code: "ESRCH" });
+          }
+          return;
+        }
+        signals.push(signal);
+        if (signal === "SIGKILL") alive = false;
+      },
+      sleepImpl: async (delayMs) => {
+        now += delayMs;
+      },
+      nowImpl: () => now,
+    });
+
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
 });

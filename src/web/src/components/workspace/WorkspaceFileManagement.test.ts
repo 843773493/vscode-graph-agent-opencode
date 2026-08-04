@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  copyWorkspaceFileEntry,
+  createWorkspaceFileDownloadRequest,
   createWorkspaceFileEntry,
   getWorkspaceFiles,
   pasteWorkspaceFileEntries,
   revealWorkspaceFileEntry,
+  uploadWorkspaceFileEntries,
 } from "../../api";
 
 const originalFetch = globalThis.fetch;
@@ -92,6 +95,65 @@ describe("文件树管理 API", () => {
     expect(requests[1]?.init?.body).toBe(JSON.stringify({
       source_paths: ["/data/model.bin", "/tmp/cache"],
     }));
+  });
+
+  test("工作区内复制发送带 scope 的来源位置", async () => {
+    const requests: Array<{ init?: RequestInit; url: string }> = [];
+    installFileManagementBackend(requests);
+
+    await copyWorkspaceFileEntry(
+      38018,
+      "target",
+      { path: "source.txt", scope: "workspace" },
+      "workspace-files",
+    );
+
+    expect(requests[1]?.url).toEndWith(
+      "/api/v1/workspace/files/copy?path=target&scope=workspace",
+    );
+    expect(requests[1]?.init?.body).toBe(JSON.stringify({
+      source_path: "source.txt",
+      source_scope: "workspace",
+    }));
+  });
+
+  test("本地 File 使用 multipart 上传且保留相对路径", async () => {
+    const requests: Array<{ init?: RequestInit; url: string }> = [];
+    installFileManagementBackend(requests);
+    const file = new File(["hello\n"], "hello.txt", { type: "text/plain" });
+
+    await uploadWorkspaceFileEntries(
+      38019,
+      "uploads",
+      [file],
+      "workspace-files",
+    );
+
+    expect(requests[1]?.url).toEndWith(
+      "/api/v1/workspace/files/upload?path=uploads&scope=workspace",
+    );
+    const body = requests[1]?.init?.body;
+    expect(body).toBeInstanceOf(FormData);
+    expect((body as FormData).get("relative_paths")).toBe("hello.txt");
+    expect(((body as FormData).get("files") as File).name).toBe("hello.txt");
+  });
+
+  test("下载请求保留工作区路由和建议文件名", async () => {
+    const requests: Array<{ init?: RequestInit; url: string }> = [];
+    installFileManagementBackend(requests);
+
+    const request = await createWorkspaceFileDownloadRequest(
+      38020,
+      "models/model.bin",
+      "model.bin",
+      "workspace-files",
+    );
+
+    expect(request.url).toEndWith(
+      "/api/v1/workspace/files/download?path=models%2Fmodel.bin&scope=workspace",
+    );
+    expect(request.headers["X-BoxTeam-Workspace-Id"]).toBe("workspace-files");
+    expect(request.suggestedName).toBe("model.bin");
   });
 
   test("系统定位使用节点自身路径而不是父目录缓存键", async () => {

@@ -4,13 +4,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Protocol
+from typing import ClassVar, Protocol
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.turn_history import TurnHistoryStoreProtocol
 from app.core.checkpoint_config import build_checkpoint_config
 from app.schemas.public_v2.common import JobStatus, MessageRole
 from app.schemas.public_v2.message import (
@@ -22,7 +23,6 @@ from app.schemas.public_v2.message import (
 )
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
-
 
 CONTEXT_ONLY_NOTICE = (
     "已移除目标消息及其后的会话上下文；工作区文件修改不会被撤销。"
@@ -42,7 +42,7 @@ class PreparedMessageDispatcher(Protocol):
 class SessionTurnReplayService:
     """在当前会话追加截断 checkpoint，并用稳定 message_id 重新执行。"""
 
-    _TERMINAL_JOB_STATUSES = {
+    _TERMINAL_JOB_STATUSES: ClassVar[set[JobStatus]] = {
         JobStatus.completed,
         JobStatus.succeeded,
         JobStatus.failed,
@@ -58,12 +58,14 @@ class SessionTurnReplayService:
         session_service: SessionService,
         job_service: JobServiceProtocol,
         dispatcher: PreparedMessageDispatcher,
+        turn_history_store: TurnHistoryStoreProtocol,
     ) -> None:
         self._checkpointer = checkpointer
         self._message_service = message_service
         self._session_service = session_service
         self._job_service = job_service
         self._dispatcher = dispatcher
+        self._turn_history_store = turn_history_store
         self._session_locks: dict[str, asyncio.Lock] = {}
 
     async def replay(
@@ -124,6 +126,20 @@ class SessionTurnReplayService:
                 session_id=session_id,
                 target_message_id=target_message_id,
                 action=request.action,
+            )
+            self._turn_history_store.truncate_from_message(
+                session_id,
+                target_message_id,
+            )
+            replacement = replacement.model_copy(
+                update={
+                    "metadata": {
+                        **replacement.metadata,
+                        "turn_projection_epoch": (
+                            self._turn_history_store.projection_epoch(session_id)
+                        ),
+                    }
+                }
             )
             accepted = await self._dispatcher.dispatch_prepared_message(
                 session_id,

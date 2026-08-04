@@ -12,6 +12,10 @@ import {
 } from "./terminalSession.js";
 import { TerminalStateStore } from "./terminalStateStore.js";
 
+export const MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE = 64;
+export const MAX_RETAINED_TERMINAL_HISTORY = 256;
+const PROTECTED_RECENT_EXECUTIONS = 8;
+
 function terminalId() {
   return `term_${randomUUID().replaceAll("-", "")}`;
 }
@@ -32,14 +36,23 @@ export function resolveWorkspaceRoot() {
 export class TerminalManager {
   constructor({
     workspaceRoot = resolveWorkspaceRoot(),
+    workspaceId,
     terminalFrontendBaseUrl = "http://127.0.0.1:8013",
   } = {}) {
+    if (typeof workspaceId !== "string" || workspaceId.trim() === "") {
+      throw new Error("TerminalManager 启动必须显式提供 workspace_id");
+    }
     this.workspaceRoot = path.resolve(workspaceRoot);
-    this.stateStore = new TerminalStateStore({ workspaceRoot: this.workspaceRoot });
+    this.workspaceId = workspaceId;
+    this.stateStore = new TerminalStateStore({
+      workspaceRoot: this.workspaceRoot,
+      workspaceId: this.workspaceId,
+    });
     this.stateDir = this.stateStore.stateDir;
     this.stateFile = this.stateStore.stateFile;
     this.terminalFrontendBaseUrl = terminalFrontendBaseUrl.replace(/\/$/, "");
     this.sessions = new Map();
+    this.capacityLock = Promise.resolve();
     this.persistRequested = false;
     this.persistPromise = null;
   }
@@ -52,10 +65,15 @@ export class TerminalManager {
     }
 
     for (const record of records) {
+      if (record.steering_dispatching) {
+        // TODO: 兼容上次后端在 steering claim 后异常退出的恢复场景。
+        record.steering_dispatching = false;
+      }
       const restored = await this.restoreRecord(record);
       const session = new TerminalSession({ record: restored, manager: this });
       this.sessions.set(session.id, session);
     }
+    await this.pruneTerminalHistory();
     await this.persist();
   }
 
@@ -116,6 +134,7 @@ export class TerminalManager {
       while (this.persistRequested) {
         this.persistRequested = false;
         await this.stateStore.write({
+          workspace_id: this.workspaceId,
           workspace_root: this.workspaceRoot,
           updated_at: nowIso(),
           terminals: [...this.sessions.values()].map((session) => session.toRecord()),
@@ -142,7 +161,9 @@ export class TerminalManager {
   }
 
   async create({
+    workspaceId,
     sessionId,
+    agentId,
     title = "Persistent Terminal",
     cwd = this.workspaceRoot,
     cols = 100,
@@ -150,16 +171,59 @@ export class TerminalManager {
     command = resolveShell(),
     args = shellArgs(),
   }) {
+    const previousLock = this.capacityLock;
+    let releaseLock;
+    this.capacityLock = new Promise((resolve) => {
+      releaseLock = resolve;
+    });
+    await previousLock;
+    try {
+      return await this.createWithCapacity({
+        workspaceId,
+        sessionId,
+        agentId,
+        title,
+        cwd,
+        cols,
+        rows,
+        command,
+        args,
+      });
+    } finally {
+      releaseLock();
+    }
+  }
+
+  async createWithCapacity({
+    workspaceId,
+    sessionId,
+    agentId,
+    title,
+    cwd,
+    cols,
+    rows,
+    command,
+    args,
+  }) {
+    if (workspaceId != null && workspaceId !== this.workspaceId) {
+      throw new Error(
+        `终端工作区身份不匹配: expected=${this.workspaceId}, actual=${workspaceId}`,
+      );
+    }
     if (!sessionId) {
       throw new Error("session_id 不能为空");
     }
+    await this.pruneTerminalHistory();
+    await this.ensureExecutionCapacity();
     const resolvedCwd = path.resolve(cwd);
     const id = terminalId();
     const session = new TerminalSession({
       manager: this,
       record: {
         terminal_id: id,
+        workspace_id: this.workspaceId,
         session_id: sessionId,
+        owner_agent_id: agentId || null,
         title,
         command,
         args,
@@ -191,6 +255,73 @@ export class TerminalManager {
     return session.snapshot();
   }
 
+  async read(id) {
+    return await this.get(id).readModelOutput();
+  }
+
+  async markModelBackgrounded(id) {
+    const session = this.get(id);
+    session.markModelBackgrounded();
+    await this.persist();
+    return session.snapshot();
+  }
+
+  async claimSteering(id) {
+    const session = this.get(id);
+    const claimed = session.claimSteering();
+    if (claimed) {
+      await this.persist();
+    }
+    return { claimed, terminal: session.snapshot() };
+  }
+
+  async finishSteering(id, { dispatched }) {
+    const session = this.get(id);
+    session.finishSteering({ dispatched });
+    await this.persist();
+    return session.snapshot();
+  }
+
+  async ensureExecutionCapacity() {
+    const active = [...this.sessions.values()]
+      .filter(
+        (session) => session.status === "running"
+          && session.lastCommandStatus !== "completed",
+      )
+      .sort((left, right) => right.lastUsedAt.localeCompare(left.lastUsedAt));
+    if (active.length < MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE) {
+      return;
+    }
+
+    const candidates = active.slice(PROTECTED_RECENT_EXECUTIONS).reverse();
+    const victim = candidates[0];
+    if (!victim) {
+      throw new Error(
+        `工作区终端执行已达到上限且没有可淘汰项: workspace_id=${this.workspaceId}, limit=${MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE}`,
+      );
+    }
+    await victim.terminateForRelease({
+      status: "terminated",
+      commandStatus: "terminated",
+      reason: "workspace_lru_eviction",
+    });
+    await this.persist();
+  }
+
+  async pruneTerminalHistory() {
+    const historical = [...this.sessions.values()]
+      .filter((session) => session.status !== "created" && session.status !== "running")
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const removed = historical.slice(MAX_RETAINED_TERMINAL_HISTORY);
+    for (const session of removed) {
+      await session.dispose();
+      this.sessions.delete(session.id);
+    }
+    if (removed.length > 0) {
+      await this.persist();
+    }
+  }
+
   async resize(id, cols, rows) {
     const session = this.get(id);
     const resized = session.resize(cols, rows);
@@ -200,9 +331,10 @@ export class TerminalManager {
     return session.snapshot();
   }
 
-  async kill(id) {
+  async kill(id, { reason = "terminal_cancel" } = {}) {
     const session = this.get(id);
-    const killed = await session.kill();
+    session.touchUsage();
+    const killed = await session.kill({ reason });
     await this.persist();
     return { killed, terminal: session.snapshot() };
   }

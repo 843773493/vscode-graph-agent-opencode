@@ -78,7 +78,7 @@ def _malformed_tool_message(
 @pytest.mark.parametrize(
     "content",
     [
-        '<TOOLCALL>[{"name":"persistent_terminal","arguments":{}}]',
+        '<TOOLCALL>[{"name":"exec_command","arguments":{}}]',
         '```json\n{"name":"read_file","arguments":{"file_path":"a"}}\n```',
         '<tool_call>{"name":"read_file","arguments":{}}</tool_call>',
         '{"name":"read_file","arguments":"{bad}"}',

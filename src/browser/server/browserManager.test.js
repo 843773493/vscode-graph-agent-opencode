@@ -75,6 +75,41 @@ describe("浏览器状态持久化", () => {
     });
   });
 
+  test("重启时兼容旧版 lost 冷回收记录并恢复为可懒加载资源", async () => {
+    const manager = managerWithWriter(async () => undefined);
+    manager.stateStore.readRecords = async () => [{
+      browser_id: "browser_legacy_discarded",
+      session_id: "session_legacy_discarded",
+      status: "lost",
+      resource_state: "discarded",
+      release_reason: "browser_manager_startup_checkpoint_recovery",
+      ended_at: "2026-07-27T00:00:00.000Z",
+    }];
+    manager.stateStore.readCheckpoint = async () => ({
+      version: 1,
+      browser_id: "browser_legacy_discarded",
+      active_page_id: "page_active",
+      pages: [{
+        page_id: "page_active",
+        title: "旧版恢复页面",
+        url: "about:blank",
+        requested_url: "about:blank",
+        navigation_error: null,
+        created_at: "2026-07-27T00:00:00.000Z",
+      }],
+    });
+
+    await manager.init();
+
+    expect(manager.get("browser_legacy_discarded").record).toMatchObject({
+      status: "running",
+      resource_state: "discarded",
+      ended_at: null,
+      release_reason: "browser_manager_startup_checkpoint_recovery",
+      error_message: null,
+    });
+  });
+
   test("并发持久化写入严格串行", async () => {
     let active = 0;
     let maximumActive = 0;
