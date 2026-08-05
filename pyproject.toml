@@ -33,6 +33,7 @@ dependencies = [
     "watchfiles>=1.0.0",
     "pillow>=12.3.0",
     "croniter>=6.0.0",
+    "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,8 @@ markers = [
     "unit: 单元测试",
     "e2e: 端到端测试",
 ]
+# TODO: Windows 未启用符号链接权限时，pytest 的 current 临时目录链接无法清理。
+tmp_path_retention_policy = "none"
 filterwarnings = [
     "ignore:module 'sre_parse' is deprecated:DeprecationWarning:lark.utils",
     "ignore:module 'sre_constants' is deprecated:DeprecationWarning:lark.utils",

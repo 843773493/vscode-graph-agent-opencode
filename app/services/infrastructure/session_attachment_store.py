@@ -14,7 +14,6 @@ from PIL import Image, ImageOps
 from app.core.path_utils import get_session_path_resolver, safe_join
 from app.schemas.public_v2.message import AttachmentRef
 
-
 MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
 SUPPORTED_MEDIA_PREFIXES = ("image/", "audio/", "video/")
 SESSION_ATTACHMENT_SCHEME = "boxteam-session://"
@@ -145,7 +144,9 @@ class SessionAttachmentStore:
             return
         temporary = target.parent / f".{target.name}.{os.getpid()}.tmp"
         temporary.write_bytes(data)
-        temporary.chmod(0o600)
+        # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+        if os.name != "nt":
+            temporary.chmod(0o600)
         os.replace(temporary, target)
 
     @staticmethod

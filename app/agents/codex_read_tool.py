@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
@@ -46,9 +47,13 @@ def _is_virtual_read_path(path: str) -> bool:
 
 def _host_read_path(path: str, workspace_root: Path) -> str:
     requested = Path(path)
-    if requested.is_absolute():
-        return str(requested.resolve())
-    return str((workspace_root / requested).resolve())
+    resolved = requested.resolve() if requested.is_absolute() else (workspace_root / requested).resolve()
+    # TODO: DeepAgents 的虚拟路径校验拒绝 Windows 盘符；extended path 可保留真实主机路径语义。
+    if os.name == "nt" and resolved.drive:
+        if resolved.drive.startswith("\\\\"):
+            return "//?/UNC/" + resolved.as_posix().lstrip("/")
+        return "//?/" + resolved.as_posix()
+    return str(resolved)
 
 
 def _read_implementations(

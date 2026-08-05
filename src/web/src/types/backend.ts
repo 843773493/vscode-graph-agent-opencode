@@ -266,6 +266,46 @@ export interface GatewayWorkspaceList {
   items: GatewayWorkspace[];
 }
 
+export interface GatewayDiagnosticLog {
+  log_id: string;
+  source: "gateway" | "workspace";
+  workspace_id: string | null;
+  workspace_name: string | null;
+  service: string;
+  label: string;
+  status: "available" | "empty" | "unavailable";
+  tail: string;
+  truncated: boolean;
+  line_count: number;
+  size_bytes: number;
+  updated_at: string | null;
+  error: string | null;
+}
+
+export interface GatewayDiagnosticWorkspace {
+  workspace_id: string;
+  name: string;
+  root_path: string;
+  connection_kind: "local" | "remote_gateway";
+  status: "ready" | "offline";
+  managed: boolean;
+  system_default: boolean;
+  connection_error: string | null;
+}
+
+export interface GatewayDiagnostics {
+  gateway_id: string;
+  gateway_name: string;
+  gateway_connection_id: string | null;
+  connection_kind: "local" | "remote_gateway";
+  status: "ready" | "degraded" | "offline";
+  checked_at: string;
+  selected_workspace_id: string | null;
+  selected_log_id: string | null;
+  workspaces: GatewayDiagnosticWorkspace[];
+  logs: GatewayDiagnosticLog[];
+}
+
 export type GatewayPortForwardProtocol = "http" | "https" | "tcp";
 
 export type GatewayPortForwardStatus =

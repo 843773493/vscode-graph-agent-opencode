@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path, PureWindowsPath
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path, PureWindowsPath
 
 from app.agents.tools.apply_patch.journal import (
     delete_apply_patch_journal,
@@ -199,7 +199,8 @@ def _atomic_write(path: Path, content: str, *, mode: int | None) -> None:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        if mode is not None:
+        # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+        if mode is not None and os.name != "nt":
             os.chmod(temporary_path, mode)
         os.replace(temporary_path, path)
     except BaseException:

@@ -1,16 +1,66 @@
 from __future__ import annotations
 
+import base64
+import os
 import re
 from typing import Any
 
 import pytest
 
 from app.agents.tools.terminal import (
+    _command_for_shell,
     create_exec_command_tool,
     create_kill_terminal_tool,
     create_list_terminal_sessions_tool,
     create_write_stdin_tool,
 )
+
+
+def test_windows_cmd_wrapper_uses_cmd_syntax(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+
+    wrapped = _command_for_shell(
+        cmd="echo BOXTEAM_CMD_OK",
+        workdir=r"C:\workspace\demo",
+        shell=None,
+        login=True,
+        start_marker="__BOXTEAM_CMD_START_test__",
+        done_marker="__BOXTEAM_CMD_DONE_test__",
+    )
+
+    assert "${SHELL" not in wrapped
+    assert "printf" not in wrapped
+    assert 'cd /d "C:\\workspace\\demo"' in wrapped
+    assert "echo __BOXTEAM_CMD_START_test__" in wrapped
+    assert 'set "__BOXTEAM_RC=%ERRORLEVEL%"' in wrapped
+    assert "echo __BOXTEAM_CMD_DONE_test__:%__BOXTEAM_RC%" in wrapped
+
+
+def test_windows_powershell_wrapper_preserves_command_and_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    wrapped = _command_for_shell(
+        cmd='Write-Output "中文"',
+        workdir=r"C:\workspace\demo",
+        shell=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        login=True,
+        start_marker="__BOXTEAM_CMD_START_test__",
+        done_marker="__BOXTEAM_CMD_DONE_test__",
+    )
+
+    encoded_script = wrapped.rstrip("\r").split()[-1]
+    script = base64.b64decode(encoded_script).decode("utf-16le")
+    assert "${SHELL" not in wrapped
+    assert "-EncodedCommand" in wrapped
+    assert "Set-Location -LiteralPath 'C:\\workspace\\demo'" in script
+    assert "Write-Output '__BOXTEAM_CMD_START_test__'" in script
+    encoded_command = base64.b64encode('Write-Output "中文"'.encode()).decode()
+    assert encoded_command in script
+    assert "__BOXTEAM_CMD_DONE_test__:" in script
 
 
 class _FakeTerminalClient:

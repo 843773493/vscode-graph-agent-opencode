@@ -24,17 +24,15 @@ def extract_command_output(
     normalized_output = buffer.replace("\r\n", "\n").replace("\r", "\n")
     done_matches = list(
         re.finditer(
-            rf"^{re.escape(done_marker)}:(\d+)\s*$",
+            rf"{re.escape(done_marker)}:(\d+)",
             normalized_output,
-            re.MULTILINE,
         )
     )
     if not done_matches:
         start_matches = list(
             re.finditer(
-                rf"^{re.escape(start_marker)}\s*$",
+                re.escape(start_marker),
                 normalized_output,
-                re.MULTILINE,
             )
         )
         if start_matches:
@@ -44,9 +42,8 @@ def extract_command_output(
     done_match = done_matches[-1]
     start_matches = list(
         re.finditer(
-            rf"^{re.escape(start_marker)}\s*$",
+            re.escape(start_marker),
             normalized_output[: done_match.start()],
-            re.MULTILINE,
         )
     )
     if start_matches:

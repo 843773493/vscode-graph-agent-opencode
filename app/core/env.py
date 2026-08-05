@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,6 +33,9 @@ def load_boxteam_env(*, override: bool = False, required: bool = False) -> Path 
     """从统一用户配置目录加载运行时环境变量。"""
     env_file = get_user_env_path()
 
+    # TODO: Windows 默认控制台编码可能是 cp1252；日志必须在非 UTF-8 输出流上可编码。
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     print(f"[Env] 加载 BoxTeam 环境配置: {env_file}")
 
     if not env_file.exists():

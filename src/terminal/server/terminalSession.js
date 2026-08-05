@@ -104,9 +104,10 @@ function latestCommandExitCode(buffer, doneMarker = null) {
   const markerPattern = doneMarker
     ? doneMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     : "__BOXTEAM_CMD_DONE_[a-f0-9]+__";
+  const normalizedBuffer = stripAnsi(normalizeTerminalLines(buffer));
   const matches = [
-    ...normalizeTerminalLines(buffer).matchAll(
-      new RegExp(`^${markerPattern}:(\\d+)\\s*$`, "gm"),
+    ...normalizedBuffer.matchAll(
+      new RegExp(`${markerPattern}:(\\d+)`, "g"),
     ),
   ];
   if (matches.length === 0) {

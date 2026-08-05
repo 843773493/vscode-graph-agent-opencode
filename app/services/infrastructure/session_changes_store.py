@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import hashlib
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from app.abstractions.session_changes import StoredFileEdit
 from app.core.path_utils import get_session_path_resolver, safe_join
 from app.schemas.public_v2.session_changes import SessionChangesetDTO
-
 
 EDIT_INDEX_FILE = "index.jsonl"
 REVIEWED_FILE = "reviewed.json"
@@ -35,7 +34,8 @@ class SessionChangesStore:
             except ValueError:
                 virtual_path = "/" + raw_path.lstrip("/")
         else:
-            virtual_path = "/" + raw_path
+            # TODO: Windows 将 /src 视为 rooted path 而非绝对路径，统一去除重复前导斜杠。
+            virtual_path = "/" + raw_path.lstrip("/")
         if ".." in Path(virtual_path).parts or virtual_path.startswith("/~"):
             raise ValueError(f"文件路径不能包含路径穿越: {file_path}")
         real_path = (self._workspace_root / virtual_path.lstrip("/")).resolve()

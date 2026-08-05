@@ -1,3 +1,4 @@
+import os
 import socket
 import subprocess
 from pathlib import Path
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.gateway.runtime.process import (
+    AdoptedManagedProcess,
     ManagedProcess,
     SshLocalForwardSpec,
     allocate_local_port_in_range,
@@ -111,6 +113,7 @@ def test_allocate_local_port_in_range_skips_occupied_port():
         first_socket.close()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX 进程组信号仅在 POSIX 上可用")
 def test_managed_process_closes_posix_process_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -128,6 +131,7 @@ def test_managed_process_closes_posix_process_group(
     assert log_file.closed is True
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX 进程组信号仅在 POSIX 上可用")
 def test_managed_process_kills_group_after_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,6 +148,64 @@ def test_managed_process_kills_group_after_timeout(
     assert signals == [(4321, 15), (4321, 9)]
     assert process.wait_calls == 2
     assert log_file.closed is True
+
+
+def test_managed_process_windows_stops_complete_process_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _Process(timeout_once=False)
+    log_file = _LogFile()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(
+        "app.gateway.runtime.process.subprocess.run",
+        lambda arguments, **_: calls.append(arguments)
+        or SimpleNamespace(returncode=0, stderr=""),
+    )
+
+    ManagedProcess(process=process, log_file=log_file).close()
+
+    assert calls == [["taskkill", "/T", "/PID", "4321"]]
+    assert log_file.closed is True
+
+
+def test_managed_process_windows_force_kills_complete_process_tree_after_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _Process(timeout_once=True)
+    log_file = _LogFile()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(
+        "app.gateway.runtime.process.subprocess.run",
+        lambda arguments, **_: calls.append(arguments)
+        or SimpleNamespace(returncode=0, stderr=""),
+    )
+
+    ManagedProcess(process=process, log_file=log_file).close(timeout_seconds=0.01)
+
+    assert calls == [
+        ["taskkill", "/T", "/PID", "4321"],
+        ["taskkill", "/T", "/F", "/PID", "4321"],
+    ]
+    assert process.wait_calls == 2
+    assert log_file.closed is True
+
+
+def test_adopted_process_windows_uses_tasklist_for_liveness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(
+        "app.gateway.runtime.process.subprocess.run",
+        lambda arguments, **_: SimpleNamespace(
+            returncode=0,
+            stdout='"python.exe","4321","Console","1","10,000 K"\n',
+            stderr="",
+        ),
+    )
+
+    assert AdoptedManagedProcess(pid=4321)._is_alive() is True
 
 
 def test_workspace_backend_has_bounded_connection_drain_timeout(

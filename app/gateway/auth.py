@@ -10,7 +10,6 @@ from fastapi import Header, HTTPException
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore
 
-
 LOCAL_TOKEN = "local-dev-token"
 
 
@@ -23,7 +22,8 @@ class GatewayAuthContext:
 def get_gateway_local_token() -> str:
     credential_path = get_gateway_root() / "credentials" / "local-token"
     if credential_path.exists():
-        if credential_path.stat().st_mode & 0o077:
+        # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时文件 ACL 由系统继承控制。
+        if os.name != "nt" and credential_path.stat().st_mode & 0o077:
             raise PermissionError(
                 f"Gateway 本地凭据权限必须为 0600: {credential_path}"
             )

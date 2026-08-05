@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import logging
 import os
 import random
@@ -25,6 +26,46 @@ DEFAULT_SSH_TUNNEL_PORT_MIN = 41000
 DEFAULT_SSH_TUNNEL_PORT_MAX = 41999
 
 logger = logging.getLogger(__name__)
+
+
+# TODO: Windows 的 taskkill 优雅模式对子进程返回非零是正常的，必须交给 close() 的 /F 阶段收尾。
+def _taskkill_process_tree(pid: int, *, force: bool) -> None:
+    arguments = ["taskkill", "/T"]
+    if force:
+        arguments.append("/F")
+    arguments.extend(["/PID", str(pid)])
+    result = subprocess.run(
+        arguments,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 and force:
+        raise RuntimeError(
+            "Windows 进程树清理失败: "
+            f"pid={pid}, force={force}, stderr={result.stderr.strip()}"
+        )
+
+
+def _windows_process_is_alive(pid: int) -> bool:
+    """通过 tasklist 查询 Windows 进程，避免 os.kill(pid, 0) 的语义差异。"""
+    # TODO: Windows 不支持 POSIX 的 os.kill(pid, 0) 探活语义，使用 CSV 输出避免本地化文本影响解析。
+    result = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Windows 进程状态查询失败: "
+            f"pid={pid}, stderr={result.stderr.strip()}"
+        )
+    return any(
+        len(row) >= 2 and row[1] == str(pid)
+        for row in csv.reader(result.stdout.splitlines())
+    )
 
 
 class ManagedProcessHandle(Protocol):
@@ -72,7 +113,7 @@ class ManagedProcess:
         if os.name == "posix":
             os.killpg(self.process.pid, signal.SIGTERM)
         else:
-            self.process.terminate()
+            _taskkill_process_tree(self.process.pid, force=False)
 
     def _kill_group(self) -> None:
         if os.name == "posix":
@@ -81,7 +122,7 @@ class ManagedProcess:
             except ProcessLookupError:
                 return
         else:
-            self.process.kill()
+            _taskkill_process_tree(self.process.pid, force=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +149,7 @@ class AdoptedManagedProcess:
             if os.name == "posix":
                 os.killpg(self.pid, signal.SIGTERM)
             else:
-                os.kill(self.pid, signal.SIGTERM)
+                _taskkill_process_tree(self.pid, force=False)
         except ProcessLookupError:
             return
 
@@ -123,7 +164,7 @@ class AdoptedManagedProcess:
             if os.name == "posix":
                 os.killpg(self.pid, signal.SIGKILL)
             else:
-                os.kill(self.pid, signal.SIGKILL)
+                _taskkill_process_tree(self.pid, force=True)
         except ProcessLookupError:
             return
 
@@ -131,6 +172,8 @@ class AdoptedManagedProcess:
         return
 
     def _is_alive(self) -> bool:
+        if os.name == "nt":
+            return _windows_process_is_alive(self.pid)
         try:
             os.kill(self.pid, 0)
         except ProcessLookupError:
@@ -227,7 +270,8 @@ def resolve_python_executable(_: Path) -> Path:
     configured = os.environ.get("BOXTEAM_PYTHON_BIN")
     if configured:
         executable = Path(configured).expanduser()
-        if not executable.is_absolute():
+        # TODO: Windows 将无盘符根路径（如 /workspace）表示为 rooted path，不能只依赖 pathlib.is_absolute。
+        if not os.path.isabs(str(executable)):
             raise ValueError(
                 f"BOXTEAM_PYTHON_BIN 必须是绝对路径: {configured}"
             )

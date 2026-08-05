@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -208,5 +209,8 @@ def test_install_gateway_development_assets_is_idempotent(tmp_path: Path) -> Non
     assert second_config == first_config
     assert second_config.count(SSH_BLOCK_BEGIN) == 1
     assert second_config.count(SSH_BLOCK_END) == 1
-    assert (home / ".ssh" / SSH_KEY_NAME).stat().st_mode & 0o777 == 0o600
+    private_key = home / ".ssh" / SSH_KEY_NAME
+    assert private_key.is_file()
+    if os.name != "nt":
+        assert private_key.stat().st_mode & 0o777 == 0o600
     assert (home / ".ssh" / SSH_KNOWN_HOSTS_NAME).is_file()

@@ -259,7 +259,9 @@ class TurnHistoryFiles:
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
-            with path.open("rb") as stream:
+            # TODO: Windows 对只读句柄调用 fsync 会返回 EBADF，使用读写句柄同步已存在文件。
+            sync_mode = "r+b" if os.name == "nt" else "rb"
+            with path.open(sync_mode) as stream:
                 os.fsync(stream.fileno())
 
     def root(self, session_id: str) -> Path:

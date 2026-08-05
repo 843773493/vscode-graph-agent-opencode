@@ -12,7 +12,8 @@ export function spawnDetachedProcess({
   mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
   const logFd = openSync(logPath, "a", 0o600);
   try {
-    chmodSync(logPath, 0o600);
+    // TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+    if (process.platform !== "win32") chmodSync(logPath, 0o600);
     return spawn(command, args, {
       cwd,
       env: environment,

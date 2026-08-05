@@ -29,11 +29,14 @@ export function openServiceLog({
 
   mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
   const descriptor = openSync(logPath, "a", 0o600);
-  try {
-    chmodSync(logPath, 0o600);
-  } catch (error) {
-    closeSync(descriptor);
-    throw error;
+  // TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+  if (process.platform !== "win32") {
+    try {
+      chmodSync(logPath, 0o600);
+    } catch (error) {
+      closeSync(descriptor);
+      throw error;
+    }
   }
   const tee = (primary) => ({
     write(value) {

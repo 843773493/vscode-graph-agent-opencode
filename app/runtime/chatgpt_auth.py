@@ -126,14 +126,18 @@ def _resolve_litellm_auth_file(token_dir: Path) -> Path:
 def _migrate_codex_auth(source: Path, target: Path) -> None:
     record = _build_litellm_auth_record(source)
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(target.parent, 0o700)
+    # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时目录权限由系统继承控制。
+    if os.name != "nt":
+        os.chmod(target.parent, 0o700)
     fd, temporary_name = tempfile.mkstemp(
         prefix=".auth.",
         suffix=".tmp",
         dir=target.parent,
     )
     try:
-        os.fchmod(fd, 0o600)
+        # TODO: Windows 没有 fchmod，且句柄必须先交给 fdopen 才能安全关闭。
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(record, stream, ensure_ascii=False)
             stream.write("\n")
@@ -143,7 +147,8 @@ def _migrate_codex_auth(source: Path, target: Path) -> None:
             os.link(temporary_name, target)
         except FileExistsError:
             return
-        os.chmod(target, 0o600)
+        if os.name != "nt":
+            os.chmod(target, 0o600)
     finally:
         if temporary_name:
             Path(temporary_name).unlink(missing_ok=True)
@@ -177,14 +182,18 @@ def _build_litellm_auth_record(source: Path) -> dict[str, Any]:
 
 def _replace_auth_record(target: Path, record: dict[str, Any]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(target.parent, 0o700)
+    # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时目录权限由系统继承控制。
+    if os.name != "nt":
+        os.chmod(target.parent, 0o700)
     fd, temporary_name = tempfile.mkstemp(
         prefix=".auth.",
         suffix=".tmp",
         dir=target.parent,
     )
     try:
-        os.fchmod(fd, 0o600)
+        # TODO: Windows 没有 fchmod，且句柄必须先交给 fdopen 才能安全关闭。
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(record, stream, ensure_ascii=False)
             stream.write("\n")
@@ -192,7 +201,8 @@ def _replace_auth_record(target: Path, record: dict[str, Any]) -> None:
             os.fsync(stream.fileno())
         os.replace(temporary_name, target)
         temporary_name = ""
-        os.chmod(target, 0o600)
+        if os.name != "nt":
+            os.chmod(target, 0o600)
     finally:
         if temporary_name:
             Path(temporary_name).unlink(missing_ok=True)

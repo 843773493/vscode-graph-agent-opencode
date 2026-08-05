@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,8 +10,8 @@ import httpx
 import pytest
 from starlette.requests import Request
 
-from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
 from app.gateway.auth import get_gateway_local_token
+from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
 from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
     RemoteGatewayConnection,
@@ -18,11 +19,11 @@ from app.gateway.federation import (
     discover_remote_gateway,
     start_remote_gateway_tunnel,
 )
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.server.workspace_proxy import _proxy_headers
 from app.gateway.main import _inbound_gateway_access_list
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.server.workspace_proxy import _proxy_headers
 
 
 def _response(data: dict[str, object]) -> httpx.Response:
@@ -65,7 +66,8 @@ def test_federation_credentials_are_separate_and_owner_only(tmp_path: Path) -> N
 
     assert store.get("rgw_test").token == issued.token
     assert store.verify(issued.token).peer_gateway_id == "gateway_peer"
-    assert storage_path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert storage_path.stat().st_mode & 0o777 == 0o600
     payload = json.loads(storage_path.read_text(encoding="utf-8"))
     assert payload["credentials"][0]["token"] == issued.token
 
@@ -137,7 +139,8 @@ def test_gateway_local_credential_is_generated_and_stable(
 
     assert first == second
     assert first != "local-dev-token"
-    assert (tmp_path / "credentials" / "local-token").stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert (tmp_path / "credentials" / "local-token").stat().st_mode & 0o777 == 0o600
 
 
 def test_registry_persists_remote_gateway_without_federation_token(

@@ -9,7 +9,6 @@ import tempfile
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
-
 SUPPORTED_MEDIA_PREFIXES = ("image/", "audio/", "video/")
 SESSION_ATTACHMENT_SCHEME = "boxteam-session://"
 
@@ -139,7 +138,9 @@ def _write_once(target: Path, data: bytes) -> None:
             file.write(data)
             file.flush()
             os.fsync(file.fileno())
-        temporary.chmod(0o600)
+        # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+        if os.name != "nt":
+            temporary.chmod(0o600)
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)

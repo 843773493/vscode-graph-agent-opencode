@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import os
 import shlex
 from time import monotonic
 from typing import Any
@@ -22,7 +24,7 @@ from app.core.identifier import create_uuid_hex
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 
-def _command_for_shell(
+def _command_for_posix_shell(
     *,
     cmd: str,
     workdir: str | None,
@@ -35,6 +37,135 @@ def _command_for_shell(
     if workdir is None:
         return invocation
     return f"cd -- {shlex.quote(workdir)} && {invocation}"
+
+
+def _windows_shell_name(shell: str | None) -> str:
+    configured = shell or os.environ.get("COMSPEC") or "cmd.exe"
+    return configured.replace("\\", "/").rsplit("/", maxsplit=1)[-1].lower()
+
+
+def _windows_cmd_quote(value: str) -> str:
+    if '"' in value:
+        raise ValueError("Windows 命令路径不能包含双引号")
+    return f'"{value}"'
+
+
+def _windows_powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _windows_powershell_command(
+    *,
+    cmd: str,
+    workdir: str | None,
+    shell: str,
+    start_marker: str,
+    done_marker: str,
+) -> str:
+    command_payload = base64.b64encode(cmd.encode("utf-8")).decode("ascii")
+    script_lines = [
+        f"Write-Output {_windows_powershell_quote(start_marker)}",
+        "$boxteamExitCode = 0",
+        "try {",
+    ]
+    if workdir is not None:
+        script_lines.append(
+            "  Set-Location -LiteralPath "
+            f"{_windows_powershell_quote(workdir)}"
+        )
+    script_lines.extend(
+        [
+            "  $global:LASTEXITCODE = 0",
+            (
+                "  $boxteamCommand = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("
+                f"{_windows_powershell_quote(command_payload)}))"
+            ),
+            "  Invoke-Expression -Command $boxteamCommand",
+            "  $boxteamSucceeded = $?",
+            "  $boxteamExitCode = [int]$LASTEXITCODE",
+            "  if (-not $boxteamSucceeded -and $boxteamExitCode -eq 0) {",
+            "    $boxteamExitCode = 1",
+            "  }",
+            "} catch {",
+            "  Write-Error $_",
+            "  $boxteamExitCode = 1",
+            "}",
+            (
+                "Write-Output ("
+                f"{_windows_powershell_quote(done_marker + ':')}"
+                " + $boxteamExitCode)"
+            ),
+        ]
+    )
+    encoded_script = base64.b64encode(
+        "\n".join(script_lines).encode("utf-16le")
+    ).decode("ascii")
+    return (
+        f"{_windows_cmd_quote(shell)} -NoLogo -NoProfile -NonInteractive "
+        f"-ExecutionPolicy Bypass -EncodedCommand {encoded_script}\r"
+    )
+
+
+def _command_for_windows_shell(
+    *,
+    cmd: str,
+    workdir: str | None,
+    shell: str | None,
+    start_marker: str,
+    done_marker: str,
+) -> str:
+    shell_name = _windows_shell_name(shell)
+    shell_path = shell or os.environ.get("COMSPEC") or "cmd.exe"
+    if shell_name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}:
+        return _windows_powershell_command(
+            cmd=cmd,
+            workdir=workdir,
+            shell=shell_path,
+            start_marker=start_marker,
+            done_marker=done_marker,
+        )
+    if shell_name not in {"cmd", "cmd.exe"}:
+        raise ValueError(
+            "Windows 终端暂不支持该 shell；请使用 cmd.exe、powershell.exe 或 pwsh.exe: "
+            f"{shell_path}"
+        )
+
+    lines = [f"echo {start_marker}"]
+    if workdir is not None:
+        lines.append(f"cd /d {_windows_cmd_quote(workdir)}")
+    lines.extend(
+        [
+            cmd,
+            'set "__BOXTEAM_RC=%ERRORLEVEL%"',
+            f"echo {done_marker}:%__BOXTEAM_RC%",
+        ]
+    )
+    return "\r\n".join(lines) + "\r"
+
+
+def _command_for_shell(
+    *,
+    cmd: str,
+    workdir: str | None,
+    shell: str | None,
+    login: bool,
+    start_marker: str,
+    done_marker: str,
+) -> str:
+    if os.name == "nt":
+        return _command_for_windows_shell(
+            cmd=cmd,
+            workdir=workdir,
+            shell=shell,
+            start_marker=start_marker,
+            done_marker=done_marker,
+        )
+    return _command_for_posix_shell(
+        cmd=cmd,
+        workdir=workdir,
+        shell=shell,
+        login=login,
+    )
 
 
 async def _get_owned_terminal(
@@ -115,15 +246,19 @@ def create_exec_command_tool(
             workdir=workdir,
             shell=shell,
             login=login,
+            start_marker=start_marker,
+            done_marker=done_marker,
         )
         # TODO: 兼容 Codex 参数；BoxTeam 为保证 session_id 可 attach，底层始终分配 PTY。
         _ = tty
-        wrapped_command = (
-            f"printf '\\n{start_marker}\\n'; "
-            f"{shell_command}; "
-            f"__boxteam_rc=$?; "
-            f"printf '\\n{done_marker}:%s\\n' \"$__boxteam_rc\"\r"
-        )
+        wrapped_command = shell_command
+        if os.name != "nt":
+            wrapped_command = (
+                f"printf '\\n{start_marker}\\n'; "
+                f"{shell_command}; "
+                f"__boxteam_rc=$?; "
+                f"printf '\\n{done_marker}:%s\\n' \"$__boxteam_rc\"\r"
+            )
         try:
             await terminal_client.write_terminal(
                 terminal_id=terminal_id,

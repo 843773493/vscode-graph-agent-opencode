@@ -14,7 +14,9 @@ from configs.layout_migrations import (
 
 
 def _legacy_user_config() -> dict[str, object]:
-    workspace = commentjson.loads(Path("configs/workspace.jsonc").read_text())
+    workspace = commentjson.loads(
+        Path("configs/workspace.jsonc").read_text(encoding="utf-8")
+    )
     assert isinstance(workspace, dict)
     workspace.pop("$schema")
     workspace["config_version"] = 4
@@ -46,8 +48,12 @@ def test_migrate_legacy_user_configuration_splits_domains(tmp_path: Path) -> Non
         workspace_schema_path=workspace_schema,
     )
 
-    gateway = json.loads((tmp_path / "gateway.jsonc").read_text())
-    workspace = json.loads((tmp_path / "workspace.jsonc").read_text())
+    gateway = json.loads(
+        (tmp_path / "gateway.jsonc").read_text(encoding="utf-8")
+    )
+    workspace = json.loads(
+        (tmp_path / "workspace.jsonc").read_text(encoding="utf-8")
+    )
     assert gateway["config_version"] == 1
     assert gateway["workspaces"][0]["host"] == "remote.example.com"
     assert workspace["config_version"] == 1

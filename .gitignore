@@ -67,6 +67,14 @@ playground/
 out/
 /.boxteam/
 
+# Windows VM 本地连接配置、私钥和 host key
+/tools/ssh/*
+!/tools/ssh/AGENTS.md
+!/tools/ssh/*.example
+/tools/windows-vm/**/*.env
+/tools/windows-vm/*.env
+/tools/windows-vm/runtime-cache/
+
 # Test workspace runtime state
 /asset/skill_test_workspace/.boxteam/artifacts/
 /asset/skill_test_workspace/.boxteam/cache/

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -123,7 +124,8 @@ async def test_create_binds_forward_to_workspace_and_reuses_ssh_alias(
     assert persisted["items"][0]["workspace_id"] == "workspace_a"
     assert persisted["items"][0]["desired_running"] is True
     assert "private_key" not in json.dumps(persisted)
-    assert (tmp_path / "port-forwards.json").stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert (tmp_path / "port-forwards.json").stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.asyncio

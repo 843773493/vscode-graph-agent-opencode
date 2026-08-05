@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -29,7 +30,8 @@ def _collect_host_aliases(config_path: Path, visited: set[Path]) -> list[str]:
     visited.add(resolved_path)
     aliases: list[str] = []
     for raw_line in resolved_path.read_text(encoding="utf-8").splitlines():
-        tokens = shlex.split(raw_line, comments=True)
+        # TODO: Windows SSH Include 路径含反斜杠，不能用 POSIX shlex 解释转义。
+        tokens = shlex.split(raw_line, comments=True, posix=os.name != "nt")
         if not tokens:
             continue
         keyword = tokens[0].lower()

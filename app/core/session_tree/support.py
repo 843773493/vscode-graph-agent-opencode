@@ -91,6 +91,11 @@ def _process_matches_identity(pid: int, expected_identity: object) -> bool:
         return False
     except PermissionError:
         return True
+    # TODO: Windows 对无效或超出范围的 PID 抛出 WinError 87，而不是 ProcessLookupError。
+    except OSError as error:
+        if os.name == "nt" and getattr(error, "winerror", None) == 87:
+            return False
+        raise
     if not isinstance(expected_identity, str) or not expected_identity:
         return True
     actual_identity = _process_identity(pid)

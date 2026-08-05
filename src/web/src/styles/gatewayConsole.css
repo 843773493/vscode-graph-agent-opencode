@@ -2,6 +2,483 @@
   position: relative;
 }
 
+.gateway-diagnostics-panel {
+  min-width: 0;
+}
+
+.gateway-diagnostics-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(260px, 1.1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--gateway-border);
+  border-radius: 12px;
+  background: var(--gateway-panel);
+}
+
+.gateway-diagnostics-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.gateway-diagnostics-toolbar label > span {
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.gateway-diagnostics-toolbar select {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--bt-input-border);
+  border-radius: 7px;
+  background: var(--gateway-input);
+  color: var(--bt-input-foreground);
+  font: inherit;
+}
+
+.gateway-diagnostics-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.gateway-diagnostics-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.gateway-diagnostics-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.gateway-diagnostics-summary article {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--gateway-border);
+  border-radius: 11px;
+  background: var(--gateway-panel);
+}
+
+.gateway-diagnostics-summary article > .codicon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 29px;
+  width: 29px;
+  height: 29px;
+  border-radius: 8px;
+  background: var(--gateway-accent-soft);
+  color: var(--gateway-accent);
+}
+
+.gateway-diagnostics-summary article > div {
+  min-width: 0;
+}
+
+.gateway-diagnostics-summary small,
+.gateway-diagnostics-summary strong,
+.gateway-diagnostics-summary span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-diagnostics-summary small {
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.gateway-diagnostics-summary strong {
+  margin-top: 4px;
+  color: var(--bt-text-primary);
+  font-size: 16px;
+}
+
+.gateway-diagnostics-summary span {
+  margin-top: 3px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.gateway-diagnostics-workspace-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--gateway-border);
+  border-radius: 11px;
+  background: var(--gateway-panel);
+}
+
+.gateway-diagnostics-workspace-strip > div:first-child {
+  min-width: 180px;
+}
+
+.gateway-diagnostics-workspace-strip strong,
+.gateway-diagnostics-workspace-strip span {
+  display: block;
+}
+
+.gateway-diagnostics-workspace-strip strong {
+  color: var(--bt-text-primary);
+  font-size: 11px;
+}
+
+.gateway-diagnostics-workspace-strip > div:first-child span {
+  margin-top: 3px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.gateway-diagnostics-workspace-pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.gateway-diagnostics-workspace-pills button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  max-width: 220px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid var(--gateway-border);
+  border-radius: 999px;
+  background: var(--gateway-input);
+  color: var(--bt-text-muted);
+  font: inherit;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.gateway-diagnostics-workspace-pills button:hover,
+.gateway-diagnostics-workspace-pills button.active {
+  border-color: color-mix(in srgb, var(--gateway-accent) 65%, var(--gateway-border));
+  background: var(--gateway-accent-soft);
+  color: var(--gateway-accent);
+}
+
+.gateway-diagnostics-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--bt-status-success);
+}
+
+.gateway-diagnostics-status-dot.offline {
+  background: var(--bt-status-danger);
+}
+
+.gateway-diagnostics-muted {
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.gateway-diagnostics-log-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.38fr) minmax(0, 1fr);
+  height: clamp(420px, calc(100dvh - 350px), 720px);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--gateway-border);
+  border-radius: 12px;
+  background: var(--gateway-panel);
+}
+
+.gateway-diagnostics-log-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--gateway-border);
+  background: var(--gateway-panel-soft);
+}
+
+.gateway-diagnostics-log-list > header {
+  padding: 13px 13px 10px;
+  border-bottom: 1px solid var(--gateway-border);
+}
+
+.gateway-diagnostics-log-list > header > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gateway-diagnostics-log-list > header strong {
+  color: var(--bt-text-primary);
+  font-size: 12px;
+}
+
+.gateway-diagnostics-log-list > header > div > span {
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.gateway-diagnostics-log-list > header small {
+  display: block;
+  margin-top: 4px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.gateway-diagnostics-log-list > div {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.gateway-diagnostics-log-list button {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 11px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--gateway-border) 72%, transparent);
+  background: transparent;
+  color: var(--bt-text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gateway-diagnostics-log-list button:hover,
+.gateway-diagnostics-log-list button.active {
+  background: var(--gateway-accent-soft);
+  color: var(--bt-text-primary);
+}
+
+.gateway-diagnostics-log-copy {
+  min-width: 0;
+}
+
+.gateway-diagnostics-log-copy strong,
+.gateway-diagnostics-log-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-diagnostics-log-copy strong {
+  color: currentColor;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.gateway-diagnostics-log-copy small {
+  margin-top: 3px;
+  color: var(--bt-text-muted);
+  font-size: 9px;
+}
+
+.gateway-diagnostics-log-status {
+  padding: 3px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bt-text-primary) 7%, transparent);
+  color: var(--bt-text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.gateway-diagnostics-log-status.available {
+  background: color-mix(in srgb, var(--bt-status-success) 12%, transparent);
+  color: var(--bt-status-success);
+}
+
+.gateway-diagnostics-log-status.unavailable {
+  background: color-mix(in srgb, var(--bt-status-danger) 11%, transparent);
+  color: var(--bt-status-danger);
+}
+
+.gateway-diagnostics-viewer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--gateway-page) 36%, var(--gateway-panel));
+}
+
+.gateway-diagnostics-viewer > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 16px 13px;
+  border-bottom: 1px solid var(--gateway-border);
+}
+
+.gateway-diagnostics-viewer > header > div {
+  min-width: 0;
+}
+
+.gateway-diagnostics-viewer > header span,
+.gateway-diagnostics-viewer > header h2,
+.gateway-diagnostics-viewer > header small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-diagnostics-viewer > header span {
+  color: var(--gateway-accent);
+  font-size: 10px;
+}
+
+.gateway-diagnostics-viewer > header h2 {
+  margin: 4px 0 0;
+  color: var(--bt-text-primary);
+  font-size: 14px;
+}
+
+.gateway-diagnostics-viewer > header small {
+  margin-top: 5px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.gateway-diagnostics-viewer pre {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  background: color-mix(in srgb, #0d1117 87%, var(--gateway-page));
+  color: #c9d1d9;
+  font-family: var(--bt-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.gateway-diagnostics-viewer-empty,
+.gateway-diagnostics-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  padding: 24px;
+  color: var(--bt-text-muted);
+  text-align: center;
+}
+
+.gateway-diagnostics-viewer-empty > .codicon,
+.gateway-diagnostics-loading > .codicon {
+  margin-bottom: 10px;
+  color: var(--gateway-accent);
+  font-size: 22px;
+}
+
+.gateway-diagnostics-viewer-empty strong {
+  color: var(--bt-text-primary);
+  font-size: 12px;
+}
+
+.gateway-diagnostics-viewer-empty p {
+  max-width: 420px;
+  margin: 7px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.gateway-diagnostics-loading {
+  border: 1px solid var(--gateway-border);
+  border-radius: 12px;
+  background: var(--gateway-panel);
+}
+
+@media (max-width: 900px) {
+  .gateway-diagnostics-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .gateway-diagnostics-toolbar-actions {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+
+  .gateway-diagnostics-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .gateway-diagnostics-workspace-strip {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .gateway-diagnostics-workspace-pills {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 680px) {
+  .gateway-diagnostics-toolbar,
+  .gateway-diagnostics-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .gateway-diagnostics-toolbar-actions {
+    grid-column: auto;
+  }
+
+  .gateway-diagnostics-log-layout {
+    display: block;
+    height: auto;
+    min-height: 0;
+  }
+
+  .gateway-diagnostics-log-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--gateway-border);
+  }
+
+  .gateway-diagnostics-log-list > div {
+    height: 260px;
+    max-height: none;
+  }
+
+  .gateway-diagnostics-viewer {
+    height: 420px;
+    min-height: 0;
+  }
+}
+
 .gateway-connections-content {
   width: min(980px, 100%);
 }

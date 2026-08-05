@@ -10,6 +10,7 @@ import type {
   GatewayRuntimeRestartResult,
   GatewayRuntimeStateResult,
   GatewayHealth,
+  GatewayDiagnostics,
   DevelopmentRuntimeRestartResult,
   GatewayDirectoryList,
   GatewayManagedWorkspaceList,
@@ -103,6 +104,32 @@ export async function getGatewayHealth(port: number): Promise<GatewayHealth> {
     await requestJson<APIResponse<GatewayHealth>>(
       port,
       "/api/gateway/health",
+    ),
+  );
+}
+
+export async function getGatewayDiagnostics(
+  port: number,
+  options: {
+    gatewayConnectionId?: string | null;
+    workspaceId?: string | null;
+    logId?: string | null;
+    tailLines?: number;
+  } = {},
+): Promise<GatewayDiagnostics> {
+  const params = new URLSearchParams();
+  if (options.gatewayConnectionId) {
+    params.set("gateway_connection_id", options.gatewayConnectionId);
+  }
+  if (options.workspaceId) params.set("workspace_id", options.workspaceId);
+  if (options.logId) params.set("log_id", options.logId);
+  if (options.tailLines) params.set("tail_lines", String(options.tailLines));
+  const query = params.toString();
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayDiagnostics>>(
+      port,
+      `/api/gateway/diagnostics${query ? `?${query}` : ""}`,
+      { timeoutMs: 15000 },
     ),
   );
 }

@@ -36,6 +36,7 @@ from app.gateway.credentials import (
     load_or_create_gateway_id,
 )
 from app.gateway.device_connections import router as device_connections_router
+from app.gateway.diagnostics import collect_gateway_diagnostics
 from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
     request_remote_gateway_management,
@@ -74,6 +75,7 @@ from app.gateway.schemas import (
     FederationProtocolManifestDTO,
     FederationWorkspaceDTO,
     FederationWorkspaceListDTO,
+    GatewayDiagnosticsDTO,
     GatewayDirectoryEntryDTO,
     GatewayDirectoryListDTO,
     GatewayHealthDTO,
@@ -512,6 +514,7 @@ async def federation_manifest(
                 "workspace_discovery",
                 "workspace_proxy",
                 "auxiliary_proxy",
+                "diagnostics_logs",
                 "managed_backend_restart",
                 "managed_workspace_admin",
             ],
@@ -568,6 +571,32 @@ async def federation_workspaces(
         ),
         request_id=request_id,
     )
+
+
+@app.get(
+    "/api/gateway/federation/diagnostics",
+    response_model=APIResponse[GatewayDiagnosticsDTO],
+)
+async def federation_diagnostics(
+    remote_workspace_id: str | None = Query(default=None),
+    log_id: str | None = Query(default=None),
+    tail_lines: int = Query(default=300, ge=20, le=1000),
+    _: object = Depends(verify_federation_token),
+    request_id: str = Depends(get_request_id),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+):
+    try:
+        result = await collect_gateway_diagnostics(
+            registry,
+            selected_workspace_id=remote_workspace_id,
+            selected_log_id=log_id,
+            tail_lines=tail_lines,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @app.get(

@@ -83,7 +83,8 @@ class FederationCredentialStore:
     def _load(self) -> dict[str, FederationCredential]:
         if not self._storage_path.exists():
             return {}
-        if self._storage_path.stat().st_mode & 0o077:
+        # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时文件 ACL 由系统继承控制。
+        if os.name != "nt" and self._storage_path.stat().st_mode & 0o077:
             raise PermissionError(
                 f"联邦凭据文件权限必须为 0600: {self._storage_path}"
             )
@@ -126,7 +127,9 @@ class FederationCredentialStore:
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
-            temporary_path.chmod(0o600)
+            # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+            if os.name != "nt":
+                temporary_path.chmod(0o600)
             os.replace(temporary_path, self._storage_path)
         finally:
             temporary_path.unlink(missing_ok=True)

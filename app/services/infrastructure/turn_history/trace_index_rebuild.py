@@ -186,11 +186,13 @@ def rebuild_trace_turn_index(
             os.fsync(stream.fileno())
         os.replace(temp_index, index_path)
         os.replace(temp_manifest, manifest_path)
-        directory_fd = os.open(trace_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        # TODO: Windows 不能像 POSIX 一样打开目录并 fsync；文件替换本身仍已完成。
+        if os.name != "nt":
+            directory_fd = os.open(trace_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         return manifest
     finally:
         temp_index.unlink(missing_ok=True)

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
@@ -30,7 +33,11 @@ from app.gateway.control.schemas import (
     WorkspaceNavigationReorderRequest,
     WorkspaceNavigationTreeDTO,
 )
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.diagnostics import collect_gateway_diagnostics
+from app.gateway.federation import request_remote_gateway_management
 from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.schemas import GatewayDiagnosticsDTO
 from app.schemas.public_v2.common import APIResponse
 
 router = APIRouter(prefix="/api/gateway", tags=["gateway-control"])
@@ -97,6 +104,94 @@ def _catalog_search(request: Request) -> GatewaySessionCatalogSearchService:
     if not isinstance(value, GatewaySessionCatalogSearchService):
         raise RuntimeError("Gateway 跨工作区会话搜索服务尚未初始化")
     return value
+
+
+@router.get(
+    "/diagnostics",
+    response_model=APIResponse[GatewayDiagnosticsDTO],
+    summary="查看 Gateway 与托管工作区日志诊断",
+)
+async def get_gateway_diagnostics(
+    gateway_connection_id: str | None = Query(default=None),
+    workspace_id: str | None = Query(default=None),
+    log_id: str | None = Query(default=None),
+    tail_lines: int = Query(default=300, ge=20, le=1000),
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+    registry: GatewayWorkspaceRegistry = Depends(_registry),
+):
+    if gateway_connection_id is None:
+        try:
+            result = await collect_gateway_diagnostics(
+                registry,
+                selected_workspace_id=workspace_id,
+                selected_log_id=log_id,
+                tail_lines=tail_lines,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return APIResponse(data=result, request_id=request_id)
+
+    try:
+        connection = registry.remote_gateway_connection(gateway_connection_id)
+        remote_workspace_id: str | None = None
+        if workspace_id is not None:
+            target = registry.resolve(workspace_id)
+            if (
+                target.connection_kind != "remote_gateway"
+                or target.remote_gateway_connection_id != gateway_connection_id
+                or target.remote_workspace_id is None
+            ):
+                raise ValueError("所选工作区不属于当前远程 Gateway")
+            remote_workspace_id = target.remote_workspace_id
+        credential = FederationCredentialStore(
+            storage_path=get_gateway_root() / "credentials" / "federation.json"
+        ).get(gateway_connection_id)
+        params = {
+            "tail_lines": str(tail_lines),
+            **(
+                {"remote_workspace_id": remote_workspace_id}
+                if remote_workspace_id is not None
+                else {}
+            ),
+            **({"log_id": log_id} if log_id is not None else {}),
+        }
+        remote_data = await request_remote_gateway_management(
+            gateway_url=registry.remote_gateway_url(gateway_connection_id),
+            credential=credential,
+            method="GET",
+            path=f"/api/gateway/federation/diagnostics?{urlencode(params)}",
+            request_id=request_id,
+        )
+        result = GatewayDiagnosticsDTO.model_validate(remote_data).model_copy(
+            update={
+                "gateway_connection_id": gateway_connection_id,
+                "gateway_name": connection.name,
+                "connection_kind": "remote_gateway",
+                "selected_workspace_id": workspace_id,
+            }
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "远程 Gateway 拒绝日志诊断请求: "
+                f"status={error.response.status_code}, "
+                f"body={error.response.text[:1000]}"
+            ),
+        ) from error
+    except httpx.RequestError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"无法连接远程 Gateway: {error}",
+        ) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get(

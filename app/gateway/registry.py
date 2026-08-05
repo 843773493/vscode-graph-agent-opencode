@@ -163,6 +163,12 @@ class GatewayWorkspaceRegistry:
         self.resolve(workspace_id)
         return workspace_id in self._runtimes
 
+    def runtime_service_urls(self, workspace_id: str) -> dict[str, str]:
+        """返回当前 Gateway 直接持有的工作区服务地址快照。"""
+        self.resolve(workspace_id)
+        runtime = self._runtimes.get(workspace_id)
+        return dict(runtime.service_urls) if runtime is not None else {}
+
     def stop_managed_runtime(self, workspace_id: str) -> None:
         target = self.resolve(workspace_id)
         if target.connection_kind != "local" or not target.managed:
@@ -980,7 +986,9 @@ class GatewayWorkspaceRegistry:
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
-            temporary_path.chmod(0o600)
+            # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+            if os.name != "nt":
+                temporary_path.chmod(0o600)
             os.replace(temporary_path, self._storage_path)
         finally:
             temporary_path.unlink(missing_ok=True)

@@ -12,6 +12,13 @@ from app.runtime.chatgpt_auth import (
 )
 
 
+def _set_test_home(monkeypatch, home: Path) -> None:
+    monkeypatch.setenv("HOME", str(home))
+    # TODO: Windows 的 pathlib.expanduser 使用 USERPROFILE，不读取 HOME。
+    if os.name == "nt":
+        monkeypatch.setenv("USERPROFILE", str(home))
+
+
 def _access_token(expires_at: int) -> str:
     claims = base64.urlsafe_b64encode(
         json.dumps({"exp": expires_at}).encode()
@@ -43,7 +50,7 @@ def test_chatgpt_auth_defaults_to_boxteam_user_directory(
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
     monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
     monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    _set_test_home(monkeypatch, tmp_path / "home")
 
     token_dir = configure_litellm_chatgpt_auth_directory()
 
@@ -58,7 +65,7 @@ def test_chatgpt_auth_preserves_explicit_token_directory(
     explicit_dir = tmp_path / "custom-chatgpt-auth"
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(explicit_dir))
     monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    _set_test_home(monkeypatch, tmp_path / "home")
 
     token_dir = configure_litellm_chatgpt_auth_directory()
 
@@ -70,7 +77,7 @@ def test_chatgpt_auth_migrates_codex_tokens_once(monkeypatch, tmp_path: Path) ->
     source = home / ".codex" / "auth.json"
     _write_codex_auth(source)
     boxteam_home = tmp_path / "boxteam-home"
-    monkeypatch.setenv("HOME", str(home))
+    _set_test_home(monkeypatch, home)
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
     monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
     monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
@@ -86,8 +93,9 @@ def test_chatgpt_auth_migrates_codex_tokens_once(monkeypatch, tmp_path: Path) ->
         "expires_at": 2_000_000_000,
         "account_id": "account-1",
     }
-    assert target.stat().st_mode & 0o777 == 0o600
-    assert token_dir.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert target.stat().st_mode & 0o777 == 0o600
+        assert token_dir.stat().st_mode & 0o777 == 0o700
 
     target.write_text('{"access_token": "litellm-owned"}\n', encoding="utf-8")
     _write_codex_auth(source, access_token=_access_token(2_100_000_000))
@@ -112,7 +120,7 @@ def test_expired_chatgpt_auth_is_replaced_by_valid_codex_auth(
     now = int(time.time())
     home = tmp_path / "home"
     boxteam_home = tmp_path / "boxteam-home"
-    monkeypatch.setenv("HOME", str(home))
+    _set_test_home(monkeypatch, home)
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
     monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
     monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
@@ -141,7 +149,8 @@ def test_expired_chatgpt_auth_is_replaced_by_valid_codex_auth(
     refreshed = json.loads(target.read_text(encoding="utf-8"))
     assert refreshed["access_token"] == _access_token(now + 3600)
     assert refreshed["refresh_token"] == "codex-refresh"
-    assert target.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert target.stat().st_mode & 0o777 == 0o600
 
 
 def test_expired_chatgpt_auth_fails_fast_without_valid_codex_auth(
@@ -161,7 +170,7 @@ def test_expired_chatgpt_auth_fails_fast_without_valid_codex_auth(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("HOME", str(home))
+    _set_test_home(monkeypatch, home)
 
     try:
         ensure_chatgpt_oauth_ready(token_dir)

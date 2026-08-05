@@ -14,6 +14,7 @@ import { useWarmConfirm } from "../WarmConfirmProvider";
 import GatewayConnectionDialog from "./GatewayConnectionDialog";
 import GatewayInboundAccessPanel from "./GatewayInboundAccessPanel";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
+import GatewayDiagnosticsPanel from "./GatewayDiagnosticsPanel";
 import GatewayThemeSettings from "./GatewayThemeSettings";
 
 export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
@@ -51,7 +52,7 @@ export default function GatewayControlCenter({
   const [reconnectingId, setReconnectingId] = useState<string | null>(null);
   const [restartingDevelopment, setRestartingDevelopment] = useState(false);
   const [deviceRevision, setDeviceRevision] = useState(0);
-  const [activePage, setActivePage] = useState<"connections" | "theme">("connections");
+  const [activePage, setActivePage] = useState<"connections" | "theme" | "diagnostics">("connections");
 
   const loadHealth = useCallback(async () => {
     try {
@@ -171,7 +172,7 @@ export default function GatewayControlCenter({
             <button type="button" className={activePage === "theme" ? "active" : undefined} aria-current={activePage === "theme" ? "page" : undefined} onClick={() => setActivePage("theme")}><span className="codicon codicon-color-mode" aria-hidden="true" />主题设置</button>
             <button type="button" disabled><span className="codicon codicon-pulse" aria-hidden="true" />服务运行时</button>
             <button type="button" disabled><span className="codicon codicon-shield" aria-hidden="true" />连接与凭据</button>
-            <button type="button" disabled><span className="codicon codicon-output" aria-hidden="true" />日志与诊断</button>
+            <button type="button" className={activePage === "diagnostics" ? "active" : undefined} aria-current={activePage === "diagnostics" ? "page" : undefined} onClick={() => setActivePage("diagnostics")}><span className="codicon codicon-output" aria-hidden="true" />日志与诊断</button>
           </section>
         </nav>
         <div className="gateway-control-sidebar-status">
@@ -186,8 +187,8 @@ export default function GatewayControlCenter({
           <header className="gateway-control-header">
             <div>
               <span>本地控制面</span>
-              <h1 id="gateway-control-title">{activePage === "connections" ? "连接管理" : "主题设置"}</h1>
-              <p>{activePage === "connections" ? "管理远程 Gateway、手机和其他外部设备的连接与授权。工作区请在会话工作台中管理。" : "统一切换界面配色并管理网络或本地背景图片。"}</p>
+              <h1 id="gateway-control-title">{activePage === "connections" ? "连接管理" : activePage === "theme" ? "主题设置" : "日志与诊断"}</h1>
+              <p>{activePage === "connections" ? "管理远程 Gateway、手机和其他外部设备的连接与授权。工作区请在会话工作台中管理。" : activePage === "theme" ? "统一切换界面配色并管理网络或本地背景图片。" : "从连接的 Gateway 逐层查看控制面和托管工作区的运行日志，定位连接、启动与代理问题。"}</p>
             </div>
             {activePage === "connections" ? <div className="gateway-control-actions">
               {health?.development_restart_available ? (
@@ -215,6 +216,8 @@ export default function GatewayControlCenter({
 
           {activePage === "theme" ? (
             <GatewayThemeSettings apiPort={apiPort} settings={uiSettings} onUpdateSettings={onUpdateUiSettings} />
+          ) : activePage === "diagnostics" ? (
+            <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} />
           ) : <>
 
           {gatewayError || healthError || operationError ? (

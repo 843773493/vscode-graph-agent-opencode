@@ -435,7 +435,9 @@ class WorkspaceService:
                 temporary_file.write(encoded_content)
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
-            os.chmod(temporary_path, original_mode)
+            # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+            if os.name != "nt":
+                os.chmod(temporary_path, original_mode)
             latest_revision = self._content_revision(target_path.read_bytes())
             if latest_revision != expected_revision:
                 raise WorkspaceFileConflictError(
