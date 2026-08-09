@@ -54,13 +54,20 @@ ${BOXTEAM_HOME}/
 ├── config/
 │   ├── .env
 │   ├── gateway.jsonc
-│   ├── gateway_config.jsonc
+│   ├── gateway_schema.jsonc
 │   ├── workspace.jsonc
-│   └── workspace_config.jsonc
+│   └── workspace_schema.jsonc
 ├── state/
 │   └── gateway/
 └── installations/
 ```
+
+发行包内置默认值位于 `configs/gateway_inline.jsonc` 与
+`configs/workspace_inline.jsonc`，不直接写入用户目录。启动时按
+`inline → 用户配置 → *_local` 合并；上图中的 `gateway.jsonc`、
+`workspace.jsonc` 是用户覆盖文件，`.env` 仍是环境变量来源。
+
+产品级 Agent Skill 源码位于 `resources/skills/`，不属于 `asset/` 测试模板。运行时发行包将其复制到 `application/resources/skills/`；manifest 通过 `skill_resources` 声明该目录。Gateway 根据 `runtime.workspace.default_skill_groups` 把默认 Skill 组传给受管 Workspace，Workspace 以只读虚拟路径加载它们。
 
 工作区业务数据继续位于 `${workspace}/.boxteam/`。Launcher、Gateway 和安装器不得把会话、检查点或工具结果写入全局控制面目录。
 
@@ -88,6 +95,7 @@ ${BOXTEAM_HOME}/
   "version": "0.1.0",
   "python_executable": "python/bin/python",
   "application_root": "application",
+  "skill_resources": "application/resources/skills",
   "web_assets": "web/dist",
   "chromium_executable": "chromium/chrome",
   "node": {

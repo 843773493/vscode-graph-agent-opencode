@@ -504,7 +504,9 @@ export interface WebUiLayoutSettings {
   workbench_view?: "sessions" | "gateway" | null;
   agent_sessions_panel_open?: boolean | null;
   auxiliary_visible?: boolean | null;
+  panel_visible?: boolean | null;
   auxiliary_tab?: "changes" | "files" | "automation" | "resources" | null;
+  auxiliary_tab_order?: Array<"changes" | "files" | "automation" | "resources"> | null;
   main_area_ratios?: WebUiMainAreaRatios | null;
   workspace_preview_visible?: boolean | null;
   workspace_preview_maximized?: boolean | null;
@@ -512,6 +514,7 @@ export interface WebUiLayoutSettings {
   workspace_preview_active_file_path?: string | null;
   customizations_collapsed?: boolean | null;
   customizations_height?: number | null;
+  panel_height?: number | null;
   content_view?:
     | "default"
     | "events"

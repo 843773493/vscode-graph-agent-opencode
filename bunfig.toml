@@ -1,0 +1,6 @@
+[test]
+# 参考仓库和正式测试产物不是当前项目的 Bun 测试输入；禁止递归发现其中的测试。
+pathIgnorePatterns = [
+  "reference_repo/**",
+  "out/**",
+]

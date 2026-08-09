@@ -67,6 +67,10 @@ export interface WorkspaceFileContentDTO {
   modified_at?: string | null;
   revision: string;
 }
+export interface WorkspaceFileCopyRequest {
+  source_path: string;
+  source_scope?: "workspace" | "filesystem";
+}
 export interface WorkspaceFileCreateRequest {
   name: string;
   kind: "file" | "directory";

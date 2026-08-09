@@ -25,19 +25,19 @@
 
 ### Schema 与实例按配置域分开命名
 
-仓库提供 `gateway_config.jsonc`、`workspace_config.jsonc` 两个 schema，以及 `gateway.jsonc`、`workspace.jsonc`、`gateway_dev.jsonc`、`workspace_dev.jsonc` 四个实际配置。安装后 schema 与实例位于 `${BOXTEAM_HOME}/config/`，工作区覆盖固定为 `${workspace}/.boxteam/workspace.jsonc`。
+仓库提供 `gateway_schema.jsonc`、`workspace_schema.jsonc` 两个 schema，以及 `gateway_inline.jsonc`、`workspace_inline.jsonc` 内置默认配置和 `gateway_dev.jsonc`、`workspace_dev.jsonc` 开发配置。安装后用户覆盖实例仍位于 `${BOXTEAM_HOME}/config/gateway.jsonc`、`workspace.jsonc`，工作区覆盖固定为 `${workspace}/.boxteam/workspace.jsonc`。
 
 相比继续使用 `boxteam` 总称，这能从文件名直接表达所有权。实际配置统一使用 JSONC，避免模板和持久化文件使用不同解析器。
 
 ### 静态模板是默认配置的唯一来源
 
-删除 `defaults.py` 和 development overlay。普通初始化复制两个普通模板；开发安装复制两个完整 dev 模板。CLI、Launcher 和 npm runtime 都调用同一个资源安装器，只通过显式 profile 选择源文件，不在内存中拼装字段。
+删除 `defaults.py` 和 development overlay。普通运行时从两个 inline 默认文件开始，再叠加用户配置与 `_local` 覆盖；安装器把 inline 或 dev 文件复制为用户配置。CLI、Launcher 和 npm runtime 都调用同一个资源安装器，只通过显式 profile 选择源文件，不在内存中拼装字段。
 
 相比生成器，完整模板存在少量重复，但可以直接审查、被编辑器校验，并消除 Python、overlay 与 JSON Schema 之间的隐式合并行为。测试将验证四个模板分别符合其 schema，并约束 dev/普通模板只在预期字段上不同。
 
 ### 两个运行时拥有各自加载器
 
-Gateway 配置加载器只接受 `gateway.jsonc`，验证独立版本及 Gateway 工作区注册声明。Workspace `ConfigService` 只接受用户级 `workspace.jsonc` 和显式工作区的 `.boxteam/workspace.jsonc`，分别迁移、验证后再深度合并。两个 schema 都设置 `additionalProperties: false`，越界字段立即报错。
+Gateway 配置加载器从 `gateway_inline.jsonc` 开始，叠加用户级 `gateway.jsonc` 和 `gateway_local.jsonc`，验证独立版本及 Gateway 工作区注册声明。Workspace `ConfigService` 从 `workspace_inline.jsonc` 开始，依次叠加用户级 `workspace.jsonc`、`workspace_local.jsonc` 和显式工作区的 `.boxteam/workspace.jsonc`，分别迁移、验证后再深度合并。两个 schema 都设置 `additionalProperties: false`，越界字段立即报错。
 
 相比让 Gateway 继续复用 Workspace `ConfigService`，独立加载器能移除默认工作区依赖，并避免 Gateway 初始化 Agent/LLM 配置。
 

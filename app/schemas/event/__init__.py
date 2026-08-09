@@ -10,7 +10,7 @@
 from datetime import datetime
 from typing import Any, Literal, Optional, Self, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, JsonValue, model_validator
 
 # ============= 1. 基础事件结构（所有事件的公共字段） =============
 
@@ -147,7 +147,7 @@ class ToolCallStartPayload(BaseModel):
     """TOOL_CALL_START 事件的 payload"""
     execution_id: str
     tool_name: str
-    args: dict[str, Any] = Field(default_factory=dict)
+    args: dict[str, JsonValue] = Field(default_factory=dict)
     agent_id: str | None = None
     skill_names: list[str] = Field(default_factory=list)
     invocation_tool_name: str | None = None

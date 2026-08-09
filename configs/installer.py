@@ -72,7 +72,7 @@ def validate_config_resource_pair(config_source: Path, schema_source: Path) -> N
 
 
 def _profile_config_resource(domain: str, profile: ConfigProfile) -> str:
-    suffix = "_dev" if profile == "development" else ""
+    suffix = "_dev" if profile == "development" else "_inline"
     return f"{domain}{suffix}.jsonc"
 
 
@@ -92,7 +92,7 @@ def install_user_configuration(
             project_root=project_root,
         )
         schema_source = resolve_config_resource_source(
-            f"{domain}_config.jsonc",
+            f"{domain}_schema.jsonc",
             project_root=project_root,
         )
         validate_config_resource_pair(config_source, schema_source)
@@ -101,7 +101,7 @@ def install_user_configuration(
                 config_source,
                 schema_source,
                 resolved_root / f"{domain}.jsonc",
-                resolved_root / f"{domain}_config.jsonc",
+                resolved_root / f"{domain}_schema.jsonc",
             )
         )
 

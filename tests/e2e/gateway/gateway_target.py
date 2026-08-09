@@ -114,9 +114,9 @@ def start_remote_backend_via_ssh(
     remote_boxteam_home = f"{remote_workspace_path}.boxteam-home"
     remote_config_root = f"{remote_boxteam_home}/config"
     remote_config_path = f"{remote_workspace_path}/.boxteam/workspace.jsonc"
-    remote_schema_path = f"{remote_workspace_path}/.boxteam/workspace_config.jsonc"
+    remote_schema_path = f"{remote_workspace_path}/.boxteam/workspace_schema.jsonc"
     test_config_source = f"{target.repository_path}/configs/tests/default.jsonc"
-    config_schema_source = f"{target.repository_path}/configs/workspace_config.jsonc"
+    config_schema_source = f"{target.repository_path}/configs/workspace_schema.jsonc"
     quoted_remote_schema_path = shlex.quote(remote_schema_path)
     env_parts = [
         f"{key}={shlex.quote(value)}" for key, value in (extra_env or {}).items()
@@ -128,10 +128,10 @@ def start_remote_backend_via_ssh(
             f"mkdir -p {shlex.quote(remote_config_root)};",
             f"cp {shlex.quote(test_config_source)} {shlex.quote(remote_config_path)};",
             f"cp {shlex.quote(config_schema_source)} {quoted_remote_schema_path};",
-            f"cp {target.repository_path}/configs/workspace.jsonc",
+            f"cp {target.repository_path}/configs/workspace_inline.jsonc",
             f"{shlex.quote(remote_config_root + '/workspace.jsonc')};",
-            f"cp {target.repository_path}/configs/workspace_config.jsonc",
-            f"{shlex.quote(remote_config_root + '/workspace_config.jsonc')};",
+            f"cp {target.repository_path}/configs/workspace_schema.jsonc",
+            f"{shlex.quote(remote_config_root + '/workspace_schema.jsonc')};",
             f"cd {shlex.quote(target.repository_path)};",
             f"WORKSPACE_ROOT={shlex.quote(remote_workspace_path)}",
             f"BOXTEAM_HOME={shlex.quote(remote_boxteam_home)}",
@@ -196,14 +196,14 @@ def start_remote_gateway_via_ssh(
             f"mkdir -p {shlex.quote(remote_config_root)}",
             f"{shlex.quote(remote_boxteam_home)}/logs",
             f"{shlex.quote(remote_workspace_path)};",
-            f"cp {target.repository_path}/configs/gateway.jsonc",
+            f"cp {target.repository_path}/configs/gateway_inline.jsonc",
             f"{shlex.quote(remote_config_root + '/gateway.jsonc')};",
-            f"cp {target.repository_path}/configs/gateway_config.jsonc",
-            f"{shlex.quote(remote_config_root + '/gateway_config.jsonc')};",
-            f"cp {target.repository_path}/configs/workspace.jsonc",
+            f"cp {target.repository_path}/configs/gateway_schema.jsonc",
+            f"{shlex.quote(remote_config_root + '/gateway_schema.jsonc')};",
+            f"cp {target.repository_path}/configs/workspace_inline.jsonc",
             f"{shlex.quote(remote_config_root + '/workspace.jsonc')};",
-            f"cp {target.repository_path}/configs/workspace_config.jsonc",
-            f"{shlex.quote(remote_config_root + '/workspace_config.jsonc')};",
+            f"cp {target.repository_path}/configs/workspace_schema.jsonc",
+            f"{shlex.quote(remote_config_root + '/workspace_schema.jsonc')};",
             f"cd {shlex.quote(target.repository_path)};",
             f"BOXTEAM_HOME={shlex.quote(remote_boxteam_home)}",
             f"BOXTEAM_GATEWAY_ROOT={gateway_root}",

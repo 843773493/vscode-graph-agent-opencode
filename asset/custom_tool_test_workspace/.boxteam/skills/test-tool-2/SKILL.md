@@ -10,19 +10,24 @@ allowed-tools: test_tool_2
 
 当用户要求调用 `test_tool_2`，或要求验证 `test_tool_2` 的返回值时，必须使用本 skill。
 
-## 调用方式
+## 参数 schema
 
-`test_tool_2` 不会直接出现在模型 tools 列表中。必须发起真实工具调用，使用固定入口 `invoke_custom_tool`，参数如下：
+`test_tool_2` 不会直接出现在模型 tools 列表中，必须使用固定入口 `invoke_custom_tool`。目标工具参数描述如下：
 
 ```json
 {
   "tool_name": "test_tool_2",
-  "arguments": {}
+  "arguments_schema": {
+    "type": "object",
+    "properties": {}
+  }
 }
 ```
 
+实际调用时将目标工具名和参数对象传给固定入口；本工具不需要参数，参数对象为空对象。
+
 ## 输出要求
 
-`test_tool_2` 不需要输入参数。工具返回后，最终回复只能包含工具返回文本本身。
+工具返回后，最终回复只能包含工具返回文本本身。
 
 禁止把 `invoke_custom_tool` 或上面的 JSON 当成普通正文输出；它们只能作为工具调用名称和参数使用。

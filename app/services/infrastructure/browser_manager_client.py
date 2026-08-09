@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from copy import copy
 import json
 import os
+from copy import copy
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from app.core.path_utils import get_boxteam_root
-
+from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_BROWSER_BACKEND_URL = "http://127.0.0.1:8015"
 
@@ -23,10 +23,16 @@ class BrowserManagerClient:
         backend_url: str | None = None,
         state_file: Path | None = None,
         actor: str | None = None,
+        config_service: ConfigService | None = None,
     ) -> None:
         configured_backend_url = backend_url or os.environ.get("BOXTEAM_BROWSER_BACKEND_URL")
         self._backend_url = (
             configured_backend_url
+            or (
+                config_service.get_browser_backend_url()
+                if config_service is not None
+                else None
+            )
             or DEFAULT_BROWSER_BACKEND_URL
         ).rstrip("/")
         self._state_file = state_file or get_boxteam_root() / "browser-manager" / "browsers.json"

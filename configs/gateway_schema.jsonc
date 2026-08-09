@@ -32,9 +32,101 @@
           "$ref": "#/$defs/themeConfig"
         }
       }
+    },
+    "features": {
+      "$ref": "#/$defs/featuresConfig"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtimeConfig"
     }
   },
   "$defs": {
+    "featuresConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session_catalog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sync": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "refresh_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 },
+                "max_concurrency": { "type": "integer", "minimum": 1, "default": 8 },
+                "request_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 }
+              }
+            }
+          }
+        },
+        "session_generators": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "scheduler": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "poll_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "runtimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gateway": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "process": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "health": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "request_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 2 },
+                    "poll_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 0.5 }
+                  }
+                },
+                "lifecycle": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "connection_drain_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 2 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "workspace": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "default_skill_groups": {
+              "type": "array",
+              "description": "启动 Gateway 托管 Workspace 时默认启用的发行包 Skill 组。",
+              "uniqueItems": true,
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{1,63}$"
+              },
+              "default": ["browser-control", "gateway-context", "web-search-fetch"]
+            }
+          }
+        }
+      }
+    },
+
     "themeConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -141,6 +233,14 @@
           "minLength": 1
         },
         "private_key_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ssh_config_host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remote_pair_command": {
           "type": "string",
           "minLength": 1
         },

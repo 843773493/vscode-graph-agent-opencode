@@ -7,7 +7,12 @@ import type {
   SessionInformationSnapshot,
   SessionUpdateRequest,
 } from "../types/backend";
-import { requestJson, unwrapApiData, workspaceHeader } from "./http";
+import {
+  DEFAULT_API_REQUEST_TIMEOUT_MS,
+  requestJson,
+  unwrapApiData,
+  workspaceHeader,
+} from "./http";
 
 export const DEFAULT_SESSION_TITLE = "新会话";
 
@@ -39,8 +44,9 @@ export async function listSessions(
     workspaceId
       ? {
           headers: workspaceHeader(workspaceId),
+          timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
         }
-      : undefined,
+      : { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
   );
   return normalizePageResult<Session>(unwrapApiData(data));
 }

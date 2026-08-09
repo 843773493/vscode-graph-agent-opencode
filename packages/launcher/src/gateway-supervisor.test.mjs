@@ -39,7 +39,7 @@ describe("gateway supervisor", () => {
       port: 8014,
       url: "http://127.0.0.1:8014",
     });
-    for (const distribution of ["source-installed", "npm"]) {
+    for (const distribution of ["source-installed", "npm", "standalone"]) {
       expect(gatewayEndpoint(distribution)).toEqual({
         host: "127.0.0.1",
         port: 8114,

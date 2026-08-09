@@ -22,8 +22,8 @@ from tests.e2e.gateway.gateway_docker import (
     ensure_gateway_ssh_container,
 )
 from tests.e2e.gateway.gateway_target import (
-    GatewayTargetE2EPaths,
     GatewaySshTarget,
+    GatewayTargetE2EPaths,
     build_remote_pair_command,
     install_gateway_ssh_assets_for_e2e,
     start_remote_gateway_via_ssh,
@@ -188,7 +188,6 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
     port_block = e2e_port_block_for_file(Path(request.node.fspath))
     local_workspace = Path(e2e_workspace_root_path).resolve()
     gateway_port = port_block.port(41)
-    ssh_port = port_block.port(42)
     remote_gateway_port = port_block.port(43)
     terminal_frontend_port = port_block.port(50)
     browser_frontend_port = port_block.port(51)
@@ -220,6 +219,10 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             username=docker_target.username,
             remote_gateway_port=remote_gateway_port,
             private_key_path=install_gateway_ssh_assets_for_e2e(local_workspace),
+            remote_pair_command=build_remote_pair_command(
+                docker_target,
+                remote_boxteam_home=remote_boxteam_home,
+            ),
         )
         terminal_frontend = start_terminal_frontend_process(
             workspace_root=local_workspace,
@@ -234,10 +237,6 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser_frontend_port}",
             "BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(
                 docker_target.known_hosts_path
-            ),
-            "BOXTEAM_REMOTE_PAIR_COMMAND": build_remote_pair_command(
-                docker_target,
-                remote_boxteam_home=remote_boxteam_home,
             ),
         }
         gateway = start_gateway_process(

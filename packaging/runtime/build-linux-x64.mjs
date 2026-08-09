@@ -17,6 +17,10 @@ import {
   NODE_RUNTIME_DEPENDENCIES,
   PYTHON_RUNTIME,
 } from "./versions.mjs";
+import {
+  runtimeAssetUrl,
+  stageRuntimeDownloaderPackage,
+} from "./runtime-release-assets.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
@@ -24,13 +28,10 @@ const projectRoot = path.resolve(
 const outputRoot = path.join(projectRoot, "out", "packaging", "linux-x64");
 const downloadRoot = path.join(outputRoot, "downloads");
 const stageRoot = path.join(outputRoot, "stage");
-const runtimePackageRoot = path.join(
-  stageRoot,
-  "runtime-linux-x64",
-  "package",
-);
+const runtimePackageRoot = path.join(stageRoot, "runtime-linux-x64", "package");
 const launcherPackageRoot = path.join(stageRoot, "launcher", "package");
 const tarballRoot = path.join(outputRoot, "tarballs");
+const releaseAssetRoot = path.join(outputRoot, "release-assets");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -83,10 +84,19 @@ function copyApplicationSources(applicationRoot) {
       );
     },
   };
-  cpSync(path.join(projectRoot, "app"), path.join(applicationRoot, "app"), copyOptions);
+  cpSync(
+    path.join(projectRoot, "app"),
+    path.join(applicationRoot, "app"),
+    copyOptions,
+  );
   cpSync(
     path.join(projectRoot, "configs"),
     path.join(applicationRoot, "configs"),
+    copyOptions,
+  );
+  cpSync(
+    path.join(projectRoot, "resources"),
+    path.join(applicationRoot, "resources"),
     copyOptions,
   );
   for (const service of ["terminal", "browser"]) {
@@ -173,19 +183,14 @@ function installChromium(applicationRoot, chromiumRoot) {
     browserDirectory === ".." ||
     executableRelativePath.startsWith(`..${path.sep}`)
   ) {
-    throw new Error(
-      `Playwright Chromium 不在浏览器缓存目录内: ${executable}`,
-    );
+    throw new Error(`Playwright Chromium 不在浏览器缓存目录内: ${executable}`);
   }
   cpSync(
     path.join(chromiumCacheRoot, browserDirectory),
     path.join(chromiumRoot, browserDirectory),
     { recursive: true },
   );
-  const packagedExecutable = path.join(
-    chromiumRoot,
-    executableRelativePath,
-  );
+  const packagedExecutable = path.join(chromiumRoot, executableRelativePath);
   if (!existsSync(packagedExecutable)) {
     throw new Error(`复制后缺少 Chromium: ${packagedExecutable}`);
   }
@@ -201,11 +206,12 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
     python_executable: "python/bin/python3.12",
     application_root: "application",
     config_resources: {
-      gateway: "application/configs/gateway.jsonc",
-      gateway_schema: "application/configs/gateway_config.jsonc",
-      workspace: "application/configs/workspace.jsonc",
-      workspace_schema: "application/configs/workspace_config.jsonc",
+      gateway_inline: "application/configs/gateway_inline.jsonc",
+      gateway_schema: "application/configs/gateway_schema.jsonc",
+      workspace_inline: "application/configs/workspace_inline.jsonc",
+      workspace_schema: "application/configs/workspace_schema.jsonc",
     },
+    skill_resources: "application/resources/skills",
     web_assets: "web",
     chromium_executable: path.relative(runtimePackageRoot, chromiumExecutable),
     node: {
@@ -237,49 +243,53 @@ function stageNpmPackages() {
     path.join(projectRoot, "packages", "runtime-linux-x64", "package.json"),
     path.join(runtimePackageRoot, "package.json"),
   );
-  cpSync(
-    path.join(projectRoot, "packages", "launcher"),
-    launcherPackageRoot,
-    {
-      recursive: true,
-      filter(source) {
-        return !source.split(path.sep).includes("node_modules");
-      },
+  cpSync(path.join(projectRoot, "packages", "launcher"), launcherPackageRoot, {
+    recursive: true,
+    filter(source) {
+      return !source.split(path.sep).includes("node_modules");
     },
-  );
+  });
 }
 
-function npmPack(packageRoot) {
+function npmPack(packageRoot, destinationRoot) {
   const filename = run(
     "npm",
-    ["pack", "--silent", "--pack-destination", tarballRoot],
+    ["pack", "--silent", "--pack-destination", destinationRoot],
     { cwd: packageRoot, capture: true },
   );
   const outputLines = filename.split(/\r?\n/).filter(Boolean);
   if (outputLines.length !== 1 || !outputLines[0].endsWith(".tgz")) {
     throw new Error(`npm pack 返回未知结果: ${filename}`);
   }
-  return path.join(tarballRoot, outputLines[0]);
+  return path.join(destinationRoot, outputLines[0]);
 }
 
 function directoryBytes(root) {
   let bytes = 0;
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const target = path.join(root, entry.name);
-    bytes += entry.isDirectory() ? directoryBytes(target) : statSync(target).size;
+    bytes += entry.isDirectory()
+      ? directoryBytes(target)
+      : statSync(target).size;
   }
   return bytes;
 }
 
-function writeSizeReport(tarballs) {
+function writeSizeReport({ npmTarballs, releaseAssets }) {
   const components = {};
   for (const name of ["python", "application", "web", "chromium"]) {
     components[name] = directoryBytes(path.join(runtimePackageRoot, name));
   }
   const report = {
     components,
-    tarballs: Object.fromEntries(
-      tarballs.map((tarball) => [path.basename(tarball), statSync(tarball).size]),
+    npm_tarballs: Object.fromEntries(
+      npmTarballs.map((tarball) => [
+        path.basename(tarball),
+        statSync(tarball).size,
+      ]),
+    ),
+    release_assets: Object.fromEntries(
+      releaseAssets.map((asset) => [asset.filename, statSync(asset.path).size]),
     ),
   };
   writeFileSync(
@@ -297,8 +307,10 @@ async function main() {
   }
   rmSync(stageRoot, { recursive: true, force: true });
   rmSync(tarballRoot, { recursive: true, force: true });
+  rmSync(releaseAssetRoot, { recursive: true, force: true });
   mkdirSync(runtimePackageRoot, { recursive: true });
   mkdirSync(tarballRoot, { recursive: true });
+  mkdirSync(releaseAssetRoot, { recursive: true });
 
   const pythonArchive = await downloadPinnedPython();
   run("tar", ["-xzf", pythonArchive, "-C", runtimePackageRoot]);
@@ -333,14 +345,35 @@ async function main() {
   writeRuntimeMetadata({ chromiumExecutable });
   stageNpmPackages();
 
-  const tarballs = [
-    npmPack(runtimePackageRoot),
-    npmPack(launcherPackageRoot),
+  const fullRuntimeTarball = npmPack(runtimePackageRoot, releaseAssetRoot);
+  const downloader = await stageRuntimeDownloaderPackage({
+    projectRoot,
+    sourcePackagePath: path.join(
+      projectRoot,
+      "packages",
+      "runtime-linux-x64",
+      "package.json",
+    ),
+    stageRoot: path.join(stageRoot, "runtime-downloader-linux-x64"),
+    platform: "linux-x64",
+    releaseAssetPath: fullRuntimeTarball,
+  });
+  const npmTarballs = [
+    npmPack(downloader.packageRoot, tarballRoot),
+    npmPack(launcherPackageRoot, tarballRoot),
   ];
-  writeSizeReport(tarballs);
+  const releaseAssets = [
+    {
+      filename: path.basename(fullRuntimeTarball),
+      path: fullRuntimeTarball,
+      url: runtimeAssetUrl("linux-x64"),
+      sha256: downloader.releaseAsset.sha256,
+    },
+  ];
+  writeSizeReport({ npmTarballs, releaseAssets });
   writeFileSync(
     path.join(outputRoot, "build-result.json"),
-    `${JSON.stringify({ tarballs }, null, 2)}\n`,
+    `${JSON.stringify({ npm_tarballs: npmTarballs, release_assets: releaseAssets }, null, 2)}\n`,
   );
   process.stdout.write(`构建完成: ${outputRoot}\n`);
 }

@@ -1,0 +1,7 @@
+interface:
+  display_name: "完整 E2E 诊断"
+  short_description: "逐一验证每个用户入口与真实端到端传输链路，避免漏测"
+  default_prompt: "Use $e2e-completeness to diagnose and fully verify this E2E issue."
+
+policy:
+  allow_implicit_invocation: false

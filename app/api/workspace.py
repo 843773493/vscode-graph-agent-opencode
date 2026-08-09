@@ -181,8 +181,8 @@ async def rebuild_workspace_index(
 async def list_workspace_files(
     path: str = Query(default="", description="相对工作区根目录的目录路径"),
     scope: WorkspaceFileScope = Query(default="workspace"),
-    limit: int = Query(
-        default=500,
+    limit: int | None = Query(
+        default=None,
         ge=1,
         le=1000,
         description="单个目录最多返回的子项数量",

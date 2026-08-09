@@ -15,12 +15,28 @@ def read_jsonc_object(path: Path) -> dict[str, object]:
     return parsed
 
 
-def load_validated_config(
+def merge_json_objects(
+    base: dict[str, object],
+    override: dict[str, object],
+) -> dict[str, object]:
+    """递归合并对象；标量和数组由高优先级配置整体覆盖。"""
+
+    result = dict(base)
+    for key, value in override.items():
+        base_value = result.get(key)
+        if isinstance(base_value, dict) and isinstance(value, dict):
+            result[key] = merge_json_objects(base_value, value)
+        else:
+            result[key] = value
+    return result
+
+
+def validate_config(
+    config: dict[str, object],
     *,
     config_path: Path,
     schema_path: Path,
 ) -> dict[str, object]:
-    config = read_jsonc_object(config_path)
     schema = read_jsonc_object(schema_path)
     try:
         jsonschema.validate(config, schema)
@@ -31,3 +47,16 @@ def load_validated_config(
             f"location={location}: {error.message}"
         ) from error
     return config
+
+
+def load_validated_config(
+    *,
+    config_path: Path,
+    schema_path: Path,
+) -> dict[str, object]:
+    config = read_jsonc_object(config_path)
+    return validate_config(
+        config,
+        config_path=config_path,
+        schema_path=schema_path,
+    )

@@ -1,0 +1,40 @@
+name: package-windows-x64
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: bun install --frozen-lockfile
+      - run: uv sync --locked
+      - run: bun run package:windows-x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boxteam-windows-x64-unsigned
+          path: |
+            out/packaging/windows-x64/tarballs/*.tgz
+            out/packaging/windows-x64/release-assets/*.tgz
+            out/packaging/windows-x64/standalone/*.zip
+            out/packaging/windows-x64/build-result.json
+            out/packaging/windows-x64/size-report.json
+          if-no-files-found: error
+          compression-level: 0

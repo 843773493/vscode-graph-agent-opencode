@@ -127,7 +127,7 @@ export function useWorkspacePreviewTabs({
             ? { ...content, previewType: "file", selection: null }
             : tab,
         ));
-        onStatusChange(`已恢复 ${filePaths.length} 个文件预览标签`);
+        onStatusChange(`已恢复 ${filePaths.length} 个文件选择`);
       })
       .catch((restoreError: unknown) => {
         if (cancelled) {
@@ -137,7 +137,7 @@ export function useWorkspacePreviewTabs({
           ? restoreError.message
           : String(restoreError);
         setError(message);
-        onStatusChange(`恢复文件预览失败: ${message}`);
+        onStatusChange(`恢复文件选择失败: ${message}`);
       })
       .finally(() => {
         if (!cancelled) {
@@ -225,7 +225,7 @@ export function useWorkspacePreviewTabs({
       ...prev.filter((tab) => tab.path !== content.path),
       { ...content, previewType: "file", selection },
     ]);
-    onStatusChange(`已打开预览: ${content.path}`);
+    onStatusChange(`已选择文件: ${content.path}`);
   }, [onStatusChange]);
 
   const selectWorkspacePreviewTab = useCallback((path: string) => {
@@ -247,7 +247,7 @@ export function useWorkspacePreviewTabs({
       .catch((openError: unknown) => {
         const message = openError instanceof Error ? openError.message : String(openError);
         setError(message);
-        onStatusChange(`文件预览失败: ${message}`);
+        onStatusChange(`文件读取失败: ${message}`);
       })
       .finally(() => setLoadingPath(null));
   }, [apiPort, onStatusChange, openWorkspaceFileContent, tabs, workspaceId]);
@@ -269,7 +269,7 @@ export function useWorkspacePreviewTabs({
             : tab,
         ));
       }
-      onStatusChange(`已切换预览: ${existingTab.path}`);
+      onStatusChange(`已切换文件: ${existingTab.path}`);
       return;
     }
 
@@ -289,7 +289,7 @@ export function useWorkspacePreviewTabs({
     } catch (openError) {
       const message = openError instanceof Error ? openError.message : String(openError);
       setError(message);
-      onStatusChange(`文件预览失败: ${message}`);
+      onStatusChange(`文件读取失败: ${message}`);
     } finally {
       setLoadingPath(null);
     }
@@ -335,7 +335,7 @@ export function useWorkspacePreviewTabs({
         attachUrl: buildGatewayAttachUrl("terminal", workspaceId, terminalId, true),
       },
     ]);
-    onStatusChange(`已在预览区连接终端: ${terminalId}`);
+    onStatusChange(`已选择终端: ${terminalId}`);
   };
 
   const openBrowserPreview = (browserId: string) => {
@@ -357,7 +357,7 @@ export function useWorkspacePreviewTabs({
         attachUrl: buildGatewayAttachUrl("browser", workspaceId, browserId, true),
       },
     ]);
-    onStatusChange(`已在预览区连接浏览器: ${browserId}`);
+    onStatusChange(`已选择浏览器: ${browserId}`);
   };
 
   const openSessionChangePreview = useCallback(
@@ -488,6 +488,10 @@ export function useWorkspacePreviewTabs({
       if (activePath === path) {
         const fallbackTab = nextTabs[Math.max(0, closedIndex - 1)] ?? nextTabs[0] ?? null;
         setActivePath(fallbackTab?.path ?? null);
+        if (!fallbackTab) {
+          setVisible(false);
+          setMaximized(false);
+        }
       }
       return nextTabs;
     });

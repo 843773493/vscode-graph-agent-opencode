@@ -172,6 +172,32 @@ body > #root {
   overflow: hidden;
   position: relative;
 }
+
+.workbench-body {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workbench-main-column {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workbench-main-column > .content,
+.workbench-main-column > .gateway-view-slot {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
 .chat-panel {
   min-width: 0;
   min-height: 0;
@@ -1006,6 +1032,93 @@ body > #root {
 .error-message {
   white-space: pre-wrap;
   line-height: 1.5;
+}
+
+.error-retry-button {
+  min-height: 30px;
+  margin-top: 16px;
+  padding: 0 11px;
+  border: 1px solid var(--bt-border);
+  border-radius: 6px;
+  background: var(--bt-button-background);
+  color: var(--bt-button-foreground);
+  cursor: pointer;
+}
+
+.app-fatal-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  background: var(--bt-page-background);
+  color: var(--bt-text-primary);
+}
+
+.app-fatal-error-card {
+  width: min(560px, 100%);
+  padding: 24px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 32%, transparent);
+  border-radius: 12px;
+  background: var(--bt-panel-surface);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--bt-text-primary) 16%, transparent);
+}
+
+.app-fatal-error-card h1 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.app-fatal-error-card p {
+  margin: 0 0 12px;
+  color: var(--bt-text-muted);
+}
+
+.app-fatal-error-card pre {
+  max-height: 180px;
+  margin: 0 0 16px;
+  overflow: auto;
+  color: var(--bt-status-danger);
+  white-space: pre-wrap;
+}
+
+.app-fatal-error-card button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--bt-border);
+  border-radius: 6px;
+  background: var(--bt-button-background);
+  color: var(--bt-button-foreground);
+  cursor: pointer;
+}
+
+.bootstrap-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.bootstrap-actions button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--bt-border);
+  border-radius: 6px;
+  background: var(--bt-button-background);
+  color: var(--bt-button-foreground);
+  cursor: pointer;
+}
+
+.bootstrap-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.bootstrap-retry-error {
+  color: var(--bt-status-danger);
+  font-size: 12px;
 }
 
 /* --- 事件卡片补充样式（聚合版 ChatPanel 依赖） --- */

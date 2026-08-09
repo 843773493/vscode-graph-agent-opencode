@@ -7,7 +7,8 @@
     "boxteam": "./bin/boxteam.mjs"
   },
   "optionalDependencies": {
-    "@boxteam/runtime-linux-x64": "0.1.0"
+    "@boxteam/runtime-linux-x64": "0.1.0",
+    "@boxteam/runtime-windows-x64": "0.1.0"
   },
   "files": [
     "bin/",

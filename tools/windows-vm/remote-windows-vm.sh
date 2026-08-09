@@ -133,15 +133,17 @@ sync_checkout() {
 run_vm_tool() {
   require_config
   (($# > 0)) || die '缺少 VM 动作' dispatch 64
-  remote_bash '
+remote_bash '
 set -euo pipefail
 tool=$1
 state=$2
-shift 2
+repo=$3
+shift 3
 [[ -x "$tool" ]] || { printf "VM tool is not executable: %s\n" "$tool" >&2; exit 78; }
 export WINDOWS_VM_STATE_DIR="$state"
+export WINDOWS_VM_REPO_ROOT_OVERRIDE="$repo"
 exec "$tool" "$@"
-' "$REMOTE_VM_TOOL" "$REMOTE_STATE_DIR" "$@"
+' "$REMOTE_VM_TOOL" "$REMOTE_STATE_DIR" "$REMOTE_REPO" "$@"
 }
 
 switch_share() {
@@ -242,19 +244,11 @@ bootstrap_js() {
   guest_repo_exec "& '$(guest_script_path bootstrap-js.ps1)' -InstallDependencies"
 }
 
-run_module() {
+run_guest_module() {
   local module=${1:-}
   [[ -n "$module" ]] || die 'run-module 需要模块名' dispatch 64
   shift || true
   (($# == 0)) || die 'run-module 不接受额外参数，模块必须保持结构化' dispatch 64
-  case "$module" in
-    js-platform|backend-js|web-build|webview-build|extension)
-      bootstrap_js
-      ;;
-    *)
-      mirror_source
-      ;;
-  esac
   local script
   script="& '$(guest_script_path run-module.ps1)' -Module '$module'"
   mkdir -p "$REPO_ROOT/out/tests/temp/windows-vm/artifacts"
@@ -269,6 +263,84 @@ run_module() {
     die "模块 $module 失败，日志: $log" module "$status"
   fi
   printf '[windows-vm stage=module] module=%s log=%s\n' "$module" "$log"
+}
+
+run_module() {
+  local module=${1:-}
+  [[ -n "$module" ]] || die 'run-module 需要模块名' dispatch 64
+  shift || true
+  (($# == 0)) || die 'run-module 不接受额外参数，模块必须保持结构化' dispatch 64
+  case "$module" in
+    js-platform|backend-js|web-build|webview-build|extension|package-windows-x64)
+      bootstrap_js
+      ;;
+    *)
+      mirror_source
+      ;;
+  esac
+  run_guest_module "$module"
+}
+
+push_packaging_artifacts() {
+  require_config
+  local source="$REPO_ROOT/out/packaging/windows-x64"
+  local destination="$REMOTE_REPO/out/packaging/windows-x64"
+  [[ -f "$source/standalone/boxteam-windows-x64-0.1.0.zip" ]] || {
+    die "Linux 交叉打包便携 ZIP 不存在: $source/standalone" push-packaging 78
+  }
+  [[ -d "$source/tarballs" && -d "$source/release-assets" ]] || {
+    die "Linux 交叉打包 npm 产物目录不存在: $source" push-packaging 78
+  }
+  [[ -d "$source/installer" ]] || {
+    die "Windows 安装器目录不存在: $source/installer" push-packaging 78
+  }
+  remote_bash '
+set -euo pipefail
+destination=$1
+mkdir -p -- "$destination/tarballs" "$destination/release-assets" "$destination/standalone" "$destination/installer"
+' "$destination"
+  local transport
+  transport=$(rsync_transport)
+  rsync -a --delete --human-readable -e "$transport" \
+    "$source/tarballs/" "$REMOTE_HOST:$destination/tarballs/"
+  rsync -a --delete --human-readable -e "$transport" \
+    "$source/release-assets/" "$REMOTE_HOST:$destination/release-assets/"
+  rsync -a --delete --human-readable -e "$transport" \
+    "$source/standalone/" "$REMOTE_HOST:$destination/standalone/"
+  rsync -a --delete --human-readable -e "$transport" \
+    "$source/installer/" "$REMOTE_HOST:$destination/installer/"
+  rsync -a --human-readable -e "$transport" \
+    "$source/build-result.json" "$source/size-report.json" \
+    "$REMOTE_HOST:$destination/"
+  printf '[windows-vm stage=push-packaging] artifacts=%s\n' "$destination"
+}
+
+collect_cross_verification() {
+  require_config
+  local destination=${1:-$REPO_ROOT/out/windows-vm/verify-windows-x64-cross}
+  mkdir -p "$destination"
+  local transport
+  transport=$(rsync_transport)
+  rsync -a --human-readable -e "$transport" \
+    "$REMOTE_HOST:$REMOTE_REPO/out/windows-vm/verify-windows-x64-cross/" \
+    "$destination/" || {
+      die "远端 Windows VM 交叉产物验证结果收集失败" collect-cross-verification 75
+    }
+  printf '[windows-vm stage=collect-cross-verification] artifacts=%s\n' "$destination"
+}
+
+collect_installer_verification() {
+  require_config
+  local destination=${1:-$REPO_ROOT/out/windows-vm/verify-windows-installer}
+  mkdir -p "$destination"
+  local transport
+  transport=$(rsync_transport)
+  rsync -a --human-readable -e "$transport" \
+    "$REMOTE_HOST:$REMOTE_REPO/out/windows-vm/verify-windows-installer/" \
+    "$destination/" || {
+      die "远端 Windows VM 安装器验证结果收集失败" collect-installer-verification 75
+    }
+  printf '[windows-vm stage=collect-installer-verification] artifacts=%s\n' "$destination"
 }
 
 collect_artifacts() {
@@ -290,9 +362,9 @@ Usage: tools/windows-vm/windows-vm.sh <command> [arguments]
 
 Commands:
   config                         打印已解析的非秘密连接配置
-  check                          检查 H20、VM 工具和 guest 状态
-  host-info                     检查 H20 主机和代理监听端口
-  sync                           将当前工作区同步到 H20 独立目录
+  check                          检查 A4500、VM 工具和 guest 状态
+  host-info                     检查 A4500 主机和代理监听端口
+  sync                           将当前工作区同步到 A4500 独立目录
   activate                       切换 QEMU SMB share 到当前项目并启动 VM
   restore-share                  停止 VM 并恢复切换前的 share 配置
   start | stop | restart         管理对应 Windows VM 生命周期
@@ -302,6 +374,9 @@ Commands:
   bootstrap-js                   在三个项目目录安装 Bun 依赖
   exec <PowerShell>              执行显式 guest PowerShell 诊断命令
   run-module <module>            同步并运行一个固定 Windows 模块
+  push-packaging                 推送本地 Linux 交叉打包产物到 Windows VM 共享仓库
+  verify-cross-package           在 Windows VM 验证本地 Linux 交叉打包产物
+  verify-windows-installer       在 Windows VM 安装并验证 setup.exe
   collect [output-dir]           收集远端 out/windows-vm 产物
 EOF
 }
@@ -358,6 +433,24 @@ test -x "$1"
     run_vm_tool exec "$*"
     ;;
   run-module) run_module "$@" ;;
+  push-packaging) push_packaging_artifacts ;;
+  verify-cross-package)
+    sync_checkout
+    # 交叉产物位于被同步过滤的 out/ 下，必须在同步完成后再推送到共享目录。
+    push_packaging_artifacts
+    # 验证模块运行在本地 Windows checkout；先从 Z: 刷新脚本，避免使用旧缓存。
+    guest_repo_exec "& '$(guest_script_path bootstrap-js.ps1)'"
+    run_guest_module verify-windows-x64-cross
+    collect_cross_verification
+    ;;
+  verify-windows-installer)
+    sync_checkout
+    # 交叉产物位于被同步过滤的 out/下，必须在同步完成后再推送到共享目录。
+    push_packaging_artifacts
+    guest_repo_exec "& '$(guest_script_path bootstrap-js.ps1)'"
+    run_guest_module verify-windows-installer
+    collect_installer_verification
+    ;;
   collect) collect_artifacts "$@" ;;
   help|-h|--help) usage ;;
   *) die "未知命令: $command" dispatch 64 ;;

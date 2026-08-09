@@ -32,6 +32,7 @@ jobs:
           name: boxteam-linux-x64-unsigned
           path: |
             out/packaging/linux-x64/tarballs/*.tgz
+            out/packaging/linux-x64/release-assets/*.tgz
             out/packaging/linux-x64/build-result.json
             out/packaging/linux-x64/size-report.json
           if-no-files-found: error

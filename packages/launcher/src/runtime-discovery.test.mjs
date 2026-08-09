@@ -27,6 +27,12 @@ describe("runtime discovery", () => {
     );
   });
 
+  test("Windows x64 选择组织平台包", () => {
+    expect(runtimePackageName("win32", "x64")).toBe(
+      "@boxteam/runtime-windows-x64",
+    );
+  });
+
   test("平台包发现解析其 manifest export", () => {
     const requested = [];
     const resolved = discoverRuntimeManifestPath({
@@ -49,7 +55,7 @@ describe("runtime discovery", () => {
     expect(() =>
       discoverRuntimeManifestPath({
         environment: {},
-        platform: "win32",
+        platform: "darwin",
         architecture: "x64",
       }),
     ).toThrow("不会回退到系统 Python");
@@ -66,5 +72,23 @@ describe("runtime discovery", () => {
         },
       }),
     ).toThrow("@boxteam/runtime-linux-x64");
+  });
+
+  test("Windows 平台包发现解析其 manifest export", () => {
+    const requested = [];
+    const resolved = discoverRuntimeManifestPath({
+      environment: {},
+      platform: "win32",
+      architecture: "x64",
+      resolvePackage(specifier) {
+        requested.push(specifier);
+        return "C:/npm/runtime-windows-x64/runtime-manifest.json";
+      },
+    });
+
+    expect(requested).toEqual([
+      "@boxteam/runtime-windows-x64/runtime-manifest.json",
+    ]);
+    expect(resolved).toBe("C:/npm/runtime-windows-x64/runtime-manifest.json");
   });
 });

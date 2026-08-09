@@ -1,5 +1,5 @@
 {
-  "$schema": "../workspace_config.jsonc",
+  "$schema": "../workspace_schema.jsonc",
   "llm": {
     "providers": [
       {

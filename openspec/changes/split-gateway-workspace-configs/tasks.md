@@ -1,6 +1,6 @@
 ## 1. 静态配置资源
 
-- [x] 1.1 从现有 schema 拆出 `gateway_config.jsonc` 与 `workspace_config.jsonc`，收紧跨域字段并建立独立 v1
+- [x] 1.1 从现有 schema 拆出 `gateway_schema.jsonc` 与 `workspace_schema.jsonc`，收紧跨域字段并建立独立 v1
 - [x] 1.2 用静态 JSONC 实现普通及开发 Gateway/Workspace 模板，并验证 `$schema` 和开发差异
 - [x] 1.3 删除动态 defaults 与 development overlay，简化开发 SSH 资产模块及其命名
 

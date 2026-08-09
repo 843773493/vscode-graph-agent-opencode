@@ -1,0 +1,4 @@
+interface:
+  display_name: "配置文件约定"
+  short_description: "统一项目配置文件变体、覆盖层与可扩展参数命名规范指南"
+  default_prompt: "Use $config-file-conventions to设计或审查项目配置文件与配置参数。"

@@ -153,6 +153,7 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
         workspace_root=workspace_root,
         template_root=template_root,
         template_items=CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS,
+        shared_skill_root=project_root / "resources" / "skills",
     )
     return str(workspace_root)
 

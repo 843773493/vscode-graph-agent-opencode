@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,7 +11,7 @@ from typing import Literal
 
 import httpx
 
-from app.gateway.credentials import FederationCredential, FederationCredentialStore
+from app.gateway.credentials import FederationCredential
 from app.gateway.runtime.process import (
     allocate_ssh_tunnel_port,
     start_ssh_tunnel_process,
@@ -22,8 +21,16 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
 
-
 FEDERATION_PROTOCOL_VERSION = 1
+DEFAULT_REMOTE_PAIR_COMMAND = "boxteam gateway issue-federation-token"
+WINDOWS_SOURCE_PAIR_COMMAND = (
+    "powershell -NoProfile -Command "
+    "\"$env:BOXTEAM_HOME=Join-Path $env:USERPROFILE '.boxteams-dev'; "
+    "Set-Location (Join-Path $env:LOCALAPPDATA 'boxteam-windows\\source'); "
+    "& (Join-Path $env:LOCALAPPDATA "
+    "'boxteam-windows\\venv\\Scripts\\python.exe') "
+    "-m app.gateway.federation_pairing {pairing_args}\""
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +46,7 @@ class RemoteGatewayConnection:
     remote_gateway_id: str
     protocol_version: int
     connection_error: str | None = None
+    remote_pair_command: str | None = None
 
 
 def build_remote_gateway_connection_id(
@@ -73,18 +81,29 @@ def obtain_pairing_credential_over_ssh(
     username: str,
     private_key_path: Path | None,
     ssh_config_host: str | None,
+    remote_pair_command: str | None = None,
 ) -> FederationCredential:
-    pairing_command = os.environ.get(
-        "BOXTEAM_REMOTE_PAIR_COMMAND",
-        "boxteam gateway issue-federation-token",
+    # TODO: Windows source-development 目标没有安装 boxteam 命令，需使用其固定运行时。
+    pairing_command = (
+        remote_pair_command
+        if remote_pair_command is not None
+        else (
+            WINDOWS_SOURCE_PAIR_COMMAND
+            if ssh_config_host and "windows" in ssh_config_host.lower()
+            else DEFAULT_REMOTE_PAIR_COMMAND
+        )
     ).strip()
     if not pairing_command:
-        raise ValueError("BOXTEAM_REMOTE_PAIR_COMMAND 不能为空")
-    remote_command = (
-        f"{pairing_command} "
+        raise ValueError("远端 Gateway 配对命令不能为空")
+    pairing_args = (
         f"--connection-id {connection_id}:{local_gateway_id} "
         f"--peer-gateway-id {local_gateway_id} --json"
     )
+    remote_command = pairing_command.replace(
+        "{pairing_args}", pairing_args
+    )
+    if remote_command == pairing_command:
+        remote_command = f"{pairing_command} {pairing_args}"
     result = subprocess.run(
         build_ssh_command(
             host=host,
@@ -119,6 +138,8 @@ async def start_remote_gateway_tunnel(
     *,
     connection: RemoteGatewayConnection,
     log_dir: Path,
+    health_request_timeout_seconds: float = 2,
+    health_poll_interval_seconds: float = 0.5,
 ) -> WorkspaceRuntime:
     local_port = allocate_ssh_tunnel_port()
     forward = LocalForwardSpec(
@@ -144,6 +165,8 @@ async def start_remote_gateway_tunnel(
         await wait_for_http_ok(
             f"{forward.local_url}/api/gateway/health",
             tunnel.process,
+            request_timeout_seconds=health_request_timeout_seconds,
+            poll_interval_seconds=health_poll_interval_seconds,
         )
     except Exception:
         tunnel.close()

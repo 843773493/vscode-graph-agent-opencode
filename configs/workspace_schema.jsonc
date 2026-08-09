@@ -5,7 +5,7 @@
   // 此文件定义了 workspace.jsonc 配置文件的验证模式。
   // 用于 JSON Schema 验证，确保配置文件结构正确。
   //
-  // 文件位置: configs/workspace_config.jsonc
+  // 文件位置: configs/workspace_schema.jsonc
   // 参考标准: https://json-schema.org/
   //
   // 配置生效规则:
@@ -83,7 +83,8 @@
     "default_agent": {
       "type": "string",
       "description": "Default agent key in the agents object. 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。",
-      "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+      "pattern": "^[a-zA-Z0-9._-]{2,64}$",
+      "default": "default"
     },
     "agents": {
       "type": "object",
@@ -104,36 +105,153 @@
     },
     "development": {
       "$ref": "#/$defs/developmentConfig"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtimeConfig"
     }
   },
   "$defs": {
+    "runtimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent": { "$ref": "#/$defs/agentRuntimeConfig" },
+        "gateway": { "$ref": "#/$defs/gatewayRuntimeConfig" },
+        "auxiliary_services": { "$ref": "#/$defs/auxiliaryServicesConfig" },
+        "workspace": { "$ref": "#/$defs/workspaceRuntimeConfig" },
+        "events": { "$ref": "#/$defs/eventsRuntimeConfig" }
+      }
+    },
+
+    "agentRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["single_agent", "team"] , "default": "single_agent" },
+            "response_mode": { "type": "string", "minLength": 1, "default": "stream" },
+            "async": { "type": "boolean", "default": true },
+            "max_steps": { "type": "integer", "minimum": 1, "default": 20 },
+            "timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 600 }
+          }
+        }
+      }
+    },
+
+    "gatewayRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "format": "uri", "minLength": 1, "default": "http://127.0.0.1:8014" },
+            "timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 }
+          }
+        }
+      }
+    },
+
+    "auxiliaryServicesConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "terminal_backend": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "format": "uri", "minLength": 1, "default": "http://127.0.0.1:8012" }
+          }
+        },
+        "browser_backend": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "format": "uri", "minLength": 1, "default": "http://127.0.0.1:8015" }
+          }
+        }
+      }
+    },
+
+    "workspaceRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "list": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "default_limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 500 }
+              }
+            },
+            "preview": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "max_bytes": { "type": "integer", "minimum": 1, "default": 1048576 },
+                "binary_sample_bytes": { "type": "integer", "minimum": 1, "default": 8192 }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "eventsRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trace_stream": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "heartbeat_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 15 }
+          }
+        }
+      }
+    },
+
     "uiConfig": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "default_model": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "可选的 UI 展示模型；省略时根据 default_agent.primary_provider 动态解析。"
         },
         "default_orchestration": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "default": "single_agent"
         },
         "max_concurrent_agents": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "default": 4
         },
         "allow_shell_tools": {
-          "type": "boolean"
+          "type": "boolean",
+          "default": false
         },
         "ignored_paths": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "default": []
         },
         "auto_summarize": {
-          "type": "boolean"
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -342,7 +460,8 @@
               "prompt_cache_key"
             ]
           },
-          "uniqueItems": true
+          "uniqueItems": true,
+          "default": []
         },
         "auth_header": {
           "type": "string",
@@ -352,18 +471,21 @@
           "type": "object",
           "description": "Provider-specific request options passed to the chat model client.",
           "additionalProperties": false,
+          "default": {},
           "properties": {
             "overrides": {
               "type": "object",
               "description": "Raw LiteLLM completion parameters. These values override agent-level defaults such as temperature, top_p and max_tokens. Put provider body extensions under extra_body.",
-              "additionalProperties": true
+              "additionalProperties": true,
+              "default": {}
             },
             "default_headers": {
               "type": "object",
               "description": "Additional default HTTP headers for this provider.",
               "additionalProperties": {
                 "type": "string"
-              }
+              },
+              "default": {}
             }
           }
         }
@@ -410,7 +532,8 @@
             "maxLength": 32
           },
           "uniqueItems": true,
-          "maxItems": 20
+          "maxItems": 20,
+          "default": []
         },
         "persona": {
           "$ref": "#/$defs/agentPersona"
@@ -520,7 +643,8 @@
             "pattern": "^[a-zA-Z0-9._-]{2,64}$"
           },
           "uniqueItems": true,
-          "maxItems": 10
+          "maxItems": 10,
+          "default": []
         },
         "temperature": {
           "type": "number",
@@ -572,7 +696,8 @@
             "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
           },
           "uniqueItems": true,
-          "maxItems": 100
+          "maxItems": 100,
+          "default": []
         },
         "denylist": {
           "type": "array",
@@ -582,7 +707,8 @@
             "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
           },
           "uniqueItems": true,
-          "maxItems": 100
+          "maxItems": 100,
+          "default": []
         },
         "confirmation_required": {
           "type": "array",
@@ -591,7 +717,8 @@
             "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
           },
           "uniqueItems": true,
-          "maxItems": 100
+          "maxItems": 100,
+          "default": []
         },
         "custom": {
           "type": "array",
@@ -652,7 +779,8 @@
             ]
           },
           "uniqueItems": true,
-          "maxItems": 100
+          "maxItems": 100,
+          "default": []
         }
       }
     },
@@ -669,7 +797,8 @@
           "items": {
             "$ref": "#/$defs/agentKnowledgeSource"
           },
-          "maxItems": 20
+          "maxItems": 20,
+          "default": []
         },
         "retrieval": {
           "$ref": "#/$defs/agentRetrieval"
@@ -918,13 +1047,15 @@
         },
         "region": {
           "type": "string",
-          "maxLength": 64
+          "maxLength": 64,
+          "default": ""
         },
         "feature_flags": {
           "type": "object",
           "additionalProperties": {
             "type": "boolean"
-          }
+          },
+          "default": {}
         }
       }
     }

@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type {
-  SessionGoal,
-  SessionGoalUpdateRequest,
   SessionResource,
   SessionResourceAction,
   SessionResourceKind,
@@ -18,7 +16,6 @@ import {
 import { CREATABLE_SESSION_CONNECTIONS } from "../state/sessionConnections";
 import type { CreatableSessionConnectionKind } from "../types/frontend";
 import AnchoredOverlay from "./AnchoredOverlay";
-import GoalManagerCard from "./GoalManagerCard";
 import ResourceTreeRow from "./ResourceTreeRow";
 
 const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {
@@ -37,18 +34,11 @@ export default function ResourcePanel({
   sessionId,
   workspaceId,
   activePreviewPath,
-  goal,
-  goalLoading,
-  goalError,
   onRefresh,
-  onRefreshGoal,
-  onUpdateGoal,
-  onClearGoal,
   onControl,
   onOpenTerminalPreview,
   onOpenBrowserPreview,
   onCloseResourcePreview,
-  onShowConversation,
   onCreateConnection,
 }: {
   resources: SessionResource[];
@@ -58,13 +48,7 @@ export default function ResourcePanel({
   sessionId: string;
   workspaceId: string | null;
   activePreviewPath: string | null;
-  goal: SessionGoal | null;
-  goalLoading: boolean;
-  goalError: string | null;
   onRefresh: () => void;
-  onRefreshGoal: () => Promise<SessionGoal | null>;
-  onUpdateGoal: (payload: SessionGoalUpdateRequest) => Promise<SessionGoal>;
-  onClearGoal: () => Promise<void>;
   onControl: (
     kind: SessionResourceKind,
     resourceId: string,
@@ -76,7 +60,6 @@ export default function ResourcePanel({
     kind: Extract<SessionResourceKind, "terminal" | "browser">,
     resourceId: string,
   ) => Promise<void>;
-  onShowConversation: (jobId?: string) => void;
   onCreateConnection: (kind: CreatableSessionConnectionKind) => Promise<void>;
 }) {
   const [busyResourceId, setBusyResourceId] = useState<string | null>(null);
@@ -238,7 +221,7 @@ export default function ResourcePanel({
     setOpenedTerminalId(resourceId);
     onOpenTerminalPreview(resourceId);
     setNoticeTechnicalDetails("");
-    setNotice(`已在预览区连接终端: ${resourceId}`);
+    setNotice("已打开终端预览；连接状态请在当前运行与连接界面查看");
   };
   const handleOpenBrowser = (resourceId: string) => {
     if (!workspaceId) {
@@ -248,7 +231,7 @@ export default function ResourcePanel({
     setOpenedBrowserId(resourceId);
     onOpenBrowserPreview(resourceId);
     setNoticeTechnicalDetails("");
-    setNotice(`已在预览区连接浏览器: ${resourceId}`);
+    setNotice("已打开浏览器预览；连接状态请在当前运行与连接界面查看");
   };
   const handleCreateConnection = (kind: CreatableSessionConnectionKind) => {
     setCreateMenuOpen(false);
@@ -261,7 +244,7 @@ export default function ResourcePanel({
           (candidate) => candidate.kind === kind,
         );
         setNotice(
-          `${option?.label ?? "新建连接"}成功，已在预览区打开；连接状态请查看预览区`,
+          `${option?.label ?? "新建连接"}成功；连接状态请在当前运行与连接界面查看`,
         );
       })
       .catch((createError: unknown) => {
@@ -272,33 +255,30 @@ export default function ResourcePanel({
       })
       .finally(() => setCreatingKind(null));
   };
-  const resourceGroups = groupSessionResources(resources, activePreviewPath);
+  const connectionResources = resources.filter(
+    (resource) => resource.kind === "browser" || resource.kind === "terminal",
+  );
+  const resourceGroups = groupSessionResources(connectionResources, activePreviewPath);
   const activeCount = resourceGroups.find((group) => group.key === "active")
     ?.resources.length ?? 0;
   const attentionCount = resourceGroups.find((group) => group.key === "attention")
+    ?.resources.length ?? 0;
+  const historyCount = resourceGroups.find((group) => group.key === "history")
     ?.resources.length ?? 0;
   const waitingForFirstMessage = !sessionId || error === "当前没有会话可读取资源";
 
   return (
     <section className="panel-view resource-panel">
-      <GoalManagerCard
-        sessionId={sessionId}
-        goal={goal}
-        loading={goalLoading}
-        error={goalError}
-        onRefresh={onRefreshGoal}
-        onUpdate={onUpdateGoal}
-        onClear={onClearGoal}
-      />
       <div className="panel-header">
         <div
           className="panel-title"
           title={`${sessionId || "无会话"}${loadedAt ? ` · 最近读取 ${loadedAt}` : ""}`}
         >
-          后台连接 <span className="resource-total-count">{resources.length}</span>
+          连接总数 <span className="resource-total-count">{connectionResources.length}</span>
         </div>
         <div className="panel-header-meta">
           <span>{activeCount} 个正在使用</span>
+          {historyCount > 0 ? <span>{historyCount} 个历史</span> : null}
           {attentionCount > 0 ? <span className="resource-attention-count">{attentionCount} 个需要处理</span> : null}
         </div>
         <button
@@ -311,12 +291,12 @@ export default function ResourcePanel({
         >
           <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
         </button>
-        <div ref={createMenuAnchorRef} className="resource-create-control">
+        {sessionId && workspaceId ? <div ref={createMenuAnchorRef} className="resource-create-control">
           <button
             type="button"
             className="resource-refresh-button resource-create-button"
             onClick={() => setCreateMenuOpen((open) => !open)}
-            disabled={!sessionId || !workspaceId || creatingKind !== null}
+            disabled={creatingKind !== null}
             aria-haspopup="menu"
             aria-expanded={createMenuOpen}
           >
@@ -346,7 +326,7 @@ export default function ResourcePanel({
               ))}
             </div>
           </AnchoredOverlay>
-        </div>
+        </div> : null}
       </div>
 
       {/* 这里只承载可重新 attach 的持久资源；一次性 Agent job 仍属于对话或事件视图。 */}
@@ -419,7 +399,6 @@ export default function ResourcePanel({
                               onCopy={handleCopy}
                               onOpenTerminal={handleOpenTerminal}
                               onOpenBrowser={handleOpenBrowser}
-                              onShowConversation={onShowConversation}
                               onReplaceBrowser={() => handleCreateConnection("browser")}
                             />
                           ))}
@@ -434,7 +413,7 @@ export default function ResourcePanel({
         </div>
       ) : null}
 
-      {!loading && !error && resources.length === 0 ? (
+      {!loading && !error && connectionResources.length === 0 && !waitingForFirstMessage ? (
         <div className="empty-state">当前会话还没有后台连接</div>
       ) : null}
     </section>

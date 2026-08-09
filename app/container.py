@@ -279,9 +279,14 @@ def build_app_container(
         store=trace_event_store,
         turn_projector=turn_history_projector,
     )
-    terminal_manager_client = TerminalManagerClient()
-    browser_manager_client = BrowserManagerClient()
-    workspace_session_context_transport = GatewaySessionContextClient()
+    config_service = ConfigService(
+        workspace_root=resolved_workspace_root,
+    )
+    terminal_manager_client = TerminalManagerClient(config_service=config_service)
+    browser_manager_client = BrowserManagerClient(config_service=config_service)
+    workspace_session_context_transport = GatewaySessionContextClient(
+        config_service=config_service,
+    )
     workspace_session_context_client = GatewayContextQueryService(
         transport=workspace_session_context_transport
     )
@@ -291,9 +296,6 @@ def build_app_container(
         channel_value_migrator=migrate_prompt_checkpoint_channel_value,
     )
 
-    config_service = ConfigService(
-        workspace_root=resolved_workspace_root,
-    )
     mcp_runtime_manager = McpRuntimeManager(
         raw_config=config_service.get_mcp_config(),
         workspace_root=resolved_workspace_root,

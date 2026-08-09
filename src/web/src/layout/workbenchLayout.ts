@@ -2,21 +2,31 @@ import type { WebUiMainAreaRatios } from "../types/backend";
 
 export type LayoutResizeTarget =
   | "agent-sessions-right"
-  | "preview-left"
+  | "workspace-editor-left"
   | "auxiliary-left";
 
 export type MainAreaKey = keyof WebUiMainAreaRatios;
 
 export const DEFAULT_MAIN_AREA_RATIOS: WebUiMainAreaRatios = {
   agent_sessions: 1,
-  // OpenClaw 桌面布局使用 258px 侧栏，其余宽度交给会话区；折算为常用
-  // 1024px 工作台宽度后约为 1:3，同时保留当前可拖拽、可持久化的比例模型。
-  chat: 3,
+  // Codex 工作台将会话区与编辑器工作区并列，编辑器工作区内部再平分文档和文件树。
+  chat: 1,
   workspace_preview: 1,
   auxiliary: 1,
 };
 
 export const LAYOUT_RESIZING_CLASS = "is-layout-resizing";
+export const GATEWAY_PANEL_RESIZING_CLASS = "is-gateway-panel-resizing";
+export const DEFAULT_GATEWAY_PANEL_HEIGHT = 286;
+export const MIN_GATEWAY_PANEL_HEIGHT = 190;
+export const MAX_GATEWAY_PANEL_HEIGHT = 520;
+
+export function clampGatewayPanelHeight(value: number): number {
+  return Math.min(
+    MAX_GATEWAY_PANEL_HEIGHT,
+    Math.max(MIN_GATEWAY_PANEL_HEIGHT, Math.round(value)),
+  );
+}
 
 export function resolveMainAreaRatios(
   value: WebUiMainAreaRatios | null | undefined,
@@ -67,8 +77,5 @@ export function resizeAdjacentMainAreas({
 }
 
 export function defaultAuxiliaryVisible(): boolean {
-  if (typeof window === "undefined") {
-    return true;
-  }
-  return window.innerWidth > 900;
+  return true;
 }

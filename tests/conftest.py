@@ -78,19 +78,19 @@ def setup_test_config(
     config_root.mkdir(parents=True)
     if os.path.exists(test_config_path):
         payload = commentjson.loads(Path(test_config_path).read_text(encoding="utf-8"))
-        payload["$schema"] = "./workspace_config.jsonc"
+        payload["$schema"] = "./workspace_schema.jsonc"
         payload["config_version"] = 1
         (config_root / "workspace.jsonc").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        (config_root / "workspace_config.jsonc").write_bytes(
-            (Path(CONFIGS_DIR) / "workspace_config.jsonc").read_bytes()
+        (config_root / "workspace_schema.jsonc").write_bytes(
+            (Path(CONFIGS_DIR) / "workspace_schema.jsonc").read_bytes()
         )
         (config_root / "gateway.jsonc").write_bytes(
-            (Path(CONFIGS_DIR) / "gateway.jsonc").read_bytes()
+            (Path(CONFIGS_DIR) / "gateway_inline.jsonc").read_bytes()
         )
-        (config_root / "gateway_config.jsonc").write_bytes(
-            (Path(CONFIGS_DIR) / "gateway_config.jsonc").read_bytes()
+        (config_root / "gateway_schema.jsonc").write_bytes(
+            (Path(CONFIGS_DIR) / "gateway_schema.jsonc").read_bytes()
         )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))

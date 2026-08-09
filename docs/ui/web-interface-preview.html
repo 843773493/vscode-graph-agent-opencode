@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234e9ee8'/><path d='M9 8h14v4H13v4h8v4h-8v4H9z' fill='white'/></svg>" />
+    <title>BoxTeam Web 界面静态预览</title>
+    <style>
+      :root {
+        --canvas: #07101d;
+        --chrome: rgba(7, 15, 27, 0.94);
+        --surface: rgba(13, 27, 47, 0.82);
+        --surface-strong: rgba(17, 34, 57, 0.94);
+        --surface-soft: rgba(255, 255, 255, 0.045);
+        --border: rgba(188, 215, 245, 0.16);
+        --border-strong: rgba(188, 215, 245, 0.26);
+        --text: #e8f1fb;
+        --muted: #9cafc4;
+        --subtle: #6f8298;
+        --accent: #4e9ee8;
+        --accent-soft: rgba(78, 158, 232, 0.16);
+        --success: #54c993;
+        --warning: #e8ad4f;
+        --danger: #e66767;
+        --shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
+        --radius: 8px;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        width: 100%;
+        height: 100%;
+        min-width: 320px;
+        margin: 0;
+        overflow: hidden;
+        background: var(--canvas);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 12px;
+      }
+
+      button, input, textarea, select { font: inherit; }
+      button { color: inherit; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible {
+        outline: 1px solid var(--accent);
+        outline-offset: 1px;
+      }
+
+      .app-shell {
+        position: relative;
+        display: grid;
+        grid-template-rows: 38px minmax(0, 1fr) 190px;
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 57% 17%, rgba(126, 184, 245, 0.18), transparent 22%),
+          radial-gradient(circle at 79% 55%, rgba(57, 109, 165, 0.2), transparent 35%),
+          linear-gradient(145deg, #0a1b31 0%, #102a47 42%, #07101d 100%);
+      }
+
+      .app-shell::before {
+        position: absolute;
+        inset: 38px 0 190px;
+        background:
+          radial-gradient(circle at 52% 18%, rgba(245, 245, 220, 0.62) 0 6%, transparent 6.4%),
+          radial-gradient(circle at 52% 18%, rgba(214, 229, 248, 0.12) 0 13%, transparent 13.5%),
+          linear-gradient(165deg, transparent 0 40%, rgba(27, 73, 115, 0.44) 40.5% 41%, transparent 41.5%),
+          linear-gradient(22deg, transparent 0 52%, rgba(55, 107, 154, 0.3) 52.5% 53%, transparent 53.5%);
+        content: "";
+        opacity: 0.78;
+        pointer-events: none;
+      }
+
+      .topbar, .main-grid, .gateway-panel { position: relative; z-index: 1; }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        padding: 0 8px;
+        border-bottom: 1px solid var(--border);
+        background: var(--chrome);
+      }
+
+      .topbar-group, .topbar-actions, .topbar-center { display: flex; align-items: center; min-width: 0; }
+      .topbar-group, .topbar-actions { gap: 3px; }
+      .topbar-center { flex: 1 1 auto; justify-content: center; }
+      .topbar-title {
+        width: min(55%, 700px);
+        min-width: 160px;
+        padding: 4px 12px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .icon-button, .text-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 27px;
+        height: 27px;
+        padding: 0 7px;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .icon-button:hover, .text-button:hover, .icon-button.active {
+        border-color: var(--border);
+        background: var(--surface-soft);
+        color: var(--text);
+      }
+
+      .glyph { font-size: 16px; line-height: 1; }
+      .main-grid {
+        display: grid;
+        grid-template-columns: 264px minmax(300px, 0.86fr) minmax(620px, 1.7fr);
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .app-shell.browser-focus .main-grid { grid-template-columns: 264px minmax(0, 1fr); }
+      .app-shell.browser-focus .chat-panel { display: none; }
+      .app-shell.browser-focus .workspace-shell { grid-column: 2; }
+
+      .session-sidebar, .chat-panel, .workspace-shell, .gateway-panel {
+        min-width: 0;
+        min-height: 0;
+        background: rgba(5, 14, 26, 0.58);
+      }
+
+      .session-sidebar {
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        background: rgba(5, 14, 26, 0.82);
+      }
+
+      .sidebar-header, .sidebar-section-header, .workspace-tabs, .gateway-tabs, .panel-toolbar {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+      }
+
+      .sidebar-header {
+        justify-content: space-between;
+        min-height: 44px;
+        padding: 0 10px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sidebar-header strong { font-size: 13px; }
+      .sidebar-tools { display: flex; gap: 3px; }
+      .sidebar-scroll { min-height: 0; flex: 1 1 auto; overflow: auto; padding: 9px 8px; }
+      .sidebar-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 10px 5px 5px;
+        color: var(--muted);
+        font-weight: 650;
+      }
+
+      .session-row, .folder-row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        width: 100%;
+        min-height: 29px;
+        padding: 0 7px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .session-row:hover, .folder-row:hover, .session-row.active { background: var(--accent-soft); color: var(--text); }
+      .session-row.active { box-shadow: inset 2px 0 var(--accent); }
+      .session-row span:nth-child(2), .folder-row span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row-meta { margin-left: auto; color: var(--subtle); font-size: 10px; }
+      .status-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--success); }
+      .status-dot.offline { background: var(--danger); }
+      .sidebar-footer { padding: 9px; border-top: 1px solid var(--border); }
+
+      .chat-panel { display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
+      .chat-scroll { min-height: 0; flex: 1 1 auto; overflow: auto; padding: 22px 18px 12px; }
+      .chat-kicker { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+      .chat-kicker::before { color: var(--success); content: "✓  "; }
+      .message { margin-top: 21px; color: var(--text); line-height: 1.65; }
+      .message.user { margin-left: 18%; color: #cfe3f7; }
+      .message strong { color: #f0f6fc; }
+      .goal-card {
+        margin-top: 12px;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: rgba(12, 27, 46, 0.72);
+      }
+
+      .goal-card header { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
+      .goal-card table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 10px; }
+      .goal-card td { padding: 4px 5px; border-top: 1px solid var(--border); }
+      .goal-card td:first-child { width: 28%; color: var(--muted); }
+      code, .mono { font-family: var(--mono); }
+      .code-chip { padding: 2px 4px; border-radius: 3px; background: rgba(0, 0, 0, 0.46); color: #d8e9f8; }
+
+      .composer {
+        margin: 0 14px 12px;
+        border: 1px solid var(--border-strong);
+        border-radius: 9px;
+        background: rgba(10, 23, 39, 0.86);
+        box-shadow: var(--shadow);
+      }
+
+      .composer textarea { display: block; width: 100%; height: 62px; padding: 10px; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); }
+      .composer textarea::placeholder { color: var(--subtle); }
+      .composer-footer { display: flex; align-items: center; gap: 6px; padding: 0 7px 7px; color: var(--muted); font-size: 10px; }
+      .composer-footer .spacer { flex: 1; }
+      .send-button { width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--accent); color: white; cursor: pointer; }
+
+      .workspace-shell { display: flex; flex-direction: column; overflow: hidden; background: rgba(9, 22, 39, 0.78); }
+      .workspace-tabs { flex: 0 0 38px; align-items: stretch; overflow-x: auto; border-bottom: 1px solid var(--border); background: var(--chrome); }
+      .workspace-tab { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 0 13px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
+      .workspace-tab:hover, .workspace-tab.active { background: var(--surface-soft); color: var(--text); }
+      .workspace-tab.active { border-bottom-color: var(--accent); }
+      .workspace-body { min-height: 0; flex: 1 1 auto; overflow: hidden; }
+      .workspace-view { display: none; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+      .workspace-view.active { display: grid; }
+      .workspace-view.resources { grid-template-columns: minmax(0, 1fr) 300px; }
+      .workspace-view.resources.hide-resources { grid-template-columns: minmax(0, 1fr); }
+      .workspace-view.resources.hide-resources .resource-column { display: none; }
+      .workspace-view.files, .workspace-view.changes { grid-template-columns: minmax(0, 1fr) 300px; }
+      .workspace-view.automation { grid-template-columns: 190px minmax(0, 1fr); }
+
+      .info-column, .resource-column, .file-tree, .automation-main, .browser-stage, .preview-pane { min-width: 0; min-height: 0; overflow: auto; }
+      .info-column { padding: 10px; border-right: 1px solid var(--border); background: rgba(6, 17, 31, 0.48); }
+      .info-column h3 { margin: 0; font-size: 12px; }
+      .info-column > p { margin: 4px 0 10px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+      .info-card { padding: 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); }
+      .info-card strong, .info-card span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .info-card span { margin-top: 4px; color: var(--muted); font-size: 10px; }
+      .info-stats { display: grid; gap: 5px; margin-top: 7px; }
+      .info-stats div { display: flex; justify-content: space-between; padding: 5px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+      .info-stats b { color: var(--text); font-weight: 500; }
+
+      .browser-stage { display: flex; flex-direction: column; padding: 10px; background: rgba(4, 13, 25, 0.32); }
+      .browser-toolbar { display: flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px 6px 0 0; background: var(--surface-strong); }
+      .browser-toolbar .address { min-width: 0; flex: 1; padding: 4px 7px; border: 1px solid var(--border); border-radius: 4px; background: rgba(0, 0, 0, 0.18); color: var(--muted); font-family: var(--mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .browser-toolbar button { min-width: 24px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+      .browser-toolbar button:hover, .browser-toolbar button[aria-expanded="true"] { border-radius: 4px; background: var(--accent-soft); color: var(--text); }
+      .browser-viewport { position: relative; min-height: 0; flex: 1; overflow: hidden; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 6px 6px; background: #f5f8fb; color: #172536; }
+      .browser-page-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid #d7e0ea; background: #fff; color: #244c71; }
+      .browser-page-header strong { font-size: 13px; }
+      .browser-page-header span { color: #70869b; font-size: 10px; }
+      .browser-page-content { display: grid; grid-template-columns: 1fr 0.8fr; gap: 12px; padding: 16px; }
+      .browser-hero { min-height: 150px; padding: 17px; border-radius: 8px; background: linear-gradient(135deg, #d6e8f8, #eef5fa); }
+      .browser-hero h2 { margin: 0; color: #183b5a; font-size: 22px; }
+      .browser-hero p { max-width: 270px; color: #59738d; line-height: 1.6; }
+      .browser-widget { display: grid; gap: 7px; align-content: start; }
+      .browser-widget div { height: 39px; padding: 10px; border: 1px solid #d8e2eb; border-radius: 6px; background: white; color: #536d83; font-size: 10px; }
+      .browser-preview-footer { display: flex; justify-content: space-between; align-items: center; padding: 7px 2px 0; color: var(--subtle); font-size: 10px; }
+
+      .resource-column, .file-tree { border-left: 1px solid var(--border); background: rgba(8, 18, 31, 0.64); }
+      .resource-header, .file-header { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 10px; border-bottom: 1px solid var(--border); }
+      .resource-header strong, .file-header strong { font-size: 12px; }
+      .resource-header span, .file-header span { color: var(--muted); font-size: 10px; }
+      .resource-scroll, .file-scroll, .automation-scroll { min-height: 0; overflow: auto; padding: 8px; }
+      .resource-group { margin-bottom: 10px; }
+      .resource-group-title { display: flex; align-items: center; gap: 5px; padding: 5px 3px; color: var(--muted); font-size: 10px; }
+      .resource-group-title b { color: var(--text); }
+      .resource-card { margin: 3px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); }
+      .resource-card.selected { border-color: rgba(78, 158, 232, 0.58); background: var(--accent-soft); }
+      .resource-card-main { display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; gap: 6px; align-items: center; min-height: 39px; padding: 0 7px; }
+      .resource-card-copy { min-width: 0; }
+      .resource-card-copy strong, .resource-card-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .resource-card-copy small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+      .resource-status { padding: 2px 5px; border-radius: 999px; background: rgba(84, 201, 147, 0.14); color: var(--success); font-size: 9px; }
+      .resource-detail { padding: 7px; border-top: 1px solid var(--border); }
+      .resource-detail p { margin: 0 0 6px; color: var(--muted); font-size: 10px; }
+      .resource-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+      .resource-actions button, .primary-button { min-height: 24px; padding: 0 7px; border: 1px solid var(--border-strong); border-radius: 4px; background: transparent; color: var(--text); cursor: pointer; font-size: 10px; }
+      .resource-actions .primary-button { border-color: rgba(84, 201, 147, 0.52); color: var(--success); }
+      .resource-actions button:hover, .primary-button:hover { background: var(--surface-soft); }
+      .resource-actions .danger { color: var(--danger); }
+
+      .file-preview, .preview-pane { display: flex; flex-direction: column; background: rgba(5, 14, 26, 0.44); }
+      .file-toolbar { display: flex; align-items: center; gap: 7px; min-height: 39px; padding: 0 10px; border-bottom: 1px solid var(--border); }
+      .file-toolbar strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .file-toolbar small { color: var(--muted); }
+      .file-toolbar .spacer { flex: 1; }
+      .mode-button { padding: 4px 7px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }
+      .mode-button.active { background: var(--accent-soft); color: var(--accent); }
+      .code-surface { min-height: 0; flex: 1; overflow: auto; padding: 15px; background: rgba(3, 10, 19, 0.48); color: #c9d9e8; font: 11px/1.8 var(--mono); white-space: pre; }
+      .line-number { display: inline-block; width: 31px; color: #52677c; user-select: none; }
+      .file-tree-row { display: flex; align-items: center; gap: 6px; min-height: 29px; padding: 0 5px; color: var(--muted); }
+      .file-tree-row.active { border-radius: 4px; background: var(--accent-soft); color: var(--text); }
+      .file-tree-row.indent { padding-left: 22px; }
+
+      .automation-main { display: flex; flex-direction: column; }
+      .automation-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; }
+      .automation-header h2 { margin: 0; font-size: 14px; }
+      .automation-header p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+      .automation-summary { display: flex; gap: 14px; padding: 8px 14px; border-block: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+      .automation-summary strong { color: var(--text); }
+      .automation-card { margin-bottom: 7px; padding: 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); }
+      .automation-card header { display: flex; justify-content: space-between; }
+      .automation-card header span { padding: 2px 5px; border-radius: 999px; background: rgba(84, 201, 147, 0.14); color: var(--success); font-size: 9px; }
+      .automation-card p { margin: 5px 0; color: var(--muted); font-size: 10px; }
+
+      .gateway-panel { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--border-strong); background: rgba(7, 14, 24, 0.96); box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.22); }
+      .gateway-resize { height: 7px; flex: 0 0 7px; cursor: row-resize; }
+      .gateway-resize:hover { background: var(--accent-soft); }
+      .gateway-tabs { min-height: 35px; justify-content: space-between; border-bottom: 1px solid var(--border); }
+      .gateway-tab { display: inline-flex; align-items: center; gap: 6px; height: 35px; padding: 0 12px; border: 0; border-bottom: 2px solid var(--accent); background: transparent; color: var(--text); cursor: pointer; }
+      .gateway-actions { display: flex; gap: 3px; padding-right: 7px; }
+      .gateway-toolbar { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 9px; border-bottom: 1px solid var(--border); }
+      .gateway-toolbar label { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+      .gateway-toolbar select { height: 25px; min-width: 135px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: var(--text); }
+      .gateway-toolbar .spacer { flex: 1; }
+      .gateway-mode { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 4px; }
+      .gateway-mode button { min-height: 21px; padding: 0 7px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }
+      .gateway-mode button.active { background: var(--accent-soft); color: var(--text); }
+      .gateway-summary { min-height: 0; flex: 1; overflow: auto; padding: 9px; }
+      .gateway-status-hero { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid rgba(232, 173, 79, 0.36); border-radius: 5px; background: rgba(232, 173, 79, 0.08); }
+      .gateway-status-hero strong { display: block; color: var(--warning); font-size: 13px; }
+      .gateway-status-hero small { color: var(--muted); }
+      .gateway-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 7px; }
+      .gateway-metric { display: flex; justify-content: space-between; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); }
+      .gateway-metric strong { color: var(--text); }
+      .gateway-focus { margin-top: 7px; padding: 8px; border: 1px solid var(--border); border-radius: 5px; }
+      .gateway-focus header { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
+      .focus-item { margin-top: 6px; color: #e77b7b; font: 10px/1.4 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .focus-item::before { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--danger); content: ""; }
+      .gateway-raw { display: none; min-height: 0; flex: 1; overflow: auto; padding: 10px; color: #afc0d2; font: 10px/1.6 var(--mono); white-space: pre; }
+      .gateway-panel.raw .gateway-summary { display: none; }
+      .gateway-panel.raw .gateway-raw { display: block; }
+
+      @media (max-width: 1250px) {
+        .main-grid { grid-template-columns: 236px minmax(280px, 0.8fr) minmax(540px, 1.55fr); }
+        .workspace-view.resources { grid-template-columns: minmax(0, 1fr) 270px; }
+        .browser-page-content { grid-template-columns: 1fr; }
+      }
+
+      @media (max-width: 980px) {
+        .main-grid { grid-template-columns: 0 minmax(290px, 0.75fr) minmax(500px, 1.35fr); }
+        .session-sidebar { display: none; }
+      }
+
+      @media (max-width: 760px) {
+        .app-shell { grid-template-rows: 38px minmax(0, 1fr) 190px; }
+        .app-shell::before { bottom: 190px; }
+        .main-grid { grid-template-columns: minmax(0, 1fr); }
+        .chat-panel { display: none; }
+        .workspace-shell { grid-column: 1; }
+        .workspace-view.resources, .workspace-view.files, .workspace-view.changes, .workspace-view.automation { grid-template-columns: minmax(0, 1fr); }
+        .workspace-view.resources .resource-column, .workspace-view.automation .info-column, .workspace-view.files .file-tree, .workspace-view.changes .file-tree { display: none; }
+        .workspace-view.resources { position: relative; }
+        .workspace-view.resources.resource-drawer-open .resource-column { display: block; position: absolute; inset: 0 0 0 auto; z-index: 3; width: min(300px, 88%); box-shadow: -14px 0 28px rgba(0, 0, 0, 0.35); }
+        .browser-page-content { grid-template-columns: 1fr; }
+        .topbar-center { display: none; }
+        .topbar-actions { margin-left: auto; }
+        .gateway-toolbar label:first-child { display: none; }
+        .gateway-toolbar select { min-width: 105px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-group">
+          <button class="icon-button" aria-label="后退">‹</button>
+          <button class="icon-button" aria-label="前进">›</button>
+          <button class="icon-button" aria-label="新建会话">＋</button>
+          <button class="text-button" aria-label="工作台视图">▦ 视图⌄</button>
+        </div>
+        <div class="topbar-center"><div class="topbar-title">⌁ 你好</div></div>
+        <div class="topbar-actions">
+          <button class="text-button">更新</button>
+          <button class="text-button" data-browser-focus-toggle aria-pressed="true">↔ 会话</button>
+          <button class="icon-button active" data-toggle="session-sidebar" aria-label="切换左侧侧边栏">◧</button>
+          <button class="icon-button active" data-toggle="gateway-panel" aria-label="切换底部面板">▰</button>
+          <button class="icon-button active" data-toggle="workspace-shell" aria-label="切换右侧侧边栏">▥</button>
+        </div>
+      </header>
+
+      <div class="main-grid">
+        <aside class="session-sidebar" id="session-sidebar">
+          <div class="sidebar-header"><strong>会话</strong><div class="sidebar-tools"><button class="icon-button">＋</button><button class="icon-button">⌕</button></div></div>
+          <div class="sidebar-scroll">
+            <div class="sidebar-label"><span>已固定</span><span>⌃</span></div>
+            <button class="session-row active"><span>◉</span><span>你好</span><span class="row-meta">当前</span></button>
+            <button class="session-row"><span>◌</span><span>布局审查与调整</span><span class="row-meta">昨天</span></button>
+            <div class="sidebar-label"><span>Chats</span><span>3</span></div>
+            <button class="session-row"><span>○</span><span>Gateway 日志整理</span></button>
+            <div class="sidebar-label"><span>工作区文件夹</span><span>＋</span></div>
+            <button class="folder-row"><span>⌄</span><span>home</span></button>
+            <button class="folder-row" style="padding-left:26px"><span>◈</span><span>你好</span></button>
+            <button class="folder-row"><span>›</span><span>Browser Tool E2E Manual</span><span class="status-dot offline"></span></button>
+            <button class="folder-row"><span>›</span><span>20260730_wallpaper</span><span class="status-dot offline"></span></button>
+            <button class="folder-row"><span>›</span><span>workspace</span><span class="status-dot"></span></button>
+          </div>
+          <div class="sidebar-footer"><button class="text-button" style="width:100%;justify-content:space-between">自定义 <span>›</span></button></div>
+        </aside>
+
+        <section class="chat-panel">
+          <div class="chat-scroll">
+            <div class="chat-kicker">已完成思考 · 已运行 update_goal</div>
+            <div class="message"><strong>Goal 完成工具已成功执行。</strong> 当前 goal 已标记为 <span class="code-chip">complete</span>。</div>
+            <div class="goal-card">
+              <header><span>Goal 完成工具</span><span>刚刚</span></header>
+              <table><tr><td>Goal ID</td><td class="mono">goal_fe479ec860...</td></tr><tr><td>目标</td><td>测试 goal 完成工具，关闭当前 goal</td></tr><tr><td>状态</td><td><span class="code-chip">completed</span></td></tr><tr><td>耗时</td><td>约 22 秒</td></tr></table>
+            </div>
+            <div class="message">操作验证：<span class="code-chip">update_goal(status='complete')</span> 调用成功返回，Goal 已正常关闭。</div>
+            <div class="message user">接下来我想查看浏览器预览和运行连接。</div>
+          </div>
+          <div class="composer">
+            <textarea placeholder="你的路线图下一步是什么？"></textarea>
+            <div class="composer-footer"><span>＋</span><span>Enter 发送 · Ctrl+Enter 换行</span><span class="spacer"></span><span>✣ default</span><span>⚙ gpt-5.6-luna</span><button class="send-button">➤</button></div>
+          </div>
+        </section>
+
+        <section class="workspace-shell" id="workspace-shell">
+          <nav class="workspace-tabs" aria-label="右侧侧边栏组件标签">
+            <button class="workspace-tab" data-tab="files">▱ 文件</button>
+            <button class="workspace-tab" data-tab="changes">▤ 更改</button>
+            <button class="workspace-tab" data-tab="automation">⚙ 自动化</button>
+            <button class="workspace-tab active" data-tab="resources">▣ 运行与连接</button>
+          </nav>
+          <div class="workspace-body">
+            <div class="workspace-view files" data-view="files">
+              <section class="file-preview"><div class="file-toolbar"><strong>AGENTS.md</strong><small>markdown · 413 B</small><span class="spacer"></span><button class="mode-button">源码</button><button class="mode-button active">预览</button></div><div class="code-surface"><h2 style="font-family:var(--sans);color:#d9eafb">通用指南</h2><p style="font-family:var(--sans);color:#a9bfd4">开发标准</p><p style="font-family:var(--sans);color:#c9d9e8;white-space:normal;line-height:1.7">使用中文进行沟通；代码注释也应使用中文。第一次实现功能时，尽量专注于核心功能。所有界面状态都应给用户清晰、可理解的反馈。</p><p style="font-family:var(--sans);color:#a9bfd4">实现方法</p><p style="font-family:var(--sans);color:#c9d9e8;white-space:normal;line-height:1.7">主聊天区、文件预览、资源树和底部状态面板各自承担明确职责，并在窄窗口下保持可操作。</p></div></section>
+              <aside class="file-tree"><div class="file-header"><strong>文件</strong><span>⌕　＋</span></div><div class="file-scroll"><div class="file-tree-row">⌄　▣ <strong>boxteam_workspace</strong></div><div class="file-tree-row indent">⌄　▣ .boxteam</div><div class="file-tree-row indent">▸　▣ sessions</div><div class="file-tree-row indent active">▤　AGENTS.md <span class="row-meta">413 B</span></div><div class="file-tree-row">▸　▣ app</div><div class="file-tree-row">▸　▣ src</div><div class="file-tree-row">▸　▣ docs</div><div class="file-tree-row">▸　▣ tests</div></div></aside>
+            </div>
+
+            <div class="workspace-view changes" data-view="changes">
+              <section class="file-preview"><div class="file-toolbar"><strong>Session change · AGENTS.md</strong><small>会话变更 · 你好</small><span class="spacer"></span><button class="mode-button active">差异</button><button class="mode-button">预览</button></div><div class="code-surface"><span class="line-number">1</span><span style="color:#71d5a4">+ .workspace-preview-panel {</span>
+<span class="line-number">2</span><span style="color:#71d5a4">+   display: flex;</span>
+<span class="line-number">3</span><span style="color:#e77b7b">-   position: absolute;</span>
+<span class="line-number">4</span><span>  min-width: 0;</span>
+<span class="line-number">5</span><span>  min-height: 0;</span>
+<span class="line-number">6</span><span style="color:#71d5a4">+   overflow: hidden;</span></div></section>
+              <aside class="file-tree"><div class="file-header"><strong>更改</strong><span>0 个文件 +18 -7</span></div><div class="file-scroll"><div class="file-tree-row active">▤　AGENTS.md <span class="row-meta">+18 -7</span></div><div class="file-tree-row">▤　WorkspaceRuntimePreviewArea.tsx</div><div class="file-tree-row">▤　resourcePanel.css</div><div class="file-tree-row" style="margin-top:18px;color:var(--subtle)">当前显示会话文件变更；工作区未提交更改尚未接入。</div></div></aside>
+            </div>
+
+            <div class="workspace-view automation" data-view="automation">
+              <aside class="info-column"><h3>自动化</h3><p>当前会话自动化，不代表 Gateway 全局健康。</p><div class="info-card"><strong>boxteam_workspace</strong><span>你好 · 当前会话</span></div><div class="info-stats"><div><span>范围</span><b>当前会话</b></div><div><span>任务</span><b>3 个</b></div></div></aside>
+              <section class="automation-main"><div class="automation-header"><div><h2>会话自动化</h2><p>按计划创建、继续或分支会话。</p></div><button class="primary-button">＋ 新建自动化</button></div><div class="automation-summary"><span><strong>3</strong> 个自动化</span><span><strong>2</strong> 个正常</span><span style="color:var(--warning)"><strong>1</strong> 个需要处理</span></div><div class="automation-scroll"><div class="automation-card"><header><strong>同步工作区索引</strong><span>正常</span></header><p>每 30 分钟检查会话目录与工作区状态。</p><button class="mode-button">运行</button><button class="mode-button">历史</button></div><div class="automation-card"><header><strong>浏览器回归检查</strong><span>正常</span></header><p>手动运行浏览器工具和资源连接检查。</p><button class="mode-button">运行</button><button class="mode-button">历史</button></div><div class="automation-card"><header><strong>UX Manual New</strong><span style="background:rgba(232,173,79,.14);color:var(--warning)">需要处理</span></header><p>目标工作区当前不可用，等待重新连接。</p><button class="mode-button">重新校验</button></div></div></section>
+            </div>
+
+            <div class="workspace-view resources active" data-view="resources">
+              <section class="browser-stage"><div class="browser-toolbar"><button>‹</button><button>›</button><button>↻</button><div class="address" id="browser-address">https://boxteam.local/browser/blank</div><button data-resource-toggle aria-expanded="true" title="切换资源列表">▤</button><button>□</button><button>×</button></div><div class="browser-viewport"><div class="browser-page-header"><strong id="browser-page-title">Browser Tool E2E Manual</strong><span id="browser-page-status">浏览器预览 · 当前</span></div><div class="browser-page-content"><div class="browser-hero"><h2 id="browser-hero-title">浏览器预览</h2><p>这是运行与连接页面中的主内容区域。选择右侧资源即可切换当前浏览器，不会创建新的页面。</p><button class="primary-button">打开外部浏览器</button></div><div class="browser-widget"><div>当前 URL　<span id="browser-url-label">about:blank</span></div><div>连接状态　<span style="color:#2a9669">运行中 · 1 个连接</span></div><div>最后检查　刚刚</div></div></div></div><div class="browser-preview-footer"><span>资源：<span id="browser-resource-label">browser_d3b9a826</span></span><span>浏览器为主区域 · 资源控制在右侧</span></div></section>
+              <aside class="resource-column"><div class="resource-header"><div><strong>连接资源</strong><span>　3</span></div><div><span>1 个正在使用</span> <button class="icon-button">↻</button></div></div><div class="resource-scroll"><div class="resource-group"><div class="resource-group-title">⌄ <b>正在使用</b> <span>1</span></div><article class="resource-card selected" data-resource="browser"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>Browser Tool E2E Manual</strong><small>空白页 · 浏览器</small></div><span class="resource-status">当前预览</span></div><div class="resource-detail"><p>浏览器 · 运行中 · 当前预览</p><div class="resource-actions"><button class="primary-button" data-open-preview>打开浏览器预览</button><button>关闭</button><button class="danger">删除</button></div></div></article></div><div class="resource-group"><div class="resource-group-title">⌄ <b>后台可用</b> <span>1</span></div><article class="resource-card" data-resource="browser-2"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>空白页</strong><small>浏览器 · 可随时切换</small></div><span class="resource-status">可用</span></div></article></div><div class="resource-group"><div class="resource-group-title">› <b>已挂起 / 可恢复</b> <span>1</span></div><div class="resource-card" style="display:none"></div></div><div class="resource-group"><div class="resource-group-title">› <b>历史记录</b> <span>1</span></div></div></div></aside>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="gateway-panel" id="gateway-panel">
+        <div class="gateway-resize" id="gateway-resize" title="拖拽调整 Gateway 面板高度"></div>
+        <div class="gateway-tabs"><button class="gateway-tab">▤ Gateway 状态 <span class="code-chip">重点 4</span></button><div class="gateway-actions"><span style="color:var(--warning);padding:7px">● 本机 Gateway · 部分异常</span><button class="icon-button">↻</button><button class="icon-button" data-toggle="gateway-panel">×</button></div></div>
+        <div class="gateway-toolbar"><label>Gateway <select><option>本机 Gateway</option><option>boxteam-container</option></select></label><label>工作区 <select><option>全部工作区</option><option>home</option></select></label><span class="spacer"></span><span style="color:var(--muted);font-size:10px">最近检查 2026/8/8 13:25</span><div class="gateway-mode"><button class="active" data-gateway-mode="summary">重点</button><button data-gateway-mode="raw">原始日志</button></div></div>
+        <div class="gateway-summary"><div class="gateway-status-hero"><div><strong>部分异常</strong><small>本机 Gateway · 当前仅展示需要关注的状态</small></div><button class="mode-button">查看原始日志</button></div><div class="gateway-metrics"><div class="gateway-metric"><span>工作区</span><strong>6</strong></div><div class="gateway-metric"><span>日志入口</span><strong>139</strong></div><div class="gateway-metric"><span>需关注</span><strong style="color:var(--warning)">4</strong></div></div><div class="gateway-focus"><header><strong>重点</strong><span>已去重 · 原始请求日志已收起</span></header><div class="focus-item">catalog_search 同步工作区会话目录索引失败：连接失败 ×4</div></div></div>
+        <div class="gateway-raw">2026-08-08T13:25:04Z INFO app.gateway.control.catalog_search 同步工作区会话目录索引失败 request_id=…
+2026-08-08T13:25:04Z ERROR ConnectError: All connection attempts failed
+2026-08-08T13:25:05Z INFO httpx HTTP Request: GET /api/v1/health HTTP/1.1 200 OK
+2026-08-08T13:25:06Z WARNING workspace resource is unavailable
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const shell = document.querySelector(".app-shell");
+      const workspaceTabs = [...document.querySelectorAll(".workspace-tab")];
+      const workspaceViews = [...document.querySelectorAll(".workspace-view")];
+      const browserFocusToggle = document.querySelector("[data-browser-focus-toggle]");
+
+      const setBrowserFocus = (focused) => {
+        shell.classList.toggle("browser-focus", focused);
+        browserFocusToggle.setAttribute("aria-pressed", String(focused));
+        browserFocusToggle.textContent = focused ? "↔ 会话" : "↔ 浏览器";
+        browserFocusToggle.title = focused ? "返回会话工作区" : "进入浏览器工作区";
+      };
+
+      // 标签切换只改变静态预览中的可见区域，不请求后端。
+      workspaceTabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const target = tab.dataset.tab;
+          workspaceTabs.forEach((item) => item.classList.toggle("active", item === tab));
+          workspaceViews.forEach((view) => view.classList.toggle("active", view.dataset.view === target));
+          setBrowserFocus(target === "resources");
+        });
+      });
+
+      browserFocusToggle.addEventListener("click", () => {
+        setBrowserFocus(!shell.classList.contains("browser-focus"));
+      });
+      setBrowserFocus(true);
+
+      document.querySelectorAll("[data-toggle]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const target = document.getElementById(button.dataset.toggle);
+          if (!target) return;
+          target.style.display = target.style.display === "none" ? "" : "none";
+        });
+      });
+
+      document.querySelectorAll("[data-gateway-mode]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const raw = button.dataset.gatewayMode === "raw";
+          document.querySelector(".gateway-panel").classList.toggle("raw", raw);
+          document.querySelectorAll("[data-gateway-mode]").forEach((item) => item.classList.toggle("active", item === button));
+        });
+      });
+
+      const resourceName = document.getElementById("browser-resource-label");
+      const address = document.getElementById("browser-address");
+      const title = document.getElementById("browser-page-title");
+      const heroTitle = document.getElementById("browser-hero-title");
+      const urlLabel = document.getElementById("browser-url-label");
+      document.querySelectorAll("[data-resource]").forEach((card) => {
+        card.addEventListener("click", () => {
+          document.querySelectorAll("[data-resource]").forEach((item) => item.classList.remove("selected"));
+          card.classList.add("selected");
+          const alternate = card.dataset.resource === "browser-2";
+          const name = alternate ? "空白页" : "Browser Tool E2E Manual";
+          resourceName.textContent = alternate ? "browser_91a2b5c7" : "browser_d3b9a826";
+          address.textContent = alternate ? "https://boxteam.local/browser/blank-2" : "https://boxteam.local/browser/blank";
+          title.textContent = name;
+          heroTitle.textContent = alternate ? "空白页预览" : "浏览器预览";
+          urlLabel.textContent = alternate ? "about:blank · 资源 2" : "about:blank";
+        });
+      });
+
+      document.querySelectorAll("[data-open-preview]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          document.querySelector(".browser-stage").scrollIntoView({ block: "nearest" });
+          button.textContent = "当前正在预览";
+          window.setTimeout(() => { button.textContent = "打开浏览器预览"; }, 1200);
+        });
+      });
+
+      const resourceView = document.querySelector(".workspace-view.resources");
+      const resourceToggle = document.querySelector("[data-resource-toggle]");
+      const syncResourceToggle = () => {
+        const isNarrow = window.matchMedia("(max-width: 760px)").matches;
+        const isVisible = isNarrow
+          ? resourceView.classList.contains("resource-drawer-open")
+          : !resourceView.classList.contains("hide-resources");
+        resourceToggle.setAttribute("aria-expanded", String(isVisible));
+        resourceToggle.title = isVisible ? "隐藏资源列表" : "显示资源列表";
+      };
+      resourceToggle.addEventListener("click", () => {
+        const isNarrow = window.matchMedia("(max-width: 760px)").matches;
+        if (isNarrow) {
+          resourceView.classList.toggle("resource-drawer-open");
+        } else {
+          resourceView.classList.toggle("hide-resources");
+        }
+        syncResourceToggle();
+      });
+      window.addEventListener("resize", syncResourceToggle);
+      syncResourceToggle();
+
+      const resizeHandle = document.getElementById("gateway-resize");
+      let resizeStartY = 0;
+      let resizeStartHeight = 0;
+      resizeHandle.addEventListener("pointerdown", (event) => {
+        resizeStartY = event.clientY;
+        resizeStartHeight = document.getElementById("gateway-panel").getBoundingClientRect().height;
+        resizeHandle.setPointerCapture(event.pointerId);
+        document.body.style.userSelect = "none";
+      });
+      resizeHandle.addEventListener("pointermove", (event) => {
+        if (!resizeHandle.hasPointerCapture(event.pointerId)) return;
+        const nextHeight = Math.max(190, Math.min(460, resizeStartHeight + resizeStartY - event.clientY));
+        shell.style.gridTemplateRows = `38px minmax(0, 1fr) ${nextHeight}px`;
+      });
+      resizeHandle.addEventListener("pointerup", (event) => {
+        resizeHandle.releasePointerCapture(event.pointerId);
+        document.body.style.userSelect = "";
+      });
+    </script>
+  </body>
+</html>

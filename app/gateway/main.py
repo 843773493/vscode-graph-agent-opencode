@@ -24,6 +24,7 @@ from app.gateway.auth import (
     verify_gateway_token,
 )
 from app.gateway.auxiliary_proxy import router as auxiliary_proxy_router
+from app.gateway.config import load_gateway_config
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
 from app.gateway.control.generators import SessionGeneratorStore
@@ -75,6 +76,8 @@ from app.gateway.schemas import (
     FederationProtocolManifestDTO,
     FederationWorkspaceDTO,
     FederationWorkspaceListDTO,
+    GatewayConfigSourceDTO,
+    GatewayConfigSourcesDTO,
     GatewayDiagnosticsDTO,
     GatewayDirectoryEntryDTO,
     GatewayDirectoryListDTO,
@@ -292,8 +295,10 @@ async def lifespan(app: FastAPI):
     load_boxteam_env()
     get_gateway_local_token()
     logger.info("Gateway 日志已初始化: gateway_root=%s", _gateway_root())
-    registry = await create_registry()
+    gateway_config = load_gateway_config()
+    registry = await create_registry(gateway_config)
     app.state.registry = registry
+    app.state.gateway_config = gateway_config
     app.state.port_forward_manager = SshPortForwardManager(
         registry=registry,
         storage_path=_gateway_root() / "port-forwards.json",
@@ -306,8 +311,19 @@ async def lifespan(app: FastAPI):
         project_root=get_project_root(),
         log_dir=_gateway_root() / "logs",
         on_registry_reconciled=(app.state.port_forward_manager.reconcile_workspaces),
+        health_request_timeout_seconds=(
+            gateway_config.gateway_process_health_request_timeout_seconds
+        ),
+        health_poll_interval_seconds=(
+            gateway_config.gateway_process_health_poll_interval_seconds
+        ),
+        connection_drain_timeout_seconds=(
+            gateway_config.gateway_process_connection_drain_timeout_seconds
+        ),
+        default_skill_groups=gateway_config.default_workspace_skill_groups,
     )
-    app.state.http_client = httpx.AsyncClient(timeout=None)
+    # Gateway 代理本机工作区时必须直连，不能把本地后端请求送入用户的 HTTP 代理。
+    app.state.http_client = httpx.AsyncClient(timeout=None, trust_env=False)
     app.state.workspace_navigation_store = WorkspaceNavigationStore(
         storage_path=_gateway_root() / "navigation" / "workspace-tree.json"
     )
@@ -322,10 +338,18 @@ async def lifespan(app: FastAPI):
         http_client=app.state.http_client,
         cache_dir=_gateway_root() / "indexes" / "session-catalogs",
         navigation_store=app.state.workspace_navigation_store,
+        refresh_interval_seconds=(
+            gateway_config.session_catalog_refresh_interval_seconds
+        ),
+        max_concurrency=gateway_config.session_catalog_max_concurrency,
+        request_timeout_seconds=(
+            gateway_config.session_catalog_request_timeout_seconds
+        ),
     )
     app.state.session_generator_scheduler = SessionGeneratorScheduler(
         store=app.state.session_generator_store,
         coordinator=app.state.session_generator_coordinator,
+        poll_interval_seconds=gateway_config.session_generator_poll_interval_seconds,
     )
     coordinator_started = False
     catalog_search_started = False
@@ -462,6 +486,38 @@ async def restart_development_runtime(
             previous_process_id=os.getpid(),
             helper_process_id=helper_process_id,
             delay_ms=RESTART_DELAY_MS,
+        ),
+        request_id=request_id,
+    )
+
+
+@app.get(
+    "/api/gateway/config/sources",
+    response_model=APIResponse[GatewayConfigSourcesDTO],
+)
+async def gateway_config_sources(
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    try:
+        config = load_gateway_config()
+    except (FileNotFoundError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if config.schema_path is None:
+        raise RuntimeError("Gateway 配置快照缺少 schema 来源")
+    return APIResponse(
+        data=GatewayConfigSourcesDTO(
+            revision=config.revision,
+            schema_path=str(config.schema_path),
+            sources=[
+                GatewayConfigSourceDTO(
+                    path=str(source.path),
+                    layer=source.layer,
+                    precedence=source.precedence,
+                    loaded=source.loaded,
+                )
+                for source in config.source_details
+            ],
         ),
         request_id=request_id,
     )
@@ -1132,6 +1188,7 @@ async def list_ssh_connections(
 )
 async def add_local_workspace(
     payload: AddLocalWorkspaceRequest,
+    request: Request,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -1157,7 +1214,16 @@ async def add_local_workspace(
             raise HTTPException(status_code=400, detail=str(error)) from error
     else:
         backend_url = payload.backend_url.rstrip("/")
-        await wait_for_http_ok(f"{backend_url}/api/v1/health")
+        gateway_config = request.app.state.gateway_config
+        await wait_for_http_ok(
+            f"{backend_url}/api/v1/health",
+            request_timeout_seconds=(
+                gateway_config.gateway_process_health_request_timeout_seconds
+            ),
+            poll_interval_seconds=(
+                gateway_config.gateway_process_health_poll_interval_seconds
+            ),
+        )
         registry.upsert(
             WorkspaceTarget(
                 workspace_id=build_workspace_id(
@@ -1190,6 +1256,7 @@ async def add_local_workspace(
 )
 async def add_remote_gateway(
     payload: AddRemoteGatewayRequest,
+    request: Request,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -1200,6 +1267,7 @@ async def add_remote_gateway(
     except (LookupError, RuntimeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     try:
+        gateway_config = request.app.state.gateway_config
         await register_remote_gateway(
             registry=registry,
             log_dir=_gateway_root() / "logs",
@@ -1210,7 +1278,14 @@ async def add_remote_gateway(
             private_key_path=connection.private_key_path,
             ssh_config_host=connection.ssh_config_host,
             remote_gateway_port=connection.remote_gateway_port,
+            remote_pair_command=connection.remote_pair_command,
             activate=False,
+            health_request_timeout_seconds=(
+                gateway_config.gateway_process_health_request_timeout_seconds
+            ),
+            health_poll_interval_seconds=(
+                gateway_config.gateway_process_health_poll_interval_seconds
+            ),
         )
         await port_forward_manager.reconcile_workspaces()
     except (FileNotFoundError, ValueError) as error:

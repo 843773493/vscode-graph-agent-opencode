@@ -34,6 +34,47 @@ def validate_model_tool_arguments(
     return parsed.model_dump()
 
 
+def normalize_model_tool_arguments(
+    tool: BaseTool,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """把工具事件参数投影为模型可见且可序列化的参数对象。"""
+    if not isinstance(arguments, dict):
+        raise TypeError(
+            "工具事件参数必须是 object: "
+            f"tool_name={tool.name} actual_type={type(arguments).__name__}"
+        )
+
+    tool_call_schema = getattr(tool, "tool_call_schema", None)
+    if isinstance(tool_call_schema, type) and issubclass(
+        tool_call_schema,
+        BaseModel,
+    ):
+        parsed = tool_call_schema.model_validate(arguments)
+        return parsed.model_dump(
+            mode="json",
+            exclude_unset=True,
+        )
+
+    if isinstance(tool_call_schema, dict):
+        properties = tool_call_schema.get("properties")
+        if not isinstance(properties, dict):
+            raise TypeError(
+                "工具事件参数无法从字典 JSON Schema 提取公开字段: "
+                f"tool_name={tool.name}"
+            )
+        return {
+            field_name: arguments[field_name]
+            for field_name in properties
+            if field_name in arguments
+        }
+
+    raise TypeError(
+        "工具缺少模型可见的 JSON Schema: "
+        f"tool_name={tool.name} tool_type={type(tool).__name__}"
+    )
+
+
 def export_model_tool_json_schema(tool: BaseTool) -> dict[str, Any]:
     """导出发送给模型及请求回放使用的公开 JSON Schema。"""
     tool_call_schema = getattr(tool, "tool_call_schema", None)

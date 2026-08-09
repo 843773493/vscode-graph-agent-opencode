@@ -13,6 +13,10 @@ export default function Toolbar({
   onCreateSession,
   auxiliaryVisible,
   onToggleAuxiliaryPanel,
+  agentSessionsVisible,
+  onToggleAgentSessionsPanel,
+  panelVisible,
+  onTogglePanel,
   workbenchView,
   onWorkbenchViewChange,
   showAuxiliaryToggle,
@@ -21,6 +25,10 @@ export default function Toolbar({
   onCreateSession: () => void;
   auxiliaryVisible: boolean;
   onToggleAuxiliaryPanel: () => void;
+  agentSessionsVisible: boolean;
+  onToggleAgentSessionsPanel: () => void;
+  panelVisible: boolean;
+  onTogglePanel: () => void;
   workbenchView: WorkbenchView;
   onWorkbenchViewChange: (view: WorkbenchView) => void;
   showAuxiliaryToggle: boolean;
@@ -130,11 +138,37 @@ export default function Toolbar({
         >
           更新
         </button>
+        <button
+          type="button"
+          className={`toolbar-icon-button titlebar-agent-sessions-button${agentSessionsVisible ? " active" : ""}`}
+          title="切换左侧侧边栏"
+          aria-label="切换左侧侧边栏"
+          aria-pressed={agentSessionsVisible}
+          onClick={onToggleAgentSessionsPanel}
+        >
+          <span
+            className={`codicon ${agentSessionsVisible ? "codicon-layout-sidebar-left" : "codicon-layout-sidebar-left-off"}`}
+            aria-hidden="true"
+          />
+        </button>
+        <button
+          type="button"
+          className={`toolbar-icon-button titlebar-panel-button${panelVisible ? " active" : ""}`}
+          title="切换底部面板"
+          aria-label="切换底部面板"
+          aria-pressed={panelVisible}
+          onClick={onTogglePanel}
+        >
+          <span
+            className={`codicon ${panelVisible ? "codicon-layout-panel" : "codicon-layout-panel-off"}`}
+            aria-hidden="true"
+          />
+        </button>
         {showAuxiliaryToggle ? <button
           type="button"
           className={`toolbar-icon-button titlebar-auxiliary-button${auxiliaryVisible ? " active" : ""}`}
-          title={auxiliaryVisible ? "隐藏右侧侧边栏" : "显示右侧侧边栏"}
-          aria-label={auxiliaryVisible ? "隐藏右侧侧边栏" : "显示右侧侧边栏"}
+          title="切换右侧侧边栏"
+          aria-label="切换右侧侧边栏"
           aria-pressed={auxiliaryVisible}
           onClick={onToggleAuxiliaryPanel}
         >

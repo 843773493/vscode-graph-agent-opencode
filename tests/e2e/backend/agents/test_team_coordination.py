@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 import httpx
 import pytest
@@ -29,8 +29,8 @@ def e2e_workspace_config_path(
     )
     target_path.write_text(payload, encoding="utf-8")
     shutil.copy2(
-        Path.cwd().resolve() / "configs" / "workspace_config.jsonc",
-        target_path.parent / "workspace_config.jsonc",
+        Path.cwd().resolve() / "configs" / "workspace_schema.jsonc",
+        target_path.parent / "workspace_schema.jsonc",
     )
     return str(target_path)
 

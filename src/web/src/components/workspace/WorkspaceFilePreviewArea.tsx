@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import type { SessionFileChange, WorkspaceFileContent } from "../../types/backend";
 import type { WorkspaceFileSelection } from "../../utils/workspaceFileReferences";
 import WorkspaceMarkdownPreview from "./preview/WorkspaceMarkdownPreview";
@@ -36,11 +36,13 @@ export type WorkspacePreviewTab =
     };
 
 interface WorkspaceFilePreviewAreaProps {
+  context: "files" | "changes";
   visible: boolean;
   flexRatio: number;
-  maximized: boolean;
   apiPort: number;
   workspaceId: string | null;
+  workspaceName: string;
+  sessionTitle: string;
   tabs: WorkspacePreviewTab[];
   activePath: string | null;
   loadingPath: string | null;
@@ -49,25 +51,13 @@ interface WorkspaceFilePreviewAreaProps {
   draftContent: string;
   savingPath: string | null;
   hasUnsavedEdit: boolean;
-  onSelectTab: (path: string) => void;
-  onCloseTab: (path: string) => void;
-  onToggleMaximized: () => void;
-  onClosePanel: () => void;
+  markdownSourceVisible: boolean;
+  onMarkdownSourceChange: (visible: boolean) => void;
   onBeginEdit: (path: string) => void;
   onDraftChange: (content: string) => void;
   onCancelEdit: () => void;
   onSaveEdit: () => Promise<void>;
   onOpenWorkspacePath: (path: string) => Promise<void>;
-}
-
-function formatFileSize(size: number): string {
-  if (size < 1024) {
-    return `${size} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function lineRows(content: string): string[] {
@@ -92,22 +82,24 @@ function diffLineKind(line: string): "add" | "remove" | "meta" | "context" {
   return "context";
 }
 
-function changeKindLabel(kind: SessionFileChange["kind"]) {
-  if (kind === "create") {
-    return "新增";
+function formatFileSize(size: number): string {
+  if (size < 1024) {
+    return `${size} B`;
   }
-  if (kind === "delete") {
-    return "删除";
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
   }
-  return "修改";
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export default function WorkspaceFilePreviewArea({
+  context,
   visible,
   flexRatio,
-  maximized,
   apiPort,
   workspaceId,
+  workspaceName,
+  sessionTitle,
   tabs,
   activePath,
   loadingPath,
@@ -116,10 +108,8 @@ export default function WorkspaceFilePreviewArea({
   draftContent,
   savingPath,
   hasUnsavedEdit,
-  onSelectTab,
-  onCloseTab,
-  onToggleMaximized,
-  onClosePanel,
+  markdownSourceVisible,
+  onMarkdownSourceChange,
   onBeginEdit,
   onDraftChange,
   onCancelEdit,
@@ -128,9 +118,6 @@ export default function WorkspaceFilePreviewArea({
 }: WorkspaceFilePreviewAreaProps) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const editorLineNumbersRef = useRef<HTMLDivElement | null>(null);
-  const [markdownSourcePaths, setMarkdownSourcePaths] = useState<Set<string>>(
-    () => new Set(),
-  );
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? tabs[0] ?? null;
   const activeDiffLines =
     activeTab?.previewType === "session-diff"
@@ -147,8 +134,6 @@ export default function WorkspaceFilePreviewArea({
   const activeEditorLines = lineRows(activeEditorContent);
   const markdownActiveFile = activeTab?.previewType === "file" &&
     activeTab.language === "markdown";
-  const markdownSourceVisible = activeTab?.previewType === "file" &&
-    markdownSourcePaths.has(activeTab.path);
 
   useEffect(() => {
     if (activeTab?.previewType !== "file" || !activeTab.selection) {
@@ -175,165 +160,87 @@ export default function WorkspaceFilePreviewArea({
     }
   }, [editingActiveFile]);
 
-  useEffect(() => {
-    setMarkdownSourcePaths(new Set());
-  }, [workspaceId]);
-
   return (
     <section
-      className={`workspace-preview-panel${maximized ? " maximized" : ""}${
-        visible ? "" : " preserve-mounted-hidden"
-      }`}
+      className={`workspace-preview-panel${visible ? "" : " preserve-mounted-hidden"}`}
       hidden={!visible}
       style={{ flexBasis: 0, flexGrow: flexRatio }}
-      aria-label="文件预览区"
+      aria-label={context === "changes" ? "更改代码预览区" : "文件代码预览区"}
       data-bt-surface="workspace"
     >
-      <header className="workspace-preview-tabs">
-        <div className="workspace-preview-tab-strip">
-          {tabs.length > 0 ? (
-            tabs.map((tab) => (
-              <div
-                key={tab.path}
-                className={`workspace-preview-tab${activeTab?.path === tab.path ? " active" : ""}`}
-              >
-                <button
-                  type="button"
-                  className="workspace-preview-tab-main"
-                  title={tab.path}
-                  onClick={() => onSelectTab(tab.path)}
-                >
-                  <span
-                    className={`workspace-preview-tab-icon codicon ${
-                      tab.previewType === "terminal"
-                        ? "codicon-terminal"
-                        : tab.previewType === "browser"
-                          ? "codicon-globe"
-                          : tab.previewType === "session-diff"
-                            ? "codicon-diff"
-                            : "codicon-file"
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <span className="workspace-preview-tab-label">{tab.name}</span>
-                </button>
-                <button
-                  type="button"
-                  className="workspace-preview-tab-close"
-                  title={`关闭 ${tab.name}`}
-                  aria-label={`关闭 ${tab.name}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onCloseTab(tab.path);
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            ))
-          ) : (
-            <div className="workspace-preview-tab-placeholder">预览</div>
-          )}
-        </div>
-        <div className="workspace-preview-actions">
-          <button
-            type="button"
-            className="workspace-preview-panel-action"
-            title={maximized ? "还原编辑器区域" : "最大化编辑器区域"}
-            aria-label={maximized ? "还原编辑器区域" : "最大化编辑器区域"}
-            aria-pressed={maximized}
-            onClick={onToggleMaximized}
-          >
-            <span
-              className={`codicon ${maximized ? "codicon-screen-normal" : "codicon-screen-full"}`}
-              aria-hidden="true"
-            />
-          </button>
-          <button
-            type="button"
-            className="workspace-preview-panel-close"
-            title="隐藏文件预览"
-            aria-label="隐藏文件预览"
-            onClick={onClosePanel}
-          >
-            ×
-          </button>
-        </div>
-      </header>
-
       <div className="workspace-preview-content">
         {activeTab?.previewType === "file" ? (
-          <>
-            <div className="workspace-preview-toolbar">
-              <span className="workspace-preview-title">{activeTab.path}</span>
-              <div className="workspace-preview-toolbar-actions">
-                <span className="workspace-preview-meta">
-                  {activeTab.language} · {formatFileSize(activeTab.size)}
-                </span>
-                {markdownActiveFile ? (
-                  <div className="workspace-preview-mode-switch" role="group" aria-label="Markdown 查看方式">
-                    <button
-                      type="button"
-                      className={markdownSourceVisible ? "active" : ""}
-                      aria-pressed={markdownSourceVisible}
-                      onClick={() => setMarkdownSourcePaths((current) => {
-                        const next = new Set(current);
-                        next.add(activeTab.path);
-                        return next;
-                      })}
-                    >
-                      源码
-                    </button>
-                    <button
-                      type="button"
-                      className={!markdownSourceVisible ? "active" : ""}
-                      aria-pressed={!markdownSourceVisible}
-                      onClick={() => setMarkdownSourcePaths((current) => {
-                        const next = new Set(current);
-                        next.delete(activeTab.path);
-                        return next;
-                      })}
-                    >
-                      预览
-                    </button>
-                  </div>
-                ) : null}
-                {editingActiveFile ? (
-                  <>
-                    {hasUnsavedEdit ? (
-                      <span className="workspace-preview-dirty-indicator">
-                        未保存
-                      </span>
-                    ) : null}
-                    <button
-                      type="button"
-                      disabled={savingPath === activeTab.path}
-                      onClick={onCancelEdit}
-                    >
-                      取消
-                    </button>
-                    <button
-                      type="button"
-                      className="workspace-preview-save-button"
-                      disabled={
-                        !hasUnsavedEdit || savingPath === activeTab.path
-                      }
-                      onClick={() => void onSaveEdit()}
-                    >
-                      <span
-                        className={`codicon ${
-                          savingPath === activeTab.path
-                            ? "codicon-loading codicon-modifier-spin"
-                            : "codicon-save"
-                        }`}
-                        aria-hidden="true"
-                      />
-                      {savingPath === activeTab.path ? "保存中" : "保存"}
-                    </button>
-                  </>
-                ) : null}
-              </div>
+          <div className="workspace-preview-toolbar workspace-file-preview-toolbar">
+            <div className="workspace-preview-title-group">
+              <span className="workspace-preview-title" title={activeTab.path}>
+                {activeTab.name}
+              </span>
+              <span
+                className="workspace-preview-scope"
+                title={`${workspaceName || "当前工作区"} · ${sessionTitle || "当前会话"}`}
+              >
+                {context === "changes" ? "会话变更" : workspaceName || "当前工作区"} · {sessionTitle || "当前会话"}
+              </span>
             </div>
+            <div className="workspace-preview-toolbar-actions" aria-label="文件预览操作">
+              <span className="workspace-preview-meta">
+                {activeTab.language} · {formatFileSize(activeTab.size)}
+              </span>
+              {activeTab.language === "markdown" ? (
+                <div className="workspace-preview-mode-switch" role="group" aria-label="Markdown 查看方式">
+                  <button
+                    type="button"
+                    className={markdownSourceVisible ? "active" : ""}
+                    aria-pressed={markdownSourceVisible}
+                    onClick={() => onMarkdownSourceChange(true)}
+                  >
+                    源码
+                  </button>
+                  <button
+                    type="button"
+                    className={!markdownSourceVisible ? "active" : ""}
+                    aria-pressed={!markdownSourceVisible}
+                    onClick={() => onMarkdownSourceChange(false)}
+                  >
+                    预览
+                  </button>
+                </div>
+              ) : null}
+              {editingActiveFile ? (
+                <>
+                  {hasUnsavedEdit ? (
+                    <span className="workspace-preview-dirty-indicator">未保存</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={savingPath === activeTab.path}
+                    onClick={onCancelEdit}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="workspace-preview-save-button"
+                    disabled={!hasUnsavedEdit || savingPath === activeTab.path}
+                    onClick={() => void onSaveEdit()}
+                  >
+                    <span
+                      className={`codicon ${
+                        savingPath === activeTab.path
+                          ? "codicon-loading codicon-modifier-spin"
+                          : "codicon-save"
+                      }`}
+                      aria-hidden="true"
+                    />
+                    {savingPath === activeTab.path ? "保存中" : "保存"}
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        {activeTab?.previewType === "file" ? (
+          <>
             {markdownActiveFile && !markdownSourceVisible ? (
               <WorkspaceMarkdownPreview
                 apiPort={apiPort}
@@ -398,54 +305,19 @@ export default function WorkspaceFilePreviewArea({
             </div>}
           </>
         ) : activeTab?.previewType === "terminal" ? (
-          <>
-            <div className="workspace-preview-toolbar">
-              <span className="workspace-preview-title">终端 {activeTab.terminalId}</span>
-              <a
-                className="workspace-preview-meta workspace-preview-terminal-link"
-                href={activeTab.attachUrl}
-                target="_blank"
-                rel="noreferrer"
-                title="在新窗口打开终端"
-              >
-                新窗口
-              </a>
-            </div>
-            <iframe
-              className="workspace-preview-terminal-frame"
-              src={activeTab.attachUrl}
-              title={`终端 ${activeTab.terminalId}`}
-            />
-          </>
+          <iframe
+            className="workspace-preview-terminal-frame"
+            src={activeTab.attachUrl}
+            title={`终端 ${activeTab.terminalId}`}
+          />
         ) : activeTab?.previewType === "browser" ? (
-          <>
-            <div className="workspace-preview-toolbar">
-              <span className="workspace-preview-title">浏览器 {activeTab.browserId}</span>
-              <a
-                className="workspace-preview-meta workspace-preview-terminal-link"
-                href={activeTab.attachUrl}
-                target="_blank"
-                rel="noreferrer"
-                title="在新窗口打开浏览器"
-              >
-                新窗口
-              </a>
-            </div>
-            <iframe
-              className="workspace-preview-terminal-frame workspace-preview-browser-frame"
-              src={activeTab.attachUrl}
-              title={`浏览器 ${activeTab.browserId}`}
-            />
-          </>
+          <iframe
+            className="workspace-preview-terminal-frame workspace-preview-browser-frame"
+            src={activeTab.attachUrl}
+            title={`浏览器 ${activeTab.browserId}`}
+          />
         ) : activeTab?.previewType === "session-diff" ? (
-          <>
-            <div className="workspace-preview-toolbar">
-              <span className="workspace-preview-title">{activeTab.change.file_path}</span>
-              <span className="workspace-preview-meta">
-                {activeTab.changesetLabel} · {changeKindLabel(activeTab.change.kind)} · +{activeTab.change.additions} -{activeTab.change.deletions}
-              </span>
-            </div>
-            <div className="workspace-preview-diff-scroll">
+          <div className="workspace-preview-diff-scroll">
               <div
                 className="workspace-preview-code-table workspace-preview-diff-table"
                 style={{ "--preview-line-number-width": `${diffLineNumberWidth}ch` } as CSSProperties}
@@ -462,8 +334,7 @@ export default function WorkspaceFilePreviewArea({
                   </div>
                 ))}
               </div>
-            </div>
-          </>
+          </div>
         ) : (
           <div className="workspace-preview-empty">
             <span className="workspace-preview-empty-icon">▱</span>

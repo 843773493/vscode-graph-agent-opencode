@@ -22,6 +22,12 @@ body,
   backdrop-filter: var(--bt-workspace-backdrop-filter);
 }
 
+.workspace-editor-body > .auxiliary-panel,
+.workspace-editor-body > .workspace-preview-panel {
+  background: color-mix(in srgb, var(--bt-workspace-surface) 94%, var(--bt-panel-surface));
+  backdrop-filter: none;
+}
+
 .content.sessions-workbench-grid,
 .gateway-view-slot,
 [data-bt-surface="layout"],

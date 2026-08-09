@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import shutil
-import re
 import json
+import re
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -49,8 +49,8 @@ def _copy_workspace_config(source_workspace: Path, target_workspace: Path) -> No
     target_config.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_workspace / ".boxteam" / "workspace.jsonc", target_config)
     shutil.copy2(
-        source_workspace / ".boxteam" / "workspace_config.jsonc",
-        target_config.parent / "workspace_config.jsonc",
+        source_workspace / ".boxteam" / "workspace_schema.jsonc",
+        target_config.parent / "workspace_schema.jsonc",
     )
 
 

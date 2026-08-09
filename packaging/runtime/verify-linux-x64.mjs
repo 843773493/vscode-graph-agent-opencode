@@ -15,6 +15,7 @@ const projectRoot = path.resolve(
 );
 const outputRoot = path.join(projectRoot, "out", "packaging", "linux-x64");
 const tarballRoot = path.join(outputRoot, "tarballs");
+const releaseAssetRoot = path.join(outputRoot, "release-assets");
 const verificationRoot = path.join(outputRoot, "verification");
 const installRoot = path.join(verificationRoot, "installed");
 const relocatedRoot = path.join(verificationRoot, "relocated");
@@ -46,6 +47,18 @@ function requiredTarball(prefix) {
     .map((name) => path.join(tarballRoot, name));
   if (result.length !== 1) {
     throw new Error(`期望一个 ${prefix} tarball，实际: ${result.join(", ")}`);
+  }
+  return result[0];
+}
+
+function requiredReleaseAsset(prefix) {
+  const result = readdirSync(releaseAssetRoot)
+    .filter((name) => name.startsWith(prefix) && name.endsWith(".tgz"))
+    .map((name) => path.join(releaseAssetRoot, name));
+  if (result.length !== 1) {
+    throw new Error(
+      `期望一个 ${prefix} release asset，实际: ${result.join(", ")}`,
+    );
   }
   return result[0];
 }
@@ -86,7 +99,9 @@ async function requestJson(pathname, options = {}) {
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`${pathname} 返回 ${response.status}: ${text.slice(0, 500)}`);
+    throw new Error(
+      `${pathname} 返回 ${response.status}: ${text.slice(0, 500)}`,
+    );
   }
   return JSON.parse(text);
 }
@@ -120,7 +135,9 @@ async function verifyRunningProduct(child, readLauncherOutput) {
     { headers: { "Sec-Fetch-Site": "same-origin" } },
   );
   if (!credentialResponse.ok) {
-    throw new Error(`安装版 Gateway 本地凭据不可用: ${credentialResponse.status}`);
+    throw new Error(
+      `安装版 Gateway 本地凭据不可用: ${credentialResponse.status}`,
+    );
   }
   const credentialPayload = await credentialResponse.json();
   const localToken = credentialPayload.data?.token;
@@ -149,7 +166,9 @@ async function verifyRunningProduct(child, readLauncherOutput) {
     },
   );
   if (browserPayload.data?.status !== "running") {
-    throw new Error(`Browser Manager 未启动打包 Chromium: ${JSON.stringify(browserPayload)}`);
+    throw new Error(
+      `Browser Manager 未启动打包 Chromium: ${JSON.stringify(browserPayload)}`,
+    );
   }
 
   const restartPayload = await requestJson(
@@ -183,6 +202,9 @@ async function verifyRunningProduct(child, readLauncherOutput) {
 async function main() {
   const mainTarball = requiredTarball("boxteam-0.1.0");
   const runtimeTarball = requiredTarball("boxteam-runtime-linux-x64-0.1.0");
+  const releaseAssetPath = requiredReleaseAsset(
+    "boxteam-runtime-linux-x64-0.1.0",
+  );
   const nodeExecutable = run("node", ["--print", "process.execPath"], {
     capture: true,
   });
@@ -194,7 +216,6 @@ async function main() {
     "npm",
     [
       "install",
-      "--ignore-scripts",
       "--no-audit",
       "--no-fund",
       "--prefix",
@@ -202,6 +223,12 @@ async function main() {
       mainTarball,
       runtimeTarball,
     ],
+    {
+      env: {
+        ...process.env,
+        BOXTEAM_RUNTIME_ASSET_PATH: releaseAssetPath,
+      },
+    },
   );
   renameSync(installRoot, relocatedRoot);
 
@@ -254,9 +281,9 @@ async function main() {
 
   for (const name of [
     "gateway.jsonc",
-    "gateway_config.jsonc",
+    "gateway_schema.jsonc",
     "workspace.jsonc",
-    "workspace_config.jsonc",
+    "workspace_schema.jsonc",
   ]) {
     const configPath = path.join(boxteamHome, "config", name);
     if (!existsSync(configPath)) {
@@ -275,13 +302,25 @@ async function main() {
       "utf8",
     ),
   );
+  const installedRuntimeRoot = path.join(
+    relocatedRoot,
+    "node_modules",
+    "@boxteam",
+    "runtime-linux-x64",
+  );
   for (const resource of [
     manifest.python_executable,
     ...Object.values(manifest.config_resources),
+    manifest.skill_resources,
   ]) {
     if (path.isAbsolute(resource)) {
       throw new Error(`runtime manifest 不得记录构建机绝对路径: ${resource}`);
     }
+  }
+  if (!existsSync(path.resolve(installedRuntimeRoot, manifest.skill_resources))) {
+    throw new Error(
+      `安装包缺少共享 Skill 资源: ${manifest.skill_resources}`,
+    );
   }
   process.stdout.write(`relocation 验证通过: ${relocatedRoot}\n`);
 }

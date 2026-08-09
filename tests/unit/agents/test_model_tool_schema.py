@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
+import pytest
 from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from pydantic import ValidationError
 from pydantic.errors import PydanticInvalidForJsonSchema
-import pytest
 
 from app.agents.model_tool_schema import (
     export_model_tool_json_schema,
     get_model_tool_schema,
+    normalize_model_tool_arguments,
     validate_model_tool_arguments,
 )
 
@@ -36,6 +37,17 @@ def test_model_tool_schema_excludes_runtime_from_all_public_operations() -> None
     assert set(parameters["properties"]) == {"value", "count"}
     assert parameters["required"] == ["value", "count"]
     assert validated == {"value": "ready", "count": 2}
+
+    normalized = normalize_model_tool_arguments(
+        runtime_aware,
+        {
+            "value": "ready",
+            "count": 2,
+            "runtime": object(),
+        },
+    )
+
+    assert normalized == {"value": "ready", "count": 2}
 
 
 def test_model_tool_argument_validation_uses_public_schema() -> None:
@@ -69,7 +81,7 @@ def test_model_tool_schema_reports_tool_identity_when_public_schema_is_missing()
 def test_model_tool_schema_exports_dictionary_schema_for_protocol_tools() -> None:
     class _ToolWithDictionarySchema:
         name = "dictionary_schema"
-        tool_call_schema: dict[str, Any] = {"type": "object"}
+        tool_call_schema: ClassVar[dict[str, Any]] = {"type": "object"}
 
     assert export_model_tool_json_schema(
         _ToolWithDictionarySchema(),  # type: ignore[arg-type]

@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
 import commentjson
+import httpx
 import pytest
 
 from app.schemas.public_v2.session_context import (
@@ -24,8 +24,8 @@ from tests.e2e.gateway.gateway_docker import (
     ensure_gateway_ssh_container,
 )
 from tests.e2e.gateway.gateway_target import (
-    GatewayTargetE2EPaths,
     GatewaySshTarget,
+    GatewayTargetE2EPaths,
     build_remote_pair_command,
     install_gateway_ssh_assets_for_e2e,
     start_remote_gateway_via_ssh,
@@ -57,7 +57,6 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
     port_block = e2e_port_block_for_file(Path(request.node.fspath))
     local_workspace = Path(e2e_workspace_root_path).resolve()
     gateway_port = port_block.port(21)
-    ssh_port = port_block.port(22)
     remote_gateway_port = port_block.port(23)
     tunnel_port_range = (port_block.port(30), port_block.port(39))
     remote_workspace_path = docker_e2e_paths.remote_workspace
@@ -85,6 +84,10 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             username=docker_target.username,
             remote_gateway_port=remote_gateway_port,
             private_key_path=install_gateway_ssh_assets_for_e2e(local_workspace),
+            remote_pair_command=build_remote_pair_command(
+                docker_target,
+                remote_boxteam_home=remote_boxteam_home,
+            ),
         )
         gateway = start_gateway_process(
             workspace_root=local_workspace,
@@ -95,10 +98,6 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 "BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(
                     docker_target.known_hosts_path
                 ),
-                "BOXTEAM_REMOTE_PAIR_COMMAND": build_remote_pair_command(
-                    docker_target,
-                    remote_boxteam_home=remote_boxteam_home,
-                )
             },
         )
 
@@ -254,10 +253,6 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 "BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(
                     docker_target.known_hosts_path
                 ),
-                "BOXTEAM_REMOTE_PAIR_COMMAND": build_remote_pair_command(
-                    docker_target,
-                    remote_boxteam_home=remote_boxteam_home,
-                )
             },
         )
         async with httpx.AsyncClient(

@@ -12,6 +12,8 @@
     "dev:web": "bun run scripts/dev.mjs",
     "install:config": "uv run python -m configs.boxteam --project-root .",
     "package:linux-x64": "bun run packaging/runtime/package-linux-x64.mjs",
+    "package:windows-x64": "bun run packaging/runtime/package-windows-x64.mjs",
+    "package:windows-x64-cross": "bun run packaging/runtime/package-windows-x64-cross.mjs",
     "build:webview-ui": "bun --cwd=src/webview-ui run build",
     "gen:public-types": "bun run ./scripts/generate_public_types.mjs",
     "gen:openapi": "uv run python -m scripts.export_openapi_snapshot"

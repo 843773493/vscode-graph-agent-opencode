@@ -18,4 +18,5 @@
 
 - 与 LangGraph/DeepAgents 私有字段或私有方法交互时，应集中在适配器内，避免扩散到 business service。
 - 运行时配置应通过 `ConfigService` 或显式参数传入。
+- 产品级 Skill 源码统一位于 `resources/skills/`；Agent 通过 `/.boxteam/bundled-skills/` 的只读路由加载 Gateway 选中的组，工作区专用 Skill 仍从 `/.boxteam/skills` 加载。
 - 失败时抛出明确错误，不要返回虚假的默认值。

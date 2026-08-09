@@ -7,10 +7,15 @@ from unittest.mock import Mock
 import pytest
 from pydantic import ValidationError
 
+from app.gateway.config import ConfiguredRemoteGateway, GatewayConfig
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.schemas import AddSshWorkspaceRequest
 from app.gateway.ssh_command import build_ssh_command
-from app.gateway.ssh_config import list_user_ssh_hosts, resolve_user_ssh_host
+from app.gateway.ssh_config import (
+    UserSshHost,
+    list_user_ssh_hosts,
+    resolve_user_ssh_host,
+)
 from app.gateway.ssh_connections import resolve_ssh_connection_request
 
 
@@ -148,3 +153,47 @@ def test_add_ssh_request_accepts_selection_or_complete_manual_connection():
             private_key_path="~/.ssh/id_ed25519",
             remote_gateway_port=8014,
         )
+
+
+def test_ssh_config_selection_uses_pairing_command_from_gateway_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.gateway.ssh_connections.resolve_user_ssh_host",
+        lambda alias: UserSshHost(
+            alias=alias,
+            hostname="127.0.0.1",
+            port=22022,
+            username="Administrator",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.gateway.ssh_connections.load_gateway_config",
+        lambda: GatewayConfig(
+            workspaces=(
+                ConfiguredRemoteGateway(
+                    name="Windows Gateway",
+                    host="127.0.0.1",
+                    port=22022,
+                    username="Administrator",
+                    private_key_path="~/.ssh/a4500-windows-vm",
+                    ssh_config_host="a4500-windows-vm",
+                    remote_pair_command="python -m app.gateway.federation_pairing",
+                ),
+            )
+        ),
+    )
+
+    resolved = resolve_ssh_connection_request(
+        AddSshWorkspaceRequest(
+            ssh_config_host="a4500-windows-vm",
+            remote_gateway_port=8014,
+        ),
+        Mock(spec=GatewayWorkspaceRegistry),
+    )
+
+    assert resolved.ssh_config_host == "a4500-windows-vm"
+    assert resolved.host == "127.0.0.1"
+    assert resolved.port == 22022
+    assert resolved.username == "Administrator"
+    assert resolved.remote_pair_command == "python -m app.gateway.federation_pairing"

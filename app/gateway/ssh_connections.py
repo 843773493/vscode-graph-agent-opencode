@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.gateway.config import load_gateway_config
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.schemas import (
     AddSshWorkspaceRequest,
     SshConnectionOptionDTO,
 )
-from app.gateway.ssh_config import list_user_ssh_hosts, resolve_user_ssh_host
+from app.gateway.ssh_config import (
+    UserSshHost,
+    list_user_ssh_hosts,
+    resolve_user_ssh_host,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +23,22 @@ class ResolvedSshConnection:
     private_key_path: str | None
     ssh_config_host: str | None
     remote_gateway_port: int
+    remote_pair_command: str | None = None
+
+
+def _configured_pairing_command(host: UserSshHost) -> str | None:
+    """只从已安装的 Gateway 配置中读取目标专用配对命令。"""
+    for configured in load_gateway_config().workspaces:
+        if configured.ssh_config_host == host.alias:
+            return configured.remote_pair_command
+        if (
+            configured.ssh_config_host is None
+            and configured.host == host.hostname
+            and configured.port == host.port
+            and configured.username == host.username
+        ):
+            return configured.remote_pair_command
+    return None
 
 
 def list_ssh_connection_options(
@@ -92,6 +113,7 @@ def resolve_ssh_connection_request(
             private_key_path=connection.private_key_path,
             ssh_config_host=connection.ssh_config_host,
             remote_gateway_port=payload.remote_gateway_port,
+            remote_pair_command=connection.remote_pair_command,
         )
     if payload.ssh_config_host:
         host = resolve_user_ssh_host(payload.ssh_config_host)
@@ -102,6 +124,7 @@ def resolve_ssh_connection_request(
             private_key_path=None,
             ssh_config_host=host.alias,
             remote_gateway_port=payload.remote_gateway_port,
+            remote_pair_command=_configured_pairing_command(host),
         )
     if payload.host and payload.username and payload.private_key_path:
         return ResolvedSshConnection(

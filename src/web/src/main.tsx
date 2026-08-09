@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import AppErrorBoundary from './components/AppErrorBoundary';
 import { AppProvider } from './hooks';
 import WarmConfirmProvider from './components/WarmConfirmProvider';
 import '@vscode/codicons/dist/codicon.css';
@@ -19,6 +20,7 @@ import './styles/workbenchLayout.css';
 import './styles/toolControl.css';
 import './styles/chatMessages.css';
 import './styles/gatewayConsole.css';
+import './styles/workbenchPanel.css';
 import './styles/portForwardPanel.css';
 import './styles/themeSurfaces.css';
 
@@ -43,7 +45,9 @@ root.render(
   <React.StrictMode>
     <AppProvider>
       <WarmConfirmProvider>
-        <App />
+        <AppErrorBoundary>
+          <App />
+        </AppErrorBoundary>
       </WarmConfirmProvider>
     </AppProvider>
   </React.StrictMode>,

@@ -13,15 +13,20 @@ from app.core.path_utils import (
     get_session_path,
     get_user_config_root,
     get_user_gateway_config_path,
+    get_user_gateway_local_config_path,
     get_user_gateway_schema_path,
     get_user_workspace_config_path,
+    get_user_workspace_local_config_path,
     get_user_workspace_root,
     get_user_workspace_schema_path,
     initialize_directories,
     safe_join,
 )
 from app.core.session_paths import SessionPathResolver, physical_segment
-from app.core.storage_migration import migrate_user_storage_layout
+from app.core.storage_migration import (
+    migrate_legacy_trace_timestamps,
+    migrate_user_storage_layout,
+)
 
 
 class TestPathUtils:
@@ -272,14 +277,20 @@ class TestPathUtils:
         assert get_boxteam_home() == boxteam_home.resolve()
         assert get_user_config_root() == boxteam_home.resolve() / "config"
         assert get_user_gateway_config_path() == boxteam_home / "config/gateway.jsonc"
+        assert get_user_gateway_local_config_path() == (
+            boxteam_home / "config/gateway_local.jsonc"
+        )
         assert get_user_gateway_schema_path() == (
-            boxteam_home / "config/gateway_config.jsonc"
+            boxteam_home / "config/gateway_schema.jsonc"
         )
         assert get_user_workspace_config_path() == (
             boxteam_home / "config/workspace.jsonc"
         )
+        assert get_user_workspace_local_config_path() == (
+            boxteam_home / "config/workspace_local.jsonc"
+        )
         assert get_user_workspace_schema_path() == (
-            boxteam_home / "config/workspace_config.jsonc"
+            boxteam_home / "config/workspace_schema.jsonc"
         )
         assert get_gateway_root() == boxteam_home.resolve() / "state" / "gateway"
         assert get_user_workspace_root() == boxteam_home.resolve() / "boxteam_workspace"
@@ -354,6 +365,54 @@ class TestPathUtils:
             / "ses_orphaned"
             / "checkpoints.jsonl"
         ).is_file()
+
+    def test_migrate_legacy_trace_timestamps_keeps_backup(self, tmp_path):
+        boxteam_root = tmp_path / ".boxteam"
+        sessions_root = boxteam_root / "sessions"
+        trace_file = sessions_root / "session-1" / "logs" / "traces" / "events.jsonl"
+        trace_file.parent.mkdir(parents=True)
+        legacy_event = {
+            "event_id": "evt_legacy",
+            "job_id": "job_legacy",
+            "step_id": None,
+            "agent_id": "job_service",
+            "timestamp": "2026-06-29T02:07:35.569434",
+            "type": "job_created",
+            "payload": {
+                "session_id": "ses_legacy",
+                "message": "旧消息",
+                "agent_id": "default",
+            },
+        }
+        trace_file.write_text(
+            json.dumps(legacy_event, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        migrate_legacy_trace_timestamps(
+            boxteam_root=boxteam_root,
+            sessions_root=sessions_root,
+        )
+
+        migrated_event = json.loads(trace_file.read_text(encoding="utf-8"))
+        assert migrated_event["timestamp"] == "2026-06-29T02:07:35.569434+00:00"
+        backup_file = (
+            boxteam_root
+            / "migrations"
+            / "trace-timestamps-v1-backup"
+            / "session-1"
+            / "logs"
+            / "traces"
+            / "events.jsonl"
+        )
+        assert json.loads(backup_file.read_text(encoding="utf-8"))["timestamp"] == (
+            "2026-06-29T02:07:35.569434"
+        )
+        assert json.loads(
+            (boxteam_root / "migrations" / "trace-timestamps-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )["normalized_timestamps"] == 1
 
     def test_session_layout_migration_reuses_unlocked_advisory_lock(self, tmp_path):
         sessions_root = tmp_path / ".boxteam" / "sessions"

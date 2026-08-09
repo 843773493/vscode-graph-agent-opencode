@@ -15,7 +15,7 @@ from configs.layout_migrations import (
 
 def _legacy_user_config() -> dict[str, object]:
     workspace = commentjson.loads(
-        Path("configs/workspace.jsonc").read_text(encoding="utf-8")
+        Path("configs/workspace_inline.jsonc").read_text(encoding="utf-8")
     )
     assert isinstance(workspace, dict)
     workspace.pop("$schema")
@@ -34,7 +34,7 @@ def _legacy_user_config() -> dict[str, object]:
 
 
 def _schema_paths() -> tuple[Path, Path]:
-    return Path("configs/gateway_config.jsonc"), Path("configs/workspace_config.jsonc")
+    return Path("configs/gateway_schema.jsonc"), Path("configs/workspace_schema.jsonc")
 
 
 def test_migrate_legacy_user_configuration_splits_domains(tmp_path: Path) -> None:
@@ -125,5 +125,5 @@ def test_workspace_layout_migration_rejects_gateway_field(tmp_path: Path) -> Non
     with pytest.raises(ValueError, match="Gateway 配置只能迁移"):
         migrate_legacy_workspace_configuration(
             workspace_root=tmp_path,
-            workspace_schema_path=Path("configs/workspace_config.jsonc"),
+            workspace_schema_path=Path("configs/workspace_schema.jsonc"),
         )

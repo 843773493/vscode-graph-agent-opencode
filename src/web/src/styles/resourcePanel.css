@@ -266,7 +266,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 6px 6px 120px;
+  padding: 6px;
   background: var(--bt-panel-background);
 }
 
@@ -310,12 +310,7 @@
 }
 
 .resource-tree-group-row small {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--bt-text-muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 .resource-tree-group-attention > .resource-tree-group-row {
@@ -469,9 +464,22 @@
 }
 
 .resource-tree-detail > p {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin: 0 0 6px;
   font-size: 11px;
   line-height: 1.4;
+}
+
+.resource-tree-current-hint {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bt-status-success) 14%, transparent);
+  color: var(--bt-status-success);
+  font-size: 9px;
 }
 
 .resource-tree-lifecycle {
@@ -522,6 +530,24 @@
   padding: 5px 7px;
   color: var(--bt-text-muted);
   font-size: 10px;
+}
+
+.resource-details > button {
+  min-height: 24px;
+  margin: 7px;
+  padding: 0 7px;
+  border: 1px solid var(--bt-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--bt-text-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.resource-details > button:hover {
+  background: var(--bt-toolbar-hover-background);
+  color: var(--bt-text-primary);
 }
 
 .resource-detail-grid {

@@ -99,40 +99,17 @@ describe("后台连接目录", () => {
           sessionId="ses_resource_tree"
           workspaceId="workspace_test"
           activePreviewPath="browser://resource_01_full_identifier"
-          goal={{
-            goal_id: "goal_resource_panel",
-            session_id: "ses_resource_tree",
-            objective: "统一放到右侧管理",
-            status: "active",
-            token_budget: 1000,
-            tokens_used: 200,
-            time_used_seconds: 12,
-            created_at: "2026-07-26T00:00:00Z",
-            updated_at: "2026-07-26T00:01:00Z",
-          }}
-          goalLoading={false}
-          goalError={null}
           onRefresh={() => {}}
-          onRefreshGoal={async () => null}
-          onUpdateGoal={async () => {
-            throw new Error("静态渲染不调用 onUpdateGoal");
-          }}
-          onClearGoal={async () => {
-            throw new Error("静态渲染不调用 onClearGoal");
-          }}
           onControl={async () => {}}
           onOpenTerminalPreview={() => {}}
           onOpenBrowserPreview={() => {}}
           onCloseResourcePreview={async () => {}}
-          onShowConversation={() => {}}
           onCreateConnection={async () => {}}
         />
       </WarmConfirmProvider>,
     );
 
-    expect(html).toContain("当前 Goal");
-    expect(html).toContain("统一放到右侧管理");
-    expect(html).toContain("后台连接 <span class=\"resource-total-count\">20</span>");
+    expect(html).toContain("连接总数 <span class=\"resource-total-count\">20</span>");
     expect(html).toContain("后台可用");
     expect(html).toContain("已挂起 / 可恢复");
     expect(html).toContain("历史记录");

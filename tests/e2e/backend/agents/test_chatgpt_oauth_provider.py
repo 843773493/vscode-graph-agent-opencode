@@ -11,9 +11,9 @@ import httpx
 import pytest
 
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.trace import get_trace_payload
 from tests.support.paths import e2e_output_root_for_test
 from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.trace import get_trace_payload
 
 
 def _chatgpt_auth_sources() -> tuple[Path, Path]:
@@ -110,8 +110,8 @@ def e2e_backend_process(
         isolated_config_dir / "workspace.jsonc",
     )
     shutil.copy2(
-        workspace_config.parent / "workspace_config.jsonc",
-        isolated_config_dir / "workspace_config.jsonc",
+        workspace_config.parent / "workspace_schema.jsonc",
+        isolated_config_dir / "workspace_schema.jsonc",
     )
 
     if litellm_auth.is_file():

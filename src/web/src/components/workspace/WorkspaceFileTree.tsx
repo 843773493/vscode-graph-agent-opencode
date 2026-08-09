@@ -68,6 +68,7 @@ interface WorkspaceFileTreeProps {
   collapseVersion: number;
   expandedPaths: string[];
   onExpandedPathsChange: (paths: string[]) => void;
+  onCloseSearch: () => void;
   onOpenFile: (node: WorkspaceFileNode) => void;
   onStatusChange: (text: string) => void;
 }
@@ -256,6 +257,7 @@ export default function WorkspaceFileTree({
   collapseVersion,
   expandedPaths: restoredExpandedPaths,
   onExpandedPathsChange,
+  onCloseSearch,
   onOpenFile,
   onStatusChange,
 }: WorkspaceFileTreeProps) {
@@ -1206,6 +1208,47 @@ export default function WorkspaceFileTree({
     workspaceRoot,
   ]);
 
+  const searchStatus = useMemo(() => {
+    const query = searchQuery.trim();
+    if (!query) {
+      return null;
+    }
+    const loadedDirectories = Object.values(directories).filter(
+      (directory) => !directory.loading && !directory.error,
+    );
+    if (loadedDirectories.length === 0) {
+      return "正在筛选已加载文件...";
+    }
+    const normalizedQuery = query.toLowerCase();
+    let hasDirectMatch = false;
+    let hasUnloadedDirectory = false;
+    for (const directory of loadedDirectories) {
+      for (const node of directory.items) {
+        if (`${node.name}\n${node.path}`.toLowerCase().includes(normalizedQuery)) {
+          hasDirectMatch = true;
+          break;
+        }
+        if (node.kind === "directory" && !directories[node.path]) {
+          hasUnloadedDirectory = true;
+        }
+      }
+      if (hasDirectMatch) {
+        break;
+      }
+    }
+    if (hasDirectMatch) {
+      return `正在筛选：${query}`;
+    }
+    return hasUnloadedDirectory
+      ? `未找到已加载文件“${query}”（展开目录后可继续搜索）`
+      : `未找到“${query}”`;
+  }, [directories, searchQuery]);
+
+  const directoryLoading = Object.values(directories).some((directory) => directory.loading);
+  const fileTreeLoading = Boolean(
+    active && sessionId && (settings === null || directoryLoading),
+  );
+
   const renderFlatRow = (row: WorkspaceFileTreeRow) => {
     if (row.kind === "root") {
       return (
@@ -1320,7 +1363,24 @@ export default function WorkspaceFileTree({
             aria-label="筛选文件"
             autoFocus
             onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onCloseSearch();
+              }
+            }}
           />
+          {searchQuery ? (
+            <button
+              type="button"
+              className="files-tree-search-clear"
+              aria-label="清除文件搜索"
+              title="清除搜索"
+              onClick={() => setSearchQuery("")}
+            >
+              <span className="codicon codicon-close" aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
       ) : null}
       {actionError ? (
@@ -1336,7 +1396,21 @@ export default function WorkspaceFileTree({
           </button>
         </div>
       ) : null}
-      <div className="files-tree-root" role="tree" aria-label="工作区文件树">
+      {searchStatus ? (
+        <div className="files-tree-search-status" role="status">
+          <span>{searchStatus}</span>
+          {searchQuery ? (
+            <button type="button" onClick={() => setSearchQuery("")}>清除</button>
+          ) : null}
+        </div>
+      ) : null}
+      {fileTreeLoading ? (
+        <div className="files-tree-loading-status" role="status">
+          <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
+          <span>正在加载工作区文件…</span>
+        </div>
+      ) : null}
+      <div className="files-tree-root" role="tree" aria-label="工作区文件树" aria-busy={fileTreeLoading}>
         {visibleRows.length > FILE_TREE_VIRTUALIZATION_THRESHOLD ? (
           <Virtuoso
             className="files-tree-virtualized"

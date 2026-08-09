@@ -20,8 +20,10 @@ from app.agents.policy import (
     resolve_tool_policy,
     resolve_tool_selectors,
 )
+from app.core.config_sources import ConfigSource
 from app.core.path_utils import (
     get_user_workspace_config_path,
+    get_user_workspace_local_config_path,
     get_user_workspace_schema_path,
     get_workspace_config_path,
 )
@@ -33,8 +35,9 @@ from app.services.infrastructure.config import (
     ConfigSnapshotStore,
     build_config_snapshot,
 )
+from configs.installer import resolve_config_resource_source
 from configs.layout_migrations import migrate_legacy_workspace_configuration
-from configs.runtime import read_jsonc_object
+from configs.runtime import merge_json_objects, read_jsonc_object
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class ConfigService:
         config_dir: str | Path | None = None,
         config_path: str | Path | None = None,
         workspace_root: str | Path | None = None,
+        inline_config_path: str | Path | None = None,
     ) -> None:
         resolved_config_dir = (
             Path(config_dir).expanduser().resolve()
@@ -59,6 +63,11 @@ class ConfigService:
         self._config_dir = resolved_config_dir
         self._config_path = (
             Path(config_path).expanduser().resolve() if config_path else None
+        )
+        self._inline_config_path = (
+            Path(inline_config_path).expanduser().resolve()
+            if inline_config_path
+            else resolve_config_resource_source("workspace_inline.jsonc")
         )
         self._schema: dict[str, Any] | None = None
         self._workspace_root = (
@@ -87,7 +96,21 @@ class ConfigService:
                 referenced_path = (config_path.parent / schema_reference).resolve()
                 if referenced_path.is_file():
                     return referenced_path
-        configured_schema = self._config_dir / "workspace_config.jsonc"
+        if self._inline_config_path.is_file():
+            schema_reference = read_jsonc_object(
+                self._inline_config_path
+            ).get("$schema")
+            if (
+                isinstance(schema_reference, str)
+                and schema_reference
+                and "://" not in schema_reference
+            ):
+                referenced_path = (
+                    self._inline_config_path.parent / schema_reference
+                ).resolve()
+                if referenced_path.is_file():
+                    return referenced_path
+        configured_schema = self._config_dir / "workspace_schema.jsonc"
         if configured_schema.is_file():
             return configured_schema
         installed_schema = get_user_workspace_schema_path()
@@ -113,27 +136,70 @@ class ConfigService:
     ) -> tuple[
         dict[str, Any],
         tuple[Path, ...],
+        tuple[ConfigSource, ...],
     ]:
         config_path = self._get_workspace_config_path()
-        source_paths: list[Path] = []
-        if config_path.exists():
-            config = self._read_config_source(config_path)
+        source_paths: list[Path] = [self._inline_config_path]
+        source_details: list[ConfigSource] = [
+            ConfigSource(
+                path=self._inline_config_path,
+                layer="inline",
+                precedence=0,
+                loaded=True,
+            ),
+            ConfigSource(
+                path=config_path,
+                layer="user",
+                precedence=1,
+                loaded=config_path.is_file(),
+            )
+        ]
+        config = self._read_config_source(self._inline_config_path)
+        if config_path.is_file():
+            config = merge_json_objects(
+                config,
+                self._read_config_source(config_path),
+            )
             source_paths.append(config_path)
-        else:
-            config = {}
+
+        local_config_path = self._get_workspace_local_config_path()
+        source_details.append(
+            ConfigSource(
+                path=local_config_path,
+                layer="user_local",
+                precedence=2,
+                loaded=local_config_path.is_file(),
+            )
+        )
+        if local_config_path.is_file():
+            config = merge_json_objects(
+                config,
+                self._read_config_source(local_config_path),
+            )
+            source_paths.append(local_config_path)
+
         if self._workspace_root is not None:
             migrate_legacy_workspace_configuration(
                 workspace_root=self._workspace_root,
                 workspace_schema_path=self._resolve_schema_path(),
             )
-            config, workspace_path = self._apply_workspace_override(
+            config, workspace_override_path = self._apply_workspace_override(
                 config,
                 self._workspace_root,
             )
-            if workspace_path is not None:
-                source_paths.append(workspace_path)
+            workspace_path = get_workspace_config_path(self._workspace_root)
+            source_details.append(
+                ConfigSource(
+                    path=workspace_path,
+                    layer="workspace",
+                    precedence=3,
+                    loaded=workspace_path.is_file(),
+                )
+            )
+            if workspace_override_path is not None:
+                source_paths.append(workspace_override_path)
         self._validate_agent_tool_policies(config)
-        return config, tuple(source_paths)
+        return config, tuple(source_paths), tuple(source_details)
 
     @staticmethod
     def _read_config_source(
@@ -152,38 +218,33 @@ class ConfigService:
         Path | None,
     ]:
         override_path = get_workspace_config_path(workspace_root)
-        if override_path.exists():
+        if override_path.is_file():
             override_config = self._read_config_source(override_path)
             return (
-                self._merge_config(base_config, override_config),
+                merge_json_objects(base_config, override_config),
                 override_path,
             )
         return base_config, None
 
-    def _merge_config(self, base: dict, override: dict) -> dict:
-        result = base.copy()
-        for key, value in override.items():
-            if (
-                key in result
-                and isinstance(result[key], dict)
-                and isinstance(value, dict)
-            ):
-                result[key] = self._merge_config(result[key], value)
-            else:
-                result[key] = value
-        return result
+    def _get_workspace_local_config_path(self) -> Path:
+        if self._config_path is None:
+            return get_user_workspace_local_config_path()
+        return self._get_workspace_config_path().parent / "workspace_local.jsonc"
 
     def _build_candidate_snapshot(
         self,
         *,
         validate_schema: bool = True,
     ) -> ConfigSnapshot:
-        config, source_paths = self._read_effective_config()
+        config, source_paths, source_details = self._read_effective_config()
+        schema_path = self._resolve_schema_path()
         if validate_schema:
             jsonschema.validate(config, self._load_schema())
         snapshot = build_config_snapshot(
             config,
             source_paths=source_paths,
+            source_details=source_details,
+            schema_path=schema_path,
         )
         return snapshot
 
@@ -219,6 +280,109 @@ class ConfigService:
     def get_reload_status(self) -> ConfigReloadStatus:
         return self._snapshot_store.status()
 
+    def get_source_details(self) -> tuple[ConfigSource, ...]:
+        return self._require_snapshot().source_details
+
+    def get_schema_path(self) -> Path:
+        snapshot = self._require_snapshot()
+        return snapshot.schema_path or self._resolve_schema_path()
+
+    def get_runtime_override_keys(self) -> tuple[str, ...]:
+        return tuple(sorted(self._runtime_config_overrides))
+
+    def _read_runtime_value(self, path: tuple[str, ...]) -> object:
+        current: object = self._get_effective_config().get("runtime", {})
+        for key in path:
+            if not isinstance(current, dict):
+                raise ValueError(
+                    f"运行时配置路径不是对象: runtime.{'.'.join(path)}"
+                )
+            if key not in current:
+                raise ValueError(
+                    f"内置运行时配置缺少参数: runtime.{'.'.join(path)}"
+                )
+            current = current[key]
+        return current
+
+    def get_gateway_connection_url(self) -> str:
+        value = self._read_runtime_value(("gateway", "connection", "url"))
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("runtime.gateway.connection.url 必须是非空字符串")
+        return value
+
+    def get_gateway_connection_timeout_seconds(self) -> float:
+        value = self._read_runtime_value(
+            ("gateway", "connection", "timeout_seconds")
+        )
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(
+                "runtime.gateway.connection.timeout_seconds 必须是正数"
+            )
+        return float(value)
+
+    def get_terminal_backend_url(self) -> str:
+        value = self._read_runtime_value(
+            ("auxiliary_services", "terminal_backend", "url")
+        )
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                "runtime.auxiliary_services.terminal_backend.url 必须是非空字符串"
+            )
+        return value
+
+    def get_browser_backend_url(self) -> str:
+        value = self._read_runtime_value(
+            ("auxiliary_services", "browser_backend", "url")
+        )
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                "runtime.auxiliary_services.browser_backend.url 必须是非空字符串"
+            )
+        return value
+
+    def get_workspace_file_default_limit(self) -> int:
+        value = self._read_runtime_value(
+            ("workspace", "files", "list", "default_limit")
+        )
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 1
+            or value > 1000
+        ):
+            raise ValueError(
+                "runtime.workspace.files.list.default_limit 必须是 1-1000 的整数"
+            )
+        return value
+
+    def get_workspace_preview_max_bytes(self) -> int:
+        value = self._read_runtime_value(("workspace", "files", "preview", "max_bytes"))
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(
+                "runtime.workspace.files.preview.max_bytes 必须是正整数"
+            )
+        return value
+
+    def get_workspace_preview_binary_sample_bytes(self) -> int:
+        value = self._read_runtime_value(
+            ("workspace", "files", "preview", "binary_sample_bytes")
+        )
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(
+                "runtime.workspace.files.preview.binary_sample_bytes 必须是正整数"
+            )
+        return value
+
+    def get_trace_stream_heartbeat_interval_seconds(self) -> float:
+        value = self._read_runtime_value(
+            ("events", "trace_stream", "heartbeat_interval_seconds")
+        )
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(
+                "runtime.events.trace_stream.heartbeat_interval_seconds 必须是正数"
+            )
+        return float(value)
+
     def config_from_snapshot(self, snapshot: ConfigSnapshot) -> dict[str, Any]:
         return snapshot.to_dict()
 
@@ -252,7 +416,10 @@ class ConfigService:
             raise RuntimeError("配置文件监听器不允许重复启动")
         self._require_snapshot()
         directories = {self._get_workspace_config_path().parent}
-        candidate_paths = {self._get_workspace_config_path()}
+        candidate_paths = {
+            self._get_workspace_config_path(),
+            self._get_workspace_local_config_path(),
+        }
         if self._workspace_root is not None:
             workspace_config_dir = self._workspace_root / ".boxteam"
             directories.add(workspace_config_dir)
@@ -332,6 +499,15 @@ class ConfigService:
                 "runtime_overrides": sorted(self._runtime_config_overrides.keys()),
                 "revision": snapshot.revision,
                 "source_paths": [str(path) for path in snapshot.source_paths],
+                "source_details": [
+                    {
+                        "path": str(source.path),
+                        "layer": source.layer,
+                        "precedence": source.precedence,
+                        "loaded": source.loaded,
+                    }
+                    for source in snapshot.source_details
+                ],
                 "reload": {
                     "healthy": reload_status.healthy,
                     "restart_required": reload_status.restart_required,

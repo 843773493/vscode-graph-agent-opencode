@@ -7,6 +7,8 @@ from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.config import (
     ConfigDTO,
     ConfigReloadStatusDTO,
+    ConfigSourceDTO,
+    ConfigSourcesDTO,
     ConfigUpdateRequest,
 )
 from app.services.infrastructure.config_service import ConfigService
@@ -50,6 +52,35 @@ async def get_config_reload_status(
 ):
     return APIResponse(
         data=_reload_status_dto(config_service),
+        request_id=request_id,
+    )
+
+
+@router.get(
+    "/sources",
+    response_model=APIResponse[ConfigSourcesDTO],
+    summary="获取配置来源",
+)
+async def get_config_sources(
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    config_service: ConfigService = Depends(get_config_service),
+):
+    return APIResponse(
+        data=ConfigSourcesDTO(
+            revision=config_service.get_revision(),
+            schema_path=str(config_service.get_schema_path()),
+            sources=[
+                ConfigSourceDTO(
+                    path=str(source.path),
+                    layer=source.layer,
+                    precedence=source.precedence,
+                    loaded=source.loaded,
+                )
+                for source in config_service.get_source_details()
+            ],
+            runtime_overrides=list(config_service.get_runtime_override_keys()),
+        ),
         request_id=request_id,
     )
 

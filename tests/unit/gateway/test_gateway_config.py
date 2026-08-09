@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.gateway.config import load_gateway_config, resolve_gateway_path
+from app.gateway.main import gateway_config_sources
 
 
 def _write_gateway_config(
@@ -14,18 +15,18 @@ def _write_gateway_config(
 ) -> tuple[Path, Path]:
     config_root.mkdir(parents=True, exist_ok=True)
     config_path = config_root / "gateway.jsonc"
-    schema_path = config_root / "gateway_config.jsonc"
+    schema_path = config_root / "gateway_schema.jsonc"
     config_path.write_text(
         json.dumps(
             {
-                "$schema": "./gateway_config.jsonc",
+                "$schema": "./gateway_schema.jsonc",
                 "config_version": 1,
                 "workspaces": workspaces,
             }
         ),
         encoding="utf-8",
     )
-    schema_path.write_bytes(Path("configs/gateway_config.jsonc").read_bytes())
+    schema_path.write_bytes(Path("configs/gateway_schema.jsonc").read_bytes())
     return config_path, schema_path
 
 
@@ -38,6 +39,8 @@ def test_load_gateway_config_accepts_remote_gateway(tmp_path: Path) -> None:
                 "host": "remote.example.com",
                 "username": "developer",
                 "private_key_path": "keys/id_ed25519",
+                "ssh_config_host": "developer-server",
+                "remote_pair_command": "boxteam gateway issue-federation-token",
                 "remote_gateway_port": 9014,
             }
         ],
@@ -48,8 +51,15 @@ def test_load_gateway_config_accepts_remote_gateway(tmp_path: Path) -> None:
     assert len(result.workspaces) == 1
     workspace = result.workspaces[0]
     assert workspace.port == 22
+    assert workspace.ssh_config_host == "developer-server"
+    assert workspace.remote_pair_command == "boxteam gateway issue-federation-token"
     assert workspace.remote_gateway_port == 9014
     assert workspace.activate is False
+    assert result.default_workspace_skill_groups == (
+        "browser-control",
+        "gateway-context",
+        "web-search-fetch",
+    )
 
 
 @pytest.mark.parametrize(
@@ -102,6 +112,69 @@ def test_load_gateway_config_skips_disabled_workspace(tmp_path: Path) -> None:
         ).workspaces
         == ()
     )
+
+
+def test_load_gateway_config_merges_local_override_and_records_sources(
+    tmp_path: Path,
+) -> None:
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    local_config_path = tmp_path / "gateway_local.jsonc"
+    local_config_path.write_text(
+        json.dumps(
+            {
+                "ui": {"theme": {"default_theme_id": "green"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_gateway_config(
+        config_path=config_path,
+        schema_path=schema_path,
+    )
+
+    assert result.default_theme_id == "green"
+    assert result.source_paths == (
+        Path("configs/gateway_inline.jsonc").resolve(),
+        config_path,
+        local_config_path,
+    )
+    assert [source.layer for source in result.source_details] == [
+        "inline",
+        "user",
+        "user_local",
+    ]
+    assert result.source_details[-1].loaded is True
+
+
+@pytest.mark.asyncio
+async def test_gateway_config_sources_endpoint_exposes_effective_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    local_config_path = tmp_path / "gateway_local.jsonc"
+    local_config_path.write_text(
+        json.dumps({"ui": {"theme": {"default_theme_id": "blue"}}}),
+        encoding="utf-8",
+    )
+    config = load_gateway_config(config_path=config_path, schema_path=schema_path)
+    monkeypatch.setattr("app.gateway.main.load_gateway_config", lambda: config)
+
+    response = await gateway_config_sources(
+        _="gateway-token",
+        request_id="req-gateway-config-sources",
+    )
+
+    assert response.request_id == "req-gateway-config-sources"
+    assert response.data is not None
+    assert response.data.schema_path == str(schema_path)
+    assert [source.layer for source in response.data.sources] == [
+        "inline",
+        "user",
+        "user_local",
+    ]
+    assert response.data.sources[1].loaded is True
 
 
 def test_gateway_loader_does_not_read_workspace_configuration(tmp_path: Path) -> None:

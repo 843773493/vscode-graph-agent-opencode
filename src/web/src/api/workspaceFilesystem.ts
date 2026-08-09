@@ -11,6 +11,7 @@ import type {
   WorkspaceFileUpdateRequest,
 } from "../types/backend";
 import {
+  DEFAULT_API_REQUEST_TIMEOUT_MS,
   getApiBaseUrl,
   getGatewayToken,
   requestJson,
@@ -74,7 +75,11 @@ export async function getWorkspaceFiles(
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
     port,
     `/api/v1/workspace/files${suffix ? `?${suffix}` : ""}`,
-    { headers: workspaceHeader(workspaceId), signal },
+    {
+      headers: workspaceHeader(workspaceId),
+      signal,
+      timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
+    },
   ));
   return encodeWorkspaceFileList(result, location.scope);
 }

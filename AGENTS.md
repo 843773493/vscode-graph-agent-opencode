@@ -130,6 +130,11 @@
 6. Agent 临时任务结束时必须列出本次生成的产物；纯临时产物应主动删除，用户需要查看的临时产物可以保留在对应的 `out/tests/temp/<task_name>/`。仓库正式测试脚本的输出默认保留，以便复查，不得按 Agent 临时产物规则自动删除。
 7. 测试生成的二进制文件默认不得加入 Git。只有用户明确要求将其作为长期测试基线或产品资源时，才允许提交，并应放入语义明确的专用目录而不是 `out/tests/` 运行输出目录。
 
+### 参考仓库
+
+1. `reference_repo/` 下的仓库仅用于代码检索和方案对照，根项目 Git 不得跟踪其中任何文件。
+2. 不得运行 `reference_repo/` 下的测试；根目录 `bunfig.toml` 已将其从 Bun 测试发现范围排除。
+
 ### 运行时说明
 
 1. 在 JS/TS 环境中使用 `bun`；使用 `bun install` 安装依赖，使用 `bun run dev` 启动本地开发环境。
@@ -144,8 +149,8 @@
 
 1. 对所有 JS/TS 相关工具使用 `bun`。
 2. 对所有 Python 相关工具使用 `uv`。
-3. Gateway 配置位于 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc`；Workspace 用户配置位于同目录 `workspace.jsonc`，两者 schema 与配置文件同目录；使用 `python -m configs.boxteam` 安装或迁移配置。
-4. 工作区级配置位于 `${workspace_abs_path}/.boxteam/workspace.jsonc`，其有效配置覆盖用户级 `workspace.jsonc` 中的同名项；Gateway 不得读取该文件。
+3. Gateway 内置默认配置位于发行包 `configs/gateway_inline.jsonc`，用户覆盖位于 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc`；Workspace 内置默认配置位于发行包 `configs/workspace_inline.jsonc`，用户覆盖位于同目录 `workspace.jsonc`；两者 schema 与配置文件同目录；使用 `python -m configs.boxteam` 安装或迁移配置。
+4. 工作区级配置位于 `${workspace_abs_path}/.boxteam/workspace.jsonc`，其有效配置覆盖 `workspace_inline.jsonc`、用户级 `workspace.jsonc` 和 `workspace_local.jsonc` 中的同名项；Gateway 不得读取该文件。
 5. 工作区后端初始化只能创建当前显式工作区的 `.boxteam/` 数据目录，不得顺带创建用户默认工作区或修改 Gateway 全局状态。
 
 ## 代理协作

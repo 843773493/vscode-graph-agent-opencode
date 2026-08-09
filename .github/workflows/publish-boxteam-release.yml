@@ -1,0 +1,140 @@
+name: publish-boxteam-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 Git tag，例如 v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: bun install --frozen-lockfile
+      - run: uv sync --locked
+      - run: bun run package:linux-x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boxteam-linux-x64-release
+          path: |
+            out/packaging/linux-x64/tarballs/*.tgz
+            out/packaging/linux-x64/release-assets/*.tgz
+            out/packaging/linux-x64/build-result.json
+            out/packaging/linux-x64/size-report.json
+          if-no-files-found: error
+          compression-level: 0
+
+  package-windows:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: bun install --frozen-lockfile
+      - run: uv sync --locked
+      - run: bun run package:windows-x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boxteam-windows-x64-release
+          path: |
+            out/packaging/windows-x64/tarballs/*.tgz
+            out/packaging/windows-x64/release-assets/*.tgz
+            out/packaging/windows-x64/standalone/*.zip
+            out/packaging/windows-x64/build-result.json
+            out/packaging/windows-x64/size-report.json
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: [package-linux, package-windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: boxteam-linux-x64-release
+          path: artifacts/linux-x64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: boxteam-windows-x64-release
+          path: artifacts/windows-x64
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: 检查版本与 Release 资产
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          test "${RELEASE_TAG#v}" = "$(node --input-type=module -e "import('./packaging/runtime/versions.mjs').then(({BOXTEAM_VERSION}) => process.stdout.write(BOXTEAM_VERSION))")"
+          test "$(find artifacts/linux-x64/release-assets -maxdepth 1 -name '*.tgz' | wc -l)" = 1
+          test "$(find artifacts/windows-x64/release-assets -maxdepth 1 -name '*.tgz' | wc -l)" = 1
+          test "$(find artifacts/windows-x64/standalone -maxdepth 1 -name '*.zip' | wc -l)" = 1
+          test "$(find artifacts/linux-x64/tarballs -maxdepth 1 -name '*.tgz' | wc -l)" = 2
+          test "$(find artifacts/windows-x64/tarballs -maxdepth 1 -name '*.tgz' | wc -l)" = 2
+
+      - name: 创建或更新 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --title "BoxTeam $RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" \
+            artifacts/linux-x64/release-assets/*.tgz \
+            artifacts/windows-x64/release-assets/*.tgz \
+            artifacts/windows-x64/standalone/*.zip \
+            --clobber
+
+      - name: 发布 npm 下载器包
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${NODE_AUTH_TOKEN}"
+          npm publish artifacts/linux-x64/tarballs/boxteam-runtime-linux-x64-*.tgz --access public
+          npm publish artifacts/windows-x64/tarballs/boxteam-runtime-windows-x64-*.tgz --access public
+          npm publish artifacts/linux-x64/tarballs/boxteam-[0-9]*.tgz --access public

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
 from app.abstractions.session_changes import (
@@ -14,7 +15,9 @@ from app.abstractions.session_changes import (
     SessionChangesRecorderProtocol,
     StoredFileEdit,
 )
+from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
+from app.agents.model_tool_schema import normalize_model_tool_arguments
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
 from app.agents.tools.apply_patch import (
     APPLY_PATCH_TOOL_NAME,
@@ -362,6 +365,10 @@ async def process_agent_event_stream(
     tracked_model_run_order: list[str] = []
     model_usage_by_run_id: dict[str, ModelTokenUsagePayload] = {}
     tool_output_store = ToolOutputStore(workspace_root=workspace_root)
+    agent_has_tool_registry = callable(getattr(agent, "get_graph", None))
+    model_tools_by_name = (
+        extract_agent_tools_by_name(agent) if agent_has_tool_registry else {}
+    )
     stream_config = _build_isolated_stream_config(
         config,
         session_id=session_id,
@@ -596,6 +603,23 @@ async def process_agent_event_stream(
                 raise RuntimeError("工具开始事件缺少 name")
             raw_tool_name = name
             raw_tool_args = normalize_tool_args(data.get("input"))
+            if agent_has_tool_registry:
+                model_tool = model_tools_by_name.get(raw_tool_name)
+                if model_tool is None:
+                    raise RuntimeError(
+                        "工具开始事件中的工具不在 Agent 工具注册表中: "
+                        f"tool_name={raw_tool_name}"
+                    )
+                if not isinstance(model_tool, BaseTool):
+                    raise TypeError(
+                        "Agent 工具注册表包含无效工具对象: "
+                        f"tool_name={raw_tool_name} "
+                        f"actual_type={type(model_tool).__name__}"
+                    )
+                raw_tool_args = normalize_model_tool_arguments(
+                    model_tool,
+                    raw_tool_args,
+                )
             display_context = _build_tool_display_context(
                 raw_tool_name=raw_tool_name,
                 raw_tool_args=raw_tool_args,

@@ -15,5 +15,6 @@
 
 - JavaScript 始终使用 ESM。
 - 所有安装资源通过显式 runtime manifest 解析。
-- npm 版本使用 Launcher Node；未来 bundled Node 只保留明确扩展点。
+- `runtime-manifest.json` 的 `skill_resources` 指向发行包内 `application/resources/skills`；Launcher 只校验并传递资源根目录，不实现 Skill 或 Agent 逻辑。
+- npm 版本使用 Launcher Node；Windows 便携版使用 runtime manifest 声明的 bundled Node。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

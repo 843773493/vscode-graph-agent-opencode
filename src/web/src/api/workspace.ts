@@ -1,5 +1,10 @@
 import type { Agent, APIResponse, WorkspaceInfo } from "../types/backend";
-import { requestJson, unwrapApiData, workspaceHeader } from "./http";
+import {
+  DEFAULT_API_REQUEST_TIMEOUT_MS,
+  requestJson,
+  unwrapApiData,
+  workspaceHeader,
+} from "./http";
 
 export async function getWorkspace(
   port: number,
@@ -9,7 +14,12 @@ export async function getWorkspace(
     await requestJson<APIResponse<WorkspaceInfo>>(
       port,
       "/api/v1/workspace",
-      workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
+      workspaceId
+        ? {
+            headers: workspaceHeader(workspaceId),
+            timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
+          }
+        : { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -22,7 +32,12 @@ export async function listAgents(
     await requestJson<APIResponse<Agent[]>>(
       port,
       "/api/v1/agents",
-      workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
+      workspaceId
+        ? {
+            headers: workspaceHeader(workspaceId),
+            timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
+          }
+        : { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
     ),
   );
 }

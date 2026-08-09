@@ -7,8 +7,8 @@ import type {
 import { formatDateTime } from "../utils/format";
 import {
   actionLabel,
+  kindLabel,
   metadataRows,
-  resourceStateSummary,
   resourceTreeDescription,
   resourceTreeStatus,
   resourceTreeTitle,
@@ -28,7 +28,6 @@ export default function ResourceTreeRow({
   onCopy,
   onOpenTerminal,
   onOpenBrowser,
-  onShowConversation,
   onReplaceBrowser,
 }: {
   resource: SessionResource;
@@ -42,7 +41,6 @@ export default function ResourceTreeRow({
   onCopy: (resourceId: string) => void;
   onOpenTerminal: (resourceId: string) => void;
   onOpenBrowser: (resourceId: string) => void;
-  onShowConversation: (jobId?: string) => void;
   onReplaceBrowser: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -51,7 +49,6 @@ export default function ResourceTreeRow({
     (resource.kind === "terminal" || resource.kind === "browser");
   const title = resourceTreeTitle(resource);
   const description = resourceTreeDescription(resource);
-  const stateSummary = resourceStateSummary(resource);
 
   const handleOpen = () => {
     if (resource.kind === "terminal" && canOpen) {
@@ -64,13 +61,6 @@ export default function ResourceTreeRow({
     }
     if (resource.kind === "browser" && resource.available_actions.includes("resume")) {
       onControl(resource.kind, resource.resource_id, "resume");
-      return;
-    }
-    if (resource.kind === "background_task") {
-      const jobId = typeof resource.metadata.job_id === "string"
-        ? resource.metadata.job_id
-        : undefined;
-      onShowConversation(jobId);
       return;
     }
     setExpanded((open) => !open);
@@ -119,19 +109,19 @@ export default function ResourceTreeRow({
 
       {expanded ? (
         <div className="resource-tree-detail">
-          {stateSummary ? <p>{stateSummary}</p> : null}
-          <div className="resource-tree-lifecycle">
-            <span>创建 {formatDateTime(resource.created_at) || "未知"}</span>
-            {resource.ended_at ? <span>结束 {formatDateTime(resource.ended_at)}</span> : null}
-            <span title={resource.resource_id}>ID {resource.resource_id}</span>
-          </div>
-          <div className="resource-tree-actions">
-            <button type="button" onClick={() => onCopy(resource.resource_id)}>
-              复制 ID
-            </button>
+          <p>
+            <span>{kindLabel(resource.kind)} · {resourceTreeStatus(resource)}</span>
+            {selected ? <span className="resource-tree-current-hint">当前预览</span> : null}
+          </p>
+          <div className="resource-tree-actions" aria-label={`${title}操作`}>
             {canOpen ? (
-              <button type="button" className="resource-action-open" onClick={handleOpen}>
-                {resource.kind === "terminal" ? "打开终端" : "打开浏览器"}
+              <button
+                type="button"
+                className="resource-action-open"
+                disabled={busy}
+                onClick={handleOpen}
+              >
+                {resource.kind === "terminal" ? "打开终端" : "打开浏览器预览"}
               </button>
             ) : null}
             {resource.available_actions.map((action) => (
@@ -154,7 +144,15 @@ export default function ResourceTreeRow({
           </div>
           {rows.length > 0 ? (
             <details className="resource-details">
-              <summary>技术详情</summary>
+              <summary>高级信息</summary>
+              <div className="resource-tree-lifecycle">
+                <span>创建 {formatDateTime(resource.created_at) || "未知"}</span>
+                {resource.ended_at ? <span>结束 {formatDateTime(resource.ended_at)}</span> : null}
+                <span title={resource.resource_id}>ID {resource.resource_id}</span>
+              </div>
+              <button type="button" onClick={() => onCopy(resource.resource_id)}>
+                复制 ID
+              </button>
               <dl className="resource-detail-grid">
                 {rows.map(([key, value]) => (
                   <div key={key} className="resource-detail-row">

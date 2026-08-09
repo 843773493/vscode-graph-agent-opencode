@@ -14,7 +14,7 @@ async def test_generated_agents_display_same_effective_tools_as_policy(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "workspace.jsonc"
-    config_path.write_bytes(Path("configs/workspace.jsonc").read_bytes())
+    config_path.write_bytes(Path("configs/workspace_inline.jsonc").read_bytes())
     config_service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,

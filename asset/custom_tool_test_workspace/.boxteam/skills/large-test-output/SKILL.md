@@ -6,12 +6,15 @@ allowed-tools: large_test_output
 
 # 大工具输出测试
 
-必须通过固定入口 `invoke_custom_tool` 发起真实调用：
+必须通过固定入口 `invoke_custom_tool` 发起真实调用。目标工具参数描述如下：
 
 ```json
 {
   "tool_name": "large_test_output",
-  "arguments": {}
+  "arguments_schema": {
+    "type": "object",
+    "properties": {}
+  }
 }
 ```
 

@@ -59,7 +59,7 @@ def e2e_workspace_config_path(
     target_path = install_e2e_workspace_config(
         workspace_root=Path(e2e_workspace_root_path),
         config_path=Path(e2e_config_path),
-        schema_path=Path.cwd().resolve() / "configs" / "workspace_config.jsonc",
+        schema_path=Path.cwd().resolve() / "configs" / "workspace_schema.jsonc",
     )
     return str(target_path)
 

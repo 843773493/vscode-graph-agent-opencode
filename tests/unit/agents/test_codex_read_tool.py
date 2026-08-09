@@ -37,6 +37,14 @@ def test_read_file_exposes_codex_style_schema(configured_read_tool):
     assert "limit" not in schema["properties"]
 
 
+def test_read_file_marks_runtime_as_injected_for_langchain_callbacks(
+    configured_read_tool,
+):
+    _workspace_root, tool = configured_read_tool
+
+    assert tool._injected_args_keys == {"runtime"}
+
+
 @pytest.mark.asyncio
 async def test_read_file_accepts_absolute_host_path_and_one_indexed_lines(
     configured_read_tool,

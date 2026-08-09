@@ -1,0 +1,379 @@
+{
+  "$schema": "./workspace_schema.jsonc", // ConfigService._resolve_schema_path 读取 schema 引用。
+  "config_version": 1, // configs.legacy_migrations 与 workspace_schema 校验配置版本。
+  "llm": {
+    "providers": [
+      {
+        "id": "primary", // agent.model.primary_provider 引用该稳定 Provider ID。
+        "endpoint": "https://opencode.ai/zen/v1", // LiteLLM Provider 请求端点。
+        "model": "big-pickle", // AgentFactory 创建模型时使用。
+        "custom_llm_provider": "openai", // LiteLLM Provider 适配器类型。
+        "api_mode": "chat_completions", // AgentFactory 选择 Chat Completions 协议。
+        "api_key": "${OPENCODE_ZEN_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
+        "capabilities": [
+          "reasoning_content_replay" // provider_capabilities 路由与请求适配使用。
+        ], // Provider 能力声明由请求适配器读取。
+        "request_options": {
+          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
+          "default_headers": {} // Provider 默认请求头默认为空。
+        }
+      },
+      {
+        "id": "backup_1", // Agent fallback_providers 引用该 Provider ID。
+        "endpoint": "https://api.kilo.ai/api/gateway", // LiteLLM Provider 请求端点。
+        "model": "openrouter/free", // AgentFactory 创建模型时使用。
+        "custom_llm_provider": "openai", // LiteLLM Provider 适配器类型。
+        "api_mode": "chat_completions", // AgentFactory 选择 Chat Completions 协议。
+        "api_key": "${KILO_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
+        "capabilities": [], // Provider 能力声明默认为空；请求适配器按显式能力工作。
+        "request_options": {
+          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
+          "default_headers": {} // Provider 默认请求头默认为空。
+        }
+      },
+      {
+        "id": "backup_2", // Agent fallback_providers 与 fetch_webpage embedding 引用该 Provider ID。
+        "endpoint": "https://openrouter.ai/api/v1", // LiteLLM Provider 请求端点。
+        "model": "openrouter/free", // AgentFactory 创建模型时使用。
+        "custom_llm_provider": "openrouter", // LiteLLM Provider 适配器类型。
+        "api_mode": "chat_completions", // AgentFactory 选择 Chat Completions 协议。
+        "api_key": "${OPENROUTER_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
+        "capabilities": [], // Provider 能力声明默认为空；请求适配器按显式能力工作。
+        "request_options": {
+          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
+          "default_headers": {} // Provider 默认请求头默认为空。
+        }
+      },
+      {
+        "id": "backup_3", // Agent fallback_providers 引用该 Provider ID。
+        "endpoint": "https://www.cctq.ai/v1", // LiteLLM Provider 请求端点。
+        "model": "gpt-5.6-luna", // AgentFactory 创建模型时使用。
+        "custom_llm_provider": "openai", // LiteLLM Provider 适配器类型。
+        "api_mode": "responses", // AgentFactory 选择 Responses API 协议。
+        "api_key": "${CCTQ_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
+        "capabilities": [
+          "image_input" // provider_capabilities 路由图片输入能力。
+        ], // Provider 能力声明由请求适配器读取。
+        "request_options": {
+          "overrides": {
+            "reasoning": {
+              "effort": "high", // Provider request_options 传给 LiteLLM。
+              "summary": "auto" // Provider request_options 传给 LiteLLM。
+            }
+          },
+          "default_headers": {} // Provider 默认请求头默认为空。
+        }
+      },
+      {
+        "id": "backup_4", // Agent fallback_providers 引用该 Provider ID。
+        "endpoint": "https://chatgpt.com/backend-api/codex", // ChatGPT OAuth 请求端点。
+        "model": "gpt-5.6-luna", // AgentFactory 创建模型时使用。
+        "custom_llm_provider": "chatgpt", // ChatGPT OAuth Provider 适配器类型。
+        "api_mode": "responses", // ChatGPT OAuth 使用 Responses API 协议。
+        "auth": {
+          "type": "oauth", // ChatGPT OAuth 认证类型。
+          "method": "chatgpt" // ChatGPT OAuth 认证方法。
+        },
+        "capabilities": [
+          "image_input" // provider_capabilities 路由图片输入能力。
+        ], // Provider 能力声明由请求适配器读取。
+        "request_options": {
+          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
+          "default_headers": {} // Provider 默认请求头默认为空。
+        }
+      }
+    ]
+  },
+  "logger": {
+    "level": "info", // ConfigService.get_logger_level 与 configure_application_logging 使用。
+    "pretty": true // ConfigService.get_logger_pretty 使用。
+  },
+  "default_agent": "default", // ConfigService.get_default_agent_id 选择默认 Agent。
+  "agents": {
+    "default": {
+      "name": "Workspace Assistant", // AgentService 展示名称。
+      "description": "工作区默认助手，负责通用问答、代码解释、开发辅助和文档问答。", // AgentService 展示描述。
+      "language": "zh-CN", // Agent prompt language 约定。
+      "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
+      "tags": [], // AgentService 展示能力标签默认为空。
+      "persona": {
+        "role": "工程团队工作区助手", // 当前未接入独立 persona middleware。
+        "tone": "professional", // 当前未接入独立 persona middleware。
+        "identity": "", // 当前未接入独立 persona middleware。
+        "verbosity": "medium" // 当前未接入独立 persona middleware。
+      },
+      "instructions": {
+        "system_prompt": "你是面向工程团队的工作区助手。优先提供准确、可执行、可验证的回答；信息不足时明确指出缺失信息。" // Agent middleware 构造系统提示词。
+      },
+      "model": {
+        "primary_provider": "primary", // AgentFactory 主模型 Provider。
+        // temperature、top_p、max_output_tokens 按项目约定省略，交给上游模型默认值。
+        "fallback_providers": [
+          "backup_1",
+          "backup_2",
+          "backup_3",
+          "backup_4"
+        ] // AgentFactory 按顺序尝试 fallback Provider。
+      },
+      "tools": {
+        "enabled": false, // Agent tool policy 总开关；当前工具集由配置项存在性控制。
+        "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
+        "timeout_ms": 10000, // Agent tools 默认调用超时。
+        "allowlist": [], // Tool policy 恢复工具集合。
+        "denylist": [], // Tool policy 禁用工具集合。
+        "confirmation_required": [], // Tool policy 需要确认的工具集合。
+        "custom": [
+          {
+            "tool_id": "read_context" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "search_context" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "web_search" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "fetch_webpage", // builtin_tool_registry 稳定工具 ID。
+            "options": {
+              "embedding": {
+                "provider_id": "backup_2", // fetch_webpage embedding Provider。
+                "model": "openai/text-embedding-3-small" // fetch_webpage embedding 模型。
+              }
+            }
+          },
+          {
+            "tool_id": "listBrowserPage" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "openBrowserPage" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "readPage" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "navigatePage" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "clickElement" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "typeInPage" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "hoverElement" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "dragElement" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "handleDialog" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "screenshotPage" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "tool_id": "runPlaywrightCode" // builtin_tool_registry 稳定工具 ID。
+          }
+        ] // Agent tool policy 读取扩展工具列表。
+      },
+      "knowledge": {
+        "enabled": false, // 当前未接入知识源运行时。
+        "sources": [], // 当前未接入知识源运行时。
+        "retrieval": {
+          "strategy": "hybrid", // 当前未接入知识检索运行时。
+          "top_k": 5, // 当前未接入知识检索运行时。
+          "score_threshold": 0.65, // 当前未接入知识检索运行时。
+          "rerank": false // 当前未接入知识检索运行时。
+        }
+      },
+      "memory": {
+        "enabled": false, // 当前未接入持久化 Agent memory。
+        "scope": "workspace", // 当前未接入持久化 Agent memory。
+        "ttl_seconds": 2592000, // 当前未接入持久化 Agent memory。
+        "max_items": 200, // 当前未接入持久化 Agent memory。
+        "store_user_preferences": true, // 当前未接入持久化 Agent memory。
+        "store_sensitive_data": false // 当前未接入持久化 Agent memory。
+      },
+      "safety": {
+        "policy_mode": "standard", // 当前未接入独立 safety middleware。
+        "prompt_injection_protection": true, // 当前未接入独立 safety middleware。
+        "pii_redaction": true, // 当前未接入独立 safety middleware。
+        "refuse_secrets_exfiltration": true // 当前未接入独立 safety middleware。
+      },
+      "execution": {
+        "stream": true, // AgentExecutionService 当前按流式事件执行。
+        "max_turns": 16, // 当前未接入该独立执行限制。
+        "max_history_messages": 30, // 当前未接入该独立执行限制。
+        "max_context_tokens": 32000, // 当前未接入该独立执行限制。
+        "require_delegated_report": false // AgentExecutionService 已接入该执行策略。
+      },
+      "env": {
+        "mode": "development", // 当前未接入按 Agent 环境切换。
+        "region": "", // 当前未接入按 Agent 区域切换。
+        "feature_flags": {} // 当前未接入按 Agent 功能开关。
+      }
+    },
+    "coder": {
+      "name": "Coding Assistant", // AgentService 展示名称。
+      "description": "专门用于代码实现、重构和修复问题。", // AgentService 展示描述。
+      "language": "zh-CN", // Agent prompt language 约定。
+      "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
+      "tags": [], // AgentService 展示能力标签默认为空。
+      "instructions": {
+        "system_prompt": "你是工程实践导向的编程助手。输出代码时优先保证正确性、可读性和可验证性。" // Agent middleware 构造系统提示词。
+      },
+      "model": {
+        "primary_provider": "primary", // AgentFactory 主模型 Provider。
+        "fallback_providers": [
+          "backup_1",
+          "backup_2",
+          "backup_3",
+          "backup_4"
+        ] // AgentFactory 按顺序选择 fallback Provider。
+      },
+      "tools": {
+        "enabled": false, // Agent tool policy 总开关。
+        "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
+        "timeout_ms": 10000, // Agent tools 默认调用超时。
+        "allowlist": [], // Tool policy 恢复工具集合。
+        "denylist": [
+          "edit_file"
+        ], // Tool policy 禁用工具集合。
+        "confirmation_required": [], // Tool policy 二次确认集合默认为空。
+        "custom": [] // 当前 Agent 默认不增加扩展工具。
+      },
+      "execution": {
+        "stream": true, // 当前按流式事件执行。
+        "max_turns": 16, // 当前未接入该独立执行限制。
+        "max_history_messages": 30, // 当前未接入该独立执行限制。
+        "max_context_tokens": 32000, // 当前未接入该独立执行限制。
+        "require_delegated_report": false // 当前未接入该执行策略。
+      }
+    },
+    "reviewer": {
+      "name": "Code Reviewer", // AgentService 展示名称。
+      "description": "专门用于代码审查、风险检查和设计评估。", // AgentService 展示描述。
+      "language": "zh-CN", // Agent prompt language 约定。
+      "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
+      "tags": [], // AgentService 展示能力标签默认为空。
+      "instructions": {
+        "system_prompt": "你是代码审查助手。优先指出正确性、架构、安全性和可维护性问题，并给出具体依据。" // Agent middleware 构造系统提示词。
+      },
+      "model": {
+        "primary_provider": "primary", // AgentFactory 主模型 Provider。
+        "fallback_providers": [
+          "backup_1",
+          "backup_2",
+          "backup_3",
+          "backup_4"
+        ] // AgentFactory 按顺序选择 fallback Provider。
+      },
+      "tools": {
+        "enabled": false, // Agent tool policy 总开关默认关闭。
+        "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
+        "timeout_ms": 10000, // Agent tools 默认调用超时。
+        "allowlist": [], // Tool policy 恢复工具集合默认为空。
+        "denylist": [], // Tool policy 禁用工具集合默认为空。
+        "confirmation_required": [], // Tool policy 二次确认集合默认为空。
+        "custom": [] // 当前 Agent 默认不增加扩展工具。
+      },
+      "execution": {
+        "stream": true, // 当前按流式事件执行。
+        "max_turns": 16, // 当前未接入该独立执行限制。
+        "max_history_messages": 30, // 当前未接入该独立执行限制。
+        "max_context_tokens": 32000, // 当前未接入该独立执行限制。
+        "require_delegated_report": false // 当前未接入该执行策略。
+      }
+    },
+    "researcher": {
+      "name": "Research Assistant", // AgentService 展示名称。
+      "description": "专门用于资料检索、文档总结和方案调研。", // AgentService 展示描述。
+      "language": "zh-CN", // Agent prompt language 约定。
+      "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
+      "tags": [], // AgentService 展示能力标签默认为空。
+      "instructions": {
+        "system_prompt": "你是调研助手。优先基于可验证来源归纳结论，并明确不确定点和假设。" // Agent middleware 构造系统提示词。
+      },
+      "model": {
+        "primary_provider": "primary", // AgentFactory 主模型 Provider。
+        "fallback_providers": [
+          "backup_1",
+          "backup_2",
+          "backup_3",
+          "backup_4"
+        ] // AgentFactory 按顺序选择 fallback Provider。
+      },
+      "tools": {
+        "enabled": false, // Agent tool policy 总开关默认关闭。
+        "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
+        "timeout_ms": 10000, // Agent tools 默认调用超时。
+        "allowlist": [], // Tool policy 恢复工具集合默认为空。
+        "denylist": [], // Tool policy 禁用工具集合默认为空。
+        "confirmation_required": [], // Tool policy 二次确认集合默认为空。
+        "custom": [] // 当前 Agent 默认不增加扩展工具。
+      },
+      "execution": {
+        "stream": true, // 当前按流式事件执行。
+        "max_turns": 16, // 当前未接入该独立执行限制。
+        "max_history_messages": 30, // 当前未接入该独立执行限制。
+        "max_context_tokens": 32000, // 当前未接入该独立执行限制。
+        "require_delegated_report": false // 当前未接入该执行策略。
+      }
+    }
+  },
+  "development": {
+    "test_tools": false // ConfigService.include_development_test_tools 使用。
+  },
+  "ui": {
+    // default_model 故意不写入：ConfigService 根据 default_agent.primary_provider 动态解析。
+    "default_orchestration": "single_agent", // ConfigService._load_public_runtime_config 使用。
+    "max_concurrent_agents": 4, // ConfigService._load_public_runtime_config 使用。
+    "allow_shell_tools": false, // ConfigService._load_public_runtime_config 使用。
+    "ignored_paths": [], // ConfigService._load_public_runtime_config 使用。
+    "auto_summarize": true // ConfigService._load_public_runtime_config 使用。
+  },
+  "mcp": {
+    "servers": {} // McpRuntimeManager 使用；默认不启动外部 MCP Server。
+  },
+  "runtime": {
+    "agent": {
+      "run": {
+        "mode": "single_agent", // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
+        "response_mode": "stream", // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
+        "async": true, // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
+        "max_steps": 20, // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
+        "timeout_seconds": 600 // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
+      }
+    },
+    "gateway": {
+      "connection": {
+        "url": "http://127.0.0.1:8014", // GatewaySessionContextClient 默认连接地址已接入配置；显式参数优先。
+        "timeout_seconds": 30 // GatewaySessionContextClient 默认请求超时已接入配置；显式参数优先。
+      }
+    },
+    "auxiliary_services": {
+      "terminal_backend": {
+        "url": "http://127.0.0.1:8012" // TerminalManagerClient 默认地址已接入配置；显式参数和环境变量优先。
+      },
+      "browser_backend": {
+        "url": "http://127.0.0.1:8015" // BrowserManagerClient 默认地址已接入配置；显式参数和环境变量优先。
+      }
+    },
+    "workspace": {
+      "files": {
+        "list": {
+          "default_limit": 500 // WorkspaceService 与 workspace API 默认目录分页大小已接入配置。
+        },
+        "preview": {
+          "max_bytes": 1048576, // WorkspaceService 文本预览上限已接入配置。
+          "binary_sample_bytes": 8192 // WorkspaceService 二进制检测采样大小已接入配置。
+        }
+      }
+    },
+    "events": {
+      "trace_stream": {
+        "heartbeat_interval_seconds": 15 // sessions API SSE 心跳默认值已接入配置。
+      }
+    }
+  }
+}

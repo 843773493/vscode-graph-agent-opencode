@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -59,6 +61,10 @@ async def start_managed_local_workspace_runtime(
     log_dir: Path,
     backend_debug_port: int | None = None,
     reusable_service_urls: dict[str, str] | None = None,
+    health_request_timeout_seconds: float = 2,
+    health_poll_interval_seconds: float = 0.5,
+    connection_drain_timeout_seconds: float = 2,
+    default_skill_groups: Sequence[str] = (),
 ) -> WorkspaceRuntime:
     workspace_id = build_managed_local_workspace_id(str(workspace_root.resolve()))
     allocated_ports: set[int] = set()
@@ -121,10 +127,17 @@ async def start_managed_local_workspace_runtime(
             browser = adopted_browser
             browser_process = None
         runtime.set_process("browser_manager", browser)
-        await wait_for_http_ok(f"{service_urls['terminal_manager']}/health", terminal.process)
+        await wait_for_http_ok(
+            f"{service_urls['terminal_manager']}/health",
+            terminal.process,
+            request_timeout_seconds=health_request_timeout_seconds,
+            poll_interval_seconds=health_poll_interval_seconds,
+        )
         await wait_for_http_ok(
             f"{service_urls['browser_manager']}/health",
             browser_process,
+            request_timeout_seconds=health_request_timeout_seconds,
+            poll_interval_seconds=health_poll_interval_seconds,
         )
 
         backend = start_local_backend_process(
@@ -135,13 +148,21 @@ async def start_managed_local_workspace_runtime(
             extra_env={
                 "BOXTEAM_TERMINAL_BACKEND_URL": service_urls["terminal_manager"],
                 "BOXTEAM_BROWSER_BACKEND_URL": service_urls["browser_manager"],
+                "BOXTEAM_DEFAULT_SKILL_GROUPS": json.dumps(
+                    list(default_skill_groups),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
             },
             debug_port=backend_debug_port,
+            connection_drain_timeout_seconds=connection_drain_timeout_seconds,
         )
         runtime.set_process("workspace_api", backend)
         await wait_for_http_ok(
             f"{service_urls['workspace_api']}/api/v1/health",
             backend.process,
+            request_timeout_seconds=health_request_timeout_seconds,
+            poll_interval_seconds=health_poll_interval_seconds,
         )
         return runtime
     except Exception:
@@ -155,6 +176,10 @@ async def restart_managed_workspace_backend(
     project_root: Path,
     workspace_root: Path,
     log_dir: Path,
+    health_request_timeout_seconds: float = 2,
+    health_poll_interval_seconds: float = 0.5,
+    connection_drain_timeout_seconds: float = 2,
+    default_skill_groups: Sequence[str] = (),
 ) -> None:
     backend_url = runtime.service_urls["workspace_api"]
     backend_port = int(backend_url.rsplit(":", 1)[1])
@@ -171,14 +196,22 @@ async def restart_managed_workspace_backend(
             "BOXTEAM_BROWSER_BACKEND_URL": runtime.service_urls[
                 "browser_manager"
             ],
+            "BOXTEAM_DEFAULT_SKILL_GROUPS": json.dumps(
+                list(default_skill_groups),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
         },
         debug_port=runtime.backend_debug_port,
+        connection_drain_timeout_seconds=connection_drain_timeout_seconds,
     )
     runtime.set_process("workspace_api", backend)
     try:
         await wait_for_http_ok(
             f"{runtime.service_urls['workspace_api']}/api/v1/health",
             backend.process,
+            request_timeout_seconds=health_request_timeout_seconds,
+            poll_interval_seconds=health_poll_interval_seconds,
         )
     except Exception:
         runtime.close_process("workspace_api")

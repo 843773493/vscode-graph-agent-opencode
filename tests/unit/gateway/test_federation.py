@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from app.gateway.federation import (
     RemoteGatewayConnection,
     build_projected_workspace_id,
     discover_remote_gateway,
+    obtain_pairing_credential_over_ssh,
     start_remote_gateway_tunnel,
 )
 from app.gateway.main import _inbound_gateway_access_list
@@ -141,6 +143,101 @@ def test_gateway_local_credential_is_generated_and_stable(
     assert first != "local-dev-token"
     if os.name != "nt":
         assert (tmp_path / "credentials" / "local-token").stat().st_mode & 0o777 == 0o600
+
+
+def test_pairing_does_not_read_global_docker_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def run(command: list[str], **_: object) -> SimpleNamespace:
+        captured["command"] = command
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "peer_gateway_id": "remote_gateway",
+                    "token": "federation-secret",
+                    "expires_at": "2026-08-05T00:00:00+00:00",
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setenv(
+        "BOXTEAM_REMOTE_PAIR_COMMAND",
+        "docker-only-command --must-not-be-used",
+    )
+    monkeypatch.setattr("app.gateway.federation.subprocess.run", run)
+
+    credential = obtain_pairing_credential_over_ssh(
+        connection_id="rgw_test",
+        local_gateway_id="gateway_local",
+        host="remote.example.com",
+        port=22,
+        username="developer",
+        private_key_path=None,
+        ssh_config_host="developer-server",
+    )
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert command[-1].startswith("boxteam gateway issue-federation-token")
+    assert "docker-only-command" not in command[-1]
+    assert credential.peer_gateway_id == "remote_gateway"
+
+
+def test_pairing_rejects_empty_explicit_command() -> None:
+    with pytest.raises(ValueError, match="配对命令不能为空"):
+        obtain_pairing_credential_over_ssh(
+            connection_id="rgw_test",
+            local_gateway_id="gateway_local",
+            host="remote.example.com",
+            port=22,
+            username="developer",
+            private_key_path=None,
+            ssh_config_host="developer-server",
+            remote_pair_command="  ",
+        )
+
+
+def test_windows_ssh_config_uses_source_runtime_pairing_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        captured["command"] = command
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "peer_gateway_id": "remote_gateway",
+                    "token": "token",
+                    "expires_at": "2026-01-01T00:00:00+00:00",
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr("app.gateway.federation.subprocess.run", fake_run)
+
+    obtain_pairing_credential_over_ssh(
+        connection_id="rgw_test",
+        local_gateway_id="gateway_local",
+        host="127.0.0.1",
+        port=22022,
+        username="Administrator",
+        private_key_path=None,
+        ssh_config_host="a4500-windows-vm",
+    )
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "powershell -NoProfile" in command[-1]
+    assert "boxteam-windows\\venv\\Scripts\\python.exe" in command[-1]
+    assert "--connection-id rgw_test:gateway_local" in command[-1]
 
 
 def test_registry_persists_remote_gateway_without_federation_token(
@@ -434,7 +531,7 @@ async def test_remote_gateway_uses_one_ssh_forward(
         captured.update(kwargs)
         return _Tunnel()
 
-    async def ready(*_: object) -> None:
+    async def ready(*_: object, **__: object) -> None:
         return None
 
     monkeypatch.setattr(

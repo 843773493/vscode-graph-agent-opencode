@@ -18,13 +18,21 @@ from app.services.infrastructure.workspace_service import (
 )
 
 
+def _workspace_config_service_mock() -> Mock:
+    config_service = Mock(spec=ConfigService)
+    config_service.get_workspace_file_default_limit.return_value = 500
+    config_service.get_workspace_preview_max_bytes.return_value = 1024 * 1024
+    config_service.get_workspace_preview_binary_sample_bytes.return_value = 8192
+    return config_service
+
+
 @pytest.fixture
 def workspace_service(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> WorkspaceService:
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    return WorkspaceService(config_service=Mock(spec=ConfigService))
+    return WorkspaceService(config_service=_workspace_config_service_mock())
 
 
 @pytest.mark.asyncio
@@ -148,7 +156,9 @@ async def test_filesystem_scope_lists_and_reads_absolute_path(
     workspace_root = filesystem_scope_root / "project"
     workspace_root.mkdir(parents=True)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
-    workspace_service = WorkspaceService(config_service=Mock(spec=ConfigService))
+    workspace_service = WorkspaceService(
+        config_service=_workspace_config_service_mock()
+    )
     external_root = filesystem_scope_root / "external"
     external_root.mkdir()
     external_file = external_root / "torch-cache.txt"
@@ -226,7 +236,7 @@ def file_manager_service(
     source_root.mkdir()
     monkeypatch.setenv("WORKSPACE_ROOT", str(project_root))
     return (
-        WorkspaceService(config_service=Mock(spec=ConfigService)),
+        WorkspaceService(config_service=_workspace_config_service_mock()),
         project_root,
         source_root,
     )

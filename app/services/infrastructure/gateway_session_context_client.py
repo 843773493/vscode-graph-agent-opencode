@@ -13,7 +13,7 @@ from app.schemas.public_v2.session_context import (
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
-
+from app.services.infrastructure.config_service import ConfigService
 
 ResponseDTO = TypeVar("ResponseDTO", bound=BaseModel)
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:8014"
@@ -28,11 +28,30 @@ class GatewaySessionContextClient:
     def __init__(
         self,
         *,
-        gateway_url: str = DEFAULT_GATEWAY_URL,
-        timeout_seconds: float = 30,
+        gateway_url: str | None = None,
+        timeout_seconds: float | None = None,
+        config_service: ConfigService | None = None,
     ) -> None:
-        self._gateway_url = gateway_url.rstrip("/")
-        self._timeout_seconds = timeout_seconds
+        resolved_gateway_url = (
+            gateway_url
+            if gateway_url is not None
+            else (
+                config_service.get_gateway_connection_url()
+                if config_service is not None
+                else DEFAULT_GATEWAY_URL
+            )
+        )
+        resolved_timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else (
+                config_service.get_gateway_connection_timeout_seconds()
+                if config_service is not None
+                else 30
+            )
+        )
+        self._gateway_url = resolved_gateway_url.rstrip("/")
+        self._timeout_seconds = resolved_timeout_seconds
 
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO:
         return await self._request(

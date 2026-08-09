@@ -790,6 +790,11 @@ class GatewayWorkspaceRegistry:
                     if item.get("connection_error") is not None
                     else None
                 ),
+                remote_pair_command=(
+                    str(item["remote_pair_command"])
+                    if item.get("remote_pair_command") is not None
+                    else None
+                ),
             )
             self._remote_gateway_connections[connection.connection_id] = connection
         targets = payload.get("targets", [])

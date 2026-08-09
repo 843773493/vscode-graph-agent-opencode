@@ -15,6 +15,20 @@ class ConfigDTO(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ConfigSourceDTO(BaseModel):
+    path: str
+    layer: Literal["inline", "user", "user_local", "workspace"]
+    precedence: int
+    loaded: bool
+
+
+class ConfigSourcesDTO(BaseModel):
+    revision: str
+    schema_path: str
+    sources: list[ConfigSourceDTO] = Field(default_factory=list)
+    runtime_overrides: list[str] = Field(default_factory=list)
+
+
 class ConfigUpdateRequest(BaseModel):
     default_model: Optional[str] = None
     default_orchestration: Optional[str] = None

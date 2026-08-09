@@ -164,6 +164,37 @@
   max-height: min(360px, calc(100vh - 170px));
 }
 
+@media (max-width: 1100px) {
+  .session-workspace-picker {
+    gap: 4px;
+  }
+
+  .session-workspace-picker > .workspace-switcher {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+
+  .session-workspace-picker .workspace-switcher-button {
+    max-width: none;
+    font-size: 11px;
+  }
+
+  .session-workspace-picker > .session-workspace-picker-label:first-child,
+  .session-workspace-picker-with-label {
+    display: none;
+  }
+
+  .session-workspace-picker .workspace-switcher-kind {
+    display: none;
+  }
+
+  .session-workspace-picker .sessions-chat-picker-slot {
+    flex: 0 1 auto;
+    max-width: 68px;
+    font-size: 14px;
+  }
+}
+
 .workspace-dialog-backdrop {
   position: fixed;
   inset: 0;

@@ -227,7 +227,7 @@ def test_conflicting_legacy_aliases_fail_instead_of_silently_deduplicating() -> 
 
 def test_schema_builtin_tool_ids_match_runtime_registry() -> None:
     schema = commentjson.loads(
-        Path("configs/workspace_config.jsonc").read_text(encoding="utf-8")
+        Path("configs/workspace_schema.jsonc").read_text(encoding="utf-8")
     )
     tool_id_schema = schema["$defs"]["agentTools"]["properties"]["custom"]["items"][
         "oneOf"

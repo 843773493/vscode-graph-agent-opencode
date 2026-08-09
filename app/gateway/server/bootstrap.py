@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.core.env import get_project_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
-from app.gateway.config import load_gateway_config
+from app.gateway.config import GatewayConfig, load_gateway_config
 from app.gateway.federation import build_remote_gateway_connection_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.remote_gateway import (
@@ -49,7 +49,9 @@ async def _restore_managed_local_runtimes(
     registry: GatewayWorkspaceRegistry,
     default_workspace_id: str,
     gateway_root: Path,
+    gateway_config: GatewayConfig | None = None,
 ) -> None:
+    resolved_gateway_config = gateway_config or load_gateway_config()
     for persisted_target in registry.targets():
         if (
             persisted_target.workspace_id == default_workspace_id
@@ -68,6 +70,16 @@ async def _restore_managed_local_runtimes(
                 workspace_root=workspace_root,
                 log_dir=gateway_root / "logs",
                 reusable_service_urls=target.local_service_urls,
+                health_request_timeout_seconds=(
+                    resolved_gateway_config.gateway_process_health_request_timeout_seconds
+                ),
+                health_poll_interval_seconds=(
+                    resolved_gateway_config.gateway_process_health_poll_interval_seconds
+                ),
+                connection_drain_timeout_seconds=(
+                    resolved_gateway_config.gateway_process_connection_drain_timeout_seconds
+                ),
+                default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
             )
         except Exception as error:
             target.connection_error = (
@@ -85,8 +97,11 @@ async def _restore_managed_local_runtimes(
         registry.upsert(target, runtime=runtime, activate=False)
 
 
-async def create_registry() -> GatewayWorkspaceRegistry:
+async def create_registry(
+    gateway_config: GatewayConfig | None = None,
+) -> GatewayWorkspaceRegistry:
     gateway_root = get_gateway_root()
+    resolved_gateway_config = gateway_config or load_gateway_config()
     registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
     persisted_targets = registry.targets()
     persisted_targets_by_id = {
@@ -116,6 +131,16 @@ async def create_registry() -> GatewayWorkspaceRegistry:
             if persisted_default is not None
             else None
         ),
+        health_request_timeout_seconds=(
+            resolved_gateway_config.gateway_process_health_request_timeout_seconds
+        ),
+        health_poll_interval_seconds=(
+            resolved_gateway_config.gateway_process_health_poll_interval_seconds
+        ),
+        connection_drain_timeout_seconds=(
+            resolved_gateway_config.gateway_process_connection_drain_timeout_seconds
+        ),
+        default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
     )
     backend_url = default_runtime.service_urls["workspace_api"]
     registry.upsert(
@@ -151,14 +176,14 @@ async def create_registry() -> GatewayWorkspaceRegistry:
         registry=registry,
         default_workspace_id=default_workspace_id,
         gateway_root=gateway_root,
+        gateway_config=resolved_gateway_config,
     )
 
     # TODO: Gateway 配置热重载需要先为 registry 目标增加 config/manual/system
     # 来源归属、原子 batch commit 与代理 runtime lease。否则删除配置可能误删手动
     # 目标，或在 HTTP/SSE/WebSocket 仍使用旧 SSH 隧道时提前关闭它。
-    gateway_config = load_gateway_config()
     configured_active_workspace_id: str | None = None
-    for configured_workspace in gateway_config.workspaces:
+    for configured_workspace in resolved_gateway_config.workspaces:
         projected = await register_remote_gateway(
             registry=registry,
             log_dir=gateway_root / "logs",
@@ -167,9 +192,16 @@ async def create_registry() -> GatewayWorkspaceRegistry:
             port=configured_workspace.port,
             username=configured_workspace.username,
             private_key_path=configured_workspace.private_key_path,
-            ssh_config_host=None,
+            ssh_config_host=configured_workspace.ssh_config_host,
             remote_gateway_port=configured_workspace.remote_gateway_port,
+            remote_pair_command=configured_workspace.remote_pair_command,
             activate=configured_workspace.activate,
+            health_request_timeout_seconds=(
+                resolved_gateway_config.gateway_process_health_request_timeout_seconds
+            ),
+            health_poll_interval_seconds=(
+                resolved_gateway_config.gateway_process_health_poll_interval_seconds
+            ),
         )
         if configured_workspace.activate and projected:
             configured_active_workspace_id = projected[0].workspace_id
@@ -181,7 +213,7 @@ async def create_registry() -> GatewayWorkspaceRegistry:
             username=item.username,
             remote_gateway_port=item.remote_gateway_port,
         )
-        for item in gateway_config.workspaces
+            for item in resolved_gateway_config.workspaces
     }
     for connection in registry.remote_gateway_connections():
         if connection.connection_id in configured_connection_ids:
@@ -191,6 +223,12 @@ async def create_registry() -> GatewayWorkspaceRegistry:
                 registry=registry,
                 connection_id=connection.connection_id,
                 log_dir=gateway_root / "logs",
+                health_request_timeout_seconds=(
+                    resolved_gateway_config.gateway_process_health_request_timeout_seconds
+                ),
+                health_poll_interval_seconds=(
+                    resolved_gateway_config.gateway_process_health_poll_interval_seconds
+                ),
             )
         except Exception as error:
             message = (

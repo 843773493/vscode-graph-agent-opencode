@@ -80,7 +80,10 @@ async def register_remote_gateway(
     private_key_path: str | None,
     ssh_config_host: str | None,
     remote_gateway_port: int,
+    remote_pair_command: str | None = None,
     activate: bool = False,
+    health_request_timeout_seconds: float = 2,
+    health_poll_interval_seconds: float = 0.5,
 ) -> tuple[WorkspaceTarget, ...]:
     resolved_private_key_path = (
         resolve_gateway_path(private_key_path) if private_key_path else None
@@ -111,6 +114,7 @@ async def register_remote_gateway(
         username=username,
         private_key_path=resolved_private_key_path,
         ssh_config_host=ssh_config_host,
+        remote_pair_command=remote_pair_command,
     )
     credential_store.put(credential)
 
@@ -129,10 +133,13 @@ async def register_remote_gateway(
         remote_gateway_port=remote_gateway_port,
         remote_gateway_id="pending",
         protocol_version=FEDERATION_PROTOCOL_VERSION,
+        remote_pair_command=remote_pair_command,
     )
     runtime = await start_remote_gateway_tunnel(
         connection=provisional,
         log_dir=log_dir,
+        health_request_timeout_seconds=health_request_timeout_seconds,
+        health_poll_interval_seconds=health_poll_interval_seconds,
     )
     try:
         gateway_url = runtime.service_urls["workspace_api"]
@@ -154,6 +161,7 @@ async def register_remote_gateway(
             remote_gateway_port=remote_gateway_port,
             remote_gateway_id=remote_gateway_id,
             protocol_version=FEDERATION_PROTOCOL_VERSION,
+            remote_pair_command=remote_pair_command,
         )
         registry.upsert_remote_gateway(connection, runtime=runtime)
         return _synchronize_projected_workspaces(
@@ -174,6 +182,8 @@ async def reconnect_remote_gateway(
     registry: GatewayWorkspaceRegistry,
     connection_id: str,
     log_dir: Path,
+    health_request_timeout_seconds: float = 2,
+    health_poll_interval_seconds: float = 0.5,
 ) -> tuple[WorkspaceTarget, ...]:
     connection = registry.remote_gateway_connection(connection_id)
     gateway_root = get_gateway_root()
@@ -193,11 +203,14 @@ async def reconnect_remote_gateway(
             else None
         ),
         ssh_config_host=connection.ssh_config_host,
+        remote_pair_command=connection.remote_pair_command,
     )
     credential_store.put(credential)
     runtime = await start_remote_gateway_tunnel(
         connection=connection,
         log_dir=log_dir,
+        health_request_timeout_seconds=health_request_timeout_seconds,
+        health_poll_interval_seconds=health_poll_interval_seconds,
     )
     try:
         manifest, remote_workspaces = await discover_remote_gateway(

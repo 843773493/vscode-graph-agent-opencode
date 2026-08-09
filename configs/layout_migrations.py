@@ -102,14 +102,14 @@ def migrate_legacy_user_configuration(
     if not isinstance(raw_gateway, dict):
         raise TypeError(f"旧配置 gateway 必须是对象: {legacy_path}")
     gateway = {
-        "$schema": "./gateway_config.jsonc",
+        "$schema": "./gateway_schema.jsonc",
         "config_version": 1,
         **raw_gateway,
     }
     legacy.pop("$schema", None)
     legacy.pop("config_version", None)
     workspace = {
-        "$schema": "./workspace_config.jsonc",
+        "$schema": "./workspace_schema.jsonc",
         "config_version": 1,
         **legacy,
     }
@@ -150,7 +150,7 @@ def migrate_legacy_workspace_configuration(
     legacy.pop("$schema", None)
     legacy.pop("config_version", None)
     workspace = {
-        "$schema": "./workspace_config.jsonc",
+        "$schema": "./workspace_schema.jsonc",
         "config_version": 1,
         **legacy,
     }

@@ -3,6 +3,8 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import os
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, NotRequired, TypedDict
@@ -23,12 +25,14 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.runtime import Runtime
 
 from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
-from app.agents.workspace_backend import build_workspace_backend
+from app.agents.workspace_backend import BUNDLED_SKILLS_SOURCE, build_workspace_backend
+from app.core.env import get_project_root
 from app.core.path_utils import get_workspace_root
 from app.prompting import PromptSection, internal_message_factory
 
 WORKSPACE_AGENTS_FILE = "AGENTS.md"
 WORKSPACE_SKILLS_SOURCE = "/.boxteam/skills"
+BUNDLED_SKILL_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 
 
 class WorkspaceAgentsSnapshot(TypedDict):
@@ -297,27 +301,84 @@ class WorkspaceSkillsMiddleware(SkillsMiddleware):
         return "\n".join(lines)
 
 
-def discover_workspace_skill_sources(workspace_root: Path | None = None) -> list[tuple[str, str]]:
-    """发现当前工作区中的 skill sources。"""
+def resolve_bundled_skill_groups(
+    configured_groups: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    """解析 Gateway 传入的发行包 Skill 组，并拒绝不安全的路径标识。"""
+    raw_groups: object = configured_groups
+    if configured_groups is None:
+        raw_value = os.environ.get("BOXTEAM_DEFAULT_SKILL_GROUPS")
+        if raw_value is None:
+            return ()
+        try:
+            raw_groups = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                "BOXTEAM_DEFAULT_SKILL_GROUPS 必须是 JSON 数组"
+            ) from error
+    if not isinstance(raw_groups, list | tuple):
+        raise TypeError("默认 Skill 组必须是字符串数组")
+    normalized: list[str] = []
+    for group in raw_groups:
+        if not isinstance(group, str) or not BUNDLED_SKILL_GROUP_PATTERN.fullmatch(group):
+            raise ValueError(f"默认 Skill 组 ID 无效: {group!r}")
+        if group in normalized:
+            raise ValueError(f"默认 Skill 组 ID 重复: {group}")
+        normalized.append(group)
+    return tuple(normalized)
+
+
+def discover_workspace_skill_sources(
+    workspace_root: Path | None = None,
+    *,
+    bundled_skill_groups: Sequence[str] | None = None,
+    project_root: Path | None = None,
+) -> list[tuple[str, str]]:
+    """按内置资源优先、工作区资源覆盖的顺序发现 Skill source。"""
     resolved_workspace_root = workspace_root or get_workspace_root()
+    resolved_groups = resolve_bundled_skill_groups(bundled_skill_groups)
+    sources: list[tuple[str, str]] = []
+    if resolved_groups:
+        bundled_skills_root = (project_root or get_project_root()) / "resources" / "skills"
+        if not bundled_skills_root.is_dir():
+            raise FileNotFoundError(f"发行包内置 Skill 根目录不存在: {bundled_skills_root}")
+        for group in resolved_groups:
+            skill_root = bundled_skills_root / group
+            if not skill_root.is_dir():
+                raise FileNotFoundError(f"发行包内置 Skill 组目录不存在: {skill_root}")
+            if not (skill_root / "SKILL.md").is_file():
+                raise FileNotFoundError(f"发行包内置 Skill 组缺少 SKILL.md: {skill_root}")
+        sources.append((BUNDLED_SKILLS_SOURCE, "Built-in"))
     skills_dir = resolved_workspace_root / ".boxteam" / "skills"
-    if not skills_dir.exists():
-        return []
-    if not skills_dir.is_dir():
+    if skills_dir.exists() and not skills_dir.is_dir():
         raise RuntimeError(f"工作区 skill 路径不是目录: {skills_dir}")
-    return [(WORKSPACE_SKILLS_SOURCE, "Workspace")]
+    if skills_dir.is_dir():
+        sources.append((WORKSPACE_SKILLS_SOURCE, "Workspace"))
+    return sources
 
 
 def discover_workspace_skill_metadata(
     workspace_root: Path | None = None,
+    *,
+    bundled_skill_groups: Sequence[str] | None = None,
+    project_root: Path | None = None,
 ) -> list[Mapping[str, Any]]:
     """用 deepagents SkillsMiddleware 同源解析器读取 workspace skill metadata。"""
     resolved_workspace_root = workspace_root or get_workspace_root()
-    sources = discover_workspace_skill_sources(resolved_workspace_root)
+    resolved_groups = resolve_bundled_skill_groups(bundled_skill_groups)
+    sources = discover_workspace_skill_sources(
+        resolved_workspace_root,
+        bundled_skill_groups=resolved_groups,
+        project_root=project_root,
+    )
     if not sources:
         return []
 
-    backend = build_workspace_backend(resolved_workspace_root)
+    backend = build_workspace_backend(
+        resolved_workspace_root,
+        bundled_skill_groups=resolved_groups,
+        project_root=project_root,
+    )
     middleware = SkillsMiddleware(
         backend=backend,
         sources=sources,
@@ -336,10 +397,16 @@ def discover_workspace_custom_tool_skill_map(
     workspace_root: Path | None = None,
     *,
     custom_tool_names: set[str] | None = None,
+    bundled_skill_groups: Sequence[str] | None = None,
+    project_root: Path | None = None,
 ) -> dict[str, list[str]]:
     """从规范化 skill metadata 建立自定义扩展工具到 skill 名称的映射。"""
     tool_to_skills: dict[str, list[str]] = {}
-    for skill in discover_workspace_skill_metadata(workspace_root):
+    for skill in discover_workspace_skill_metadata(
+        workspace_root,
+        bundled_skill_groups=bundled_skill_groups,
+        project_root=project_root,
+    ):
         skill_name = skill.get("name")
         allowed_tools = skill.get("allowed_tools")
         if not isinstance(skill_name, str) or not isinstance(allowed_tools, list):

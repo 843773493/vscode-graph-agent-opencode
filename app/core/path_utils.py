@@ -6,7 +6,10 @@ from pathlib import Path
 
 from app.core.exceptions import ForbiddenError
 from app.core.session_paths import SessionPathResolver
-from app.core.storage_migration import migrate_workspace_storage_layout
+from app.core.storage_migration import (
+    migrate_legacy_trace_timestamps,
+    migrate_workspace_storage_layout,
+)
 
 
 def resolve_boxteam_home(home: Path | None = None) -> Path:
@@ -32,19 +35,29 @@ def get_user_gateway_config_path() -> Path:
     return get_user_config_root() / "gateway.jsonc"
 
 
+def get_user_gateway_local_config_path() -> Path:
+    """获取 Gateway 用户级本地覆盖配置文件。"""
+    return get_user_config_root() / "gateway_local.jsonc"
+
+
 def get_user_workspace_config_path() -> Path:
     """获取 Workspace Backend 用户级业务配置文件。"""
     return get_user_config_root() / "workspace.jsonc"
 
 
+def get_user_workspace_local_config_path() -> Path:
+    """获取 Workspace 用户级本地覆盖配置文件。"""
+    return get_user_config_root() / "workspace_local.jsonc"
+
+
 def get_user_gateway_schema_path() -> Path:
     """获取安装后的 Gateway 配置 schema。"""
-    return get_user_config_root() / "gateway_config.jsonc"
+    return get_user_config_root() / "gateway_schema.jsonc"
 
 
 def get_user_workspace_schema_path() -> Path:
     """获取安装后的 Workspace 配置 schema。"""
-    return get_user_config_root() / "workspace_config.jsonc"
+    return get_user_config_root() / "workspace_schema.jsonc"
 
 
 def get_workspace_config_path(workspace_root: Path) -> Path:
@@ -144,6 +157,10 @@ def initialize_directories() -> None:
     get_artifacts_dir().mkdir(exist_ok=True, parents=True)
     get_cache_dir().mkdir(exist_ok=True, parents=True)
     migrate_workspace_storage_layout(
+        boxteam_root=get_boxteam_root(),
+        sessions_root=get_sessions_dir(),
+    )
+    migrate_legacy_trace_timestamps(
         boxteam_root=get_boxteam_root(),
         sessions_root=get_sessions_dir(),
     )

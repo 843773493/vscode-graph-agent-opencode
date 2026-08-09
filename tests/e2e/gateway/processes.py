@@ -157,6 +157,7 @@ def write_gateway_remote_gateway_config(
     username: str,
     remote_gateway_port: int,
     private_key_path: Path,
+    remote_pair_command: str,
 ) -> None:
     config_root = _test_boxteam_home(workspace_root) / "config"
     install_user_configuration(
@@ -176,6 +177,7 @@ def write_gateway_remote_gateway_config(
             "port": ssh_port,
             "username": username,
             "private_key_path": str(private_key_path.resolve()),
+            "remote_pair_command": remote_pair_command,
             "remote_gateway_port": remote_gateway_port,
             "activate": False,
         }

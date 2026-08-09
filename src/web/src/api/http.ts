@@ -3,6 +3,7 @@ import { parseJsonResponse } from "../runtime/jsonResponseParser";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
+export const DEFAULT_API_REQUEST_TIMEOUT_MS = 15_000;
 
 type RequestJsonInit = RequestInit & {
   timeoutMs?: number;

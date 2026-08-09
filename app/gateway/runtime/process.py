@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import logging
+import math
 import os
 import random
 import signal
@@ -20,12 +21,18 @@ from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
 
-GATEWAY_PROCESS_READY_TIMEOUT_SECONDS = 45
+# TODO: Windows 嵌入式 Python 首次导入依赖较慢，单独放宽本地后端冷启动窗口。
+GATEWAY_PROCESS_READY_TIMEOUT_SECONDS = 120 if os.name == "nt" else 45
 WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS = 2
 DEFAULT_SSH_TUNNEL_PORT_MIN = 41000
 DEFAULT_SSH_TUNNEL_PORT_MAX = 41999
 
 logger = logging.getLogger(__name__)
+
+
+# TODO: Uvicorn 的命令行参数只接受整数秒；配置模型允许小数时向上取整，避免 Windows 启动时被 CLI 拒绝。
+def _uvicorn_graceful_shutdown_timeout(seconds: float) -> str:
+    return str(max(1, math.ceil(seconds)))
 
 
 # TODO: Windows 的 taskkill 优雅模式对子进程返回非零是正常的，必须交给 close() 的 /F 阶段收尾。
@@ -283,10 +290,13 @@ def resolve_python_executable(_: Path) -> Path:
 async def wait_for_http_ok(
     url: str,
     process: subprocess.Popen[str] | None = None,
+    *,
+    request_timeout_seconds: float = 2,
+    poll_interval_seconds: float = 0.5,
 ) -> None:
     deadline = asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
     last_error: Exception | None = None
-    async with httpx.AsyncClient(timeout=2) as client:
+    async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
         while asyncio.get_running_loop().time() < deadline:
             if process is not None and process.poll() is not None:
                 raise RuntimeError(
@@ -305,7 +315,7 @@ async def wait_for_http_ok(
                 )
             except (httpx.HTTPError, RuntimeError) as error:
                 last_error = error
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(poll_interval_seconds)
 
     detail = f"，最后错误: {last_error}" if last_error else ""
     raise TimeoutError(
@@ -322,6 +332,9 @@ def start_local_backend_process(
     log_dir: Path,
     extra_env: dict[str, str] | None = None,
     debug_port: int | None = None,
+    connection_drain_timeout_seconds: float = (
+        WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS
+    ),
 ) -> ManagedProcess:
     python_executable = resolve_python_executable(project_root)
     env = os.environ.copy()
@@ -352,7 +365,7 @@ def start_local_backend_process(
             "--log-level",
             "warning",
             "--timeout-graceful-shutdown",
-            str(WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS),
+            _uvicorn_graceful_shutdown_timeout(connection_drain_timeout_seconds),
         ]
     )
     log_store = ProcessLogStore(log_dir)

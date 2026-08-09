@@ -68,7 +68,7 @@ export default function AnchoredOverlay({
     () => (point ? pointReference(point) : null),
     [point],
   );
-  const { refs, floatingStyles, context } = useFloating({
+  const { refs, floatingStyles, context, isPositioned, update } = useFloating({
     open,
     onOpenChange: (nextOpen) => {
       if (!nextOpen) {
@@ -107,10 +107,17 @@ export default function AnchoredOverlay({
   useIsomorphicLayoutEffect(() => {
     if (virtualReference) {
       refs.setPositionReference(virtualReference);
+      if (open) {
+        void update();
+      }
       return;
     }
-    refs.setReference(anchorRef?.current ?? null);
-  }, [anchorRef, refs, virtualReference]);
+    const reference = anchorRef?.current ?? null;
+    refs.setReference(reference);
+    if (open && reference) {
+      void update();
+    }
+  }, [anchorRef, open, refs, update, virtualReference]);
 
   if (!open) {
     return null;
@@ -124,7 +131,10 @@ export default function AnchoredOverlay({
       <div
         ref={refs.setFloating}
         className="anchored-overlay-positioner"
-        style={floatingStyles}
+        style={{
+          ...floatingStyles,
+          visibility: isPositioned ? "visible" : "hidden",
+        }}
         {...getFloatingProps()}
       >
         {children}

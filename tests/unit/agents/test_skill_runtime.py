@@ -1,21 +1,25 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import HumanMessage
 
 from app.agents.custom_tools import CustomToolFactoryContext
-from app.agents.tools.testing import create_test_tool_2
 from app.agents.skill_runtime import (
     WorkspaceAgentsMiddleware,
     WorkspaceSkillsMiddleware,
     discover_workspace_custom_tool_skill_map,
+    discover_workspace_skill_metadata,
     discover_workspace_skill_sources,
+    resolve_bundled_skill_groups,
 )
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.custom_invocation import create_custom_tool_invoker_tool
+from app.agents.tools.testing import create_test_tool_2
+from app.agents.workspace_backend import BUNDLED_SKILLS_SOURCE, build_workspace_backend
 
 
 def _custom_tool_context(tmp_path) -> CustomToolFactoryContext:
@@ -40,6 +44,7 @@ def _custom_tool_context(tmp_path) -> CustomToolFactoryContext:
 
 def test_discover_workspace_skill_sources_requires_existing_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 
     assert discover_workspace_skill_sources(tmp_path) == []
 
@@ -48,6 +53,41 @@ def test_discover_workspace_skill_sources_requires_existing_directory(tmp_path, 
     assert discover_workspace_skill_sources(tmp_path) == [
         ("/.boxteam/skills", "Workspace")
     ]
+
+
+def test_discover_bundled_skill_groups_uses_read_only_project_resources(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("BOXTEAM_DEFAULT_SKILL_GROUPS", '["gateway-context"]')
+
+    assert resolve_bundled_skill_groups() == ("gateway-context",)
+    assert discover_workspace_skill_sources(
+        tmp_path,
+        project_root=Path.cwd(),
+    ) == [(BUNDLED_SKILLS_SOURCE, "Built-in")]
+
+    metadata = discover_workspace_skill_metadata(
+        tmp_path,
+        project_root=Path.cwd(),
+    )
+    assert [item["name"] for item in metadata] == ["gateway-context"]
+
+    backend = build_workspace_backend(
+        tmp_path,
+        bundled_skill_groups=("gateway-context",),
+        project_root=Path.cwd(),
+    )
+    read_result = backend.read(
+        f"{BUNDLED_SKILLS_SOURCE}gateway-context/SKILL.md"
+    )
+    assert read_result.error is None
+    assert read_result.file_data is not None
+    assert "gateway-context" in read_result.file_data["content"]
+    assert backend.write(
+        f"{BUNDLED_SKILLS_SOURCE}gateway-context/SKILL.md",
+        "不应写入",
+    ).error is not None
 
 
 def _initialize_workspace_agents_state(

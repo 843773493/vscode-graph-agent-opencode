@@ -12,17 +12,16 @@ import httpx
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
+from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.schemas import (
     GatewaySessionSearchMatchDTO,
     GatewaySessionSearchResultsDTO,
     GatewaySessionSearchWorkspaceStatusDTO,
 )
 from app.gateway.control.storage import atomic_write_json, read_json_object
-from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.public_v2.session_navigation import SessionCatalogNodeDTO
-
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +42,16 @@ class GatewaySessionCatalogSearchService:
         cache_dir: Path,
         navigation_store: WorkspaceNavigationStore,
         refresh_interval_seconds: float = 30,
+        max_concurrency: int = 8,
+        request_timeout_seconds: float = 30,
     ) -> None:
         self._registry = registry
         self._http_client = http_client
         self._cache_dir = cache_dir
         self._navigation_store = navigation_store
         self._refresh_interval_seconds = refresh_interval_seconds
+        self._max_concurrency = max_concurrency
+        self._request_timeout_seconds = request_timeout_seconds
         self._snapshots: dict[str, _CatalogSnapshot] = {}
         self._fresh_workspace_ids: set[str] = set()
         self._workspace_errors: dict[str, str] = {}
@@ -178,7 +181,7 @@ class GatewaySessionCatalogSearchService:
                 continue
 
     async def _sync_all(self) -> None:
-        semaphore = asyncio.Semaphore(8)
+        semaphore = asyncio.Semaphore(self._max_concurrency)
 
         async def sync(target: WorkspaceTarget) -> None:
             async with semaphore:
@@ -268,7 +271,11 @@ class GatewaySessionCatalogSearchService:
         lock = self._sync_locks.setdefault(target.workspace_id, asyncio.Lock())
         async with lock:
             url, headers = self._target_request(target, request_id=request_id)
-            response = await self._http_client.get(url, headers=headers, timeout=30)
+            response = await self._http_client.get(
+                url,
+                headers=headers,
+                timeout=self._request_timeout_seconds,
+            )
             response.raise_for_status()
             body = response.json()
             data = body.get("data") if isinstance(body, dict) else None

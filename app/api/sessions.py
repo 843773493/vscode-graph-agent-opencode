@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.api.deps import (
+    get_config_service,
     get_context_compaction_service,
     get_file_tree_settings_service,
     get_goal_runtime_service,
@@ -71,6 +72,7 @@ from app.services.business.session_information_service import SessionInformation
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
@@ -413,6 +415,7 @@ async def stream_session_traces(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _: str = Depends(verify_local_token),
     session_service: SessionService = Depends(get_session_service),
+    config_service: ConfigService = Depends(get_config_service),
 ):
     if after_event_id and last_event_id and after_event_id != last_event_id:
         raise HTTPException(
@@ -431,7 +434,12 @@ async def stream_session_traces(
 
     events = session_service.stream_trace_events(session_id, cursor)
     return StreamingResponse(
-        _stream_trace_sse(events),
+        _stream_trace_sse(
+            events,
+            heartbeat_interval_seconds=(
+                config_service.get_trace_stream_heartbeat_interval_seconds()
+            ),
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from app.core.config_sources import ConfigSource
 
 ConfigReloadFailureReason = Literal[
     "invalid_config",
@@ -21,6 +22,8 @@ class ConfigSnapshot:
     canonical_json: str
     source_paths: tuple[Path, ...]
     loaded_at: datetime
+    source_details: tuple[ConfigSource, ...] = ()
+    schema_path: Path | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value = json.loads(self.canonical_json)
@@ -53,6 +56,8 @@ def build_config_snapshot(
     config: dict[str, Any],
     *,
     source_paths: tuple[Path, ...],
+    source_details: tuple[ConfigSource, ...] = (),
+    schema_path: Path | None = None,
 ) -> ConfigSnapshot:
     canonical_json = json.dumps(
         config,
@@ -65,4 +70,15 @@ def build_config_snapshot(
         canonical_json=canonical_json,
         source_paths=source_paths,
         loaded_at=datetime.now(timezone.utc),
+        source_details=source_details
+        or tuple(
+            ConfigSource(
+                path=path,
+                layer="user",
+                precedence=index,
+                loaded=True,
+            )
+            for index, path in enumerate(source_paths)
+        ),
+        schema_path=schema_path,
     )

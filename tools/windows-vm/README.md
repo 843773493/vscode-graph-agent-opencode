@@ -1,8 +1,8 @@
 # 本项目 Windows VM 工具
 
-该工具复用 Kunlun-Code 的持久 Windows Server VM，但使用 H20 上独立的远端仓库目录，避免覆盖参考项目。连接链路为：
+该工具复用 Kunlun-Code 的持久 Windows Server VM，但使用 A4500 上独立的远端仓库目录，避免覆盖参考项目。连接链路为：
 
-本机 --SSH--> H20 Linux --SSH(127.0.0.1:22022)--> Windows guest
+本机 --SSH--> A4500 Linux --SSH(127.0.0.1:22022)--> Windows guest
 
 ## 本地配置
 

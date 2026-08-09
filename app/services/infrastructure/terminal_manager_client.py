@@ -11,6 +11,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from app.core.path_utils import get_boxteam_root, get_workspace_root
+from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_TERMINAL_BACKEND_URL = "http://127.0.0.1:8012"
 
@@ -22,10 +23,16 @@ class TerminalManagerClient:
         backend_url: str | None = None,
         state_file: Path | None = None,
         workspace_id: str | None = None,
+        config_service: ConfigService | None = None,
     ) -> None:
         self._backend_url = (
             backend_url
             or os.environ.get("BOXTEAM_TERMINAL_BACKEND_URL")
+            or (
+                config_service.get_terminal_backend_url()
+                if config_service is not None
+                else None
+            )
             or DEFAULT_TERMINAL_BACKEND_URL
         ).rstrip("/")
         self._state_file = state_file or get_boxteam_root() / "terminal-manager" / "terminals.json"

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -111,6 +109,8 @@ def configure_codex_read_file_tool(
     )
     host_sync, host_async = _read_implementations(host_middleware)
 
+    # LangChain 的 StructuredTool 通过 inspect.signature 识别注入参数，不能解析
+    # postponed annotations；此文件必须让 ToolRuntime 在函数签名中保持真实类型。
     def sync_read_file(
         path: str,
         runtime: ToolRuntime[None, FilesystemState],

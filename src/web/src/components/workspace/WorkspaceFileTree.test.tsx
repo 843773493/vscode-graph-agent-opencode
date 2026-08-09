@@ -31,6 +31,7 @@ describe("工作区文件树根节点", () => {
         collapseVersion={0}
         expandedPaths={[""]}
         onExpandedPathsChange={() => {}}
+        onCloseSearch={() => {}}
         onOpenFile={() => {}}
         onStatusChange={() => {}}
       />,

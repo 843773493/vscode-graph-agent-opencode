@@ -38,7 +38,10 @@ def _base_config() -> dict:
             "default": {
                 "name": "Default Agent",
                 "instructions": {"system_prompt": "hello"},
-                "model": {"primary_provider": "primary"},
+                "model": {
+                    "primary_provider": "primary",
+                    "fallback_providers": [],
+                },
             }
         },
     }
@@ -136,6 +139,59 @@ async def test_update_public_config_null_clears_runtime_override(tmp_path: Path)
 
     assert result.default_model == "model-a"
     assert result.metadata["runtime_overrides"] == []
+
+
+def test_workspace_local_config_is_merged_before_workspace_override(
+    tmp_path: Path,
+) -> None:
+    config = _base_config()
+    config["logger"]["level"] = "warning"
+    config_path = _write_workspace_config(tmp_path, config)
+    local_path = tmp_path / "workspace_local.jsonc"
+    local_path.write_text(
+        json.dumps(
+            {
+                "logger": {"level": "debug"},
+                "agents": {"default": {"name": "Local Agent"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
+    workspace_path.parent.mkdir(parents=True)
+    workspace_path.write_text(
+        json.dumps(
+            {
+                "agents": {"default": {"name": "Workspace Agent"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=config_path,
+        workspace_root=workspace_root,
+    )
+
+    assert service.get_logger_level() == "DEBUG"
+    assert service.list_agents()["default"]["name"] == "Workspace Agent"
+    assert service.get_snapshot().source_paths == (
+        Path("configs/workspace_inline.jsonc").resolve(),
+        config_path,
+        local_path,
+        workspace_path,
+    )
+    assert [source.layer for source in service.get_source_details()] == [
+        "inline",
+        "user",
+        "user_local",
+        "workspace",
+    ]
+
+    public_config = service.get_snapshot()
+    assert public_config.source_details[2].loaded is True
 
 
 @pytest.mark.asyncio
@@ -680,7 +736,11 @@ async def test_same_revision_reload_refreshes_active_source_paths(
     assert await service.reload() is False
     snapshot = service.get_snapshot()
     assert snapshot.revision == original_revision
-    assert snapshot.source_paths == (global_path, workspace_config_path)
+    assert snapshot.source_paths == (
+        Path("configs/workspace_inline.jsonc").resolve(),
+        global_path,
+        workspace_config_path,
+    )
 
 
 @pytest.mark.asyncio
@@ -717,7 +777,10 @@ async def test_reload_workspace_config_deletion_falls_back_to_user_config(
     assert await service.reload() is True
     assert service.get_revision() != workspace_revision
     assert service.get_agent_runtime_config("default")["system_prompt"] == "hello"
-    assert service.get_snapshot().source_paths == (user_path,)
+    assert service.get_snapshot().source_paths == (
+        Path("configs/workspace_inline.jsonc").resolve(),
+        user_path,
+    )
 
 
 @pytest.mark.asyncio

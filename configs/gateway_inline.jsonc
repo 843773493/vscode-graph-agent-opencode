@@ -1,0 +1,45 @@
+{
+  "$schema": "./gateway_schema.jsonc", // load_gateway_config 使用对应 schema 校验最终 Gateway 配置。
+  "config_version": 1, // load_gateway_config 与 gateway_schema 校验配置版本。
+  "workspaces": [], // load_gateway_config 读取远程 Gateway 注册项。
+  "ui": {
+    "theme": {
+      "default_theme_id": "warm", // Gateway 主题解析器使用默认主题 ID。
+      "custom_themes": [] // Gateway 主题解析器读取用户自定义主题。
+    }
+  },
+  "features": {
+    "session_catalog": {
+      "sync": {
+        "refresh_interval_seconds": 30, // GatewaySessionCatalogSearchService 同步周期已接入配置。
+        "max_concurrency": 8, // GatewaySessionCatalogSearchService 同步并发已接入配置。
+        "request_timeout_seconds": 30 // GatewaySessionCatalogSearchService 请求超时已接入配置。
+      }
+    },
+    "session_generators": {
+      "scheduler": {
+        "poll_interval_seconds": 1 // SessionGeneratorScheduler 轮询周期已接入配置。
+      }
+    }
+  },
+  "runtime": {
+    "gateway": {
+      "process": {
+        "health": {
+          "request_timeout_seconds": 2, // Gateway 进程健康检查 HTTP 超时已接入配置。
+          "poll_interval_seconds": 0.5 // Gateway 进程健康检查轮询周期已接入配置。
+        },
+        "lifecycle": {
+          "connection_drain_timeout_seconds": 2 // 工作区后端优雅退出超时已接入配置。
+        }
+      }
+    },
+    "workspace": {
+      "default_skill_groups": [
+        "browser-control", // 浏览器控制扩展工具组。
+        "gateway-context", // Gateway 工作区上下文扩展工具组。
+        "web-search-fetch" // Web 搜索与网页抓取扩展工具组。
+      ]
+    }
+  }
+}

@@ -14,11 +14,12 @@ const baseManifest = {
   python_executable: "../../.venv/bin/python",
   application_root: "../..",
   config_resources: {
-    gateway: "../../configs/gateway.jsonc",
-    gateway_schema: "../../configs/gateway_config.jsonc",
-    workspace: "../../configs/workspace.jsonc",
-    workspace_schema: "../../configs/workspace_config.jsonc",
+    gateway_inline: "../../configs/gateway_inline.jsonc",
+    gateway_schema: "../../configs/gateway_schema.jsonc",
+    workspace_inline: "../../configs/workspace_inline.jsonc",
+    workspace_schema: "../../configs/workspace_schema.jsonc",
   },
+  skill_resources: "../../resources/skills",
   web_assets: null,
   chromium_executable: null,
   node: {
@@ -43,6 +44,9 @@ describe("runtime manifest", () => {
       path.resolve("/tmp/boxteam/runtime", "../../.venv/bin/python"),
     );
     expect(manifest.applicationRoot).toBe("/tmp");
+    expect(manifest.skillResources).toBe(
+      path.resolve("/tmp/boxteam/runtime", "../../resources/skills"),
+    );
   });
 
   test("拒绝未知 schema", () => {
@@ -72,17 +76,16 @@ describe("runtime manifest", () => {
     expect(resolveNodeExecutable(manifest)).toBe(process.execPath);
   });
 
-  test("bundled Node 保留为明确的未来扩展点", () => {
+  test("standalone 使用 manifest 声明的 bundled Node", () => {
     const manifest = resolveRuntimeManifest("/tmp/runtime.json", {
       ...baseManifest,
+      distribution: "standalone",
       node: {
         source: "bundled",
         executable: "node/bin/node",
       },
     });
 
-    expect(() => resolveNodeExecutable(manifest)).toThrow(
-      "尚未实现 bundled Node",
-    );
+    expect(resolveNodeExecutable(manifest)).toBe("/tmp/node/bin/node");
   });
 });

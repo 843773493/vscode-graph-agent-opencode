@@ -6,12 +6,13 @@ const DISTRIBUTIONS = new Set([
   "source-development",
   "source-installed",
   "npm",
+  "standalone",
 ]);
 const NODE_SOURCES = new Set(["launcher", "bundled"]);
 const CONFIG_RESOURCE_KEYS = [
-  "gateway",
+  "gateway_inline",
   "gateway_schema",
-  "workspace",
+  "workspace_inline",
   "workspace_schema",
 ];
 
@@ -94,6 +95,10 @@ export function validateRuntimeManifest(value) {
         ]),
       ),
     ),
+    skillResources: requireString(
+      manifest.skill_resources,
+      "runtime manifest.skill_resources",
+    ),
     webAssets: optionalString(manifest.web_assets, "runtime manifest.web_assets"),
     chromiumExecutable: optionalString(
       manifest.chromium_executable,
@@ -128,6 +133,7 @@ export function resolveRuntimeManifest(manifestPath, value) {
         ]),
       ),
     ),
+    skillResources: resolveResource(runtimeRoot, manifest.skillResources),
     webAssets:
       manifest.webAssets === null
         ? null
@@ -172,10 +178,14 @@ export function assertRuntimeResources(manifest) {
       `配置资源 ${name}`,
       resourcePath,
     ]),
+    ["共享 Skill 资源", manifest.skillResources],
     ...(manifest.webAssets === null ? [] : [["Web UI", manifest.webAssets]]),
     ...(manifest.chromiumExecutable === null
       ? []
       : [["Chromium", manifest.chromiumExecutable]]),
+    ...(manifest.node.source === "bundled"
+      ? [["Bundled Node", manifest.node.executable]]
+      : []),
   ]) {
     if (!existsSync(resourcePath)) {
       throw new Error(
@@ -190,9 +200,5 @@ export function resolveNodeExecutable(manifest) {
   if (manifest.node.source === "launcher") {
     return process.execPath;
   }
-  // TODO: Windows .exe 与 Linux 独立安装程序落地时，在这里启用 manifest
-  // 声明的 bundled Node；npm 发行版不得回退搜索 PATH。
-  throw new Error(
-    `当前发行版尚未实现 bundled Node: ${manifest.node.executable ?? "未声明"}`,
-  );
+  return manifest.node.executable;
 }

@@ -9,6 +9,7 @@ def prepare_e2e_workspace(
     workspace_root: Path,
     template_root: Path,
     template_items: tuple[str, ...],
+    shared_skill_root: Path | None = None,
 ) -> Path:
     """从只读模板创建全新的隔离 E2E 工作区。"""
 
@@ -26,6 +27,18 @@ def prepare_e2e_workspace(
             shutil.copytree(source, target)
         else:
             shutil.copy2(source, target)
+    if shared_skill_root is not None:
+        if not shared_skill_root.is_dir():
+            raise FileNotFoundError(f"共享 Skill 源目录不存在: {shared_skill_root}")
+        target_skill_root = workspace_root / ".boxteam" / "skills"
+        target_skill_root.mkdir(parents=True, exist_ok=True)
+        for skill_source in sorted(shared_skill_root.iterdir()):
+            if skill_source.is_dir():
+                shutil.copytree(
+                    skill_source,
+                    target_skill_root / skill_source.name,
+                    dirs_exist_ok=True,
+                )
     return workspace_root
 
 
@@ -58,5 +71,5 @@ def install_e2e_workspace_config(
     target_path = workspace_root / ".boxteam" / "workspace.jsonc"
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(resolved_config_path, target_path)
-    shutil.copy2(resolved_schema_path, target_path.parent / "workspace_config.jsonc")
+    shutil.copy2(resolved_schema_path, target_path.parent / "workspace_schema.jsonc")
     return target_path

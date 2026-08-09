@@ -35,10 +35,6 @@ from app.schemas.public_v2.workspace import (
 )
 from app.services.infrastructure.config_service import ConfigService
 
-DEFAULT_WORKSPACE_FILE_LIMIT = 500
-MAX_PREVIEW_FILE_BYTES = 1024 * 1024
-TEXT_PREVIEW_BINARY_SAMPLE_BYTES = 8192
-
 
 class WorkspaceFileConflictError(RuntimeError):
     """文件打开后已被其他写入者修改。"""
@@ -126,9 +122,14 @@ class WorkspaceService:
         *,
         path: str = "",
         scope: WorkspaceFileScope = "workspace",
-        limit: int = DEFAULT_WORKSPACE_FILE_LIMIT,
+        limit: int | None = None,
         cursor: str | None = None,
     ) -> WorkspaceFileListDTO:
+        resolved_limit = (
+            self._config_service.get_workspace_file_default_limit()
+            if limit is None
+            else limit
+        )
         target_path, display_path = self._resolve_file_tree_path(
             path,
             scope=scope,
@@ -145,7 +146,7 @@ class WorkspaceService:
             target_path,
             display_path,
             scope,
-            limit,
+            resolved_limit,
             cursor_key,
         )
 
@@ -158,7 +159,7 @@ class WorkspaceService:
             path=display_path,
             items=items,
             truncated=next_cursor is not None,
-            limit=limit,
+            limit=resolved_limit,
             next_cursor=next_cursor,
         )
 
@@ -328,7 +329,8 @@ class WorkspaceService:
             raise IsADirectoryError(f"工作区路径不是文件: {relative_path}")
 
         stat_result = target_path.stat()
-        if stat_result.st_size > MAX_PREVIEW_FILE_BYTES:
+        max_preview_bytes = self._config_service.get_workspace_preview_max_bytes()
+        if stat_result.st_size > max_preview_bytes:
             raise ValueError(
                 f"文件过大，暂不预览: {relative_path} ({stat_result.st_size} bytes)"
             )
@@ -413,7 +415,8 @@ class WorkspaceService:
         encoded_content = content.encode("utf-8")
         if has_utf8_bom:
             encoded_content = codecs.BOM_UTF8 + encoded_content
-        if len(encoded_content) > MAX_PREVIEW_FILE_BYTES:
+        max_preview_bytes = self._config_service.get_workspace_preview_max_bytes()
+        if len(encoded_content) > max_preview_bytes:
             raise ValueError(
                 f"文件过大，暂不允许保存: {relative_path} "
                 f"({len(encoded_content)} bytes)"
@@ -746,7 +749,8 @@ class WorkspaceService:
         return hashlib.sha256(raw_content).hexdigest()
 
     def _looks_like_binary(self, raw_content: bytes) -> bool:
-        sample = raw_content[:TEXT_PREVIEW_BINARY_SAMPLE_BYTES]
+        sample_size = self._config_service.get_workspace_preview_binary_sample_bytes()
+        sample = raw_content[:sample_size]
         return b"\x00" in sample
 
     def _guess_language(self, filename: str) -> str:

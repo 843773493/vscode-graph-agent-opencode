@@ -4,18 +4,23 @@ import ChatPanel from "./components/ChatPanel";
 import Composer from "./components/composer/Composer";
 import EventQueuePanel from "./components/EventQueuePanel";
 import AgentSessionsPanel from "./components/AgentSessionsPanel";
+import GatewayLogPanel from "./components/GatewayLogPanel";
 import RequestLogPanel from "./components/RequestLogPanel";
 import ResourcePanel from "./components/ResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
 import { useWarmConfirm } from "./components/WarmConfirmProvider";
 import Toolbar, { type WorkbenchView } from "./components/Toolbar";
 import GatewayControlCenter from "./components/workspace/GatewayControlCenter";
+import WorkspaceEditorHeader from "./components/workspace/WorkspaceEditorHeader";
+import WorkspaceInfoSidebar from "./components/workspace/WorkspaceInfoSidebar";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
+import WorkspaceRuntimePreviewArea, {
+  type WorkspaceRuntimePreviewTab,
+} from "./components/workspace/WorkspaceRuntimePreviewArea";
 import { WorkspaceFileReferenceProvider } from "./components/workspace/WorkspaceFileReferenceContext";
 import WorkspaceAuxiliaryPanel, {
   type WorkspaceAuxiliaryTab,
 } from "./components/workspace/WorkspaceAuxiliaryPanel";
-import WorkspacePortForwardPanel from "./components/workspace/WorkspacePortForwardPanel";
 import {
   useCallback,
   useEffect,
@@ -41,8 +46,11 @@ import SessionGeneratorManager from "./components/agentSessions/SessionGenerator
 import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
 import { createSessionConnection } from "./gatewayApi";
 import {
+  DEFAULT_GATEWAY_PANEL_HEIGHT,
   DEFAULT_MAIN_AREA_RATIOS,
+  GATEWAY_PANEL_RESIZING_CLASS,
   LAYOUT_RESIZING_CLASS,
+  clampGatewayPanelHeight,
   defaultAuxiliaryVisible,
   resizeAdjacentMainAreas,
   resolveMainAreaRatios,
@@ -65,6 +73,26 @@ type SessionNameDialogState = {
   initialTitle: string;
 };
 
+const DEFAULT_AUXILIARY_TAB_ORDER: WorkspaceAuxiliaryTab[] = [
+  "files",
+  "changes",
+  "automation",
+  "resources",
+];
+
+function resolveAuxiliaryTabOrder(
+  value: ReadonlyArray<WorkspaceAuxiliaryTab> | null | undefined,
+): WorkspaceAuxiliaryTab[] {
+  const result: WorkspaceAuxiliaryTab[] = [];
+  for (const tab of value ?? []) {
+    if (!result.includes(tab)) result.push(tab);
+  }
+  for (const tab of DEFAULT_AUXILIARY_TAB_ORDER) {
+    if (!result.includes(tab)) result.push(tab);
+  }
+  return result;
+}
+
 export default function AppShell() {
   const confirm = useWarmConfirm();
   const {
@@ -80,8 +108,9 @@ export default function AppShell() {
     refreshSessionChanges,
     refreshSessionResources,
     reviewSessionChangeFile,
-    controlSessionResource,
     switchContentView,
+    controlSessionResource,
+    toggleAgentSessionsPanel,
     activateGatewayWorkspace,
     refreshGatewayState,
     reconnectGatewayWorkspace,
@@ -103,9 +132,6 @@ export default function AppShell() {
     clearPendingRequests,
     reorderPendingRequests,
     sendPendingRequestImmediately,
-    refreshGoal,
-    updateGoal,
-    clearGoal,
     loadOlderMessages,
     loadTurnDetails,
     refreshTurnHistory,
@@ -121,13 +147,28 @@ export default function AppShell() {
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
   const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>(
-    () => state.uiSettings.layout.auxiliary_tab ?? "changes",
+    () => state.uiSettings.layout.auxiliary_tab ?? "files",
+  );
+  const [auxiliaryTabOrder, setAuxiliaryTabOrder] = useState<WorkspaceAuxiliaryTab[]>(
+    () => resolveAuxiliaryTabOrder(state.uiSettings.layout.auxiliary_tab_order),
   );
   const [auxiliaryVisible, setAuxiliaryVisible] = useState(
     () => state.uiSettings.layout.auxiliary_visible ?? defaultAuxiliaryVisible(),
   );
+  const [panelVisible, setPanelVisible] = useState(
+    () => state.uiSettings.layout.panel_visible ?? false,
+  );
+  const [gatewayPanelHeight, setGatewayPanelHeight] = useState(() =>
+    clampGatewayPanelHeight(
+      state.uiSettings.layout.panel_height ?? DEFAULT_GATEWAY_PANEL_HEIGHT,
+    ),
+  );
   const [fileTreeSearchOpen, setFileTreeSearchOpen] = useState(false);
   const [fileTreeCollapseVersion, setFileTreeCollapseVersion] = useState(0);
+  const [workspaceInfoVisible, setWorkspaceInfoVisible] = useState({
+    automation: true,
+  });
+  const [markdownSourceVisible, setMarkdownSourceVisible] = useState(false);
   const [mainAreaRatios, setMainAreaRatios] = useState(() =>
     resolveMainAreaRatios(state.uiSettings.layout.main_area_ratios),
   );
@@ -153,9 +194,6 @@ export default function AppShell() {
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
-  const activeSessionWorkspace = state.gatewayWorkspaces.find(
-    (workspace) => workspace.workspace_id === activeSessionWorkspaceId,
-  ) ?? null;
   const activeSessionCacheKey =
     activeSession && activeSessionWorkspaceId
       ? sessionScopeKey(activeSessionWorkspaceId, activeSession.session_id)
@@ -188,25 +226,6 @@ export default function AppShell() {
   }, [activeSessionWorkspaceId, state.uiSettings.workspace_file_tree]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const mediaQuery = window.matchMedia("(max-width: 900px)");
-    const syncAuxiliaryVisibility = () => {
-      if (mediaQuery.matches) {
-        setAuxiliaryVisible(false);
-      }
-    };
-
-    syncAuxiliaryVisibility();
-    mediaQuery.addEventListener("change", syncAuxiliaryVisibility);
-    return () => {
-      mediaQuery.removeEventListener("change", syncAuxiliaryVisibility);
-    };
-  }, []);
-
-  useEffect(() => {
     const layout = state.uiSettings.layout;
     if (layout.workbench_view) {
       setWorkbenchView(layout.workbench_view);
@@ -214,8 +233,17 @@ export default function AppShell() {
     if (typeof layout.auxiliary_visible === "boolean") {
       setAuxiliaryVisible(layout.auxiliary_visible);
     }
+    if (typeof layout.panel_visible === "boolean") {
+      setPanelVisible(layout.panel_visible);
+    }
+    if (typeof layout.panel_height === "number") {
+      setGatewayPanelHeight(clampGatewayPanelHeight(layout.panel_height));
+    }
     if (layout.auxiliary_tab) {
       setAuxiliaryTab(layout.auxiliary_tab);
+    }
+    if (layout.auxiliary_tab_order) {
+      setAuxiliaryTabOrder(resolveAuxiliaryTabOrder(layout.auxiliary_tab_order));
     }
     setMainAreaRatios(resolveMainAreaRatios(layout.main_area_ratios));
     if (typeof layout.customizations_collapsed === "boolean") {
@@ -277,9 +305,6 @@ export default function AppShell() {
   ]);
   const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
   const generatorResources = useSessionGeneratorResources(resolvedApiPort);
-  const automationIssueCount = generatorResources.generators?.items.filter(
-    (generator) => generator.status === "blocked",
-  ).length ?? 0;
   const sortedSessions = useMemo(
     () => [...state.sessions].sort(
       (a, b) =>
@@ -323,14 +348,65 @@ export default function AppShell() {
     onPersistLayout: persistLayoutSettings,
     onStatusChange: setStatus,
   });
-  const initializationFailed = Boolean(state.error && !state.isBootstrapping);
-  const previewVisible = !initializationFailed && workspacePreview.visible;
-  const previewMaximized = previewVisible && workspacePreview.maximized;
-  const previewTabs = workspacePreview.tabs;
   const activePreviewPath = workspacePreview.activePath;
+  const previewTabs = workspacePreview.tabs;
   const previewLoadingPath = workspacePreview.loadingPath;
   const previewError = workspacePreview.error;
+  const filePreviewTabs = previewTabs.filter(
+    (tab) => tab.previewType === "file" || tab.previewType === "file-placeholder",
+  );
+  const changePreviewTabs = previewTabs.filter(
+    (tab) => tab.previewType === "session-diff",
+  );
+  const runtimePreviewTabs = previewTabs.filter(
+    (tab): tab is WorkspaceRuntimePreviewTab =>
+      tab.previewType === "terminal" || tab.previewType === "browser",
+  );
+  const codePreviewTabs = auxiliaryTab === "changes"
+    ? changePreviewTabs
+    : filePreviewTabs;
+  const activeCodePreviewPath = codePreviewTabs.some(
+    (tab) => tab.path === activePreviewPath,
+  )
+    ? activePreviewPath
+    : codePreviewTabs[0]?.path ?? null;
+  const activeFilePath = filePreviewTabs.some(
+    (tab) => tab.path === activePreviewPath,
+  )
+    ? activePreviewPath
+    : filePreviewTabs[0]?.path ?? null;
+  const activeRuntimePreview = runtimePreviewTabs.find(
+    (tab) => tab.path === activePreviewPath,
+  ) ?? null;
+  const codePreviewLoadingPath = codePreviewTabs.some(
+    (tab) => tab.path === previewLoadingPath,
+  )
+    ? previewLoadingPath
+    : null;
+  const codePreviewError = previewError && (
+    (auxiliaryTab === "changes" && activePreviewPath?.startsWith("session-diff://")) ||
+    (auxiliaryTab === "files" && activePreviewPath !== null &&
+      !activePreviewPath.startsWith("terminal://") &&
+      !activePreviewPath.startsWith("browser://") &&
+      !activePreviewPath.startsWith("session-diff://"))
+  )
+    ? previewError
+    : null;
   const resourcePanelActive = auxiliaryVisible && auxiliaryTab === "resources";
+
+  const sharedPreviewTab = auxiliaryTab === "files" || auxiliaryTab === "changes";
+  const sharedPreviewVisible = sharedPreviewTab && (
+    codePreviewTabs.length > 0 ||
+    codePreviewLoadingPath !== null ||
+    codePreviewError !== null
+  );
+  const auxiliaryLeftVisible = sharedPreviewTab
+    ? sharedPreviewVisible
+    : auxiliaryTab === "automation" && workspaceInfoVisible.automation;
+
+  useEffect(() => {
+    setMarkdownSourceVisible(false);
+  }, [activePreviewPath]);
 
   useEffect(() => {
     if (state.contentView !== "resources") {
@@ -521,17 +597,33 @@ export default function AppShell() {
     const nextVisible = !auxiliaryVisible;
     setAuxiliaryVisible(nextVisible);
     persistLayoutSettings({ auxiliary_visible: nextVisible });
-    setStatus(nextVisible ? "已显示右侧侧边栏" : "已隐藏右侧侧边栏");
+    setStatus(nextVisible ? "右侧侧边栏已切换为展开" : "右侧侧边栏已切换为收起");
+  };
+  const handleTogglePanel = () => {
+    const nextVisible = !panelVisible;
+    setPanelVisible(nextVisible);
+    persistLayoutSettings({ panel_visible: nextVisible });
+    setStatus(nextVisible ? "底部 Gateway 日志面板已切换为展开" : "底部 Gateway 日志面板已切换为收起");
   };
   const handleAuxiliaryTabChange = (tab: WorkspaceAuxiliaryTab) => {
     setAuxiliaryTab(tab);
     persistLayoutSettings({ auxiliary_tab: tab });
   };
+
+  const handleAuxiliaryTabReorder = (tabOrder: WorkspaceAuxiliaryTab[]) => {
+    const nextOrder = resolveAuxiliaryTabOrder(tabOrder);
+    setAuxiliaryTabOrder(nextOrder);
+    persistLayoutSettings({ auxiliary_tab_order: nextOrder });
+  };
+  const openAuxiliaryTab = (tab: WorkspaceAuxiliaryTab) => {
+    setAuxiliaryVisible(true);
+    setAuxiliaryTab(tab);
+    persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: tab });
+  };
   const handleOpenChangesView = () => {
     setAuxiliaryVisible(true);
     setAuxiliaryTab("changes");
     persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "changes" });
-    void switchContentView("changes");
   };
   const startLayoutResize = (
     target: LayoutResizeTarget,
@@ -542,27 +634,17 @@ export default function AppShell() {
 
     const startX = event.clientX;
     const startRatios = mainAreaRatios;
-    const effectiveStartRatios = previewMaximized
-      ? {
-          ...startRatios,
-          workspace_preview:
-            startRatios.agent_sessions +
-            startRatios.chat +
-            startRatios.workspace_preview,
-        }
-      : startRatios;
+    const effectiveStartRatios = startRatios;
     const [left, leftSelector, right, rightSelector]: [
       MainAreaKey,
       string,
       MainAreaKey,
       string,
     ] = target === "agent-sessions-right"
-      ? ["agent_sessions", ".agent-sessions-panel", "chat", ".sessions-part-card"]
-      : target === "preview-left"
-        ? ["chat", ".sessions-part-card", "workspace_preview", ".workspace-preview-panel"]
-        : previewVisible
-          ? ["workspace_preview", ".workspace-preview-panel", "auxiliary", ".auxiliary-panel"]
-          : ["chat", ".sessions-part-card", "auxiliary", ".auxiliary-panel"];
+      ? ["agent_sessions", ".agent-sessions-panel", "chat", ".workbench-main-column"]
+      : target === "workspace-editor-left"
+        ? ["chat", ".sessions-part-card", "workspace_preview", ".workspace-editor-shell"]
+        : ["workspace_preview", ".workspace-preview-panel", "auxiliary", ".auxiliary-panel"];
     const leftArea = document.querySelector<HTMLElement>(leftSelector);
     const rightArea = document.querySelector<HTMLElement>(rightSelector);
     if (!leftArea || !rightArea) {
@@ -581,27 +663,68 @@ export default function AppShell() {
         return;
       }
       moved = true;
-      const resizedRatios = resizeAdjacentMainAreas({
-        ratios: effectiveStartRatios,
-        left,
-        right,
-        leftWidth,
-        rightWidth,
-        deltaX,
-      });
-      if (previewMaximized && left === "workspace_preview") {
-        const scale =
-          resizedRatios.workspace_preview /
-          effectiveStartRatios.workspace_preview;
-        latestRatios = {
-          agent_sessions: startRatios.agent_sessions * scale,
-          chat: startRatios.chat * scale,
-          workspace_preview: startRatios.workspace_preview * scale,
-          auxiliary: resizedRatios.auxiliary,
-        };
-      } else {
-        latestRatios = resizedRatios;
-      }
+      const resizedRatios = target === "agent-sessions-right"
+        ? (() => {
+            const combinedWidth = leftWidth + rightWidth;
+            if (combinedWidth <= 0) {
+              throw new Error("无法调整没有宽度的会话侧栏和主工作区");
+            }
+            const nextSidebarWidth = leftWidth + deltaX;
+            const nextMainWidth = rightWidth - deltaX;
+            if (nextSidebarWidth <= 0 || nextMainWidth <= 0) {
+              return effectiveStartRatios;
+            }
+            const mainRatio =
+              effectiveStartRatios.chat +
+              effectiveStartRatios.workspace_preview +
+              effectiveStartRatios.auxiliary;
+            const combinedRatio = effectiveStartRatios.agent_sessions + mainRatio;
+            const nextMainRatio = combinedRatio * (nextMainWidth / combinedWidth);
+            const mainScale = nextMainRatio / mainRatio;
+            return {
+              ...effectiveStartRatios,
+              agent_sessions: combinedRatio * (nextSidebarWidth / combinedWidth),
+              chat: effectiveStartRatios.chat * mainScale,
+              workspace_preview:
+                effectiveStartRatios.workspace_preview * mainScale,
+              auxiliary: effectiveStartRatios.auxiliary * mainScale,
+            };
+          })()
+        : target === "workspace-editor-left"
+          ? (() => {
+              const combinedWidth = leftWidth + rightWidth;
+              if (combinedWidth <= 0) {
+                throw new Error("无法调整没有宽度的会话区和编辑器工作区");
+              }
+              const nextChatWidth = leftWidth + deltaX;
+              const nextEditorWidth = rightWidth - deltaX;
+              if (nextChatWidth <= 0 || nextEditorWidth <= 0) {
+                return effectiveStartRatios;
+              }
+              const editorRatio =
+                effectiveStartRatios.workspace_preview +
+                effectiveStartRatios.auxiliary;
+              const combinedRatio = effectiveStartRatios.chat + editorRatio;
+              const nextChatRatio = combinedRatio * (nextChatWidth / combinedWidth);
+              const nextEditorRatio = combinedRatio * (nextEditorWidth / combinedWidth);
+              const editorScale = nextEditorRatio / editorRatio;
+              return {
+                ...effectiveStartRatios,
+                chat: nextChatRatio,
+                workspace_preview:
+                  effectiveStartRatios.workspace_preview * editorScale,
+                auxiliary: effectiveStartRatios.auxiliary * editorScale,
+              };
+            })()
+        : resizeAdjacentMainAreas({
+            ratios: effectiveStartRatios,
+            left,
+            right,
+            leftWidth,
+            rightWidth,
+            deltaX,
+          });
+      latestRatios = resizedRatios;
       setMainAreaRatios(latestRatios);
     };
 
@@ -626,6 +749,46 @@ export default function AppShell() {
     const ratios = { ...DEFAULT_MAIN_AREA_RATIOS };
     setMainAreaRatios(ratios);
     persistLayoutSettings({ main_area_ratios: ratios });
+  };
+  const startGatewayPanelResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    cleanupLayoutResizeRef.current?.();
+
+    const startY = event.clientY;
+    const startHeight = gatewayPanelHeight;
+    let latestHeight = startHeight;
+    let moved = false;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const deltaY = startY - moveEvent.clientY;
+      if (deltaY === 0) {
+        return;
+      }
+      moved = true;
+      latestHeight = clampGatewayPanelHeight(startHeight + deltaY);
+      setGatewayPanelHeight(latestHeight);
+    };
+
+    const finishResize = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", finishResize);
+      document.body.classList.remove(GATEWAY_PANEL_RESIZING_CLASS);
+      cleanupLayoutResizeRef.current = null;
+      if (moved) {
+        persistLayoutSettings({ panel_height: latestHeight });
+      }
+    };
+
+    document.body.classList.add(GATEWAY_PANEL_RESIZING_CLASS);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", finishResize);
+    cleanupLayoutResizeRef.current = finishResize;
+  };
+  const resetGatewayPanelHeight = () => {
+    setGatewayPanelHeight(DEFAULT_GATEWAY_PANEL_HEIGHT);
+    persistLayoutSettings({ panel_height: DEFAULT_GATEWAY_PANEL_HEIGHT });
   };
   const handleCreateSession = (workspaceId?: string | null) => {
     setNameDialog(null);
@@ -774,55 +937,25 @@ export default function AppShell() {
         setNameDialogSubmitting(false);
       });
   };
-  const findLatestResponseInConversation = (marker: Element | null) => {
-    let target: Element | null = marker;
-    let cursor = marker?.nextElementSibling ?? null;
-    while (cursor && !cursor.classList.contains("conversation-marker")) {
-      if (cursor.classList.contains("event-card-response")) {
-        target = cursor;
-      }
-      cursor = cursor.nextElementSibling;
-    }
-    return target;
-  };
-  const showConversation = (jobId?: string) => {
-    switchContentView("default");
-    if (!jobId) {
-      window.setTimeout(() => {
-        const markers = document.querySelectorAll(".conversation-marker");
-        const marker = markers.length > 0 ? markers[markers.length - 1] : null;
-        const target = findLatestResponseInConversation(marker);
-        if (target instanceof HTMLElement) {
-          target.scrollIntoView({ behavior: "smooth", block: "start" });
-          return;
-        }
-        const stream = document.querySelector<HTMLElement>(".chat-stream");
-        stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
-      }, 80);
-      return;
-    }
-
-    window.setTimeout(() => {
-      const escapedJobId = jobId.replace(/["\\]/g, "\\$&");
-      const marker = document.querySelector(`[data-job-id="${escapedJobId}"]`);
-      const target = findLatestResponseInConversation(marker);
-      const targetElement = target instanceof HTMLElement ? target : null;
-      targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 80);
-  };
-
   const renderContentView = () => {
     if (state.error) {
       return (
         <div className="empty-state error-state">
           <div className="error-title">前端初始化失败</div>
           <div className="error-message">{state.error}</div>
+          <button
+            type="button"
+            className="error-retry-button"
+            onClick={() => void refreshGatewayState().catch(() => undefined)}
+          >
+            重新加载工作区
+          </button>
         </div>
       );
     }
 
     if (state.isBootstrapping) {
-      return <BootstrapState />;
+      return <BootstrapState onRetry={refreshGatewayState} />;
     }
 
     const contentView = state.contentView;
@@ -934,7 +1067,10 @@ export default function AppShell() {
       apiPort={resolvedApiPort}
       workspaceId={activeSessionWorkspaceId}
       workspaceRoot={state.workspaceRoot ?? ""}
-      onOpen={workspacePreview.openWorkspaceFileReference}
+      onOpen={(content, reference) => {
+        openAuxiliaryTab("files");
+        workspacePreview.openWorkspaceFileReference(content, reference);
+      }}
     >
       <div
       className={`app-shell agent-sessions-workbench shell-gradient-background ${agentSessionsVisible ? "agent-sessions-open" : "agent-sessions-closed"}`}
@@ -955,10 +1091,99 @@ export default function AppShell() {
         }}
         auxiliaryVisible={auxiliaryVisible}
         onToggleAuxiliaryPanel={handleToggleAuxiliaryPanel}
+        agentSessionsVisible={agentSessionsVisible}
+        onToggleAgentSessionsPanel={toggleAgentSessionsPanel}
+        panelVisible={panelVisible}
+        onTogglePanel={handleTogglePanel}
         workbenchView={workbenchView}
         onWorkbenchViewChange={handleWorkbenchViewChange}
         showAuxiliaryToggle={workbenchView === "sessions"}
       />
+      <div className="workbench-body">
+        <AgentSessionsPanel
+          apiPort={resolvedApiPort}
+          sessions={sortedSessions}
+          currentSessionId={
+            state.currentSessionWorkspaceId === state.activeGatewayWorkspaceId
+              ? activeSession?.session_id ?? ""
+              : ""
+          }
+          onSelectSession={selectSession}
+          onRenameSession={handleRenameSession}
+          onDeleteSession={handleDeleteSession}
+          onSetSessionParent={handleSetSessionParent}
+          onForkSessionContext={handleForkSessionContext}
+          onStatusChange={setStatus}
+          isOpen={agentSessionsVisible && workbenchView === "sessions"}
+          workspaceName={state.workspaceName ?? ""}
+          gatewayWorkspaces={state.gatewayWorkspaces}
+          activeGatewayWorkspaceId={state.activeGatewayWorkspaceId}
+          workspaceSwitching={state.workspaceSwitching}
+          onActivateWorkspace={activateGatewayWorkspace}
+          onSetWorkspaceParent={setGatewayWorkspaceParent}
+          onRefreshWorkspaceSessions={refreshGatewayWorkspaceSessions}
+          onRemoveWorkspace={handleRemoveWorkspace}
+          onAddWorkspace={addManagedGatewayWorkspace}
+          onOpenGatewayControl={() => handleWorkbenchViewChange("gateway")}
+          onReconnectWorkspace={reconnectGatewayWorkspace}
+          onStartWorkspace={startManagedGatewayWorkspaceBackend}
+          onStopWorkspace={stopManagedGatewayWorkspaceBackend}
+          onRenameWorkspace={renameGatewayWorkspace}
+          onCopySessionInformation={copySessionInformation}
+          onCopyWorkspaceInformation={copyWorkspaceInformation}
+          onSelectWorkspaceSession={handleSelectAgentSession}
+          activeSession={activeSession}
+          sessionAttachmentSummaries={state.sessionAttachmentSummaries}
+          activeJobIdsBySession={state.activeJobIdsBySession}
+          unreadSessionKeys={state.unreadSessionKeys}
+          onCreateSession={handleCreateSession}
+          onCreateSessionInFolder={handleCreateSessionInFolder}
+          onCreateSessionFolder={handleCreateSessionFolder}
+          onSessionFolderDeleted={handleSessionFolderDeleted}
+          onInvalidateSessionCatalog={invalidateSessionCatalog}
+          catalogSyncKeys={sessionCatalogSyncKeys}
+          catalogRefreshVersions={sessionCatalogRefreshVersions}
+          flexRatio={mainAreaRatios.agent_sessions}
+          preferences={agentSessionsPreferences}
+          onPreferencesChange={(updater) => {
+            persistUiSettings((current) => ({
+              session_sidebar: updater(current.session_sidebar),
+            }));
+          }}
+          customizationsCollapsed={customizationsCollapsed}
+          customizationsHeight={customizationsHeight}
+          onCustomizationsCollapsedChange={(collapsed) => {
+            setCustomizationsCollapsed(collapsed);
+            persistLayoutSettings({ customizations_collapsed: collapsed });
+          }}
+          onCustomizationsHeightChange={(height, commit) => {
+            setCustomizationsHeight(height);
+            if (commit) {
+              persistLayoutSettings({ customizations_height: height });
+            }
+          }}
+          generatorResources={generatorResources}
+        />
+        {agentSessionsVisible && workbenchView === "sessions" ? (
+          <button
+            type="button"
+            className="layout-sash layout-sash-agent-sessions-right"
+            title="拖拽调整会话侧栏宽度，双击还原"
+            aria-label="调整会话侧栏宽度"
+            onPointerDown={(event) => startLayoutResize("agent-sessions-right", event)}
+            onDoubleClick={resetMainAreaRatios}
+          />
+        ) : null}
+        <div
+          className="workbench-main-column"
+          style={{
+            flexBasis: 0,
+            flexGrow:
+              mainAreaRatios.chat +
+              mainAreaRatios.workspace_preview +
+              mainAreaRatios.auxiliary,
+          }}
+        >
       <div
         className={`gateway-view-slot${
           workbenchView === "gateway" ? "" : " preserve-mounted-hidden"
@@ -985,82 +1210,8 @@ export default function AppShell() {
         data-bt-surface="layout"
       >
         <div
-          className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${previewVisible ? "" : " preview-collapsed"}${previewMaximized ? " preview-maximized" : ""}`}
+          className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}`}
         >
-          <AgentSessionsPanel
-            apiPort={resolvedApiPort}
-            sessions={sortedSessions}
-            currentSessionId={
-              state.currentSessionWorkspaceId === state.activeGatewayWorkspaceId
-                ? activeSession?.session_id ?? ""
-                : ""
-            }
-            onSelectSession={selectSession}
-            onRenameSession={handleRenameSession}
-            onDeleteSession={handleDeleteSession}
-            onSetSessionParent={handleSetSessionParent}
-            onForkSessionContext={handleForkSessionContext}
-            onStatusChange={setStatus}
-            isOpen={agentSessionsVisible}
-            workspaceName={state.workspaceName ?? ""}
-            gatewayWorkspaces={state.gatewayWorkspaces}
-            activeGatewayWorkspaceId={state.activeGatewayWorkspaceId}
-            workspaceSwitching={state.workspaceSwitching}
-            onActivateWorkspace={activateGatewayWorkspace}
-            onSetWorkspaceParent={setGatewayWorkspaceParent}
-            onRefreshWorkspaceSessions={refreshGatewayWorkspaceSessions}
-            onRemoveWorkspace={handleRemoveWorkspace}
-            onAddWorkspace={addManagedGatewayWorkspace}
-            onOpenGatewayControl={() => handleWorkbenchViewChange("gateway")}
-            onReconnectWorkspace={reconnectGatewayWorkspace}
-            onStartWorkspace={startManagedGatewayWorkspaceBackend}
-            onStopWorkspace={stopManagedGatewayWorkspaceBackend}
-            onRenameWorkspace={renameGatewayWorkspace}
-            onCopySessionInformation={copySessionInformation}
-            onCopyWorkspaceInformation={copyWorkspaceInformation}
-            onSelectWorkspaceSession={handleSelectAgentSession}
-            activeSession={activeSession}
-            sessionAttachmentSummaries={state.sessionAttachmentSummaries}
-            activeJobIdsBySession={state.activeJobIdsBySession}
-            unreadSessionKeys={state.unreadSessionKeys}
-            onCreateSession={handleCreateSession}
-            onCreateSessionInFolder={handleCreateSessionInFolder}
-            onCreateSessionFolder={handleCreateSessionFolder}
-            onSessionFolderDeleted={handleSessionFolderDeleted}
-            onInvalidateSessionCatalog={invalidateSessionCatalog}
-            catalogSyncKeys={sessionCatalogSyncKeys}
-            catalogRefreshVersions={sessionCatalogRefreshVersions}
-            flexRatio={mainAreaRatios.agent_sessions}
-            preferences={agentSessionsPreferences}
-            onPreferencesChange={(updater) => {
-              persistUiSettings((current) => ({
-                session_sidebar: updater(current.session_sidebar),
-              }));
-            }}
-            customizationsCollapsed={customizationsCollapsed}
-            customizationsHeight={customizationsHeight}
-            onCustomizationsCollapsedChange={(collapsed) => {
-              setCustomizationsCollapsed(collapsed);
-              persistLayoutSettings({ customizations_collapsed: collapsed });
-            }}
-            onCustomizationsHeightChange={(height, commit) => {
-              setCustomizationsHeight(height);
-              if (commit) {
-                persistLayoutSettings({ customizations_height: height });
-              }
-            }}
-            generatorResources={generatorResources}
-          />
-          {agentSessionsVisible ? (
-            <button
-              type="button"
-              className="layout-sash layout-sash-agent-sessions-right"
-              title="拖拽调整会话侧栏宽度，双击还原"
-              aria-label="调整会话侧栏宽度"
-              onPointerDown={(event) => startLayoutResize("agent-sessions-right", event)}
-              onDoubleClick={resetMainAreaRatios}
-            />
-          ) : null}
           <section
             className="chat-panel sessions-part-card"
             data-bt-surface="workspace"
@@ -1071,196 +1222,240 @@ export default function AppShell() {
               <Composer />
             </div>
           </section>
-          {previewVisible ? (
-            <button
-              type="button"
-              className="layout-sash layout-sash-preview-left"
-              title="拖拽调整文件预览区宽度，双击还原"
-              aria-label="调整文件预览区宽度"
-              onPointerDown={(event) => startLayoutResize("preview-left", event)}
-              onDoubleClick={resetMainAreaRatios}
-            />
-          ) : null}
-          <WorkspaceFilePreviewArea
-            visible={previewVisible}
-            apiPort={resolvedApiPort}
-            workspaceId={activeSessionWorkspaceId}
-            flexRatio={
-              previewMaximized
-                ? mainAreaRatios.agent_sessions +
-                  mainAreaRatios.chat +
-                  mainAreaRatios.workspace_preview
-                : mainAreaRatios.workspace_preview
-            }
-            maximized={previewMaximized}
-            tabs={previewTabs}
-            activePath={activePreviewPath}
-            loadingPath={previewLoadingPath}
-            error={previewError}
-            editingPath={workspacePreview.editingPath}
-            draftContent={workspacePreview.draftContent}
-            savingPath={workspacePreview.savingPath}
-            hasUnsavedEdit={workspacePreview.hasUnsavedEdit}
-            onSelectTab={(path) => {
-              workspacePreview.selectWorkspacePreviewTab(path);
-              workspacePreview.setError(null);
-            }}
-            onCloseTab={workspacePreview.closeWorkspaceFilePreview}
-            onToggleMaximized={() => {
-              workspacePreview.setMaximized((maximized) => !maximized);
-            }}
-            onClosePanel={() => {
-              workspacePreview.setMaximized(false);
-              workspacePreview.setVisible(false);
-            }}
-            onBeginEdit={workspacePreview.beginWorkspaceFileEdit}
-            onDraftChange={workspacePreview.setDraftContent}
-            onCancelEdit={workspacePreview.cancelWorkspaceFileEdit}
-            onSaveEdit={workspacePreview.saveWorkspaceFileEdit}
-            onOpenWorkspacePath={workspacePreview.openWorkspaceFilePath}
-          />
           {auxiliaryVisible ? (
-            <button
-              type="button"
-              className="layout-sash layout-sash-auxiliary-left"
-              title="拖拽调整右侧栏宽度，双击还原"
-              aria-label="调整右侧栏宽度"
-              onPointerDown={(event) => startLayoutResize("auxiliary-left", event)}
-              onDoubleClick={resetMainAreaRatios}
-            />
+            <>
+              <button
+                type="button"
+                className="layout-sash layout-sash-workspace-editor-left"
+                title="拖拽调整会话区与编辑器工作区宽度，双击还原"
+                aria-label="调整会话区与编辑器工作区宽度"
+                onPointerDown={(event) => startLayoutResize("workspace-editor-left", event)}
+                onDoubleClick={resetMainAreaRatios}
+              />
+              <section
+                className="workspace-editor-shell"
+                data-bt-surface="workspace"
+                style={{
+                  flexBasis: 0,
+                  flexGrow:
+                    mainAreaRatios.workspace_preview +
+                    mainAreaRatios.auxiliary,
+                }}
+              >
+                <WorkspaceEditorHeader
+                  auxiliaryTab={auxiliaryTab}
+                  tabOrder={auxiliaryTabOrder}
+                  onSelectAuxiliaryTab={openAuxiliaryTab}
+                  onReorderAuxiliaryTabs={handleAuxiliaryTabReorder}
+                />
+                <div className={`workspace-editor-body workspace-editor-body-${auxiliaryTab}`}>
+                  {sharedPreviewTab ? (
+                    sharedPreviewVisible ? (
+                      <WorkspaceFilePreviewArea
+                        context={auxiliaryTab === "changes" ? "changes" : "files"}
+                        visible
+                        flexRatio={mainAreaRatios.workspace_preview}
+                        apiPort={resolvedApiPort}
+                        workspaceId={activeSessionWorkspaceId}
+                        workspaceName={state.workspaceName ?? "未选择工作区"}
+                        sessionTitle={activeSession?.title ?? "新会话"}
+                        tabs={codePreviewTabs}
+                        activePath={activeCodePreviewPath}
+                        loadingPath={codePreviewLoadingPath}
+                        error={codePreviewError}
+                        editingPath={workspacePreview.editingPath}
+                        draftContent={workspacePreview.draftContent}
+                        savingPath={workspacePreview.savingPath}
+                        hasUnsavedEdit={workspacePreview.hasUnsavedEdit}
+                        markdownSourceVisible={markdownSourceVisible}
+                        onMarkdownSourceChange={setMarkdownSourceVisible}
+                        onBeginEdit={workspacePreview.beginWorkspaceFileEdit}
+                        onDraftChange={workspacePreview.setDraftContent}
+                        onCancelEdit={() => void workspacePreview.cancelWorkspaceFileEdit()}
+                        onSaveEdit={workspacePreview.saveWorkspaceFileEdit}
+                        onOpenWorkspacePath={workspacePreview.openWorkspaceFilePath}
+                      />
+                    ) : null
+                  ) : auxiliaryTab === "automation" ? (
+                    <WorkspaceInfoSidebar
+                      tab="automation"
+                      visible={workspaceInfoVisible.automation}
+                      flexRatio={mainAreaRatios.workspace_preview}
+                      workspaceName={state.workspaceName ?? "未选择工作区"}
+                      workspaceRoot={state.workspaceRoot ?? ""}
+                      sessionTitle={activeSession?.title ?? "新会话"}
+                      onToggle={() => setWorkspaceInfoVisible((current) => ({
+                        ...current,
+                        automation: !current.automation,
+                      }))}
+                    />
+                  ) : null}
+                  {auxiliaryLeftVisible ? (
+                    <button
+                      type="button"
+                      className="layout-sash layout-sash-auxiliary-left"
+                      title="拖拽调整左侧信息区宽度，双击还原"
+                      aria-label="调整左侧信息区宽度"
+                      onPointerDown={(event) => startLayoutResize("auxiliary-left", event)}
+                      onDoubleClick={resetMainAreaRatios}
+                    />
+                  ) : null}
+                  <WorkspaceAuxiliaryPanel
+                    visible={auxiliaryVisible}
+                    flexRatio={sharedPreviewTab && !sharedPreviewVisible
+                      ? mainAreaRatios.workspace_preview + mainAreaRatios.auxiliary
+                      : mainAreaRatios.auxiliary}
+                    tab={auxiliaryTab}
+                    apiPort={resolvedApiPort}
+                    workspaceId={activeSessionWorkspaceId}
+                    workspaceName={state.workspaceName ?? ""}
+                    workspaceRoot={state.workspaceRoot ?? ""}
+                    sessionId={activeSession?.session_id ?? ""}
+                    sessionTitle={activeSession?.title ?? "新会话"}
+                    activeFilePath={activeFilePath}
+                    sessionChangesets={state.sessionChangesets}
+                    selectedChangesetId={state.selectedChangesetId}
+                    activeChangeset={state.activeChangeset}
+                    sessionChangesLoading={state.sessionChangesLoading}
+                    sessionChangesError={state.sessionChangesError}
+                    sessionChangesLoadedAt={state.sessionChangesLoadedAt}
+                    searchOpen={fileTreeSearchOpen}
+                    collapseVersion={fileTreeCollapseVersion}
+                    expandedFileTreePaths={expandedFileTreePaths}
+                    onExpandedFileTreePathsChange={(paths) => {
+                      if (!activeSessionWorkspaceId) {
+                        return;
+                      }
+                      persistUiSettings((current) => ({
+                        workspace_file_tree: {
+                          expanded_paths_by_workspace: {
+                            ...current.workspace_file_tree.expanded_paths_by_workspace,
+                            [activeSessionWorkspaceId]: paths,
+                          },
+                        },
+                      }));
+                    }}
+                    automationPanel={(
+                      <SessionGeneratorManager
+                        apiPort={resolvedApiPort}
+                        generatorResources={generatorResources}
+                        workspaces={state.gatewayWorkspaces}
+                        activeWorkspaceId={state.activeGatewayWorkspaceId}
+                        currentSessionId={activeSession?.session_id ?? ""}
+                        onStatusChange={setStatus}
+                        onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
+                        onReconnectWorkspace={reconnectGatewayWorkspace}
+                        onStartWorkspace={startManagedGatewayWorkspaceBackend}
+                      />
+                    )}
+                    resourcePanel={(
+                      <ResourcePanel
+                        resources={state.sessionResources}
+                        loading={state.sessionResourcesLoading}
+                        error={state.sessionResourcesError}
+                        loadedAt={state.sessionResourcesLoadedAt}
+                        sessionId={activeSession?.session_id ?? ""}
+                        workspaceId={activeSessionWorkspaceId}
+                        activePreviewPath={activeRuntimePreview?.path ?? null}
+                        onRefresh={() => {
+                          if (activeSession) {
+                            void refreshSessionResources(activeSession.session_id);
+                          }
+                        }}
+                        onControl={controlSessionResource}
+                        onOpenTerminalPreview={(terminalId) => {
+                          openAuxiliaryTab("resources");
+                          workspacePreview.openTerminalPreview(terminalId);
+                        }}
+                        onOpenBrowserPreview={(browserId) => {
+                          openAuxiliaryTab("resources");
+                          workspacePreview.openBrowserPreview(browserId);
+                        }}
+                        onCloseResourcePreview={(kind, resourceId) =>
+                          workspacePreview.closeWorkspaceFilePreview(`${kind}://${resourceId}`)
+                        }
+                        onCreateConnection={async (kind) => {
+                          if (!activeSession || !activeSessionWorkspaceId) {
+                            throw new Error("新建连接需要当前会话和 Gateway workspace_id");
+                          }
+                          const created = await createSessionConnection(
+                            resolvedApiPort,
+                            activeSessionWorkspaceId,
+                            activeSession.session_id,
+                            kind,
+                          );
+                          await refreshSessionResources(activeSession.session_id);
+                          if (created.kind === "terminal") {
+                            openAuxiliaryTab("resources");
+                            workspacePreview.openTerminalPreview(created.resourceId);
+                          } else {
+                            openAuxiliaryTab("resources");
+                            workspacePreview.openBrowserPreview(created.resourceId);
+                          }
+                        }}
+                      />
+                    )}
+                    runtimePreview={activeRuntimePreview ? (
+                      <WorkspaceRuntimePreviewArea
+                        tab={activeRuntimePreview}
+                        onClose={() => void workspacePreview.closeWorkspaceFilePreview(activeRuntimePreview.path)}
+                      />
+                    ) : null}
+                    onToggleSearch={() => {
+                      handleAuxiliaryTabChange("files");
+                      setFileTreeSearchOpen((open) => !open);
+                    }}
+                    onCollapseAll={() => {
+                      handleAuxiliaryTabChange("files");
+                      setFileTreeCollapseVersion((version) => version + 1);
+                    }}
+                    onSelectSessionChangeset={(changesetId) => {
+                      if (activeSession) {
+                        void refreshSessionChanges(activeSession.session_id, changesetId);
+                      }
+                    }}
+                    onRefreshSessionChanges={() => {
+                      if (activeSession) {
+                        void refreshSessionChanges(
+                          activeSession.session_id,
+                          state.selectedChangesetId,
+                        );
+                      }
+                    }}
+                    onOpenSessionChangeFile={openSessionChangeInPreview}
+                    onReviewSessionChangeFile={reviewSessionChangeFile}
+                    onOpenFile={(node) => {
+                      openAuxiliaryTab("files");
+                      workspacePreview.openWorkspaceFilePreview(node);
+                    }}
+                    onStatusChange={setStatus}
+                  />
+                </div>
+              </section>
+            </>
           ) : null}
-          <WorkspaceAuxiliaryPanel
-            visible={auxiliaryVisible}
-            flexRatio={mainAreaRatios.auxiliary}
-            tab={auxiliaryTab}
-            apiPort={resolvedApiPort}
-            workspaceId={activeSessionWorkspaceId}
-            workspaceName={state.workspaceName ?? ""}
-            workspaceRoot={state.workspaceRoot ?? ""}
-            sessionId={activeSession?.session_id ?? ""}
-            activeFilePath={activePreviewPath}
-            sessionChangesets={state.sessionChangesets}
-            selectedChangesetId={state.selectedChangesetId}
-            activeChangeset={state.activeChangeset}
-            sessionChangesLoading={state.sessionChangesLoading}
-            sessionChangesError={state.sessionChangesError}
-            sessionChangesLoadedAt={state.sessionChangesLoadedAt}
-            searchOpen={fileTreeSearchOpen}
-            collapseVersion={fileTreeCollapseVersion}
-            expandedFileTreePaths={expandedFileTreePaths}
-            onExpandedFileTreePathsChange={(paths) => {
-              if (!activeSessionWorkspaceId) {
-                return;
-              }
-              persistUiSettings((current) => ({
-                workspace_file_tree: {
-                  expanded_paths_by_workspace: {
-                    ...current.workspace_file_tree.expanded_paths_by_workspace,
-                    [activeSessionWorkspaceId]: paths,
-                  },
-                },
-              }));
-            }}
-            onTabChange={handleAuxiliaryTabChange}
-            automationIssueCount={automationIssueCount}
-            automationPanel={(
-              <SessionGeneratorManager
-                apiPort={resolvedApiPort}
-                generatorResources={generatorResources}
-                workspaces={state.gatewayWorkspaces}
-                activeWorkspaceId={state.activeGatewayWorkspaceId}
-                currentSessionId={activeSession?.session_id ?? ""}
-                onStatusChange={setStatus}
-                onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
-                onReconnectWorkspace={reconnectGatewayWorkspace}
-                onStartWorkspace={startManagedGatewayWorkspaceBackend}
-              />
-            )}
-            portForwardPanel={(
-              <WorkspacePortForwardPanel
-                apiPort={resolvedApiPort}
-                workspace={activeSessionWorkspace}
-                active={auxiliaryVisible && auxiliaryTab === "resources"}
-              />
-            )}
-            resourcePanel={(
-              <ResourcePanel
-                resources={state.sessionResources}
-                loading={state.sessionResourcesLoading}
-                error={state.sessionResourcesError}
-                loadedAt={state.sessionResourcesLoadedAt}
-                sessionId={activeSession?.session_id ?? ""}
-                workspaceId={activeSessionWorkspaceId}
-                activePreviewPath={activePreviewPath}
-                goal={
-                  state.currentGoalSessionId === activeSession?.session_id
-                    ? state.currentGoal
-                    : null
-                }
-                goalLoading={state.goalLoading}
-                goalError={state.goalError}
-                onRefresh={() => {
-                  if (activeSession) {
-                    void refreshSessionResources(activeSession.session_id);
-                  }
-                }}
-                onRefreshGoal={() => refreshGoal()}
-                onUpdateGoal={(payload) => updateGoal(payload)}
-                onClearGoal={() => clearGoal()}
-                onControl={controlSessionResource}
-                onOpenTerminalPreview={workspacePreview.openTerminalPreview}
-                onOpenBrowserPreview={workspacePreview.openBrowserPreview}
-                onCloseResourcePreview={(kind, resourceId) =>
-                  workspacePreview.closeWorkspaceFilePreview(`${kind}://${resourceId}`)
-                }
-                onShowConversation={showConversation}
-                onCreateConnection={async (kind) => {
-                  if (!activeSession || !activeSessionWorkspaceId) {
-                    throw new Error("新建连接需要当前会话和 Gateway workspace_id");
-                  }
-                  const created = await createSessionConnection(
-                    resolvedApiPort,
-                    activeSessionWorkspaceId,
-                    activeSession.session_id,
-                    kind,
-                  );
-                  await refreshSessionResources(activeSession.session_id);
-                  if (created.kind === "terminal") {
-                    workspacePreview.openTerminalPreview(created.resourceId);
-                  } else {
-                    workspacePreview.openBrowserPreview(created.resourceId);
-                  }
-                }}
-              />
-            )}
-            onToggleSearch={() => {
-              handleAuxiliaryTabChange("files");
-              setFileTreeSearchOpen((open) => !open);
-            }}
-            onCollapseAll={() => {
-              handleAuxiliaryTabChange("files");
-              setFileTreeCollapseVersion((version) => version + 1);
-            }}
-            onSelectSessionChangeset={(changesetId) => {
-              if (activeSession) {
-                void refreshSessionChanges(activeSession.session_id, changesetId);
-              }
-            }}
-            onRefreshSessionChanges={() => {
-              if (activeSession) {
-                void refreshSessionChanges(
-                  activeSession.session_id,
-                  state.selectedChangesetId,
-                );
-              }
-            }}
-            onOpenSessionChangeFile={openSessionChangeInPreview}
-            onReviewSessionChangeFile={reviewSessionChangeFile}
-            onOpenFile={workspacePreview.openWorkspaceFilePreview}
-            onStatusChange={setStatus}
-          />
         </div>
       </main>
+      {panelVisible ? (
+        <>
+          <button
+            type="button"
+            className="layout-sash layout-sash-gateway-panel"
+            title="拖拽调整 Gateway 日志面板高度，双击还原"
+            aria-label="调整 Gateway 日志面板高度"
+            onPointerDown={startGatewayPanelResize}
+            onDoubleClick={resetGatewayPanelHeight}
+          />
+          <GatewayLogPanel
+            apiPort={resolvedApiPort}
+            workspaces={state.gatewayWorkspaces}
+            height={gatewayPanelHeight}
+            onClose={handleTogglePanel}
+          />
+        </>
+      ) : null}
+        </div>
+      </div>
       <SessionNameDialog
         open={nameDialog !== null}
         title="重命名会话"

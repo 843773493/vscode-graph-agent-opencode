@@ -29,26 +29,30 @@ def _load(path: Path) -> dict[str, object]:
 
 
 @pytest.mark.parametrize("domain", ["gateway", "workspace"])
-@pytest.mark.parametrize("suffix", ["", "_dev"])
+@pytest.mark.parametrize("suffix", ["_inline", "_dev"])
 def test_static_configuration_matches_domain_schema(domain: str, suffix: str) -> None:
-    schema = _load(Path(f"configs/{domain}_config.jsonc"))
+    schema = _load(Path(f"configs/{domain}_schema.jsonc"))
     config = _load(Path(f"configs/{domain}{suffix}.jsonc"))
 
     jsonschema.Draft202012Validator.check_schema(schema)
     jsonschema.validate(config, schema)
 
 
-def test_development_templates_only_enable_development_capabilities() -> None:
-    gateway = _load(Path("configs/gateway.jsonc"))
+def test_development_templates_enable_development_capabilities_and_docker_gateway() -> None:
+    gateway = _load(Path("configs/gateway_inline.jsonc"))
     gateway_dev = _load(Path("configs/gateway_dev.jsonc"))
-    workspace = _load(Path("configs/workspace.jsonc"))
+    workspace = _load(Path("configs/workspace_inline.jsonc"))
     workspace_dev = _load(Path("configs/workspace_dev.jsonc"))
 
     assert gateway["workspaces"] == []
-    assert gateway_dev["workspaces"][0]["enabled"] is False  # type: ignore[index]
+    assert gateway_dev["workspaces"][0]["enabled"] is True  # type: ignore[index]
+    assert (
+        gateway_dev["workspaces"][0]["ssh_config_host"]  # type: ignore[index]
+        == "boxteam-container"
+    )
     assert workspace["development"] == {"test_tools": False}
     assert workspace_dev["development"] == {"test_tools": True}
-    assert "mcp" not in workspace
+    assert workspace["mcp"] == {"servers": {}}
     assert "mcp" in workspace_dev
 
 
@@ -68,8 +72,8 @@ def test_initialize_user_configuration_only_creates_missing_configs(
 
     assert existing.read_text(encoding="utf-8") == '{"owned_by_user": true}\n'
     assert result.created_config_paths == (config_root / "workspace.jsonc",)
-    assert (config_root / "gateway_config.jsonc").is_file()
-    assert (config_root / "workspace_config.jsonc").is_file()
+    assert (config_root / "gateway_schema.jsonc").is_file()
+    assert (config_root / "workspace_schema.jsonc").is_file()
 
 
 def test_force_rebuild_replaces_both_user_configs(tmp_path: Path) -> None:
@@ -101,12 +105,12 @@ def test_install_source_development_configuration_replaces_all_runtime_files(
     configs_root.mkdir(parents=True)
     (project_root / ".env").write_text("BOXTEAM_TEST=source\n", encoding="utf-8")
     for name in (
-        "gateway.jsonc",
+        "gateway_inline.jsonc",
         "gateway_dev.jsonc",
-        "gateway_config.jsonc",
-        "workspace.jsonc",
+        "gateway_schema.jsonc",
+        "workspace_inline.jsonc",
         "workspace_dev.jsonc",
-        "workspace_config.jsonc",
+        "workspace_schema.jsonc",
     ):
         shutil.copy2(Path.cwd() / "configs" / name, configs_root / name)
     config_root = tmp_path / "boxteam-home" / "config"
@@ -120,7 +124,7 @@ def test_install_source_development_configuration_replaces_all_runtime_files(
 
     assert result.env_path is not None
     assert result.env_path.read_text(encoding="utf-8") == "BOXTEAM_TEST=source\n"
-    assert _load(config_root / "gateway.jsonc")["workspaces"][0]["enabled"] is False  # type: ignore[index]
+    assert _load(config_root / "gateway.jsonc")["workspaces"][0]["enabled"] is True  # type: ignore[index]
     assert _load(config_root / "workspace.jsonc")["development"] == {"test_tools": True}
 
 
@@ -164,7 +168,7 @@ def test_cli_migrate_splits_legacy_user_configuration(
     boxteam_home = tmp_path / "boxteam-home"
     config_root = boxteam_home / "config"
     config_root.mkdir(parents=True)
-    legacy = _load(Path("configs/workspace.jsonc"))
+    legacy = _load(Path("configs/workspace_inline.jsonc"))
     legacy.pop("$schema")
     legacy["config_version"] = 4
     legacy["gateway"] = {"workspaces": []}

@@ -617,6 +617,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({
       ...prev,
       workspaceSwitching: false,
+      error: null,
       status: "工作区已就绪",
     }));
   }, [refreshSessions]);
@@ -670,6 +671,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({
       ...prev,
       gatewayError: null,
+      error: null,
+      isBootstrapping: prev.isBootstrapping || Boolean(prev.error),
       status: "正在刷新 Gateway 状态",
     }));
     try {

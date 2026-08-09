@@ -134,11 +134,12 @@ function writeDevelopmentManifest() {
         python_executable: pythonBin,
         application_root: projectRoot,
         config_resources: {
-          gateway: path.join(projectRoot, "configs", "gateway.jsonc"),
-          gateway_schema: path.join(projectRoot, "configs", "gateway_config.jsonc"),
-          workspace: path.join(projectRoot, "configs", "workspace.jsonc"),
-          workspace_schema: path.join(projectRoot, "configs", "workspace_config.jsonc"),
+          gateway_inline: path.join(projectRoot, "configs", "gateway_inline.jsonc"),
+          gateway_schema: path.join(projectRoot, "configs", "gateway_schema.jsonc"),
+          workspace_inline: path.join(projectRoot, "configs", "workspace_inline.jsonc"),
+          workspace_schema: path.join(projectRoot, "configs", "workspace_schema.jsonc"),
         },
+        skill_resources: path.join(projectRoot, "resources", "skills"),
         web_assets: null,
         chromium_executable:
           process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? null,
@@ -360,16 +361,6 @@ async function main() {
     BOXTEAM_PYTHON_BIN: pythonBin,
     BOXTEAM_NODE_BIN: nodeBin,
     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultWorkspaceRoot,
-    BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE:
-      process.env.BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE ??
-      path.join(os.homedir(), ".ssh", "boxteam_gateway_e2e_known_hosts"),
-    BOXTEAM_REMOTE_PAIR_COMMAND:
-      process.env.BOXTEAM_REMOTE_PAIR_COMMAND ??
-      "cd /opt/boxteam-dev/repository && " +
-        "BOXTEAM_HOME=/home/boxteam/.boxteams-dev " +
-        "BOXTEAM_GATEWAY_ROOT=/home/boxteam/.boxteams-dev/state/gateway " +
-        "/opt/boxteam-dev/repository/.venv/bin/python " +
-        "-m app.gateway.federation_pairing",
     BOXTEAM_TERMINAL_FRONTEND_URL: `http://${host}:${ports.terminalFrontend}`,
     BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${ports.browserFrontend}`,
     BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),

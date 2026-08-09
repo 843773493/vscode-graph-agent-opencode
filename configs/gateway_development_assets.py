@@ -5,9 +5,11 @@ from pathlib import Path
 
 from configs.installer import atomic_write
 
-SSH_KEY_NAME = "boxteam_gateway_e2e_ed25519"
-SSH_KNOWN_HOSTS_NAME = "boxteam_gateway_e2e_known_hosts"
-SSH_HOST_ALIAS = "boxteam-gateway-e2e"
+SSH_SOURCE_KEY_NAME = "boxteam_gateway_e2e_ed25519"
+SSH_KEY_NAME = "boxteam-container"
+SSH_KNOWN_HOSTS_NAME = "boxteam-container_known_hosts"
+SSH_HOST_ALIAS = "boxteam-container"
+SSH_COMPATIBILITY_HOST_ALIAS = "boxteam-gateway-e2e"
 SSH_BLOCK_BEGIN = "# BEGIN BOXTEAM GATEWAY E2E"
 SSH_BLOCK_END = "# END BOXTEAM GATEWAY E2E"
 DOCKER_TARGET_KNOWN_HOSTS = Path(
@@ -38,8 +40,8 @@ def _replace_managed_ssh_block(existing: str, block: str) -> str:
 def install_gateway_development_assets(*, project_root: Path, home: Path) -> None:
     """安装 Gateway 开发目标所需的 SSH 文件，不读写 JSONC 配置。"""
     source_root = project_root / "asset" / "gateway_ssh"
-    private_source = source_root / SSH_KEY_NAME
-    public_source = source_root / f"{SSH_KEY_NAME}.pub"
+    private_source = source_root / SSH_SOURCE_KEY_NAME
+    public_source = source_root / f"{SSH_SOURCE_KEY_NAME}.pub"
     if not private_source.is_file() or not public_source.is_file():
         raise FileNotFoundError(f"Gateway E2E SSH 密钥不完整: {source_root}")
 
@@ -68,7 +70,7 @@ def install_gateway_development_assets(*, project_root: Path, home: Path) -> Non
     block = "\n".join(
         (
             SSH_BLOCK_BEGIN,
-            f"Host {SSH_HOST_ALIAS}",
+            f"Host {SSH_HOST_ALIAS} {SSH_COMPATIBILITY_HOST_ALIAS}",
             "  HostName 127.0.0.1",
             "  Port 22222",
             f"  User {ssh_user}",

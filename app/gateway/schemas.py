@@ -79,6 +79,19 @@ class GatewayConfigReloadStatusDTO(BaseModel):
     error: str | None = None
 
 
+class GatewayConfigSourceDTO(BaseModel):
+    path: str
+    layer: Literal["inline", "user", "user_local"]
+    precedence: int
+    loaded: bool
+
+
+class GatewayConfigSourcesDTO(BaseModel):
+    revision: str
+    schema_path: str
+    sources: list[GatewayConfigSourceDTO] = Field(default_factory=list)
+
+
 class GatewayRemoteConnectionSummaryDTO(BaseModel):
     gateway_connection_id: str
     remote_workspace_id: str
@@ -375,7 +388,13 @@ class WebUILayoutSettingsDTO(BaseModel):
     workbench_view: Literal["sessions", "gateway"] | None = None
     agent_sessions_panel_open: bool | None = None
     auxiliary_visible: bool | None = None
+    panel_visible: bool | None = None
     auxiliary_tab: Literal["changes", "files", "automation", "resources"] | None = None
+    auxiliary_tab_order: list[Literal["changes", "files", "automation", "resources"]] | None = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+    )
     main_area_ratios: WebUIMainAreaRatiosDTO | None = None
     workspace_preview_visible: bool | None = None
     workspace_preview_maximized: bool | None = None
@@ -386,6 +405,7 @@ class WebUILayoutSettingsDTO(BaseModel):
     )
     customizations_collapsed: bool | None = None
     customizations_height: int | None = Field(default=None, ge=80, le=520)
+    panel_height: int | None = Field(default=None, ge=190, le=520)
     content_view: (
         Literal[
             "default",

@@ -35,11 +35,11 @@ def _layout_schema_sources(
 ) -> tuple[Path, Path]:
     return (
         resolve_config_resource_source(
-            "gateway_config.jsonc",
+            "gateway_schema.jsonc",
             project_root=project_root,
         ),
         resolve_config_resource_source(
-            "workspace_config.jsonc",
+            "workspace_schema.jsonc",
             project_root=project_root,
         ),
     )
@@ -69,7 +69,7 @@ def _validate_installed_configuration(
 
     gateway = load_gateway_config(
         config_path=config_root / "gateway.jsonc",
-        schema_path=config_root / "gateway_config.jsonc",
+        schema_path=config_root / "gateway_schema.jsonc",
     )
     service = ConfigService(
         config_dir=config_root,

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from deepagents.middleware.permissions import FilesystemPermission
 from deepagents.middleware.skills import append_to_system_message
@@ -38,6 +38,7 @@ from app.agents.policy import validate_tool_dependencies
 from app.agents.skill_runtime import (
     append_skill_middlewares,
     discover_workspace_skill_sources,
+    resolve_bundled_skill_groups,
 )
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
@@ -352,8 +353,19 @@ def create_my_deep_agent(
             item for item in runtime_middleware if item.__class__.__name__ in enabled_runtime_middleware_names
         ]
 
-    resolved_skills = discover_workspace_skill_sources(workspace_root) if skills is None else list(skills)
-    backend = build_workspace_backend(workspace_root)
+    resolved_bundled_skill_groups = resolve_bundled_skill_groups()
+    resolved_skills = (
+        discover_workspace_skill_sources(
+            workspace_root,
+            bundled_skill_groups=resolved_bundled_skill_groups,
+        )
+        if skills is None
+        else list(skills)
+    )
+    backend = build_workspace_backend(
+        workspace_root,
+        bundled_skill_groups=resolved_bundled_skill_groups,
+    )
     tool_output_middleware = ToolOutputMiddleware(
         session_id=session_id,
         store=ToolOutputStore(workspace_root=workspace_root),

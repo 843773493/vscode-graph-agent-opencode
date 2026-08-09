@@ -1,17 +1,28 @@
 {
-  "$schema": "./gateway_config.jsonc",
+  "$schema": "./gateway_schema.jsonc",
   "config_version": 1,
   "workspaces": [
     {
-      "enabled": false,
+      "enabled": true,
       "kind": "remote_gateway",
       "name": "Gateway E2E Docker Gateway",
       "host": "127.0.0.1",
       "port": 22222,
       "username": "boxteam",
-      "private_key_path": "~/.ssh/boxteam_gateway_e2e_ed25519",
+      "private_key_path": "~/.ssh/boxteam-container",
+      "ssh_config_host": "boxteam-container",
+      "remote_pair_command": "BOXTEAM_HOME=/home/boxteam/.boxteams-dev BOXTEAM_GATEWAY_ROOT=/home/boxteam/.boxteams-dev/state/gateway boxteam gateway issue-federation-token",
       "remote_gateway_port": 8014,
       "activate": false
     }
-  ]
+  ],
+  "runtime": {
+    "workspace": {
+      "default_skill_groups": [
+        "browser-control",
+        "gateway-context",
+        "web-search-fetch"
+      ]
+    }
+  }
 }

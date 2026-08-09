@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -39,6 +39,10 @@ class GatewayWorkspaceRuntimeController:
         on_registry_reconciled: Callable[[], Awaitable[None]] | None = None,
         drain_timeout_seconds: float = 30,
         drain_poll_interval_seconds: float = 0.25,
+        health_request_timeout_seconds: float = 2,
+        health_poll_interval_seconds: float = 0.5,
+        connection_drain_timeout_seconds: float = 2,
+        default_skill_groups: Sequence[str] = (),
     ) -> None:
         self._registry = registry
         self._project_root = project_root
@@ -46,6 +50,10 @@ class GatewayWorkspaceRuntimeController:
         self._on_registry_reconciled = on_registry_reconciled
         self._drain_timeout_seconds = drain_timeout_seconds
         self._drain_poll_interval_seconds = drain_poll_interval_seconds
+        self._health_request_timeout_seconds = health_request_timeout_seconds
+        self._health_poll_interval_seconds = health_poll_interval_seconds
+        self._connection_drain_timeout_seconds = connection_drain_timeout_seconds
+        self._default_skill_groups = tuple(default_skill_groups)
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def start_managed_backend(
@@ -74,6 +82,12 @@ class GatewayWorkspaceRuntimeController:
                 workspace_root=workspace_root,
                 log_dir=self._log_dir,
                 reusable_service_urls=target.local_service_urls,
+                health_request_timeout_seconds=self._health_request_timeout_seconds,
+                health_poll_interval_seconds=self._health_poll_interval_seconds,
+                connection_drain_timeout_seconds=(
+                    self._connection_drain_timeout_seconds
+                ),
+                default_skill_groups=self._default_skill_groups,
             )
             target.backend_url = runtime.service_urls["workspace_api"]
             target.local_service_urls = {
@@ -240,6 +254,10 @@ class GatewayWorkspaceRuntimeController:
             project_root=self._project_root,
             workspace_root=Path(target.root_path),
             log_dir=self._log_dir,
+            health_request_timeout_seconds=self._health_request_timeout_seconds,
+            health_poll_interval_seconds=self._health_poll_interval_seconds,
+            connection_drain_timeout_seconds=self._connection_drain_timeout_seconds,
+            default_skill_groups=self._default_skill_groups,
         )
         self._registry.invalidate_route(target.workspace_id)
         target.connection_error = None
@@ -345,6 +363,8 @@ class GatewayWorkspaceRuntimeController:
                 registry=self._registry,
                 connection_id=target.remote_gateway_connection_id,
                 log_dir=self._log_dir,
+                health_request_timeout_seconds=self._health_request_timeout_seconds,
+                health_poll_interval_seconds=self._health_poll_interval_seconds,
             )
             await self._reconcile_registry_dependents()
 
@@ -359,7 +379,9 @@ class GatewayWorkspaceRuntimeController:
                     "只有外部本地后端可以执行重新探测"
                 )
             await wait_for_http_ok(
-                f"{target.backend_url.rstrip('/')}/api/v1/health"
+                f"{target.backend_url.rstrip('/')}/api/v1/health",
+                request_timeout_seconds=self._health_request_timeout_seconds,
+                poll_interval_seconds=self._health_poll_interval_seconds,
             )
             target.connection_error = None
             self._registry.upsert(target, activate=False)
@@ -492,6 +514,10 @@ async def reconnect_gateway_workspace(
     workspace_id: str,
     project_root: Path,
     log_dir: Path,
+    health_request_timeout_seconds: float = 2,
+    health_poll_interval_seconds: float = 0.5,
+    connection_drain_timeout_seconds: float = 2,
+    default_skill_groups: Sequence[str] = (),
 ) -> None:
     """按注册信息重建工作区运行时，不改变稳定的 workspace_id。"""
     target = registry.resolve(workspace_id)
@@ -504,6 +530,8 @@ async def reconnect_gateway_workspace(
             registry=registry,
             connection_id=connection_id,
             log_dir=log_dir,
+            health_request_timeout_seconds=health_request_timeout_seconds,
+            health_poll_interval_seconds=health_poll_interval_seconds,
         )
         return
 
@@ -513,13 +541,21 @@ async def reconnect_gateway_workspace(
             workspace_root=Path(target.root_path),
             log_dir=log_dir,
             reusable_service_urls=target.local_service_urls,
+            health_request_timeout_seconds=health_request_timeout_seconds,
+            health_poll_interval_seconds=health_poll_interval_seconds,
+            connection_drain_timeout_seconds=connection_drain_timeout_seconds,
+            default_skill_groups=default_skill_groups,
         )
         target.backend_url = runtime.service_urls["workspace_api"]
         target.local_service_urls = {
             "browser_manager": runtime.service_urls["browser_manager"]
         }
     else:
-        await wait_for_http_ok(f"{target.backend_url.rstrip('/')}/api/v1/health")
+        await wait_for_http_ok(
+            f"{target.backend_url.rstrip('/')}/api/v1/health",
+            request_timeout_seconds=health_request_timeout_seconds,
+            poll_interval_seconds=health_poll_interval_seconds,
+        )
         runtime = WorkspaceRuntime(service_urls={"workspace_api": target.backend_url})
 
     target.connection_error = None

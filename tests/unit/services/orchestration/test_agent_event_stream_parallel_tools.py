@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables.config import ensure_config, var_child_runnable_config
+from langchain_core.tools import BaseTool, tool
+from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
@@ -49,6 +53,21 @@ class FakeAgent:
             }
 
 
+class GraphFakeAgent(FakeAgent):
+    def __init__(self, events: list[dict[str, Any]], tools: list[BaseTool]) -> None:
+        super().__init__(events)
+        self._tools_by_name = {item.name: item for item in tools}
+
+    def get_graph(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            nodes={
+                "tools": SimpleNamespace(
+                    data=SimpleNamespace(tools_by_name=self._tools_by_name),
+                )
+            }
+        )
+
+
 class ResolvingConfigAgent(FakeAgent):
     def __init__(self) -> None:
         super().__init__([])
@@ -85,6 +104,66 @@ class RecordingSessionChangesService:
 
     async def record_tool_file_edit(self, **kwargs: Any) -> None:
         self.recorded.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_tool_start_event_contains_only_model_visible_arguments(
+    tmp_path: Path,
+) -> None:
+    @tool
+    def runtime_aware(value: str, runtime: ToolRuntime) -> str:
+        """测试含运行时注入参数的工具。"""
+        del runtime
+        return value
+
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_runtime_aware",
+            "name": "runtime_aware",
+            "data": {
+                "input": {
+                    "value": "ready",
+                    "runtime": object(),
+                }
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_runtime_aware",
+            "name": "runtime_aware",
+            "data": {
+                "output": ToolMessage(
+                    content="ready",
+                    tool_call_id="call_runtime_aware",
+                    name="runtime_aware",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    await process_agent_event_stream(
+        agent=GraphFakeAgent(events, [runtime_aware]),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_runtime_args",
+        turn_id="job_runtime_args",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+    )
+
+    start_payload = published[0][1]
+    assert start_payload["args"] == {"value": "ready"}
+    json.dumps(start_payload)
 
 
 def test_last_model_token_usage_keeps_last_execution_request() -> None:

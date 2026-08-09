@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url);
 
 const PLATFORM_RUNTIME_PACKAGES = new Map([
   ["linux:x64", "@boxteam/runtime-linux-x64"],
+  ["win32:x64", "@boxteam/runtime-windows-x64"],
 ]);
 
 function platformKey(platform, architecture) {
