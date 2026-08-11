@@ -71,21 +71,30 @@ class JobPendingQueue:
         self._refresh_yield(session_id)
         return job_id
 
-    def pop_next_group(self, session_id: str) -> tuple[str, ...]:
-        """连续 Steering 合并为一组；普通排队消息一次只取一条。"""
+    def peek_next_group(self, session_id: str) -> tuple[str, ...]:
+        """查看下一组待处理 Job，但不改变队列。"""
         waiting = self._waiting.get(session_id)
         if not waiting:
             return ()
         first_id = waiting[0]
         first_kind = self.kind(first_id)
-        count = 1
-        if first_kind == "steering":
-            count = 0
-            for job_id in waiting:
-                if self.kind(job_id) != "steering":
-                    break
-                count += 1
-        result = tuple(waiting.popleft() for _ in range(count))
+        if first_kind != "steering":
+            return (first_id,)
+        group: list[str] = []
+        for job_id in waiting:
+            if self.kind(job_id) != "steering":
+                break
+            group.append(job_id)
+        return tuple(group)
+
+    def pop_next_group(self, session_id: str) -> tuple[str, ...]:
+        """连续 Steering 合并为一组；普通排队消息一次只取一条。"""
+        waiting = self._waiting.get(session_id)
+        if not waiting:
+            return ()
+        result = self.peek_next_group(session_id)
+        for _ in result:
+            waiting.popleft()
         for job_id in result:
             self._kinds.pop(job_id, None)
         if not waiting:

@@ -202,6 +202,29 @@ def _status(workspaces: list[GatewayDiagnosticWorkspaceDTO]) -> GatewayDiagnosti
     return "ready"
 
 
+def _scope_log_candidates(
+    gateway_candidates: list[_LogCandidate],
+    workspace_candidates: list[_LogCandidate],
+    selected_workspace_id: str | None,
+) -> list[_LogCandidate]:
+    if selected_workspace_id is None:
+        return [*gateway_candidates, *workspace_candidates]
+
+    # Gateway 运行日志没有稳定的 workspace_id，不能在工作区筛选下伪装成目标工作区日志。
+    # 保留 Launcher 汇总日志作为全局控制面入口，其他无归属日志只在“全部工作区”中展示。
+    global_candidates = [
+        candidate
+        for candidate in gateway_candidates
+        if candidate.log_id == "gateway:launcher"
+    ]
+    selected_workspace_candidates = [
+        candidate
+        for candidate in workspace_candidates
+        if candidate.workspace_id == selected_workspace_id
+    ]
+    return [*global_candidates, *selected_workspace_candidates]
+
+
 async def collect_gateway_diagnostics(
     registry: GatewayWorkspaceRegistry,
     *,
@@ -218,16 +241,21 @@ async def collect_gateway_diagnostics(
     local_gateway_id = gateway_id or load_or_create_gateway_id(
         get_gateway_root() / "identity.json"
     )
-    workspace_dtos = [
+    all_workspace_dtos = [
         item
         for item in await registry.list_dtos()
         if item.connection_kind == "local"
     ]
     if selected_workspace_id is not None and not any(
-        item.workspace_id == selected_workspace_id for item in workspace_dtos
+        item.workspace_id == selected_workspace_id for item in all_workspace_dtos
     ):
         raise LookupError(f"Gateway 工作区不存在: {selected_workspace_id}")
 
+    workspace_dtos = [
+        item
+        for item in all_workspace_dtos
+        if selected_workspace_id is None or item.workspace_id == selected_workspace_id
+    ]
     workspace_items = [
         GatewayDiagnosticWorkspaceDTO(
             workspace_id=item.workspace_id,
@@ -256,18 +284,12 @@ async def collect_gateway_diagnostics(
         for candidate in workspace_candidates
         if candidate.path is not None
     }
-    candidates = _candidate_gateway_logs(known_workspace_files)
-    if selected_workspace_id is not None:
-        candidates = [
-            *[candidate for candidate in candidates if candidate.source == "gateway"],
-            *[
-                candidate
-                for candidate in workspace_candidates
-                if candidate.workspace_id == selected_workspace_id
-            ],
-        ]
-    else:
-        candidates = [*candidates, *workspace_candidates]
+    gateway_candidates = _candidate_gateway_logs(known_workspace_files)
+    candidates = _scope_log_candidates(
+        gateway_candidates,
+        workspace_candidates,
+        selected_workspace_id,
+    )
     if selected_log_id is not None and not any(
         candidate.log_id == selected_log_id for candidate in candidates
     ):

@@ -89,6 +89,17 @@
   color: var(--bt-text-muted);
 }
 
+.chat-user-bubble.is-inspectable {
+  min-width: 34px;
+  min-height: 22px;
+  cursor: context-menu;
+}
+
+.chat-user-bubble.is-inspectable:focus-visible {
+  outline: 1px solid var(--bt-focus-border);
+  outline-offset: 2px;
+}
+
 .chat-internal-message-label {
   display: inline-block;
   margin-right: 8px;
@@ -334,6 +345,51 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.55;
+}
+
+.chat-user-raw-status,
+.chat-user-raw-error {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.chat-user-raw-status {
+  color: var(--bt-text-muted);
+}
+
+.chat-user-raw-error {
+  color: var(--bt-status-danger);
+}
+
+.chat-user-raw-details {
+  max-width: min(80vw, 760px);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--bt-overlay-border);
+}
+
+.chat-user-raw-details-title {
+  margin-bottom: 5px;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-user-raw-content {
+  max-height: 300px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--bt-overlay-border);
+  border-radius: 6px;
+  background: var(--bt-code-background);
+  color: var(--bt-text-primary);
+  font-family: var(--bt-font-family-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .chat-user-bubble .attachment-list {

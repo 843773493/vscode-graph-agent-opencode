@@ -17,6 +17,7 @@ export type WorkspacePreviewTab =
       previewType: "terminal";
       path: string;
       name: string;
+      scopeLabel?: string;
       terminalId: string;
       attachUrl: string;
     }
@@ -24,6 +25,7 @@ export type WorkspacePreviewTab =
       previewType: "browser";
       path: string;
       name: string;
+      scopeLabel?: string;
       browserId: string;
       attachUrl: string;
     }

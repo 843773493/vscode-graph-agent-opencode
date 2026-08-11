@@ -26,9 +26,21 @@ const terminalSearchResult = document.querySelector("#terminal-search-result");
 const terminalSearchPrevious = document.querySelector("#terminal-search-previous");
 const terminalSearchNext = document.querySelector("#terminal-search-next");
 const terminalSearchClose = document.querySelector("#terminal-search-close");
-const agentForm = document.querySelector("#agent-form");
-const agentInput = document.querySelector("#agent-input");
-const agentSubmitButton = agentForm.querySelector("button");
+
+function readHostThemeToken(token, fallback) {
+  if (window.parent === window) {
+    return fallback;
+  }
+  // TODO：跨域独立终端没有权限读取主窗口主题，保留终端自身的深色默认值。
+  try {
+    const value = window.parent.getComputedStyle(
+      window.parent.document.documentElement,
+    ).getPropertyValue(token).trim();
+    return value || fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 const terminal = new window.Terminal({
   cursorBlink: true,
@@ -36,10 +48,13 @@ const terminal = new window.Terminal({
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
   fontSize: 14,
   theme: {
-    background: "#050607",
-    foreground: "#f8fafc",
-    cursor: "#93c5fd",
-    selectionBackground: "#334155",
+    background: readHostThemeToken("--bt-terminal-background", "#050607"),
+    foreground: readHostThemeToken("--bt-terminal-foreground", "#f8fafc"),
+    cursor: readHostThemeToken("--bt-accent", "#93c5fd"),
+    selectionBackground: readHostThemeToken(
+      "--bt-selection-background",
+      "#334155",
+    ),
   },
 });
 const fitAddon = new window.FitAddon.FitAddon();
@@ -106,6 +121,7 @@ async function initializeGatewayAuth() {
 function setStatus(message, error = false) {
   statusLine.textContent = message;
   statusLine.classList.toggle("error", error);
+  statusLine.hidden = !error;
 }
 
 function statusLabel(status) {
@@ -133,13 +149,10 @@ function commandStatusLabel(status, exitCode) {
 
 function updateControls() {
   const terminalRunning = currentTerminalStatus === "running";
-  const hasInput = Boolean(agentInput.value.trim());
   attachToggle.disabled = deleted || !terminalRunning;
   refreshSnapshotButton.disabled = deleted;
   terminateButton.disabled = deleted || !terminalRunning;
   deleteButton.disabled = deleted;
-  agentInput.disabled = !attached || deleted || !terminalRunning;
-  agentSubmitButton.disabled = !attached || deleted || !terminalRunning || !hasInput;
   terminalContainer.classList.toggle("is-disabled", deleted || !terminalRunning);
   terminal.options.disableStdin = !attached || deleted || !terminalRunning;
 }
@@ -514,26 +527,6 @@ refreshSnapshotButton.addEventListener("click", () => {
     setStatus(error instanceof Error ? error.message : String(error), true);
   });
 });
-
-agentForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const value = agentInput.value;
-  if (!value.trim()) {
-    setStatus("请输入要发送到终端的内容", true);
-    updateControls();
-    return;
-  }
-  if (!attached) {
-    setStatus("请先 attach 后再发送输入", true);
-    return;
-  }
-  send({ type: "input", data: `${value}\r` });
-  agentInput.value = "";
-  updateControls();
-  setStatus("输入已写入终端；如果当前命令仍在运行，shell 会在其结束后继续处理。");
-});
-
-agentInput.addEventListener("input", updateControls);
 
 terminateButton.addEventListener("click", async () => {
   if (!terminalId) {

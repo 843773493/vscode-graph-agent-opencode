@@ -8,7 +8,7 @@ import type {
 import SessionChangesTree from "./SessionChangesTree";
 import WorkspaceFileTree from "./WorkspaceFileTree";
 
-export type WorkspaceAuxiliaryTab = "changes" | "files" | "automation" | "resources";
+export type WorkspaceAuxiliaryTab = "changes" | "files" | "resources";
 
 interface WorkspaceAuxiliaryPanelProps {
   visible: boolean;
@@ -20,6 +20,7 @@ interface WorkspaceAuxiliaryPanelProps {
   workspaceRoot: string;
   sessionId: string;
   sessionTitle: string;
+  extensionWindow?: boolean;
   activeFilePath: string | null;
   sessionChangesets: SessionChangesetListItem[];
   selectedChangesetId: string | null;
@@ -32,7 +33,6 @@ interface WorkspaceAuxiliaryPanelProps {
   expandedFileTreePaths: string[];
   onExpandedFileTreePathsChange: (paths: string[]) => void;
   resourcePanel: ReactNode;
-  automationPanel: ReactNode;
   runtimePreview: ReactNode;
   onToggleSearch: () => void;
   onCollapseAll: () => void;
@@ -57,6 +57,7 @@ export default function WorkspaceAuxiliaryPanel({
   workspaceRoot,
   sessionId,
   sessionTitle,
+  extensionWindow = false,
   activeFilePath,
   sessionChangesets,
   selectedChangesetId,
@@ -69,7 +70,6 @@ export default function WorkspaceAuxiliaryPanel({
   expandedFileTreePaths,
   onExpandedFileTreePathsChange,
   resourcePanel,
-  automationPanel,
   runtimePreview,
   onToggleSearch,
   onCollapseAll,
@@ -171,19 +171,11 @@ export default function WorkspaceAuxiliaryPanel({
           />
       </div>
       <div
-        className={`auxiliary-view-body auxiliary-automation-body${
-          tab === "automation" ? "" : " preserve-mounted-hidden"
-        }`}
-        hidden={tab !== "automation"}
-        data-bt-surface="layout"
-      >
-        {automationPanel}
-      </div>
-      <div
-        className={`auxiliary-view-body auxiliary-resources-body${runtimePreview ? " has-runtime-preview" : ""}${
+        className={`auxiliary-view-body auxiliary-resources-body${extensionWindow ? " extension-window-body" : ""}${runtimePreview ? " has-runtime-preview" : ""}${
           tab === "resources" ? "" : " preserve-mounted-hidden"
         }`}
         hidden={tab !== "resources"}
+        data-extension-region={extensionWindow ? "workspace" : undefined}
         data-bt-surface="layout"
       >
         {runtimePreview}

@@ -57,6 +57,13 @@ export default function SessionGeneratorManager({
     folder_id: string;
     name: string;
   }>>([]);
+  const workspaceGenerators = generatorResources.generators?.items.filter(
+    (generator) => generator.placement.workspace_id === activeWorkspaceId,
+  ) ?? [];
+
+  useEffect(() => {
+    setTargetWorkspaceId(activeWorkspaceId ?? "");
+  }, [activeWorkspaceId]);
 
   const reportError = (prefix: string, error: unknown) => {
     onStatusChange(`${prefix}: ${error instanceof Error ? error.message : String(error)}`);
@@ -189,16 +196,16 @@ export default function SessionGeneratorManager({
       config: { prompt: prompt.trim(), session_title: name.trim() },
     });
     closeDraft();
-    onStatusChange(`已创建会话自动化：${name.trim()}`);
+    onStatusChange(`已创建工作区自动化：${name.trim()}`);
   };
 
   return (
     <>
-    <section className="session-generator-manager" data-testid="session-generator-manager" aria-label="会话自动化">
+    <section className="session-generator-manager" data-testid="session-generator-manager" aria-label="工作区自动化">
       <header className="session-automation-header">
         <div>
-          <h2>会话自动化</h2>
-          <p>按计划创建、继续或分支会话。</p>
+          <h2>工作区自动化</h2>
+          <p>按当前工作区管理计划任务及其生成会话。</p>
         </div>
         {!creating ? <button type="button" className="session-generator-create" onClick={() => {
           resetDraft();
@@ -206,15 +213,15 @@ export default function SessionGeneratorManager({
         }}>新建自动化</button> : null}
       </header>
       <div className="session-automation-summary" aria-label="自动化状态摘要">
-        <span>{generatorResources.generators?.items.length ?? 0} 个自动化</span>
-        <span>{generatorResources.generators?.items.filter((item) => item.status === "ready").length ?? 0} 个正常</span>
-        <span className={generatorResources.generators?.items.some((item) => item.status === "blocked") ? "attention" : ""}>
-          {generatorResources.generators?.items.filter((item) => item.status === "blocked").length ?? 0} 个需要处理
+        <span>{workspaceGenerators.length} 个自动化</span>
+        <span>{workspaceGenerators.filter((item) => item.status === "ready").length} 个正常</span>
+        <span className={workspaceGenerators.some((item) => item.status === "blocked") ? "attention" : ""}>
+          {workspaceGenerators.filter((item) => item.status === "blocked").length} 个需要处理
         </span>
       </div>
       {generatorResources.generatorError ? <div className="session-resource-error" role="alert">{generatorResources.generatorError}</div> : null}
       <div className="session-generator-list">
-        {generatorResources.generators?.items.map((generator) => {
+        {workspaceGenerators.map((generator) => {
           const runs = generatorResources.generationRuns.get(generator.generator_id);
           const targetWorkspace = workspaces.find(
             (workspace) => workspace.workspace_id === generator.placement.workspace_id,
@@ -322,6 +329,9 @@ export default function SessionGeneratorManager({
             </div>
           );
         })}
+        {workspaceGenerators.length === 0 ? (
+          <div className="session-generator-empty">当前工作区暂无自动化</div>
+        ) : null}
       </div>
       {creating ? (
         <form className="session-generator-form" onSubmit={(event) => {
@@ -348,7 +358,7 @@ export default function SessionGeneratorManager({
           {triggerType === "cron" ? <label>Cron（UTC）<input required value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label> : null}
           <label>工作区
             <select value={targetWorkspaceId} onChange={(event) => setTargetWorkspaceId(event.target.value)}>
-              {workspaces.map((workspace) => (
+              {workspaces.filter((workspace) => workspace.workspace_id === activeWorkspaceId).map((workspace) => (
                 <option key={workspace.workspace_id} value={workspace.workspace_id}>
                   {workspace.name} — {workspace.root_path} · {workspace.status} · {workspace.workspace_id.slice(-8)}
                 </option>
@@ -422,7 +432,7 @@ export default function SessionGeneratorManager({
     </section>
     <WarmActionDialog
       open={deletingGenerator !== null}
-      title="删除会话自动化"
+      title="删除工作区自动化"
       description={deletingGenerator
         ? `删除自动化“${deletingGenerator.name}”？已有运行和生成会话不会删除。`
         : undefined}
@@ -434,7 +444,7 @@ export default function SessionGeneratorManager({
           throw new Error("自动化删除目标已失效");
         }
         await generatorResources.deleteGenerator(deletingGenerator.generatorId);
-        onStatusChange(`已删除自动化：${deletingGenerator.name}`);
+        onStatusChange(`已删除工作区自动化：${deletingGenerator.name}`);
       }}
     />
     </>

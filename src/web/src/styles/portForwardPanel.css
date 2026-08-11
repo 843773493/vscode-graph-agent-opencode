@@ -1,18 +1,21 @@
+/* 端口视图按 VS Code tunnelView 的 Workbench Table 组织；颜色仍由本地主题变量提供。 */
 .auxiliary-resources-body {
   flex-direction: column;
 }
 
 .port-forward-panel {
   display: flex;
-  flex: 0 1 auto;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
-  max-height: min(360px, 42%);
-  margin: 10px;
-  padding: 10px;
   overflow: hidden;
-  border: 1px solid var(--bt-border);
-  border-radius: 10px;
-  background: var(--bt-surface-background);
+  color: var(--bt-text-primary);
+  font-size: 12px;
+}
+
+.port-forward-panel-empty {
+  padding: 12px;
+  color: var(--bt-text-muted);
 }
 
 .port-forward-panel h3,
@@ -20,155 +23,53 @@
   margin: 0;
 }
 
-.port-forward-panel-empty {
-  color: var(--bt-text-muted);
-}
-
-.port-forward-panel-empty h3 {
-  margin-bottom: 6px;
-  color: var(--bt-text-primary);
-}
-
-.port-forward-panel-empty .port-forward-header {
-  margin-bottom: 6px;
-}
-
-.port-forward-card-title,
-.port-forward-card-actions,
-.port-forward-error {
+.port-forward-address-line,
+.port-forward-actionbar,
+.port-forward-inline-action,
+.port-forward-more > summary {
   display: flex;
   align-items: center;
 }
 
-.port-forward-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 8px;
-}
-
-.port-forward-header h3 {
-  font-size: 13px;
-}
-
-.port-forward-heading {
-  min-width: 0;
-}
-
-.port-forward-scope {
-  display: block;
-  margin-bottom: 1px;
-  color: var(--bt-text-muted);
-  font-size: 9px;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
-.port-forward-title-line,
-.port-forward-header-actions {
-  display: flex;
-  align-items: center;
-}
-
-.port-forward-title-line {
-  gap: 6px;
-}
-
-.port-forward-count {
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--bt-badge-background);
-  color: var(--bt-badge-foreground);
-  font-size: 10px;
-  line-height: 17px;
-  text-align: center;
-}
-
-.port-forward-header-actions {
-  align-self: center;
-  gap: 4px;
-}
-
-.port-forward-context {
-  grid-column: 1 / -1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--bt-text-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.port-forward-header-actions button,
-.port-forward-error button,
-.port-forward-card-actions button,
-.port-forward-card-actions a {
-  min-height: 26px;
-  padding: 3px 7px;
-  border: 1px solid var(--bt-border);
-  border-radius: 5px;
-  background: var(--bt-input-background);
-  color: var(--bt-text-primary);
-  font: inherit;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.port-forward-header-actions .port-forward-add-toggle {
-  border-color: color-mix(in srgb, var(--bt-button-background) 65%, var(--bt-border));
-  color: var(--bt-button-background);
-}
-
-.port-forward-header-actions .port-forward-refresh {
-  width: 26px;
-  padding: 2px;
-  color: var(--bt-text-muted);
-  font-size: 16px;
-  line-height: 1;
+.port-forward-panel button:disabled,
+.port-forward-panel input:disabled,
+.port-forward-panel select:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .port-forward-create-region {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--bt-border);
-}
-
-.port-forward-guidance {
-  color: var(--bt-text-muted);
-  font-size: 11px;
-  line-height: 1.35;
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--bt-border);
+  background: color-mix(in srgb, var(--bt-surface-background) 55%, transparent);
 }
 
 .port-forward-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
-  margin-top: 7px;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(100px, 0.9fr) minmax(75px, 0.65fr) minmax(120px, 1.3fr) auto;
+  align-items: end;
+  gap: 7px;
 }
 
 .port-forward-field {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   color: var(--bt-text-muted);
-  font-size: 11px;
-}
-
-.port-forward-field-wide,
-.port-forward-create {
-  grid-column: 1 / -1;
+  font-size: 10px;
 }
 
 .port-forward-field input,
 .port-forward-field select {
   width: 100%;
   min-width: 0;
-  height: 30px;
-  padding: 4px 7px;
+  height: 26px;
+  padding: 3px 6px;
   border: 1px solid var(--bt-border);
-  border-radius: 6px;
-  outline: none;
+  border-radius: 2px;
+  outline: 0;
   background: var(--bt-input-background);
   color: var(--bt-input-foreground);
   font: inherit;
@@ -179,151 +80,516 @@
   border-color: var(--bt-focus-border);
 }
 
-.port-forward-create {
-  min-height: 32px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--bt-button-background);
-  color: var(--bt-button-foreground);
+.port-forward-create,
+.port-forward-create-cancel {
+  min-height: 26px;
+  padding: 2px 10px;
+  border: 1px solid var(--bt-border);
+  border-radius: 2px;
+  background: var(--bt-input-background);
+  color: var(--bt-text-primary);
   font: inherit;
-  font-weight: 600;
   cursor: pointer;
 }
 
-.port-forward-panel button:disabled,
-.port-forward-panel input:disabled,
-.port-forward-panel select:disabled {
-  cursor: default;
-  opacity: 0.58;
+.port-forward-create {
+  border-color: var(--bt-button-background);
+  background: var(--bt-button-background);
+  color: var(--bt-button-foreground);
 }
 
 .port-forward-error {
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 7px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 40%, transparent);
-  border-radius: 6px;
-  color: var(--bt-status-danger);
-  font-size: 12px;
-}
-
-.port-forward-list {
-  display: flex;
-  min-height: 0;
-  max-height: 146px;
-  flex-direction: column;
-  gap: 5px;
-  margin-top: 7px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.port-forward-empty {
-  padding: 7px 0;
-  color: var(--bt-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.port-forward-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  min-height: 48px;
-  padding: 5px 6px;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--bt-status-danger) 45%, var(--bt-border));
+  color: var(--bt-status-danger);
+  font-size: 11px;
+}
+
+.port-forward-error span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.port-forward-error button {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px 7px;
   border: 1px solid var(--bt-border);
-  border-left: 3px solid var(--bt-text-muted);
-  border-radius: 7px;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.port-forward-list {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.port-forward-narrow-hint {
+  display: none;
+}
+
+.port-forward-empty {
+  padding: 14px 10px;
+  color: var(--bt-text-muted);
+}
+
+.port-forward-empty-action {
+  margin-left: 6px;
+  padding: 2px 6px;
+  border: 1px solid var(--bt-border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--bt-text-link, var(--bt-button-background));
+  font: inherit;
+  cursor: pointer;
+}
+
+.port-forward-empty-action:hover:not(:disabled) {
+  background: var(--bt-toolbar-hover-background);
+}
+
+.port-forward-inline-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin: 5px 10px;
+  padding: 0 7px;
+  border: 1px solid var(--bt-focus-border);
+  border-radius: 2px;
   background: var(--bt-input-background);
+  color: var(--bt-text-muted);
 }
 
-.port-forward-card.is-active {
-  border-left-color: var(--bt-status-success);
+.port-forward-inline-filter input {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--bt-input-foreground);
+  font: inherit;
 }
 
-.port-forward-card.is-starting {
-  border-left-color: var(--bt-status-warning);
+.port-forward-inline-filter button {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--bt-text-muted);
+  cursor: pointer;
 }
 
-.port-forward-card.is-error {
-  border-left-color: var(--bt-status-danger);
+.port-forward-inline-filter button:hover {
+  color: var(--bt-text-primary);
 }
 
-.port-forward-card-main {
+.port-forward-table {
+  --port-forward-columns: 40px minmax(110px, 1fr) minmax(190px, 1fr) minmax(220px, 2fr) minmax(92px, 1fr);
+  position: relative;
+  min-width: 700px;
+}
+
+.port-forward-table-header,
+.port-forward-row {
+  display: grid;
+  grid-template-columns: var(--port-forward-columns);
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.port-forward-table-header {
+  min-height: 30px;
+  align-items: center;
+  border-bottom: 1px solid var(--bt-border);
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.port-forward-table-header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-forward-row {
+  position: relative;
+  min-height: 30px;
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--bt-border) 72%, transparent);
+  outline: none;
+}
+
+.port-forward-row:hover,
+.port-forward-row.is-focused {
+  background: color-mix(in srgb, var(--bt-toolbar-hover-background) 58%, transparent);
+}
+
+.port-forward-row:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--bt-focus-border);
+}
+
+.port-forward-cell {
+  min-width: 0;
+  padding: 3px 8px 3px 0;
+}
+
+.port-forward-status-cell {
+  padding-left: 0;
+}
+
+.port-forward-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 1px;
+  border: 1px solid var(--bt-text-muted);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.port-forward-status-dot.is-active {
+  border-color: var(--bt-status-success);
+  background: var(--bt-status-success);
+}
+
+.port-forward-status-dot.is-starting {
+  border-color: var(--bt-status-warning);
+  background: var(--bt-status-warning);
+}
+
+.port-forward-status-dot.is-error {
+  border-color: var(--bt-status-danger);
+  background: var(--bt-status-danger);
+}
+
+.port-forward-port-cell,
+.port-forward-process-cell,
+.port-forward-origin-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-forward-port-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.port-forward-port-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-forward-process-cell,
+.port-forward-origin-cell {
+  color: var(--bt-text-muted);
+}
+
+.port-forward-address-cell {
+  overflow: hidden;
+}
+
+.port-forward-address-line {
+  min-width: 0;
+  gap: 4px;
+}
+
+.port-forward-address-line > a,
+.port-forward-address-line > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bt-text-link, var(--bt-button-background));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-forward-address-line > a {
+  text-decoration: none;
+}
+
+.port-forward-address-line > a:hover {
+  text-decoration: underline;
+}
+
+.port-forward-actionbar {
+  display: none;
+  flex: 0 0 auto;
+  gap: 1px;
+  margin-left: auto;
+}
+
+.port-forward-label-action,
+.port-forward-stop-action {
+  display: none;
+}
+
+.port-forward-row:hover .port-forward-actionbar,
+.port-forward-row.is-focused .port-forward-actionbar,
+.port-forward-row:hover .port-forward-label-action,
+.port-forward-row.is-focused .port-forward-label-action {
+  display: flex;
+}
+
+.port-forward-inline-action,
+.port-forward-more > summary {
+  width: 22px;
+  height: 22px;
+  justify-content: center;
+  flex: 0 0 22px;
+  padding: 2px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--bt-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.port-forward-inline-action:hover:not(:disabled),
+.port-forward-more > summary:hover,
+.port-forward-more[open] > summary {
+  background: var(--bt-toolbar-hover-background);
+  color: var(--bt-text-primary);
+}
+
+.port-forward-inline-action:disabled {
+  display: none;
+}
+
+.port-forward-more {
+  position: relative;
+  flex: 0 0 22px;
+}
+
+.port-forward-more > summary {
+  list-style: none;
+}
+
+.port-forward-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.port-forward-more > div {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: calc(100% + 3px);
+  display: flex;
+  min-width: 150px;
+  flex-direction: column;
+  padding: 3px;
+  border: 1px solid var(--bt-border);
+  border-radius: 2px;
+  background: var(--bt-menu-background);
+  box-shadow: var(--bt-surface-shadow);
+}
+
+.port-forward-more > div button {
+  min-height: 25px;
+  padding: 3px 7px;
+  border: 0;
+  background: transparent;
+  color: var(--bt-text-primary);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.port-forward-more > div button:hover:not(:disabled) {
+  background: var(--bt-hover-background);
+}
+
+.port-forward-context-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% - 1px);
+  right: 10px;
+  display: flex;
+  min-width: 168px;
+  flex-direction: column;
+  padding: 3px;
+  border: 1px solid var(--bt-border);
+  border-radius: 2px;
+  background: var(--bt-menu-background);
+  box-shadow: var(--bt-surface-shadow);
+}
+
+.port-forward-context-menu button {
+  min-height: 25px;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--bt-text-primary);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.port-forward-context-menu button:hover:not(:disabled) {
+  background: var(--bt-hover-background);
+}
+
+.port-forward-table-context-menu {
+  top: 30px;
+  right: 10px;
+  bottom: auto;
+}
+
+.port-forward-item-error {
+  margin-top: 2px !important;
+  overflow-wrap: anywhere;
+  color: var(--bt-status-danger);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.port-forward-error-summary {
+  display: block;
+  overflow: hidden;
+  max-height: 2.6em;
+  text-overflow: ellipsis;
+}
+
+.port-forward-error-details {
+  margin-top: 2px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.port-forward-error-details > summary {
+  width: fit-content;
+  color: var(--bt-text-link, var(--bt-button-background));
+  cursor: pointer;
+}
+
+.port-forward-error-details pre {
+  max-height: 150px;
+  margin: 3px 0 0;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 35%, var(--bt-border));
+  background: color-mix(in srgb, var(--bt-status-danger) 7%, transparent);
+  color: var(--bt-status-danger);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.port-forward-inline-edit {
   min-width: 0;
   flex: 1 1 auto;
 }
 
-.port-forward-card-title {
-  gap: 5px;
+.port-forward-inline-edit input {
+  width: 100%;
+  min-width: 0;
+  height: 23px;
+  padding: 2px 5px;
+  border: 1px solid var(--bt-focus-border);
+  border-radius: 2px;
+  outline: 0;
+  background: var(--bt-input-background);
+  color: var(--bt-input-foreground);
+  font: inherit;
 }
 
-.port-forward-card-title code {
-  overflow: hidden;
-  color: var(--bt-text-primary);
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.port-forward-edit-form {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: end;
+  gap: 6px;
+  padding: 5px 0 6px;
+  border-top: 1px solid var(--bt-border);
 }
 
-.port-forward-status {
-  padding: 1px 5px;
-  border-radius: 999px;
-  background: var(--bt-badge-background);
-  color: var(--bt-badge-foreground);
+.port-forward-edit-form label {
+  display: flex;
+  min-width: 105px;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--bt-text-muted);
   font-size: 10px;
 }
 
-.port-forward-card-label {
-  display: block;
-  margin-top: 2px;
-  overflow: hidden;
-  color: var(--bt-text-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.port-forward-edit-form input {
+  width: 92px;
+  height: 24px;
+  padding: 2px 5px;
+  border: 1px solid var(--bt-border);
+  border-radius: 2px;
+  background: var(--bt-input-background);
+  color: var(--bt-input-foreground);
+  font: inherit;
 }
 
-.port-forward-item-error {
-  margin-top: 5px !important;
-  color: var(--bt-status-danger);
-  font-size: 11px;
+.port-forward-edit-form button {
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid var(--bt-border);
+  border-radius: 2px;
+  background: var(--bt-input-background);
+  color: var(--bt-text-primary);
+  font: inherit;
+  cursor: pointer;
 }
 
-.port-forward-card-actions {
-  flex: 0 0 auto;
-  gap: 3px;
-}
-
-.port-forward-card-actions a {
+.port-forward-edit-form button[type="submit"] {
   border-color: var(--bt-button-background);
-  color: var(--bt-button-background);
+  background: var(--bt-button-background);
+  color: var(--bt-button-foreground);
 }
 
-.port-forward-card-actions button.danger-soft {
-  color: var(--bt-status-danger);
-}
+@media (max-width: 720px) {
+  .port-forward-narrow-hint {
+    display: block;
+    padding: 3px 10px 2px;
+    color: var(--bt-text-muted);
+    font-size: 10px;
+    text-align: right;
+  }
 
-@media (max-width: 520px) {
   .port-forward-form {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .port-forward-field-wide,
-  .port-forward-create {
-    grid-column: auto;
+  .port-forward-create,
+  .port-forward-create-cancel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 420px) {
+  .port-forward-table {
+    min-width: 620px;
   }
 
-  .port-forward-panel {
-    margin-inline: 8px;
+  .port-forward-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .port-forward-card-actions button,
-  .port-forward-card-actions a {
-    min-height: 24px;
-    padding-inline: 6px;
+  .port-forward-create,
+  .port-forward-create-cancel {
+    grid-column: 1 / -1;
   }
 }

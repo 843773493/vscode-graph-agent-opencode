@@ -65,6 +65,7 @@ function conversation(
 }
 
 const replayTurn = async () => {};
+const loadAgentStateMessageRawContent = async () => "<system_reminder>原始消息</system_reminder>";
 
 function chatTurnProps(value: ConversationView): ChatTurnProps {
   return {
@@ -73,6 +74,7 @@ function chatTurnProps(value: ConversationView): ChatTurnProps {
     showRawDetails: false,
     isLastTurn: false,
     sessionBusy: false,
+    onLoadAgentStateMessageRawContent: loadAgentStateMessageRawContent,
     onReplayTurn: replayTurn,
     ...pendingActionProps,
   };
@@ -216,6 +218,7 @@ describe("ChatTurn 轮次动作", () => {
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
+        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
         onReplayTurn={async () => {}}
         {...pendingActionProps}
       />,
@@ -227,6 +230,21 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("重新生成最后回复");
   });
 
+  test("空内部用户消息默认隐藏原文并保留右键展开入口", () => {
+    const value = conversation("done");
+    value.userMessage = {
+      ...value.userMessage!,
+      content: "",
+      metadata: { internal: true },
+    };
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain('aria-label="空用户消息，右键展开原始消息"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("<system_reminder>原始消息</system_reminder>");
+  });
+
   test("最后一个完成轮次展示内联编辑和重新生成入口", () => {
     const html = renderToStaticMarkup(
       <ChatTurn
@@ -235,6 +253,7 @@ describe("ChatTurn 轮次动作", () => {
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
+        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
         onReplayTurn={async () => {}}
         {...pendingActionProps}
       />,
@@ -252,6 +271,7 @@ describe("ChatTurn 轮次动作", () => {
         showRawDetails={false}
         isLastTurn
         sessionBusy
+        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
         onReplayTurn={async () => {}}
         {...pendingActionProps}
       />,
@@ -269,6 +289,7 @@ describe("ChatTurn 轮次动作", () => {
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
+        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
         onReplayTurn={async () => {}}
         {...pendingActionProps}
       />,
@@ -301,6 +322,7 @@ describe("ChatTurn 轮次动作", () => {
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
+        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
         onReplayTurn={async () => {}}
         {...pendingActionProps}
       />,
@@ -325,6 +347,7 @@ describe("ChatTurn 轮次动作", () => {
         showRawDetails={false}
         isLastTurn
         sessionBusy
+        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
         onReplayTurn={async () => {}}
         {...pendingActionProps}
       />,
@@ -351,6 +374,7 @@ describe("ChatTurn 轮次动作", () => {
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
+        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
         onReplayTurn={async () => {}}
         {...pendingActionProps}
       />,
@@ -377,6 +401,7 @@ describe("ChatTurn 轮次动作", () => {
         showRawDetails={false}
         isLastTurn
         sessionBusy={false}
+        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
         onReplayTurn={async () => {}}
         {...pendingActionProps}
       />,

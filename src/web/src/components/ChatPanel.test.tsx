@@ -20,6 +20,7 @@ function emptyPanelProps(onRetryHistory: () => void) {
     onLoadOlderMessages: async () => {},
     loadingDetailTurnIds: [],
     onLoadTurnDetails: async () => {},
+    onLoadAgentStateMessageRawContent: async () => "",
     onRetryHistory,
     onReplayTurn: async () => {},
     onUpdatePending: async () => {},

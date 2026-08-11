@@ -129,9 +129,12 @@
         overflow: hidden;
       }
 
-      .app-shell.browser-focus .main-grid { grid-template-columns: 264px minmax(0, 1fr); }
-      .app-shell.browser-focus .chat-panel { display: none; }
-      .app-shell.browser-focus .workspace-shell { grid-column: 2; }
+      .app-shell.extension-window .main-grid { grid-template-columns: minmax(0, 1fr); }
+      .app-shell.extension-window .session-sidebar,
+      .app-shell.extension-window .chat-panel { display: none; }
+      .app-shell.extension-window .workspace-shell { grid-column: 1; }
+      .app-shell.extension-window .gateway-panel { display: none; }
+      .app-shell.extension-window { grid-template-rows: 38px minmax(0, 1fr); }
 
       .session-sidebar, .chat-panel, .workspace-shell, .gateway-panel {
         min-width: 0;
@@ -241,19 +244,8 @@
       .workspace-view.resources { grid-template-columns: minmax(0, 1fr) 300px; }
       .workspace-view.resources.hide-resources { grid-template-columns: minmax(0, 1fr); }
       .workspace-view.resources.hide-resources .resource-column { display: none; }
-      .workspace-view.files, .workspace-view.changes { grid-template-columns: minmax(0, 1fr) 300px; }
-      .workspace-view.automation { grid-template-columns: 190px minmax(0, 1fr); }
 
-      .info-column, .resource-column, .file-tree, .automation-main, .browser-stage, .preview-pane { min-width: 0; min-height: 0; overflow: auto; }
-      .info-column { padding: 10px; border-right: 1px solid var(--border); background: rgba(6, 17, 31, 0.48); }
-      .info-column h3 { margin: 0; font-size: 12px; }
-      .info-column > p { margin: 4px 0 10px; color: var(--muted); font-size: 10px; line-height: 1.5; }
-      .info-card { padding: 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); }
-      .info-card strong, .info-card span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .info-card span { margin-top: 4px; color: var(--muted); font-size: 10px; }
-      .info-stats { display: grid; gap: 5px; margin-top: 7px; }
-      .info-stats div { display: flex; justify-content: space-between; padding: 5px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
-      .info-stats b { color: var(--text); font-weight: 500; }
+      .resource-column, .file-tree, .browser-stage, .preview-pane { min-width: 0; min-height: 0; overflow: auto; }
 
       .browser-stage { display: flex; flex-direction: column; padding: 10px; background: rgba(4, 13, 25, 0.32); }
       .browser-toolbar { display: flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px 6px 0 0; background: var(--surface-strong); }
@@ -308,12 +300,6 @@
       .file-tree-row.active { border-radius: 4px; background: var(--accent-soft); color: var(--text); }
       .file-tree-row.indent { padding-left: 22px; }
 
-      .automation-main { display: flex; flex-direction: column; }
-      .automation-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; }
-      .automation-header h2 { margin: 0; font-size: 14px; }
-      .automation-header p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
-      .automation-summary { display: flex; gap: 14px; padding: 8px 14px; border-block: 1px solid var(--border); color: var(--muted); font-size: 10px; }
-      .automation-summary strong { color: var(--text); }
       .automation-card { margin-bottom: 7px; padding: 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); }
       .automation-card header { display: flex; justify-content: space-between; }
       .automation-card header span { padding: 2px 5px; border-radius: 999px; background: rgba(84, 201, 147, 0.14); color: var(--success); font-size: 9px; }
@@ -323,7 +309,8 @@
       .gateway-resize { height: 7px; flex: 0 0 7px; cursor: row-resize; }
       .gateway-resize:hover { background: var(--accent-soft); }
       .gateway-tabs { min-height: 35px; justify-content: space-between; border-bottom: 1px solid var(--border); }
-      .gateway-tab { display: inline-flex; align-items: center; gap: 6px; height: 35px; padding: 0 12px; border: 0; border-bottom: 2px solid var(--accent); background: transparent; color: var(--text); cursor: pointer; }
+      .gateway-tab { display: inline-flex; align-items: center; gap: 6px; height: 35px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
+      .gateway-tab.active { border-bottom-color: var(--accent); color: var(--text); }
       .gateway-actions { display: flex; gap: 3px; padding-right: 7px; }
       .gateway-toolbar { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 9px; border-bottom: 1px solid var(--border); }
       .gateway-toolbar label { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
@@ -346,6 +333,18 @@
       .gateway-raw { display: none; min-height: 0; flex: 1; overflow: auto; padding: 10px; color: #afc0d2; font: 10px/1.6 var(--mono); white-space: pre; }
       .gateway-panel.raw .gateway-summary { display: none; }
       .gateway-panel.raw .gateway-raw { display: block; }
+      .gateway-panel.automation .gateway-toolbar, .gateway-panel.automation .gateway-summary, .gateway-panel.automation .gateway-raw { display: none; }
+      .gateway-panel.automation .gateway-tab[data-bottom-tab="automation"] { border-bottom-color: var(--accent); background: var(--surface-soft); }
+      .automation-bottom-view { display: none; min-height: 0; flex: 1; overflow: auto; padding: 10px 12px; background: rgba(7, 14, 24, 0.54); }
+      .gateway-panel.automation .automation-bottom-view { display: block; }
+      .automation-bottom-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+      .automation-bottom-header h2 { margin: 0; font-size: 13px; }
+      .automation-bottom-header p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+      .automation-bottom-context { color: var(--muted); font-size: 10px; }
+      .automation-bottom-summary { display: flex; gap: 14px; padding: 8px 0; color: var(--muted); font-size: 10px; }
+      .automation-bottom-summary strong { color: var(--text); }
+      .automation-bottom-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 7px; }
+      .automation-bottom-grid .automation-card { margin: 0; }
 
       @media (max-width: 1250px) {
         .main-grid { grid-template-columns: 236px minmax(280px, 0.8fr) minmax(540px, 1.55fr); }
@@ -364,8 +363,8 @@
         .main-grid { grid-template-columns: minmax(0, 1fr); }
         .chat-panel { display: none; }
         .workspace-shell { grid-column: 1; }
-        .workspace-view.resources, .workspace-view.files, .workspace-view.changes, .workspace-view.automation { grid-template-columns: minmax(0, 1fr); }
-        .workspace-view.resources .resource-column, .workspace-view.automation .info-column, .workspace-view.files .file-tree, .workspace-view.changes .file-tree { display: none; }
+        .workspace-view.resources, .workspace-view.files, .workspace-view.changes { grid-template-columns: minmax(0, 1fr); }
+        .workspace-view.resources .resource-column, .workspace-view.files .file-tree, .workspace-view.changes .file-tree { display: none; }
         .workspace-view.resources { position: relative; }
         .workspace-view.resources.resource-drawer-open .resource-column { display: block; position: absolute; inset: 0 0 0 auto; z-index: 3; width: min(300px, 88%); box-shadow: -14px 0 28px rgba(0, 0, 0, 0.35); }
         .browser-page-content { grid-template-columns: 1fr; }
@@ -385,10 +384,10 @@
           <button class="icon-button" aria-label="新建会话">＋</button>
           <button class="text-button" aria-label="工作台视图">▦ 视图⌄</button>
         </div>
-        <div class="topbar-center"><div class="topbar-title">⌁ 你好</div></div>
+        <div class="topbar-center"><div class="topbar-title" id="topbar-title">⌁ 扩展窗口</div></div>
         <div class="topbar-actions">
           <button class="text-button">更新</button>
-          <button class="text-button" data-browser-focus-toggle aria-pressed="true">↔ 会话</button>
+          <button class="text-button" data-extension-window-toggle aria-pressed="true">↔ 标准</button>
           <button class="icon-button active" data-toggle="session-sidebar" aria-label="切换左侧侧边栏">◧</button>
           <button class="icon-button active" data-toggle="gateway-panel" aria-label="切换底部面板">▰</button>
           <button class="icon-button active" data-toggle="workspace-shell" aria-label="切换右侧侧边栏">▥</button>
@@ -435,7 +434,6 @@
           <nav class="workspace-tabs" aria-label="右侧侧边栏组件标签">
             <button class="workspace-tab" data-tab="files">▱ 文件</button>
             <button class="workspace-tab" data-tab="changes">▤ 更改</button>
-            <button class="workspace-tab" data-tab="automation">⚙ 自动化</button>
             <button class="workspace-tab active" data-tab="resources">▣ 运行与连接</button>
           </nav>
           <div class="workspace-body">
@@ -454,14 +452,9 @@
               <aside class="file-tree"><div class="file-header"><strong>更改</strong><span>0 个文件 +18 -7</span></div><div class="file-scroll"><div class="file-tree-row active">▤　AGENTS.md <span class="row-meta">+18 -7</span></div><div class="file-tree-row">▤　WorkspaceRuntimePreviewArea.tsx</div><div class="file-tree-row">▤　resourcePanel.css</div><div class="file-tree-row" style="margin-top:18px;color:var(--subtle)">当前显示会话文件变更；工作区未提交更改尚未接入。</div></div></aside>
             </div>
 
-            <div class="workspace-view automation" data-view="automation">
-              <aside class="info-column"><h3>自动化</h3><p>当前会话自动化，不代表 Gateway 全局健康。</p><div class="info-card"><strong>boxteam_workspace</strong><span>你好 · 当前会话</span></div><div class="info-stats"><div><span>范围</span><b>当前会话</b></div><div><span>任务</span><b>3 个</b></div></div></aside>
-              <section class="automation-main"><div class="automation-header"><div><h2>会话自动化</h2><p>按计划创建、继续或分支会话。</p></div><button class="primary-button">＋ 新建自动化</button></div><div class="automation-summary"><span><strong>3</strong> 个自动化</span><span><strong>2</strong> 个正常</span><span style="color:var(--warning)"><strong>1</strong> 个需要处理</span></div><div class="automation-scroll"><div class="automation-card"><header><strong>同步工作区索引</strong><span>正常</span></header><p>每 30 分钟检查会话目录与工作区状态。</p><button class="mode-button">运行</button><button class="mode-button">历史</button></div><div class="automation-card"><header><strong>浏览器回归检查</strong><span>正常</span></header><p>手动运行浏览器工具和资源连接检查。</p><button class="mode-button">运行</button><button class="mode-button">历史</button></div><div class="automation-card"><header><strong>UX Manual New</strong><span style="background:rgba(232,173,79,.14);color:var(--warning)">需要处理</span></header><p>目标工作区当前不可用，等待重新连接。</p><button class="mode-button">重新校验</button></div></div></section>
-            </div>
-
             <div class="workspace-view resources active" data-view="resources">
-              <section class="browser-stage"><div class="browser-toolbar"><button>‹</button><button>›</button><button>↻</button><div class="address" id="browser-address">https://boxteam.local/browser/blank</div><button data-resource-toggle aria-expanded="true" title="切换资源列表">▤</button><button>□</button><button>×</button></div><div class="browser-viewport"><div class="browser-page-header"><strong id="browser-page-title">Browser Tool E2E Manual</strong><span id="browser-page-status">浏览器预览 · 当前</span></div><div class="browser-page-content"><div class="browser-hero"><h2 id="browser-hero-title">浏览器预览</h2><p>这是运行与连接页面中的主内容区域。选择右侧资源即可切换当前浏览器，不会创建新的页面。</p><button class="primary-button">打开外部浏览器</button></div><div class="browser-widget"><div>当前 URL　<span id="browser-url-label">about:blank</span></div><div>连接状态　<span style="color:#2a9669">运行中 · 1 个连接</span></div><div>最后检查　刚刚</div></div></div></div><div class="browser-preview-footer"><span>资源：<span id="browser-resource-label">browser_d3b9a826</span></span><span>浏览器为主区域 · 资源控制在右侧</span></div></section>
-              <aside class="resource-column"><div class="resource-header"><div><strong>连接资源</strong><span>　3</span></div><div><span>1 个正在使用</span> <button class="icon-button">↻</button></div></div><div class="resource-scroll"><div class="resource-group"><div class="resource-group-title">⌄ <b>正在使用</b> <span>1</span></div><article class="resource-card selected" data-resource="browser"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>Browser Tool E2E Manual</strong><small>空白页 · 浏览器</small></div><span class="resource-status">当前预览</span></div><div class="resource-detail"><p>浏览器 · 运行中 · 当前预览</p><div class="resource-actions"><button class="primary-button" data-open-preview>打开浏览器预览</button><button>关闭</button><button class="danger">删除</button></div></div></article></div><div class="resource-group"><div class="resource-group-title">⌄ <b>后台可用</b> <span>1</span></div><article class="resource-card" data-resource="browser-2"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>空白页</strong><small>浏览器 · 可随时切换</small></div><span class="resource-status">可用</span></div></article></div><div class="resource-group"><div class="resource-group-title">› <b>已挂起 / 可恢复</b> <span>1</span></div><div class="resource-card" style="display:none"></div></div><div class="resource-group"><div class="resource-group-title">› <b>历史记录</b> <span>1</span></div></div></div></aside>
+              <section class="browser-stage" data-extension-region="primary"><div class="browser-toolbar"><button>‹</button><button>›</button><button>↻</button><div class="address" id="browser-address">https://boxteam.local/browser/blank</div><button data-resource-toggle aria-expanded="true" title="切换扩展资源列表">▤</button><button>□</button><button>×</button></div><div class="browser-viewport"><div class="browser-page-header"><strong id="browser-page-title">Browser Tool E2E Manual</strong><span id="browser-page-status">扩展窗口 · 浏览器主区域</span></div><div class="browser-page-content"><div class="browser-hero"><h2 id="browser-hero-title">浏览器预览</h2><p>这里是扩展窗口的主展示区域。浏览器默认占据大部分空间，右侧和其他扩展标签可继续承载辅助展示。</p><button class="primary-button">打开外部浏览器</button></div><div class="browser-widget"><div>当前 URL　<span id="browser-url-label">about:blank</span></div><div>连接状态　<span style="color:#2a9669">运行中 · 1 个连接</span></div><div>最后检查　刚刚</div></div></div></div><div class="browser-preview-footer"><span>扩展资源：<span id="browser-resource-label">browser_d3b9a826</span></span><span>浏览器主区域 · 辅助扩展区域在右侧</span></div></section>
+              <aside class="resource-column" data-extension-region="secondary"><div class="resource-header"><div><strong>扩展资源</strong><span>　3</span></div><div><span>1 个正在使用</span> <button class="icon-button">↻</button></div></div><div class="resource-scroll"><div class="resource-group"><div class="resource-group-title">⌄ <b>正在使用</b> <span>1</span></div><article class="resource-card selected" data-resource="browser"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>Browser Tool E2E Manual</strong><small>空白页 · 浏览器</small></div><span class="resource-status">当前预览</span></div><div class="resource-detail"><p>浏览器 · 运行中 · 当前预览</p><div class="resource-actions"><button class="primary-button" data-open-preview>打开扩展窗口</button><button>关闭</button><button class="danger">删除</button></div></div></article></div><div class="resource-group"><div class="resource-group-title">⌄ <b>后台可用</b> <span>1</span></div><article class="resource-card" data-resource="browser-2"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>空白页</strong><small>浏览器 · 可随时切换</small></div><span class="resource-status">可用</span></div></article></div><div class="resource-group"><div class="resource-group-title">› <b>已挂起 / 可恢复</b> <span>1</span></div><div class="resource-card" style="display:none"></div></div><div class="resource-group"><div class="resource-group-title">› <b>历史记录</b> <span>1</span></div></div></div></aside>
             </div>
           </div>
         </section>
@@ -469,13 +462,24 @@
 
       <section class="gateway-panel" id="gateway-panel">
         <div class="gateway-resize" id="gateway-resize" title="拖拽调整 Gateway 面板高度"></div>
-        <div class="gateway-tabs"><button class="gateway-tab">▤ Gateway 状态 <span class="code-chip">重点 4</span></button><div class="gateway-actions"><span style="color:var(--warning);padding:7px">● 本机 Gateway · 部分异常</span><button class="icon-button">↻</button><button class="icon-button" data-toggle="gateway-panel">×</button></div></div>
+        <div class="gateway-tabs">
+          <button class="gateway-tab" data-bottom-tab="terminal">▣ 终端</button>
+          <button class="gateway-tab active" data-bottom-tab="output">▤ 输出</button>
+          <button class="gateway-tab" data-bottom-tab="ports">▥ 端口</button>
+          <button class="gateway-tab" data-bottom-tab="automation">⚙ 自动化</button>
+          <div class="gateway-actions"><button class="icon-button">↻</button><button class="icon-button" data-toggle="gateway-panel">×</button></div>
+        </div>
         <div class="gateway-toolbar"><label>Gateway <select><option>本机 Gateway</option><option>boxteam-container</option></select></label><label>工作区 <select><option>全部工作区</option><option>home</option></select></label><span class="spacer"></span><span style="color:var(--muted);font-size:10px">最近检查 2026/8/8 13:25</span><div class="gateway-mode"><button class="active" data-gateway-mode="summary">重点</button><button data-gateway-mode="raw">原始日志</button></div></div>
         <div class="gateway-summary"><div class="gateway-status-hero"><div><strong>部分异常</strong><small>本机 Gateway · 当前仅展示需要关注的状态</small></div><button class="mode-button">查看原始日志</button></div><div class="gateway-metrics"><div class="gateway-metric"><span>工作区</span><strong>6</strong></div><div class="gateway-metric"><span>日志入口</span><strong>139</strong></div><div class="gateway-metric"><span>需关注</span><strong style="color:var(--warning)">4</strong></div></div><div class="gateway-focus"><header><strong>重点</strong><span>已去重 · 原始请求日志已收起</span></header><div class="focus-item">catalog_search 同步工作区会话目录索引失败：连接失败 ×4</div></div></div>
         <div class="gateway-raw">2026-08-08T13:25:04Z INFO app.gateway.control.catalog_search 同步工作区会话目录索引失败 request_id=…
 2026-08-08T13:25:04Z ERROR ConnectError: All connection attempts failed
 2026-08-08T13:25:05Z INFO httpx HTTP Request: GET /api/v1/health HTTP/1.1 200 OK
 2026-08-08T13:25:06Z WARNING workspace resource is unavailable
+        </div>
+        <div class="automation-bottom-view">
+          <div class="automation-bottom-header"><div><h2>工作区自动化</h2><p>按当前工作区管理计划任务及其生成会话。</p></div><span class="automation-bottom-context">boxteam_workspace · 当前工作区</span><button class="primary-button">＋ 新建自动化</button></div>
+          <div class="automation-bottom-summary"><span><strong>3</strong> 个自动化</span><span><strong>2</strong> 个正常</span><span style="color:var(--warning)"><strong>1</strong> 个需要处理</span></div>
+          <div class="automation-bottom-grid"><div class="automation-card"><header><strong>同步工作区索引</strong><span>正常</span></header><p>每 30 分钟检查会话目录与工作区状态。</p><button class="mode-button">运行</button><button class="mode-button">历史</button></div><div class="automation-card"><header><strong>浏览器回归检查</strong><span>正常</span></header><p>手动运行浏览器工具和资源连接检查。</p><button class="mode-button">运行</button><button class="mode-button">历史</button></div><div class="automation-card"><header><strong>UX Manual New</strong><span style="background:rgba(232,173,79,.14);color:var(--warning)">需要处理</span></header><p>目标工作区当前不可用，等待重新连接。</p><button class="mode-button">重新校验</button></div></div>
         </div>
       </section>
     </div>
@@ -484,13 +488,15 @@
       const shell = document.querySelector(".app-shell");
       const workspaceTabs = [...document.querySelectorAll(".workspace-tab")];
       const workspaceViews = [...document.querySelectorAll(".workspace-view")];
-      const browserFocusToggle = document.querySelector("[data-browser-focus-toggle]");
+      const extensionWindowToggle = document.querySelector("[data-extension-window-toggle]");
+      const topbarTitle = document.querySelector("#topbar-title");
 
-      const setBrowserFocus = (focused) => {
-        shell.classList.toggle("browser-focus", focused);
-        browserFocusToggle.setAttribute("aria-pressed", String(focused));
-        browserFocusToggle.textContent = focused ? "↔ 会话" : "↔ 浏览器";
-        browserFocusToggle.title = focused ? "返回会话工作区" : "进入浏览器工作区";
+      const setExtensionWindow = (focused) => {
+        shell.classList.toggle("extension-window", focused);
+        extensionWindowToggle.setAttribute("aria-pressed", String(focused));
+        extensionWindowToggle.textContent = focused ? "↔ 标准" : "↔ 扩展";
+        extensionWindowToggle.title = focused ? "返回标准窗口" : "进入扩展窗口";
+        topbarTitle.textContent = focused ? "⌁ 扩展窗口" : "⌁ 你好";
       };
 
       // 标签切换只改变静态预览中的可见区域，不请求后端。
@@ -499,14 +505,14 @@
           const target = tab.dataset.tab;
           workspaceTabs.forEach((item) => item.classList.toggle("active", item === tab));
           workspaceViews.forEach((view) => view.classList.toggle("active", view.dataset.view === target));
-          setBrowserFocus(target === "resources");
+          setExtensionWindow(target === "resources");
         });
       });
 
-      browserFocusToggle.addEventListener("click", () => {
-        setBrowserFocus(!shell.classList.contains("browser-focus"));
+      extensionWindowToggle.addEventListener("click", () => {
+        setExtensionWindow(!shell.classList.contains("extension-window"));
       });
-      setBrowserFocus(true);
+      setExtensionWindow(true);
 
       document.querySelectorAll("[data-toggle]").forEach((button) => {
         button.addEventListener("click", () => {
@@ -521,6 +527,15 @@
           const raw = button.dataset.gatewayMode === "raw";
           document.querySelector(".gateway-panel").classList.toggle("raw", raw);
           document.querySelectorAll("[data-gateway-mode]").forEach((item) => item.classList.toggle("active", item === button));
+        });
+      });
+
+      document.querySelectorAll("[data-bottom-tab]").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const panel = document.getElementById("gateway-panel");
+          const automation = tab.dataset.bottomTab === "automation";
+          panel.classList.toggle("automation", automation);
+          document.querySelectorAll("[data-bottom-tab]").forEach((item) => item.classList.toggle("active", item === tab));
         });
       });
 

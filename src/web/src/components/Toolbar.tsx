@@ -13,6 +13,8 @@ export default function Toolbar({
   onCreateSession,
   auxiliaryVisible,
   onToggleAuxiliaryPanel,
+  chatVisible,
+  onToggleChatPanel,
   agentSessionsVisible,
   onToggleAgentSessionsPanel,
   panelVisible,
@@ -25,6 +27,8 @@ export default function Toolbar({
   onCreateSession: () => void;
   auxiliaryVisible: boolean;
   onToggleAuxiliaryPanel: () => void;
+  chatVisible: boolean;
+  onToggleChatPanel: () => void;
   agentSessionsVisible: boolean;
   onToggleAgentSessionsPanel: () => void;
   panelVisible: boolean;
@@ -110,8 +114,8 @@ export default function Toolbar({
               >
                 <span className="codicon codicon-server-environment" aria-hidden="true" />
                 <span className="workbench-view-menu-copy">
-                  <strong>连接管理</strong>
-                  <small>管理远程 Gateway 与外部设备连接</small>
+                  <strong>Gateway 控制台</strong>
+                  <small>管理 Gateway、工作区与连接</small>
                 </span>
                 {workbenchView === "gateway" ? (
                   <span className="codicon codicon-check" aria-hidden="true" />
@@ -164,6 +168,19 @@ export default function Toolbar({
             aria-hidden="true"
           />
         </button>
+        {showAuxiliaryToggle ? <button
+          type="button"
+          className={`toolbar-icon-button titlebar-chat-button${chatVisible ? " active" : ""}`}
+          title="切换会话区"
+          aria-label="切换会话区"
+          aria-pressed={chatVisible}
+          onClick={onToggleChatPanel}
+        >
+          <span
+            className="codicon codicon-layout-centered"
+            aria-hidden="true"
+          />
+        </button> : null}
         {showAuxiliaryToggle ? <button
           type="button"
           className={`toolbar-icon-button titlebar-auxiliary-button${auxiliaryVisible ? " active" : ""}`}

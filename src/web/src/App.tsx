@@ -5,14 +5,17 @@ import Composer from "./components/composer/Composer";
 import EventQueuePanel from "./components/EventQueuePanel";
 import AgentSessionsPanel from "./components/AgentSessionsPanel";
 import GatewayLogPanel from "./components/GatewayLogPanel";
+import AutomationPanel from "./components/AutomationPanel";
+import PortForwardPanel from "./components/PortForwardPanel";
+import TerminalPanel from "./components/TerminalPanel";
 import RequestLogPanel from "./components/RequestLogPanel";
 import ResourcePanel from "./components/ResourcePanel";
+import GatewayExtensionResourcePanel from "./components/GatewayExtensionResourcePanel";
 import SessionNameDialog from "./components/SessionNameDialog";
 import { useWarmConfirm } from "./components/WarmConfirmProvider";
 import Toolbar, { type WorkbenchView } from "./components/Toolbar";
 import GatewayControlCenter from "./components/workspace/GatewayControlCenter";
 import WorkspaceEditorHeader from "./components/workspace/WorkspaceEditorHeader";
-import WorkspaceInfoSidebar from "./components/workspace/WorkspaceInfoSidebar";
 import WorkspaceFilePreviewArea from "./components/workspace/WorkspaceFilePreviewArea";
 import WorkspaceRuntimePreviewArea, {
   type WorkspaceRuntimePreviewTab,
@@ -41,8 +44,8 @@ import {
   useAppState,
 } from "./hooks";
 import { useWorkspacePreviewTabs } from "./hooks/useWorkspacePreviewTabs";
+import { useGatewayExtensionResources } from "./hooks/useGatewayExtensionResources";
 import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
-import SessionGeneratorManager from "./components/agentSessions/SessionGeneratorManager";
 import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/resourceTreeSync";
 import { createSessionConnection } from "./gatewayApi";
 import {
@@ -58,7 +61,14 @@ import {
   type LayoutResizeTarget,
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
+import {
+  resolveWorkspaceBottomPanelState,
+  toWorkspaceBottomPanelSettings,
+  type WorkspaceBottomPanelState,
+} from "./state/workspaceBottomPanel";
 import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences";
+import { buildGatewayAttachUrl } from "./utils/attachUrls";
+import type { GatewayExtensionResourceEntry } from "./hooks/useGatewayExtensionResources";
 import type {
   SessionChangesSummary,
   SessionFileChange,
@@ -73,19 +83,57 @@ type SessionNameDialogState = {
   initialTitle: string;
 };
 
+type ExtensionResourceKind = "browser" | "terminal";
+
+type ExtensionWindowRequest = {
+  kind: ExtensionResourceKind | null;
+  resourceId: string | null;
+  workspaceId: string | null;
+  sessionId: string | null;
+};
+
+const EXTENSION_WINDOW_NAME = "boxteam-extension";
+
+function resolveExtensionWindowRequest(): ExtensionWindowRequest | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (window.location.pathname !== "/extension" && params.get("window") !== "extension") {
+    return null;
+  }
+  const browserId = params.get("browserId");
+  const resourceId = params.get("resourceId") ?? browserId;
+  const resourceType = params.get("resourceType") ?? (browserId ? "browser" : null);
+  const kind = resourceType === "browser" || resourceType === "terminal"
+    ? resourceType
+    : null;
+  return {
+    kind,
+    resourceId,
+    workspaceId: params.get("workspaceId"),
+    sessionId: params.get("sessionId"),
+  };
+}
+
 const DEFAULT_AUXILIARY_TAB_ORDER: WorkspaceAuxiliaryTab[] = [
   "files",
   "changes",
-  "automation",
   "resources",
 ];
 
+type StoredAuxiliaryTab = WorkspaceAuxiliaryTab | "automation";
+
+function resolveAuxiliaryTab(value: StoredAuxiliaryTab | null | undefined): WorkspaceAuxiliaryTab {
+  return value === "changes" || value === "resources" ? value : "files";
+}
+
 function resolveAuxiliaryTabOrder(
-  value: ReadonlyArray<WorkspaceAuxiliaryTab> | null | undefined,
+  value: ReadonlyArray<StoredAuxiliaryTab> | null | undefined,
 ): WorkspaceAuxiliaryTab[] {
   const result: WorkspaceAuxiliaryTab[] = [];
   for (const tab of value ?? []) {
-    if (!result.includes(tab)) result.push(tab);
+    if (tab !== "automation" && !result.includes(tab)) result.push(tab);
   }
   for (const tab of DEFAULT_AUXILIARY_TAB_ORDER) {
     if (!result.includes(tab)) result.push(tab);
@@ -95,6 +143,8 @@ function resolveAuxiliaryTabOrder(
 
 export default function AppShell() {
   const confirm = useWarmConfirm();
+  const extensionWindowRequest = useMemo(resolveExtensionWindowRequest, []);
+  const extensionWindowRequested = extensionWindowRequest !== null;
   const {
     state,
     createSession,
@@ -134,6 +184,7 @@ export default function AppShell() {
     sendPendingRequestImmediately,
     loadOlderMessages,
     loadTurnDetails,
+    loadAgentStateMessageRawContent,
     refreshTurnHistory,
     loadOlderTraceHistory,
     refreshTraceHistory,
@@ -147,27 +198,29 @@ export default function AppShell() {
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
   const [auxiliaryTab, setAuxiliaryTab] = useState<WorkspaceAuxiliaryTab>(
-    () => state.uiSettings.layout.auxiliary_tab ?? "files",
+    () => extensionWindowRequested
+      ? "resources"
+      : resolveAuxiliaryTab(state.uiSettings.layout.auxiliary_tab),
   );
   const [auxiliaryTabOrder, setAuxiliaryTabOrder] = useState<WorkspaceAuxiliaryTab[]>(
     () => resolveAuxiliaryTabOrder(state.uiSettings.layout.auxiliary_tab_order),
   );
   const [auxiliaryVisible, setAuxiliaryVisible] = useState(
-    () => state.uiSettings.layout.auxiliary_visible ?? defaultAuxiliaryVisible(),
+    () => extensionWindowRequested
+      ? true
+      : state.uiSettings.layout.auxiliary_visible ?? defaultAuxiliaryVisible(),
   );
-  const [panelVisible, setPanelVisible] = useState(
-    () => state.uiSettings.layout.panel_visible ?? false,
+  const [chatVisible, setChatVisible] = useState(
+    () => extensionWindowRequested
+      ? false
+      : state.uiSettings.layout.chat_visible ?? true,
   );
-  const [gatewayPanelHeight, setGatewayPanelHeight] = useState(() =>
-    clampGatewayPanelHeight(
-      state.uiSettings.layout.panel_height ?? DEFAULT_GATEWAY_PANEL_HEIGHT,
-    ),
-  );
+  const [extensionWindowFallback, setExtensionWindowFallback] = useState(false);
+  const [workspaceBottomPanelStates, setWorkspaceBottomPanelStates] = useState<
+    Record<string, WorkspaceBottomPanelState>
+  >({});
   const [fileTreeSearchOpen, setFileTreeSearchOpen] = useState(false);
   const [fileTreeCollapseVersion, setFileTreeCollapseVersion] = useState(0);
-  const [workspaceInfoVisible, setWorkspaceInfoVisible] = useState({
-    automation: true,
-  });
   const [markdownSourceVisible, setMarkdownSourceVisible] = useState(false);
   const [mainAreaRatios, setMainAreaRatios] = useState(() =>
     resolveMainAreaRatios(state.uiSettings.layout.main_area_ratios),
@@ -194,6 +247,40 @@ export default function AppShell() {
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
+  const bottomPanelWorkspaceId = state.activeGatewayWorkspaceId ?? activeSessionWorkspaceId;
+  const bottomPanelWorkspace = useMemo(
+    () => state.gatewayWorkspaces.find(
+      (workspace) => workspace.workspace_id === bottomPanelWorkspaceId,
+    ) ?? null,
+    [bottomPanelWorkspaceId, state.gatewayWorkspaces],
+  );
+  const bottomPanelState = useMemo(() => {
+    const persisted = bottomPanelWorkspaceId
+      ? state.uiSettings.layout.bottom_panel_by_workspace?.[bottomPanelWorkspaceId]
+      : null;
+    return workspaceBottomPanelStates[bottomPanelWorkspaceId ?? ""] ??
+      resolveWorkspaceBottomPanelState(persisted, {
+        visible: extensionWindowRequested
+          ? false
+          : state.uiSettings.layout.panel_visible ?? false,
+        height: clampGatewayPanelHeight(
+          state.uiSettings.layout.panel_height ?? DEFAULT_GATEWAY_PANEL_HEIGHT,
+        ),
+        tab: state.uiSettings.layout.auxiliary_tab === "automation"
+          ? "automation"
+          : "output",
+        terminalId: null,
+      });
+  }, [
+    bottomPanelWorkspaceId,
+    extensionWindowRequested,
+    state.uiSettings.layout.bottom_panel_by_workspace,
+    state.uiSettings.layout.auxiliary_tab,
+    state.uiSettings.layout.panel_height,
+    state.uiSettings.layout.panel_visible,
+    workspaceBottomPanelStates,
+  ]);
+  const panelVisible = !extensionWindowRequested && bottomPanelState.visible;
   const activeSessionCacheKey =
     activeSession && activeSessionWorkspaceId
       ? sessionScopeKey(activeSessionWorkspaceId, activeSession.session_id)
@@ -227,20 +314,22 @@ export default function AppShell() {
 
   useEffect(() => {
     const layout = state.uiSettings.layout;
+    if (extensionWindowRequested) {
+      setAuxiliaryVisible(true);
+      setAuxiliaryTab("resources");
+      return;
+    }
     if (layout.workbench_view) {
       setWorkbenchView(layout.workbench_view);
     }
     if (typeof layout.auxiliary_visible === "boolean") {
       setAuxiliaryVisible(layout.auxiliary_visible);
     }
-    if (typeof layout.panel_visible === "boolean") {
-      setPanelVisible(layout.panel_visible);
-    }
-    if (typeof layout.panel_height === "number") {
-      setGatewayPanelHeight(clampGatewayPanelHeight(layout.panel_height));
+    if (typeof layout.chat_visible === "boolean") {
+      setChatVisible(layout.chat_visible);
     }
     if (layout.auxiliary_tab) {
-      setAuxiliaryTab(layout.auxiliary_tab);
+      setAuxiliaryTab(resolveAuxiliaryTab(layout.auxiliary_tab));
     }
     if (layout.auxiliary_tab_order) {
       setAuxiliaryTabOrder(resolveAuxiliaryTabOrder(layout.auxiliary_tab_order));
@@ -254,7 +343,7 @@ export default function AppShell() {
         Math.min(420, Math.max(129, layout.customizations_height)),
       );
     }
-  }, [state.uiSettings]);
+  }, [extensionWindowRequested, state.uiSettings]);
 
   useEffect(() => {
     return () => {
@@ -331,6 +420,54 @@ export default function AppShell() {
     },
     [persistUiSettings],
   );
+  const updateBottomPanelState = useCallback(
+    (patch: Partial<WorkspaceBottomPanelState>) => {
+      if (!bottomPanelWorkspaceId) {
+        return;
+      }
+      const nextState: WorkspaceBottomPanelState = {
+        ...bottomPanelState,
+        ...patch,
+      };
+      setWorkspaceBottomPanelStates((previous) => ({
+        ...previous,
+        [bottomPanelWorkspaceId]: nextState,
+      }));
+      persistUiSettings((current) => ({
+        layout: {
+          bottom_panel_by_workspace: {
+            ...(current.layout.bottom_panel_by_workspace ?? {}),
+            [bottomPanelWorkspaceId]: toWorkspaceBottomPanelSettings(nextState),
+          },
+        },
+      }));
+    },
+    [bottomPanelState, bottomPanelWorkspaceId, persistUiSettings],
+  );
+  useEffect(() => {
+    if (
+      extensionWindowRequested ||
+      state.uiSettings.layout.auxiliary_tab !== "automation" ||
+      !bottomPanelWorkspaceId
+    ) {
+      return;
+    }
+    if (bottomPanelState.tab !== "automation") {
+      updateBottomPanelState({
+        visible: true,
+        tab: "automation",
+        terminalId: null,
+      });
+    }
+    persistLayoutSettings({ auxiliary_tab: "files" });
+  }, [
+    bottomPanelState.tab,
+    bottomPanelWorkspaceId,
+    extensionWindowRequested,
+    persistLayoutSettings,
+    state.uiSettings.layout.auxiliary_tab,
+    updateBottomPanelState,
+  ]);
   const agentSessionsVisible = state.agentSessionsPanelOpen;
   const handleWorkbenchViewChange = useCallback(
     (view: WorkbenchView) => {
@@ -348,6 +485,25 @@ export default function AppShell() {
     onPersistLayout: persistLayoutSettings,
     onStatusChange: setStatus,
   });
+  const extensionResourceKey = extensionWindowRequest?.workspaceId &&
+    extensionWindowRequest.sessionId &&
+    extensionWindowRequest.kind &&
+    extensionWindowRequest.resourceId
+    ? `${extensionWindowRequest.workspaceId}:${extensionWindowRequest.sessionId}:${extensionWindowRequest.kind}:${extensionWindowRequest.resourceId}`
+    : null;
+  const extensionResources = useGatewayExtensionResources({
+    apiPort: resolvedApiPort,
+    initialResourceKey: extensionResourceKey,
+    enabled: true,
+  });
+  const workspaceTerminalEntries = useMemo(
+    () => extensionResources.entries.filter(
+      (entry) => entry.workspace_id === bottomPanelWorkspaceId &&
+        entry.resource.kind === "terminal" &&
+        entry.resource.status === "running",
+    ),
+    [bottomPanelWorkspaceId, extensionResources.entries],
+  );
   const activePreviewPath = workspacePreview.activePath;
   const previewTabs = workspacePreview.tabs;
   const previewLoadingPath = workspacePreview.loadingPath;
@@ -378,6 +534,20 @@ export default function AppShell() {
   const activeRuntimePreview = runtimePreviewTabs.find(
     (tab) => tab.path === activePreviewPath,
   ) ?? null;
+
+  useEffect(() => {
+    if (!activeRuntimePreview && !extensionWindowRequested) {
+      setExtensionWindowFallback(false);
+    }
+  }, [activeRuntimePreview, extensionWindowRequested]);
+
+  useEffect(() => {
+    if (!extensionWindowRequested) {
+      return;
+    }
+    setAuxiliaryVisible(true);
+    setAuxiliaryTab("resources");
+  }, [extensionWindowRequested]);
   const codePreviewLoadingPath = codePreviewTabs.some(
     (tab) => tab.path === previewLoadingPath,
   )
@@ -400,9 +570,7 @@ export default function AppShell() {
     codePreviewLoadingPath !== null ||
     codePreviewError !== null
   );
-  const auxiliaryLeftVisible = sharedPreviewTab
-    ? sharedPreviewVisible
-    : auxiliaryTab === "automation" && workspaceInfoVisible.automation;
+  const auxiliaryLeftVisible = sharedPreviewTab && sharedPreviewVisible;
 
   useEffect(() => {
     setMarkdownSourceVisible(false);
@@ -599,11 +767,16 @@ export default function AppShell() {
     persistLayoutSettings({ auxiliary_visible: nextVisible });
     setStatus(nextVisible ? "右侧侧边栏已切换为展开" : "右侧侧边栏已切换为收起");
   };
+  const handleToggleChatPanel = () => {
+    const nextVisible = !chatVisible;
+    setChatVisible(nextVisible);
+    persistLayoutSettings({ chat_visible: nextVisible });
+    setStatus(nextVisible ? "会话区已展开" : "会话区已收起");
+  };
   const handleTogglePanel = () => {
-    const nextVisible = !panelVisible;
-    setPanelVisible(nextVisible);
-    persistLayoutSettings({ panel_visible: nextVisible });
-    setStatus(nextVisible ? "底部 Gateway 日志面板已切换为展开" : "底部 Gateway 日志面板已切换为收起");
+    const nextVisible = !bottomPanelState.visible;
+    updateBottomPanelState({ visible: nextVisible });
+    setStatus(nextVisible ? "底部面板已展开" : "底部面板已收起");
   };
   const handleAuxiliaryTabChange = (tab: WorkspaceAuxiliaryTab) => {
     setAuxiliaryTab(tab);
@@ -616,10 +789,137 @@ export default function AppShell() {
     persistLayoutSettings({ auxiliary_tab_order: nextOrder });
   };
   const openAuxiliaryTab = (tab: WorkspaceAuxiliaryTab) => {
+    if (tab !== "resources") {
+      setExtensionWindowFallback(false);
+    }
     setAuxiliaryVisible(true);
     setAuxiliaryTab(tab);
     persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: tab });
   };
+  const openTerminalPanel = (terminalId: string) => {
+    if (!bottomPanelWorkspaceId) {
+      setStatus("打开终端失败：当前没有活动工作区");
+      return;
+    }
+    updateBottomPanelState({
+      visible: true,
+      tab: "terminal",
+      terminalId,
+    });
+    setStatus(`已在主窗口底部面板打开终端：${terminalId}`);
+  };
+  const openExtensionWindow = (kind: ExtensionResourceKind, resourceId: string) => {
+    if (extensionWindowRequested) {
+      const entry = extensionResources.entries.find(
+        (candidate) =>
+          candidate.resource.kind === kind &&
+          candidate.resource.resource_id === resourceId,
+      );
+      if (entry) {
+        extensionResources.select(entry.key);
+      }
+      return;
+    }
+
+    const url = new URL(window.location.href);
+    url.pathname = "/extension";
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set("resourceType", kind);
+    url.searchParams.set("resourceId", resourceId);
+    if (activeSessionWorkspaceId) {
+      url.searchParams.set("workspaceId", activeSessionWorkspaceId);
+    }
+    if (activeSession?.session_id) {
+      url.searchParams.set("sessionId", activeSession.session_id);
+    }
+    const extensionWindow = window.open(url.toString(), EXTENSION_WINDOW_NAME);
+    if (!extensionWindow) {
+      setExtensionWindowFallback(true);
+      openAuxiliaryTab("resources");
+      if (kind === "browser") {
+        workspacePreview.openBrowserPreview(resourceId);
+      } else {
+        workspacePreview.openTerminalPreview(resourceId);
+      }
+      setStatus("扩展窗口未能打开，已在当前页面切换为扩展窗口模式；请检查浏览器弹窗权限。");
+      return;
+    }
+    extensionWindow.focus();
+    setStatus("已打开扩展窗口；后续扩展内容将在此窗口内切换。");
+  };
+  const openExtensionResource = (entry: GatewayExtensionResourceEntry) => {
+    extensionResources.select(entry.key);
+    setStatus(
+      `已切换到 ${entry.gateway_name} · ${entry.workspace_name} · ${entry.session_title}`,
+    );
+  };
+  const createExtensionReplacement = async (entry: GatewayExtensionResourceEntry) => {
+    const created = await createSessionConnection(
+      resolvedApiPort,
+      entry.workspace_id,
+      entry.session_id,
+      "browser",
+    );
+    await extensionResources.refresh();
+    setStatus(`已新建浏览器：${created.resourceId}`);
+  };
+  const selectedExtensionEntry = extensionResources.selectedEntry;
+  const extensionPreviewEntry = selectedExtensionEntry &&
+    (selectedExtensionEntry.resource.kind === "browser" ||
+      selectedExtensionEntry.resource.kind === "terminal")
+    ? selectedExtensionEntry
+    : null;
+  const extensionPreviewTab: WorkspaceRuntimePreviewTab | null = extensionPreviewEntry
+    ? extensionPreviewEntry.resource.kind === "browser"
+      ? {
+          previewType: "browser",
+          path: `gateway-resource://${extensionPreviewEntry.key}`,
+          name: extensionPreviewEntry.resource.name,
+          scopeLabel: `${extensionPreviewEntry.gateway_name} · ${extensionPreviewEntry.workspace_name} · ${extensionPreviewEntry.session_title}`,
+          browserId: extensionPreviewEntry.resource.resource_id,
+          attachUrl: buildGatewayAttachUrl(
+            "browser",
+            extensionPreviewEntry.workspace_id,
+            extensionPreviewEntry.resource.resource_id,
+            true,
+          ),
+        }
+      : {
+          previewType: "terminal",
+          path: `gateway-resource://${extensionPreviewEntry.key}`,
+          name: extensionPreviewEntry.resource.name,
+          scopeLabel: `${extensionPreviewEntry.gateway_name} · ${extensionPreviewEntry.workspace_name} · ${extensionPreviewEntry.session_title}`,
+          terminalId: extensionPreviewEntry.resource.resource_id,
+          attachUrl: buildGatewayAttachUrl(
+            "terminal",
+            extensionPreviewEntry.workspace_id,
+            extensionPreviewEntry.resource.resource_id,
+            true,
+          ),
+        }
+    : null;
+  const handleExitExtensionWindow = () => {
+    if (extensionWindowRequested) {
+      if (window.opener && !window.opener.closed) {
+        window.close();
+        return;
+      }
+      const standardUrl = new URL(window.location.href);
+      standardUrl.pathname = "/";
+      standardUrl.search = "";
+      standardUrl.hash = "";
+      window.location.assign(standardUrl.toString());
+      return;
+    }
+    setExtensionWindowFallback(false);
+  };
+  const extensionWindowVisible = extensionWindowRequested || extensionWindowFallback;
+  const runtimePreviewTab = extensionWindowRequested
+    ? extensionPreviewTab
+    : extensionWindowFallback
+      ? activeRuntimePreview
+      : null;
   const handleOpenChangesView = () => {
     setAuxiliaryVisible(true);
     setAuxiliaryTab("changes");
@@ -755,7 +1055,7 @@ export default function AppShell() {
     cleanupLayoutResizeRef.current?.();
 
     const startY = event.clientY;
-    const startHeight = gatewayPanelHeight;
+    const startHeight = bottomPanelState.height;
     let latestHeight = startHeight;
     let moved = false;
 
@@ -766,7 +1066,15 @@ export default function AppShell() {
       }
       moved = true;
       latestHeight = clampGatewayPanelHeight(startHeight + deltaY);
-      setGatewayPanelHeight(latestHeight);
+      if (bottomPanelWorkspaceId) {
+        setWorkspaceBottomPanelStates((previous) => ({
+          ...previous,
+          [bottomPanelWorkspaceId]: {
+            ...bottomPanelState,
+            height: latestHeight,
+          },
+        }));
+      }
     };
 
     const finishResize = () => {
@@ -776,7 +1084,7 @@ export default function AppShell() {
       document.body.classList.remove(GATEWAY_PANEL_RESIZING_CLASS);
       cleanupLayoutResizeRef.current = null;
       if (moved) {
-        persistLayoutSettings({ panel_height: latestHeight });
+        updateBottomPanelState({ height: latestHeight });
       }
     };
 
@@ -787,8 +1095,7 @@ export default function AppShell() {
     cleanupLayoutResizeRef.current = finishResize;
   };
   const resetGatewayPanelHeight = () => {
-    setGatewayPanelHeight(DEFAULT_GATEWAY_PANEL_HEIGHT);
-    persistLayoutSettings({ panel_height: DEFAULT_GATEWAY_PANEL_HEIGHT });
+    updateBottomPanelState({ height: DEFAULT_GATEWAY_PANEL_HEIGHT });
   };
   const handleCreateSession = (workspaceId?: string | null) => {
     setNameDialog(null);
@@ -1046,6 +1353,7 @@ export default function AppShell() {
             onLoadOlderMessages={loadOlderMessages}
             loadingDetailTurnIds={activeTurnTimeline?.loadingDetailIds ?? []}
             onLoadTurnDetails={loadTurnDetails}
+            onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
             onRetryHistory={refreshTurnHistory}
             sessionChangeSummary={activeSessionChangeHint}
             sessionChangesLoading={defaultViewChangesLoading}
@@ -1073,13 +1381,16 @@ export default function AppShell() {
       }}
     >
       <div
-      className={`app-shell agent-sessions-workbench shell-gradient-background ${agentSessionsVisible ? "agent-sessions-open" : "agent-sessions-closed"}`}
+      className={`app-shell agent-sessions-workbench shell-gradient-background${extensionWindowVisible ? " extension-window" : ""} ${agentSessionsVisible ? "agent-sessions-open" : "agent-sessions-closed"}`}
       data-agent-sessions-open={String(agentSessionsVisible)}
+      data-window-mode={extensionWindowVisible ? "extension" : "standard"}
       data-bt-surface="canvas"
     >
       <Toolbar
         sessionTitle={
-          workbenchView === "gateway"
+          extensionWindowVisible
+            ? "扩展窗口"
+            : workbenchView === "gateway"
             ? "Gateway 控制台"
             : state.currentSession?.title ?? null
         }
@@ -1091,6 +1402,8 @@ export default function AppShell() {
         }}
         auxiliaryVisible={auxiliaryVisible}
         onToggleAuxiliaryPanel={handleToggleAuxiliaryPanel}
+        chatVisible={chatVisible}
+        onToggleChatPanel={handleToggleChatPanel}
         agentSessionsVisible={agentSessionsVisible}
         onToggleAgentSessionsPanel={toggleAgentSessionsPanel}
         panelVisible={panelVisible}
@@ -1210,18 +1523,20 @@ export default function AppShell() {
         data-bt-surface="layout"
       >
         <div
-          className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}`}
+          className={`content-layout${auxiliaryVisible ? "" : " auxiliary-collapsed"}${chatVisible ? "" : " chat-collapsed"}`}
         >
-          <section
-            className="chat-panel sessions-part-card"
-            data-bt-surface="workspace"
-            style={{ flexBasis: 0, flexGrow: mainAreaRatios.chat }}
-          >
-            <div className="session-view-surface">
-              <div className="session-view-content">{renderContentView()}</div>
-              <Composer />
-            </div>
-          </section>
+          {chatVisible ? (
+            <section
+              className="chat-panel sessions-part-card"
+              data-bt-surface="workspace"
+              style={{ flexBasis: 0, flexGrow: mainAreaRatios.chat }}
+            >
+              <div className="session-view-surface">
+                <div className="session-view-content">{renderContentView()}</div>
+                <Composer />
+              </div>
+            </section>
+          ) : null}
           {auxiliaryVisible ? (
             <>
               <button
@@ -1244,7 +1559,7 @@ export default function AppShell() {
               >
                 <WorkspaceEditorHeader
                   auxiliaryTab={auxiliaryTab}
-                  tabOrder={auxiliaryTabOrder}
+                  tabOrder={extensionWindowRequested ? ["resources"] : auxiliaryTabOrder}
                   onSelectAuxiliaryTab={openAuxiliaryTab}
                   onReorderAuxiliaryTabs={handleAuxiliaryTabReorder}
                 />
@@ -1276,19 +1591,6 @@ export default function AppShell() {
                         onOpenWorkspacePath={workspacePreview.openWorkspaceFilePath}
                       />
                     ) : null
-                  ) : auxiliaryTab === "automation" ? (
-                    <WorkspaceInfoSidebar
-                      tab="automation"
-                      visible={workspaceInfoVisible.automation}
-                      flexRatio={mainAreaRatios.workspace_preview}
-                      workspaceName={state.workspaceName ?? "未选择工作区"}
-                      workspaceRoot={state.workspaceRoot ?? ""}
-                      sessionTitle={activeSession?.title ?? "新会话"}
-                      onToggle={() => setWorkspaceInfoVisible((current) => ({
-                        ...current,
-                        automation: !current.automation,
-                      }))}
-                    />
                   ) : null}
                   {auxiliaryLeftVisible ? (
                     <button
@@ -1302,9 +1604,9 @@ export default function AppShell() {
                   ) : null}
                   <WorkspaceAuxiliaryPanel
                     visible={auxiliaryVisible}
-                    flexRatio={sharedPreviewTab && !sharedPreviewVisible
-                      ? mainAreaRatios.workspace_preview + mainAreaRatios.auxiliary
-                      : mainAreaRatios.auxiliary}
+                    flexRatio={sharedPreviewTab && sharedPreviewVisible
+                      ? mainAreaRatios.auxiliary
+                      : mainAreaRatios.workspace_preview + mainAreaRatios.auxiliary}
                     tab={auxiliaryTab}
                     apiPort={resolvedApiPort}
                     workspaceId={activeSessionWorkspaceId}
@@ -1312,6 +1614,7 @@ export default function AppShell() {
                     workspaceRoot={state.workspaceRoot ?? ""}
                     sessionId={activeSession?.session_id ?? ""}
                     sessionTitle={activeSession?.title ?? "新会话"}
+                    extensionWindow={extensionWindowVisible}
                     activeFilePath={activeFilePath}
                     sessionChangesets={state.sessionChangesets}
                     selectedChangesetId={state.selectedChangesetId}
@@ -1335,70 +1638,79 @@ export default function AppShell() {
                         },
                       }));
                     }}
-                    automationPanel={(
-                      <SessionGeneratorManager
-                        apiPort={resolvedApiPort}
-                        generatorResources={generatorResources}
-                        workspaces={state.gatewayWorkspaces}
-                        activeWorkspaceId={state.activeGatewayWorkspaceId}
-                        currentSessionId={activeSession?.session_id ?? ""}
-                        onStatusChange={setStatus}
-                        onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
-                        onReconnectWorkspace={reconnectGatewayWorkspace}
-                        onStartWorkspace={startManagedGatewayWorkspaceBackend}
-                      />
-                    )}
                     resourcePanel={(
-                      <ResourcePanel
-                        resources={state.sessionResources}
-                        loading={state.sessionResourcesLoading}
-                        error={state.sessionResourcesError}
-                        loadedAt={state.sessionResourcesLoadedAt}
-                        sessionId={activeSession?.session_id ?? ""}
-                        workspaceId={activeSessionWorkspaceId}
-                        activePreviewPath={activeRuntimePreview?.path ?? null}
-                        onRefresh={() => {
-                          if (activeSession) {
-                            void refreshSessionResources(activeSession.session_id);
+                      extensionWindowRequested ? (
+                        <GatewayExtensionResourcePanel
+                          entries={extensionResources.entries}
+                          errors={extensionResources.errors}
+                          loading={extensionResources.loading}
+                          loadedAt={extensionResources.loadedAt}
+                          selectedKey={extensionResources.selectedKey}
+                          onSelect={extensionResources.select}
+                          onRefresh={() => void extensionResources.refresh()}
+                          onControl={extensionResources.control}
+                          onOpen={openExtensionResource}
+                          onCreateReplacement={createExtensionReplacement}
+                        />
+                      ) : (
+                        <ResourcePanel
+                          resources={state.sessionResources}
+                          loading={state.sessionResourcesLoading}
+                          error={state.sessionResourcesError}
+                          loadedAt={state.sessionResourcesLoadedAt}
+                          sessionId={activeSession?.session_id ?? ""}
+                          workspaceId={activeSessionWorkspaceId}
+                          extensionWindow={extensionWindowVisible}
+                          activePreviewPath={activeRuntimePreview?.path ?? null}
+                          onRefresh={() => {
+                            if (activeSession) {
+                              void refreshSessionResources(activeSession.session_id);
+                            }
+                          }}
+                          onControl={controlSessionResource}
+                          onOpenTerminalPreview={(terminalId) => {
+                            openTerminalPanel(terminalId);
+                          }}
+                          onOpenBrowserPreview={(browserId) => {
+                            openExtensionWindow("browser", browserId);
+                          }}
+                          onCloseResourcePreview={(kind, resourceId) =>
+                            workspacePreview.closeWorkspaceFilePreview(`${kind}://${resourceId}`)
                           }
-                        }}
-                        onControl={controlSessionResource}
-                        onOpenTerminalPreview={(terminalId) => {
-                          openAuxiliaryTab("resources");
-                          workspacePreview.openTerminalPreview(terminalId);
-                        }}
-                        onOpenBrowserPreview={(browserId) => {
-                          openAuxiliaryTab("resources");
-                          workspacePreview.openBrowserPreview(browserId);
-                        }}
-                        onCloseResourcePreview={(kind, resourceId) =>
-                          workspacePreview.closeWorkspaceFilePreview(`${kind}://${resourceId}`)
-                        }
-                        onCreateConnection={async (kind) => {
-                          if (!activeSession || !activeSessionWorkspaceId) {
-                            throw new Error("新建连接需要当前会话和 Gateway workspace_id");
-                          }
-                          const created = await createSessionConnection(
-                            resolvedApiPort,
-                            activeSessionWorkspaceId,
-                            activeSession.session_id,
-                            kind,
-                          );
-                          await refreshSessionResources(activeSession.session_id);
-                          if (created.kind === "terminal") {
-                            openAuxiliaryTab("resources");
-                            workspacePreview.openTerminalPreview(created.resourceId);
-                          } else {
-                            openAuxiliaryTab("resources");
-                            workspacePreview.openBrowserPreview(created.resourceId);
-                          }
-                        }}
-                      />
+                          onCreateConnection={async (kind) => {
+                            if (!activeSession || !activeSessionWorkspaceId) {
+                              throw new Error("新建连接需要当前会话和 Gateway workspace_id");
+                            }
+                            const created = await createSessionConnection(
+                              resolvedApiPort,
+                              activeSessionWorkspaceId,
+                              activeSession.session_id,
+                              kind,
+                            );
+                            await refreshSessionResources(activeSession.session_id);
+                            if (created.kind === "terminal") {
+                              openTerminalPanel(created.resourceId);
+                            } else {
+                              openExtensionWindow("browser", created.resourceId);
+                            }
+                          }}
+                        />
+                      )
                     )}
-                    runtimePreview={activeRuntimePreview ? (
+                    runtimePreview={runtimePreviewTab ? (
                       <WorkspaceRuntimePreviewArea
-                        tab={activeRuntimePreview}
-                        onClose={() => void workspacePreview.closeWorkspaceFilePreview(activeRuntimePreview.path)}
+                        tab={runtimePreviewTab}
+                        onClose={async () => {
+                          if (extensionWindowRequested) {
+                            extensionResources.select(null);
+                            return;
+                          }
+                          if (runtimePreviewTab) {
+                            await workspacePreview.closeWorkspaceFilePreview(runtimePreviewTab.path);
+                          }
+                        }}
+                        extensionWindow={extensionWindowVisible}
+                        onExitExtensionWindow={extensionWindowVisible ? handleExitExtensionWindow : undefined}
                       />
                     ) : null}
                     onToggleSearch={() => {
@@ -1441,21 +1753,75 @@ export default function AppShell() {
           <button
             type="button"
             className="layout-sash layout-sash-gateway-panel"
-            title="拖拽调整 Gateway 日志面板高度，双击还原"
-            aria-label="调整 Gateway 日志面板高度"
+            title="拖拽调整底部面板高度，双击还原"
+            aria-label="调整底部面板高度"
             onPointerDown={startGatewayPanelResize}
             onDoubleClick={resetGatewayPanelHeight}
           />
-          <GatewayLogPanel
-            apiPort={resolvedApiPort}
-            workspaces={state.gatewayWorkspaces}
-            height={gatewayPanelHeight}
-            onClose={handleTogglePanel}
-          />
+          {bottomPanelState.tab === "terminal" ? (
+            <TerminalPanel
+              entries={workspaceTerminalEntries}
+              workspaceId={activeSessionWorkspaceId}
+              workspaceName={state.workspaceName ?? ""}
+              selectedTerminalId={bottomPanelState.terminalId}
+              height={bottomPanelState.height}
+              loading={extensionResources.loading}
+              onSelectTerminal={(terminalId) => updateBottomPanelState({
+                tab: "terminal",
+                terminalId,
+              })}
+              onRefresh={() => void extensionResources.refresh()}
+              onSwitchToOutput={() => updateBottomPanelState({ tab: "output" })}
+              onSwitchToPorts={() => updateBottomPanelState({ tab: "ports" })}
+              onSwitchToAutomation={() => updateBottomPanelState({ tab: "automation" })}
+              onClose={() => updateBottomPanelState({ visible: false })}
+            />
+          ) : bottomPanelState.tab === "ports" ? (
+            <PortForwardPanel
+              apiPort={resolvedApiPort}
+              workspace={bottomPanelWorkspace}
+              height={bottomPanelState.height}
+              onSwitchToTerminal={() => updateBottomPanelState({ tab: "terminal" })}
+              onSwitchToOutput={() => updateBottomPanelState({ tab: "output" })}
+              onSwitchToAutomation={() => updateBottomPanelState({ tab: "automation" })}
+              onClose={() => updateBottomPanelState({ visible: false })}
+            />
+          ) : bottomPanelState.tab === "automation" ? (
+            <AutomationPanel
+              apiPort={resolvedApiPort}
+              generatorResources={generatorResources}
+              workspaces={state.gatewayWorkspaces}
+              activeWorkspaceId={bottomPanelWorkspaceId}
+              currentSessionId={activeSession?.session_id ?? ""}
+              workspaceName={bottomPanelWorkspace?.name ?? state.workspaceName ?? ""}
+              height={bottomPanelState.height}
+              onStatusChange={setStatus}
+              onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
+              onReconnectWorkspace={reconnectGatewayWorkspace}
+              onStartWorkspace={startManagedGatewayWorkspaceBackend}
+              onSwitchToTerminal={() => updateBottomPanelState({ tab: "terminal" })}
+              onSwitchToOutput={() => updateBottomPanelState({ tab: "output" })}
+              onSwitchToPorts={() => updateBottomPanelState({ tab: "ports" })}
+              onClose={() => updateBottomPanelState({ visible: false })}
+            />
+          ) : (
+            <GatewayLogPanel
+              apiPort={resolvedApiPort}
+              workspaceId={activeSessionWorkspaceId}
+              height={bottomPanelState.height}
+              onOpenTerminal={() => updateBottomPanelState({ tab: "terminal" })}
+              onOpenPorts={() => updateBottomPanelState({ tab: "ports" })}
+              onOpenAutomation={() => updateBottomPanelState({ tab: "automation" })}
+              onClose={() => updateBottomPanelState({ visible: false })}
+            />
+          )}
         </>
       ) : null}
         </div>
       </div>
+      {!extensionWindowVisible ? (
+        <footer className="workbench-status-bar" aria-label="状态栏" />
+      ) : null}
       <SessionNameDialog
         open={nameDialog !== null}
         title="重命名会话"

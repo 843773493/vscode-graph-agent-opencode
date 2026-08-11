@@ -5,7 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
-from app.gateway.schemas import CreatePortForwardRequest, PortForwardListDTO
+from app.gateway.schemas import (
+    ChangePortForwardLabelRequest,
+    ChangePortForwardLocalPortRequest,
+    CreatePortForwardRequest,
+    PortForwardListDTO,
+)
 from app.schemas.public_v2.common import APIResponse
 
 router = APIRouter(tags=["gateway-port-forwards"])
@@ -94,6 +99,46 @@ async def reconnect_port_forward(
 ):
     try:
         await manager.reconnect(workspace_id, forward_id)
+        items = await manager.list(workspace_id)
+    except Exception as error:
+        raise _http_error(error) from error
+    return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
+
+
+@router.patch(
+    "/api/gateway/workspaces/{workspace_id}/port-forwards/{forward_id}/local-port",
+    response_model=APIResponse[PortForwardListDTO],
+)
+async def change_local_port(
+    workspace_id: str,
+    forward_id: str,
+    payload: ChangePortForwardLocalPortRequest,
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+    manager: SshPortForwardManager = Depends(get_port_forward_manager),  # noqa: B008
+):
+    try:
+        await manager.change_local_port(workspace_id, forward_id, payload.local_port)
+        items = await manager.list(workspace_id)
+    except Exception as error:
+        raise _http_error(error) from error
+    return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
+
+
+@router.patch(
+    "/api/gateway/workspaces/{workspace_id}/port-forwards/{forward_id}/label",
+    response_model=APIResponse[PortForwardListDTO],
+)
+async def change_port_forward_label(
+    workspace_id: str,
+    forward_id: str,
+    payload: ChangePortForwardLabelRequest,
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+    manager: SshPortForwardManager = Depends(get_port_forward_manager),  # noqa: B008
+):
+    try:
+        await manager.change_label(workspace_id, forward_id, payload.label)
         items = await manager.list(workspace_id)
     except Exception as error:
         raise _http_error(error) from error

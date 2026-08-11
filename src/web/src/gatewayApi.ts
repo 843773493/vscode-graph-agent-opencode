@@ -29,7 +29,10 @@ import type {
   SessionGeneratorList,
   WorkspaceNavigationTree,
   CreateGatewayPortForwardRequest,
+  ChangeGatewayPortForwardLocalPortRequest,
+  ChangeGatewayPortForwardLabelRequest,
   GatewayPortForwardList,
+  GatewayResourceList,
 } from "./types/backend";
 import { HttpRequestError, requestJson, unwrapApiData } from "./api";
 import type { CreatableSessionConnectionKind } from "./types/frontend";
@@ -157,6 +160,17 @@ export async function listGatewayWorkspaces(
   );
 }
 
+export async function listGatewayResources(
+  port: number,
+): Promise<GatewayResourceList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayResourceList>>(
+      port,
+      "/api/gateway/resources",
+    ),
+  );
+}
+
 export async function listWorkspacePortForwards(
   port: number,
   workspaceId: string,
@@ -207,6 +221,39 @@ export async function reconnectWorkspacePortForward(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}/reconnect`,
       { method: "POST", body: "{}" },
+    ),
+  );
+}
+
+export async function changeWorkspacePortForwardLocalPort(
+  port: number,
+  workspaceId: string,
+  forwardId: string,
+  payload: ChangeGatewayPortForwardLocalPortRequest,
+): Promise<GatewayPortForwardList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayPortForwardList>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}/local-port`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+    ),
+  );
+}
+
+export async function changeWorkspacePortForwardLabel(
+  port: number,
+  workspaceId: string,
+  forwardId: string,
+  payload: ChangeGatewayPortForwardLabelRequest,
+): Promise<GatewayPortForwardList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayPortForwardList>>(
+      port,
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}/label`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
     ),
   );
 }

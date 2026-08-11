@@ -3,6 +3,34 @@
   background: var(--bt-panel-background);
 }
 
+.gateway-extension-resource-panel {
+  min-width: 0;
+}
+
+.gateway-extension-scope-hint {
+  flex: 0 0 auto;
+  margin: 6px 8px 0;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.gateway-extension-error {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--bt-status-danger);
+}
+
+.gateway-extension-error strong {
+  color: var(--bt-text-primary);
+  font-size: 11px;
+}
+
+.gateway-extension-error span {
+  overflow-wrap: anywhere;
+}
+
 .goal-manager {
   flex: 0 0 auto;
   margin: 8px;
@@ -268,6 +296,77 @@
   overflow: auto;
   padding: 6px;
   background: var(--bt-panel-background);
+}
+
+.gateway-extension-resource-tree {
+  padding-top: 8px;
+}
+
+.gateway-extension-scope + .gateway-extension-scope {
+  margin-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
+  padding-top: 4px;
+}
+
+.gateway-extension-scope-row {
+  display: grid;
+  width: 100%;
+  min-height: 36px;
+  grid-template-columns: 14px minmax(0, 1fr) max-content;
+  gap: 5px;
+  align-items: center;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--bt-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.gateway-extension-scope-row:hover,
+.gateway-extension-scope-row:focus-visible {
+  background: var(--bt-hover-background);
+  outline: none;
+}
+
+.gateway-extension-scope-row > .codicon {
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.gateway-extension-scope-row > span:last-child {
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.gateway-extension-scope-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.gateway-extension-scope-copy strong,
+.gateway-extension-scope-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-extension-scope-copy strong {
+  font-size: 11px;
+}
+
+.gateway-extension-scope-copy small {
+  color: var(--bt-text-muted);
+  font-size: 9px;
+}
+
+.gateway-extension-scope-children {
+  margin-left: 13px;
+  border-left: 1px solid color-mix(in srgb, var(--bt-text-primary) 12%, transparent);
+  padding-left: 3px;
 }
 
 .resource-tree-group + .resource-tree-group {
