@@ -230,7 +230,7 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("重新生成最后回复");
   });
 
-  test("空内部用户消息默认隐藏原文并保留右键展开入口", () => {
+  test("空内部用户消息默认隐藏原文并提供消息操作菜单", () => {
     const value = conversation("done");
     value.userMessage = {
       ...value.userMessage!,
@@ -241,7 +241,8 @@ describe("ChatTurn 轮次动作", () => {
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
     expect(html).toContain('aria-label="空用户消息，右键展开原始消息"');
-    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('aria-label="消息操作"');
+    expect(html).toContain("codicon-add");
     expect(html).not.toContain("<system_reminder>原始消息</system_reminder>");
   });
 
@@ -259,7 +260,8 @@ describe("ChatTurn 轮次动作", () => {
       />,
     );
 
-    expect(html).toContain("编辑并从此处继续");
+    expect(html).toContain('aria-label="消息操作"');
+    expect(html).toContain("codicon-add");
     expect(html).toContain("重新生成最后回复");
   });
 
@@ -277,7 +279,7 @@ describe("ChatTurn 轮次动作", () => {
       />,
     );
 
-    expect(html).toContain('aria-label="编辑并从此处继续" disabled=""');
+    expect(html).toContain('aria-label="消息操作"');
     expect(html).not.toContain("重新生成最后回复");
   });
 
