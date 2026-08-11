@@ -167,6 +167,10 @@ interface AppContextType {
   sendPendingRequestImmediately: (messageId: string) => Promise<void>;
   loadOlderMessages: () => Promise<void>;
   loadTurnDetails: (turnIds: string[]) => Promise<void>;
+  loadAgentStateMessageRawContent: (
+    sessionId: string,
+    messageId: string,
+  ) => Promise<string>;
   refreshTurnHistory: () => void;
   loadOlderTraceHistory: () => Promise<number>;
   refreshTraceHistory: () => Promise<void>;
@@ -364,6 +368,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   });
   const {
     invalidateAgentState,
+    loadAgentStateMessageRawContent,
     refreshSessionResources,
     refreshSessionChanges,
     refreshAgentStateSnapshot,
@@ -1232,6 +1237,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       sendPendingRequestImmediately,
       loadOlderMessages,
       loadTurnDetails,
+      loadAgentStateMessageRawContent,
       refreshTurnHistory,
       loadOlderTraceHistory,
       refreshTraceHistory,
@@ -1291,6 +1297,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       sendPendingRequestImmediately,
       loadOlderMessages,
       loadTurnDetails,
+      loadAgentStateMessageRawContent,
       refreshTurnHistory,
       loadOlderTraceHistory,
       refreshTraceHistory,

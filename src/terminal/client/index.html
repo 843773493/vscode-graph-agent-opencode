@@ -70,7 +70,7 @@
           </button>
         </div>
       </header>
-      <section id="status-line" class="status-line">等待连接</section>
+      <section id="status-line" class="status-line" hidden role="alert"></section>
       <section class="terminal-stage">
         <section id="terminal-search-bar" class="terminal-search-bar" hidden>
           <input
@@ -94,18 +94,6 @@
         </section>
         <section id="terminal" class="terminal"></section>
       </section>
-      <form id="agent-form" class="agent-form">
-        <input id="agent-input" type="text" autocomplete="off" placeholder="从网页向终端写入命令" />
-        <button
-          class="icon-button terminal-icon-button send-button"
-          type="submit"
-          title="发送输入到终端"
-          aria-label="发送输入到终端"
-        >
-          <span class="button-icon codicon codicon-send" aria-hidden="true"></span>
-          <span class="sr-only">发送输入到终端</span>
-        </button>
-      </form>
     </main>
     <script src="./config.js"></script>
     <script src="./vendor/xterm/xterm.js"></script>

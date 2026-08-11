@@ -20,6 +20,7 @@ export function useContentViewLoader({
 }) {
   const {
     invalidateAgentState,
+    loadAgentStateMessageRawContent,
     refreshAgentStateSnapshot,
   } = useAgentStateSnapshotLoader({
     apiPort,
@@ -208,6 +209,7 @@ export function useContentViewLoader({
   return {
     controlSessionResource,
     invalidateAgentState,
+    loadAgentStateMessageRawContent,
     refreshSessionChanges,
     refreshAgentStateSnapshot,
     refreshLLMRequestLogs,

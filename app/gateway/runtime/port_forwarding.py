@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -88,7 +88,7 @@ class SshPortForwardManager:
                 try:
                     connection = self._connection_for_definition(definition)
                     await self._start_definition(definition, connection)
-                except Exception as error:  # noqa: BLE001
+                except Exception as error:
                     self._runtimes[definition.forward_id] = _PortForwardRuntime(
                         status="error",
                         error=(
@@ -181,7 +181,55 @@ class SshPortForwardManager:
                     forward_id,
                     workspace_id,
                 )
-            return self._dto(definition)
+        return self._dto(definition)
+
+    async def change_label(
+        self,
+        workspace_id: str,
+        forward_id: str,
+        label: str | None,
+    ) -> PortForwardDTO:
+        async with self._lock:
+            self._resolve_remote_workspace(workspace_id)
+            definition = self._owned_definition(workspace_id, forward_id)
+            updated_definition = replace(definition, label=label or None)
+            self._definitions[forward_id] = updated_definition
+            self._save()
+            return self._dto(updated_definition)
+
+    async def change_local_port(
+        self,
+        workspace_id: str,
+        forward_id: str,
+        local_port: int,
+    ) -> PortForwardDTO:
+        async with self._lock:
+            connection = self._resolve_remote_workspace(workspace_id)
+            definition = self._owned_definition(workspace_id, forward_id)
+            if local_port == definition.local_port:
+                return self._dto(definition)
+            self._assert_local_port_available(
+                local_port,
+                exclude_forward_id=definition.forward_id,
+            )
+            await self._stop_runtime(definition.forward_id)
+            updated_definition = replace(definition, local_port=local_port)
+            self._definitions[forward_id] = updated_definition
+            self._save()
+            try:
+                if updated_definition.desired_running:
+                    await self._start_definition(updated_definition, connection)
+            except Exception as error:
+                self._runtimes[forward_id] = _PortForwardRuntime(
+                    status="error",
+                    error=f"{type(error).__name__}: {error}",
+                )
+                logger.exception(
+                    "更改 SSH 端口转发本地端口失败: forward_id=%s workspace_id=%s",
+                    forward_id,
+                    workspace_id,
+                )
+            return self._dto(updated_definition)
 
     async def remove_workspace(self, workspace_id: str) -> None:
         async with self._lock:
@@ -302,12 +350,18 @@ class SshPortForwardManager:
                 f"{existing.workspace_id}: forward_id={existing.forward_id}"
             )
 
-    def _assert_local_port_available(self, local_port: int) -> None:
+    def _assert_local_port_available(
+        self,
+        local_port: int,
+        *,
+        exclude_forward_id: str | None = None,
+    ) -> None:
         existing = next(
             (
                 definition
                 for definition in self._definitions.values()
                 if definition.local_port == local_port
+                and definition.forward_id != exclude_forward_id
             ),
             None,
         )

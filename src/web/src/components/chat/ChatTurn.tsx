@@ -16,6 +16,10 @@ export interface ChatTurnProps extends ChatTurnActionCallbacks {
   showRawDetails: boolean;
   isLastTurn: boolean;
   sessionBusy: boolean;
+  onLoadAgentStateMessageRawContent: (
+    sessionId: string,
+    messageId: string,
+  ) => Promise<string>;
 }
 
 function ChatTurn({
@@ -25,6 +29,7 @@ function ChatTurn({
   showRawDetails,
   isLastTurn,
   sessionBusy,
+  onLoadAgentStateMessageRawContent,
   onReplayTurn,
   onUpdatePending,
   onRemovePending,
@@ -46,6 +51,7 @@ function ChatTurn({
         conversation={conversation}
         sessionBusy={sessionBusy}
         actions={actions}
+        onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}
         onRemovePending={onRemovePending}
         onSendPendingImmediately={onSendPendingImmediately}
         onChangePendingKind={onChangePendingKind}
@@ -100,6 +106,7 @@ export function areChatTurnPropsEqual(
     || previous.showRawDetails !== next.showRawDetails
     || previous.isLastTurn !== next.isLastTurn
     || previous.sessionBusy !== next.sessionBusy
+    || previous.onLoadAgentStateMessageRawContent !== next.onLoadAgentStateMessageRawContent
     || previous.onReplayTurn !== next.onReplayTurn
     || previous.onUpdatePending !== next.onUpdatePending
     || previous.onRemovePending !== next.onRemovePending

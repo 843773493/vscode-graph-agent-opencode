@@ -7,10 +7,14 @@ body,
 }
 
 [data-bt-surface="chrome"],
-.toolbar,
 .agent-sessions-panel,
 .gateway-control-sidebar {
   background: var(--bt-chrome-surface);
+  backdrop-filter: var(--bt-chrome-backdrop-filter);
+}
+
+.toolbar {
+  background: var(--bt-toolbar-background);
   backdrop-filter: var(--bt-chrome-backdrop-filter);
 }
 
@@ -51,8 +55,7 @@ body,
 .auxiliary-resources-body > .resource-panel,
 .auxiliary-resources-body .panel-list,
 .auxiliary-resources-body .resource-tree,
-.auxiliary-resources-body .empty-state,
-.auxiliary-automation-body > .session-generator-manager {
+.auxiliary-resources-body .empty-state {
   background: transparent;
 }
 

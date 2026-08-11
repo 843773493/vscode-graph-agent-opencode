@@ -59,6 +59,19 @@ def test_builtin_themes_are_complete_and_default_to_warm(tmp_path):
         "--bt-panel-surface",
         "--bt-floating-surface",
         "--bt-critical-surface",
+        "--bt-toolbar-background",
+        "--bt-workspace-header-background",
+        "--bt-bottom-panel-background",
+        "--bt-bottom-panel-header-background",
+        "--bt-bottom-panel-toolbar-background",
+        "--bt-bottom-panel-list-background",
+        "--bt-bottom-panel-viewer-background",
+        "--bt-runtime-preview-background",
+        "--bt-runtime-preview-header-background",
+        "--bt-runtime-preview-border",
+        "--bt-status-bar-background",
+        "--bt-status-bar-border",
+        "--bt-status-bar-foreground",
         "--bt-surface-backdrop-filter",
         "--bt-chrome-backdrop-filter",
         "--bt-workspace-backdrop-filter",
@@ -88,6 +101,28 @@ def test_custom_theme_inherits_and_overrides_builtin(tmp_path):
     assert resolved.theme.theme_id == "forest"
     assert resolved.theme.resolved_theme is not None
     assert resolved.theme.resolved_theme.tokens["--bt-accent"] == "#123456"
+
+
+def test_custom_theme_can_override_new_workbench_region_tokens(tmp_path):
+    config = GatewayConfig(
+        custom_themes=(
+            ConfiguredTheme(
+                id="compact-dark",
+                label="紧凑深色",
+                extends="blue",
+                color_scheme="dark",
+                tokens={
+                    "--bt-bottom-panel-background": "#10151d",
+                    "--bt-status-bar-background": "#183b30",
+                },
+            ),
+        )
+    )
+
+    resolved = resolve_theme("compact-dark", config=config, gateway_root=tmp_path)
+
+    assert resolved.tokens["--bt-bottom-panel-background"] == "#10151d"
+    assert resolved.tokens["--bt-status-bar-background"] == "#183b30"
 
 
 @pytest.mark.parametrize(

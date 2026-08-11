@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,7 +14,7 @@ from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
-from app.schemas.public_v2.common import ControlAction, JobStatus, RunMode
+from app.schemas.public_v2.common import JobStatus, RunMode
 from app.schemas.public_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
@@ -29,6 +30,11 @@ from app.schemas.public_v2.pending_request import (
     PendingRequestOrderItem,
     PendingRequestSummaryListDTO,
 )
+from app.services.business.job.control_service import JobControlService
+from app.services.business.job.lifecycle import (
+    TERMINAL_JOB_STATUSES,
+    transition_job_status,
+)
 from app.services.business.job.pending_queue import JobPendingQueue
 from app.services.business.job.pending_request_service import (
     JobPendingRequestService,
@@ -36,6 +42,7 @@ from app.services.business.job.pending_request_service import (
 from app.services.business.job.runtime_state import JobRuntimeState
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 class JobAdmissionClosedError(RuntimeError):
@@ -101,6 +108,14 @@ class JobService:
             get_jobs=lambda: self._jobs,
             get_current_jobs=lambda: self._session_current_job,
         )
+        self._control_service = JobControlService(
+            get_jobs=lambda: self._jobs,
+            get_current_jobs=lambda: self._session_current_job,
+            pending_queue=self._pending_queue,
+            pending_requests=self._pending_requests,
+            dispatch_lock=self._dispatch_lock,
+            start_job_task=lambda job: self._start_job_task(job),
+        )
 
     def assert_accepting_jobs(self) -> None:
         if not self._accepting_jobs:
@@ -142,31 +157,42 @@ class JobService:
         if not blockers:
             return 0
 
-        blocker_ids = {blocker.job_id for blocker in blockers}
+        active_blockers: list[JobDrainBlocker] = []
         sessions_with_queued_jobs: set[str] = set()
+        queued_blocker_ids: set[str] = set()
         tasks: list[asyncio.Task] = []
         now = datetime.now()
         async with self._dispatch_lock:
-            for job_id in blocker_ids:
-                job = self._jobs[job_id]
-                job.cancellation_reason = reason
-                job.updated_at = now
-                if job.status == JobStatus.queued:
-                    job.status = JobStatus.cancelled
-                    job.error_message = reason
-                    job.ended_at = now
-                    sessions_with_queued_jobs.add(job.session_id)
+            for blocker in blockers:
+                job = self._jobs.get(blocker.job_id)
+                if job is None or self._is_terminal_status(job.status):
                     continue
-                job.status = JobStatus.cancelling
+                active_blockers.append(blocker)
+                job.cancellation_reason = reason
+                if job.status in {JobStatus.accepted, JobStatus.queued}:
+                    was_queued = job.status == JobStatus.queued
+                    transition_job_status(
+                        job,
+                        JobStatus.cancelled,
+                        error_message=reason,
+                        now=now,
+                    )
+                    if was_queued:
+                        sessions_with_queued_jobs.add(job.session_id)
+                        queued_blocker_ids.add(job.job_id)
+                    continue
+                transition_job_status(job, JobStatus.cancelling, now=now)
                 if job.task is not None and not job.task.done():
                     tasks.append(job.task)
             for session_id in sessions_with_queued_jobs:
                 self._pending_queue.clear(session_id)
 
+        if not active_blockers:
+            return 0
         if self._bus is None:
             raise RuntimeError("JobService 未绑定 JobEventBus")
-        for blocker in blockers:
-            if blocker.status == JobStatus.queued:
+        for blocker in active_blockers:
+            if blocker.job_id in queued_blocker_ids:
                 continue
             await self._bus.publish(
                 job_id=blocker.job_id,
@@ -185,19 +211,21 @@ class JobService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         ended_at = datetime.now()
-        for blocker in blockers:
-            job = self._jobs[blocker.job_id]
-            if job.status != JobStatus.cancelling:
+        for blocker in active_blockers:
+            job = self._jobs.get(blocker.job_id)
+            if job is None or job.status != JobStatus.cancelling:
                 continue
-            job.status = JobStatus.cancelled
-            job.error_message = reason
-            job.ended_at = ended_at
-            job.updated_at = ended_at
+            transition_job_status(
+                job,
+                JobStatus.cancelled,
+                error_message=reason,
+                now=ended_at,
+            )
         for session_id in sessions_with_queued_jobs:
             await self._pending_requests.persist(
                 await self._pending_requests.list(session_id)
             )
-        return len(blockers)
+        return len(active_blockers)
 
     def _normalize_result_text(self, result: object) -> str:
         if isinstance(result, str):
@@ -300,7 +328,8 @@ class JobService:
                 if preparation_count:
                     raise RuntimeError(
                         "会话正在准备持久化消息，不能移动物理存储: "
-                        f"session_id={session_id}, preparation_count={preparation_count}"
+                        f"session_id={session_id}, "
+                        f"preparation_count={preparation_count}"
                     )
                 active_job_id = self._session_current_job.get(session_id)
                 if active_job_id is not None:
@@ -380,36 +409,12 @@ class JobService:
             raise ValueError(f"Job {job_id} not found")
         return job.steps
 
-    async def control(self, job_id: str, control_request: JobControlRequest) -> JobControlResponseDTO:
-        job = self._jobs.get(job_id)
-        if not job:
-            raise ValueError(f"Job {job_id} not found")
-
-        if control_request.action == ControlAction.pause:
-            job.status = JobStatus.paused
-            if job.task and not job.task.done():
-                job.task.cancel()
-        elif control_request.action == ControlAction.resume:
-            job.status = JobStatus.running
-            if job.task is None or job.task.done():
-                self._start_job_task(job)
-        elif control_request.action == ControlAction.cancel:
-            if job.status == JobStatus.queued:
-                await self._pending_requests.remove(
-                    job.session_id,
-                    job.message_id,
-                )
-            else:
-                job.status = JobStatus.cancelling
-            if job.task and not job.task.done():
-                job.task.cancel()
-
-        job.updated_at = datetime.now()
-        return JobControlResponseDTO(
-            job_id=job_id,
-            status=job.status,
-            control_state=f"Action {control_request.action.value} applied successfully"
-        )
+    async def control(
+        self,
+        job_id: str,
+        control_request: JobControlRequest,
+    ) -> JobControlResponseDTO:
+        return await self._control_service.control(job_id, control_request)
 
     async def list_pending(self, session_id: str) -> PendingRequestListDTO:
         async def restore_and_list() -> PendingRequestListDTO:
@@ -528,7 +533,7 @@ class JobService:
                 )
             raise
         if reserved:
-            reservation.status = JobStatus.completed
+            transition_job_status(reservation, JobStatus.completed)
             try:
                 await self._schedule_next_job_if_needed(reservation)
             finally:
@@ -543,10 +548,12 @@ class JobService:
                 and current_job.task is not None
                 and not current_job.task.done()
             ):
-                current_job.status = JobStatus.cancelling
-                current_job.error_message = "为立即发送排队消息而停止"
+                transition_job_status(
+                    current_job,
+                    JobStatus.cancelling,
+                    error_message="为立即发送排队消息而停止",
+                )
                 current_job.dispatch_pending_after_cancel = True
-                current_job.updated_at = datetime.now()
                 SessionInterruptState.set(
                     session_id,
                     cancellation_reason="pending_request_send_immediately",
@@ -572,10 +579,12 @@ class JobService:
             now = datetime.now()
             for job in jobs:
                 if not self._is_terminal_status(job.status):
-                    job.status = JobStatus.cancelled
-                    job.error_message = "会话删除时清理任务"
-                    job.ended_at = job.ended_at or now
-                    job.updated_at = now
+                    transition_job_status(
+                        job,
+                        JobStatus.cancelled,
+                        error_message="会话删除时清理任务",
+                        now=job.ended_at or now,
+                    )
 
         for job in jobs:
             if job.task and not job.task.done():
@@ -642,7 +651,8 @@ class JobService:
         import logging
         logger = logging.getLogger(__name__)
         logger.info(
-            "[job_service] start_job: session_id=%s agent_id=%s message_length=%s job_id=%s",
+            "[job_service] start_job: session_id=%s agent_id=%s "
+            "message_length=%s job_id=%s",
             session_id,
             agent_id,
             len(message or ""),
@@ -706,14 +716,19 @@ class JobService:
             },
             agent_id="job_service"
         )
-        logger.info("[job_service] JOB_CREATED published: job_id=%s session_id=%s", resolved_job_id, session_id)
+        logger.info(
+            "[job_service] JOB_CREATED published: job_id=%s session_id=%s",
+            resolved_job_id,
+            session_id,
+        )
 
         dispatch = await self._enqueue_or_dispatch(
             job,
             dispatch_mode=dispatch_mode,
         )
         logger.info(
-            "[job_service] enqueue_or_dispatch result: job_id=%s status=%s blocked_by=%s queued_ahead=%s pending=%s",
+            "[job_service] enqueue_or_dispatch result: job_id=%s status=%s "
+            "blocked_by=%s queued_ahead=%s pending=%s",
             resolved_job_id,
             dispatch.job_status,
             dispatch.blocked_by_job_id,
@@ -783,13 +798,7 @@ class JobService:
         )
 
     def _is_terminal_status(self, status: JobStatus) -> bool:
-        return status in {
-            JobStatus.completed,
-            JobStatus.succeeded,
-            JobStatus.failed,
-            JobStatus.cancelled,
-            JobStatus.timed_out,
-        }
+        return status in TERMINAL_JOB_STATUSES
 
     def _start_job_task(self, job: JobState) -> None:
         loop = asyncio.get_running_loop()
@@ -800,12 +809,12 @@ class JobService:
             except asyncio.CancelledError:
                 pass
             except Exception as e:
-                import logging
-                logging.error(f"Job task failed: job_id={job.job_id}, error={e!s}", exc_info=True)
-                job.status = JobStatus.failed
-                job.error_message = str(e)
-                job.ended_at = datetime.now()
-                job.updated_at = datetime.now()
+                logger.exception(
+                    "Job task failed: job_id=%s",
+                    job.job_id,
+                )
+                if not self._is_terminal_status(job.status):
+                    transition_job_status(job, JobStatus.failed, error_message=str(e))
                 if self._bus is not None:
                     asyncio.get_event_loop().create_task(
                         self._bus.publish(
@@ -843,17 +852,18 @@ class JobService:
                         job.job_id,
                         pending_kind,
                     )
-                    job.status = JobStatus.queued
                     job.pending_kind = pending_kind
-                    job.updated_at = datetime.now()
+                    transition_job_status(job, JobStatus.queued)
                     if dispatch_mode == "immediate":
                         self._pending_queue.promote(job.session_id, job.job_id)
                         queued_jobs_ahead = 0
                         if current_job.task is not None and not current_job.task.done():
-                            current_job.status = JobStatus.cancelling
-                            current_job.error_message = "为跨会话立即消息而停止"
+                            transition_job_status(
+                                current_job,
+                                JobStatus.cancelling,
+                                error_message="为跨会话立即消息而停止",
+                            )
                             current_job.dispatch_pending_after_cancel = True
-                            current_job.updated_at = datetime.now()
                             SessionInterruptState.set(
                                 job.session_id,
                                 cancellation_reason="session_message_immediate",
@@ -873,8 +883,7 @@ class JobService:
                     )
 
             self._session_current_job[job.session_id] = job.job_id
-            job.status = JobStatus.running
-            job.updated_at = datetime.now()
+            transition_job_status(job, JobStatus.running)
             self._start_job_task(job)
             return JobDispatchSnapshotDTO(
                 session_id=job.session_id,
@@ -898,6 +907,8 @@ class JobService:
         )
         if not should_continue:
             async with self._dispatch_lock:
+                if finished_job.status == JobStatus.paused:
+                    return
                 if (
                     self._session_current_job.get(finished_job.session_id)
                     == finished_job.job_id
@@ -905,87 +916,105 @@ class JobService:
                     self._session_current_job.pop(finished_job.session_id, None)
             return
 
-        next_job: JobState | None = None
-        merge_event_payload: dict[str, object] | None = None
-
         async with self._dispatch_lock:
             current_job_id = self._session_current_job.get(finished_job.session_id)
             if current_job_id != finished_job.job_id:
                 return
 
+            next_job: JobState | None = None
+            next_group: tuple[str, ...] = ()
             while True:
-                next_group = self._pending_queue.pop_next_group(
+                candidate_group = self._pending_queue.peek_next_group(
                     finished_job.session_id
                 )
-                if not next_group:
+                if not candidate_group:
                     break
-                next_job_id = next_group[0]
+                next_job_id = candidate_group[0]
                 candidate = self._jobs.get(next_job_id)
                 if candidate and candidate.status == JobStatus.queued:
                     next_job = candidate
-                    if len(next_group) > 1:
-                        merged_jobs = [
-                            self._jobs[group_job_id]
-                            for group_job_id in next_group
-                            if group_job_id in self._jobs
-                        ]
-                        next_job.message = "\n\n".join(
-                            merged_job.message for merged_job in merged_jobs
-                        )
-                        next_job.attachments = [
-                            attachment
-                            for merged_job in merged_jobs
-                            for attachment in merged_job.attachments
-                        ]
-                        now = datetime.now()
-                        for merged_job in merged_jobs[1:]:
-                            merged_job.status = JobStatus.cancelled
-                            merged_job.error_message = (
-                                f"Steering 消息已合并到 {next_job.job_id}"
-                            )
-                            merged_job.ended_at = now
-                            merged_job.updated_at = now
-                        merge_event_payload = {
-                            "session_id": next_job.session_id,
-                            "merged_job_ids": [
-                                merged_job.job_id for merged_job in merged_jobs[1:]
-                            ],
-                            "source_message_ids": [
-                                merged_job.message_id for merged_job in merged_jobs
-                            ],
-                        }
+                    next_group = candidate_group
                     break
+                self._pending_queue.pop_next_group(finished_job.session_id)
 
             if next_job is None:
                 self._session_current_job.pop(finished_job.session_id, None)
                 return
 
+            merged_jobs = [
+                self._jobs[group_job_id]
+                for group_job_id in next_group
+                if group_job_id in self._jobs
+            ]
+            merge_event_payload: dict[str, object] | None = None
+            if len(next_group) > 1:
+                merge_event_payload = {
+                    "session_id": next_job.session_id,
+                    "merged_job_ids": [
+                        merged_job.job_id for merged_job in merged_jobs[1:]
+                    ],
+                    "source_message_ids": [
+                        merged_job.message_id for merged_job in merged_jobs
+                    ],
+                }
+                if self._bus is None:
+                    raise RuntimeError("JobService 未绑定 JobEventBus")
+                await self._bus.publish(
+                    job_id=next_job.job_id,
+                    event_type=EventType.JOB_MERGED,
+                    payload=merge_event_payload,
+                    agent_id="job_service",
+                )
+
+            popped_group = self._pending_queue.pop_next_group(
+                finished_job.session_id
+            )
+            if popped_group != next_group:
+                raise RuntimeError(
+                    "调度下一 Job 时队列内容发生变化: "
+                    f"expected={list(next_group)} actual={list(popped_group)}"
+                )
+            if len(next_group) > 1:
+                next_job.message = "\n\n".join(
+                    merged_job.message for merged_job in merged_jobs
+                )
+                next_job.attachments = [
+                    attachment
+                    for merged_job in merged_jobs
+                    for attachment in merged_job.attachments
+                ]
+                now = datetime.now()
+                for merged_job in merged_jobs[1:]:
+                    transition_job_status(
+                        merged_job,
+                        JobStatus.cancelled,
+                        error_message=(
+                            f"Steering 消息已合并到 {next_job.job_id}"
+                        ),
+                        now=now,
+                    )
             self._session_current_job[finished_job.session_id] = next_job.job_id
             next_job.pending_kind = None
+            transition_job_status(next_job, JobStatus.running)
+            self._start_job_task(next_job)
 
-        if merge_event_payload is not None:
-            if self._bus is None:
-                raise RuntimeError("JobService 未绑定 JobEventBus")
-            await self._bus.publish(
-                job_id=next_job.job_id,
-                event_type=EventType.JOB_MERGED,
-                payload=merge_event_payload,
-                agent_id="job_service",
-            )
-        self._start_job_task(next_job)
         await self._pending_requests.persist(
             await self._pending_requests.list(finished_job.session_id)
         )
 
     async def _run_job_background(self, job_id: str, session_id: str, message: str):
         job = self._jobs[job_id]
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("[job_service] _run_job_background begin: job_id=%s session_id=%s agent_id=%s message_length=%s", job_id, session_id, job.agent_id, len(message or ""))
+        logger.info(
+            "[job_service] _run_job_background begin: "
+            "job_id=%s session_id=%s agent_id=%s message_length=%s",
+            job_id,
+            session_id,
+            job.agent_id,
+            len(message or ""),
+        )
 
         try:
-            job.status = JobStatus.running
-            job.updated_at = datetime.now()
+            transition_job_status(job, JobStatus.running)
 
             if self._bus is not None:
                 await self._bus.publish(
@@ -1025,19 +1054,21 @@ class JobService:
                 ),
             ))
             job.result = result
-            job.status = JobStatus.completed
+            transition_job_status(job, JobStatus.completed)
             job.progress = 100
-            job.ended_at = datetime.now()
-            job.updated_at = datetime.now()
         except asyncio.CancelledError:
             if job.status == JobStatus.paused:
-                job.error_message = "任务已暂停"
-                job.updated_at = datetime.now()
+                transition_job_status(
+                    job,
+                    JobStatus.paused,
+                    error_message="任务已暂停",
+                )
             else:
-                job.status = JobStatus.cancelled
-                job.error_message = job.cancellation_reason or "任务被用户取消"
-                job.ended_at = datetime.now()
-                job.updated_at = datetime.now()
+                transition_job_status(
+                    job,
+                    JobStatus.cancelled,
+                    error_message=job.cancellation_reason or "任务被用户取消",
+                )
                 if self._bus is not None:
                     await self._bus.publish(
                         job_id=job_id,
@@ -1045,11 +1076,8 @@ class JobService:
                         payload={},
                         agent_id="job_service",
                     )
-        except Exception as error:
-            job.status = JobStatus.failed
-            job.error_message = str(error)
-            job.ended_at = datetime.now()
-            job.updated_at = datetime.now()
+        except Exception as error:  # noqa: BLE001
+            transition_job_status(job, JobStatus.failed, error_message=str(error))
             if self._bus is not None:
                 await self._bus.publish(
                     job_id=job_id,
@@ -1131,7 +1159,7 @@ class JobService:
                 return
             self._session_current_job[session_id] = placeholder.job_id
             self._jobs[placeholder.job_id] = placeholder
-        placeholder.status = JobStatus.completed
+        transition_job_status(placeholder, JobStatus.completed)
         try:
             await self._schedule_next_job_if_needed(placeholder)
         finally:

@@ -9,11 +9,15 @@ export type WorkspaceRuntimePreviewTab = Extract<
 interface WorkspaceRuntimePreviewAreaProps {
   tab: WorkspaceRuntimePreviewTab | null;
   onClose: () => Promise<void>;
+  extensionWindow?: boolean;
+  onExitExtensionWindow?: () => void;
 }
 
 export default function WorkspaceRuntimePreviewArea({
   tab,
   onClose,
+  extensionWindow = false,
+  onExitExtensionWindow,
 }: WorkspaceRuntimePreviewAreaProps) {
   const [expanded, setExpanded] = useState(true);
 
@@ -29,9 +33,21 @@ export default function WorkspaceRuntimePreviewArea({
   return (
     <section
       className={`workspace-runtime-preview${expanded ? " expanded" : " collapsed"}`}
-      aria-label="运行时预览"
+      aria-label={extensionWindow ? "扩展窗口" : "运行时预览"}
+      data-extension-region={extensionWindow ? "primary" : undefined}
     >
       <header className="workspace-runtime-preview-header">
+        {onExitExtensionWindow ? (
+          <button
+            type="button"
+            className="workspace-runtime-preview-close"
+            title="返回标准窗口"
+            aria-label="返回标准窗口"
+            onClick={onExitExtensionWindow}
+          >
+            <span className="codicon codicon-chevron-left" aria-hidden="true" />
+          </button>
+        ) : null}
         <button
           type="button"
           className="workspace-runtime-preview-toggle"
@@ -43,8 +59,15 @@ export default function WorkspaceRuntimePreviewArea({
             aria-hidden="true"
           />
           <span className="workspace-runtime-preview-copy">
-          <strong>{isBrowser ? "浏览器" : "终端"}</strong>
-          <span title={tab.path}>{tab.name}</span>
+          <strong>{extensionWindow ? "扩展窗口" : isBrowser ? "浏览器" : "终端"}</strong>
+          <span title={tab.scopeLabel ?? tab.path}>
+            {extensionWindow
+              ? `${isBrowser ? "浏览器" : "终端"} · ${tab.name}`
+              : tab.name}
+          </span>
+          {extensionWindow && tab.scopeLabel ? (
+            <small title={tab.scopeLabel}>{tab.scopeLabel}</small>
+          ) : null}
           </span>
         </button>
         <button

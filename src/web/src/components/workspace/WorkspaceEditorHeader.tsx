@@ -12,7 +12,6 @@ interface WorkspaceEditorHeaderProps {
 const DEFAULT_AUXILIARY_TAB_ORDER: ReadonlyArray<WorkspaceAuxiliaryTab> = [
   "files",
   "changes",
-  "automation",
   "resources",
 ];
 
@@ -33,12 +32,6 @@ const WORKSPACE_COMPONENT_OPTIONS: ReadonlyArray<{
     label: "更改",
     description: "查看会话和工作区文件变更",
     icon: "codicon-diff",
-  },
-  {
-    tab: "automation",
-    label: "自动化",
-    description: "管理自动化任务",
-    icon: "codicon-gear",
   },
   {
     tab: "resources",

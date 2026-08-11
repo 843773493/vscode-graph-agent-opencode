@@ -110,6 +110,7 @@ describe("工作区端口转发面板", () => {
       create: async () => list([]),
       remove: async () => list([]),
       reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
     };
     const renderer = renderPanel(api, {
       ...remoteWorkspace,
@@ -118,8 +119,8 @@ describe("工作区端口转发面板", () => {
       remote: null,
     });
 
-    expect(renderedText(renderer)).toContain("本地项目");
-    expect(renderedText(renderer)).toContain(" · 本地");
+    expect(renderedText(renderer)).toContain("工作区端口");
+    expect(renderedText(renderer)).toContain("当前是本地工作区");
     expect(renderedText(renderer)).toContain("无需 SSH 转发");
     renderer.unmount();
   });
@@ -130,24 +131,87 @@ describe("工作区端口转发面板", () => {
       create: async () => list([]),
       remove: async () => list([]),
       reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
     };
     const renderer = renderPanel(api);
     await flush();
 
     expect(renderer.root.findAllByType("form")).toHaveLength(0);
-    expect(renderedText(renderer)).toContain("工作区资源");
-    expect(renderedText(renderer)).toContain("开发服务器 · developer@dev.example:22");
-    expect(renderedText(renderer)).toContain("2 个端口");
+    expect(renderedText(renderer)).not.toContain("筛选端口...");
+    expect(renderedText(renderer)).not.toContain("新增端口");
     expect(renderedText(renderer)).not.toContain("仅监听本机 127.0.0.1");
 
+    act(() => renderer.root.findByProps({ role: "table" }).props.onContextMenu({ preventDefault() {} }));
     const addButton = renderer.root.findByProps({ "aria-controls": "workspace-port-forward-form" });
     act(() => addButton.props.onClick());
     expect(renderer.root.findAllByType("form")).toHaveLength(1);
-    expect(renderedText(renderer)).toContain("仅监听本机 127.0.0.1");
-    expect(addButton.props["aria-expanded"]).toBe(true);
+    expect(renderedText(renderer)).toContain("远端端口");
+    expect(renderer.root.findByProps({ className: "port-forward-create-cancel" })).toBeDefined();
 
-    act(() => renderer.root.findByProps({ "aria-controls": "workspace-port-forward-form" }).props.onClick());
+    act(() => renderer.root.findByProps({ className: "port-forward-create-cancel" }).props.onClick());
     expect(renderer.root.findAllByType("form")).toHaveLength(0);
+    renderer.unmount();
+  });
+
+  test("筛选框按远端或本地端口过滤列表", async () => {
+    const api: WorkspacePortForwardApi = {
+      list: async () => list([
+        forward({ label: "前端预览", remote_port: 5173 }),
+        forward({ forward_id: "pf_terminal", label: "终端服务", remote_port: 8013, local_port: 41002 }),
+      ]),
+      create: async () => list([]),
+      remove: async () => list([]),
+      reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
+    };
+    const renderer = renderPanel(api);
+    await flush();
+
+    act(() => renderer.root.findByProps({ role: "table" }).props.onContextMenu({ preventDefault() {} }));
+    const filterMenuItem = renderer.root.findAllByProps({ role: "menuitem" }).find(
+      (item) => item.children.includes("筛选端口"),
+    );
+    expect(filterMenuItem).toBeDefined();
+    act(() => filterMenuItem!.props.onClick());
+    const filter = renderer.root.findByProps({ placeholder: "筛选端口..." });
+    expect(renderer.root.findAllByType("article")).toHaveLength(2);
+    act(() => filter.props.onChange({ target: { value: "8013" } }));
+    expect(renderer.root.findAllByType("article")).toHaveLength(1);
+    expect(renderedText(renderer)).toContain("终端服务");
+    expect(renderedText(renderer)).not.toContain("前端预览");
+    renderer.unmount();
+  });
+
+  test("通过更多操作更改本地端口并替换完整列表", async () => {
+    const payloads: number[] = [];
+    const api: WorkspacePortForwardApi = {
+      list: async () => list([forward()]),
+      create: async () => list([]),
+      remove: async () => list([]),
+      reconnect: async () => list([]),
+      changeLocalPort: async (_port, _workspaceId, _forwardId, payload) => {
+        payloads.push(payload.local_port);
+        return list([forward({ local_port: payload.local_port, local_url: `http://127.0.0.1:${payload.local_port}` })]);
+      },
+    };
+    const renderer = renderPanel(api);
+    await flush();
+
+    const menuItem = renderer.root.findAllByProps({ role: "menuitem" }).find(
+      (item) => item.children.includes("更改本地端口"),
+    );
+    expect(menuItem).toBeDefined();
+    const requiredMenuItem = menuItem!;
+    act(() => requiredMenuItem.props.onClick({ currentTarget: { closest: () => ({ removeAttribute() {} }) } }));
+    const editForm = renderer.root.findByProps({ className: "port-forward-edit-form" });
+    const portInput = editForm.findByType("input");
+    act(() => portInput.props.onChange({ target: { value: "41009" } }));
+    act(() => editForm.props.onSubmit({ preventDefault() {} }));
+    await flush();
+
+    expect(payloads).toEqual([41009]);
+    expect(renderedText(renderer)).toContain("127.0.0.1:41009");
+    expect(renderedText(renderer)).not.toContain("127.0.0.1:41001");
     renderer.unmount();
   });
 
@@ -157,6 +221,7 @@ describe("工作区端口转发面板", () => {
       create: async () => list([]),
       remove: async () => list([]),
       reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
     };
     const renderer = renderPanel(api);
     await flush();
@@ -168,7 +233,7 @@ describe("工作区端口转发面板", () => {
     expect(protocol.props.value).toBe("http");
     expect(localPort.props.value).toBe("");
     expect(remotePort.props.value).toBe("");
-    expect(renderedText(renderer)).toContain("仅监听本机 127.0.0.1");
+    expect(renderedText(renderer)).toContain("远端端口");
     expect(renderer.root.findByProps({ className: "port-forward-create" }).props.disabled).toBe(true);
     act(() => remotePort.props.onChange({ target: { value: "5173" } }));
     expect(renderer.root.findByProps({ className: "port-forward-create" }).props.disabled).toBe(false);
@@ -186,6 +251,7 @@ describe("工作区端口转发面板", () => {
       },
       remove: async () => list([]),
       reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
     };
     const renderer = renderPanel(api);
     await flush();
@@ -213,7 +279,7 @@ describe("工作区端口转发面板", () => {
       protocol: "https",
       label: "前端预览",
     }]);
-    expect(renderedText(renderer)).toContain("正在创建 SSH 转发…");
+    expect(renderedText(renderer)).toContain("正在创建…");
 
     await act(async () => pending.resolve(list([forward({
       label: "前端预览",
@@ -224,7 +290,8 @@ describe("工作区端口转发面板", () => {
     expect(renderedText(renderer)).toContain("前端预览");
     expect(renderedText(renderer)).toContain("127.0.0.1:4173");
     expect(renderer.root.findAllByType("form")).toHaveLength(0);
-    expect(renderer.root.findByProps({ "aria-controls": "workspace-port-forward-form" }).children).toContain("新增转发");
+    act(() => renderer.root.findByProps({ role: "table" }).props.onContextMenu({ preventDefault() {} }));
+    expect(renderedText(renderer)).toContain("新增端口");
     renderer.unmount();
   });
 
@@ -240,6 +307,7 @@ describe("工作区端口转发面板", () => {
       },
       remove: async () => list([]),
       reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
     };
     const renderer = renderPanel(api);
     await flush();
@@ -275,6 +343,7 @@ describe("工作区端口转发面板", () => {
         throw new Error("SSH 进程未退出");
       },
       reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
     };
     const renderer = renderPanel(api, remoteWorkspace, async () => {
       confirmations += 1;
@@ -282,7 +351,7 @@ describe("工作区端口转发面板", () => {
     });
     await flush();
     const stopButton = renderer.root.findAllByType("button").find(
-      (button) => button.children.includes("停止"),
+      (button) => button.children.includes("停止转发"),
     );
     expect(stopButton).toBeDefined();
     act(() => stopButton!.props.onClick());
@@ -306,11 +375,12 @@ describe("工作区端口转发面板", () => {
         reconnectId = forwardId;
         return list([reconnected]);
       },
+      changeLocalPort: async () => list([]),
     };
     const renderer = renderPanel(api);
     await flush();
     const reconnectButton = renderer.root.findAllByType("button").find(
-      (button) => button.children.includes("重连"),
+      (button) => button.children.includes("重新连接"),
     );
     expect(reconnectButton).toBeDefined();
     act(() => reconnectButton!.props.onClick());
@@ -338,6 +408,7 @@ describe("工作区端口转发面板", () => {
       create: async () => list([]),
       remove: async () => list([]),
       reconnect: async () => list([]),
+      changeLocalPort: async () => list([]),
     };
     const renderer = renderPanel(api);
     await flush();

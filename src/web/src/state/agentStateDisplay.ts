@@ -46,6 +46,39 @@ export function parseAgentStateRecords(jsonl: string): Record<string, unknown>[]
     .filter(isRecord);
 }
 
+function agentStateMessageId(record: Record<string, unknown>): string | null {
+  const responseMetadata = isRecord(record.response_metadata)
+    ? record.response_metadata
+    : null;
+  if (!responseMetadata) return null;
+  if (typeof responseMetadata.message_id === "string") {
+    return responseMetadata.message_id;
+  }
+  const nestedMetadata = isRecord(responseMetadata.message_metadata)
+    ? responseMetadata.message_metadata
+    : null;
+  return nestedMetadata && typeof nestedMetadata.message_id === "string"
+    ? nestedMetadata.message_id
+    : null;
+}
+
+function formatAgentStateMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  return JSON.stringify(content, null, 2) ?? String(content);
+}
+
+/** 根据稳定 message_id 找到原始 Agent State 消息正文，供显式调试展开使用。 */
+export function findAgentStateMessageRawContent(
+  jsonl: string,
+  messageId: string,
+): string | null {
+  if (!messageId) return null;
+  const record = parseAgentStateRecords(jsonl).find(
+    (candidate) => agentStateMessageId(candidate) === messageId,
+  );
+  return record ? formatAgentStateMessageContent(record.content) : null;
+}
+
 function textContent(value: unknown): string {
   if (typeof value === "string") {
     return normalizeDisplayText(value);

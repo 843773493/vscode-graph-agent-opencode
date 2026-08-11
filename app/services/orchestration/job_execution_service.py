@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
 from app.core.job_event_bus import EventType
 from app.schemas.public_v2.common import JobStatus
+from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.message_service import MessageService
 from app.services.orchestration.session_title_service import SessionTitleService
 
@@ -21,7 +20,11 @@ def session_title_message(
     if message_metadata.get("goal_continuation") is not True:
         return None
     objective = message_metadata.get("goal_objective")
-    return objective.strip() if isinstance(objective, str) and objective.strip() else None
+    return (
+        objective.strip()
+        if isinstance(objective, str) and objective.strip()
+        else None
+    )
 
 
 class JobExecutionService:
@@ -39,8 +42,7 @@ class JobExecutionService:
         self._session_title_service = session_title_service
 
     async def run(self, job: JobRuntimeStateProtocol) -> str:
-        job.status = JobStatus.running
-        job.updated_at = datetime.now(UTC)
+        transition_job_status(job, JobStatus.running)
 
         try:
             title_message = session_title_message(job.message, job.message_metadata)
@@ -76,10 +78,8 @@ class JobExecutionService:
         result_text = result if isinstance(result, str) else str(result)
 
         job.result = result_text
-        job.status = JobStatus.completed
+        transition_job_status(job, JobStatus.completed)
         job.progress = 100
-        job.ended_at = datetime.now(UTC)
-        job.updated_at = datetime.now(UTC)
 
         await self._bus.publish(
             job_id=job.job_id,
@@ -90,10 +90,11 @@ class JobExecutionService:
         return result_text
 
     async def fail(self, job: JobRuntimeStateProtocol, error: Exception) -> None:
-        job.status = JobStatus.failed
-        job.error_message = str(error)
-        job.ended_at = datetime.now(UTC)
-        job.updated_at = datetime.now(UTC)
+        transition_job_status(
+            job,
+            JobStatus.failed,
+            error_message=str(error),
+        )
         await self._bus.publish(
             job_id=job.job_id,
             event_type=EventType.JOB_FAILED,

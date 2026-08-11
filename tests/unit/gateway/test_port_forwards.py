@@ -146,6 +146,55 @@ async def test_server_remote_port_has_single_workspace_owner(
 
 
 @pytest.mark.asyncio
+async def test_change_local_port_restarts_same_forward_and_persists_new_port(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+    processes: list[_FakeManagedProcess] = []
+    manager = _manager(tmp_path, _registry(tmp_path), calls, processes)
+    created = await manager.create(
+        "workspace_a",
+        CreatePortForwardRequest(remote_port=5173, local_port=41235),
+    )
+
+    changed = await manager.change_local_port(
+        "workspace_a",
+        created.forward_id,
+        41236,
+    )
+
+    assert changed.forward_id == created.forward_id
+    assert changed.local_port == 41236
+    assert changed.local_url == "http://127.0.0.1:41236"
+    assert processes[0].closed is True
+    assert calls[1]["forward"].local_port == 41236
+    persisted = json.loads(
+        (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
+    )
+    assert persisted["items"][0]["local_port"] == 41236
+
+
+@pytest.mark.asyncio
+async def test_change_label_replaces_definition_and_persists_display_name(
+    tmp_path: Path,
+) -> None:
+    manager = _manager(tmp_path, _registry(tmp_path), [], [])
+    created = await manager.create(
+        "workspace_a",
+        CreatePortForwardRequest(remote_port=5173, local_port=41236, label="旧名称"),
+    )
+
+    changed = await manager.change_label("workspace_a", created.forward_id, "新名称")
+
+    assert changed.label == "新名称"
+    assert (await manager.list("workspace_a"))[0].label == "新名称"
+    persisted = json.loads(
+        (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
+    )
+    assert persisted["items"][0]["label"] == "新名称"
+
+
+@pytest.mark.asyncio
 async def test_local_port_conflict_is_rejected_across_workspaces(
     tmp_path: Path,
 ) -> None:

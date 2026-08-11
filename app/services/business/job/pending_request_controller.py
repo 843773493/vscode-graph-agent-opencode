@@ -15,6 +15,7 @@ from app.schemas.public_v2.pending_request import (
     PendingRequestSummaryDTO,
     PendingRequestSummaryListDTO,
 )
+from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.job.pending_queue import JobPendingQueue
 from app.services.business.message_display import project_message_for_display
 
@@ -160,10 +161,11 @@ class JobPendingRequestController:
                 raise RuntimeError(
                     f"撤回待处理消息时队列状态不一致: job_id={job.job_id}"
                 )
-            job.status = JobStatus.cancelled
-            job.error_message = "消息已从队列撤回"
-            job.ended_at = datetime.now()
-            job.updated_at = job.ended_at
+            transition_job_status(
+                job,
+                JobStatus.cancelled,
+                error_message="消息已从队列撤回",
+            )
         return await self.list(session_id)
 
     async def clear(self, session_id: str) -> PendingRequestListDTO:
@@ -175,10 +177,12 @@ class JobPendingRequestController:
                 job = jobs.get(job_id)
                 if job is None:
                     continue
-                job.status = JobStatus.cancelled
-                job.error_message = "消息已从队列撤回"
-                job.ended_at = now
-                job.updated_at = now
+                transition_job_status(
+                    job,
+                    JobStatus.cancelled,
+                    error_message="消息已从队列撤回",
+                    now=now,
+                )
         return await self.list(session_id)
 
     async def reorder(

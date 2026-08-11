@@ -15,7 +15,9 @@ from app.gateway.control.coordinator import (
 )
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
+from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.control.schemas import (
+    GatewayResourceListDTO,
     GatewaySessionSearchResultsDTO,
     GenerationRunDTO,
     GenerationRunListDTO,
@@ -104,6 +106,29 @@ def _catalog_search(request: Request) -> GatewaySessionCatalogSearchService:
     if not isinstance(value, GatewaySessionCatalogSearchService):
         raise RuntimeError("Gateway 跨工作区会话搜索服务尚未初始化")
     return value
+
+
+def _resource_catalog(request: Request) -> GatewayResourceCatalogService:
+    value = getattr(request.app.state, "gateway_resource_catalog_service", None)
+    if not isinstance(value, GatewayResourceCatalogService):
+        raise RuntimeError("Gateway 全局资源目录服务尚未初始化")
+    return value
+
+
+@router.get(
+    "/resources",
+    response_model=APIResponse[GatewayResourceListDTO],
+    summary="聚合所有 Gateway 工作区的可连接资源",
+)
+async def list_gateway_resources(
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+    service: GatewayResourceCatalogService = Depends(_resource_catalog),
+):
+    return APIResponse(
+        data=await service.list(request_id=request_id),
+        request_id=request_id,
+    )
 
 
 @router.get(

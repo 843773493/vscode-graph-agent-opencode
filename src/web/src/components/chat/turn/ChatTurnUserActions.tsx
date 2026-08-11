@@ -15,6 +15,7 @@ export function ChatTurnUserSection({
   conversation,
   sessionBusy,
   actions,
+  onLoadAgentStateMessageRawContent,
   onRemovePending,
   onSendPendingImmediately,
   onChangePendingKind,
@@ -27,16 +28,95 @@ export function ChatTurnUserSection({
   conversation: ConversationView;
   sessionBusy: boolean;
   actions: ChatTurnActions;
+  onLoadAgentStateMessageRawContent: (
+    sessionId: string,
+    messageId: string,
+  ) => Promise<string>;
 }): React.ReactNode {
   const editAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
   const userMessage = conversation.userMessage;
+  const userMessageId = userMessage?.message_id ?? null;
+  const [rawMessageContent, setRawMessageContent] = React.useState<string | null>(null);
+  const [rawMessageLoading, setRawMessageLoading] = React.useState(false);
+  const [rawMessageError, setRawMessageError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setRawMessageContent(null);
+    setRawMessageLoading(false);
+    setRawMessageError(null);
+  }, [userMessageId]);
+
+  const canInspectRawMessage = Boolean(
+    userMessage
+    && (!userMessage.content.trim() || userMessage.metadata?.internal === true),
+  );
+  const rawMessageAriaLabel = userMessage?.content.trim()
+    ? "内部用户消息，右键展开原始消息"
+    : "空用户消息，右键展开原始消息";
+  const toggleRawMessageDetails = React.useCallback(async () => {
+    if (!userMessage || !canInspectRawMessage || rawMessageLoading) return;
+    if (rawMessageContent !== null) {
+      setRawMessageContent(null);
+      setRawMessageError(null);
+      return;
+    }
+    setRawMessageLoading(true);
+    setRawMessageError(null);
+    try {
+      const content = await onLoadAgentStateMessageRawContent(
+        conversation.sessionId,
+        userMessage.message_id,
+      );
+      setRawMessageContent(content);
+    } catch (error) {
+      setRawMessageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRawMessageLoading(false);
+    }
+  }, [
+    canInspectRawMessage,
+    conversation.sessionId,
+    onLoadAgentStateMessageRawContent,
+    rawMessageContent,
+    rawMessageLoading,
+    userMessage,
+  ]);
+  const handleRawMessageContextMenu = React.useCallback((
+    event: React.MouseEvent<HTMLDivElement>,
+  ) => {
+    if (!canInspectRawMessage) return;
+    event.preventDefault();
+    void toggleRawMessageDetails();
+  }, [canInspectRawMessage, toggleRawMessageDetails]);
+  const handleRawMessageKeyDown = React.useCallback((
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) => {
+    if (
+      !canInspectRawMessage
+      || (event.key !== "Enter" && event.key !== " ")
+    ) {
+      return;
+    }
+    event.preventDefault();
+    void toggleRawMessageDetails();
+  }, [canInspectRawMessage, toggleRawMessageDetails]);
+
   if (!userMessage) return null;
   const summaryOnly = conversation.turnItemsView === "summary";
   const userAttachments = userMessage.attachments ?? [];
 
   return (
     <div className={`chat-user-row${actions.isInternalDisplayMessage ? " is-internal" : ""}`}>
-      <div className={`chat-user-bubble${actions.editing ? " is-editing" : ""}${actions.isInternalDisplayMessage ? " is-internal" : ""}`}>
+      <div
+        className={`chat-user-bubble${actions.editing ? " is-editing" : ""}${actions.isInternalDisplayMessage ? " is-internal" : ""}${canInspectRawMessage ? " is-inspectable" : ""}`}
+        role={canInspectRawMessage ? "button" : undefined}
+        tabIndex={canInspectRawMessage ? 0 : undefined}
+        aria-expanded={canInspectRawMessage ? rawMessageContent !== null : undefined}
+        aria-label={canInspectRawMessage ? rawMessageAriaLabel : undefined}
+        title={canInspectRawMessage ? "右键展开或收起原始消息详情" : undefined}
+        onContextMenu={handleRawMessageContextMenu}
+        onKeyDown={handleRawMessageKeyDown}
+      >
         {actions.editing ? (
           <form
             className="chat-request-edit-form"
@@ -168,6 +248,20 @@ export function ChatTurnUserSection({
             ) : null}
           </>
         )}
+        {canInspectRawMessage && rawMessageLoading ? (
+          <div className="chat-user-raw-status" role="status">正在读取原始消息…</div>
+        ) : null}
+        {canInspectRawMessage && rawMessageError ? (
+          <div className="chat-user-raw-error" role="alert">{rawMessageError}</div>
+        ) : null}
+        {canInspectRawMessage && rawMessageContent !== null ? (
+          <div className="chat-user-raw-details">
+            <div className="chat-user-raw-details-title">原始消息详情（标记文本）</div>
+            <pre className="chat-user-raw-content">
+              {rawMessageContent || "（原始消息为空）"}
+            </pre>
+          </div>
+        ) : null}
         {conversation.pending
           && !actions.isInternalDisplayMessage
           && conversation.pendingKind ? (

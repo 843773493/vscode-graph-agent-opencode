@@ -6,15 +6,24 @@ import contextvars
 import pytest
 from langchain_core.runnables import RunnableLambda
 
-from app.core.job_event_bus import JobEventBus
+from app.core.job_event_bus import EventType, JobEventBus
 from app.schemas.public_v2.common import ControlAction, JobStatus
 from app.schemas.public_v2.job import JobControlRequest
-from app.services.business.job.service import JobService, JobState
+from app.services.business.job.lifecycle import transition_job_status
+from app.services.business.job.service import JobDrainBlocker, JobService, JobState
 
 
 class _DummyJobExecutor:
     async def run(self, job):
         return "ok"
+
+
+class _FailingMergeEventBus:
+    async def publish(self, *, event_type, **kwargs):
+        del kwargs
+        if event_type == EventType.JOB_MERGED:
+            raise RuntimeError("merge event failed")
+        return None
 
 
 def create_job_service() -> JobService:
@@ -170,6 +179,57 @@ async def test_job_control_pause_cancels_running_task(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_job_control_resume_waits_for_paused_task_to_finish() -> None:
+    started = asyncio.Event()
+
+    class _BlockingJobExecutor:
+        async def run(self, job):
+            del job
+            started.set()
+            await asyncio.Future()
+
+    service = JobService(
+        job_event_bus=JobEventBus(),
+        job_executor=_BlockingJobExecutor(),
+    )
+    session_id = "session_pause_resume"
+    job = JobState(
+        job_id="job_pause_resume",
+        session_id=session_id,
+        message="pause and resume",
+        message_id="msg_pause_resume",
+        message_created_at="2026-08-09T00:00:00+00:00",
+        agent_id="default",
+        status=JobStatus.running,
+    )
+    service._jobs[job.job_id] = job
+    service._session_current_job[session_id] = job.job_id
+    service._start_job_task(job)
+    await started.wait()
+
+    await service.control(
+        job.job_id,
+        JobControlRequest(action=ControlAction.pause),
+    )
+    result = await service.control(
+        job.job_id,
+        JobControlRequest(action=ControlAction.resume),
+    )
+
+    assert result.status == JobStatus.running
+    assert job.status == JobStatus.running
+    assert service._session_current_job[session_id] == job.job_id
+    assert job.task is not None
+    resumed_task = job.task
+
+    await service.control(
+        job.job_id,
+        JobControlRequest(action=ControlAction.cancel),
+    )
+    await asyncio.gather(resumed_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_job_control_resume_restarts_completed_pause(monkeypatch):
     service = create_job_service()
     service._jobs = {}
@@ -319,6 +379,143 @@ async def test_job_control_cancel_requests_task_cancel(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    [ControlAction.pause, ControlAction.resume, ControlAction.cancel],
+)
+async def test_job_control_rejects_terminal_job(action: ControlAction) -> None:
+    service = create_job_service()
+    job = JobState(
+        job_id="job_terminal_control",
+        session_id="session_test",
+        message="terminal",
+        message_id="msg_terminal",
+        message_created_at="2026-08-09T00:00:00+00:00",
+        agent_id="default",
+        status=JobStatus.completed,
+        task=DummyTask(done=True),
+    )
+    service._jobs[job.job_id] = job
+
+    with pytest.raises(ValueError):
+        await service.control(job.job_id, JobControlRequest(action=action))
+
+    assert job.status == JobStatus.completed
+
+
+@pytest.mark.asyncio
+async def test_job_control_rejects_unimplemented_action() -> None:
+    service = create_job_service()
+    job = JobState(
+        job_id="job_unimplemented_control",
+        session_id="session_test",
+        message="unsupported",
+        message_id="msg_unsupported",
+        message_created_at="2026-08-09T00:00:00+00:00",
+        agent_id="default",
+        status=JobStatus.running,
+        task=DummyTask(),
+    )
+    service._jobs[job.job_id] = job
+
+    with pytest.raises(ValueError, match="尚未实现"):
+        await service.control(
+            job.job_id,
+            JobControlRequest(action=ControlAction.skip),
+        )
+
+    assert job.status == JobStatus.running
+
+
+@pytest.mark.asyncio
+async def test_job_control_rejects_pause_for_interrupt_pending_job() -> None:
+    service = create_job_service()
+    job = JobState(
+        job_id="job_interrupt_pending_pause",
+        session_id="session_test",
+        message="interrupt pending",
+        message_id="msg_interrupt_pending_pause",
+        message_created_at="2026-08-09T00:00:00+00:00",
+        agent_id="default",
+        status=JobStatus.interrupt_pending,
+        task=DummyTask(),
+    )
+    service._jobs[job.job_id] = job
+
+    with pytest.raises(ValueError, match="只有 running、streaming 或 waiting_input"):
+        await service.control(
+            job.job_id,
+            JobControlRequest(action=ControlAction.pause),
+        )
+
+    assert job.status == JobStatus.interrupt_pending
+
+
+@pytest.mark.asyncio
+async def test_force_interrupt_skips_job_finished_after_blocker_snapshot(monkeypatch):
+    service = create_job_service()
+    job = JobState(
+        job_id="job_finished_after_snapshot",
+        session_id="session_test",
+        message="finished",
+        message_id="msg_finished_after_snapshot",
+        message_created_at="2026-08-09T00:00:00+00:00",
+        agent_id="default",
+        status=JobStatus.completed,
+        task=DummyTask(done=True),
+    )
+    service._jobs[job.job_id] = job
+
+    async def stale_blockers() -> list[JobDrainBlocker]:
+        return [
+            JobDrainBlocker(
+                job_id=job.job_id,
+                session_id=job.session_id,
+                status=JobStatus.running,
+                phase="text",
+                tool_names=(),
+            )
+        ]
+
+    monkeypatch.setattr(service, "drain_blockers", stale_blockers)
+
+    assert await service.force_interrupt_active(reason="runtime restart") == 0
+    assert job.status == JobStatus.completed
+
+
+@pytest.mark.asyncio
+async def test_job_control_cancel_queued_job_removes_it_from_queue(monkeypatch):
+    service = create_job_service()
+
+    def fake_start_job_task(job):
+        job.task = DummyTask()
+
+    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
+    session_id = "session_cancel_queued"
+    await service.start_job(
+        session_id,
+        "active",
+        message_id="msg_active",
+        message_created_at="2026-08-09T00:00:00+00:00",
+    )
+    queued = await service.start_job(
+        session_id,
+        "queued",
+        message_id="msg_queued",
+        message_created_at="2026-08-09T00:00:01+00:00",
+    )
+
+    result = await service.control(
+        queued.job_id,
+        JobControlRequest(action=ControlAction.cancel),
+    )
+
+    assert result.status == JobStatus.cancelled
+    assert service._jobs[queued.job_id].status == JobStatus.cancelled
+    assert service._pending_queue.ids(session_id) == ()
+
+
+@pytest.mark.asyncio
 async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch):
     service = create_job_service()
     service._jobs = {}
@@ -389,6 +586,58 @@ async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch
     assert started_jobs == [first_job_id, second_job_id]
     assert service._session_current_job[session_id] == second_job_id
     assert list(service._pending_queue.ids(session_id)) == [third_job_id]
+    assert service._jobs[second_job_id].status == JobStatus.running
+
+
+@pytest.mark.asyncio
+async def test_merge_event_failure_keeps_next_job_queued(monkeypatch):
+    service = JobService(
+        job_event_bus=_FailingMergeEventBus(),
+        job_executor=_DummyJobExecutor(),
+    )
+    started_jobs: list[str] = []
+
+    def fake_start_job_task(job):
+        started_jobs.append(job.job_id)
+        job.task = DummyTask(done=False)
+
+    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
+    session_id = "session_merge_event_failure"
+    first = await service.start_job(
+        session_id,
+        "first",
+        message_id="msg_merge_first",
+        message_created_at="2026-08-09T00:00:00+00:00",
+    )
+    second = await service.start_job(
+        session_id,
+        "second",
+        message_id="msg_merge_second",
+        message_created_at="2026-08-09T00:00:01+00:00",
+        dispatch_mode="steering",
+    )
+    third = await service.start_job(
+        session_id,
+        "third",
+        message_id="msg_merge_third",
+        message_created_at="2026-08-09T00:00:02+00:00",
+        dispatch_mode="steering",
+    )
+
+    first_job = service._jobs[first.job_id]
+    transition_job_status(first_job, JobStatus.completed)
+
+    with pytest.raises(RuntimeError, match="merge event failed"):
+        await service._schedule_next_job_if_needed(first_job)
+
+    assert started_jobs == [first.job_id]
+    assert service._session_current_job[session_id] == first.job_id
+    assert service._pending_queue.ids(session_id) == (
+        second.job_id,
+        third.job_id,
+    )
+    assert service._jobs[second.job_id].status == JobStatus.queued
+    assert service._jobs[third.job_id].status == JobStatus.queued
 
 
 @pytest.mark.asyncio

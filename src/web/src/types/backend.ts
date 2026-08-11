@@ -266,6 +266,28 @@ export interface GatewayWorkspaceList {
   items: GatewayWorkspace[];
 }
 
+export interface GatewayResourceScopeError {
+  scope_key: string;
+  label: string;
+  message: string;
+}
+
+export interface GatewayResourceItem {
+  gateway_connection_id: string | null;
+  gateway_name: string;
+  workspace_id: string;
+  workspace_name: string;
+  connection_kind: "local" | "remote_gateway";
+  session_id: string;
+  session_title: string;
+  resource: SessionResource;
+}
+
+export interface GatewayResourceList {
+  items: GatewayResourceItem[];
+  errors: GatewayResourceScopeError[];
+}
+
 export interface GatewayDiagnosticLog {
   log_id: string;
   source: "gateway" | "workspace";
@@ -338,6 +360,14 @@ export interface CreateGatewayPortForwardRequest {
   local_port?: number | null;
   protocol: GatewayPortForwardProtocol;
   label?: string | null;
+}
+
+export interface ChangeGatewayPortForwardLocalPortRequest {
+  local_port: number;
+}
+
+export interface ChangeGatewayPortForwardLabelRequest {
+  label: string | null;
 }
 
 export interface GatewayManagedWorkspace {
@@ -500,14 +530,30 @@ export interface WebUiMainAreaRatios {
   auxiliary: number;
 }
 
+export type WebUiBottomPanelTab = "terminal" | "output" | "ports" | "automation";
+
+/** 仅用于读取旧版本设置；新的底部面板状态统一使用 output。 */
+export type LegacyWebUiBottomPanelTab = WebUiBottomPanelTab | "gateway";
+
+export interface WebUiWorkspaceBottomPanelSettings {
+  visible?: boolean | null;
+  height?: number | null;
+  tab?: LegacyWebUiBottomPanelTab | null;
+  terminal_id?: string | null;
+}
+
 export interface WebUiLayoutSettings {
   workbench_view?: "sessions" | "gateway" | null;
   agent_sessions_panel_open?: boolean | null;
+  chat_visible?: boolean | null;
   auxiliary_visible?: boolean | null;
   panel_visible?: boolean | null;
+  /** automation 仅为旧布局迁移保留，新设置写入底部面板。 */
   auxiliary_tab?: "changes" | "files" | "automation" | "resources" | null;
+  /** automation 仅为旧布局迁移保留，新设置写入底部面板。 */
   auxiliary_tab_order?: Array<"changes" | "files" | "automation" | "resources"> | null;
   main_area_ratios?: WebUiMainAreaRatios | null;
+  bottom_panel_by_workspace?: Record<string, WebUiWorkspaceBottomPanelSettings> | null;
   workspace_preview_visible?: boolean | null;
   workspace_preview_maximized?: boolean | null;
   workspace_preview_file_paths?: string[] | null;

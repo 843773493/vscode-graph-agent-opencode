@@ -133,6 +133,54 @@ test("Turn detail 恢复内部展示消息时保留展示类型", () => {
   ).toBe("delegated_task");
 });
 
+test("Turn 摘要中的空内部消息保留可展开的用户气泡", () => {
+  const sessionId = "ses_empty_internal";
+  const turnId = "job_empty_internal";
+  const state = {
+    messages: [],
+    pendingConversations: new Map(),
+    turnTimelinesBySession: new Map([[
+      sessionId,
+      {
+        ...createSessionTurnTimeline(sessionId),
+        phase: "ready" as const,
+        orderedTurnIds: [turnId],
+        turnsById: {
+          [turnId]: {
+            turn_id: turnId,
+            job_id: turnId,
+            session_id: sessionId,
+            ordinal: 1,
+            revision: 1,
+            status: "completed" as const,
+            created_at: "2026-07-30T07:56:41Z",
+            updated_at: "2026-07-30T07:56:42Z",
+            completed_at: "2026-07-30T07:56:42Z",
+            items_view: "summary" as const,
+            user_messages: [{
+              message_id: "msg_empty_internal",
+              preview: "",
+              content_truncated: false,
+              attachment_count: 0,
+              created_at: "2026-07-30T07:56:41Z",
+            }],
+            user_message_count: 1,
+            user_messages_truncated: false,
+            response_preview: "Goal 已完成",
+            preview_truncated: false,
+            item_count: 1,
+          },
+        },
+      },
+    ]]),
+  } as unknown as AppState;
+
+  const conversations = getConversationsForSession(sessionId, state);
+
+  expect(conversations).toHaveLength(1);
+  expect(conversations[0]?.userMessage?.content).toBe("");
+});
+
 test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn", () => {
   const sessionId = "ses_active_history";
   const jobId = "job_active_history";

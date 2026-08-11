@@ -33,6 +33,7 @@ export default function ResourcePanel({
   loadedAt,
   sessionId,
   workspaceId,
+  extensionWindow = false,
   activePreviewPath,
   onRefresh,
   onControl,
@@ -47,6 +48,7 @@ export default function ResourcePanel({
   loadedAt: string | null;
   sessionId: string;
   workspaceId: string | null;
+  extensionWindow?: boolean;
   activePreviewPath: string | null;
   onRefresh: () => void;
   onControl: (
@@ -221,7 +223,7 @@ export default function ResourcePanel({
     setOpenedTerminalId(resourceId);
     onOpenTerminalPreview(resourceId);
     setNoticeTechnicalDetails("");
-    setNotice("已打开终端预览；连接状态请在当前运行与连接界面查看");
+    setNotice("已在主窗口底部面板打开终端；连接管理请在运行与连接中查看");
   };
   const handleOpenBrowser = (resourceId: string) => {
     if (!workspaceId) {
@@ -244,7 +246,9 @@ export default function ResourcePanel({
           (candidate) => candidate.kind === kind,
         );
         setNotice(
-          `${option?.label ?? "新建连接"}成功；连接状态请在当前运行与连接界面查看`,
+          kind === "terminal"
+            ? "终端创建成功，已在主窗口底部面板打开"
+            : `${option?.label ?? "新建连接"}成功；连接管理请在运行与连接中查看`,
         );
       })
       .catch((createError: unknown) => {
@@ -268,7 +272,10 @@ export default function ResourcePanel({
   const waitingForFirstMessage = !sessionId || error === "当前没有会话可读取资源";
 
   return (
-    <section className="panel-view resource-panel">
+    <section
+      className={`panel-view resource-panel${extensionWindow ? " extension-window-region" : ""}`}
+      data-extension-region={extensionWindow ? "secondary" : undefined}
+    >
       <div className="panel-header">
         <div
           className="panel-title"

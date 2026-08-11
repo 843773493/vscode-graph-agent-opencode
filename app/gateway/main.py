@@ -29,6 +29,7 @@ from app.gateway.control.catalog_search import GatewaySessionCatalogSearchServic
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
+from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.control.router import router as gateway_control_router
 from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.credentials import (
@@ -345,6 +346,10 @@ async def lifespan(app: FastAPI):
         request_timeout_seconds=(
             gateway_config.session_catalog_request_timeout_seconds
         ),
+    )
+    app.state.gateway_resource_catalog_service = GatewayResourceCatalogService(
+        registry=registry,
+        http_client=app.state.http_client,
     )
     app.state.session_generator_scheduler = SessionGeneratorScheduler(
         store=app.state.session_generator_store,

@@ -18,6 +18,7 @@ describe("顶层语义表面", () => {
     for (const token of [
       "--bt-canvas-background",
       "--bt-chrome-surface",
+      "--bt-toolbar-background",
       "--bt-workspace-surface",
       "--bt-panel-surface",
       "--bt-floating-surface",
@@ -71,14 +72,13 @@ describe("顶层语义表面", () => {
       ".auxiliary-resources-body .panel-list",
       ".auxiliary-resources-body .resource-tree",
       ".auxiliary-resources-body .empty-state",
-      ".auxiliary-automation-body > .session-generator-manager",
     ]) {
       expect(contract).toContain(selector);
     }
     expect(contract).toMatch(/background:\s*transparent/);
-    expect(auxiliaryPanel.match(/data-bt-surface="layout"/g)).toHaveLength(4);
+    expect(auxiliaryPanel.match(/data-bt-surface="layout"/g)).toHaveLength(3);
     expect(layoutCss).not.toMatch(
-      /\.auxiliary-(?:resources|automation)-body\s*\{[^}]*background:/,
+      /\.auxiliary-resources-body\s*\{[^}]*background:/,
     );
     expect(layoutCss).not.toMatch(
       /\.auxiliary-resources-body\s+\.(?:resource-panel|panel-list|empty-state)\s*\{[^}]*background:/,
@@ -116,10 +116,23 @@ describe("顶层语义表面", () => {
 
     for (const token of [
       "--bt-chrome-surface",
+      "--bt-toolbar-background",
+      "--bt-workspace-header-background",
       "--bt-workspace-surface",
       "--bt-panel-surface",
       "--bt-chrome-backdrop-filter",
       "--bt-workspace-backdrop-filter",
+      "--bt-bottom-panel-background",
+      "--bt-bottom-panel-header-background",
+      "--bt-bottom-panel-toolbar-background",
+      "--bt-bottom-panel-list-background",
+      "--bt-bottom-panel-viewer-background",
+      "--bt-runtime-preview-background",
+      "--bt-runtime-preview-header-background",
+      "--bt-runtime-preview-border",
+      "--bt-status-bar-background",
+      "--bt-status-bar-border",
+      "--bt-status-bar-foreground",
     ]) {
       const cssValue = themeCss.match(
         new RegExp(`${token}\\s*:\\s*([^;]+);`),

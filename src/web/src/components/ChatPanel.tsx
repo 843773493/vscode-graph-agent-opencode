@@ -33,6 +33,7 @@ export default function ChatPanel({
   onLoadOlderMessages,
   loadingDetailTurnIds,
   onLoadTurnDetails,
+  onLoadAgentStateMessageRawContent,
   onRetryHistory,
   sessionChangeSummary,
   sessionChangesLoading,
@@ -59,6 +60,10 @@ export default function ChatPanel({
   onLoadOlderMessages: () => Promise<void>;
   loadingDetailTurnIds: readonly string[];
   onLoadTurnDetails: (turnIds: string[]) => Promise<void>;
+  onLoadAgentStateMessageRawContent: (
+    sessionId: string,
+    messageId: string,
+  ) => Promise<string>;
   onRetryHistory: () => void;
   sessionChangeSummary?: SessionChangesSummary | null;
   sessionChangesLoading?: boolean;
@@ -338,6 +343,7 @@ export default function ChatPanel({
                     showRawDetails={expandDetails}
                     isLastTurn={index === firstItemIndex + conversations.length - 1}
                     sessionBusy={sessionBusy}
+                    onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}
                     onReplayTurn={onReplayTurn}
                     onUpdatePending={updatePending}
                     onRemovePending={removePending}

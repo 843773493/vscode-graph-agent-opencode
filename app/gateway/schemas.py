@@ -42,6 +42,18 @@ class CreatePortForwardRequest(BaseModel):
     label: str | None = Field(default=None, max_length=120)
 
 
+class ChangePortForwardLocalPortRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    local_port: int = Field(ge=1, le=65535)
+
+
+class ChangePortForwardLabelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    label: str | None = Field(default=None, max_length=120)
+
+
 class PortForwardDTO(BaseModel):
     forward_id: str
     workspace_id: str
@@ -384,9 +396,17 @@ class WebUIMainAreaRatiosDTO(BaseModel):
     auxiliary: float = Field(default=1, gt=0)
 
 
+class WebUIWorkspaceBottomPanelSettingsDTO(BaseModel):
+    visible: bool | None = None
+    height: int | None = Field(default=None, ge=190, le=520)
+    tab: Literal["terminal", "output", "gateway", "ports", "automation"] | None = None
+    terminal_id: str | None = None
+
+
 class WebUILayoutSettingsDTO(BaseModel):
     workbench_view: Literal["sessions", "gateway"] | None = None
     agent_sessions_panel_open: bool | None = None
+    chat_visible: bool | None = None
     auxiliary_visible: bool | None = None
     panel_visible: bool | None = None
     auxiliary_tab: Literal["changes", "files", "automation", "resources"] | None = None
@@ -396,6 +416,10 @@ class WebUILayoutSettingsDTO(BaseModel):
         max_length=4,
     )
     main_area_ratios: WebUIMainAreaRatiosDTO | None = None
+    bottom_panel_by_workspace: dict[str, WebUIWorkspaceBottomPanelSettingsDTO] | None = Field(
+        default=None,
+        max_length=200,
+    )
     workspace_preview_visible: bool | None = None
     workspace_preview_maximized: bool | None = None
     workspace_preview_file_paths: list[str] | None = Field(default=None, max_length=20)

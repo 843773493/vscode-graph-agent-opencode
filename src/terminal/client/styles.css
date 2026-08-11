@@ -24,14 +24,13 @@ input {
 
 .terminal-shell {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
   height: 100vh;
-  padding: 12px;
+  padding: 6px;
 }
 
 .terminal-toolbar,
-.agent-form,
 .terminal-search-bar {
   display: flex;
   align-items: center;
@@ -70,16 +69,16 @@ input {
 .terminal-actions {
   display: flex;
   flex: 0 0 auto;
-  gap: 6px;
+  gap: 3px;
 }
 
 button {
   border: 1px solid #334155;
-  border-radius: 8px;
+  border-radius: 5px;
   background: #1f2937;
   color: #f8fafc;
   cursor: pointer;
-  padding: 8px 12px;
+  padding: 4px 7px;
 }
 
 .icon-button {
@@ -87,8 +86,8 @@ button {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 24px;
+  height: 24px;
   padding: 0;
 }
 
@@ -127,9 +126,9 @@ button {
 }
 
 .button-icon {
-  width: 17px;
-  height: 17px;
-  font-size: 17px;
+  width: 13px;
+  height: 13px;
+  font-size: 13px;
   line-height: 1;
 }
 
@@ -169,13 +168,17 @@ button:disabled:hover {
 }
 
 .status-line {
-  min-height: 28px;
+  min-height: 22px;
   border: 1px solid #2f3a4a;
-  border-radius: 8px;
+  border-radius: 5px;
   background: #161b22;
   color: #b9c4d4;
-  padding: 6px 10px;
-  font-size: 13px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.status-line[hidden] {
+  display: none;
 }
 
 .status-line.error {
@@ -241,16 +244,6 @@ button:disabled:hover {
   display: none;
 }
 
-.agent-form input {
-  min-width: 0;
-  flex: 1;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  background: #111827;
-  color: #f8fafc;
-  padding: 9px 12px;
-}
-
 @media (max-width: 560px) {
   .terminal-shell {
     padding: 8px;
@@ -271,14 +264,14 @@ button:disabled:hover {
   }
 
   .icon-button {
-    width: 32px;
-    height: 32px;
+    width: 24px;
+    height: 24px;
   }
 }
 
 .embedded-terminal .terminal-shell {
-  gap: 8px;
-  padding: 8px;
+  gap: 4px;
+  padding: 4px;
 }
 
 .embedded-terminal .terminal-toolbar {
@@ -294,16 +287,16 @@ button:disabled:hover {
 }
 
 .embedded-terminal .terminal-actions {
-  gap: 4px;
+  gap: 2px;
 }
 
 .embedded-terminal .status-line {
-  min-height: 24px;
-  padding: 4px 8px;
-  border-radius: 6px;
+  min-height: 20px;
+  padding: 3px 6px;
+  border-radius: 5px;
 }
 
 .embedded-terminal .terminal {
   border-radius: 6px;
-  padding: 6px;
+  padding: 4px;
 }

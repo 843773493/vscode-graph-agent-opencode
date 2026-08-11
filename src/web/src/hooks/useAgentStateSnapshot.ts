@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
 import { getAgentStateMessages } from "../api";
+import { findAgentStateMessageRawContent } from "../state/agentStateDisplay";
 import type { AppState } from "../types/frontend";
 import type { SetAppState } from "./contentViewLoaderTypes";
 
@@ -92,8 +93,26 @@ export function useAgentStateSnapshotLoader({
     [apiPort, workspaceId, setState],
   );
 
+  const loadAgentStateMessageRawContent = useCallback(async (
+    sessionId: string,
+    messageId: string,
+  ): Promise<string> => {
+    const snapshot = await getAgentStateMessages(apiPort, sessionId, workspaceId);
+    if (snapshot.session_id !== sessionId) {
+      throw new Error(
+        `Agent State 会话不匹配: 请求 ${sessionId}，响应 ${snapshot.session_id}`,
+      );
+    }
+    const content = findAgentStateMessageRawContent(snapshot.jsonl, messageId);
+    if (content === null) {
+      throw new Error(`Agent State 中找不到消息原文: message_id=${messageId}`);
+    }
+    return content;
+  }, [apiPort, workspaceId]);
+
   return {
     invalidateAgentState,
+    loadAgentStateMessageRawContent,
     refreshAgentStateSnapshot,
   };
 }
