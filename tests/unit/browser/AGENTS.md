@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-存放 `src/browser/` 独立 Browser 服务源根的 Python 单元测试与跨语言轻量验证。
+存放 `src/workspace-services/browser/` 独立 Browser 服务源根的 Python 单元测试与跨语言轻量验证。
 
 ## 可修改内容
 

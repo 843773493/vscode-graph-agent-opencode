@@ -20,25 +20,28 @@ When the user's request matches a skill, read that skill's `SKILL.md` with `read
 FILESYSTEM_SYSTEM_PROMPT = (
     "Use the available filesystem tools according to their schemas. Read existing files before "
     "editing them, preserve the repository's conventions, and inspect large results in bounded chunks. "
-    "For read_file, pass `path` as a workspace-relative path or an absolute host path; "
-    "`line_offset` is 1-indexed."
+    "All model-facing filesystem paths are standard workspace-relative paths. Use `.` for the workspace "
+    "root and paths such as `src/main.js` for files; never start them with `/` and never pass host "
+    "absolute paths. Paths returned by ls, glob, and grep can be passed unchanged to read_file, "
+    "write_file, edit_file, and workspace source-debugging tools. read_file uses a 1-indexed "
+    "`line_offset`."
 )
 
 FILESYSTEM_TOOL_DESCRIPTIONS = {
-    "ls": "List entries in an absolute directory path.",
+    "ls": "List entries below a workspace-relative directory; use `.` for the workspace root.",
     "read_file": (
-        "Read a file using Codex-style arguments. Pass `path` as a workspace-relative path or an "
-        "absolute host path. Use the 1-indexed `line_offset` and "
+        "Read a workspace-relative file; never start the path with `/`. Paths returned by ls, glob, "
+        "and grep are reusable unchanged. Use the 1-indexed `line_offset` and "
         "optional `max_lines` for large text files. "
         "Images, audio, video, and PDFs return multimodal content; do not paginate those files."
     ),
-    "write_file": "Create a new text file at an absolute path with the provided content.",
+    "write_file": "Create a text file at a workspace-relative path.",
     "edit_file": (
-        "Replace exact text in an existing file. Read the file first, preserve indentation, "
+        "Replace exact text in a workspace-relative file. Read the file first, preserve indentation, "
         "and use replace_all only when every occurrence should change."
     ),
-    "glob": "Find files below an absolute base path using a glob pattern.",
-    "grep": "Search for literal text in files, optionally filtered by path and glob.",
+    "glob": "Find files below a workspace-relative base path using a glob pattern.",
+    "grep": "Search below a workspace-relative path, optionally filtered by glob.",
 }
 
 COMPACT_CONVERSATION_SYSTEM_PROMPT = (

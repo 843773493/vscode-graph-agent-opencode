@@ -21,7 +21,8 @@
       "default_skill_groups": [
         "browser-control",
         "gateway-context",
-        "web-search-fetch"
+        "web-search-fetch",
+        "debugging"
       ]
     }
   }

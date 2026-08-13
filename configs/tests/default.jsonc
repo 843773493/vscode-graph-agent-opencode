@@ -153,6 +153,126 @@
           },
           {
             "tool_id": "runPlaywrightCode"
+          },
+          {
+            "name": "list_debug_configurations",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "list_debug_configurations"},
+            "description": "列出当前会话调试方案。"
+          },
+          {
+            "name": "create_debug_configuration",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "create_debug_configuration"},
+            "description": "创建当前会话调试方案。"
+          },
+          {
+            "name": "activate_debug_configuration",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "activate_debug_configuration"},
+            "description": "激活当前会话调试方案。"
+          },
+          {
+            "name": "delete_debug_configuration",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "delete_debug_configuration"},
+            "description": "删除当前会话调试方案。"
+          },
+          {
+            "name": "start_debugging",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "start_debugging"},
+            "description": "源码调试扩展工具 start_debugging，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "stop_debugging",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "stop_debugging"},
+            "description": "源码调试扩展工具 stop_debugging，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "step_over",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "step_over"},
+            "description": "源码调试扩展工具 step_over，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "step_into",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "step_into"},
+            "description": "源码调试扩展工具 step_into，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "step_out",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "step_out"},
+            "description": "源码调试扩展工具 step_out，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "continue_execution",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "continue_execution"},
+            "description": "源码调试扩展工具 continue_execution，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "pause_execution",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "pause_execution"},
+            "description": "源码调试扩展工具 pause_execution，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "restart_debugging",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "restart_debugging"},
+            "description": "源码调试扩展工具 restart_debugging，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "add_breakpoint",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "add_breakpoint"},
+            "description": "源码调试扩展工具 add_breakpoint，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "add_logpoint",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "add_logpoint"},
+            "description": "源码调试扩展工具 add_logpoint，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "remove_breakpoint",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "remove_breakpoint"},
+            "description": "源码调试扩展工具 remove_breakpoint，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "clear_all_breakpoints",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "clear_all_breakpoints"},
+            "description": "源码调试扩展工具 clear_all_breakpoints，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "list_breakpoints",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "list_breakpoints"},
+            "description": "源码调试扩展工具 list_breakpoints，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "list_variable_names",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "list_variable_names"},
+            "description": "源码调试扩展工具 list_variable_names，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "get_variables_values",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "get_variables_values"},
+            "description": "源码调试扩展工具 get_variables_values，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "evaluate_expression",
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": {"tool_name": "evaluate_expression"},
+            "description": "源码调试扩展工具 evaluate_expression，必须通过 invoke_custom_tool 调用。"
           }
         ]
       },

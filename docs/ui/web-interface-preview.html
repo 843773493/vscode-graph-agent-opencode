@@ -122,6 +122,19 @@
       }
 
       .glyph { font-size: 16px; line-height: 1; }
+      .ui-icon {
+        display: block;
+        width: 14px;
+        height: 14px;
+        flex: 0 0 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.9;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .ui-icon.compact { width: 12px; height: 12px; flex-basis: 12px; }
+      .view-trigger { gap: 6px; }
       .main-grid {
         display: grid;
         grid-template-columns: 264px minmax(300px, 0.86fr) minmax(620px, 1.7fr);
@@ -376,13 +389,22 @@
     </style>
   </head>
   <body>
+    <!-- Lucide Icons（ISC）离线 SVG sprite，避免 Unicode 箭头受字体基线影响。 -->
+    <svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
+      <defs>
+        <symbol id="lucide-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+        <symbol id="lucide-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+        <symbol id="lucide-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+        <symbol id="lucide-chevron-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+      </defs>
+    </svg>
     <div class="app-shell">
       <header class="topbar">
         <div class="topbar-group">
-          <button class="icon-button" aria-label="后退">‹</button>
-          <button class="icon-button" aria-label="前进">›</button>
+          <button class="icon-button" aria-label="后退"><svg class="ui-icon"><use href="#lucide-chevron-left"></use></svg></button>
+          <button class="icon-button" aria-label="前进"><svg class="ui-icon"><use href="#lucide-chevron-right"></use></svg></button>
           <button class="icon-button" aria-label="新建会话">＋</button>
-          <button class="text-button" aria-label="工作台视图">▦ 视图⌄</button>
+          <button class="text-button view-trigger" aria-label="工作台视图">▦ 视图<svg class="ui-icon compact"><use href="#lucide-chevron-down"></use></svg></button>
         </div>
         <div class="topbar-center"><div class="topbar-title" id="topbar-title">⌁ 扩展窗口</div></div>
         <div class="topbar-actions">
@@ -398,19 +420,19 @@
         <aside class="session-sidebar" id="session-sidebar">
           <div class="sidebar-header"><strong>会话</strong><div class="sidebar-tools"><button class="icon-button">＋</button><button class="icon-button">⌕</button></div></div>
           <div class="sidebar-scroll">
-            <div class="sidebar-label"><span>已固定</span><span>⌃</span></div>
+            <div class="sidebar-label"><span>已固定</span><svg class="ui-icon compact"><use href="#lucide-chevron-up"></use></svg></div>
             <button class="session-row active"><span>◉</span><span>你好</span><span class="row-meta">当前</span></button>
             <button class="session-row"><span>◌</span><span>布局审查与调整</span><span class="row-meta">昨天</span></button>
             <div class="sidebar-label"><span>Chats</span><span>3</span></div>
             <button class="session-row"><span>○</span><span>Gateway 日志整理</span></button>
             <div class="sidebar-label"><span>工作区文件夹</span><span>＋</span></div>
-            <button class="folder-row"><span>⌄</span><span>home</span></button>
+            <button class="folder-row"><svg class="ui-icon compact"><use href="#lucide-chevron-down"></use></svg><span>home</span></button>
             <button class="folder-row" style="padding-left:26px"><span>◈</span><span>你好</span></button>
-            <button class="folder-row"><span>›</span><span>Browser Tool E2E Manual</span><span class="status-dot offline"></span></button>
-            <button class="folder-row"><span>›</span><span>20260730_wallpaper</span><span class="status-dot offline"></span></button>
-            <button class="folder-row"><span>›</span><span>workspace</span><span class="status-dot"></span></button>
+            <button class="folder-row"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg><span>Browser Tool E2E Manual</span><span class="status-dot offline"></span></button>
+            <button class="folder-row"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg><span>20260730_wallpaper</span><span class="status-dot offline"></span></button>
+            <button class="folder-row"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg><span>workspace</span><span class="status-dot"></span></button>
           </div>
-          <div class="sidebar-footer"><button class="text-button" style="width:100%;justify-content:space-between">自定义 <span>›</span></button></div>
+          <div class="sidebar-footer"><button class="text-button" style="width:100%;justify-content:space-between">自定义 <svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg></button></div>
         </aside>
 
         <section class="chat-panel">
@@ -439,7 +461,7 @@
           <div class="workspace-body">
             <div class="workspace-view files" data-view="files">
               <section class="file-preview"><div class="file-toolbar"><strong>AGENTS.md</strong><small>markdown · 413 B</small><span class="spacer"></span><button class="mode-button">源码</button><button class="mode-button active">预览</button></div><div class="code-surface"><h2 style="font-family:var(--sans);color:#d9eafb">通用指南</h2><p style="font-family:var(--sans);color:#a9bfd4">开发标准</p><p style="font-family:var(--sans);color:#c9d9e8;white-space:normal;line-height:1.7">使用中文进行沟通；代码注释也应使用中文。第一次实现功能时，尽量专注于核心功能。所有界面状态都应给用户清晰、可理解的反馈。</p><p style="font-family:var(--sans);color:#a9bfd4">实现方法</p><p style="font-family:var(--sans);color:#c9d9e8;white-space:normal;line-height:1.7">主聊天区、文件预览、资源树和底部状态面板各自承担明确职责，并在窄窗口下保持可操作。</p></div></section>
-              <aside class="file-tree"><div class="file-header"><strong>文件</strong><span>⌕　＋</span></div><div class="file-scroll"><div class="file-tree-row">⌄　▣ <strong>boxteam_workspace</strong></div><div class="file-tree-row indent">⌄　▣ .boxteam</div><div class="file-tree-row indent">▸　▣ sessions</div><div class="file-tree-row indent active">▤　AGENTS.md <span class="row-meta">413 B</span></div><div class="file-tree-row">▸　▣ app</div><div class="file-tree-row">▸　▣ src</div><div class="file-tree-row">▸　▣ docs</div><div class="file-tree-row">▸　▣ tests</div></div></aside>
+              <aside class="file-tree"><div class="file-header"><strong>文件</strong><span>⌕　＋</span></div><div class="file-scroll"><div class="file-tree-row"><svg class="ui-icon compact"><use href="#lucide-chevron-down"></use></svg>▣ <strong>boxteam_workspace</strong></div><div class="file-tree-row indent"><svg class="ui-icon compact"><use href="#lucide-chevron-down"></use></svg>▣ .boxteam</div><div class="file-tree-row indent"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg>▣ sessions</div><div class="file-tree-row indent active">▤　AGENTS.md <span class="row-meta">413 B</span></div><div class="file-tree-row"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg>▣ app</div><div class="file-tree-row"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg>▣ src</div><div class="file-tree-row"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg>▣ docs</div><div class="file-tree-row"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg>▣ tests</div></div></aside>
             </div>
 
             <div class="workspace-view changes" data-view="changes">
@@ -453,8 +475,8 @@
             </div>
 
             <div class="workspace-view resources active" data-view="resources">
-              <section class="browser-stage" data-extension-region="primary"><div class="browser-toolbar"><button>‹</button><button>›</button><button>↻</button><div class="address" id="browser-address">https://boxteam.local/browser/blank</div><button data-resource-toggle aria-expanded="true" title="切换扩展资源列表">▤</button><button>□</button><button>×</button></div><div class="browser-viewport"><div class="browser-page-header"><strong id="browser-page-title">Browser Tool E2E Manual</strong><span id="browser-page-status">扩展窗口 · 浏览器主区域</span></div><div class="browser-page-content"><div class="browser-hero"><h2 id="browser-hero-title">浏览器预览</h2><p>这里是扩展窗口的主展示区域。浏览器默认占据大部分空间，右侧和其他扩展标签可继续承载辅助展示。</p><button class="primary-button">打开外部浏览器</button></div><div class="browser-widget"><div>当前 URL　<span id="browser-url-label">about:blank</span></div><div>连接状态　<span style="color:#2a9669">运行中 · 1 个连接</span></div><div>最后检查　刚刚</div></div></div></div><div class="browser-preview-footer"><span>扩展资源：<span id="browser-resource-label">browser_d3b9a826</span></span><span>浏览器主区域 · 辅助扩展区域在右侧</span></div></section>
-              <aside class="resource-column" data-extension-region="secondary"><div class="resource-header"><div><strong>扩展资源</strong><span>　3</span></div><div><span>1 个正在使用</span> <button class="icon-button">↻</button></div></div><div class="resource-scroll"><div class="resource-group"><div class="resource-group-title">⌄ <b>正在使用</b> <span>1</span></div><article class="resource-card selected" data-resource="browser"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>Browser Tool E2E Manual</strong><small>空白页 · 浏览器</small></div><span class="resource-status">当前预览</span></div><div class="resource-detail"><p>浏览器 · 运行中 · 当前预览</p><div class="resource-actions"><button class="primary-button" data-open-preview>打开扩展窗口</button><button>关闭</button><button class="danger">删除</button></div></div></article></div><div class="resource-group"><div class="resource-group-title">⌄ <b>后台可用</b> <span>1</span></div><article class="resource-card" data-resource="browser-2"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>空白页</strong><small>浏览器 · 可随时切换</small></div><span class="resource-status">可用</span></div></article></div><div class="resource-group"><div class="resource-group-title">› <b>已挂起 / 可恢复</b> <span>1</span></div><div class="resource-card" style="display:none"></div></div><div class="resource-group"><div class="resource-group-title">› <b>历史记录</b> <span>1</span></div></div></div></aside>
+              <section class="browser-stage" data-extension-region="primary"><div class="browser-toolbar"><button><svg class="ui-icon"><use href="#lucide-chevron-left"></use></svg></button><button><svg class="ui-icon"><use href="#lucide-chevron-right"></use></svg></button><button>↻</button><div class="address" id="browser-address">https://boxteam.local/browser/blank</div><button data-resource-toggle aria-expanded="true" title="切换扩展资源列表">▤</button><button>□</button><button>×</button></div><div class="browser-viewport"><div class="browser-page-header"><strong id="browser-page-title">Browser Tool E2E Manual</strong><span id="browser-page-status">扩展窗口 · 浏览器主区域</span></div><div class="browser-page-content"><div class="browser-hero"><h2 id="browser-hero-title">浏览器预览</h2><p>这里是扩展窗口的主展示区域。浏览器默认占据大部分空间，右侧和其他扩展标签可继续承载辅助展示。</p><button class="primary-button">打开外部浏览器</button></div><div class="browser-widget"><div>当前 URL　<span id="browser-url-label">about:blank</span></div><div>连接状态　<span style="color:#2a9669">运行中 · 1 个连接</span></div><div>最后检查　刚刚</div></div></div></div><div class="browser-preview-footer"><span>扩展资源：<span id="browser-resource-label">browser_d3b9a826</span></span><span>浏览器主区域 · 辅助扩展区域在右侧</span></div></section>
+              <aside class="resource-column" data-extension-region="secondary"><div class="resource-header"><div><strong>扩展资源</strong><span>　3</span></div><div><span>1 个正在使用</span> <button class="icon-button">↻</button></div></div><div class="resource-scroll"><div class="resource-group"><div class="resource-group-title"><svg class="ui-icon compact"><use href="#lucide-chevron-down"></use></svg><b>正在使用</b> <span>1</span></div><article class="resource-card selected" data-resource="browser"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>Browser Tool E2E Manual</strong><small>空白页 · 浏览器</small></div><span class="resource-status">当前预览</span></div><div class="resource-detail"><p>浏览器 · 运行中 · 当前预览</p><div class="resource-actions"><button class="primary-button" data-open-preview>打开扩展窗口</button><button>关闭</button><button class="danger">删除</button></div></div></article></div><div class="resource-group"><div class="resource-group-title"><svg class="ui-icon compact"><use href="#lucide-chevron-down"></use></svg><b>后台可用</b> <span>1</span></div><article class="resource-card" data-resource="browser-2"><div class="resource-card-main"><span>◉</span><div class="resource-card-copy"><strong>空白页</strong><small>浏览器 · 可随时切换</small></div><span class="resource-status">可用</span></div></article></div><div class="resource-group"><div class="resource-group-title"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg><b>已挂起 / 可恢复</b> <span>1</span></div><div class="resource-card" style="display:none"></div></div><div class="resource-group"><div class="resource-group-title"><svg class="ui-icon compact"><use href="#lucide-chevron-right"></use></svg><b>历史记录</b> <span>1</span></div></div></div></aside>
             </div>
           </div>
         </section>

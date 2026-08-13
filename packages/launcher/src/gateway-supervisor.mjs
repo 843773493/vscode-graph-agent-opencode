@@ -8,16 +8,29 @@ const INSTALLED_GATEWAY_PORT = 8114;
 const GATEWAY_READY_TIMEOUT_MS = process.platform === "win32" ? 180_000 : 90_000;
 const GATEWAY_CONNECTION_DRAIN_TIMEOUT_SECONDS = 2;
 const GATEWAY_SHUTDOWN_TIMEOUT_MS = 10_000;
+
+function resolveDevelopmentGatewayPort(environment) {
+  const rawValue = environment?.BOXTEAM_GATEWAY_PORT?.trim() ?? "";
+  if (rawValue === "") return DEVELOPMENT_GATEWAY_PORT;
+  const port = Number(rawValue);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error(
+      `BOXTEAM_GATEWAY_PORT 必须是 1 到 65535 的整数，实际为 ${rawValue}`,
+    );
+  }
+  return port;
+}
+
 function forwardedSignals(platform) {
   return platform === "win32"
     ? ["SIGINT", "SIGTERM", "SIGBREAK"]
     : ["SIGINT", "SIGTERM", "SIGHUP"];
 }
 
-export function gatewayEndpoint(distribution) {
+export function gatewayEndpoint(distribution, environment = process.env) {
   const port =
     distribution === "source-development"
-      ? DEVELOPMENT_GATEWAY_PORT
+      ? resolveDevelopmentGatewayPort(environment)
       : INSTALLED_GATEWAY_PORT;
   return Object.freeze({
     host: GATEWAY_HOST,
@@ -55,7 +68,7 @@ export async function waitForGateway({
 }
 
 export function gatewayEnvironment(runtime, baseEnvironment) {
-  const endpoint = gatewayEndpoint(runtime.distribution);
+  const endpoint = gatewayEndpoint(runtime.distribution, baseEnvironment);
   return {
     ...baseEnvironment,
     BOXTEAM_DISTRIBUTION: runtime.distribution,
@@ -81,7 +94,7 @@ export function spawnGateway({
   spawnImpl = spawn,
   platform = process.platform,
 }) {
-  const endpoint = gatewayEndpoint(runtime.distribution);
+  const endpoint = gatewayEndpoint(runtime.distribution, environment);
   return spawnImpl(
     runtime.pythonExecutable,
     [
@@ -194,7 +207,7 @@ export async function superviseGateway({
   stderr = process.stderr,
   processObject = process,
 }) {
-  const endpoint = gatewayEndpoint(runtime.distribution);
+  const endpoint = gatewayEndpoint(runtime.distribution, environment);
   stdout.write(
     `BoxTeam ${runtime.version} 正在启动 ` +
       `(distribution=${runtime.distribution})\n`,

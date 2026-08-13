@@ -80,7 +80,7 @@ def test_middleware_uses_project_prompts_without_upstream_demo_agents(tmp_path):
     assert {tool.name: tool.description for tool in filesystem.tools} == FILESYSTEM_TOOL_DESCRIPTIONS
     assert "execute" not in {tool.name for tool in filesystem.tools}
     read_file = next(tool for tool in filesystem.tools if tool.name == "read_file")
-    assert set(read_file.args_schema.model_json_schema()["properties"]) == {
+    assert set(read_file.tool_call_schema.model_json_schema()["properties"]) == {
         "path",
         "line_offset",
         "max_lines",

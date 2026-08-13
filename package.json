@@ -8,8 +8,11 @@
   "scripts": {
     "dev:backend": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload",
     "test:extension": "vscode-test",
+    "test:matrix": "bun tests/runner/run-tests.mjs",
+    "test:integration:web:anchored-overlay": "bun tests/integration/clients/web/anchored_overlay_positioning.mjs",
     "dev": "bun run scripts/dev.mjs",
     "dev:web": "bun run scripts/dev.mjs",
+    "build:web": "bun run --cwd=src/clients/web build",
     "install:config": "uv run python -m configs.boxteam --project-root .",
     "package:linux-x64": "bun run packaging/runtime/package-linux-x64.mjs",
     "package:windows-x64": "bun run packaging/runtime/package-windows-x64.mjs",

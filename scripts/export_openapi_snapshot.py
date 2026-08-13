@@ -19,8 +19,8 @@ def main() -> None:
         separators=(",", ":"),
     )
     targets = (
-        project_root / "src" / "web" / "openapi.json",
-        project_root / "src" / "web" / "src" / "types" / "gen" / "openapi" / "index.json",
+        project_root / "src" / "clients" / "web" / "openapi.json",
+        project_root / "src" / "clients" / "web" / "src" / "types" / "gen" / "openapi" / "index.json",
     )
     for target in targets:
         target.parent.mkdir(parents=True, exist_ok=True)

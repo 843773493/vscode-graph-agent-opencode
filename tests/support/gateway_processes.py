@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import IO
+from urllib.request import Request, urlopen
+
+import commentjson
+import httpx
+
+from configs.installer import install_user_configuration
+from tests.support.processes import (
+    kill_process_on_port,
+    resolve_workspace_python_executable,
+    terminate_process,
+)
+
+LOCAL_TOKEN_HEADERS = {"X-Local-Token": "local-dev-token"}
+READY_TIMEOUT_SECONDS = 60
+
+
+def _test_boxteam_home(workspace_root: Path) -> Path:
+    return workspace_root.resolve().parent / "boxteam-home"
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayProcess:
+    process: subprocess.Popen[str]
+    stdout_file: IO[str]
+    stderr_file: IO[str]
+    port: int
+
+
+def wait_for_gateway_ready(port: int, process: subprocess.Popen[str]) -> None:
+    deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+    request = Request(
+        f"http://127.0.0.1:{port}/api/gateway/health",
+        headers=LOCAL_TOKEN_HEADERS,
+    )
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"Gateway 提前退出: pid={process.pid}, returncode={process.returncode}"
+            )
+        try:
+            with urlopen(request, timeout=1) as response:
+                if response.status == 200:
+                    return
+        except OSError:
+            time.sleep(1)
+    raise TimeoutError(f"Gateway 在 {READY_TIMEOUT_SECONDS} 秒内未就绪: {port}")
+
+
+def start_gateway_process(
+    *,
+    workspace_root: Path,
+    default_backend_url: str,
+    port: int,
+    ssh_tunnel_port_range: tuple[int, int] | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> GatewayProcess:
+    kill_process_on_port(port)
+    project_root = Path.cwd().resolve()
+    python_executable = resolve_workspace_python_executable(project_root)
+    boxteam_home = _test_boxteam_home(workspace_root)
+    install_user_configuration(
+        config_root=boxteam_home / "config",
+        profile="default",
+        project_root=project_root,
+    )
+    log_dir = workspace_root / ".boxteam" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_file = open(  # noqa: SIM115
+        log_dir / "gateway.stdout.log", "a", encoding="utf-8"
+    )
+    stderr_file = open(  # noqa: SIM115
+        log_dir / "gateway.stderr.log", "a", encoding="utf-8"
+    )
+    env = os.environ.copy()
+    env["WORKSPACE_ROOT"] = str(workspace_root)
+    env["BOXTEAM_HOME"] = str(boxteam_home)
+    env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
+    env["BOXTEAM_GATEWAY_ROOT"] = str(workspace_root / ".boxteam" / "gateway")
+    env["BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT"] = str(workspace_root)
+    env["BOXTEAM_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
+    env["PYTHONUNBUFFERED"] = "1"
+    env["BOXTEAM_PYTHON_BIN"] = str(python_executable)
+    node_executable = shutil.which("node")
+    if node_executable is None:
+        raise RuntimeError("Gateway 测试需要 PATH 中存在 node")
+    env["BOXTEAM_NODE_BIN"] = node_executable
+    credential_path = (
+        workspace_root / ".boxteam" / "gateway" / "credentials" / "local-token"
+    )
+    credential_path.parent.mkdir(parents=True, exist_ok=True)
+    credential_path.write_text("local-dev-token\n", encoding="utf-8")
+    credential_path.chmod(0o600)
+    if ssh_tunnel_port_range is not None:
+        env["BOXTEAM_GATEWAY_SSH_TUNNEL_PORT_MIN"] = str(ssh_tunnel_port_range[0])
+        env["BOXTEAM_GATEWAY_SSH_TUNNEL_PORT_MAX"] = str(ssh_tunnel_port_range[1])
+    if extra_env:
+        env.update(extra_env)
+    process = subprocess.Popen(
+        [
+            str(python_executable),
+            "-m",
+            "uvicorn",
+            "app.gateway.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=project_root,
+        env=env,
+        stdout=stdout_file,
+        stderr=stderr_file,
+    )
+    handle = GatewayProcess(
+        process=process,
+        stdout_file=stdout_file,
+        stderr_file=stderr_file,
+        port=port,
+    )
+    try:
+        wait_for_gateway_ready(port, process)
+    except Exception:
+        close_gateway_process(handle)
+        raise
+    return handle
+
+
+def close_gateway_process(handle: GatewayProcess) -> None:
+    try:
+        terminate_process(handle.process)
+        # Gateway 会在 lifespan 中逐个回收托管工作区进程；给已收到终止信号的
+        # Node 辅助服务一个很短的退出窗口，避免下一条用例删除隔离工作区时竞态写日志。
+        time.sleep(0.5)
+        kill_process_on_port(handle.port)
+    finally:
+        handle.stdout_file.close()
+        handle.stderr_file.close()
+
+
+def workspace_root_from_response(response: httpx.Response) -> str:
+    assert response.status_code == 200, response.text
+    return str(response.json()["data"]["root_path"])
+
+
+def write_gateway_remote_gateway_config(
+    *,
+    workspace_root: Path,
+    ssh_port: int,
+    username: str,
+    remote_gateway_port: int,
+    private_key_path: Path,
+    remote_pair_command: str,
+) -> None:
+    config_root = _test_boxteam_home(workspace_root) / "config"
+    install_user_configuration(
+        config_root=config_root,
+        profile="default",
+        project_root=Path.cwd(),
+    )
+    config_path = config_root / "gateway.jsonc"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Gateway 测试工作区配置不存在: {config_path}")
+    payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
+    payload["workspaces"] = [
+        {
+            "kind": "remote_gateway",
+            "name": "remote docker gateway",
+            "host": "127.0.0.1",
+            "port": ssh_port,
+            "username": username,
+            "private_key_path": str(private_key_path.resolve()),
+            "remote_pair_command": remote_pair_command,
+            "remote_gateway_port": remote_gateway_port,
+            "activate": False,
+        }
+    ]
+    config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )

@@ -2,6 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   existsSync,
+  copyFileSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -22,21 +23,44 @@ import {
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
 );
+const webRoot = path.join(projectRoot, "src", "clients", "web");
+const terminalFrontendRoot = path.join(
+  projectRoot,
+  "src",
+  "workspace-services",
+  "terminal",
+  "client",
+);
+const browserFrontendRoot = path.join(
+  projectRoot,
+  "src",
+  "workspace-services",
+  "browser",
+  "client",
+);
+const rawPortOffset = process.env.BOXTEAM_DEV_PORT_OFFSET?.trim() ?? "";
+
+function parsePortOffset(value) {
+  if (value === "") return 0;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 57000) {
+    throw new Error(
+      `BOXTEAM_DEV_PORT_OFFSET 必须是 0 到 57000 的整数，实际为 ${value}`,
+    );
+  }
+  return parsed;
+}
+
+const portOffset = parsePortOffset(rawPortOffset);
+const defaultBoxteamHome =
+  portOffset === 0 ? ".boxteams-dev" : `.boxteams-dev-${portOffset}`;
 const boxteamHome = path.resolve(
-  process.env.BOXTEAM_HOME ?? path.join(os.homedir(), ".boxteams-dev"),
+  process.env.BOXTEAM_HOME ?? path.join(os.homedir(), defaultBoxteamHome),
 );
 const defaultWorkspaceRoot = path.resolve(
   process.env.BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT ??
     path.join(boxteamHome, "boxteam_workspace"),
 );
-const webRoot = path.join(projectRoot, "src", "web");
-const terminalFrontendRoot = path.join(
-  projectRoot,
-  "src",
-  "terminal",
-  "client",
-);
-const browserFrontendRoot = path.join(projectRoot, "src", "browser", "client");
 const launcherEntry = path.join(
   projectRoot,
   "packages",
@@ -72,13 +96,16 @@ if (
 }
 const detachedReadyFile = process.env.BOXTEAM_DEV_READY_FILE ?? null;
 const host = "127.0.0.1";
-const ports = {
+const basePorts = {
   frontend: 8011,
   terminalFrontend: 8013,
   gateway: 8014,
   browserFrontend: 8016,
   backendDebug: 8002,
 };
+const ports = Object.fromEntries(
+  Object.entries(basePorts).map(([name, port]) => [name, port + portOffset]),
+);
 
 function requirePath(targetPath, label) {
   if (!existsSync(targetPath)) {
@@ -117,6 +144,25 @@ function installDevelopmentConfiguration(environment) {
     throw new Error(
       `源码开发配置安装失败: exit=${String(result.exitCode)}`,
     );
+  }
+}
+
+function installNodeDebugFixture() {
+  const sourcePath = path.join(
+    projectRoot,
+    "scripts",
+    "debug-fixtures",
+    "node-debug-fixture.mjs",
+  );
+  const targetPath = path.join(
+    defaultWorkspaceRoot,
+    "debug",
+    "node-debug-fixture.mjs",
+  );
+  requirePath(sourcePath, "Node 调试测试脚本");
+  if (!existsSync(targetPath)) {
+    mkdirSync(path.dirname(targetPath), { recursive: true });
+    copyFileSync(sourcePath, targetPath);
   }
 }
 
@@ -361,12 +407,22 @@ async function main() {
     BOXTEAM_PYTHON_BIN: pythonBin,
     BOXTEAM_NODE_BIN: nodeBin,
     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultWorkspaceRoot,
+    BOXTEAM_DEV_PORT_OFFSET: String(portOffset),
+    BOXTEAM_DEV_FRONTEND_PORT: String(ports.frontend),
+    BOXTEAM_GATEWAY_PORT: String(ports.gateway),
     BOXTEAM_TERMINAL_FRONTEND_URL: `http://${host}:${ports.terminalFrontend}`,
     BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${ports.browserFrontend}`,
     BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),
     ...(detachedReadyFile === null ? {} : { [SERVICE_LOG_CAPTURED_ENV]: "1" }),
   };
+  process.stdout.write(
+    `[dev] profile=source-development port_offset=${String(portOffset)} ` +
+      `frontend=http://${host}:${ports.frontend} ` +
+      `gateway=http://${host}:${ports.gateway} ` +
+      `boxteam_home=${boxteamHome}\n`,
+  );
   installDevelopmentConfiguration(environment);
+  installNodeDebugFixture();
   const terminalFrontend = spawnProcess(
     nodeBin,
     [

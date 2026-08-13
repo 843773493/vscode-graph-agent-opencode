@@ -1,43 +1,29 @@
-# src
+# 目录用途
 
-## 目录作用
+`src/` 是 JavaScript/TypeScript 产品源码根目录，包含当前维护的纯 Web 客户端、工作区辅助服务、跨进程共享协议，以及暂时保留在旧位置的 VS Code 扩展实现。
 
-VS Code 扩展的客户端源代码根目录。扩展入口 `extension.js` 在此，后端管理器、共享模块、Webview 侧边栏三部分分别位于三个子目录中。
+当前开发范围只有 `src/clients/web/`。Electron、React Native 和新的 VS Code 客户端仅在 `src/clients/` 下预留 TODO 边界；不得把“预留目录”理解为需要同步实现多端功能。
 
-如果你是“主要写后端、第一次碰前端”的新手，可以把 `src/` 理解成：
+## 可修改内容
 
-- 这里不是 Python 后端代码，而是 VS Code 扩展自己的前端/壳子代码
-- 这里负责“启动扩展、打开侧边栏、和 Webview 传消息、把后端状态显示出来”
-- 真正的业务计算和 API 在项目根目录的 `app/` 里，不在这里写
+- `src/clients/web/` 中的纯 Web 页面、交互、状态和 API 适配。
+- `src/clients/shared/` 中已经证明需要复用的纯业务模型或 React DOM 组件。
+- `src/workspace-services/` 中 Browser、Terminal 等辅助服务。
+- `src/shared/` 中跨进程协议、传输和常量。
+- 用户明确指定时，才可修改现存 VS Code 扩展相关目录。
 
-## 架构
+## 不可修改内容
 
-```text
-src/
-├── extension.js    扩展入口：注册命令、视图、状态栏；不包含业务逻辑
-├── backend/        后端进程管理：启动/探测/健康检查/优雅关闭本地 FastAPI 后端
-├── shared/         共享模块：API 客户端、常量、Webview-Host 通信协议
-├── webview/        VS Code Webview 侧边栏宿主端（非 UI 渲染代码）
-├── webview-ui/     VS Code Webview 前端 UI（React，端口 5173）
-├── web/            浏览器前端 UI ★优先开发★（React，端口 8011）
-└── test/           扩展集成测试
-```
+- 不要在本目录存放 Python 后端业务代码；后端位于根目录 `app/`。
+- 不要在本阶段实现 Electron、React Native 或新的 VS Code 客户端。
+- 不要为旧路径创建转发模块、重复源码或双路径构建。
+- 不要为了未来兼容性预写尚无调用方的 adapter、bridge 或平台实现。
 
-**UI 开发优先级**：`src/web` > `src/webview-ui`。先在浏览器端（8011，端口以根目录 `scripts/dev.mjs` 的 `frontendPort` 为准）开发调试，稳定后同步到 VS Code Webview（5173）。用户说"UI"时默认指 `src/web`。
+## 规范
 
-## 可以修改
-
-- 所有文件，遵循各子目录的约定
-- 新增子目录或文件
-
-## 不要修改
-
-- 不要在此目录存放后端（Python）代码，后端代码在项目根目录的 `app/` 下
-- 不要在此目录存放构建配置文件
-
-## 约定
-
-- 所有 JS 代码使用 ESM（`import`/`export`），避免 CommonJS
-- 扩展入口 `extension.js` 只做注册和编排，不包含业务逻辑
-- 各子目录的职责边界清晰，不要跨职责引用（除 `shared/` 外）
-- 前端新手优先看各子目录自己的 AGENTS.md，再改具体文件
+- 依赖方向为 `src/shared` → `src/clients/shared/core` → `src/clients/shared/web-ui` → `src/clients/web`。
+- `src/workspace-services` 可以依赖 `src/shared`，不得依赖客户端。
+- JavaScript 始终使用 ESM；新增源码子目录必须包含四段式 `AGENTS.md`。
+- 修改纯 Web 后运行 `bun run --cwd src/clients/web build`。
+- 现存 `extension.js`、`backend/`、`webview/`、`webview-ui/`、`test/` 是阶段性保留的旧 VS Code 实现，后续迁移必须使用独立 OpenSpec。
+- 模板示例；在整理 `AGENTS.md` 时请保留此行。

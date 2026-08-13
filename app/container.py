@@ -83,6 +83,8 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpRuntimeManager
 from app.services.infrastructure.message_history_store import MessageHistoryStore
+from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
 from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
@@ -131,6 +133,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._session_context_query_service = session_context_query_service
         self._workspace_session_context_client = workspace_session_context_client
         self._mcp_runtime_manager = mcp_runtime_manager
+        self._node_debug_service: NodeDebugService | None = None
         self._job_service: JobServiceProtocol | None = None
         self._session_orchestrator: SessionOrchestrator | None = None
         self._session_subagent_service: SessionSubagentProtocol | None = None
@@ -170,6 +173,16 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 
     def get_mcp_tools(self) -> list[BaseTool]:
         return self._mcp_runtime_manager.get_tools()
+
+    def set_node_debug_service(self, node_debug_service: NodeDebugService) -> None:
+        self._node_debug_service = node_debug_service
+
+    def get_node_debug_service(self) -> NodeDebugService:
+        if self._node_debug_service is None:
+            raise RuntimeError(
+                "_AgentRuntimeDependencyProvider 未绑定 NodeDebugService"
+            )
+        return self._node_debug_service
 
     def set_job_service(self, job_service: JobServiceProtocol) -> None:
         self._job_service = job_service
@@ -243,6 +256,7 @@ class AppContainer:
     workspace_file_watch_service: WorkspaceFileWatchService
     file_tree_settings_service: FileTreeSettingsService
     agent_execution_service: AgentExecutionService
+    node_debug_service: NodeDebugService
     job_event_bus: JobEventBusProtocol
     background_task_registry: BackgroundTaskRegistry
     background_message_bus: BackgroundMessageBus
@@ -348,6 +362,12 @@ def build_app_container(
         mcp_runtime_manager=mcp_runtime_manager,
     )
     dependency_provider.set_goal_service(goal_service)
+    node_debug_service = NodeDebugService(
+        workspace_root=resolved_workspace_root,
+        config_service=config_service,
+        session_store=NodeDebugSessionStore(session_path_resolver),
+    )
+    dependency_provider.set_node_debug_service(node_debug_service)
     agent_execution_service = AgentExecutionService(
         config_service=config_service,
         background_task_registry=background_task_registry,
@@ -575,6 +595,7 @@ def build_app_container(
         workspace_file_watch_service=workspace_file_watch_service,
         file_tree_settings_service=file_tree_settings_service,
         agent_execution_service=agent_execution_service,
+        node_debug_service=node_debug_service,
         job_event_bus=job_event_bus,
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,

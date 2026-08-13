@@ -5,9 +5,15 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from .common import ControlAction, ControlScope, JobStatus, RunMode, StepStatus, TimestampedDTO
+from .common import (
+    ControlAction,
+    ControlScope,
+    JobStatus,
+    RunMode,
+    StepStatus,
+    TimestampedDTO,
+)
 from .pending_request import PendingRequestKind
-
 
 JobDispatchStatus = Literal["queued", "running"]
 

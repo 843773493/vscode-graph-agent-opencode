@@ -34,7 +34,7 @@ from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
     build_provider_model_candidate,
 )
-from app.agents.policy import validate_tool_dependencies
+from app.agents.policy import custom_tool_spec_names, validate_tool_dependencies
 from app.agents.skill_runtime import (
     append_skill_middlewares,
     discover_workspace_skill_sources,
@@ -51,6 +51,7 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 
@@ -221,6 +222,7 @@ def create_my_deep_agent(
     memory: list[str] | None = None,
     permissions: list[FilesystemPermission] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
+    custom_tool_confirmation_names: frozenset[str] = frozenset(),
     debug: bool = False,
     name: str | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
@@ -236,6 +238,7 @@ def create_my_deep_agent(
     config_service: ConfigService | None = None,
     terminal_manager_client: TerminalManagerClient | None = None,
     browser_manager_client: BrowserManagerClient | None = None,
+    node_debug_service: NodeDebugService | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
@@ -317,6 +320,7 @@ def create_my_deep_agent(
             terminal_manager_client=terminal_manager_client,
             browser_manager_client=browser_manager_client,
             invocation_context=tool_invocation_context,
+            node_debug_service=node_debug_service,
         )
         custom_tools = filter_tools_by_name(
             custom_tool_bundle.tools,
@@ -387,6 +391,7 @@ def create_my_deep_agent(
         tool_invocation_context_middleware=tool_invocation_context_middleware,
         tool_output_middleware=tool_output_middleware,
         memory=memory,
+        custom_tool_confirmation_names=custom_tool_confirmation_names,
     )
 
     agent = create_agent(
@@ -440,6 +445,7 @@ def create_runtime_deep_agent_for_session(
     checkpointer: BaseCheckpointSaver | None = None,
     terminal_manager_client: TerminalManagerClient | None = None,
     browser_manager_client: BrowserManagerClient | None = None,
+    node_debug_service: NodeDebugService | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
@@ -465,6 +471,16 @@ def create_runtime_deep_agent_for_session(
         & tool_policy.enabled_names
     )
     custom_tool_specs = list(tool_config.get("custom", []))
+    configured_custom_tool_names = custom_tool_spec_names(
+        custom_tool_specs,
+        context=f"agent {agent_id} 的 tools.custom",
+    )
+    custom_tool_confirmation_names = (
+        confirmation_tool_names & configured_custom_tool_names
+    )
+    direct_confirmation_tool_names = (
+        confirmation_tool_names - configured_custom_tool_names
+    )
 
     model = override_model if override_model is not None else runtime["model"]
 
@@ -495,10 +511,12 @@ def create_runtime_deep_agent_for_session(
         team_service=team_service,
         terminal_manager_client=terminal_manager_client,
         browser_manager_client=browser_manager_client,
+        node_debug_service=node_debug_service,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
         mcp_tools=mcp_tools,
-        interrupt_on={tool_name: True for tool_name in confirmation_tool_names},
+        interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
+        custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=service,
         workspace_root=workspace_root,
     )

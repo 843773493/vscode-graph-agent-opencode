@@ -42,11 +42,15 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+addopts = ["--import-mode=importlib"]
 asyncio_mode = "auto"
 pythonpath = ["."]
 markers = [
     "unit: 单元测试",
+    "contract: 跨进程或跨语言公开协议契约测试",
+    "integration: 多模块集成测试，包含受控服务替身",
     "e2e: 端到端测试",
+    "live_model: 需要真实外部模型的测试",
 ]
 # TODO: Windows 未启用符号链接权限时，pytest 的 current 临时目录链接无法清理。
 tmp_path_retention_policy = "none"

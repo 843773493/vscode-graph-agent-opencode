@@ -95,6 +95,27 @@ def test_gateway_ui_settings_persist_workspace_port_panel_state(tmp_path):
     assert updated.layout.bottom_panel_by_workspace["workspace-home"].tab == "ports"
 
 
+def test_gateway_ui_settings_persist_debug_auxiliary_tab(tmp_path):
+    payload = WebUISettingsUpdateDTO(
+        layout=WebUILayoutSettingsDTO(
+            auxiliary_tab="debug",
+            auxiliary_tab_order=["files", "changes", "debug", "automation", "resources"],
+        )
+    )
+
+    updated = merge_web_ui_settings(payload, gateway_root=tmp_path)
+
+    assert updated.layout.auxiliary_tab == "debug"
+    assert updated.layout.auxiliary_tab_order == [
+        "files",
+        "changes",
+        "debug",
+        "automation",
+        "resources",
+    ]
+    assert read_web_ui_settings(tmp_path).layout.auxiliary_tab == "debug"
+
+
 def test_gateway_ui_settings_persist_collapsed_workspace_ids(tmp_path):
     merge_web_ui_settings(
         WebUISettingsUpdateDTO(

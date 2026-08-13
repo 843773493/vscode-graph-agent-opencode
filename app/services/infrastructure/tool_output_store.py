@@ -84,7 +84,7 @@ class ToolOutputStore:
         relative_path = (
             f"{SESSION_ARTIFACT_SCHEME}{session_id}/tool-results/{output_path.name}"
         )
-        read_path = f"/session-artifacts/{session_id}/tool-results/{output_path.name}"
+        read_path = f"session-artifacts/{session_id}/tool-results/{output_path.name}"
         reference = ToolOutputReference(
             type="tool_output",
             path=relative_path,

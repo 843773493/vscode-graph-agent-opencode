@@ -207,8 +207,8 @@ function copyApplicationSources(applicationRoot) {
   );
   for (const service of ["terminal", "browser"]) {
     cpSync(
-      path.join(projectRoot, "src", service, "server"),
-      path.join(applicationRoot, "src", service, "server"),
+      path.join(projectRoot, "src", "workspace-services", service, "server"),
+      path.join(applicationRoot, "src", "workspace-services", service, "server"),
       copyOptions,
     );
   }
@@ -842,10 +842,10 @@ async function main() {
   installNodeDependencies(applicationRoot);
 
   run("bun", ["run", "build"], {
-    cwd: path.join(projectRoot, "src", "web"),
+    cwd: path.join(projectRoot, "src", "clients", "web"),
   });
   cpSync(
-    path.join(projectRoot, "src", "web", "dist"),
+    path.join(projectRoot, "src", "clients", "web", "dist"),
     path.join(runtimePackageRoot, "web"),
     { recursive: true },
   );

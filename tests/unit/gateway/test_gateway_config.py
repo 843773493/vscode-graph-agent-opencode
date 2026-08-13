@@ -59,6 +59,7 @@ def test_load_gateway_config_accepts_remote_gateway(tmp_path: Path) -> None:
         "browser-control",
         "gateway-context",
         "web-search-fetch",
+        "debugging",
     )
 
 

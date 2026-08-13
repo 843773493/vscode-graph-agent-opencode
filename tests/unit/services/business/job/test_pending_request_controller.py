@@ -209,6 +209,38 @@ async def test_plain_cancel_keeps_pending_requests_stopped(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", [JobStatus.failed, JobStatus.timed_out])
+async def test_failed_or_timed_out_job_dispatches_pending_requests(
+    monkeypatch,
+    terminal_status,
+):
+    service = _service()
+    started_jobs: list[str] = []
+    _prevent_background_execution(service, monkeypatch, started_jobs)
+    session_id = f"session_{terminal_status.value}_dispatch"
+    active = await service.start_job(
+        session_id,
+        "active",
+        message_id="msg_active",
+        message_created_at="2026-07-17T00:00:00+00:00",
+    )
+    pending = await service.start_job(
+        session_id,
+        "pending",
+        message_id="msg_pending",
+        message_created_at="2026-07-17T00:00:01+00:00",
+    )
+
+    active_job = service._jobs[active.job_id]
+    active_job.status = terminal_status
+    await service._schedule_next_job_if_needed(active_job)
+
+    assert service._session_current_job[session_id] == pending.job_id
+    assert service._jobs[pending.job_id].pending_kind is None
+    assert started_jobs == [active.job_id, pending.job_id]
+
+
+@pytest.mark.asyncio
 async def test_send_immediately_reserves_idle_session_before_concurrent_send(
     monkeypatch,
 ):

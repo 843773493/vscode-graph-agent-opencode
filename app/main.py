@@ -15,6 +15,7 @@ from app.api.context import router as context_router
 from app.api.jobs import router as jobs_router
 from app.api.mcp import router as mcp_router
 from app.api.messages import router as messages_router
+from app.api.node_debug import router as node_debug_router
 from app.api.runtime import router as runtime_router
 from app.api.session_navigation import router as session_navigation_router
 from app.api.session_turns import router as session_turns_router
@@ -121,6 +122,7 @@ async def lifespan(_: FastAPI):
         try:
             yield
         finally:
+            await container.node_debug_service.close()
             await container.terminal_steering_service.shutdown()
             await container.session_generation_service.shutdown()
             await container.job_event_bus.unregister_durable_listener(
@@ -172,6 +174,7 @@ app.include_router(messages_router, prefix="/api/v1")
 app.include_router(context_router, prefix="/api/v1")
 app.include_router(mcp_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
+app.include_router(node_debug_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1")
 app.include_router(tools_router, prefix="/api/v1")
 app.include_router(artifacts_router, prefix="/api/v1")

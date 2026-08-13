@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>主窗口右侧侧边栏 · 响应式会话调试预览</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #090c11;
+      --bg: #10151c;
+      --chrome: #141a22;
+      --panel: #171e27;
+      --panel-2: #1d2632;
+      --code: #0b1016;
+      --border: #303b4a;
+      --border-soft: #242e3a;
+      --text: #e7ebf1;
+      --muted: #99a6b6;
+      --faint: #667487;
+      --blue: #78a7ff;
+      --blue-strong: #4c7fdb;
+      --blue-soft: rgba(104, 151, 235, .14);
+      --orange: #f0a45f;
+      --orange-soft: rgba(240, 164, 95, .11);
+      --green: #68cb8e;
+      --red: #ef6d78;
+      --yellow: #e7c667;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-family: var(--font);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; min-height: 100%; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      background:
+        radial-gradient(circle at 18% 10%, rgba(71, 107, 171, .17), transparent 30rem),
+        var(--page);
+      color: var(--text);
+    }
+    button { color: inherit; font: inherit; cursor: pointer; }
+    button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+    .icon {
+      width: 16px;
+      height: 16px;
+      display: block;
+      flex: none;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .icon.sm { width: 14px; height: 14px; }
+    .icon.xs { width: 12px; height: 12px; }
+
+    .preview-toolbar {
+      min-height: 46px;
+      padding: 7px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      border-bottom: 1px solid #222b37;
+      background: rgba(16, 21, 28, .92);
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .preview-toolbar strong { color: #cbd4df; font-weight: 620; }
+    .preview-switch { padding: 2px; display: flex; gap: 2px; border: 1px solid #364253; border-radius: 7px; background: #151c25; }
+    .preview-size {
+      height: 27px;
+      padding: 0 9px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: #8d9bad;
+      font-size: 9px;
+    }
+    .preview-size:hover { color: #dbe2eb; }
+    .preview-size.active { background: #293548; color: #e6edf7; }
+    .preview-hint { color: #667487; }
+
+    .preview-stage { min-height: 0; display: grid; place-items: center; padding: 14px; overflow: auto; }
+    .preview-frame {
+      width: 380px;
+      height: min(820px, calc(100vh - 74px));
+      min-height: 620px;
+      transition: width .22s ease;
+    }
+    .preview-frame.wide { width: min(720px, calc(100vw - 28px)); }
+
+    .sidebar {
+      container: debug-sidebar / inline-size;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #3a4657;
+      background: var(--bg);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .42);
+    }
+
+    .titlebar {
+      min-height: 46px;
+      padding: 0 9px 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      background: var(--chrome);
+    }
+    .bug-mark {
+      width: 27px;
+      height: 27px;
+      display: grid;
+      place-items: center;
+      flex: none;
+      border: 1px solid rgba(120, 167, 255, .35);
+      border-radius: 7px;
+      background: var(--blue-soft);
+      color: #a9c4fa;
+    }
+    .title-copy { min-width: 0; flex: 1; }
+    .title-copy strong, .title-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .title-copy strong { font-size: 12px; font-weight: 650; }
+    .title-copy small { margin-top: 2px; color: var(--faint); font-size: 8px; }
+    .title-actions { display: flex; gap: 2px; }
+    .icon-button {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: #8f9cad;
+    }
+    .icon-button:hover { border-color: #3a4656; background: #202936; color: #edf1f5; }
+
+    .status-strip {
+      min-height: 55px;
+      padding: 8px 9px 8px 11px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border-soft);
+      background: linear-gradient(90deg, var(--orange-soft), transparent 86%);
+    }
+    .status-main { min-width: 0; }
+    .status-line { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+    .pulse { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 4px rgba(240, 164, 95, .1); }
+    .status-detail { margin: 4px 0 0 14px; overflow: hidden; color: var(--muted); font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+    .ownership {
+      height: 28px;
+      padding: 0 8px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid #45536a;
+      border-radius: 6px;
+      background: #1e2733;
+      color: #c5d1e1;
+      font-size: 9px;
+    }
+    .ownership:hover { border-color: var(--blue); }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border-bottom: 1px solid var(--border);
+      background: #121820;
+    }
+    .tab {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: #8996a7;
+      font-size: 10px;
+    }
+    .tab:hover { background: rgba(255,255,255,.02); color: #dce3eb; }
+    .tab.active { border-bottom-color: var(--blue); color: #e8edf3; }
+
+    .content { min-height: 0; flex: 1; overflow: hidden; }
+    .tab-panel { display: none; width: 100%; height: 100%; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: #445063 transparent; }
+    .tab-panel.active { display: flex; flex-direction: column; }
+    .live-panel { padding: 9px; gap: 8px; }
+    .live-grid { min-height: 0; display: flex; flex: 1; }
+
+    .source-card {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .file-head {
+      min-height: 42px;
+      padding: 6px 7px 6px 9px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .file-symbol { width: 24px; height: 24px; display: grid; place-items: center; flex: none; border-radius: 5px; background: rgba(231, 198, 103, .13); color: var(--yellow); }
+    .file-copy { min-width: 0; flex: 1; }
+    .file-name, .file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-name { color: #dce3ec; font: 10px var(--mono); }
+    .file-path { margin-top: 2px; color: var(--faint); font-size: 8px; }
+    .head-actions { display: flex; gap: 1px; }
+    .head-actions .icon-button { width: 26px; height: 26px; }
+
+    .follow-label { min-height: 25px; padding: 0 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #202936; background: #101721; color: #8794a6; font-size: 8px; }
+    .follow-copy { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .follow-copy .icon { color: var(--green); }
+    .follow-copy strong { color: #b7c9ea; font-weight: 560; }
+    .location { flex: none; color: #a6b5ca; font: 8px var(--mono); }
+
+    .code-scroll { min-height: 270px; flex: 1; overflow: auto; padding: 11px 0 18px; background: var(--code); scrollbar-width: thin; scrollbar-color: #354151 transparent; }
+    .code-line { min-width: max-content; height: 22px; display: grid; grid-template-columns: 18px 31px minmax(310px, 1fr); align-items: center; border-left: 2px solid transparent; color: #cad2dc; font: 10px/22px var(--mono); }
+    .code-line.current { border-left-color: var(--orange); background: rgba(240, 164, 95, .13); color: #f1f3f6; }
+    .gutter { position: relative; height: 100%; }
+    .gutter.breakpoint::after { content: ""; position: absolute; top: 7px; left: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 2px rgba(239, 109, 120, .12); }
+    .code-line.current .gutter::before { content: ""; position: absolute; z-index: 2; top: 5px; left: 2px; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 8px solid var(--orange); }
+    .line-no { padding-right: 8px; color: #566477; text-align: right; user-select: none; }
+    .code { padding-right: 18px; white-space: pre; }
+
+    .compact-stop { padding: 9px 10px; border-top: 1px solid var(--border-soft); background: #151b24; }
+    .stop-reason { display: flex; align-items: center; gap: 6px; font-size: 10px; }
+    .stop-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--red); }
+    .agent-note { margin: 6px 0 0 13px; color: #adb8c6; font-size: 9px; line-height: 1.5; }
+
+    .context-column { display: none; min-width: 0; min-height: 0; overflow: auto; gap: 8px; scrollbar-width: thin; }
+    .context-card { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .context-card.primary-context { background: linear-gradient(145deg, rgba(240, 164, 95, .08), var(--panel) 65%); }
+    .context-head { min-height: 31px; padding: 0 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border-soft); font-size: 9px; font-weight: 620; }
+    .context-head small { overflow: hidden; color: var(--faint); font-size: 8px; font-weight: 440; text-overflow: ellipsis; white-space: nowrap; }
+    .context-body { padding: 9px; }
+    .context-reason { display: flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 620; }
+    .context-path { margin: 6px 0 0 14px; overflow: hidden; color: #8998ab; font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+    .context-note { margin: 7px 0 0 14px; color: #b6c0cc; font-size: 9px; line-height: 1.5; }
+
+    .rows { padding: 3px 0; }
+    .row { min-height: 25px; padding: 4px 9px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; color: #b6c0cd; font: 9px var(--mono); }
+    .row + .row { border-top: 1px solid rgba(48, 59, 74, .45); }
+    .row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row-value { max-width: 155px; overflow: hidden; color: #95bcf5; text-overflow: ellipsis; white-space: nowrap; }
+    .row.active { background: var(--blue-soft); color: #e7ebf1; }
+    .breakpoint-dot { color: var(--red); }
+
+    .quick-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+    .primary-action, .secondary-action { height: 32px; display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 6px; font-size: 9px; }
+    .primary-action { border: 1px solid #6591e4; background: #416fc4; color: white; }
+    .primary-action:hover { background: #4d7bd0; }
+    .secondary-action { padding: 0 9px; border: 1px solid var(--border); background: var(--panel); color: #aeb9c7; }
+    .secondary-action:hover { border-color: #4c5a6e; color: white; }
+    .primary-action:disabled, .secondary-action:disabled { cursor: default; opacity: .42; }
+    .primary-action:disabled:hover { background: #416fc4; }
+    .secondary-action:disabled:hover { border-color: var(--border); color: #aeb9c7; }
+
+    .info-panel { padding: 9px; gap: 8px; }
+    .section { overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); }
+    .section h2 { height: 33px; margin: 0; padding: 0 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border-soft); font-size: 10px; font-weight: 620; }
+    .section h2 small { color: var(--faint); font-size: 8px; font-weight: 440; }
+    .observation { padding: 11px 10px; color: #aeb9c6; font-size: 9px; line-height: 1.55; }
+    .console-mini { margin: 7px; padding: 8px; min-height: 95px; border: 1px solid #252e3a; border-radius: 5px; background: #0b1016; color: #aab5c2; font: 8px/1.65 var(--mono); }
+    .console-mini .system { color: #718095; }
+    .console-mini .paused { color: #edaa6c; }
+
+    .footer { min-height: 39px; padding: 0 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--border); background: #121820; color: var(--faint); font-size: 8px; }
+    .open-extension { height: 27px; padding: 0 8px; display: flex; align-items: center; gap: 5px; flex: none; border: 1px solid #45546a; border-radius: 6px; background: #1d2632; color: #c5d2e4; font-size: 8px; }
+    .open-extension:hover { border-color: var(--blue); color: white; }
+
+    .sidebar.focus-mode .status-strip,
+    .sidebar.focus-mode .tabs,
+    .sidebar.focus-mode .quick-actions,
+    .sidebar.focus-mode .footer,
+    .sidebar.focus-mode .context-column { display: none; }
+    .sidebar.focus-mode .titlebar { min-height: 40px; }
+    .sidebar.focus-mode .tab-panel { display: none; }
+    .sidebar.focus-mode #live-panel { display: flex; padding: 5px; }
+    .sidebar.focus-mode .source-card { border-radius: 5px; }
+    .sidebar.focus-mode .code-scroll { min-height: 0; }
+    .sidebar.focus-mode .compact-stop { display: none; }
+
+    .toast { position: fixed; left: 50%; bottom: 18px; z-index: 20; max-width: calc(100vw - 24px); padding: 8px 11px; border: 1px solid #53627a; border-radius: 7px; background: #202a37; box-shadow: 0 12px 36px rgba(0,0,0,.4); color: #e8edf4; font-size: 9px; opacity: 0; pointer-events: none; transform: translate(-50%, 8px); transition: .18s ease; white-space: nowrap; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    /* 侧边栏外宽 560px 时，扣除左右 1px 边框后的容器内容宽度为 558px。 */
+    @container debug-sidebar (min-width: 558px) {
+      .titlebar { min-height: 44px; }
+      .title-copy { display: flex; align-items: baseline; gap: 9px; }
+      .title-copy small { margin-top: 0; }
+      .status-strip { min-height: 48px; padding-top: 6px; padding-bottom: 6px; }
+      .tabs { grid-template-columns: repeat(3, minmax(110px, 150px)); justify-content: start; padding-left: 7px; }
+      .live-panel { padding: 10px; }
+      .live-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(245px, .85fr); gap: 9px; }
+      .source-card { height: 100%; }
+      .compact-stop { display: none; }
+      .context-column { display: flex; flex-direction: column; }
+      .context-card.primary-context { flex: none; }
+      .context-card.variables-card { flex: 1; min-height: 0; }
+      .context-card.stack-card { flex: none; }
+      .context-card.variables-card .rows { max-height: 190px; overflow: auto; }
+      .quick-actions { grid-template-columns: minmax(190px, 250px) auto; justify-content: end; }
+      .info-panel.active { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
+      .info-panel .observation-section { grid-column: 1 / -1; }
+      .more-panel.active { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .row-value { max-width: 210px; }
+      .footer { padding-left: 11px; }
+    }
+
+    @media (max-height: 700px) {
+      .preview-frame { height: calc(100vh - 60px); min-height: 560px; }
+      .code-scroll { min-height: 210px; }
+      .status-strip { min-height: 48px; }
+      .status-detail { margin-top: 2px; }
+    }
+
+    @media (max-width: 520px) {
+      .preview-toolbar { justify-content: space-between; }
+      .preview-toolbar > strong, .preview-hint { display: none; }
+      .preview-stage { padding: 0; }
+      .preview-frame, .preview-frame.wide { width: 100vw; height: calc(100vh - 46px); min-height: 560px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- 以下尺寸切换器仅用于静态设计验收，实际产品由主窗口右侧侧边栏宽度自动触发容器查询。 -->
+  <header class="preview-toolbar">
+    <strong>设计预览</strong>
+    <div class="preview-switch" aria-label="预览主窗口右侧侧边栏宽度">
+      <button class="preview-size active" type="button" data-preview-size="narrow"><svg class="icon sm"><use href="#i-panel-right"></use></svg>窄体 380</button>
+      <button class="preview-size" type="button" data-preview-size="wide"><svg class="icon sm"><use href="#i-columns"></use></svg>宽体 720</button>
+    </div>
+    <span class="preview-hint" id="preview-hint">单列观察模式 · 容器宽度 380px</span>
+  </header>
+
+  <!-- 图标路径取自 Lucide Icons（ISC），以内嵌 sprite 方式使用，静态预览无需网络。 -->
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
+    <defs>
+      <symbol id="i-bug" viewBox="0 0 24 24"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3 3 0 0 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6 13H2"/><path d="M18 13h4"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+      <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+      <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M16 3v3a2 2 0 0 0 2 2h3"/><path d="M8 21v-3a2 2 0 0 0-2-2H3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+      <symbol id="i-file-code" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"/><polyline points="14 2 14 8 20 8"/><path d="m10 13-2 2 2 2"/><path d="m14 17 2-2-2-2"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7C3.75 7.6 7.7 5 12 5s8.25 2.6 9.94 6.65a1 1 0 0 1 0 .7C20.25 16.4 16.3 19 12 19s-8.25-2.6-9.94-6.65"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+      <symbol id="i-ellipsis" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+      <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="m6 3 14 9-14 9Z"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><rect width="4" height="16" x="6" y="4"/><rect width="4" height="16" x="14" y="4"/></symbol>
+      <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3-1.9 5.1L5 10l5.1 1.9L12 17l1.9-5.1L19 10l-5.1-1.9Z"/><path d="M5 3v4"/><path d="M3 5h4"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></symbol>
+      <symbol id="i-braces" viewBox="0 0 24 24"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/></symbol>
+      <symbol id="i-panel-right" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></symbol>
+      <symbol id="i-columns" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></symbol>
+    </defs>
+  </svg>
+
+  <main class="preview-stage">
+    <div class="preview-frame" id="preview-frame">
+      <aside class="sidebar" id="sidebar" aria-label="主窗口右侧侧边栏的调试标签页">
+        <header class="titlebar">
+          <span class="bug-mark" aria-hidden="true"><svg class="icon sm"><use href="#i-bug"></use></svg></span>
+          <div class="title-copy"><strong>调试</strong><small>会话：排查 JavaScript fixture</small></div>
+          <div class="title-actions">
+            <button class="icon-button" id="open-extension-top" type="button" title="在扩展窗口打开" aria-label="在扩展窗口打开"><svg class="icon sm"><use href="#i-external"></use></svg></button>
+            <button class="icon-button" id="close-preview" type="button" title="关闭调试标签页" aria-label="关闭调试标签页"><svg class="icon sm"><use href="#i-x"></use></svg></button>
+          </div>
+        </header>
+
+        <section class="status-strip" aria-label="调试状态">
+          <div class="status-main">
+            <div class="status-line"><span class="pulse"></span><strong id="status-title">AI 调试已暂停</strong></div>
+            <p class="status-detail" id="status-detail">命中断点 · model-debug-target.mjs:4</p>
+          </div>
+          <button class="ownership" id="refresh-state" type="button"><svg class="icon xs"><use href="#i-user"></use></svg><span>共享操作</span></button>
+        </section>
+
+        <nav class="tabs" aria-label="调试信息分类">
+          <button class="tab active" type="button" data-tab="live" aria-selected="true"><svg class="icon xs"><use href="#i-eye"></use></svg>现场</button>
+          <button class="tab" type="button" data-tab="state" aria-selected="false"><svg class="icon xs"><use href="#i-braces"></use></svg>上下文</button>
+          <button class="tab" type="button" data-tab="more" aria-selected="false"><svg class="icon xs"><use href="#i-ellipsis"></use></svg>更多</button>
+        </nav>
+
+        <div class="content">
+          <section class="tab-panel live-panel active" id="live-panel" data-panel="live">
+            <div class="live-grid">
+              <article class="source-card">
+                <header class="file-head">
+                  <span class="file-symbol"><svg class="icon sm"><use href="#i-file-code"></use></svg></span>
+                  <div class="file-copy"><div class="file-name" id="file-name">model-debug-target.mjs</div><div class="file-path" id="file-path">debug/model-debug-target.mjs</div></div>
+                  <div class="head-actions">
+                    <button class="icon-button" id="focus-code" type="button" title="放大源码观察区" aria-label="放大源码观察区"><svg class="icon sm"><use href="#i-maximize"></use></svg></button>
+                  </div>
+                </header>
+                <div class="follow-label"><span class="follow-copy"><svg class="icon xs"><use href="#i-eye"></use></svg><strong>自动跟随</strong><span>当前停止位置</span></span><span class="location" id="location">Ln 5</span></div>
+                <div class="code-scroll" id="code-scroll" aria-label="自动跟随的源码预览"></div>
+                <div class="compact-stop">
+                  <div class="stop-reason"><span class="stop-dot"></span><strong id="compact-stop-reason">断点 · transform()</strong></div>
+                  <p class="agent-note" id="compact-agent-note">AI：输入值为 23，准备检查 doubled 赋值。</p>
+                </div>
+              </article>
+
+              <aside class="context-column" aria-label="宽体调试上下文">
+                <article class="context-card primary-context">
+                  <header class="context-head"><span>暂停现场</span><small id="wide-owner">共享状态</small></header>
+                  <div class="context-body"><div class="context-reason"><span class="stop-dot"></span><strong id="wide-stop-reason">断点 · 入口调用</strong></div><p class="context-path" id="wide-stop-path">debug/model-debug-target.mjs:4</p><p class="context-note" id="wide-agent-note">输入值为 23，下一步将进入 Worker 的 transform。</p></div>
+                </article>
+                <article class="context-card variables-card"><header class="context-head"><span>变量</span><small id="wide-variable-scope">transform · Local</small></header><div class="rows" id="wide-variables"></div></article>
+                <article class="context-card stack-card"><header class="context-head"><span>调用栈</span><small>当前线程</small></header><div class="rows" id="wide-call-stack"></div></article>
+              </aside>
+            </div>
+            <div class="quick-actions">
+              <button class="primary-action" id="next-stop" type="button"><svg class="icon xs"><use href="#i-play"></use></svg><span>让 AI 运行到下一停止点</span></button>
+              <button class="secondary-action" id="pause-resume" type="button" title="程序运行时可暂停" disabled><svg class="icon xs"><use href="#i-pause"></use></svg><span>已暂停</span></button>
+            </div>
+          </section>
+
+          <section class="tab-panel info-panel" id="state-panel" data-panel="state">
+            <article class="section"><h2>变量 <small id="variable-scope">transform · Local</small></h2><div class="rows" id="variables"></div></article>
+            <article class="section"><h2>调用栈 <small>当前线程</small></h2><div class="rows" id="call-stack"></div></article>
+            <article class="section observation-section"><h2>AI 观察 <small>只读</small></h2><div class="observation" id="observation">模型正在比较 transform 的输入和返回对象。</div></article>
+          </section>
+
+          <section class="tab-panel info-panel more-panel" id="more-panel" data-panel="more">
+            <article class="section"><h2>模型断点 <small>自动同步</small></h2><div class="rows" id="breakpoints"></div></article>
+            <article class="section"><h2>最近输出 <small>调试控制台</small></h2><div class="console-mini" id="console-mini"></div></article>
+            <article class="section"><h2>会话方案 <small>可快速切换</small></h2><div class="rows"><label class="row"><span class="row-name">活动方案</span><select id="scheme-select"><option>入口与 Worker</option><option>仅 Worker</option></select></label><div class="row"><span class="row-name">方案数量</span><span class="row-value">2 套</span></div><div class="row"><span class="row-name">操作者</span><span class="row-value" id="owner-value">AI / 用户共享</span></div></div><button class="secondary-action" id="new-scheme" type="button">新建方案</button></article>
+          </section>
+        </div>
+
+        <footer class="footer"><span>轻量观察与共享操作；完整调试操作在扩展窗口中进行</span><button class="open-extension" id="open-extension" type="button"><svg class="icon xs"><use href="#i-external"></use></svg>打开扩展窗口</button></footer>
+      </aside>
+    </div>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const stops = [
+      {
+        file: "model-debug-target.mjs", path: "debug/model-debug-target.mjs", line: 4, fn: "<module>", reason: "断点 · 入口调用",
+        note: "输入值为 23，下一步将进入 Worker 的 transform。", observation: "模型正在确认入口参数，并准备单步进入另一个 JavaScript 文件。", start: 1,
+        code: ["import { transform } from \"./model-debug-worker.mjs\";", "", "const input = 23;", "const snapshot = transform(input);", "console.log(JSON.stringify(snapshot));"],
+        breakpoints: [4], variables: [["input", "23"], ["snapshot", "<未初始化>"]], stack: [["<module>", "model-debug-target.mjs:4"]], logs: ["Target program attached.", "Paused on breakpoint: model-debug-target.mjs:4"]
+      },
+      {
+        file: "model-debug-worker.mjs", path: "debug/model-debug-worker.mjs", line: 2, fn: "transform", reason: "断点 · transform()",
+        note: "已跨文件进入 transform；准备检查 doubled 的计算。", observation: "源码预览已自动切到 Worker，模型正在比较 value 与 doubled。", start: 1,
+        code: ["export function transform(value) {", "  const doubled = value * 2;", "  const result = { value, doubled };", "  return result;", "}"],
+        breakpoints: [2, 4], variables: [["value", "23"], ["doubled", "<未初始化>"]], stack: [["transform", "model-debug-worker.mjs:2"], ["<module>", "model-debug-target.mjs:4"]], logs: ["Stepped into model-debug-worker.mjs", "Paused on breakpoint: transform:2"]
+      },
+      {
+        file: "model-debug-worker.mjs", path: "debug/model-debug-worker.mjs", line: 4, fn: "transform", reason: "断点 · 返回结果",
+        note: "doubled 为 46；模型正在核对最终返回对象。", observation: "计算结果已确认，下一步可继续到目标程序正常退出。", start: 1,
+        code: ["export function transform(value) {", "  const doubled = value * 2;", "  const result = { value, doubled };", "  return result;", "}"],
+        breakpoints: [2, 4], variables: [["value", "23"], ["doubled", "46"], ["result", "{ value: 23, doubled: 46 }"]], stack: [["transform", "model-debug-worker.mjs:4"], ["<module>", "model-debug-target.mjs:4"]], logs: ["Stepped over doubled assignment", "Paused on breakpoint: transform:4"]
+      }
+    ];
+
+    let stopIndex = 0;
+    let lastActor = "AI";
+    let isPaused = true;
+    let pendingStopTimer;
+
+    const sidebar = document.querySelector("#sidebar");
+    const previewFrame = document.querySelector("#preview-frame");
+    const toast = document.querySelector("#toast");
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(function () { toast.classList.remove("show"); }, 1700);
+    }
+
+    function renderRows(target, rows, activeFirst) {
+      target.replaceChildren();
+      rows.forEach(function (pair, index) {
+        const row = document.createElement("div");
+        row.className = "row" + (activeFirst && index === 0 ? " active" : "");
+        const name = document.createElement("span");
+        name.className = "row-name";
+        name.textContent = pair[0];
+        const value = document.createElement("span");
+        value.className = "row-value";
+        value.textContent = pair[1];
+        row.append(name, value);
+        target.append(row);
+      });
+    }
+
+    function renderStop() {
+      const stop = stops[stopIndex];
+      document.querySelector("#file-name").textContent = stop.file;
+      document.querySelector("#file-path").textContent = stop.path;
+      document.querySelector("#location").textContent = "Ln " + stop.line;
+      document.querySelector("#compact-stop-reason").textContent = stop.reason;
+      document.querySelector("#compact-agent-note").textContent = "AI：" + stop.note;
+      document.querySelector("#wide-stop-reason").textContent = stop.reason;
+      document.querySelector("#wide-stop-path").textContent = stop.path + ":" + stop.line;
+      document.querySelector("#wide-agent-note").textContent = stop.note;
+      document.querySelector("#observation").textContent = stop.observation;
+      document.querySelector("#variable-scope").textContent = stop.fn + " · Local";
+      document.querySelector("#wide-variable-scope").textContent = stop.fn + " · Local";
+      document.querySelector("#status-detail").textContent = "命中模型设置的断点 · " + stop.file + ":" + stop.line;
+
+      const codeScroll = document.querySelector("#code-scroll");
+      codeScroll.replaceChildren();
+      stop.code.forEach(function (source, index) {
+        const lineNumber = stop.start + index;
+        const row = document.createElement("div");
+        row.className = "code-line" + (lineNumber === stop.line ? " current" : "");
+        row.dataset.line = String(lineNumber);
+        const gutter = document.createElement("span");
+        gutter.className = "gutter" + (stop.breakpoints.includes(lineNumber) ? " breakpoint" : "");
+        const number = document.createElement("span");
+        number.className = "line-no";
+        number.textContent = String(lineNumber);
+        const code = document.createElement("span");
+        code.className = "code";
+        code.textContent = source || " ";
+        row.append(gutter, number, code);
+        codeScroll.append(row);
+      });
+
+      renderRows(document.querySelector("#variables"), stop.variables, false);
+      renderRows(document.querySelector("#wide-variables"), stop.variables, false);
+      renderRows(document.querySelector("#call-stack"), stop.stack, true);
+      renderRows(document.querySelector("#wide-call-stack"), stop.stack.slice(0, 3), true);
+
+      const breakpointRows = stops.map(function (item) { return [item.file + ":" + item.line, item === stop ? "● 当前" : "● 已启用"]; });
+      renderRows(document.querySelector("#breakpoints"), breakpointRows, false);
+      document.querySelectorAll("#breakpoints .row-value").forEach(function (node) { node.classList.add("breakpoint-dot"); });
+
+      const consoleMini = document.querySelector("#console-mini");
+      consoleMini.replaceChildren();
+      stop.logs.forEach(function (message, index) {
+        const line = document.createElement("div");
+        line.className = index === stop.logs.length - 1 ? "paused" : "system";
+        line.textContent = message;
+        consoleMini.append(line);
+      });
+    }
+
+    function updateRunState() {
+      const actor = lastActor;
+      document.querySelector("#status-title").textContent = actor + (isPaused ? " 调试已暂停" : " 正在运行");
+      const action = document.querySelector("#pause-resume");
+      action.disabled = isPaused;
+      action.querySelector("span").textContent = isPaused ? "已暂停" : "暂停";
+      document.querySelector("#next-stop").disabled = !isPaused;
+      document.querySelector("#wide-owner").textContent = "共享状态";
+    }
+
+    function runToNextStop() {
+      if (!isPaused) return;
+      isPaused = false;
+      updateRunState();
+      document.querySelector("#status-detail").textContent = "等待下一个断点、异常或暂停事件";
+      showToast(lastActor + " 已继续执行");
+      window.clearTimeout(pendingStopTimer);
+      pendingStopTimer = window.setTimeout(function () {
+        stopIndex = (stopIndex + 1) % stops.length;
+        isPaused = true;
+        renderStop();
+        updateRunState();
+        showToast("已自动跟随到 " + stops[stopIndex].file + ":" + stops[stopIndex].line);
+      }, 520);
+    }
+
+    function activateTab(name) {
+      document.querySelectorAll(".tab").forEach(function (tab) {
+        const active = tab.dataset.tab === name;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", String(active));
+      });
+      document.querySelectorAll(".tab-panel").forEach(function (panel) { panel.classList.toggle("active", panel.dataset.panel === name); });
+    }
+
+    document.querySelectorAll(".tab").forEach(function (tab) { tab.addEventListener("click", function () { activateTab(tab.dataset.tab); }); });
+    document.querySelector("#next-stop").addEventListener("click", runToNextStop);
+    document.querySelector("#pause-resume").addEventListener("click", function () {
+      if (isPaused) return;
+      window.clearTimeout(pendingStopTimer);
+      isPaused = true;
+      updateRunState();
+      document.querySelector("#status-detail").textContent = "已请求在当前执行点暂停";
+      showToast("已发送暂停请求");
+    });
+
+    document.querySelector("#refresh-state").addEventListener("click", function () {
+      lastActor = lastActor === "AI" ? "人类" : "AI";
+      document.querySelector("#owner-value").textContent = "AI / 用户共享";
+      updateRunState();
+      showToast("已刷新 AI 与用户共享的最新调试状态");
+    });
+    document.querySelector("#scheme-select").addEventListener("change", function () {
+      showToast("已切换会话调试方案：" + this.value);
+    });
+    document.querySelector("#new-scheme").addEventListener("click", function () {
+      showToast("在扩展窗口创建完整调试方案");
+    });
+
+    document.querySelector("#focus-code").addEventListener("click", function () {
+      const enabled = sidebar.classList.toggle("focus-mode");
+      this.querySelector("use").setAttribute("href", enabled ? "#i-minimize" : "#i-maximize");
+      this.title = enabled ? "退出源码放大" : "放大源码观察区";
+      this.setAttribute("aria-label", this.title);
+    });
+
+    document.querySelectorAll("[data-preview-size]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        const wide = button.dataset.previewSize === "wide";
+        previewFrame.classList.toggle("wide", wide);
+        document.querySelectorAll("[data-preview-size]").forEach(function (item) { item.classList.toggle("active", item === button); });
+        document.querySelector("#preview-hint").textContent = wide ? "双列上下文模式 · 容器宽度 720px" : "单列观察模式 · 容器宽度 380px";
+      });
+    });
+
+    function previewExtensionWindow() { showToast("原型：扩展窗口将同步打开当前停止位置"); }
+    document.querySelector("#open-extension").addEventListener("click", previewExtensionWindow);
+    document.querySelector("#open-extension-top").addEventListener("click", previewExtensionWindow);
+    document.querySelector("#close-preview").addEventListener("click", function () { showToast("原型：关闭主窗口右侧侧边栏的调试标签页"); });
+
+    renderStop();
+    updateRunState();
+  </script>
+</body>
+</html>

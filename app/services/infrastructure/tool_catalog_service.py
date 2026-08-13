@@ -4,6 +4,7 @@ from typing import Any, Protocol
 
 from app.agents.policy import (
     AGENT_COLLABORATION_TOOL_GROUP,
+    DEBUGGING_TOOL_GROUP,
     DEFAULT_TOOL_GROUP,
     ParsedCustomToolSpec,
     catalog_group_for_tool,
@@ -61,7 +62,10 @@ class ToolCatalogService:
     def _custom_definition(spec: ParsedCustomToolSpec) -> dict[str, Any]:
         module_name = spec.factory_path.split(":", 1)[0].rsplit(".", 1)[-1]
         known_group = catalog_group_for_tool(spec.name)
-        if known_group == AGENT_COLLABORATION_TOOL_GROUP:
+        if known_group in {
+            AGENT_COLLABORATION_TOOL_GROUP,
+            DEBUGGING_TOOL_GROUP,
+        }:
             group_fields = known_group.as_catalog_fields()
         else:
             group_fields = {

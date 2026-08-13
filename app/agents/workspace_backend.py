@@ -17,6 +17,7 @@ from app.core.session_paths import SessionPathResolver
 
 BOXTEAM_ARTIFACTS_ROOT = "/.boxteam"
 SESSION_ARTIFACT_ROUTE = "/session-artifacts/"
+WORKSPACE_SKILLS_ROUTE = "/.boxteam/skills/"
 BUNDLED_SKILLS_SOURCE = "/.boxteam/bundled-skills/"
 
 
@@ -134,8 +135,15 @@ def build_workspace_backend(
         root_dir=str(workspace_root),
         virtual_mode=True,
     )
+    workspace_skills = FilesystemBackend(
+        root_dir=workspace_root / ".boxteam" / "skills",
+        virtual_mode=True,
+    )
     session_artifacts = SessionArtifactBackend(workspace_root)
-    routes = {SESSION_ARTIFACT_ROUTE: session_artifacts}
+    routes = {
+        SESSION_ARTIFACT_ROUTE: session_artifacts,
+        WORKSPACE_SKILLS_ROUTE: workspace_skills,
+    }
     if bundled_skill_groups:
         resolved_project_root = project_root or get_project_root()
         bundled_skills_root = resolved_project_root / "resources" / "skills"

@@ -409,11 +409,11 @@ class WebUILayoutSettingsDTO(BaseModel):
     chat_visible: bool | None = None
     auxiliary_visible: bool | None = None
     panel_visible: bool | None = None
-    auxiliary_tab: Literal["changes", "files", "automation", "resources"] | None = None
-    auxiliary_tab_order: list[Literal["changes", "files", "automation", "resources"]] | None = Field(
+    auxiliary_tab: Literal["changes", "files", "automation", "resources", "debug"] | None = None
+    auxiliary_tab_order: list[Literal["changes", "files", "automation", "resources", "debug"]] | None = Field(
         default=None,
         min_length=4,
-        max_length=4,
+        max_length=5,
     )
     main_area_ratios: WebUIMainAreaRatiosDTO | None = None
     bottom_panel_by_workspace: dict[str, WebUIWorkspaceBottomPanelSettingsDTO] | None = Field(

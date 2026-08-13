@@ -9,12 +9,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.support.paths import e2e_output_root_for_test
+from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
 from tests.support.workspaces import (
-    install_e2e_workspace_config,
-    prepare_default_e2e_workspace,
+    install_test_workspace_config,
+    prepare_default_test_workspace,
 )
 
 
@@ -35,13 +35,15 @@ def is_debug() -> bool:
 @pytest.fixture(scope="module")
 def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     project_root = Path.cwd().resolve()
-    output_root = e2e_output_root_for_test(
+    output_root = output_root_for_test(
         Path(request.node.fspath),
+        test_layer="e2e",
         project_root=project_root,
     )
-    workspace_root = prepare_default_e2e_workspace(
+    workspace_root = prepare_default_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=project_root / "asset" / "default_test_workspace",
+        shared_skill_root=project_root / "resources" / "skills",
     )
     return str(workspace_root)
 
@@ -56,7 +58,7 @@ def e2e_workspace_config_path(
     e2e_workspace_root_path: str,
     e2e_config_path: str,
 ) -> str:
-    target_path = install_e2e_workspace_config(
+    target_path = install_test_workspace_config(
         workspace_root=Path(e2e_workspace_root_path),
         config_path=Path(e2e_config_path),
         schema_path=Path.cwd().resolve() / "configs" / "workspace_schema.jsonc",

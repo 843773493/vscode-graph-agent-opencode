@@ -10,11 +10,11 @@ from urllib.request import urlopen
 
 from configs.installer import install_user_configuration
 
-E2E_READY_TIMEOUT_SECONDS = 60
+TEST_READY_TIMEOUT_SECONDS = 60
 
 
 @dataclass(frozen=True, slots=True)
-class E2EBackendProcess:
+class BackendProcess:
     process: subprocess.Popen[str]
     stdout_file: IO[str]
     stderr_file: IO[str]
@@ -106,7 +106,7 @@ def resolve_workspace_python_executable(project_root: Path) -> Path:
 
 
 def wait_for_backend_ready(port: int, process: subprocess.Popen[str]) -> None:
-    deadline = time.monotonic() + E2E_READY_TIMEOUT_SECONDS
+    deadline = time.monotonic() + TEST_READY_TIMEOUT_SECONDS
     url = f"http://127.0.0.1:{port}/api/v1/health"
 
     while time.monotonic() < deadline:
@@ -122,11 +122,11 @@ def wait_for_backend_ready(port: int, process: subprocess.Popen[str]) -> None:
         except OSError:
             time.sleep(1)
 
-    raise TimeoutError(f"后端在 {E2E_READY_TIMEOUT_SECONDS} 秒内未就绪，端口: {port}")
+    raise TimeoutError(f"后端在 {TEST_READY_TIMEOUT_SECONDS} 秒内未就绪，端口: {port}")
 
 
 def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
-    deadline = time.monotonic() + E2E_READY_TIMEOUT_SECONDS
+    deadline = time.monotonic() + TEST_READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
@@ -140,7 +140,7 @@ def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
         except OSError:
             time.sleep(1)
 
-    raise TimeoutError(f"测试服务在 {E2E_READY_TIMEOUT_SECONDS} 秒内未就绪: {url}")
+    raise TimeoutError(f"测试服务在 {TEST_READY_TIMEOUT_SECONDS} 秒内未就绪: {url}")
 
 
 def start_backend_process(
@@ -150,7 +150,7 @@ def start_backend_process(
     log_name: str,
     debugpy_port: int | None = None,
     env_overrides: dict[str, str] | None = None,
-) -> E2EBackendProcess:
+) -> BackendProcess:
     kill_process_on_port(port)
     if debugpy_port is not None:
         kill_process_on_port(debugpy_port)
@@ -166,7 +166,7 @@ def start_backend_process(
     workspace_config_path = Path(workspace_root) / ".boxteam" / "workspace.jsonc"
     if not workspace_config_path.is_file():
         raise FileNotFoundError(
-            f"启动 E2E 后端前必须先复制工作区配置: {workspace_config_path}"
+            f"启动测试后端前必须先复制工作区配置: {workspace_config_path}"
         )
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = workspace_root
@@ -202,7 +202,7 @@ def start_backend_process(
 
     log_dir = Path(workspace_root) / ".boxteam" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    # 文件句柄由 E2EBackendProcess 持有，并在 close_backend_process 中统一关闭。
+    # 文件句柄由 BackendProcess 持有，并在 close_backend_process 中统一关闭。
     stdout_file = open(  # noqa: SIM115
         log_dir / f"{log_name}.stdout.log", "a", encoding="utf-8"
     )
@@ -217,7 +217,7 @@ def start_backend_process(
         stdout=stdout_file,
         stderr=stderr_file,
     )
-    handle = E2EBackendProcess(
+    handle = BackendProcess(
         process=process,
         stdout_file=stdout_file,
         stderr_file=stderr_file,
@@ -233,7 +233,7 @@ def start_backend_process(
     return handle
 
 
-def close_backend_process(handle: E2EBackendProcess) -> None:
+def close_backend_process(handle: BackendProcess) -> None:
     try:
         terminate_process(handle.process)
         kill_process_on_port(handle.port)

@@ -414,6 +414,10 @@ class JobService:
         job_id: str,
         control_request: JobControlRequest,
     ) -> JobControlResponseDTO:
+        job = self._jobs.get(job_id)
+        if not job:
+            raise ValueError(f"Job {job_id} not found")
+
         return await self._control_service.control(job_id, control_request)
 
     async def list_pending(self, session_id: str) -> PendingRequestListDTO:
@@ -901,6 +905,8 @@ class JobService:
         should_continue = finished_job.status in {
             JobStatus.completed,
             JobStatus.succeeded,
+            JobStatus.failed,
+            JobStatus.timed_out,
         } or (
             finished_job.status == JobStatus.cancelled
             and finished_job.dispatch_pending_after_cancel

@@ -304,7 +304,7 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
         for index in range(3)
     ]
 
-    with (
+    with (  # noqa: SIM117 - 保持异常断言的作用域清晰。
         patch(
             "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
             return_value=MagicMock(),
@@ -362,7 +362,7 @@ async def test_delegated_progress_only_cannot_replace_final_result(
         for index in range(3)
     ]
 
-    with (
+    with (  # noqa: SIM117 - 保持异常断言的作用域清晰。
         patch(
             "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
             return_value=MagicMock(),
@@ -1043,6 +1043,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
 
         mock_agent = MagicMock()
         mock_agent.astream_events = mock_events
+        mock_agent.get_graph = None
         mock_build.return_value = mock_agent
 
         result = await service.run_step(
@@ -1115,7 +1116,7 @@ async def test_execution_delegates_model_fallback_to_single_agent(mock_dependenc
     deps = mock_dependencies
     service = _make_service(deps)
 
-    with patch(
+    with patch(  # noqa: SIM117 - 两个运行时入口必须共享同一个 mock。
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
     ) as mock_build:
         with patch("app.runtime.agent_runtime.build_session_agent_runtime", mock_build):
@@ -1184,7 +1185,7 @@ async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
     deps = mock_dependencies
     service = _make_service(deps)
 
-    with patch(
+    with patch(  # noqa: SIM117 - 两个运行时入口必须共享同一个 mock。
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
     ) as mock_build:
         with patch("app.runtime.agent_runtime.build_session_agent_runtime", mock_build):
