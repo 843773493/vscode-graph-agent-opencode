@@ -160,7 +160,6 @@ class EventType:
     # Session 打断
     SESSION_INTERRUPTED = "session_interrupted"
 
-
 @dataclass(frozen=True)
 class EventFactorySpec:
     event_type: str

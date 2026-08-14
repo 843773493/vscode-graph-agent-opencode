@@ -34,6 +34,7 @@ from app.services.infrastructure.file_tree_settings_service import (
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpRuntimeManager
+from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
@@ -80,6 +81,7 @@ class _AppContainerProtocol:
     workspace_file_watch_service: WorkspaceFileWatchService
     file_tree_settings_service: FileTreeSettingsService
     agent_execution_service: AgentExecutionService
+    node_debug_service: NodeDebugService
     session_orchestrator: SessionOrchestrator
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
@@ -154,6 +156,13 @@ def get_job_service(request: Request) -> JobServiceProtocol:
     service = getattr(_get_container(request), "job_service", None)
     if not isinstance(service, JobServiceProtocol):
         raise RuntimeError("JobService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_node_debug_service(request: Request) -> NodeDebugService:
+    service = getattr(_get_container(request), "node_debug_service", None)
+    if not isinstance(service, NodeDebugService):
+        raise RuntimeError("NodeDebugService 尚未在应用启动阶段初始化")
     return service
 
 

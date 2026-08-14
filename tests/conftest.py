@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 import commentjson
 import pytest
 from dotenv import load_dotenv
+
+from tests.harness.python.run_context import TestRunContext
 
 # 测试进程显式加载仓库环境；产品运行时只读取 BOXTEAM_HOME/config/.env。
 load_dotenv(Path.cwd() / ".env", override=False)
@@ -69,11 +72,14 @@ def session_bundle_factory() -> Callable[[Path, str], Path]:
 @pytest.fixture(autouse=True)
 def setup_test_config(
     test_config_path: str,
-    tmp_path_factory: pytest.TempPathFactory,
+    request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """每个测试通过独立 BOXTEAM_HOME 使用标准 Workspace 配置路径。"""
-    boxteam_home = tmp_path_factory.mktemp("boxteam-home")
+    run_context = TestRunContext.from_test_file(Path(request.node.path))
+    boxteam_home = run_context.boxteam_home_for_node(request.node.nodeid)
+    if boxteam_home.exists():
+        shutil.rmtree(boxteam_home)
     config_root = boxteam_home / "config"
     config_root.mkdir(parents=True)
     if os.path.exists(test_config_path):
@@ -94,3 +100,14 @@ def setup_test_config(
             (Path(CONFIGS_DIR) / "gateway_schema.jsonc").read_bytes()
         )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+
+
+@pytest.fixture
+def tmp_path(request: pytest.FixtureRequest) -> Path:
+    """把 pytest 临时文件隔离到当前正式测试文件的输出目录。"""
+    run_context = TestRunContext.from_test_file(Path(request.node.path))
+    temp_root = run_context.runtime_root_for_node(request.node.nodeid) / "tmp"
+    if temp_root.exists():
+        shutil.rmtree(temp_root)
+    temp_root.mkdir(parents=True)
+    return temp_root

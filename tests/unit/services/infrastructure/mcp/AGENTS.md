@@ -16,4 +16,4 @@
 
 - 依赖统一通过 pytest fixture 注入。
 - 文件系统使用 `tmp_path` 隔离。
-- 真实 stdio Server 连接只放在 `tests/e2e/tools/mcp/`。
+- 真实 stdio Server 连接只放在 `tests/e2e/system/workspace_services/mcp/`。

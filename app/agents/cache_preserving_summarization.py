@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar, NotRequired, cast
 
 from deepagents.backends.protocol import BACKEND_TYPES
+
 # TODO: DeepAgents 暴露公共的压缩扩展基类后，改用公共 API，避免依赖私有实现类。
 from deepagents.middleware.summarization import (
     CompactConversationSchema,
@@ -29,8 +30,8 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command
 
+from app.agents.workspace_tool_paths import backend_virtual_to_workspace_relative
 from app.prompting import internal_message_factory
-
 
 CACHE_PRESERVING_STRATEGY = "cache_preserving"
 CACHE_REPLACEMENT_STRATEGY = "cache_replacement"
@@ -844,11 +845,12 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         if file_path is None:
             raise RuntimeError("缓存优先压缩无法保存被摘要的历史消息")
         summary = self._create_cache_preserving_summary(request, handler, partition)
-        summary_message = self._build_new_messages_with_path(summary, file_path)[0]
+        model_file_path = backend_virtual_to_workspace_relative(file_path)
+        summary_message = self._build_new_messages_with_path(summary, model_file_path)[0]
         event = build_cache_preserving_event(
             partition,
             summary_message=summary_message,
-            file_path=file_path,
+            file_path=model_file_path,
             strategy=(
                 CACHE_PRESERVING_STRATEGY
                 if partition.prefix_messages
@@ -903,11 +905,12 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             handler,
             partition,
         )
-        summary_message = self._build_new_messages_with_path(summary, file_path)[0]
+        model_file_path = backend_virtual_to_workspace_relative(file_path)
+        summary_message = self._build_new_messages_with_path(summary, model_file_path)[0]
         event = build_cache_preserving_event(
             partition,
             summary_message=summary_message,
-            file_path=file_path,
+            file_path=model_file_path,
             strategy=(
                 CACHE_PRESERVING_STRATEGY
                 if partition.prefix_messages

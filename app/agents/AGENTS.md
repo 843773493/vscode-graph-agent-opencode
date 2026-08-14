@@ -18,5 +18,6 @@
 
 - 与 LangGraph/DeepAgents 私有字段或私有方法交互时，应集中在适配器内，避免扩散到 business service。
 - 运行时配置应通过 `ConfigService` 或显式参数传入。
-- 产品级 Skill 源码统一位于 `resources/skills/`；Agent 通过 `/.boxteam/bundled-skills/` 的只读路由加载 Gateway 选中的组，工作区专用 Skill 仍从 `/.boxteam/skills` 加载。
+- 产品级 Skill 源码统一位于 `resources/skills/`；DeepAgents 后端内部通过 `/.boxteam/bundled-skills/` 和 `/.boxteam/skills` 只读路由加载 Skill，面向 Agent 的提示必须分别展示为 `.boxteam/bundled-skills/` 和 `.boxteam/skills`。
+- Agent 文件工具和面向模型的源码调试路径统一使用标准工作区相对路径，`.` 表示当前 workspace 根目录；DeepAgents 的 `/` 虚拟路径只允许存在于内部适配层。不得在同一个模型路径字段中重载宿主机绝对路径语义；确需宿主机路径的能力必须使用独立字段或独立工具。
 - 失败时抛出明确错误，不要返回虚假的默认值。

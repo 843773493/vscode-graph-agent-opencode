@@ -21,6 +21,7 @@ from configs.layout_migrations import (
 )
 
 GATEWAY_DEVELOPMENT_ASSETS_ENV = "BOXTEAM_INSTALL_DEVELOPMENT_ASSETS"
+DEV_LOCAL_ONLY_ENV = "BOXTEAM_DEV_LOCAL_ONLY"
 
 
 def _environment_flag(name: str) -> bool:
@@ -144,9 +145,11 @@ def main() -> None:
         )
 
     if args.action == "install-source-development":
+        local_only = _environment_flag(DEV_LOCAL_ONLY_ENV)
         installation = install_source_development_configuration(
             project_root=project_root,
             config_root=config_root,
+            local_only=local_only,
         )
         gateway_development_assets = _environment_flag(
             GATEWAY_DEVELOPMENT_ASSETS_ENV
@@ -164,6 +167,7 @@ def main() -> None:
                     "config_paths": [str(path) for path in installation.config_paths],
                     "schema_paths": [str(path) for path in installation.schema_paths],
                     "gateway_development_assets": gateway_development_assets,
+                    "local_only": local_only,
                     "migrated_user_layout": migrated_user_layout,
                 },
                 ensure_ascii=False,

@@ -38,7 +38,8 @@
       "default_skill_groups": [
         "browser-control", // 浏览器控制扩展工具组。
         "gateway-context", // Gateway 工作区上下文扩展工具组。
-        "web-search-fetch" // Web 搜索与网页抓取扩展工具组。
+        "web-search-fetch", // Web 搜索与网页抓取扩展工具组。
+        "debugging" // Agent 源码调试工具组。
       ]
     }
   }

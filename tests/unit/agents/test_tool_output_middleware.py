@@ -72,7 +72,7 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
         f"boxteam-session://{session_id}/tool-results/{output_name}"
     )
     assert reference["read_path"] == (
-        f"/session-artifacts/{session_id}/tool-results/{output_name}"
+        f"session-artifacts/{session_id}/tool-results/{output_name}"
     )
     assert reference["tool_name"] == "large_tool"
     assert reference["tool_call_id"] == "call-large"

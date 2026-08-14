@@ -35,6 +35,15 @@ WORKSPACE_SKILLS_SOURCE = "/.boxteam/skills"
 BUNDLED_SKILL_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 
 
+def _agent_visible_path(path: str) -> str:
+    """把后端虚拟路径转换为 Agent 使用的工作区相对路径。"""
+    if path == "/.boxteam":
+        return ".boxteam"
+    if path.startswith("/.boxteam/"):
+        return path[1:]
+    return path
+
+
 class WorkspaceAgentsSnapshot(TypedDict):
     applied_content: str
     observed_content: NotRequired[str]
@@ -76,7 +85,7 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
             PromptSection(
                 "workspace_agents_md",
                 content,
-                attributes={"path": "/AGENTS.md"},
+                attributes={"path": "AGENTS.md"},
             )
         )
         return (
@@ -184,12 +193,12 @@ class WorkspaceAgentsMiddleware(AgentMiddleware[Any, Any, Any]):
                 PromptSection(
                     "workspace_agents_md_change",
                     diff,
-                    attributes={"path": "/AGENTS.md"},
+                    attributes={"path": "AGENTS.md"},
                 ),
             ),
             metadata={
                 "source": "workspace_agents_change",
-                "path": "/AGENTS.md",
+                "path": "AGENTS.md",
             },
         )
 
@@ -286,16 +295,29 @@ class WorkspaceSkillsMiddleware(SkillsMiddleware):
             system_prompt=system_prompt,
         )
 
+    def _format_skills_locations(self) -> str:
+        """使用 Agent 可见的工作区相对路径展示 Skill 来源。"""
+        locations: list[str] = []
+        last = len(self.sources) - 1
+        for index, (source_path, label) in enumerate(
+            zip(self.sources, self.source_labels, strict=True)
+        ):
+            suffix = " (higher priority)" if index == last else ""
+            locations.append(
+                f"**{label} Skills**: `{_agent_visible_path(str(source_path))}`{suffix}"
+            )
+        return "\n".join(locations)
+
     def _format_skills_list(self, skills: list[SkillMetadata]) -> str:
         if not skills:
-            paths = [f"{source_path}" for source_path in self.sources]
+            paths = [_agent_visible_path(str(source_path)) for source_path in self.sources]
             return f"(No skills available yet. You can create skills in {' or '.join(paths)})"
 
         lines: list[str] = []
         for skill in skills:
             lines.append(f"- **{skill['name']}**: {skill['description']}")
             lines.append(
-                f"  -> 用户请求匹配本 skill 描述时，先读取 `{skill['path']}`；"
+                f"  -> 用户请求匹配本 skill 描述时，先读取 `{_agent_visible_path(skill['path'])}`；"
                 "扩展工具调用入口、目标名称和参数以该文件为准"
             )
         return "\n".join(lines)

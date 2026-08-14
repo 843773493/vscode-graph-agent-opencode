@@ -32,15 +32,16 @@
 ### 执行和质量
 
 1. 每次编写代码文件时，都运行静态分析。
-2. 每次修改浏览器 UI（`src/web/`）后，都要执行 `bun --cwd src/web run build`；每次修改 Webview UI（`src/webview-ui/`）后，都要执行 `bun --cwd src/webview-ui run build`，并在结束前确认构建成功。
+2. 每次修改浏览器 UI（`src/clients/web/`）后，都要执行 `bun run --cwd src/clients/web build`；现存 `src/webview-ui/` 属于暂不维护的旧 VS Code 客户端，只有用户明确要求修改它时才执行其构建。
 
 ### 代码组织
 
 1. 如果 `package.json` 中的命令过长，将其移到 `scripts/` 下的 `.mjs` 脚本中。
 2. 仓库中的 JavaScript 代码必须始终使用 ESM（ES 模块）通过 `import`/`export`，避免使用 CommonJS。
-3. `src/web` 与 `src/webview-ui` 负责页面、交互、状态、API 调用以及少量展示逻辑。
+3. `src/clients/web` 是当前唯一开发和维护的客户端，负责页面、交互、状态、API 调用以及少量展示逻辑；可复用的纯客户端核心和 React DOM 组件分别预留在 `src/clients/shared/core`、`src/clients/shared/web-ui`。
 4. `app/` 中除 `app/gateway/` 外的工作区后端模块负责 Agent 业务规则、会话状态和核心计算；`app/gateway/` 只负责工作区路由和代理。
-5. **UI 优先开发 `src/web`（浏览器前端 8011，端口以 `scripts/dev.mjs` 的 `frontendPort` 为准），稳定后同步到 `src/webview-ui`（VS Code Webview 5173）。用户说"UI"默认指 `src/web`。**
+5. **UI 只开发 `src/clients/web`（浏览器前端 8011，端口以 `scripts/dev.mjs` 的 `frontendPort` 为准）。Electron、React Native、VS Code 新客户端当前都只是预留 TODO；不要同步或修改它们的代码。用户说“UI”默认指纯 Web。**
+6. 编写纯 Web 代码时应保持共享协议和纯业务模型不绑定浏览器全局对象，但不要为尚未实现的客户端预写 adapter、bridge 或兼容层。
 
 ### 提交和目录规范
 
@@ -105,7 +106,7 @@
 
 ### 架构原则
 
-1. 浏览器前端默认请求同源 `/api`：Vite 将请求转发到 Workspace Gateway，Gateway 再路由到当前激活工作区的 FastAPI 后端；不要假设 `src/web` 直接访问 8010。
+1. 浏览器前端默认请求同源 `/api`：Vite 将请求转发到 Workspace Gateway，Gateway 再路由到当前激活工作区的 FastAPI 后端；不要假设 `src/clients/web` 直接访问 8010。
 2. Workspace Gateway 只负责工作区注册、目标生命周期和透明代理，不实现 Agent 业务逻辑，也不直接读写工作区 `.boxteam/` 业务数据。
 3. 工作区后端中，`JobService` 调度 `AgentExecutionService`，`AgentExecutionService` 驱动 `DeepAgent` 执行内置工具。
 4. Gateway 自有接口使用 `/api/gateway/*`，工作区业务接口使用 `/api/v1/*`；浏览器访问后者时仍先经过 Gateway。
@@ -127,7 +128,7 @@
 
 ### 测试工作区隔离
 
-1. 仓库正式测试脚本的运行工作区必须写入 `out/tests/<与 tests/ 下测试文件相同的路径（去掉测试文件后缀）>/workspace/`。例如 `tests/e2e/tools/mcp/test_mini_mcp.py` 对应 `out/tests/e2e/tools/mcp/test_mini_mcp/workspace/`。
+1. 仓库正式测试脚本的运行工作区必须写入 `out/tests/<与 tests/ 下测试文件相同的路径（去掉测试文件后缀）>/workspace/`。例如 `tests/integration/workspace_services/mcp/test_mini_mcp.py` 对应 `out/tests/integration/workspace_services/mcp/test_mini_mcp/workspace/`。
 2. Codex/Agent 为当前开发任务执行的临时 Web UI、浏览器、E2E 探索或 subagent 真实操作不属于仓库正式测试脚本；这类临时操作只能使用当前用户明确允许的默认工作区，或使用 `out/tests/temp/<task_name>/workspace/` 下的临时隔离工作区。
 3. 测试需要独立工作区时，从 `asset/` 选择合适的测试工作区复制到上述对应的 `workspace/`，再使用复制后的目录；不要直接修改或注册 `asset/` 中的模板目录。
 4. 禁止把本项目根目录注册为测试工作区，也禁止为了测试在项目根目录产生 `.boxteam/`、会话、运行时状态或其他测试数据。

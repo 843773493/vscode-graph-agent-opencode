@@ -187,9 +187,9 @@ case "$action" in
         bun install --force --frozen-lockfile
       fi
       node -e 'require("node-pty")' >/dev/null
-      bun install --cwd src/web --frozen-lockfile
+      bun install --cwd src/clients/web --frozen-lockfile
       bun install --cwd src/webview-ui --frozen-lockfile
-      lock_hash=$(sha256sum uv.lock bun.lock src/web/bun.lock src/webview-ui/bun.lock | sha256sum | awk '{print $1}')
+      lock_hash=$(sha256sum uv.lock bun.lock src/clients/web/bun.lock src/webview-ui/bun.lock | sha256sum | awk '{print $1}')
       printf 'platform=linux\npython=%s\nlocks=%s\n' "$system_version" "$lock_hash" > .venv/.boxteam-target-metadata
     )
     printf '%s\n' "$repository/.venv/bin/python"

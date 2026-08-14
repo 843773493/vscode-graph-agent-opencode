@@ -3,11 +3,11 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-
 IdentifierPrefix = Literal[
     "attempt",
     "bgm",
     "bgt",
+    "dbgcfg",
     "evt",
     "job",
     "msg",

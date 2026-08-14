@@ -398,7 +398,14 @@ def start_local_node_service_process(
 ) -> ManagedProcess:
     if service not in {"terminal", "browser"}:
         raise ValueError(f"不支持的本地辅助服务: {service}")
-    backend_path = project_root / "src" / service / "server" / "backend.js"
+    backend_path = (
+        project_root
+        / "src"
+        / "workspace-services"
+        / service
+        / "server"
+        / "backend.js"
+    )
     if not backend_path.is_file():
         raise FileNotFoundError(f"辅助服务入口不存在: {backend_path}")
     node_executable = os.environ.get("BOXTEAM_NODE_BIN")

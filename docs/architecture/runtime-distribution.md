@@ -113,7 +113,9 @@ npm 发行版的 Node 来源为 `launcher`，即使用执行 `boxteam` 的 `proc
 
 ## 正式 Web UI
 
-development 模式由 Vite 8011 提供 HMR，并把 `/api` 转发到 Gateway 8014。installed 模式不启动 Vite；Gateway 在 8114 端口通过同一 origin 提供构建后的 Web UI，避免与开发版 Gateway 冲突。
+当前唯一开发和维护的客户端源码位于 `src/clients/web/`。development 模式由 Vite 8011 提供 HMR，并把 `/api` 转发到 Gateway 8014。installed 模式不启动 Vite；Gateway 在 8114 端口通过同一 origin 提供构建后的 Web UI，避免与开发版 Gateway 冲突。
+
+Electron、React Native 和新的 VS Code 客户端当前只预留 TODO，不参与运行时打包；现存旧 VS Code 扩展目录也不随纯 Web 构建同步。
 
 静态资源和 SPA fallback 必须位于 API、SSE、WebSocket 与辅助代理路由之后。未知 `/api/*` 必须返回 API 错误，不能返回 `index.html`。
 

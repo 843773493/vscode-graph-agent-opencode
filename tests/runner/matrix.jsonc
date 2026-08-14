@@ -1,0 +1,70 @@
+{
+  // 当前只实现纯 Web 客户端。其他客户端保留 disabled TODO，不能被报告为通过。
+  "schemaVersion": 1,
+  "suites": [
+    {
+      "id": "unit-python",
+      "layer": "unit",
+      "client": null,
+      "enabled": true,
+      "command": ["uv", "run", "pytest", "tests/unit"]
+    },
+    {
+      "id": "contracts-python",
+      "layer": "contracts",
+      "client": null,
+      "enabled": true,
+      "command": ["uv", "run", "pytest", "tests/contracts"]
+    },
+    {
+      "id": "integration-python",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "command": ["uv", "run", "pytest", "tests/integration"]
+    },
+    {
+      "id": "integration-web-anchored-overlay",
+      "layer": "integration",
+      "client": "web",
+      "enabled": true,
+      "command": ["bun", "tests/integration/clients/web/anchored_overlay_positioning.mjs"]
+    },
+    {
+      "id": "e2e-web",
+      "layer": "e2e",
+      "client": "web",
+      "enabled": true,
+      "command": ["uv", "run", "pytest", "tests/e2e/clients/web"]
+    },
+    {
+      "id": "e2e-live-source-debug",
+      "layer": "e2e",
+      "client": null,
+      "enabled": true,
+      "requiredEnvironment": ["BOXTEAM_RUN_LIVE_DEBUG_E2E"],
+      "command": ["uv", "run", "pytest", "tests/e2e/system/agent/test_debug_prompt_live.py"]
+    },
+    {
+      "id": "e2e-electron",
+      "layer": "e2e",
+      "client": "electron",
+      "enabled": false,
+      "todo": "等待 Electron 客户端独立 OpenSpec"
+    },
+    {
+      "id": "e2e-vscode",
+      "layer": "e2e",
+      "client": "vscode",
+      "enabled": false,
+      "todo": "等待 VS Code 客户端迁移 OpenSpec"
+    },
+    {
+      "id": "e2e-mobile-native",
+      "layer": "e2e",
+      "client": "mobile",
+      "enabled": false,
+      "todo": "等待 React Native 原生客户端 OpenSpec"
+    }
+  ]
+}

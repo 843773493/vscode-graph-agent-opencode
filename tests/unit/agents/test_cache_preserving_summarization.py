@@ -3,7 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from langchain.agents.middleware import ModelRequest, ModelResponse, SummarizationMiddleware
+from langchain.agents.middleware import (
+    ModelRequest,
+    ModelResponse,
+    SummarizationMiddleware,
+)
 from langchain.agents.middleware.types import ExtendedModelResponse
 from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import (
@@ -832,8 +836,8 @@ def test_prepare_compaction_never_rewrites_stable_prefix_tool_arguments() -> Non
 def test_token_non_reduction_fails_before_event_is_committed() -> None:
     class _TokenCounterStub:
         @staticmethod
-        def _count_request_tokens(_: ModelRequest, messages: list) -> int:
-            return 100 if messages[0].content == "before" else 100
+        def _count_request_tokens(_: ModelRequest, __: list) -> int:
+            return 100
 
     with pytest.raises(RuntimeError, match="没有缩短模型上下文"):
         CachePreservingSummarizationMiddleware._ensure_compaction_reduces_tokens(
@@ -953,6 +957,55 @@ def test_untriggered_path_calls_handler_without_parent_argument_truncation() -> 
     assert observed[0].messages[1] is tool_ai
     assert observed[0].messages[1].tool_calls[0]["args"]["content"] == (
         "必须原样保留" * 500
+    )
+
+
+def test_compaction_exposes_history_as_workspace_relative_path() -> None:
+    before = [HumanMessage(content="待压缩消息")]
+    partition = CachePreservingPartition(
+        prefix_messages=[],
+        messages_to_summarize=before,
+        preserved_messages=[],
+        state_cutoff=1,
+    )
+    observed_paths: list[str] = []
+
+    class _CompactionStub:
+        @staticmethod
+        def _prepare_cache_compaction(_: ModelRequest):
+            return before, partition
+
+        @staticmethod
+        def _get_backend(*_):
+            return object()
+
+        @staticmethod
+        def _offload_to_backend(*_):
+            return "/session-artifacts/ses_relative/context/history.md"
+
+        @staticmethod
+        def _create_cache_preserving_summary(*_):
+            return "压缩摘要"
+
+        @staticmethod
+        def _build_new_messages_with_path(summary: str, file_path: str):
+            observed_paths.append(file_path)
+            return [HumanMessage(content=f"{summary}\n{file_path}")]
+
+        @staticmethod
+        def _ensure_compaction_reduces_tokens(*_):
+            return None
+
+    response = CachePreservingSummarizationMiddleware.wrap_model_call(
+        _CompactionStub(),  # type: ignore[arg-type]
+        ModelRequest(model=None, messages=before),
+        lambda _: ModelResponse(result=[AIMessage(content="继续")]),
+    )
+
+    assert isinstance(response, ExtendedModelResponse)
+    assert observed_paths == ["session-artifacts/ses_relative/context/history.md"]
+    assert response.command.update["_summarization_event"]["file_path"] == (
+        "session-artifacts/ses_relative/context/history.md"
     )
 
 

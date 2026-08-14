@@ -7,7 +7,7 @@ import path from 'node:path';
 
 const workspaceRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
 const sourceDir = path.join(workspaceRoot, 'app', 'schemas', 'public_v2');
-const outputDir = path.join(workspaceRoot, 'src', 'web', 'src', 'types', 'gen');
+const outputDir = path.join(workspaceRoot, 'src', 'clients', 'web', 'src', 'types', 'gen');
 const isWindows = process.platform === 'win32';
 const pydantic2tsExecutable = isWindows
 	? path.join(workspaceRoot, '.venv', 'Scripts', 'pydantic2ts.exe')
@@ -20,7 +20,7 @@ const json2tsExecutable = isWindows
 	: path.join(workspaceRoot, 'node_modules', '.bin', 'json2ts');
 
 async function generateSseRuntimeValidators() {
-	const webRequire = createRequire(path.join(workspaceRoot, 'src', 'web', 'package.json'));
+	const webRequire = createRequire(path.join(workspaceRoot, 'src', 'clients', 'web', 'package.json'));
 	const Ajv = webRequire('ajv').default;
 	const standaloneCode = webRequire('ajv/dist/standalone').default;
 	const schemaPath = path.join(outputDir, 'sse_runtime_schemas.json');
@@ -195,6 +195,7 @@ async function main() {
 		"export type { ArtifactDTO } from './artifact';",
 		"export type { EntityRef, LogSnapshotResultDTO, TimestampedDTO } from './common';",
 		"export type { ConfigDTO, ConfigReloadStatusDTO, ConfigUpdateRequest } from './config';",
+		"export type { NodeDebugActionRequest, NodeDebugActionRecordDTO, NodeDebugBreakpointDTO, NodeDebugBreakpointRequest, NodeDebugCapabilitiesDTO, NodeDebugConfigurationActivateRequest, NodeDebugConfigurationBreakpointDTO, NodeDebugConfigurationCopyRequest, NodeDebugConfigurationCreateRequest, NodeDebugConfigurationDTO, NodeDebugConfigurationImportRequest, NodeDebugConfigurationSummaryDTO, NodeDebugConfigurationUpdateRequest, NodeDebugEvaluationDTO, NodeDebugLaunchProfileDTO, NodeDebugSessionManifestDTO, NodeDebugStackFrameDTO, NodeDebugStartRequest, NodeDebugStateDTO, NodeDebugVariableDTO } from './node_debug';",
 		"export type { JobDispatchSnapshotDTO, JobDTO, JobStatus, RunMode, StepDTO, StepStatus } from './job';",
 		"export type { LLMRequestLogRecordDTO } from './llm_request_log';",
 		"export type { AttachmentRef } from './attachment';",

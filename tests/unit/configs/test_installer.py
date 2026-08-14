@@ -28,6 +28,22 @@ def _load(path: Path) -> dict[str, object]:
     return payload
 
 
+def _default_custom_tool_names(config: dict[str, object]) -> set[str]:
+    agents = config["agents"]
+    assert isinstance(agents, dict)
+    default_agent = agents["default"]
+    assert isinstance(default_agent, dict)
+    tools = default_agent["tools"]
+    assert isinstance(tools, dict)
+    custom = tools["custom"]
+    assert isinstance(custom, list)
+    return {
+        str(spec.get("name") or spec.get("tool_id"))
+        for spec in custom
+        if isinstance(spec, dict)
+    }
+
+
 @pytest.mark.parametrize("domain", ["gateway", "workspace"])
 @pytest.mark.parametrize("suffix", ["_inline", "_dev"])
 def test_static_configuration_matches_domain_schema(domain: str, suffix: str) -> None:
@@ -54,6 +70,26 @@ def test_development_templates_enable_development_capabilities_and_docker_gatewa
     assert workspace_dev["development"] == {"test_tools": True}
     assert workspace["mcp"] == {"servers": {}}
     assert "mcp" in workspace_dev
+    debugging_tools = {
+        "start_debugging",
+        "stop_debugging",
+        "step_over",
+        "step_into",
+        "step_out",
+        "continue_execution",
+        "pause_execution",
+        "restart_debugging",
+        "add_breakpoint",
+        "add_logpoint",
+        "remove_breakpoint",
+        "clear_all_breakpoints",
+        "list_breakpoints",
+        "list_variable_names",
+        "get_variables_values",
+        "evaluate_expression",
+    }
+    assert debugging_tools <= _default_custom_tool_names(workspace)
+    assert debugging_tools <= _default_custom_tool_names(workspace_dev)
 
 
 def test_initialize_user_configuration_only_creates_missing_configs(

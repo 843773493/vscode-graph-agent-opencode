@@ -22,7 +22,9 @@ from app.agents.cache_preserving_summarization import (
     CompactConversationSchema,
     create_cache_preserving_summarization_middleware,
 )
-from app.agents.codex_read_tool import configure_codex_read_file_tool
+from app.agents.custom_tool_confirmation_middleware import (
+    CustomToolConfirmationMiddleware,
+)
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
@@ -46,6 +48,7 @@ from app.agents.structured_tool_call_middleware import StructuredToolCallMiddlew
 from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
+from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
 
 ToolDefinition = BaseTool | Callable[..., Any] | dict[str, Any]
 FILESYSTEM_INTERNAL_TOOL_DENYLIST = {"execute"}
@@ -165,6 +168,7 @@ def build_deep_agent_middleware(
     tool_invocation_context_middleware: ToolInvocationContextMiddleware,
     tool_output_middleware: ToolOutputMiddleware,
     memory: list[str] | None,
+    custom_tool_confirmation_names: frozenset[str] = frozenset(),
 ) -> list[AgentMiddleware]:
     deepagent_middleware: list[AgentMiddleware] = [
         tool_invocation_context_middleware,
@@ -192,7 +196,7 @@ def build_deep_agent_middleware(
         _permissions=permissions,
         tool_token_limit_before_evict=None,
     )
-    configure_codex_read_file_tool(
+    configure_workspace_filesystem_tools(
         filesystem_middleware,
         workspace_root=workspace_root,
     )
@@ -239,6 +243,10 @@ def build_deep_agent_middleware(
             )
         )
 
+    if custom_tool_confirmation_names:
+        deepagent_middleware.append(
+            CustomToolConfirmationMiddleware(custom_tool_confirmation_names)
+        )
     if interrupt_on:
         deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
 

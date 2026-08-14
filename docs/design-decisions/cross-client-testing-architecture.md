@@ -1,221 +1,153 @@
-# 跨客户端测试架构设计决策
+# 客户端源码与测试架构
 
 > **决策状态**：采纳  
-> **适用范围**：Workspace 后端、Gateway HTTP、浏览器 Web、VS Code、Electron、React Native 及共享客户端模块
+> **当前实施范围**：纯 Web 客户端、共享边界、Workspace 辅助服务与测试基础设施
 
----
+## 1. 当前开发范围
 
-## 1. 背景
+当前唯一开发、构建和验证的客户端是 `src/clients/web/`。Electron、React Native 和新的 VS Code 客户端只预留目录与依赖方向，都是 TODO；当前功能不需要同步到这些客户端，也不修改现存 `src/extension.js`、`src/backend/`、`src/webview/` 或 `src/webview-ui/`。
 
-本项目当前已经实现 Workspace Gateway HTTP、浏览器 Web 和 VS Code 扩展。后续还会增加 Electron 桌面客户端和 React Native 移动客户端。所有客户端都以 Gateway HTTP、SSE 和辅助服务代理作为远程能力边界，但各客户端具有不同的运行环境和系统集成方式。
+纯 Web 代码仍需考虑未来兼容性：跨进程协议和纯业务模型不得无故绑定浏览器全局对象。但兼容性只约束边界设计，不代表要提前编写 Electron preload、React Native adapter 或 VS Code bridge。
 
-现有测试已经包含 Python 单元测试、前端 Bun 单元测试、后端真实 HTTP E2E、Gateway E2E 和少量 Playwright Web UI E2E，但仍存在以下结构问题：
+## 2. 源码结构
 
-1. `tests/e2e/` 根目录混合 Agent、会话、存储和运行时测试，直接文件过多。
-2. `tests/e2e/ui/`、`tests/e2e/web/` 和 `tests/e2e/browser/` 的名称无法清晰区分产品 Web 客户端、Web 搜索工具和 Browser Manager。
-3. Web UI E2E 在各测试文件中分别管理构建、端口、Gateway、工作区、浏览器和产物；继续复制到 Electron、React Native 会形成多套生命周期实现。
-4. Gateway HTTP 是所有客户端共享的协议边界，但缺少独立、系统化的契约测试层。
+```text
+src/
+├── clients/
+│   ├── shared/
+│   │   ├── core/                  # 纯 TypeScript；无 UI/平台运行时依赖
+│   │   └── web-ui/                # 可复用 React DOM 层
+│   ├── web/                        # 当前唯一维护的客户端
+│   ├── electron/                   # TODO
+│   ├── mobile/                     # TODO
+│   └── vscode/                     # TODO，现存实现尚未迁移
+├── workspace-services/
+│   ├── browser/
+│   └── terminal/
+├── shared/                         # 跨进程协议、传输、常量
+├── extension.js                    # 阶段性保留的旧 VS Code 实现
+├── backend/
+├── webview/
+├── webview-ui/
+└── test/
+```
 
-## 2. 决策目标
+依赖方向固定为：
 
-测试架构必须满足以下目标：
+```text
+src/shared
+    ↓
+src/clients/shared/core
+    ↓
+src/clients/shared/web-ui
+    ↓
+src/clients/web
+```
 
-1. 明确区分单元、契约、集成和端到端测试。
-2. Gateway 协议只定义一次，由所有客户端共享。
-3. Web、Electron、React Native 使用适合自身平台的测试驱动，不强制使用同一种语言操作客户端。
-4. 完整运行时的工作区、端口、进程、控制面目录和产物由统一基础设施管理。
-5. Python 后端单元测试目录镜像 `app/`，禁止继续把业务测试堆在 `tests/unit/` 根目录。
-6. 正式测试产物继续严格镜像测试文件路径，并写入 `out/tests/`。
+`src/workspace-services/` 可以依赖 `src/shared/`，不能依赖客户端。共享代码只在复用需求已出现时提取；空的预留目录不应产生占位实现。
 
-## 3. 测试层级
+## 3. 测试证据分层
 
-### 3.1 单元测试
+### Unit
 
-单元测试验证单个函数、类、Hook、组件或状态转换。测试不能依赖真实 Gateway、工作区后端、浏览器、模拟器或外部网络。
+验证单个函数、类、Hook、组件或状态转换。Python 测试位于 `tests/unit/`，TypeScript/React 单元测试与源码共置。
 
-- Python 后端测试集中在 `tests/unit/`，目录按生产模块镜像。
-- TypeScript/React 测试与源码共置，例如 `src/web/src/**/*.test.tsx`。
-- 未来共享客户端 package 的测试与对应 package 源码共置。
+### Contracts
 
-### 3.2 契约测试
+验证跨进程、跨语言稳定协议，位于 `tests/contracts/`：
 
-契约测试验证跨进程、跨语言的稳定协议，而不是完整用户流程。Gateway HTTP 契约至少覆盖：
+- `api/`：Gateway、Workspace HTTP、OpenAPI、认证、`request_id` 和 SSE；
+- `clients/`：共享类型、生成类型和客户端状态协议；
+- `workspace_services/`：Browser、Terminal 等辅助服务公开边界。测试目录使用下划线以保持 Python 可导入；源码仍使用 `src/workspace-services/`。
 
-- OpenAPI schema 和生成类型；
-- 本地 Token、设备凭据和 Federation 凭据；
-- `request_id` 响应体、响应头和代理透传；
-- 成功与失败响应结构；
-- Workspace 路由头和激活工作区语义；
-- SSE 事件名称、数据 schema、心跳和断线行为；
-- Terminal、Browser 等辅助服务代理边界。
+### Integration
 
-契约测试位于 `tests/contract/gateway_http/`。客户端不得通过复制 E2E 场景来替代协议契约测试。
+验证多个真实生产模块组合，但允许在明确外部边界使用替身，位于 `tests/integration/`。以下任一条件命中就属于 Integration：
 
-### 3.3 集成测试
+- stub、fake、mock 模型或 Provider；
+- mini MCP、替代 Gateway 下游或替代网页服务；
+- 固定场景响应；
+- `page.route().fulfill()` 或修改产品依赖响应；
+- 模拟 Electron bridge、VS Code host；
+- React Native Web 替代原生运行面。
 
-集成测试验证多个真实模块组合后的行为，但不启动完整产品客户端。允许在进程或外部系统边界使用 fake、stub 或最小 HTTP 服务。
+浏览器本身是真的、Gateway/后端大部分是真的，均不能抵消关键链路存在替身这一事实。
 
-适合的场景包括：
+### E2E
 
-- `GatewayWorkspaceRegistry`、运行时控制器和持久化文件组合；
-- Gateway 路由器与最小 Workspace HTTP stub 组合；
-- 客户端 Gateway SDK 与协议级 Gateway stub 组合；
-- SSE 客户端的取消、重连、乱序和迟到响应处理；
-- Electron 主进程服务与 fake Gateway 组合；
-- React Native 网络层与协议桩组合。
+E2E 位于 `tests/e2e/`，必须使用场景要求的真实进程、真实传输和真实外部依赖。缺少真实模型、凭据、平台运行时或服务时，测试必须失败、跳过或报告 `UNMET_PREREQUISITE`；不得切换到 stub 后继续报告 E2E 通过。
 
-如果测试需要完整 Gateway、完整 Workspace 后端、真实图形客户端和用户交互，它属于 E2E，不属于集成测试。
+以下测试设施不算替身：
 
-### 3.4 端到端测试
+- 从 `asset/` 复制到隔离目录的测试工作区；
+- 通过真实 API 预置状态；
+- 测试账号和显式测试配置；
+- 只读网络、控制台和 trace 观测；
+- 由测试拥有的动态端口和进程生命周期。
 
-E2E 使用真实进程和真实传输验证完整外部行为：
-
-- 后端 E2E：真实 Workspace 后端 HTTP、Agent、会话和工具链；
-- Gateway E2E：真实 Gateway、多工作区、进程生命周期、Federation 和代理；
-- 客户端 E2E：真实 Gateway、真实 Workspace 后端和真实客户端；
-- 工具 E2E：Browser Manager、Terminal Manager、MCP 和 Web 搜索工具链。
-
-## 4. 目录结构
-
-目标结构如下：
+## 4. 测试目录
 
 ```text
 tests/
-├── support/                         # 共享测试基础设施，不放测试用例
-│   ├── paths.py
-│   ├── ports.py
-│   ├── workspaces.py
-│   ├── processes/
-│   └── full_stack/
-├── unit/                            # Python 单元测试，镜像 app/ 等 Python 源根
-│   ├── agents/
+├── clients/
+│   ├── scenarios/                  # 跨客户端场景意图
+│   ├── selectors/                  # 稳定语义选择器
+│   ├── drivers/
+│   │   ├── web-playwright/         # 当前实现
+│   │   ├── electron-playwright/    # TODO
+│   │   ├── vscode/                 # TODO
+│   │   ├── mobile-web-playwright/  # TODO，只能算 parity/integration
+│   │   └── mobile-native/          # TODO，未来原生 E2E
+│   └── capabilities/
+├── contracts/
 │   ├── api/
-│   ├── core/
-│   ├── gateway/
-│   │   ├── control/
-│   │   ├── runtime/
-│   │   └── server/
-│   ├── prompting/
-│   ├── runtime/
-│   ├── schemas/
-│   ├── services/
-│   └── tool_testing/
-├── contract/
-│   └── gateway_http/
+│   ├── clients/
+│   └── workspace_services/
 ├── integration/
 │   ├── backend/
 │   ├── gateway/
-│   └── clients/
-└── e2e/
-    ├── backend/
-    │   ├── agents/
-    │   ├── jobs/
-    │   ├── sessions/
-    │   └── storage/
-    ├── gateway/
-    │   ├── http/
-    │   ├── workspace_runtime/
-    │   ├── federation/
-    │   └── docker/
-    ├── clients/
-    │   ├── web/
-    │   ├── electron/
-    │   ├── mobile/
-    │   └── vscode/
-    └── tools/
-        ├── browser/
-        ├── terminal/
-        ├── mcp/
-        └── web_search/
+│   ├── workspace_services/
+│   ├── clients/web/
+│   └── stubs/
+├── e2e/
+│   ├── system/
+│   │   ├── agent/
+│   │   ├── gateway/
+│   │   └── workspace_services/
+│   └── clients/web/
+├── harness/
+│   ├── python/
+│   └── js/
+├── runner/
+│   ├── matrix.jsonc
+│   └── run-tests.mjs
+├── support/                        # 现有 helper，逐步由 harness 收口
+└── unit/
 ```
 
-`configs/`、`src/browser/`、`src/terminal/` 等非 `app/` 源根的 Python 测试可以在 `tests/unit/` 下保留同名独立分区，但不能混入某个无关的 `app/` 模块目录。
+## 5. 四类客户端的验证面
 
-## 5. 单元测试镜像规则
-
-Python 单元测试以主要被测生产模块决定路径：
-
-```text
-app/agents/...                    -> tests/unit/agents/...
-app/api/...                       -> tests/unit/api/...
-app/core/...                      -> tests/unit/core/...
-app/gateway/control/...           -> tests/unit/gateway/control/...
-app/gateway/runtime/...           -> tests/unit/gateway/runtime/...
-app/gateway/server/...            -> tests/unit/gateway/server/...
-app/prompting/...                 -> tests/unit/prompting/...
-app/runtime/...                   -> tests/unit/runtime/...
-app/schemas/...                   -> tests/unit/schemas/...
-app/services/business/...         -> tests/unit/services/business/...
-app/services/infrastructure/...   -> tests/unit/services/infrastructure/...
-app/services/mapping/...          -> tests/unit/services/mapping/...
-app/services/orchestration/...    -> tests/unit/services/orchestration/...
-app/tool_testing/...              -> tests/unit/tool_testing/...
-```
-
-一个测试引用多个模块时，以测试标题和主要断言对应的公开行为为准，不按 import 数量机械决定路径。跨越多个生产层且无法确定主要模块的测试应重新判断其是否属于 integration。
-
-## 6. 客户端测试驱动
-
-统一的是测试资源生命周期，不是客户端测试语言。
-
-| 客户端 | 单元测试 | E2E 驱动 | 外层资源编排 |
+| 产品客户端 | 当前状态 | 浏览器测试的含义 | 未来真实 E2E |
 |---|---|---|---|
-| Web React | Bun Test | Node Playwright | pytest |
-| Electron | Bun Test | Node Playwright Electron | pytest |
-| React Native | Jest 或项目选定的 JS runner | Maestro 或 Detox | pytest 或平台启动脚本 |
-| VS Code | Bun/Mocha | `@vscode/test-electron` | Node 或 pytest |
-| Gateway HTTP | pytest | `httpx` | pytest |
+| 纯 Web | 正在开发 | 真实客户端运行面 | Node Playwright |
+| Electron | TODO | Web 组件 parity/Integration | Playwright Electron，真实 main/preload/renderer |
+| VS Code | 旧实现暂留，新增开发 TODO | Webview 预览/Integration | VS Code Extension Host |
+| React Native | TODO | RN Web parity/Integration | 真实模拟器或设备驱动 |
 
-pytest 可以作为完整 E2E 的外层编排器，负责启动后端资源并调用平台原生驱动；不得为了表面统一而用 Python 重写所有浏览器、Electron 或移动端操作。
+统一的是场景意图、资源生命周期、产物格式和结果状态，不是强迫所有平台使用同一种驱动语言。
 
-## 7. 统一完整运行时
+## 6. 运行与产物
 
-共享测试基础设施提供一个明确拥有资源的 `FullStackRuntime` fixture。它至少管理：
+JavaScript 浏览器动作使用 Node Playwright ESM；Python 只在需要管理 Workspace/Gateway fixture 时作为外层编排器。纯粹调用同名 `.mjs` 的 Python 薄包装不保留。
 
-- 当前测试的 `output_root` 和 `artifacts_dir`；
-- 独立的 `BOXTEAM_HOME`/Gateway 控制面目录；
-- 从只读 `asset/` 复制出的一个或多个 Workspace；
-- Gateway、Workspace 后端和可选辅助服务进程；
-- 端口块、Gateway URL、本地 Token 和 Workspace ID；
-- 浏览器 profile、Electron user-data 或移动设备标识；
-- 失败日志收集和确定性的逆序清理。
-
-fixture 必须快速失败并暴露完整错误，不允许在依赖缺失或进程异常时返回虚假的可用状态。
-
-## 8. E2E 覆盖策略
-
-避免把所有业务场景在每个客户端重复一遍：
-
-1. Gateway 契约测试负责共享协议的完整性。
-2. 共享客户端核心单元测试负责状态机、请求竞态和错误分类。
-3. Gateway E2E 负责多工作区和真实进程生命周期。
-4. 每个客户端 E2E 负责关键用户路径和平台特有能力。
-5. 少量黄金路径在 Web、Electron、Mobile 三端重复执行，用于验证客户端一致性。
-
-客户端黄金路径至少包括：连接 Gateway、浏览工作区、创建会话、发送消息、恢复断线，以及关闭当前活动工作区后切换默认工作区。
-
-## 9. 产物规范
-
-继续遵循测试文件路径镜像规则：
+正式测试产物继续镜像测试文件路径：
 
 ```text
-tests/e2e/clients/web/test_workspace_lifecycle.py
+tests/e2e/clients/web/test_workspace_lifecycle.mjs
 -> out/tests/e2e/clients/web/test_workspace_lifecycle/
    ├── workspace/
    ├── gateway-home/
-   ├── client-state/
    └── artifacts/
 ```
 
-Web 截图、Playwright trace、Electron 日志、移动端录屏和性能 JSON 都必须写入对应 `artifacts/`。二进制产物默认不加入 Git。
-
-## 10. 迁移顺序
-
-1. 先让 `tests/unit/` 按生产模块镜像并清空根目录业务测试。
-2. 将共享端口、工作区、进程和产物逻辑逐步移动到 `tests/support/`。
-3. 建立 `tests/contract/gateway_http/`。
-4. 将 `tests/e2e/ui` 迁移为 `tests/e2e/clients/web`。
-5. 将 Browser、Terminal、MCP、Web 搜索迁移到 `tests/e2e/tools/`。
-6. 最后按领域下沉 `tests/e2e/` 根目录的后端业务测试。
-
-每个迁移步骤必须保持测试可收集、可独立运行，并让正式产物路径镜像迁移后的测试文件路径；不得同时保留新旧兼容入口。
+运行上下文显式拥有隔离工作区、`BOXTEAM_HOME`、端口、进程、浏览器 profile 和产物目录，并按逆序确定性清理。Python 使用 pytest `importlib` 导入模式；`tmp_path` 与 `BOXTEAM_HOME` 由测试运行 ID 和节点 ID 共同隔离到对应 `out/tests/.../runtime/`，允许独立 pytest 进程和 xdist worker 并发运行。runner 必须分别汇报 passed、failed、skipped 与 `UNMET_PREREQUISITE`，不能隐藏或降级失败。

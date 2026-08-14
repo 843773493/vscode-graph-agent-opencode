@@ -600,7 +600,7 @@ dispatch_mode="steering"
 
 ## 11. 组件职责
 
-### 11.1 `src/terminal/`
+### 11.1 `src/workspace-services/terminal/`
 
 负责：
 

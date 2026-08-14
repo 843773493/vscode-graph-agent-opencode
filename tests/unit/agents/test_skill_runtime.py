@@ -128,7 +128,7 @@ def test_workspace_agents_middleware_injects_frozen_root_agents_md(tmp_path):
     system_text = _workspace_agents_system_text(middleware, state)
 
     assert "Workspace AGENTS.md" in system_text
-    assert '<workspace_agents_md encoding="text" path="/AGENTS.md"' in system_text
+    assert '<workspace_agents_md encoding="text" path="AGENTS.md"' in system_text
     assert 'trust="workspace_instruction">' in system_text
     assert "必须优先读取对应 skill。" in system_text
 
@@ -218,7 +218,7 @@ def test_workspace_agents_middleware_reloads_latest_version_after_compaction(tmp
     state["_summarization_event"] = {
         "cutoff_index": 1,
         "summary_message": HumanMessage(content="已压缩历史"),
-        "file_path": "/session-artifacts/ses_test/context/history.md",
+        "file_path": "session-artifacts/ses_test/context/history.md",
     }
 
     compact_update = middleware.before_model(state, MagicMock())
@@ -287,6 +287,9 @@ def test_workspace_skills_prompt_keeps_custom_tools_out_of_skill_list(tmp_path):
         backend=MagicMock(),
         sources=[("/.boxteam/skills", "Workspace")],
     )
+    assert middleware._format_skills_locations() == (
+        "**Workspace Skills**: `.boxteam/skills` (higher priority)"
+    )
     skill_list = middleware._format_skills_list(
         [
             {
@@ -302,7 +305,8 @@ def test_workspace_skills_prompt_keeps_custom_tools_out_of_skill_list(tmp_path):
     )
 
     assert "test-tool-2" in skill_list
-    assert "/.boxteam/skills/test-tool-2/SKILL.md" in skill_list
+    assert ".boxteam/skills/test-tool-2/SKILL.md" in skill_list
+    assert "/.boxteam/skills/test-tool-2/SKILL.md" not in skill_list
     assert "用户请求匹配本 skill 描述时，先读取" in skill_list
     assert "test_tool_2" not in skill_list
 

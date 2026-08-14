@@ -173,6 +173,126 @@
           },
           {
             "tool_id": "runPlaywrightCode" // builtin_tool_registry 稳定工具 ID。
+          },
+          {
+            "name": "list_debug_configurations", // 当前会话目标程序调试方案列表。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "list_debug_configurations" },
+            "description": "列出当前会话的可移植源码调试方案，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "create_debug_configuration", // 创建当前会话调试方案。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "create_debug_configuration" },
+            "description": "创建并激活目标程序调试方案，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "activate_debug_configuration", // 切换当前会话活动调试方案。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "activate_debug_configuration" },
+            "description": "激活当前会话的目标程序调试方案，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "delete_debug_configuration", // 删除当前会话调试方案。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "delete_debug_configuration" },
+            "description": "删除当前会话未运行的目标程序调试方案，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "start_debugging", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "start_debugging" },
+            "description": "源码调试扩展工具 start_debugging，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "stop_debugging", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "stop_debugging" },
+            "description": "源码调试扩展工具 stop_debugging，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "step_over", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "step_over" },
+            "description": "源码调试扩展工具 step_over，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "step_into", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "step_into" },
+            "description": "源码调试扩展工具 step_into，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "step_out", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "step_out" },
+            "description": "源码调试扩展工具 step_out，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "continue_execution", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "continue_execution" },
+            "description": "源码调试扩展工具 continue_execution，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "pause_execution", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "pause_execution" },
+            "description": "源码调试扩展工具 pause_execution，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "restart_debugging", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "restart_debugging" },
+            "description": "源码调试扩展工具 restart_debugging，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "add_breakpoint", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "add_breakpoint" },
+            "description": "源码调试扩展工具 add_breakpoint，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "add_logpoint", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "add_logpoint" },
+            "description": "源码调试扩展工具 add_logpoint，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "remove_breakpoint", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "remove_breakpoint" },
+            "description": "源码调试扩展工具 remove_breakpoint，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "clear_all_breakpoints", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "clear_all_breakpoints" },
+            "description": "源码调试扩展工具 clear_all_breakpoints，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "list_breakpoints", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "list_breakpoints" },
+            "description": "源码调试扩展工具 list_breakpoints，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "list_variable_names", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "list_variable_names" },
+            "description": "源码调试扩展工具 list_variable_names，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "get_variables_values", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "get_variables_values" },
+            "description": "源码调试扩展工具 get_variables_values，必须通过 invoke_custom_tool 调用。"
+          },
+          {
+            "name": "evaluate_expression", // MCP 风格源码调试扩展工具。
+            "factory": "app.agents.tools.debugging:create_debugging_tool",
+            "options": { "tool_name": "evaluate_expression" },
+            "description": "源码调试扩展工具 evaluate_expression，必须通过 invoke_custom_tool 调用。"
           }
         ] // Agent tool policy 读取扩展工具列表。
       },
@@ -373,6 +493,30 @@
     "events": {
       "trace_stream": {
         "heartbeat_interval_seconds": 15 // sessions API SSE 心跳默认值已接入配置。
+      }
+    },
+    "debug": {
+      "enabled": true, // Agent 源码调试工具默认启用。
+      "default_adapter": "node_inspector", // 首期实现的 JavaScript 调试 adapter。
+      "command_timeout_seconds": 10, // Inspector 单个命令和状态等待的默认上限。
+      "node": {
+        "inspector_host": "127.0.0.1", // 仅绑定本机，避免暴露调试器。
+        "inspector_port": 0, // 0 表示每个调试会话动态分配端口。
+        "executable": "" // 为空时按 BOXTEAM_NODE_BIN 或 PATH 解析 Node。
+      },
+      "python": {
+        "adapter": "debugpy", // 仅预留配置，当前版本尚未实现 Python adapter。
+        "debugpy_host": "127.0.0.1", // 未来 debugpy 默认只绑定本机。
+        "debugpy_port": 0 // 未来 debugpy 默认动态分配端口。
+      },
+      "launch_profiles": {
+        "node-default": {
+          "adapter": "node_inspector",
+          "runtime": "node",
+          "program": "",
+          "working_directory": "",
+          "args": []
+        }
       }
     }
   }

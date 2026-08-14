@@ -19,6 +19,7 @@ def main() -> None:
     target = (
         project_root
         / "src"
+        / "clients"
         / "web"
         / "src"
         / "types"

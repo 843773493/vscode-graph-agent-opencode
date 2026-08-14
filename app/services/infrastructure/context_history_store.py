@@ -23,14 +23,14 @@ class ContextHistoryStore:
         session_id: str,
         messages: list[AnyMessage],
     ) -> str:
-        path = f"/session-artifacts/{session_id}/context/history.md"
+        backend_path = f"/session-artifacts/{session_id}/context/history.md"
         timestamp = datetime.now(UTC).isoformat()
         new_section = (
             f"## Summarized at {timestamp}\n\n"
             f"{get_buffer_string(messages)}\n\n"
         )
 
-        responses = await self._backend.adownload_files([path])
+        responses = await self._backend.adownload_files([backend_path])
         existing_content = ""
         if responses:
             response = responses[0]
@@ -38,18 +38,25 @@ class ContextHistoryStore:
                 existing_content = response.content.decode("utf-8")
             elif response.error != "file_not_found":
                 raise RuntimeError(
-                    f"读取 compact 历史文件失败: path={path}, error={response.error}"
+                    "读取 compact 历史文件失败: "
+                    f"path={backend_path}, error={response.error}"
                 )
 
         combined_content = existing_content + new_section
         if existing_content:
-            result = await self._backend.aedit(path, existing_content, combined_content)
+            result = await self._backend.aedit(
+                backend_path,
+                existing_content,
+                combined_content,
+            )
         else:
-            result = await self._backend.awrite(path, combined_content)
+            result = await self._backend.awrite(backend_path, combined_content)
 
         if result is None or result.error:
             raise RuntimeError(
-                f"写入 compact 历史文件失败: path={path}, error={result.error if result else 'backend returned None'}"
+                "写入 compact 历史文件失败: "
+                f"path={backend_path}, "
+                f"error={result.error if result else 'backend returned None'}"
             )
 
-        return path
+        return backend_path.removeprefix("/")

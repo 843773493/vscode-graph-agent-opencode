@@ -144,7 +144,7 @@ function Invoke-TargetAction([string[]]$Arguments) {
                     node -e 'require("node-pty")'
                 }
                 if ($LASTEXITCODE -ne 0) { Fail-Target "node-pty Windows 原生模块不可用" }
-                bun install --cwd src/web --frozen-lockfile
+                bun install --cwd src/clients/web --frozen-lockfile
                 Assert-NativeCommand "Web bun install"
                 bun install --cwd src/webview-ui --frozen-lockfile
                 Assert-NativeCommand "Webview bun install"

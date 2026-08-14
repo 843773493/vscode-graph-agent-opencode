@@ -33,7 +33,7 @@ description: "Use when: starting web service, running project, starting developm
 
 `dev.mjs` 会：
 1. 清理占用 8000（后端）、8001（前端）、8002（调试）端口的旧进程
-2. 在 `src/web` 目录启动前端开发服务器（端口 8001）
+2. 在 `src/clients/web` 目录启动前端开发服务器（默认端口 8011，以 `scripts/dev.mjs` 配置为准）
 3. 在根目录启动后端 FastAPI + debugpy（端口 8000，调试端口 8002）
 4. 等待前后端健康检查通过（最多 30 秒超时）
 5. 管理进程联动退出（任一进程崩溃会自动终止另一个）
@@ -91,9 +91,9 @@ curl http://127.0.0.1:8001/health
    - 手动测试：`uv run uvicorn app.main:app --host 127.0.0.1 --port 8000`
 
 3. **前端启动失败**：
-   - 检查 `src/web` 目录是否存在
-   - 检查 node_modules：`cd src/web && ..\..\tools\bun.exe install`
-   - 手动测试：`cd src/web && ..\..\tools\bun.exe run dev`
+   - 检查 `src/clients/web` 目录是否存在
+   - 检查 node_modules：`bun install --cwd src/clients/web`
+   - 手动测试：`bun --cwd src/clients/web run dev`
 
 ### 停止服务
 按 `Ctrl+C` 终止 dev.mjs 进程，它会自动清理前后端子进程。

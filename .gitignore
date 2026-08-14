@@ -68,6 +68,7 @@ yarn-error.log*
 playground/
 out/
 /.boxteam/
+/src/workspace-services/**/.boxteam/
 *_local.jsonc
 
 # Windows VM 本地连接配置、私钥和 host key

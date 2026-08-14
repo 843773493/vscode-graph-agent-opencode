@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiByeD0iMyIgZmlsbD0iIzU1N2ViMyIvPjwvc3ZnPg==">
+  <title>扩展窗口 · 运行与连接预览</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ext-bg: #f4f0e5;
+      --ext-surface: #faf7ee;
+      --ext-surface-raised: #fffdf6;
+      --ext-surface-muted: #eee9da;
+      --ext-line: #d8d1c0;
+      --ext-line-strong: #c7beab;
+      --ext-text: #2f312f;
+      --ext-muted: #77776f;
+      --ext-faint: #a09d91;
+      --ext-blue: #557eb3;
+      --ext-blue-soft: #e4edf8;
+      --ext-green: #4e9a72;
+      --ext-green-soft: #e4f1e7;
+      --ext-amber: #b9803d;
+      --ext-amber-soft: #f6ead8;
+      --ext-red: #a85d5d;
+      --ext-red-soft: #f4e2df;
+      --ext-terminal: #101722;
+      --ext-terminal-text: #d7dfeb;
+      --ext-terminal-muted: #7e8b9f;
+      --ext-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --ext-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { width: 100%; height: 100%; }
+    body { margin: 0; overflow: hidden; background: var(--ext-bg); color: var(--ext-text); font: 12px/1.4 var(--ext-font); }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    button:focus-visible { outline: 2px solid var(--ext-blue); outline-offset: -2px; }
+    .ext-icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .ext-icon.xs { width: 13px; height: 13px; }
+    .ext-icon.sm { width: 15px; height: 15px; }
+    .ext-icon.lg { width: 20px; height: 20px; }
+
+    .ext-window { display: grid; grid-template-rows: 42px 42px minmax(0, 1fr) 25px; width: 100vw; height: 100vh; min-width: 930px; min-height: 610px; background: var(--ext-bg); }
+    .ext-topbar { display: grid; grid-template-columns: 250px minmax(240px, 1fr) 250px; align-items: center; padding: 0 12px; border-bottom: 1px solid var(--ext-line); background: #f8f4e9; }
+    .ext-brand { display: flex; align-items: center; gap: 9px; color: var(--ext-muted); font-weight: 650; }
+    .ext-brand-mark { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid #bab29f; border-radius: 6px; color: #696b68; }
+    .ext-window-title { justify-self: center; min-width: 240px; max-width: 620px; width: 68%; padding: 6px 16px; border: 1px solid var(--ext-line); border-radius: 9px; color: var(--ext-muted); text-align: center; }
+    .ext-window-actions { display: flex; justify-content: flex-end; gap: 4px; }
+    .ext-icon-button { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ext-muted); }
+    .ext-icon-button:hover { border-color: var(--ext-line); background: var(--ext-surface-muted); color: var(--ext-text); }
+    .ext-main-tabs { display: flex; align-items: stretch; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--ext-line); background: #f8f4e9; }
+    .ext-main-tab { display: inline-flex; align-items: center; gap: 7px; min-width: 112px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--ext-muted); }
+    .ext-main-tab:hover { background: rgba(255, 255, 255, .38); color: var(--ext-text); }
+    .ext-main-tab.active { border-bottom-color: var(--ext-blue); background: var(--ext-surface); color: var(--ext-text); }
+
+    /* 资源标签只做“切换预览”，统一使用垂直资源栏。 */
+    .ext-resource-strip { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--ext-line); background: var(--ext-surface); }
+    .ext-opened-caption { display: grid; align-content: center; gap: 2px; min-height: 56px; padding: 9px 12px; border-bottom: 1px solid var(--ext-line); }
+    .ext-opened-caption strong { font-size: 11px; }
+    .ext-opened-caption small { color: var(--ext-muted); font-size: 10px; }
+    .ext-resource-tabs { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--ext-line-strong) transparent; }
+    .ext-resource-tab { position: relative; display: grid; flex: 0 0 54px; grid-template-columns: 24px minmax(0, 1fr) auto 18px; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 6px 7px; border: 0; border-left: 2px solid transparent; border-radius: 5px; background: transparent; text-align: left; }
+    .ext-resource-tab:hover { background: var(--ext-surface-muted); }
+    .ext-resource-tab.active { border-left-color: var(--ext-blue); background: var(--ext-surface-raised); }
+    .ext-resource-tab[data-kind="browser"].active { border-left-color: var(--ext-green); }
+    .ext-resource-tab[data-kind="terminal"].active { border-left-color: var(--ext-amber); }
+    .ext-resource-icon { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 6px; color: var(--ext-blue); background: var(--ext-blue-soft); }
+    .ext-resource-tab[data-kind="browser"] .ext-resource-icon { color: var(--ext-green); background: var(--ext-green-soft); }
+    .ext-resource-tab[data-kind="terminal"] .ext-resource-icon { color: var(--ext-amber); background: var(--ext-amber-soft); }
+    .ext-resource-copy { min-width: 0; }
+    .ext-resource-copy strong, .ext-resource-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ext-resource-copy strong { font-size: 11px; font-weight: 650; }
+    .ext-resource-copy small { margin-top: 2px; color: var(--ext-muted); font-size: 10px; }
+    .ext-resource-state { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--ext-muted); font-size: 10px; }
+    .ext-resource-state::before { width: 6px; height: 6px; border-radius: 50%; background: var(--ext-faint); content: ""; }
+    .ext-resource-state.running { color: var(--ext-green); }
+    .ext-resource-state.running::before { background: var(--ext-green); }
+    .ext-resource-state.history { color: var(--ext-muted); }
+    .ext-tab-close { display: grid; place-items: center; width: 18px; height: 18px; margin-left: 2px; border-radius: 4px; color: var(--ext-faint); font-size: 14px; line-height: 1; }
+    .ext-tab-close:hover { background: var(--ext-surface-muted); color: var(--ext-text); }
+    .ext-connection-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ext-green); box-shadow: 0 0 0 3px var(--ext-green-soft); }
+
+    .ext-content { display: grid; min-width: 0; min-height: 0; overflow: hidden; }
+    .ext-mode { display: none; min-width: 0; min-height: 0; }
+    .ext-mode.active { display: grid; }
+    .ext-connect-mode { grid-template-columns: 176px minmax(0, 1fr) 300px; }
+    .ext-preview { display: grid; grid-template-rows: 48px minmax(0, 1fr) 30px; min-width: 0; min-height: 0; border-right: 1px solid var(--ext-line); }
+    .ext-preview-header { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 14px; border-bottom: 1px solid var(--ext-line); background: var(--ext-surface); }
+    .ext-back { margin-right: 2px; }
+    .ext-preview-title { min-width: 0; }
+    .ext-preview-title strong, .ext-preview-title small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ext-preview-title strong { font-size: 12px; }
+    .ext-preview-title small { margin-top: 2px; color: var(--ext-muted); font-size: 10px; }
+    .ext-preview-header .ext-spacer { flex: 1; }
+    .ext-state-label { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 999px; background: var(--ext-surface-muted); color: var(--ext-muted); font-size: 10px; white-space: nowrap; }
+    .ext-state-label.history::before { width: 6px; height: 6px; border-radius: 50%; background: var(--ext-faint); content: ""; }
+    .ext-state-label.running { background: var(--ext-green-soft); color: var(--ext-green); }
+    .ext-state-label.running::before { width: 6px; height: 6px; border-radius: 50%; background: var(--ext-green); content: ""; }
+    .ext-preview-body { min-height: 0; overflow: hidden; background: var(--ext-terminal); }
+    .ext-terminal-view { display: grid; grid-template-rows: 38px minmax(0, 1fr); width: 100%; height: 100%; }
+    .ext-terminal-toolbar { display: flex; align-items: center; gap: 8px; padding: 0 11px; border-bottom: 1px solid #263243; background: #151d29; color: var(--ext-terminal-text); }
+    .ext-terminal-toolbar strong { font-size: 11px; }
+    .ext-terminal-toolbar small { color: var(--ext-terminal-muted); font-size: 10px; }
+    .ext-terminal-toolbar .ext-spacer { flex: 1; }
+    .ext-terminal-output { padding: 18px 16px; overflow: auto; color: var(--ext-terminal-text); font: 12px/1.7 var(--ext-mono); }
+    .ext-terminal-output .muted { color: var(--ext-terminal-muted); }
+    .ext-terminal-output .warning { color: #e7bd77; }
+    .ext-terminal-output .prompt { color: #80b6ed; }
+    .ext-terminal-output .path { color: #a8c58b; }
+    .ext-terminal-output .deleted { display: inline-flex; margin-top: 14px; padding: 3px 7px; border: 1px solid #684d3b; border-radius: 4px; color: #e6b173; background: rgba(185, 128, 61, .1); font: 10px var(--ext-font); }
+    .ext-preview-footer { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-top: 1px solid var(--ext-line); background: var(--ext-surface); color: var(--ext-muted); font-size: 10px; }
+    .ext-preview-footer .ext-spacer { flex: 1; }
+
+    .ext-resource-rail { min-width: 0; min-height: 0; overflow: hidden; background: var(--ext-surface); }
+
+    /* 右侧沿用 Gateway 资源树的层级结构，不再使用独立资源卡片。 */
+    .ext-gateway-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; padding: 0; background: var(--ext-surface); }
+    .ext-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 48px; padding: 0 9px; border-bottom: 1px solid var(--ext-line); }
+    .ext-panel-title { min-width: 0; font-size: 13px; font-weight: 700; }
+    .ext-count { margin-left: 4px; color: var(--ext-muted); font-size: 11px; font-weight: 500; }
+    .ext-panel-meta { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--ext-muted); font-size: 10px; white-space: nowrap; }
+    .ext-scope-hint { margin: 6px 8px 0; color: var(--ext-muted); font-size: 10px; line-height: 1.4; }
+    .ext-resource-tree { min-height: 0; overflow: auto; padding: 8px 6px 16px; }
+    .ext-scope-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) max-content; align-items: center; gap: 5px; width: 100%; min-height: 36px; padding: 3px 6px; border: 0; border-radius: 5px; background: transparent; text-align: left; }
+    .ext-scope-row:hover { background: var(--ext-surface-muted); }
+    .ext-scope-chevron { display: grid; place-items: center; color: var(--ext-muted); }
+    .ext-scope-chevron .ext-icon { width: 12px; height: 12px; transform: rotate(90deg); }
+    .ext-scope-copy { min-width: 0; }
+    .ext-scope-copy strong, .ext-scope-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ext-scope-copy strong { font-size: 11px; }
+    .ext-scope-copy small { margin-top: 1px; color: var(--ext-muted); font-size: 9px; }
+    .ext-scope-count { color: var(--ext-muted); font-size: 10px; }
+    .ext-scope-children { margin-left: 13px; padding-left: 4px; border-left: 1px solid var(--ext-line); }
+    .ext-tree-item { margin-bottom: 2px; border-radius: 5px; }
+    .ext-tree-item.is-selected { background: var(--ext-blue-soft); }
+    .ext-tree-row { display: flex; align-items: center; min-height: 34px; }
+    .ext-tree-chevron { display: grid; place-items: center; width: 24px; height: 30px; flex: none; border: 0; background: transparent; color: var(--ext-muted); }
+    .ext-tree-chevron:hover { background: var(--ext-surface-muted); }
+    .ext-tree-chevron .ext-icon { width: 11px; height: 11px; }
+    .ext-tree-item.is-expanded .ext-tree-chevron .ext-icon { transform: rotate(90deg); }
+    .ext-tree-main { display: grid; grid-template-columns: 18px minmax(0, 1fr) max-content; align-items: center; gap: 6px; min-width: 0; flex: 1; min-height: 34px; padding: 0 5px 0 1px; border: 0; background: transparent; text-align: left; }
+    .ext-tree-main:hover { color: var(--ext-text); }
+    .ext-tree-kind { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--ext-muted); background: var(--ext-surface-muted); }
+    .ext-tree-item[data-resource-status="running"] .ext-tree-kind { color: var(--ext-green); background: var(--ext-green-soft); }
+    .ext-tree-copy { min-width: 0; }
+    .ext-tree-copy strong, .ext-tree-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ext-tree-copy strong { font-size: 11px; font-weight: 650; }
+    .ext-tree-copy small { margin-top: 1px; color: var(--ext-muted); font-size: 9px; }
+    .ext-tree-status { padding: 3px 5px; border-radius: 4px; background: var(--ext-surface-muted); color: var(--ext-muted); font-size: 9px; white-space: nowrap; }
+    .ext-tree-item.is-selected .ext-tree-status { background: #d8e7f8; color: var(--ext-blue); }
+    .ext-tree-item[data-resource-status="running"] .ext-tree-status { background: var(--ext-green-soft); color: var(--ext-green); }
+    .ext-tree-detail { margin: 0 5px 6px 29px; padding: 7px 8px 8px; border: 1px solid var(--ext-line); border-radius: 5px; background: var(--ext-surface-raised); }
+    .ext-tree-detail p { margin: 0; color: var(--ext-muted); font-size: 9px; }
+    .ext-tree-detail p + p { margin-top: 3px; }
+    .ext-tree-current-hint { display: inline-flex; margin-top: 6px; padding: 3px 5px; border-radius: 4px; background: var(--ext-green-soft); color: var(--ext-green); font-size: 9px; }
+    .ext-tree-actions { display: flex; justify-content: flex-end; gap: 2px; margin-top: 5px; }
+    .ext-tree-actions .ext-icon-button { width: 23px; height: 23px; }
+    .ext-resource-details { margin-top: 5px; border-top: 1px solid var(--ext-line); color: var(--ext-muted); font-size: 9px; }
+    .ext-resource-details summary { padding-top: 5px; cursor: pointer; }
+    .ext-resource-details p { margin-top: 5px; font-family: var(--ext-mono); font-size: 9px; word-break: break-all; }
+
+    .ext-debug-mode { grid-template-columns: minmax(0, 1fr) 320px; background: var(--ext-surface); }
+    .ext-debug-placeholder { display: grid; place-items: center; min-width: 0; min-height: 0; background: #f6f2e7; }
+    .ext-debug-card { width: min(520px, 86%); padding: 26px; border: 1px solid var(--ext-line); border-radius: 10px; background: var(--ext-surface-raised); box-shadow: 0 12px 34px rgba(91, 78, 52, .08); }
+    .ext-debug-card h2 { margin: 12px 0 5px; font-size: 17px; }
+    .ext-debug-card p { margin: 0; color: var(--ext-muted); line-height: 1.7; }
+    .ext-debug-card .ext-debug-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; color: var(--ext-blue); background: var(--ext-blue-soft); }
+    .ext-debug-card .ext-debug-row { display: flex; align-items: center; gap: 8px; margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--ext-line); color: var(--ext-muted); font-size: 11px; }
+    .ext-debug-rail { padding: 14px; border-left: 1px solid var(--ext-line); background: var(--ext-surface); }
+    .ext-debug-rail h2 { margin: 0 0 13px; font-size: 13px; }
+    .ext-debug-row-card { margin-bottom: 8px; padding: 10px; border: 1px solid var(--ext-line); border-radius: 7px; background: var(--ext-surface-raised); }
+    .ext-debug-row-card strong, .ext-debug-row-card small { display: block; }
+    .ext-debug-row-card small { margin-top: 3px; color: var(--ext-muted); font-size: 10px; }
+    .ext-status-inline { display: inline-flex; align-items: center; gap: 5px; margin-top: 9px; color: var(--ext-green); font-size: 10px; }
+    .ext-status-inline::before { width: 6px; height: 6px; border-radius: 50%; background: currentColor; content: ""; }
+
+    .ext-statusbar { display: flex; align-items: center; gap: 14px; padding: 0 12px; border-top: 1px solid var(--ext-line); background: #eee9da; color: var(--ext-muted); font-size: 10px; }
+    .ext-statusbar .ext-spacer { flex: 1; }
+    .ext-statusbar strong { color: var(--ext-text); font-weight: 650; }
+
+    @media (max-width: 1080px) {
+      .ext-window { min-width: 760px; }
+      .ext-topbar { grid-template-columns: 180px minmax(170px, 1fr) 180px; }
+      .ext-connect-mode { grid-template-columns: 156px minmax(0, 1fr) 260px; }
+      .ext-resource-tab { flex-basis: 54px; }
+    }
+    @media (max-width: 820px) {
+      .ext-window { min-width: 620px; grid-template-rows: 42px 42px minmax(0, 1fr) 25px; }
+      .ext-topbar { grid-template-columns: 145px minmax(100px, 1fr) 120px; padding: 0 8px; }
+      .ext-brand span:last-child, .ext-window-actions .ext-icon-button:first-child { display: none; }
+      .ext-window-title { min-width: 110px; width: 88%; }
+      .ext-main-tab { min-width: 92px; padding: 0 10px; }
+      .ext-connect-mode { grid-template-columns: 136px minmax(0, 1fr) 230px; }
+      .ext-opened-caption { padding: 0 8px; }
+      .ext-opened-caption small { font-size: 9px; }
+      .ext-resource-state { display: none; }
+      .ext-preview-header { padding: 0 9px; }
+      .ext-preview-header .ext-state-label { display: none; }
+      .ext-resource-rail { padding-left: 9px; padding-right: 9px; }
+    }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
+    <defs>
+      <symbol id="ext-i-box" viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+      <symbol id="ext-i-bug" viewBox="0 0 24 24"><path d="m8 2 1.88 1.88M14.12 3.88 16 2M9 7.13v-1a3 3 0 0 1 6 0v1M12 20c-3.3 0-6-2.7-6-6v-3a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v3c0 3.3-2.7 6-6 6M12 20v-9M6.53 9C4.6 8.8 3 7.1 3 5M6 13H2M3 21c0-2.1 1.7-3.9 3.8-4M17.47 9C19.4 8.8 21 7.1 21 5M18 13h4M21 21c0-2.1-1.7-3.9-3.8-4"/></symbol>
+      <symbol id="ext-i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
+      <symbol id="ext-i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10"/></symbol>
+      <symbol id="ext-i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="ext-i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="ext-i-square" viewBox="0 0 24 24"><rect width="14" height="14" x="5" y="5" rx="1"/></symbol>
+      <symbol id="ext-i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+      <symbol id="ext-i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></symbol>
+      <symbol id="ext-i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+      <symbol id="ext-i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+      <symbol id="ext-i-eye" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7C3.75 7.6 7.7 5 12 5s8.25 2.6 9.94 6.65a1 1 0 0 1 0 .7C20.25 16.4 16.3 19 12 19s-8.25-2.6-9.94-6.65"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="ext-i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="ext-window">
+    <header class="ext-topbar">
+      <div class="ext-brand"><span class="ext-brand-mark"><svg class="ext-icon xs"><use href="#ext-i-box"/></svg></span><span>BoxTeam</span></div>
+      <div class="ext-window-title">扩展窗口</div>
+      <div class="ext-window-actions" aria-label="窗口控制"><button class="ext-icon-button" type="button" title="刷新"><svg class="ext-icon sm"><use href="#ext-i-refresh"/></svg></button><button class="ext-icon-button" type="button" title="最小化"><svg class="ext-icon sm"><use href="#ext-i-minus"/></svg></button><button class="ext-icon-button" type="button" title="最大化"><svg class="ext-icon sm"><use href="#ext-i-square"/></svg></button><button class="ext-icon-button" type="button" title="关闭窗口"><svg class="ext-icon sm"><use href="#ext-i-x"/></svg></button></div>
+    </header>
+
+    <nav class="ext-main-tabs" aria-label="扩展窗口功能标签">
+      <button class="ext-main-tab" type="button" data-mode-tab="debug"><svg class="ext-icon sm"><use href="#ext-i-bug"/></svg>调试</button>
+      <button class="ext-main-tab active" type="button" data-mode-tab="connect"><svg class="ext-icon sm"><use href="#ext-i-terminal"/></svg>运行与连接</button>
+    </nav>
+
+    <main class="ext-content">
+      <section class="ext-mode ext-connect-mode active" data-mode="connect">
+        <section class="ext-resource-strip" aria-label="已打开的预览标签">
+          <div class="ext-opened-caption"><strong>已打开预览</strong><small><span id="opened-total">2</span> 个标签</small></div>
+          <nav class="ext-resource-tabs" id="opened-resource-tabs" role="tablist" aria-label="已打开的预览标签"></nav>
+        </section>
+
+        <section class="ext-preview" aria-label="资源预览">
+          <header class="ext-preview-header"><button class="ext-icon-button ext-back" type="button" title="返回标准窗口"><svg class="ext-icon sm"><use href="#ext-i-chevron"/></svg></button><div class="ext-preview-title"><strong id="preview-title">终端 01 · sleep 2</strong><small id="preview-subtitle">终端 · home · Terminal Manager</small></div><span class="ext-spacer"></span><span class="ext-state-label history" id="preview-state">已删除 · 只读快照</span><button class="ext-icon-button" type="button" title="复制资源信息" id="copy-resource"><svg class="ext-icon sm"><use href="#ext-i-copy"/></svg></button><button class="ext-icon-button" type="button" title="更多操作"><svg class="ext-icon sm"><use href="#ext-i-link"/></svg></button></header>
+          <div class="ext-preview-body" id="preview-body">
+            <div class="ext-terminal-view" data-preview="terminal-1"><header class="ext-terminal-toolbar"><svg class="ext-icon sm" style="color:var(--ext-amber)"><use href="#ext-i-terminal"/></svg><strong>终端 01</strong><small>最后输出 · 03:18:42</small><span class="ext-spacer"></span><span class="ext-terminal-muted">只读</span></header><div class="ext-terminal-output"><div><span class="prompt">hyf@kl</span>:<span class="path">~/workspace</span>$ sleep 2</div><div class="muted">进程已启动，等待退出…</div><div class="warning">进程已结束 · exit code 0</div><div class="deleted">资源已删除，保留最后一次输出供回看</div></div></div>
+            <div class="ext-terminal-view" data-preview="terminal-2" hidden><header class="ext-terminal-toolbar"><svg class="ext-icon sm" style="color:var(--ext-amber)"><use href="#ext-i-terminal"/></svg><strong>终端 02</strong><small>最后输出 · 03:16:09</small><span class="ext-spacer"></span><span class="ext-terminal-muted">只读</span></header><div class="ext-terminal-output"><div><span class="prompt">hyf@kl</span>:<span class="path">~/workspace</span>$ ls -la debug/</div><div>total 16</div><div>drwxr-xr-x  3 hyf staff  4096 debug</div><div>-rw-r--r--  1 hyf staff  1052 model-debug-target.mjs</div><div>-rw-r--r--  1 hyf staff   684 node-debug-fixture.mjs</div><div class="deleted">资源已删除，保留最后一次输出供回看</div></div></div>
+            <div class="ext-terminal-view" data-preview="browser-1" hidden><header class="ext-terminal-toolbar"><svg class="ext-icon sm" style="color:var(--ext-green)"><use href="#ext-i-globe"/></svg><strong>浏览器 01 · 本地预览</strong><small>Browser Manager</small><span class="ext-spacer"></span><span style="color:#79c391">运行中</span></header><div style="display:grid;place-items:center;min-height:0;background:#e9eef4;color:#536272"><div style="width:min(560px,80%);padding:28px;border:1px solid #cbd6e1;border-radius:10px;background:#fff;text-align:center;box-shadow:0 8px 24px rgba(40,62,83,.12)"><div style="font-size:20px;font-weight:700;color:#34475d">本地预览页面</div><p style="margin:8px 0;color:#738092">Browser Manager 正在控制这个页面</p><span style="display:inline-flex;padding:5px 9px;border-radius:999px;background:#e3f2e8;color:#4e9a72;font-size:11px">连接正常 · 可交互</span></div></div></div>
+          </div>
+          <footer class="ext-preview-footer"><span id="preview-footer">这是已删除终端的最后一次输出，内容只读。</span><span class="ext-spacer"></span><span>资源 ID 可在高级信息中查看</span></footer>
+        </section>
+
+        <aside class="ext-resource-rail ext-gateway-panel" aria-label="Gateway 资源目录">
+          <header class="ext-panel-header"><div class="ext-panel-title">Gateway 连接 <span class="ext-count">3</span></div><div class="ext-panel-meta"><span>1 个运行中</span><span>1 个会话</span><button class="ext-icon-button" type="button" title="刷新资源目录"><svg class="ext-icon sm"><use href="#ext-i-refresh"/></svg></button></div></header>
+          <div class="ext-scope-hint">所有 Gateway、工作区和会话申请的浏览器/终端；不跟随标准窗口当前会话。</div>
+          <div class="ext-resource-tree" role="tree" aria-label="所有 Gateway 连接">
+            <section class="ext-scope" role="treeitem" aria-expanded="true">
+              <button class="ext-scope-row" type="button"><span class="ext-scope-chevron"><svg class="ext-icon xs"><use href="#ext-i-chevron"/></svg></span><span class="ext-scope-copy"><strong>Node 调试测试</strong><small>本机 Gateway · home</small></span><span class="ext-scope-count">3</span></button>
+              <div class="ext-scope-children" role="group">
+                <article class="ext-tree-item" data-card-resource="browser-1" data-resource-status="running" role="treeitem">
+                  <div class="ext-tree-row"><button class="ext-tree-chevron" type="button" aria-label="展开浏览器资源"><svg class="ext-icon xs"><use href="#ext-i-chevron"/></svg></button><button class="ext-tree-main" type="button" data-resource-select="browser-1"><span class="ext-tree-kind"><svg class="ext-icon xs"><use href="#ext-i-globe"/></svg></span><span class="ext-tree-copy"><strong>浏览器 01 · 本地预览</strong><small>home · Browser Manager</small></span><span class="ext-tree-status">运行中</span></button></div>
+                </article>
+                <article class="ext-tree-item" data-card-resource="terminal-1" data-resource-status="history" role="treeitem">
+                  <div class="ext-tree-row"><button class="ext-tree-chevron" type="button" aria-label="展开终端资源"><svg class="ext-icon xs"><use href="#ext-i-chevron"/></svg></button><button class="ext-tree-main" type="button" data-resource-select="terminal-1"><span class="ext-tree-kind"><svg class="ext-icon xs"><use href="#ext-i-terminal"/></svg></span><span class="ext-tree-copy"><strong>终端 01 · sleep 2</strong><small>home · 最后输出 03:18:42</small></span><span class="ext-tree-status">已删除</span></button></div>
+                  <div class="ext-tree-detail" data-resource-detail="terminal-1"><p>终端 · 已删除</p><p>本机 Gateway · home</p><span class="ext-tree-current-hint">当前预览</span><div class="ext-tree-actions"><button class="ext-icon-button" type="button" title="复制资源信息"><svg class="ext-icon xs"><use href="#ext-i-copy"/></svg></button><button class="ext-icon-button" type="button" title="打开资源链接"><svg class="ext-icon xs"><use href="#ext-i-link"/></svg></button></div><details class="ext-resource-details"><summary>高级信息</summary><p>resource_id: terminal-1<br>status: deleted<br>mode: readonly-snapshot</p></details></div>
+                </article>
+                <article class="ext-tree-item" data-card-resource="terminal-2" data-resource-status="history" role="treeitem">
+                  <div class="ext-tree-row"><button class="ext-tree-chevron" type="button" aria-label="展开终端资源"><svg class="ext-icon xs"><use href="#ext-i-chevron"/></svg></button><button class="ext-tree-main" type="button" data-resource-select="terminal-2"><span class="ext-tree-kind"><svg class="ext-icon xs"><use href="#ext-i-terminal"/></svg></span><span class="ext-tree-copy"><strong>终端 02 · ls -la</strong><small>workspace · 最后输出 03:16:09</small></span><span class="ext-tree-status">已删除</span></button></div>
+                  <div class="ext-tree-detail" data-resource-detail="terminal-2" hidden><p>终端 · 已删除</p><p>本机 Gateway · workspace</p><span class="ext-tree-current-hint">当前预览</span><div class="ext-tree-actions"><button class="ext-icon-button" type="button" title="复制资源信息"><svg class="ext-icon xs"><use href="#ext-i-copy"/></svg></button><button class="ext-icon-button" type="button" title="打开资源链接"><svg class="ext-icon xs"><use href="#ext-i-link"/></svg></button></div><details class="ext-resource-details"><summary>高级信息</summary><p>resource_id: terminal-2<br>status: deleted<br>mode: readonly-snapshot</p></details></div>
+                </article>
+              </div>
+            </section>
+          </div>
+        </aside>
+      </section>
+
+      <section class="ext-mode ext-debug-mode" data-mode="debug">
+        <div class="ext-debug-placeholder"><article class="ext-debug-card"><span class="ext-debug-icon"><svg class="ext-icon lg"><use href="#ext-i-bug"/></svg></span><h2>源码调试工作台</h2><p>调试资源已从“运行与连接”中独立出来。这里用于源码断点、调用栈、变量和控制台，不与终端/浏览器资源混在一起。</p><div class="ext-debug-row"><span class="ext-connection-dot"></span><span>当前会话 · Node 调试</span><span style="margin-left:auto;color:var(--ext-blue)">已暂停 · fixture.mjs:5</span></div></article></div>
+        <aside class="ext-debug-rail"><h2>调试资源</h2><article class="ext-debug-row-card"><strong>Node 调试 · JavaScript Fixture</strong><small>当前会话 · Debug Gateway</small><span class="ext-status-inline">已暂停 · 可继续</span></article><article class="ext-debug-row-card"><strong>调试配置</strong><small>node-default · debug/node-debug-fixture.mjs</small></article></aside>
+      </section>
+    </main>
+
+    <footer class="ext-statusbar"><span><span class="ext-connection-dot" style="display:inline-block;margin-right:6px;vertical-align:-1px"></span><strong>Gateway local</strong> · 已连接</span><span id="status-text">正在查看历史资源 · 终端 01</span><span class="ext-spacer"></span><span>3 个资源</span><span>主窗口同步开启</span></footer>
+  </div>
+
+  <script>
+    const resourceData = {
+      "terminal-1": { title: "终端 01 · sleep 2", subtitle: "终端 · home · Terminal Manager", state: "已删除 · 只读快照", stateClass: "history", footer: "这是已删除终端的最后一次输出，内容只读。", railMeta: "历史资源 · 只读快照", status: "正在查看历史资源 · 终端 01", icon: "terminal", kind: "terminal" },
+      "terminal-2": { title: "终端 02 · ls -la", subtitle: "终端 · workspace · Terminal Manager", state: "已删除 · 只读快照", stateClass: "history", footer: "这是已删除终端的最后一次输出，内容只读。", railMeta: "历史资源 · 只读快照", status: "正在查看历史资源 · 终端 02", icon: "terminal", kind: "terminal" },
+      "browser-1": { title: "浏览器 01 · 本地预览", subtitle: "浏览器 · home · Browser Manager", state: "运行中 · 可交互", stateClass: "running", footer: "当前页面由 Browser Manager 保持连接，可以继续操作。", railMeta: "运行中 · 可交互", status: "正在查看运行中资源 · 浏览器 01", icon: "globe", kind: "browser" }
+    };
+
+    const openedResources = new Set(["terminal-1", "browser-1"]);
+    let selectedResourceId = "terminal-1";
+
+    const $ = (selector) => document.querySelector(selector);
+    const showToast = (message) => {
+      const toast = document.createElement("div");
+      toast.textContent = message;
+      toast.style.cssText = "position:fixed;left:50%;bottom:40px;transform:translateX(-50%);padding:8px 12px;border:1px solid #c7beab;border-radius:7px;background:#fffdf6;color:#2f312f;box-shadow:0 8px 22px rgba(70,60,40,.16);font:11px var(--ext-font);z-index:5";
+      document.body.append(toast);
+      window.setTimeout(() => toast.remove(), 1500);
+    };
+
+    function renderOpenedTabs() {
+      const tabs = $("#opened-resource-tabs");
+      tabs.replaceChildren();
+      openedResources.forEach((resourceId) => {
+        const resource = resourceData[resourceId];
+        const tab = document.createElement("button");
+        tab.className = "ext-resource-tab" + (resourceId === selectedResourceId ? " active" : "");
+        tab.type = "button";
+        tab.role = "tab";
+        tab.dataset.resource = resourceId;
+        tab.dataset.kind = resource.kind;
+        tab.title = resource.title + " · 点击切换预览";
+        tab.setAttribute("aria-selected", String(resourceId === selectedResourceId));
+        tab.innerHTML = '<span class="ext-resource-icon"><svg class="ext-icon xs"><use href="#ext-i-' + resource.icon + '"></use></svg></span><span class="ext-resource-copy"><strong></strong><small></small></span><span class="ext-resource-state ' + resource.stateClass + '"></span>';
+        tab.querySelector("strong").textContent = resource.title;
+        tab.querySelector("small").textContent = resource.subtitle.replace(" · Terminal Manager", "").replace(" · Browser Manager", "");
+        tab.querySelector(".ext-resource-state").textContent = resource.stateClass === "running" ? "运行中" : "已删除";
+        const close = document.createElement("span");
+        close.className = "ext-tab-close";
+        close.textContent = "×";
+        close.title = "关闭预览标签，不停止资源";
+        close.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (openedResources.size === 1) {
+            showToast("至少保留一个已打开的预览标签");
+            return;
+          }
+          openedResources.delete(resourceId);
+          if (selectedResourceId === resourceId) selectedResourceId = openedResources.values().next().value;
+          renderOpenedTabs();
+          selectResource(selectedResourceId);
+          showToast("已关闭预览标签，资源仍保持原状态");
+        });
+        tab.append(close);
+        tab.addEventListener("click", () => selectResource(resourceId));
+        tabs.append(tab);
+      });
+      $("#opened-total").textContent = String(openedResources.size);
+    }
+
+    function selectResource(resourceId) {
+      const resource = resourceData[resourceId];
+      if (!openedResources.has(resourceId)) {
+        openedResources.add(resourceId);
+        showToast("已打开预览标签：" + resource.title);
+      }
+      selectedResourceId = resourceId;
+      renderOpenedTabs();
+      document.querySelectorAll(".ext-tree-item").forEach((card) => {
+        const selected = card.dataset.cardResource === resourceId;
+        card.classList.toggle("is-selected", selected);
+        card.classList.toggle("is-expanded", selected);
+        const status = card.querySelector(".ext-tree-status");
+        status.textContent = selected ? "当前" : card.dataset.resourceStatus === "running" ? "运行中" : "已删除";
+        const detail = card.querySelector("[data-resource-detail]");
+        if (detail) detail.hidden = !selected;
+      });
+      document.querySelectorAll("[data-preview]").forEach((preview) => { preview.hidden = preview.dataset.preview !== resourceId; });
+      $("#preview-title").textContent = resource.title;
+      $("#preview-subtitle").textContent = resource.subtitle;
+      $("#preview-state").textContent = resource.state;
+      $("#preview-state").className = "ext-state-label " + resource.stateClass;
+      $("#preview-footer").textContent = resource.footer;
+      $("#status-text").textContent = resource.status;
+    }
+
+    document.querySelectorAll("[data-resource-select]").forEach((button) => button.addEventListener("click", () => selectResource(button.dataset.resourceSelect)));
+    document.querySelectorAll(".ext-tree-chevron").forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const item = button.closest(".ext-tree-item");
+      const detail = item?.querySelector("[data-resource-detail]");
+      if (!detail) return;
+      const expanded = detail.hidden;
+      detail.hidden = !expanded;
+      item.classList.toggle("is-expanded", expanded);
+    }));
+    document.querySelectorAll("[data-mode-tab]").forEach((tab) => tab.addEventListener("click", () => {
+      const mode = tab.dataset.modeTab;
+      document.querySelectorAll("[data-mode-tab]").forEach((item) => item.classList.toggle("active", item === tab));
+      document.querySelectorAll("[data-mode]").forEach((panel) => panel.classList.toggle("active", panel.dataset.mode === mode));
+      showToast(mode === "connect" ? "已切换到运行与连接" : "已切换到源码调试");
+    }));
+    $("#copy-resource").addEventListener("click", () => showToast("已复制资源摘要；完整 ID 位于高级信息"));
+    document.querySelector(".ext-back").addEventListener("click", () => showToast("原型：返回标准窗口"));
+    renderOpenedTabs();
+    selectResource("terminal-1");
+  </script>
+</body>
+</html>

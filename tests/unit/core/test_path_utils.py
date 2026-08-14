@@ -355,7 +355,7 @@ class TestPathUtils:
         )
         assert migrated_references == {
             "file_id": (f"boxteam-session://{session_id}/attachments/legacy.png"),
-            "read_path": (f"/session-artifacts/{session_id}/tool-results/legacy.txt"),
+            "read_path": (f"session-artifacts/{session_id}/tool-results/legacy.txt"),
         }
         assert not legacy_checkpoint.exists()
         assert (

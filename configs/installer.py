@@ -127,6 +127,7 @@ def install_source_development_configuration(
     *,
     project_root: Path,
     config_root: Path,
+    local_only: bool = False,
 ) -> ConfigurationInstallation:
     """把源码开发资源安装到 BOXTEAM_HOME，运行期不再读取源码文件。"""
     resolved_project_root = project_root.expanduser().resolve()
@@ -135,7 +136,7 @@ def install_source_development_configuration(
         raise FileNotFoundError(f"源码环境配置不存在: {source_env_path}")
     installation = install_user_configuration(
         config_root=config_root,
-        profile="development",
+        profile="default" if local_only else "development",
         project_root=resolved_project_root,
         force=True,
     )

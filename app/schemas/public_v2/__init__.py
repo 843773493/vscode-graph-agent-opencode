@@ -7,6 +7,7 @@ from .goal import *
 from .job import *
 from .mcp import *
 from .message import *
+from .node_debug import *
 from .runtime import *
 from .session import *
 from .session_interaction import *

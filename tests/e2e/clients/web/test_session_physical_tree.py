@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -9,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.e2e.gateway.processes import (
+from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
@@ -41,9 +42,10 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
     if chromium_path is None:
         pytest.fail("会话物理树 Web E2E 需要 Chromium")
 
-    build = subprocess.run(
+    build = await asyncio.to_thread(
+        subprocess.run,
         ["bun", "run", "build"],
-        cwd=project_root / "src" / "web",
+        cwd=project_root / "src" / "clients" / "web",
         capture_output=True,
         text=True,
         check=False,
@@ -55,7 +57,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
         workspace_root=workspace_root,
         default_backend_url="http://127.0.0.1:9",
         port=port,
-        extra_env={"BOXTEAM_WEB_ASSETS": str(project_root / "src" / "web" / "dist")},
+        extra_env={"BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist")},
     )
     try:
         async with httpx.AsyncClient(
@@ -122,7 +124,8 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["node", "tests/e2e/clients/web/session_physical_tree.mjs"],
             cwd=project_root,
             env=environment,

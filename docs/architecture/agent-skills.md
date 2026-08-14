@@ -15,6 +15,9 @@ resources/
     ├── gateway-context/
     │   ├── AGENTS.md
     │   └── SKILL.md
+    ├── debugging/
+    │   ├── AGENTS.md
+    │   └── SKILL.md
     └── web-search-fetch/
         ├── AGENTS.md
         └── SKILL.md

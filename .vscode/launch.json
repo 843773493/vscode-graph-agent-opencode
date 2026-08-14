@@ -26,7 +26,7 @@
             "type": "editor-browser",
             "request": "launch",
             "url": "http://127.0.0.1:8001",
-            "webRoot": "${workspaceFolder}/src/web",
+            "webRoot": "${workspaceFolder}/src/clients/web",
             "preLaunchTask": "dev:web",
         },
         {

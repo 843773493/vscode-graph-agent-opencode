@@ -29,6 +29,7 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 if TYPE_CHECKING:
@@ -70,6 +71,8 @@ class AgentRuntimeDependencyProvider(Protocol):
     ) -> SessionMessageDeliveryProtocol: ...
 
     def get_mcp_tools(self) -> list[BaseTool]: ...
+
+    def get_node_debug_service(self) -> NodeDebugService: ...
 
 
 def build_session_agent_runtime(
@@ -119,6 +122,12 @@ def build_session_agent_runtime(
             dependency_provider.get_session_message_delivery_service()
         ),
         mcp_tools=dependency_provider.get_mcp_tools(),
+        node_debug_service=(
+            # TODO: 所有外部 runtime provider 补齐该依赖后移除兼容分支。
+            dependency_provider.get_node_debug_service()
+            if hasattr(dependency_provider, "get_node_debug_service")
+            else None
+        ),
         checkpointer=checkpointer,
         name=name or resolved_agent_id,
         override_model=override_model,

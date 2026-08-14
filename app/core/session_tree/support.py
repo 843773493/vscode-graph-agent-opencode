@@ -108,7 +108,7 @@ def _navigation_signature(path: Path) -> tuple[int, int, int]:
 def _read_json_object(path: Path) -> dict[str, object]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise RuntimeError(f"JSON 文件必须是 object: {path}")
+        raise TypeError(f"JSON 文件必须是 object: {path}")
     return {str(key): value for key, value in raw.items()}
 
 def _parse_datetime(value: object, path: Path) -> datetime:
@@ -120,7 +120,7 @@ def _parse_datetime(value: object, path: Path) -> datetime:
 def _parse_optional_datetime(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.fromisoformat(value)
 
 def _rewrite_legacy_locator_value(
     value: object,
@@ -215,7 +215,7 @@ def _rewrite_legacy_locator_string(
     replacement = (
         f"boxteam-session://{session_id}/"
         if field_name == "file_id"
-        else f"/session-artifacts/{session_id}/"
+        else f"session-artifacts/{session_id}/"
     )
     updated = absolute_pattern.sub(replacement, value)
     updated = relative_pattern.sub(replacement, updated)

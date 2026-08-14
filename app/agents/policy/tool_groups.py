@@ -27,6 +27,36 @@ AGENT_COLLABORATION_TOOL_GROUP = ToolGroupDefinition(
     group_name="默认工具 · Agent Collaboration",
     kind="collaboration",
 )
+DEBUGGING_TOOL_GROUP = ToolGroupDefinition(
+    group_id="debugging",
+    group_name="扩展工具 · Source Debugging",
+    kind="debugging",
+)
+
+DEBUGGING_TOOL_NAMES = frozenset(
+    {
+        "list_debug_configurations",
+        "create_debug_configuration",
+        "activate_debug_configuration",
+        "delete_debug_configuration",
+        "start_debugging",
+        "stop_debugging",
+        "step_over",
+        "step_into",
+        "step_out",
+        "continue_execution",
+        "pause_execution",
+        "restart_debugging",
+        "add_breakpoint",
+        "add_logpoint",
+        "remove_breakpoint",
+        "clear_all_breakpoints",
+        "list_breakpoints",
+        "list_variable_names",
+        "get_variables_values",
+        "evaluate_expression",
+    }
+)
 
 DIRECT_AGENT_COLLABORATION_TOOL_NAMES = frozenset(
     {
@@ -55,6 +85,8 @@ AGENT_COLLABORATION_TOOL_NAMES = (
 
 
 def catalog_group_for_tool(tool_name: str) -> ToolGroupDefinition:
+    if tool_name in DEBUGGING_TOOL_NAMES:
+        return DEBUGGING_TOOL_GROUP
     if tool_name in AGENT_COLLABORATION_TOOL_NAMES:
         return AGENT_COLLABORATION_TOOL_GROUP
     return DEFAULT_TOOL_GROUP

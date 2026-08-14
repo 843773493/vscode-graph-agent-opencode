@@ -48,6 +48,22 @@ describe("gateway supervisor", () => {
     }
   });
 
+  test("开发版允许通过环境变量切换 Gateway 端口", () => {
+    expect(
+      gatewayEndpoint("source-development", {
+        BOXTEAM_GATEWAY_PORT: "8114",
+      }),
+    ).toEqual({
+      host: "127.0.0.1",
+      port: 8114,
+      url: "http://127.0.0.1:8114",
+    });
+    expect(
+      gatewayEnvironment(runtime, { BOXTEAM_GATEWAY_PORT: "8114" })
+        .BOXTEAM_GATEWAY_URL,
+    ).toBe("http://127.0.0.1:8114");
+  });
+
   test("向 Gateway 传入 manifest 资源", () => {
     const environment = gatewayEnvironment(runtime, {
       BOXTEAM_HOME: "/tmp/boxteams",

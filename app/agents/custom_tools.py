@@ -4,7 +4,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from importlib import import_module
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from langchain_core.tools import BaseTool
 
@@ -29,6 +29,9 @@ from app.agents.model_tool_schema import get_model_tool_schema
 from app.agents.policy import parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.node_debug_service import NodeDebugService
+
 
 @dataclass(frozen=True, slots=True)
 class CustomToolFactoryContext:
@@ -49,6 +52,7 @@ class CustomToolFactoryContext:
     invocation_context: ToolInvocationContext
     session_target_resolver: SessionTargetResolverProtocol | None = None
     tool_options: Mapping[str, object] = field(default_factory=dict)
+    node_debug_service: NodeDebugService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +149,7 @@ def build_custom_tool_bundle(
     browser_manager_client: BrowserManagerClientProtocol,
     invocation_context: ToolInvocationContext,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
+    node_debug_service: NodeDebugService | None = None,
 ) -> CustomToolBundle:
     context = CustomToolFactoryContext(
         session_id=session_id,
@@ -163,6 +168,7 @@ def build_custom_tool_bundle(
         browser_manager_client=browser_manager_client,
         invocation_context=invocation_context,
         session_target_resolver=session_target_resolver,
+        node_debug_service=node_debug_service,
     )
     tools = build_custom_tools(specs, context=context)
     return CustomToolBundle(tools=tools)

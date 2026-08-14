@@ -1,0 +1,1974 @@
+.auxiliary-debug-body {
+  min-width: 0;
+  overflow: auto;
+}
+
+.debug-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100%;
+  gap: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--bt-surface-raised) 72%, transparent);
+  color: var(--bt-text-primary);
+}
+
+.debug-panel-header,
+.debug-section-title-row,
+.debug-breakpoint-row,
+.debug-timeline-row,
+.debug-audit-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.debug-panel-header {
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--bt-panel-border);
+}
+
+.debug-panel-header > div,
+.debug-section-title-row h3 {
+  min-width: 0;
+}
+
+.debug-panel-header strong,
+.debug-panel-header span {
+  display: block;
+}
+
+.debug-panel-header strong {
+  font-size: 14px;
+}
+
+.debug-panel-header span,
+.debug-muted,
+.debug-section-title-row > span,
+.debug-stop-card p,
+.debug-timeline-row small,
+.debug-audit-row small {
+  color: var(--bt-text-muted);
+}
+
+.debug-panel-header span {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.debug-refresh-button,
+.debug-control-buttons button,
+.debug-breakpoint-form button,
+.debug-clear-all {
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-surface-raised) 68%, transparent);
+  color: var(--bt-text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.debug-refresh-button,
+.debug-control-buttons button,
+.debug-breakpoint-form button {
+  min-height: 26px;
+  padding: 0 8px;
+}
+
+.debug-refresh-button:hover,
+.debug-control-buttons button:hover:not(:disabled),
+.debug-breakpoint-form button:hover,
+.debug-clear-all:hover {
+  border-color: color-mix(in srgb, var(--bt-accent) 52%, var(--bt-panel-border));
+  background: color-mix(in srgb, var(--bt-accent) 12%, var(--bt-surface-raised));
+}
+
+.debug-control-buttons button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.debug-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.debug-section-title-row {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.debug-section-title-row h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.debug-section-title-row > span {
+  font-size: 10px;
+}
+
+.debug-status {
+  color: var(--bt-status-success) !important;
+}
+
+.debug-status.stopped {
+  color: var(--bt-status-warning) !important;
+}
+
+.debug-breakpoint-form select,
+.debug-breakpoint-form input {
+  min-width: 0;
+  min-height: 28px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-input-background, var(--bt-surface-raised));
+  color: var(--bt-text-primary);
+  font: inherit;
+  font-size: 11px;
+}
+
+.debug-shared-control-note {
+  margin: 0;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.debug-control-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.debug-control-buttons button:last-child {
+  grid-column: 1 / -1;
+}
+
+.debug-breakpoint-form {
+  display: grid;
+  grid-template-columns: minmax(66px, 0.7fr) minmax(0, 1.4fr) auto;
+  gap: 5px;
+}
+
+.debug-breakpoint-form select,
+.debug-breakpoint-form input {
+  padding: 0 6px;
+}
+
+.debug-breakpoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.debug-breakpoint-row {
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 5px;
+  border: 1px solid color-mix(in srgb, var(--bt-panel-border) 70%, transparent);
+  border-radius: var(--bt-radius-small);
+  font-size: 11px;
+}
+
+.debug-breakpoint-row > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-breakpoint-row button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--bt-text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.debug-breakpoint-row button:hover {
+  color: var(--bt-status-danger);
+}
+
+.debug-breakpoint-dot,
+.debug-timeline-marker {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--bt-accent);
+}
+
+.debug-clear-all {
+  align-self: flex-start;
+  padding: 4px 7px;
+}
+
+.debug-stop-card {
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-warning) 48%, var(--bt-panel-border));
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-status-warning) 8%, transparent);
+}
+
+.debug-stop-card strong {
+  display: block;
+  font-size: 11px;
+}
+
+.debug-stop-card p {
+  margin: 5px 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.debug-stop-card details {
+  margin-top: 6px;
+  font-size: 10px;
+}
+
+.debug-stop-card pre {
+  max-height: 140px;
+  margin: 5px 0 0;
+  padding: 6px;
+  overflow: auto;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--bt-surface-base) 70%, transparent);
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.debug-empty-state {
+  padding: 18px 4px;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.debug-empty-state.compact {
+  padding: 7px 0;
+}
+
+.debug-timeline,
+.debug-audit-details {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.debug-timeline-row {
+  display: grid;
+  grid-template-columns: 8px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.debug-timeline-row small,
+.debug-audit-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-timeline-marker.debug {
+  background: var(--bt-status-warning);
+}
+
+.debug-timeline-marker.tool {
+  background: var(--bt-status-success);
+}
+
+.debug-audit-details {
+  margin-top: 5px;
+  font-size: 10px;
+}
+
+.debug-audit-row {
+  gap: 5px;
+}
+
+.debug-audit-row strong {
+  font-weight: 500;
+}
+
+.debug-audit-row small {
+  flex: 1 1 auto;
+}
+
+.debug-error {
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 48%, var(--bt-panel-border));
+  border-radius: var(--bt-radius-small);
+  color: var(--bt-status-danger);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.debug-warning {
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-warning) 48%, var(--bt-panel-border));
+  border-radius: var(--bt-radius-small);
+  color: var(--bt-status-warning);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.node-debug-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--bt-panel-border);
+  background: color-mix(in srgb, var(--bt-surface-raised) 96%, #6f8cff 4%);
+}
+
+.node-debug-header,
+.node-debug-controls,
+.node-debug-breakpoint-form,
+.node-debug-evaluate-row,
+.node-debug-breakpoint-row,
+.node-debug-frame-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.node-debug-header {
+  justify-content: space-between;
+}
+
+.node-debug-header > div,
+.node-debug-frame-card {
+  display: grid;
+  gap: 3px;
+}
+
+.node-debug-header span,
+.node-debug-frame-card small {
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.node-debug-section {
+  display: grid;
+  gap: 7px;
+}
+
+.node-debug-breakpoint-form input,
+.node-debug-evaluate-row input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 5px 7px;
+  color: var(--bt-text-primary);
+  background: var(--bt-surface-raised);
+  font: inherit;
+}
+
+.node-debug-controls button,
+.node-debug-breakpoint-form button,
+.node-debug-evaluate-row button,
+.node-debug-header button {
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: var(--bt-text-primary);
+  background: var(--bt-surface-raised);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.node-debug-controls button:hover,
+.node-debug-breakpoint-form button:hover,
+.node-debug-evaluate-row button:hover,
+.node-debug-header button:hover {
+  border-color: var(--bt-accent);
+}
+
+.node-debug-controls button:disabled,
+.node-debug-breakpoint-form button:disabled,
+.node-debug-evaluate-row button:disabled,
+.node-debug-header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.node-debug-controls {
+  flex-wrap: wrap;
+}
+
+.node-debug-breakpoint-form input {
+  max-width: 68px;
+}
+
+.node-debug-breakpoint-row {
+  min-width: 0;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.node-debug-breakpoint-row button:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  color: var(--bt-text-primary);
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.node-debug-breakpoint-row button:last-child {
+  border: 0;
+  color: var(--bt-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.node-debug-breakpoint-row .verified {
+  color: #55c88a;
+}
+
+.node-debug-breakpoint-row .unverified {
+  color: #d69d4f;
+}
+
+.node-debug-frame-card {
+  align-items: start;
+  border-left: 2px solid var(--bt-accent);
+  padding: 6px 8px;
+  background: var(--bt-surface-raised);
+}
+
+.node-debug-frame-card button {
+  width: fit-content;
+  border: 0;
+  padding: 0;
+  color: var(--bt-accent);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.node-debug-variables {
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 5px 7px;
+  background: var(--bt-surface-raised);
+  font-size: 11px;
+}
+
+.node-debug-variables > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.node-debug-variables code,
+.node-debug-section pre {
+  overflow: auto;
+  color: var(--bt-text-primary);
+  font: 11px/1.45 var(--bt-font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.node-debug-section pre {
+  max-height: 140px;
+  margin: 0;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 7px;
+  background: var(--bt-surface-raised);
+}
+
+.node-debug-output {
+  max-height: 90px !important;
+}
+
+/* 源码调试工作台：主窗口保持紧凑，扩展窗口保留完整的二级视图。 */
+.debug-workbench-header {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 45px;
+  border-bottom: 1px solid var(--bt-panel-border);
+}
+
+.debug-workbench-header > div:first-child {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+  padding: 0 2px;
+}
+
+.debug-workbench-header strong,
+.debug-workbench-header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-workbench-header strong {
+  font-size: 12px;
+}
+
+.debug-workbench-header span {
+  margin-top: 2px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.debug-workbench-header nav,
+.node-debug-view-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.debug-workbench-header nav button,
+.node-debug-view-tabs button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--bt-text-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.debug-workbench-header nav button:hover,
+.debug-workbench-header nav button.active,
+.node-debug-view-tabs button:hover,
+.node-debug-view-tabs button.active {
+  background: var(--bt-hover-background);
+  color: var(--bt-text-primary);
+}
+
+.debug-workbench-header nav button[aria-selected="true"],
+.node-debug-view-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--bt-accent);
+}
+
+.node-debug-panel.compact {
+  gap: 9px;
+  padding: 10px;
+}
+
+.node-debug-panel.extension-window {
+  min-height: 0;
+  padding: 16px;
+}
+
+.node-debug-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.node-debug-header-actions button,
+.node-debug-start-button,
+.node-debug-controls button,
+.node-debug-configuration-view button,
+.node-debug-evaluate-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-surface-raised);
+  color: var(--bt-text-primary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.node-debug-header-actions button:hover,
+.node-debug-start-button:hover:not(:disabled),
+.node-debug-controls button:hover:not(:disabled),
+.node-debug-configuration-view button:hover:not(:disabled),
+.node-debug-evaluate-row button:hover:not(:disabled) {
+  border-color: var(--bt-accent);
+}
+
+.node-debug-header-actions button:disabled,
+.node-debug-start-button:disabled,
+.node-debug-controls button:disabled,
+.node-debug-configuration-view button:disabled,
+.node-debug-evaluate-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.node-debug-header-actions button:not(:has(.codicon)) {
+  padding: 0 7px;
+}
+
+.node-debug-status {
+  display: inline-block;
+  width: fit-content;
+  margin-top: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bt-text-muted) 12%, transparent);
+  color: var(--bt-text-muted) !important;
+  font-size: 9px !important;
+}
+
+.node-debug-status.running,
+.node-debug-status.starting {
+  background: color-mix(in srgb, var(--bt-status-success) 14%, transparent);
+  color: var(--bt-status-success) !important;
+}
+
+.node-debug-status.paused {
+  background: color-mix(in srgb, var(--bt-status-warning) 16%, transparent);
+  color: var(--bt-status-warning) !important;
+}
+
+.node-debug-status.failed {
+  background: color-mix(in srgb, var(--bt-status-danger) 14%, transparent);
+  color: var(--bt-status-danger) !important;
+}
+
+.node-debug-header small {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-view-tabs {
+  border-bottom: 1px solid var(--bt-panel-border);
+}
+
+.node-debug-controls {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+}
+
+.node-debug-controls button {
+  min-width: 30px;
+  padding: 0 7px;
+}
+
+.node-debug-controls button.primary,
+.node-debug-start-button {
+  border-color: color-mix(in srgb, var(--bt-accent) 55%, var(--bt-panel-border));
+  background: color-mix(in srgb, var(--bt-accent) 16%, var(--bt-surface-raised));
+}
+
+.node-debug-view {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.node-debug-source-preview,
+.node-debug-secondary,
+.node-debug-section,
+.node-debug-configuration-view label {
+  min-width: 0;
+}
+
+.node-debug-scheme-section {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--bt-panel-border);
+}
+
+.node-debug-scheme-list {
+  display: grid;
+  gap: 5px;
+}
+
+.node-debug-scheme-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 5px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--bt-surface-raised) 72%, transparent);
+}
+
+.node-debug-scheme-list > div.active {
+  border-color: color-mix(in srgb, var(--bt-accent) 64%, var(--bt-panel-border));
+  background: color-mix(in srgb, var(--bt-accent) 9%, var(--bt-surface-raised));
+}
+
+.node-debug-scheme-list > div > button:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 0;
+  padding: 3px 5px;
+  color: var(--bt-text-primary);
+  background: transparent;
+  text-align: left;
+}
+
+.node-debug-scheme-list strong,
+.node-debug-scheme-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-scheme-list small {
+  color: var(--bt-text-muted);
+  font-size: 9px;
+}
+
+.node-debug-scheme-list .danger {
+  border: 0;
+  color: var(--bt-text-muted);
+  background: transparent;
+}
+
+.node-debug-scheme-list .danger:hover:not(:disabled) {
+  color: var(--bt-status-danger);
+}
+
+.node-debug-scheme-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.node-debug-scheme-section > p {
+  margin: 0;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.node-debug-scheme-transfer {
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 5px;
+  padding: 6px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.node-debug-scheme-transfer[open] summary {
+  margin-bottom: 7px;
+}
+
+.node-debug-scheme-transfer > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.node-debug-scheme-transfer > div:first-of-type {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.node-debug-scheme-transfer select {
+  min-width: 0;
+}
+
+.node-debug-source-preview {
+  display: grid;
+  gap: 5px;
+}
+
+.node-debug-source-preview > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.node-debug-source-preview > header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-source-preview > header button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 23px;
+  padding: 0 6px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: transparent;
+  color: var(--bt-text-primary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.node-debug-code {
+  max-height: min(330px, 42vh);
+  overflow: auto;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: color-mix(in srgb, var(--bt-surface-base) 82%, transparent);
+  font: 10px/1.55 var(--bt-font-mono, monospace);
+}
+
+.node-debug-code-line {
+  display: grid;
+  grid-template-columns: 22px 28px minmax(0, 1fr);
+  align-items: center;
+  min-height: 18px;
+  color: var(--bt-text-primary);
+}
+
+.node-debug-code-line.current {
+  background: color-mix(in srgb, var(--bt-status-warning) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--bt-status-warning);
+}
+
+.node-debug-gutter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.node-debug-gutter > .node-debug-breakpoint-placeholder {
+  width: 7px;
+  height: 7px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+}
+
+.node-debug-gutter:hover > .node-debug-breakpoint-placeholder {
+  border-color: var(--bt-status-danger);
+}
+
+.node-debug-gutter:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.node-debug-line-number {
+  color: var(--bt-text-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.node-debug-code-line code {
+  min-width: 0;
+  padding: 0 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.node-debug-source-preview > small {
+  color: var(--bt-text-muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.node-debug-secondary {
+  border-top: 1px solid var(--bt-panel-border);
+  padding-top: 7px;
+}
+
+.node-debug-secondary > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.node-debug-secondary > summary span {
+  min-width: 17px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  background: var(--bt-badge-background);
+  text-align: center;
+}
+
+.node-debug-breakpoint-list,
+.node-debug-variable-list,
+.node-debug-action-list {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 7px;
+}
+
+.node-debug-breakpoint-form {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.node-debug-breakpoint-form input,
+.node-debug-evaluate-row input,
+.node-debug-configuration-view input,
+.node-debug-configuration-view select {
+  min-width: 0;
+  width: 100%;
+  min-height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-input-background, var(--bt-surface-raised));
+  color: var(--bt-text-primary);
+  font: inherit;
+  font-size: 10px;
+}
+
+.node-debug-breakpoint-row {
+  min-height: 25px;
+  padding: 3px 5px;
+  border: 1px solid color-mix(in srgb, var(--bt-panel-border) 75%, transparent);
+  border-radius: var(--bt-radius-small);
+}
+
+.node-debug-breakpoint-row > span:first-child {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--bt-text-muted);
+}
+
+.node-debug-breakpoint-row > span:first-child.verified {
+  background: var(--bt-status-success);
+}
+
+.node-debug-breakpoint-row > span:first-child.unverified {
+  background: var(--bt-status-warning);
+}
+
+.node-debug-context-view .node-debug-frame-card {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  border: 1px solid var(--bt-panel-border);
+  border-left: 2px solid transparent;
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-surface-raised);
+  text-align: left;
+}
+
+.node-debug-context-view .node-debug-frame-card.active {
+  border-left-color: var(--bt-accent);
+}
+
+.node-debug-context-view .node-debug-frame-card span,
+.node-debug-variable-list small,
+.node-debug-action-list small {
+  color: var(--bt-text-muted);
+  font-size: 9px;
+}
+
+.node-debug-variable-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 0.6fr) minmax(0, 1fr) max-content;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 4px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--bt-panel-border) 65%, transparent);
+  font-size: 10px;
+}
+
+.node-debug-variable-list code,
+.node-debug-action-list strong {
+  min-width: 0;
+  overflow: hidden;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-evaluate-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.node-debug-evaluation-list {
+  display: grid;
+  gap: 4px;
+}
+
+.node-debug-evaluation-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-surface-raised);
+}
+
+.node-debug-evaluation-list code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bt-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-evaluation-list strong {
+  color: var(--bt-accent);
+  font-size: 10px;
+}
+
+.node-debug-section pre,
+.node-debug-console-view pre {
+  max-height: min(180px, 30vh);
+  margin: 0;
+  padding: 7px;
+  overflow: auto;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-surface-raised);
+  color: var(--bt-text-primary);
+  font: 10px/1.45 var(--bt-font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.node-debug-action-list > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, max-content) minmax(0, 1fr) max-content;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  font-size: 10px;
+}
+
+.node-debug-action-list > div > span {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--bt-text-muted) 14%, transparent);
+  color: var(--bt-text-muted);
+  font-size: 9px;
+}
+
+.node-debug-action-list > div > span.agent {
+  background: color-mix(in srgb, var(--bt-accent) 14%, transparent);
+  color: var(--bt-accent);
+}
+
+.node-debug-configuration-view {
+  display: grid;
+  gap: 8px;
+}
+
+.node-debug-configuration-view label {
+  display: grid;
+  gap: 4px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.node-debug-path-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.node-debug-configuration-view .node-debug-start-button {
+  justify-self: start;
+}
+
+@media (max-width: 760px) {
+  .debug-panel {
+    gap: 9px;
+    padding: 9px;
+  }
+
+  .node-debug-panel.compact {
+    padding: 8px;
+  }
+
+  .debug-workbench-header {
+    display: grid;
+    gap: 3px;
+  }
+
+  .debug-workbench-header nav {
+    width: 100%;
+  }
+
+  .node-debug-controls {
+    overflow-x: auto;
+  }
+
+  .node-debug-controls button {
+    flex: 0 0 auto;
+  }
+}
+
+/* 当前调试工作台：右侧侧边栏与扩展窗口共用同一套响应式组件。 */
+.debug-workbench-header {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--bt-panel-border);
+}
+
+.debug-workbench-header > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.debug-workbench-header > div span {
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.debug-workbench-header nav,
+.node-debug-view-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.debug-workbench-header nav button,
+.node-debug-view-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--bt-text-muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.debug-workbench-header nav button:hover,
+.node-debug-view-tabs button:hover,
+.debug-workbench-header nav button.active,
+.node-debug-view-tabs button.active {
+  color: var(--bt-text-primary);
+  border-color: color-mix(in srgb, var(--bt-accent) 48%, var(--bt-panel-border));
+  background: color-mix(in srgb, var(--bt-accent) 10%, var(--bt-surface-raised));
+}
+
+.node-debug-panel {
+  min-width: 0;
+}
+
+.node-debug-panel,
+.node-debug-panel.extension-window {
+  container-type: inline-size;
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.node-debug-header,
+.node-debug-header-actions,
+.node-debug-controls,
+.node-debug-breakpoint-form,
+.node-debug-evaluate-row,
+.node-debug-breakpoint-row,
+.node-debug-path-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.node-debug-header {
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.node-debug-header > div:first-child {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.node-debug-header strong {
+  font-size: 12px;
+}
+
+.node-debug-header small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--bt-text-muted);
+  background: color-mix(in srgb, var(--bt-text-muted) 11%, transparent);
+  font-size: 10px;
+}
+
+.node-debug-status.running,
+.node-debug-status.starting {
+  color: var(--bt-status-success);
+  background: color-mix(in srgb, var(--bt-status-success) 12%, transparent);
+}
+
+.node-debug-status.paused {
+  color: var(--bt-status-warning);
+  background: color-mix(in srgb, var(--bt-status-warning) 13%, transparent);
+}
+
+.node-debug-status.failed {
+  color: var(--bt-status-danger);
+  background: color-mix(in srgb, var(--bt-status-danger) 12%, transparent);
+}
+
+.node-debug-header button,
+.node-debug-controls button,
+.node-debug-breakpoint-form button,
+.node-debug-evaluate-row button,
+.node-debug-path-field button,
+.node-debug-start-button,
+.node-debug-source-preview header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 5px;
+  padding: 0 8px;
+  color: var(--bt-text-primary);
+  background: color-mix(in srgb, var(--bt-surface-raised) 88%, transparent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.node-debug-header button:hover,
+.node-debug-controls button:hover:not(:disabled),
+.node-debug-breakpoint-form button:hover:not(:disabled),
+.node-debug-evaluate-row button:hover:not(:disabled),
+.node-debug-path-field button:hover,
+.node-debug-start-button:hover:not(:disabled),
+.node-debug-source-preview header button:hover {
+  border-color: var(--bt-accent);
+}
+
+.node-debug-header button:disabled,
+.node-debug-controls button:disabled,
+.node-debug-breakpoint-form button:disabled,
+.node-debug-evaluate-row button:disabled,
+.node-debug-start-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.node-debug-controls {
+  flex-wrap: wrap;
+}
+
+.node-debug-controls button:not(.primary) {
+  width: 30px;
+  padding: 0;
+}
+
+.node-debug-controls button.primary,
+.node-debug-start-button {
+  color: var(--bt-button-primary-foreground, #fff);
+  border-color: color-mix(in srgb, var(--bt-accent) 68%, var(--bt-panel-border));
+  background: color-mix(in srgb, var(--bt-accent) 78%, #171b26);
+}
+
+.node-debug-view-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--bt-panel-border);
+  padding-bottom: 6px;
+}
+
+.node-debug-view {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.node-debug-section {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.node-debug-source-preview {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bt-surface-base) 88%, transparent);
+}
+
+.node-debug-source-preview > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--bt-panel-border);
+}
+
+.node-debug-source-preview > header > span {
+  min-width: 0;
+  overflow: hidden;
+  font: 10px var(--bt-font-mono, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-source-preview > small {
+  display: block;
+  padding: 7px 9px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.node-debug-code {
+  min-height: 170px;
+  max-height: 310px;
+  overflow: auto;
+  padding: 5px 0;
+  font: 11px/1.55 var(--bt-font-mono, monospace);
+}
+
+.node-debug-code-line {
+  display: grid;
+  grid-template-columns: 18px 34px minmax(max-content, 1fr);
+  min-width: max-content;
+  min-height: 18px;
+}
+
+.node-debug-code-line.current {
+  background: color-mix(in srgb, var(--bt-status-warning) 13%, transparent);
+  box-shadow: inset 2px 0 var(--bt-status-warning);
+}
+
+.node-debug-code-line code {
+  padding-right: 14px;
+  color: var(--bt-text-primary);
+  white-space: pre;
+}
+
+.node-debug-line-number {
+  color: var(--bt-text-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.node-debug-gutter {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.node-debug-gutter > .node-debug-breakpoint-placeholder {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 60%, transparent);
+  border-radius: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+}
+
+.node-debug-code-line:hover .node-debug-gutter > .node-debug-breakpoint-placeholder,
+.node-debug-gutter:focus-visible > .node-debug-breakpoint-placeholder {
+  opacity: 1;
+}
+
+.node-debug-secondary {
+  min-width: 0;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 6px;
+  padding: 7px;
+  background: color-mix(in srgb, var(--bt-surface-raised) 72%, transparent);
+  font-size: 11px;
+}
+
+.node-debug-secondary summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.node-debug-secondary[open] summary {
+  margin-bottom: 8px;
+}
+
+.node-debug-breakpoint-form {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  margin-bottom: 7px;
+}
+
+.node-debug-breakpoint-form input,
+.node-debug-evaluate-row input,
+.node-debug-configuration-view input,
+.node-debug-configuration-view select {
+  min-width: 0;
+  width: 100%;
+  max-width: none;
+  min-height: 29px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 5px;
+  padding: 4px 7px;
+  color: var(--bt-text-primary);
+  background: var(--bt-input-background, var(--bt-surface-raised));
+  font: inherit;
+  font-size: 11px;
+}
+
+.node-debug-breakpoint-list,
+.node-debug-action-list,
+.node-debug-variable-list {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.node-debug-breakpoint-row {
+  min-width: 0;
+  min-height: 24px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.node-debug-breakpoint-row > span {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--bt-status-warning);
+}
+
+.node-debug-breakpoint-row > span.verified {
+  color: transparent;
+  background: var(--bt-status-danger);
+}
+
+.node-debug-breakpoint-row > span.stale {
+  color: transparent;
+  background: var(--bt-status-warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bt-status-warning) 20%, transparent);
+}
+
+.node-debug-breakpoint-row button:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  color: var(--bt-text-primary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-breakpoint-row button:last-child {
+  border: 0;
+  padding: 2px;
+  color: var(--bt-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.node-debug-frame-card {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid var(--bt-panel-border);
+  border-left: 1px solid var(--bt-panel-border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  color: var(--bt-text-primary);
+  background: color-mix(in srgb, var(--bt-surface-raised) 76%, transparent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.node-debug-frame-card.active {
+  border-left: 2px solid var(--bt-accent);
+}
+
+.node-debug-frame-card span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bt-text-muted);
+  font: 10px var(--bt-font-mono, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-variable-list > div {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.65fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--bt-panel-border) 65%, transparent);
+  font-size: 10px;
+}
+
+.node-debug-variable-list code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bt-text-primary);
+  font: 10px var(--bt-font-mono, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-variable-list small {
+  color: var(--bt-text-muted);
+}
+
+.node-debug-variable-group {
+  min-width: 0;
+  border-top: 1px solid var(--bt-panel-border);
+  padding-top: 7px;
+}
+
+.node-debug-variable-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--bt-text-muted);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.node-debug-variable-group[open] summary {
+  margin-bottom: 6px;
+}
+
+.node-debug-variable-group > small {
+  display: block;
+  padding-top: 6px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.node-debug-evaluate-row,
+.node-debug-path-field {
+  min-width: 0;
+}
+
+.node-debug-evaluate-row input,
+.node-debug-path-field input {
+  flex: 1;
+}
+
+.node-debug-section pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 5px;
+  padding: 8px;
+  color: var(--bt-text-primary);
+  background: color-mix(in srgb, var(--bt-surface-base) 82%, transparent);
+  font: 10px/1.55 var(--bt-font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.node-debug-output {
+  min-height: 150px;
+  max-height: 260px !important;
+}
+
+.node-debug-action-list > div {
+  display: grid;
+  grid-template-columns: 34px minmax(74px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10px;
+}
+
+.node-debug-action-list > div > span {
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: var(--bt-accent);
+  background: color-mix(in srgb, var(--bt-accent) 10%, transparent);
+  text-align: center;
+}
+
+.node-debug-action-list > div > span.human {
+  color: var(--bt-text-muted);
+  background: color-mix(in srgb, var(--bt-text-muted) 10%, transparent);
+}
+
+.node-debug-action-list small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bt-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-action-list time {
+  color: var(--bt-text-muted);
+  font: 9px var(--bt-font-mono, monospace);
+}
+
+.node-debug-configuration-view label {
+  display: grid;
+  gap: 4px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.node-debug-start-button {
+  justify-self: start;
+}
+
+@container (min-width: 620px) {
+  .node-debug-source-view {
+    grid-template-columns: minmax(0, 1fr) minmax(250px, 0.42fr);
+    align-items: start;
+  }
+
+  .node-debug-code {
+    min-height: 340px;
+    max-height: 58vh;
+  }
+
+  .node-debug-context-view,
+  .node-debug-console-view {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .node-debug-context-view .node-debug-variable-section {
+    grid-column: 1 / -1;
+  }
+
+  .node-debug-configuration-view {
+    max-width: 720px;
+  }
+}
+
+@container (max-width: 420px) {
+  .node-debug-view-tabs button {
+    gap: 3px;
+    padding-right: 2px;
+    padding-left: 2px;
+    font-size: 10px;
+  }
+
+  .node-debug-code-line {
+    grid-template-columns: 18px 28px minmax(0, 1fr);
+    min-width: 0;
+  }
+
+  .node-debug-code-line code {
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+
+.app-shell.extension-window .workspace-editor-body-debug > .layout-sash-auxiliary-left {
+  display: block;
+}
+
+.app-shell.extension-window .workspace-editor-body-debug > .workspace-preview-panel,
+.app-shell.extension-window .workspace-editor-body-debug > .auxiliary-panel {
+  min-width: min(260px, 42vw);
+}
+
+/* 源码预览和扩展窗口共用的 VS Code 风格特殊断点标记。 */
+.node-debug-gutter {
+  display: inline-grid;
+  place-items: center;
+}
+
+.node-debug-gutter > .node-debug-breakpoint-icon,
+.node-debug-gutter > .node-debug-current-icon,
+.workspace-debug-editor-gutter > .node-debug-breakpoint-icon,
+.workspace-debug-editor-gutter > .node-debug-current-icon {
+  position: static;
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  opacity: 1;
+  color: var(--bt-status-danger);
+  font-size: 14px;
+  transform: none;
+}
+
+.node-debug-gutter.breakpoint-hit > .node-debug-breakpoint-icon,
+.workspace-debug-editor-gutter.breakpoint-hit > .node-debug-breakpoint-icon {
+  color: var(--bt-accent);
+}
+
+.node-debug-gutter.breakpoint-log > .node-debug-breakpoint-icon,
+.workspace-debug-editor-gutter.breakpoint-log > .node-debug-breakpoint-icon {
+  color: var(--bt-status-info, #45a9dc);
+}
+
+.node-debug-gutter.breakpoint-unverified > .node-debug-breakpoint-icon,
+.workspace-debug-editor-gutter.breakpoint-unverified > .node-debug-breakpoint-icon {
+  color: var(--bt-text-muted);
+}
+
+.node-debug-gutter > .node-debug-current-icon,
+.workspace-debug-editor-gutter > .node-debug-current-icon {
+  color: var(--bt-status-warning);
+  font-size: 16px;
+}
+
+.node-debug-breakpoint-menu {
+  position: fixed;
+  z-index: 1600;
+  display: grid;
+  width: 242px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--bt-panel-border) 82%, var(--bt-text-muted));
+  border-radius: 7px;
+  padding: 5px;
+  color: var(--bt-text-primary);
+  background: color-mix(in srgb, var(--bt-surface-raised) 97%, black 3%);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 32%);
+  font: 12px/1.35 var(--bt-font-family, sans-serif);
+}
+
+.node-debug-breakpoint-menu.editing {
+  width: 320px;
+}
+
+.node-debug-breakpoint-menu > header,
+.node-debug-breakpoint-menu form > header {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  padding: 6px 8px 7px;
+  border-bottom: 1px solid var(--bt-panel-border);
+  margin-bottom: 3px;
+}
+
+.node-debug-breakpoint-menu header strong,
+.node-debug-breakpoint-menu header span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-breakpoint-menu header strong {
+  font-size: 12px;
+}
+
+.node-debug-breakpoint-menu header span {
+  color: var(--bt-text-muted);
+  font: 10px var(--bt-font-mono, monospace);
+}
+
+.node-debug-breakpoint-menu > button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  min-height: 30px;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 7px;
+  color: var(--bt-text-primary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.node-debug-breakpoint-menu > button:hover,
+.node-debug-breakpoint-menu > button:focus-visible,
+.node-debug-breakpoint-menu > button.active {
+  outline: none;
+  background: color-mix(in srgb, var(--bt-accent) 16%, transparent);
+}
+
+.node-debug-breakpoint-menu > button .codicon {
+  color: var(--bt-status-danger);
+  font-size: 15px;
+}
+
+.node-debug-breakpoint-menu > button:nth-of-type(3) .codicon {
+  color: var(--bt-accent);
+}
+
+.node-debug-breakpoint-menu > button:nth-of-type(4) .codicon {
+  color: var(--bt-status-info, #45a9dc);
+}
+
+.node-debug-breakpoint-menu > button.separated {
+  border-top: 1px solid var(--bt-panel-border);
+  border-radius: 0 0 4px 4px;
+  margin-top: 3px;
+  padding-top: 6px;
+}
+
+.node-debug-breakpoint-menu > button.danger,
+.node-debug-breakpoint-menu > button.danger .codicon {
+  color: var(--bt-status-danger);
+}
+
+.node-debug-breakpoint-menu form {
+  display: grid;
+  gap: 8px;
+}
+
+.node-debug-breakpoint-menu form label,
+.node-debug-breakpoint-menu form details {
+  display: grid;
+  gap: 4px;
+  margin: 0 7px;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.node-debug-breakpoint-menu form details {
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 5px;
+  padding: 5px 6px;
+}
+
+.node-debug-breakpoint-menu form details label {
+  margin: 5px 0 0;
+}
+
+.node-debug-breakpoint-menu form summary {
+  cursor: pointer;
+  color: var(--bt-text-primary);
+}
+
+.node-debug-breakpoint-menu form input {
+  min-width: 0;
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 4px 7px;
+  color: var(--bt-text-primary);
+  background: var(--bt-input-background, var(--bt-surface-base));
+  font: 11px var(--bt-font-mono, monospace);
+}
+
+.node-debug-breakpoint-menu form input:focus {
+  border-color: var(--bt-accent);
+  outline: 1px solid color-mix(in srgb, var(--bt-accent) 45%, transparent);
+}
+
+.node-debug-breakpoint-menu form p {
+  margin: 0 7px;
+  color: var(--bt-status-danger);
+  font-size: 10px;
+}
+
+.node-debug-breakpoint-menu form footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  border-top: 1px solid var(--bt-panel-border);
+  padding: 7px 7px 2px;
+}
+
+.node-debug-breakpoint-menu form footer button {
+  min-height: 27px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: 4px;
+  padding: 3px 10px;
+  color: var(--bt-text-primary);
+  background: var(--bt-surface-base);
+  cursor: pointer;
+  font: inherit;
+}
+
+.node-debug-breakpoint-menu form footer button.primary {
+  border-color: var(--bt-accent);
+  color: var(--bt-button-primary-foreground, white);
+  background: var(--bt-accent);
+}
