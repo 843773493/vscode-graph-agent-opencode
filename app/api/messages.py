@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
+from app.abstractions.internal_message import PreparedInternalMessage
+from app.abstractions.job_service import JobServiceProtocol
 from app.api.deps import (
-    get_message_service,
-    get_session_attachment_store,
     get_job_service,
+    get_message_service,
     get_request_id,
+    get_session_attachment_store,
     get_session_orchestrator,
     get_session_turn_replay_service,
     verify_local_token,
 )
-from app.abstractions.job_service import JobServiceProtocol
+from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.public_v2.common import APIResponse, CursorPage
 from app.schemas.public_v2.message import (
     AgentStateMessagesDTO,
@@ -20,18 +22,20 @@ from app.schemas.public_v2.message import (
     MessageReplayRequest,
     MessageRunAccepted,
     MessageRunRequest,
+    SessionMessageDispatchRequest,
 )
 from app.schemas.public_v2.pending_request import (
     PendingRequestListDTO,
     PendingRequestReorderRequest,
     PendingRequestUpdateRequest,
 )
-from app.services.business.message_service import MessageService
-from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
-from app.services.infrastructure.message_history_store import StaleMessageHistoryCursorError
 from app.services.business.job.service import JobAdmissionClosedError
+from app.services.business.message_service import MessageService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
-from app.runtime.session_orchestrator import SessionOrchestrator
+from app.services.infrastructure.message_history_store import (
+    StaleMessageHistoryCursorError,
+)
+from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 
@@ -179,6 +183,43 @@ async def create_message_and_run(
 ):
     try:
         result = await session_orchestrator.create_message(session_id, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except JobAdmissionClosedError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return APIResponse(message="ok", data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/inter-agent-messages",
+    response_model=APIResponse[MessageRunAccepted],
+    summary="通过 Gateway 派发跨会话消息",
+)
+async def dispatch_inter_agent_message(
+    session_id: str,
+    payload: SessionMessageDispatchRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    session_orchestrator: SessionOrchestrator = Depends(get_session_orchestrator),
+):
+    try:
+        if payload.simulate_user:
+            result = await session_orchestrator.create_and_run(
+                session_id,
+                payload.content,
+                dispatch_mode=payload.dispatch_mode,
+                idempotency_key=payload.idempotency_key,
+            )
+        else:
+            result = await session_orchestrator.create_and_run_internal(
+                session_id,
+                PreparedInternalMessage(
+                    content=payload.content,
+                    metadata=payload.metadata,
+                ),
+                dispatch_mode=payload.dispatch_mode,
+                idempotency_key=payload.idempotency_key,
+            )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except JobAdmissionClosedError as error:

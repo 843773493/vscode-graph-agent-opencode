@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
@@ -60,6 +61,7 @@ def build_default_tools(
     invocation_context: ToolInvocationContext | None = None,
     workspace_root: Path | None = None,
     goal_service: SessionGoalService | None = None,
+    session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     include_test_tools: bool = False,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
@@ -123,6 +125,7 @@ def build_default_tools(
             session_subagent_service=session_subagent_service,
             team_service=team_service,
             invocation_context=invocation_context,
+            session_message_delivery_service=session_message_delivery_service,
         ),
     ]
     if goal_service is not None:

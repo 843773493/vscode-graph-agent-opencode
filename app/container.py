@@ -9,7 +9,9 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_context import WorkspaceSessionContextClientProtocol
+from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
+from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
@@ -44,6 +46,9 @@ from app.services.business.session_generation import (
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_information_service import SessionInformationService
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.business.session_message_delivery_service import (
+    SessionMessageDeliveryService,
+)
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_resource_providers import (
     BackgroundTaskResourceProvider,
@@ -55,6 +60,7 @@ from app.services.business.session_resource_registry import (
 )
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
+from app.services.business.session_target_resolver import SessionTargetResolver
 from app.services.business.session_turn_history import (
     SessionTurnHistoryMigrator,
     SessionTurnHistoryService,
@@ -76,6 +82,9 @@ from app.services.infrastructure.file_tree_settings_service import (
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
+from app.services.infrastructure.gateway_session_message_client import (
+    GatewaySessionMessageClient,
+)
 from app.services.infrastructure.historical_terminal_record_reader import (
     HistoricalTerminalRecordReader,
 )
@@ -90,6 +99,9 @@ from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.session_goal_store import SessionGoalStore
+from app.services.infrastructure.session_message_idempotency_store import (
+    SessionMessageIdempotencyStore,
+)
 from app.services.infrastructure.team.store import TeamStore
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_catalog_service import ToolCatalogService
@@ -123,6 +135,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         browser_manager_client: BrowserManagerClient,
         session_context_query_service: SessionContextQueryService,
         workspace_session_context_client: WorkspaceSessionContextClientProtocol,
+        session_target_resolver: SessionTargetResolverProtocol,
         mcp_runtime_manager: McpRuntimeManager,
     ) -> None:
         self._message_service = message_service
@@ -132,10 +145,12 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._browser_manager_client = browser_manager_client.for_actor("agent")
         self._session_context_query_service = session_context_query_service
         self._workspace_session_context_client = workspace_session_context_client
+        self._session_target_resolver = session_target_resolver
         self._mcp_runtime_manager = mcp_runtime_manager
         self._node_debug_service: NodeDebugService | None = None
         self._job_service: JobServiceProtocol | None = None
         self._session_orchestrator: SessionOrchestrator | None = None
+        self._session_message_delivery_service: SessionMessageDeliveryProtocol | None = None
         self._session_subagent_service: SessionSubagentProtocol | None = None
         self._team_service: TeamCoordinationProtocol | None = None
         self._goal_service: SessionGoalService | None = None
@@ -170,6 +185,22 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self,
     ) -> WorkspaceSessionContextClientProtocol:
         return self._workspace_session_context_client
+
+    def get_session_target_resolver(self) -> SessionTargetResolverProtocol:
+        return self._session_target_resolver
+
+    def set_session_message_delivery_service(
+        self,
+        service: SessionMessageDeliveryProtocol,
+    ) -> None:
+        self._session_message_delivery_service = service
+
+    def get_session_message_delivery_service(self) -> SessionMessageDeliveryProtocol:
+        if self._session_message_delivery_service is None:
+            raise RuntimeError(
+                "_AgentRuntimeDependencyProvider 未绑定 SessionMessageDeliveryService"
+            )
+        return self._session_message_delivery_service
 
     def get_mcp_tools(self) -> list[BaseTool]:
         return self._mcp_runtime_manager.get_tools()
@@ -304,6 +335,9 @@ def build_app_container(
     workspace_session_context_client = GatewayContextQueryService(
         transport=workspace_session_context_transport
     )
+    workspace_session_message_transport = GatewaySessionMessageClient(
+        config_service=config_service,
+    )
 
     checkpointer = FileSystemCheckpointSaver(
         sessions_dir=resolved_sessions_root,
@@ -341,6 +375,10 @@ def build_app_container(
         message_source=message_service,
         session_lookup=session_service,
     )
+    session_target_resolver = SessionTargetResolver(
+        session_service=session_service,
+        workspace_session_context_client=workspace_session_context_client,
+    )
     session_context_fork_service = SessionContextForkService(
         session_service=session_service,
         checkpointer=checkpointer,
@@ -359,6 +397,7 @@ def build_app_container(
         browser_manager_client=browser_manager_client,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
+        session_target_resolver=session_target_resolver,
         mcp_runtime_manager=mcp_runtime_manager,
     )
     dependency_provider.set_goal_service(goal_service)
@@ -421,8 +460,18 @@ def build_app_container(
         config_service=config_service,
         job_service=job_service,
         job_event_bus=job_event_bus,
+        idempotency_store=SessionMessageIdempotencyStore(
+            path_resolver=session_path_resolver,
+        ),
     )
     dependency_provider.set_session_orchestrator(session_orchestrator)
+    dependency_provider.set_session_message_delivery_service(
+        SessionMessageDeliveryService(
+            target_resolver=session_target_resolver,
+            session_orchestrator=session_orchestrator,
+            remote_transport=workspace_session_message_transport,
+        )
+    )
     terminal_steering_service = TerminalSteeringService(
         terminal_client=terminal_manager_client,
         session_orchestrator=session_orchestrator,

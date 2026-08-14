@@ -24,6 +24,7 @@ from app.abstractions.session_resources import (
     BrowserManagerClientProtocol,
     TerminalManagerClientProtocol,
 )
+from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.agents.model_tool_schema import get_model_tool_schema
 from app.agents.policy import parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -49,6 +50,7 @@ class CustomToolFactoryContext:
     terminal_manager_client: TerminalManagerClientProtocol
     browser_manager_client: BrowserManagerClientProtocol
     invocation_context: ToolInvocationContext
+    session_target_resolver: SessionTargetResolverProtocol | None = None
     tool_options: Mapping[str, object] = field(default_factory=dict)
     node_debug_service: NodeDebugService | None = None
 
@@ -146,6 +148,7 @@ def build_custom_tool_bundle(
     terminal_manager_client: TerminalManagerClientProtocol,
     browser_manager_client: BrowserManagerClientProtocol,
     invocation_context: ToolInvocationContext,
+    session_target_resolver: SessionTargetResolverProtocol | None = None,
     node_debug_service: NodeDebugService | None = None,
 ) -> CustomToolBundle:
     context = CustomToolFactoryContext(
@@ -164,6 +167,7 @@ def build_custom_tool_bundle(
         terminal_manager_client=terminal_manager_client,
         browser_manager_client=browser_manager_client,
         invocation_context=invocation_context,
+        session_target_resolver=session_target_resolver,
         node_debug_service=node_debug_service,
     )
     tools = build_custom_tools(specs, context=context)
