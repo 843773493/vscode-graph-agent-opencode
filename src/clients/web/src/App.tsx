@@ -52,6 +52,7 @@ import { buildSessionCatalogSyncKeys } from "./hooks/sessionResourceExplorer/res
 import { createSessionConnection } from "./gatewayApi";
 import {
   DEFAULT_GATEWAY_PANEL_HEIGHT,
+  DEFAULT_EXTENSION_DEBUG_AREA_RATIOS,
   DEFAULT_MAIN_AREA_RATIOS,
   GATEWAY_PANEL_RESIZING_CLASS,
   LAYOUT_RESIZING_CLASS,
@@ -229,6 +230,9 @@ export default function AppShell() {
   const [markdownSourceVisible, setMarkdownSourceVisible] = useState(false);
   const [mainAreaRatios, setMainAreaRatios] = useState(() =>
     resolveMainAreaRatios(state.uiSettings.layout.main_area_ratios),
+  );
+  const [extensionDebugAreaRatios, setExtensionDebugAreaRatios] = useState(
+    () => ({ ...DEFAULT_EXTENSION_DEBUG_AREA_RATIOS }),
   );
   const [customizationsCollapsed, setCustomizationsCollapsed] = useState(
     () => state.uiSettings.layout.customizations_collapsed ?? false,
@@ -954,6 +958,9 @@ export default function AppShell() {
     setExtensionWindowFallback(false);
   };
   const extensionWindowVisible = extensionWindowRequested || extensionWindowFallback;
+  const extensionDebugSplitActive = extensionWindowVisible &&
+    auxiliaryTab === "debug" &&
+    sharedPreviewVisible;
   const runtimePreviewTab = extensionWindowRequested
     ? extensionPreviewTab
     : extensionWindowFallback
@@ -972,7 +979,15 @@ export default function AppShell() {
     cleanupLayoutResizeRef.current?.();
 
     const startX = event.clientX;
-    const startRatios = mainAreaRatios;
+    const resizingExtensionDebugSplit = target === "auxiliary-left" &&
+      extensionDebugSplitActive;
+    const startRatios = resizingExtensionDebugSplit
+      ? {
+          ...mainAreaRatios,
+          workspace_preview: extensionDebugAreaRatios.workspace_preview,
+          auxiliary: extensionDebugAreaRatios.auxiliary,
+        }
+      : mainAreaRatios;
     const effectiveStartRatios = startRatios;
     const [left, leftSelector, right, rightSelector]: [
       MainAreaKey,
@@ -1064,7 +1079,14 @@ export default function AppShell() {
             deltaX,
           });
       latestRatios = resizedRatios;
-      setMainAreaRatios(latestRatios);
+      if (resizingExtensionDebugSplit) {
+        setExtensionDebugAreaRatios({
+          workspace_preview: latestRatios.workspace_preview,
+          auxiliary: latestRatios.auxiliary,
+        });
+      } else {
+        setMainAreaRatios(latestRatios);
+      }
     };
 
     const finishResize = () => {
@@ -1073,7 +1095,7 @@ export default function AppShell() {
       window.removeEventListener("pointercancel", finishResize);
       document.body.classList.remove(LAYOUT_RESIZING_CLASS);
       cleanupLayoutResizeRef.current = null;
-      if (moved) {
+      if (moved && !resizingExtensionDebugSplit) {
         persistLayoutSettings({ main_area_ratios: latestRatios });
       }
     };
@@ -1085,6 +1107,10 @@ export default function AppShell() {
     cleanupLayoutResizeRef.current = finishResize;
   };
   const resetMainAreaRatios = () => {
+    if (extensionDebugSplitActive) {
+      setExtensionDebugAreaRatios({ ...DEFAULT_EXTENSION_DEBUG_AREA_RATIOS });
+      return;
+    }
     const ratios = { ...DEFAULT_MAIN_AREA_RATIOS };
     setMainAreaRatios(ratios);
     persistLayoutSettings({ main_area_ratios: ratios });
@@ -1612,7 +1638,9 @@ export default function AppShell() {
                       <WorkspaceFilePreviewArea
                         context={auxiliaryTab === "changes" ? "changes" : "files"}
                         visible
-                        flexRatio={mainAreaRatios.workspace_preview}
+                        flexRatio={extensionDebugSplitActive
+                          ? extensionDebugAreaRatios.workspace_preview
+                          : mainAreaRatios.workspace_preview}
                         apiPort={resolvedApiPort}
                         workspaceId={activeSessionWorkspaceId}
                         workspaceName={state.workspaceName ?? "未选择工作区"}
@@ -1666,17 +1694,23 @@ export default function AppShell() {
                     <button
                       type="button"
                       className="layout-sash layout-sash-auxiliary-left"
-                      title="拖拽调整左侧信息区宽度，双击还原"
-                      aria-label="调整左侧信息区宽度"
+                      title={extensionDebugSplitActive
+                        ? "拖拽调整代码预览与调试面板宽度，双击还原"
+                        : "拖拽调整代码预览与信息区宽度，双击还原"}
+                      aria-label={extensionDebugSplitActive
+                        ? "调整代码预览与调试面板宽度"
+                        : "调整代码预览与信息区宽度"}
                       onPointerDown={(event) => startLayoutResize("auxiliary-left", event)}
                       onDoubleClick={resetMainAreaRatios}
                     />
                   ) : null}
                   <WorkspaceAuxiliaryPanel
                     visible={auxiliaryVisible}
-                    flexRatio={sharedPreviewTab && sharedPreviewVisible
-                      ? mainAreaRatios.auxiliary
-                      : mainAreaRatios.workspace_preview + mainAreaRatios.auxiliary}
+                    flexRatio={extensionDebugSplitActive
+                      ? extensionDebugAreaRatios.auxiliary
+                      : sharedPreviewTab && sharedPreviewVisible
+                        ? mainAreaRatios.auxiliary
+                        : mainAreaRatios.workspace_preview + mainAreaRatios.auxiliary}
                     tab={auxiliaryTab}
                     apiPort={resolvedApiPort}
                     workspaceId={activeSessionWorkspaceId}
@@ -1740,6 +1774,9 @@ export default function AppShell() {
                           onControl={controlSessionResource}
                           onOpenTerminalPreview={(terminalId) => {
                             openTerminalPanel(terminalId);
+                          }}
+                          onOpenTerminalExtension={(terminalId) => {
+                            openExtensionWindow("terminal", terminalId);
                           }}
                           onOpenBrowserPreview={(browserId) => {
                             openExtensionWindow("browser", browserId);

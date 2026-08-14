@@ -26,6 +26,16 @@ from app.services.infrastructure.node_debug_service import NodeDebugService
 
 DebugScope = Literal["local", "global", "all"]
 VariableName = Annotated[str, Field(min_length=1)]
+_ENDING_DEBUG_TOOLS = frozenset(
+    {
+        "stop_debugging",
+        "continue_execution",
+        "step_over",
+        "step_into",
+        "step_out",
+        "restart_debugging",
+    }
+)
 
 
 class StartDebuggingInput(BaseModel):
@@ -199,12 +209,48 @@ def _state_payload(state: NodeDebugStateDTO | None) -> dict[str, object] | None:
     return payload
 
 
-def _success(message: str, state: NodeDebugStateDTO | None) -> str:
+def _invalid_breakpoint_payload(
+    state_payload: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    if state_payload is None:
+        return []
+    breakpoints = state_payload.get("breakpoints")
+    if not isinstance(breakpoints, list):
+        return []
+    invalid: list[dict[str, object]] = []
+    for breakpoint in breakpoints:
+        if not isinstance(breakpoint, dict):
+            continue
+        status = breakpoint.get("relocation_status")
+        if status == "current":
+            continue
+        invalid.append(
+            {
+                "path": breakpoint.get("path"),
+                "line": breakpoint.get("line"),
+                "column": breakpoint.get("column"),
+                "original_line": breakpoint.get("original_line"),
+                "relocation_status": status,
+                "relocation_message": breakpoint.get("relocation_message"),
+            }
+        )
+    return invalid
+
+
+def _success(
+    message: str,
+    state: NodeDebugStateDTO | None,
+    *,
+    include_invalid_breakpoints: bool = False,
+) -> str:
+    state_payload = _state_payload(state)
     payload: dict[str, object] = {
         "ok": True,
         "message": message,
-        "state": _state_payload(state),
+        "state": state_payload,
     }
+    if include_invalid_breakpoints:
+        payload["invalid_breakpoints"] = _invalid_breakpoint_payload(state_payload)
     if contains_redaction(payload):
         payload["redaction_notice"] = REDACTION_NOTICE
     return _json_result(payload)
@@ -214,12 +260,17 @@ def _failure(
     code: str,
     message: str,
     state: NodeDebugStateDTO | None = None,
+    *,
+    include_invalid_breakpoints: bool = False,
 ) -> str:
+    state_payload = _state_payload(state)
     payload: dict[str, object] = {
         "ok": False,
         "error": {"code": code, "message": message},
-        "state": _state_payload(state),
+        "state": state_payload,
     }
+    if include_invalid_breakpoints:
+        payload["invalid_breakpoints"] = _invalid_breakpoint_payload(state_payload)
     if contains_redaction(payload):
         payload["redaction_notice"] = REDACTION_NOTICE
     return _json_result(payload)
@@ -245,115 +296,115 @@ class DebuggingToolFactory:
         return [
             self._no_argument_tool(
                 "list_debug_configurations",
-                "列出当前会话保存的全部目标程序调试方案和活动方案。",
+                "首次进入调试时调用：返回会话方案、活动方案、断点和最新状态；不要为了取得控制权而重复启动。",
                 self.list_debug_configurations,
             ),
             StructuredTool.from_function(
                 coroutine=self.create_debug_configuration,
                 name="create_debug_configuration",
-                description="为当前会话创建并激活一套目标程序调试方案。",
+                description="仅在没有匹配方案时创建并激活具名目标程序调试方案；运行中不能直接切换。",
                 args_schema=CreateDebugConfigurationInput,
             ),
             StructuredTool.from_function(
                 coroutine=self.activate_debug_configuration,
                 name="activate_debug_configuration",
-                description="激活当前会话中的一套目标程序调试方案。",
+                description="在没有运行中目标时激活另一套会话调试方案；不会取得或交接控制权。",
                 args_schema=DebugConfigurationIdInput,
             ),
             StructuredTool.from_function(
                 coroutine=self.delete_debug_configuration,
                 name="delete_debug_configuration",
-                description="删除当前会话中未运行的目标程序调试方案。",
+                description="删除当前会话中未运行且不再需要的目标程序调试方案。",
                 args_schema=DebugConfigurationIdInput,
             ),
             StructuredTool.from_function(
                 coroutine=self.start_debugging,
                 name="start_debugging",
                 description=(
-                    "启动当前工作区源文件的源码调试会话。"
-                    "可通过 configurationName 选择 runtime.debug launch profile。"
+                    "启动目标 JavaScript；已有活动方案时以方案保存的入口、参数、profile 和断点为准。"
+                    "返回后先检查 state.status；启动结果还会列出 invalid_breakpoints，但失效断点不会阻止其他代码运行。"
                 ),
                 args_schema=StartDebuggingInput,
             ),
             self._no_argument_tool(
                 "stop_debugging",
-                "停止当前 Agent session 的源码调试会话。",
+                "停止共享的目标源码调试会话；人类和 Agent 不需要先交接控制权。",
                 self.stop_debugging,
             ),
             self._no_argument_tool(
                 "step_over",
-                "执行当前源码行并跳过函数调用。",
+                "仅在 state.status=paused 时执行一步并跳过函数调用；以返回的实际 state 为准。",
                 self.step_over,
             ),
             self._no_argument_tool(
                 "step_into",
-                "执行当前源码行并进入函数调用。",
+                "仅在 state.status=paused 时执行一步并进入函数调用；以返回的实际 state 为准。",
                 self.step_into,
             ),
             self._no_argument_tool(
                 "step_out",
-                "执行当前函数剩余部分并跳出当前函数。",
+                "仅在 state.status=paused 时执行一步并跳出当前函数；以返回的实际 state 为准。",
                 self.step_out,
             ),
             self._no_argument_tool(
                 "continue_execution",
-                "继续执行直到下一个断点或程序结束。",
+                "继续共享的目标进程直到下一个真实断点或程序结束；源码变化导致的失效断点不会阻止继续。",
                 self.continue_execution,
             ),
             self._no_argument_tool(
                 "pause_execution",
-                "暂停当前正在运行的源码调试进程。",
+                "请求暂停共享的目标进程；人类可能已经先暂停或继续，以返回的真实 state 为准。",
                 self.pause_execution,
             ),
             self._no_argument_tool(
                 "restart_debugging",
-                "使用当前 launch profile 重新启动源码调试会话。",
+                "按当前活动方案重新启动目标程序；不会自动恢复或重定位失效断点，需显式重新设置。",
                 self.restart_debugging,
             ),
             StructuredTool.from_function(
                 coroutine=self.add_breakpoint,
                 name="add_breakpoint",
-                description="在指定源码行添加普通、条件或命中次数断点。",
+                description="在当前源码行添加普通、条件或命中次数断点；源码变化后的旧断点必须先检查并重新设置。",
                 args_schema=BreakpointInput,
             ),
             StructuredTool.from_function(
                 coroutine=self.add_logpoint,
                 name="add_logpoint",
-                description="添加只记录日志而不暂停执行的 logpoint。",
+                description="添加只记录日志而不暂停执行的 logpoint；适合观察值而不打断程序。",
                 args_schema=LogpointInput,
             ),
             StructuredTool.from_function(
                 coroutine=self.remove_breakpoint,
                 name="remove_breakpoint",
-                description="移除指定源码行上的断点。",
+                description="移除指定路径和请求行上的断点，包括已失效的断点。",
                 args_schema=RemoveBreakpointInput,
             ),
             self._no_argument_tool(
                 "clear_all_breakpoints",
-                "清除当前调试 session 的所有源码断点。",
+                "清除当前调试 session 的全部源码断点，包含失效断点。",
                 self.clear_all_breakpoints,
             ),
             self._no_argument_tool(
                 "list_breakpoints",
-                "列出当前调试 session 的全部源码断点。",
+                "列出当前调试 session 的权威断点状态；重点查看 relocation_status，不要只看 verified。",
                 self.list_breakpoints,
             ),
             StructuredTool.from_function(
                 coroutine=self.list_variable_names,
                 name="list_variable_names",
-                description="列出当前暂停位置可见的变量名和类型，不返回变量值。",
+                description="仅在 state.status=paused 时列出当前暂停位置可见的变量名和类型，不返回变量值。",
                 args_schema=VariableNamesInput,
             ),
             StructuredTool.from_function(
                 coroutine=self.get_variables_values,
                 name="get_variables_values",
-                description="读取当前暂停位置指定变量的值。",
+                description="仅在 state.status=paused 时读取明确指定的变量值；不要绕过脱敏或读取全部变量。",
                 args_schema=VariableValuesInput,
             ),
             StructuredTool.from_function(
                 coroutine=self.evaluate_expression,
                 name="evaluate_expression",
-                description="在当前暂停的源码上下文中求值表达式。",
+                description="仅在 state.status=paused 时在当前源码上下文求值；可能有副作用，结果进入审计和调试控制台。",
                 args_schema=EvaluateExpressionInput,
             ),
         ]
@@ -385,7 +436,17 @@ class DebuggingToolFactory:
                 tool_call_id=tool_call_id,
             )
             state = await self._safe_state() or state
-            return _success(f"{tool_name} 执行成功", state)
+            return _success(
+                f"{tool_name} 执行成功",
+                state,
+                include_invalid_breakpoints=(
+                    tool_name == "start_debugging"
+                    or (
+                        tool_name in _ENDING_DEBUG_TOOLS
+                        and state.status in {"exited", "failed"}
+                    )
+                ),
+            )
         except Exception as error:  # noqa: BLE001 - 工具协议必须把运行时错误转成结构化结果
             state = await self._safe_state()
             await self._record_action(
@@ -395,7 +456,19 @@ class DebuggingToolFactory:
                 tool_call_id=tool_call_id,
             )
             state = await self._safe_state() or state
-            return _failure(self._error_code(error), str(error), state)
+            return _failure(
+                self._error_code(error),
+                str(error),
+                state,
+                include_invalid_breakpoints=(
+                    tool_name == "start_debugging"
+                    or (
+                        tool_name in _ENDING_DEBUG_TOOLS
+                        and state is not None
+                        and state.status in {"exited", "failed"}
+                    )
+                ),
+            )
 
     async def _record_action(
         self,
@@ -433,7 +506,19 @@ class DebuggingToolFactory:
         state = await self._safe_state()
         await self._record_action(tool_name, "error", str(error))
         state = await self._safe_state() or state
-        return _failure(self._error_code(error), str(error), state)
+        return _failure(
+            self._error_code(error),
+            str(error),
+            state,
+            include_invalid_breakpoints=(
+                tool_name == "start_debugging"
+                or (
+                    tool_name in _ENDING_DEBUG_TOOLS
+                    and state is not None
+                    and state.status in {"exited", "failed"}
+                )
+            ),
+        )
 
     @staticmethod
     def _error_code(error: Exception) -> str:
@@ -469,6 +554,7 @@ class DebuggingToolFactory:
                 "UNSUPPORTED_TEST_TARGET",
                 message,
                 await self._safe_state(),
+                include_invalid_breakpoints=True,
             )
         try:
             path = self._relative_workspace_path(fileFullPath, "fileFullPath")

@@ -60,10 +60,23 @@ export function nodeDebugBreakpointLabel(
 
 function breakpointIcon(breakpoint: NodeDebugBreakpoint): string {
   const kind = nodeDebugBreakpointKind(breakpoint);
-  if (kind === "condition") return "codicon-debug-breakpoint-conditional";
-  if (kind === "hit") return "codicon-debug-breakpoint-data";
-  if (kind === "log") return "codicon-debug-breakpoint-log";
-  return "codicon-debug-breakpoint";
+  const verified = breakpoint.verified === true;
+  if (kind === "condition") {
+    return verified
+      ? "codicon-debug-breakpoint-conditional"
+      : "codicon-debug-breakpoint-conditional-unverified";
+  }
+  if (kind === "hit") {
+    return verified
+      ? "codicon-debug-breakpoint-data"
+      : "codicon-debug-breakpoint-data-unverified";
+  }
+  if (kind === "log") {
+    return verified
+      ? "codicon-debug-breakpoint-log"
+      : "codicon-debug-breakpoint-log-unverified";
+  }
+  return verified ? "codicon-debug-breakpoint" : "codicon-debug-breakpoint-unverified";
 }
 
 export default function NodeDebugBreakpointGutter({
@@ -309,7 +322,7 @@ export default function NodeDebugBreakpointGutter({
     <>
       <button
         type="button"
-        className={`${className}${breakpoint ? ` has-breakpoint breakpoint-${kind}` : ""}`}
+        className={`${className}${breakpoint ? ` has-breakpoint breakpoint-${kind}${breakpoint.verified === true ? "" : " breakpoint-unverified"}` : ""}`}
         aria-label={`${breakpoint ? "清除" : "设置"}第 ${line} 行断点；右键打开特殊断点菜单`}
         aria-haspopup="menu"
         aria-expanded={menuPosition !== null}

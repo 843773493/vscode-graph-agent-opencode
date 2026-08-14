@@ -56,7 +56,7 @@ export default function WorkspaceSwitcher({
           <span className="workspace-switcher-label">
             {switching ? "切换中" : workspaceLabel(activeWorkspace)}
           </span>
-          <span className="workspace-switcher-chevron" aria-hidden="true">⌄</span>
+          <span className="codicon codicon-chevron-down workspace-switcher-chevron" aria-hidden="true" />
         </button>
         <AnchoredOverlay
           open={open}

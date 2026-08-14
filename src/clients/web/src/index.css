@@ -1541,27 +1541,9 @@ body {
   transform-origin: 0 50%;
 }
 
-.auxiliary-action-icon.collapse-all::before,
-.auxiliary-action-icon.collapse-all::after {
-  content: "";
-  position: absolute;
-  border: 1.4px solid currentColor;
-  border-radius: 2px;
-}
-
-.auxiliary-action-icon.collapse-all::before {
-  left: 2px;
-  top: 2px;
-  width: 8px;
-  height: 8px;
-}
-
-.auxiliary-action-icon.collapse-all::after {
-  left: 5px;
-  top: 5px;
-  width: 8px;
-  height: 8px;
-  background: var(--bt-panel-background);
+.auxiliary-action-icon.codicon-collapse-all {
+  font-size: 14px;
+  line-height: 14px;
 }
 
 .sessions-filter-menu {

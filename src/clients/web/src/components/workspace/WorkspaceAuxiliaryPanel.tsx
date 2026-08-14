@@ -152,7 +152,7 @@ export default function WorkspaceAuxiliaryPanel({
               aria-label="全部折叠"
               onClick={onCollapseAll}
             >
-              <span className="auxiliary-action-icon collapse-all" aria-hidden="true" />
+              <span className="codicon codicon-collapse-all auxiliary-action-icon" aria-hidden="true" />
             </button>
           </div>
           <WorkspaceFileTree

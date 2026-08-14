@@ -111,7 +111,7 @@ function ImageViewer({
               setScale(1);
             }}
             aria-label="上一张图片"
-          >‹</button>
+          ><span className="codicon codicon-chevron-left" aria-hidden="true" /></button>
           <button
             type="button"
             className="message-media-viewer-nav next"
@@ -121,7 +121,7 @@ function ImageViewer({
               setScale(1);
             }}
             aria-label="下一张图片"
-          >›</button>
+          ><span className="codicon codicon-chevron-right" aria-hidden="true" /></button>
         </>
       ) : null}
       <div className="message-media-viewer-canvas" onClick={(event) => event.stopPropagation()}>

@@ -38,7 +38,7 @@ def _breakpoint(path: str, line: int) -> NodeDebugBreakpointDTO:
     )
 
 
-def test_breakpoint_relocates_after_lines_are_inserted(tmp_path: Path) -> None:
+def test_breakpoint_becomes_invalid_after_lines_are_inserted(tmp_path: Path) -> None:
     source = tmp_path / "worker.mjs"
     source.write_text(
         "export function compute(value) {\n  const doubled = value * 2;\n  return doubled;\n}\n",
@@ -50,12 +50,28 @@ def test_breakpoint_relocates_after_lines_are_inserted(tmp_path: Path) -> None:
         "// 新增说明\nconst offset = 0;\nexport function compute(value) {\n  const doubled = value * 2;\n  return doubled + offset;\n}\n",
         encoding="utf-8",
     )
-    relocated = reconcile_breakpoint(anchored, source)
+    invalidated = reconcile_breakpoint(anchored, source)
 
-    assert relocated.line == 4
-    assert relocated.original_line == 2
-    assert relocated.relocation_status == "relocated"
-    assert relocated.verified is False
+    assert invalidated.line == 2
+    assert invalidated.original_line == 2
+    assert invalidated.relocation_status == "pending_update"
+    assert invalidated.relocation_message is not None
+    assert "未自动重定位" in invalidated.relocation_message
+    assert invalidated.verified is False
+
+
+def test_invalidated_breakpoint_does_not_auto_recover(tmp_path: Path) -> None:
+    source = tmp_path / "worker.mjs"
+    source.write_text("const value = 1;\nrun(value);\n", encoding="utf-8")
+    anchored = anchor_breakpoint(_breakpoint("worker.mjs", 2), source)
+
+    source.write_text("// changed\nconst value = 1;\nrun(value);\n", encoding="utf-8")
+    invalidated = reconcile_breakpoint(anchored, source)
+    restored = reconcile_breakpoint(invalidated, source)
+
+    assert restored == invalidated
+    assert restored.line == 2
+    assert restored.relocation_status == "pending_update"
 
 
 def test_breakpoint_marks_ambiguous_and_deleted_source(tmp_path: Path) -> None:

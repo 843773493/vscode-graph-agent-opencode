@@ -8,27 +8,39 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
 
 这是通过固定扩展入口 invoke_custom_tool 提供给 Agent 的源码级调试工具组。目标工具不会直接出现在 Agent 的模型工具列表中，也不是让模型连接 Inspector 的底层接口。所有动作都会进入 Agent 工具轨迹和调试 session 审计记录。
 
-## 必须遵循的流程
+## 给模型的最短决策流程
 
-1. 用户请求匹配本 Skill 后，先用 read_file 读取 .boxteam/bundled-skills/debugging/SKILL.md，再通过 invoke_custom_tool 执行调试动作。
-2. 从用户请求或工作区文件中确认要调试的 JS 文件和工作目录。fileFullPath、workingDirectory 必须使用标准工作区相对路径；优先直接复用 ls、glob、grep 返回的路径。例如使用 `counter-entry.mjs`、`src/main.mjs`，workspace 根目录使用 `.`。不要添加开头的 `/`，也不要传入真实宿主机绝对路径；DeepAgents 内部的虚拟路径转换不属于模型参数协议。
-3. 先调用 list_debug_configurations 读取当前会话的方案列表与活动方案，再调用 list_breakpoints 读取权威运行状态。一个会话可以保存多套方案，但同一时间只激活一套。人类可能已经切换方案、启动调试、设置断点或推进执行；若 state.status 是 running 或 paused，直接从该状态继续，不要为“取得控制权”而重启。只有没有活动运行时时，才按需创建/激活方案、添加断点和启动。
-4. 用户只描述功能或目标而没有给出入口文件时，使用 glob、grep 和 read_file 检查工作区中的 JavaScript 文件、导入关系和实际可执行入口，不能根据文件名猜测。若现有方案的名称或目标文件都不匹配本次请求，先调用 create_debug_configuration 创建语义明确的具名方案，再向该方案添加入口和相关模块断点；不要先设置断点触发匿名方案。
-5. 每次工具返回 state.status=paused 后，先根据最新 call_stack[0] 的文件、函数和行号在对话中向用户说明该处代码的作用，再执行本次暂停所需的变量读取或 evaluate_expression，最后才能 continue_execution 或 step_*。不得提前写好尚未实际命中的下一断点说明。
-6. 用户要求把暂停位置中的计数变量加一时，调用 evaluate_expression 并使用真实变量名构造 `<变量> += 1`；确认工具返回的求值结果后再继续。该表达式只改变目标进程的当前暂停帧，不得使用 edit_file 修改源码来伪造结果。调试控制台会展示求值历史。
-7. 只有工具返回的 state.status 为 paused 时，才读取变量或调用 evaluate_expression、step_*。不要根据猜测的行号或旧快照继续执行。
-8. 每次单步、继续、暂停或重启后，都以工具返回的完整 state 为准；不要向用户声称已经命中断点，除非返回了 paused 和调用栈。
-9. 调试结束必须观察到 state.status 为 exited 或明确的 failed，再向用户报告结果。最后一次 continue_execution 或 step_* 如果暂时返回 running，调用 list_breakpoints 重新读取权威状态，不能把 running 直接说成已结束。失败不能伪装成正常结束。
-10. evaluate_expression 可能执行有副作用的代码。仅在用户请求或已有确认策略允许时调用，并在解释中说明表达式和实际返回值。
-11. add_breakpoint 可使用 condition 和正整数 hitCondition；后者按本次目标进程的命中次数触发，重启后从 0 重新计数。add_logpoint 使用 logMessage 记录信息但不暂停，消息中的 `{expression}` 会在命中位置求值；只有需要观察而不打断执行时使用日志点。
-12. 不请求、不拼接、不向用户传递 Inspector URL、Inspector 端口、WebSocket 地址、threadId 或 frameId。会话、调用栈顶层 frame 和运行时连接由后端绑定。
-13. 通用 state 中的 call_stack 只返回栈结构，不附带变量值。先用 list_variable_names 发现名称，再用 get_variables_values 显式请求最多 50 个必要变量；不要尝试通过其他工具的 state 绕过此限制。
-14. get_variables_values 和 evaluate_expression 会把疑似密钥、令牌、密码或连接凭据替换成 `<redacted: possible secret>`。看到 redaction_notice 后只能改用类型、长度、是否为空等调试判断，不能尝试编码、切片或其他表达式绕过脱敏。
-15. 人类和 Agent 始终共享当前 session 的同一调试运行时，不存在接管、交接或控制模式。人类可能在你的两次工具调用之间点击继续、暂停、单步、停止、增删断点，也可能在终端输入、修改源码或发送新消息。每次都接受工具返回的最新 state；如果状态已推进，基于新位置继续分析，不要回滚或抢占。
-16. state.requires_restart 为 true 时，说明磁盘源码已不同于当前 Node 进程加载的版本。先检查 source_changed_paths 和断点 relocation_status；`pending_update` 或 `source_deleted` 必须请用户检查或重新设置，不能继续声称旧断点仍准确。需要运行新源码时调用 restart_debugging。
-17. 调试入口、工作目录、参数、profile 和断点保存在当前会话的活动方案。启动已有方案时，方案 JSON 是这些参数的唯一权威来源；`start_debugging` 的文件和工作目录只用于尚无方案时创建首套方案。用户从 Web 启动后再发消息要求继续调试时，先复用该状态；不要把会话选择写回 Workspace 默认配置。
-18. 本工具只用于替用户调试工作区中的目标程序，不得用于暂停或检查 BoxTeam Agent 自身的思考、LLM 请求和工具循环。本工具组没有这类能力，不要尝试通过 Job 控制模拟。
-19. 每套方案是独立版本化 JSON，使用工作区相对路径且不包含 session ID、PID、Inspector 地址或动作历史。用户可以把 `debug/node/configurations/<configuration_id>.json` 复制到另一会话；不要把 `manifest.json` 当成可移植方案。
+你是在替用户观察和控制目标 JavaScript 程序，不是在管理 Inspector 连接。先看状态再行动：每次动作都以工具返回的最新 `state` 为准，优先少调用、少重复和少假设。
+
+1. 用户请求匹配本 Skill 后，先用 `read_file` 读取 `.boxteam/bundled-skills/debugging/SKILL.md`，再通过 `invoke_custom_tool` 调用目标调试工具。
+2. 首次进入调试时，先调用一次 `list_debug_configurations`。它的返回 `state` 同时包含活动方案、方案列表、断点和运行状态；只有状态可能已被人类改变、返回不完整或需要单独确认断点时，才追加 `list_breakpoints`。一个会话可保存多套方案，但同时只激活一套。
+3. 根据这次返回做分支：
+   - `running` 或 `paused`：复用当前运行时，直接处理用户目标；不要为了“取得控制权”重启，也不要重新创建方案。
+   - `idle`、`exited` 或 `failed`：如果用户要继续一次新的运行，选择匹配的活动方案；没有匹配方案时才创建具名方案、设置断点并启动。
+   - 没有入口文件时，使用 `glob`、`grep`、`read_file` 确认实际可执行入口和导入关系，不凭文件名猜测。
+4. 方案匹配时，方案 JSON 是入口、工作目录、profile、参数和断点的权威来源。`start_debugging` 的必填路径只用于满足调用契约，不要用临时参数偷偷覆盖已有方案；需要改变方案时先显式创建或激活正确方案。
+5. 每次返回后先看 `state.status`，再决定下一步：
+   - `paused`：依据最新 `call_stack[0]` 的文件、函数和行号向用户解释当前代码作用；只有用户目标或分析确实需要时才读取变量、求值或单步，然后再继续。
+   - `running`：不要读取变量、求值或单步；如用户要求停下，调用 `pause_execution`，否则等待下一次状态或用户消息。
+   - `exited`：程序已结束；`failed`：调试失败。两者都不能描述成暂停或成功运行。
+6. 用户要求把暂停位置的计数变量加一时，先确认真实变量名，再用 `evaluate_expression` 执行 `<变量> += 1`，检查返回值后继续。它只改变目标进程内存，不修改源码；表达式有副作用时遵守确认策略。
+7. 不要预先解释尚未命中的断点。每次单步、继续、暂停或重启后都只陈述返回的实际位置；没有 `paused` 和调用栈就不要声称命中了断点。
+8. 源码变化是“断点失效提醒”，不是“调试阻断”：`pending_update`/`source_deleted` 断点不会自动重定位、不会安装到猜测位置，但 `continue_execution`、`pause_execution`、`step_*` 和 `stop_debugging` 仍可调用。需要调试新源码时，先检查当前文件，移除旧路径/旧行号的失效断点，再按当前行重新添加；确认后才按需 `restart_debugging`。
+9. `start_debugging` 返回顶层 `invalid_breakpoints` 时，记录并告诉用户哪些断点失效，但继续检查是否有其他有效断点或程序状态，不要因为该字段存在就停止调试。调试结束的最后一个成功控制工具在状态为 `exited`/`failed` 时也会返回该字段；普通 `list_breakpoints` 不会重复返回顶层字段，仍要查看 `state.breakpoints`。
+10. 最后一个 `continue_execution` 或单步若返回 `running`，不能直接说已结束；用 `list_breakpoints` 获取最新 `state`。确认 `exited`/`failed` 后再报告结果，并保留失效断点提醒。
+
+## 并发、人类操作和安全边界
+
+- 人类和 Agent 始终共享同一个 session 调试运行时，不存在接管、交接或权限模式；不需要先交接控制权。人类可能在两次工具调用之间继续、暂停、单步、停止、增删断点、在终端输入、修改源码或发送新消息。
+- 用户新消息不是“等待授权”的信号，而是对当前最新状态的新指令：先读取或使用下一次工具返回的权威状态，接受已经发生的推进，不回滚、不抢占、不重启来夺回控制权。
+- `call_stack` 只提供栈结构，不包含变量值。先用 `list_variable_names`，再用 `get_variables_values` 读取最多 50 个必要变量。
+- 变量和求值中的疑似密钥、令牌、密码或凭据会替换为 `<redacted: possible secret>`；看到 `redaction_notice` 后只能使用类型、长度或空值判断，不得尝试编码、切片或其他表达式绕过脱敏。
+- 不请求、不拼接、不向用户传递 Inspector URL、Inspector 端口、WebSocket 地址、`threadId` 或 `frameId`。本工具只调试用户目标程序，不调试 BoxTeam Agent 自身的思考、LLM 请求或工具循环。
+- 每套方案是独立版本化 JSON，使用标准工作区相对路径且不包含 session ID、PID、Inspector 地址或动作历史；方案文件可复制到其他会话。
+
+## 断点类型
+
+`add_breakpoint` 支持普通、条件和命中次数断点；`hitCondition` 按本次目标进程计数，重启后重新计数。`add_logpoint` 只记录 `logMessage`（可用 `{expression}` 插入值）而不暂停；需要观察而不打断执行时优先使用日志点。
 
 ## 工具参数契约
 
@@ -228,10 +240,12 @@ testName 目前不支持 Node 单测试启动；不要为了满足请求而猜�
 - status：idle、starting、running、paused、exited 或 failed。
 - call_stack：后端确认的调用栈结构；通用 state 不携带变量值，顶层 frame 是显式变量读取和表达式求值的上下文。
 - breakpoints：断点的相对路径、行号、condition、hit_condition、log_message 和验证状态。
-- breakpoints.relocation_status：`current`、`relocated`、`pending_update` 或 `source_deleted`；后两者不会安装到猜测位置。
+- breakpoints.relocation_status：`current`、`pending_update` 或 `source_deleted`；后两者不会安装到猜测位置，也不会自动恢复。源码变化后的断点会保留原请求行号，必须显式重新设置后才恢复为 `current`。
 - variables：仅由 get_variables_values 对显式请求的名称返回，并可能包含脱敏占位符。
 - last_evaluation：仅在后端确认暂停并完成求值后返回，疑似凭据会被脱敏。
 - actions：按时间顺序记录工具动作、工具调用 ID、结果和时间。
 - configuration_revision：当前活动方案修订；requires_restart 和 source_changed_paths 表示运行中的源码已落后于磁盘文件。
+
+`start_debugging` 成功结果会额外返回顶层 `invalid_breakpoints`；当最后一个成功控制工具使状态变为 `exited` 或 `failed` 时，也会返回该字段。数组中的每项包含 `path`、`line`、`original_line`、`relocation_status` 和 `relocation_message`。其他工具直接查看 `state.breakpoints` 中的失效状态即可，不要因为缺少顶层数组而认为断点有效。
 
 如果工具返回 ok: false，先读取 error.code 和 state 决定下一步；不要用自然语言覆盖工具的失败事实。

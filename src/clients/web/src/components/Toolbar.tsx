@@ -53,10 +53,10 @@ export default function Toolbar({
     <header className="toolbar" data-bt-surface="chrome">
       <div className="toolbar-group toolbar-group-left">
         <button type="button" className="toolbar-icon-button" title="Web 端暂无导航历史" aria-label="后退" disabled>
-          ‹
+          <span className="codicon codicon-arrow-left" aria-hidden="true" />
         </button>
         <button type="button" className="toolbar-icon-button" title="Web 端暂无导航历史" aria-label="前进" disabled>
-          ›
+          <span className="codicon codicon-arrow-right" aria-hidden="true" />
         </button>
         <button
           type="button"

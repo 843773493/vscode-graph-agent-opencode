@@ -707,7 +707,7 @@ export default function NodeDebugPanel({
       {state?.error_message ? <div className="debug-error" role="alert">{state.error_message}</div> : null}
       {state?.requires_restart ? (
         <div className="debug-warning" role="status">
-          源码已变化，需要重启调试：{state.source_changed_paths.join("、")}
+          源码已变化，相关断点已失效；当前进程仍可继续。需要运行新源码时再重启并重新设置断点：{state.source_changed_paths.join("、")}
         </div>
       ) : null}
       {error ? <div className="debug-error" role="alert">{error}</div> : null}

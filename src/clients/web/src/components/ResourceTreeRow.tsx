@@ -7,7 +7,6 @@ import type {
 import { formatDateTime } from "../utils/format";
 import {
   actionLabel,
-  kindLabel,
   metadataRows,
   resourceTreeDescription,
   resourceTreeStatus,
@@ -20,6 +19,14 @@ const RESOURCE_ICONS: Record<SessionResourceKind, string> = {
   background_task: "codicon-server-process",
 };
 
+function resourceActionIcon(action: SessionResourceAction): string {
+  if (action === "delete") return "codicon-trash";
+  if (action === "cancel") return "codicon-debug-stop";
+  if (action === "pause") return "codicon-debug-pause";
+  if (action === "resume") return "codicon-debug-continue";
+  return "codicon-settings-gear";
+}
+
 export default function ResourceTreeRow({
   resource,
   selected,
@@ -27,8 +34,10 @@ export default function ResourceTreeRow({
   onControl,
   onCopy,
   onOpenTerminal,
+  onOpenTerminalExtension,
   onOpenBrowser,
   onReplaceBrowser,
+  extensionWindow = false,
 }: {
   resource: SessionResource;
   selected: boolean;
@@ -40,8 +49,10 @@ export default function ResourceTreeRow({
   ) => void;
   onCopy: (resourceId: string) => void;
   onOpenTerminal: (resourceId: string) => void;
+  onOpenTerminalExtension?: (resourceId: string) => void;
   onOpenBrowser: (resourceId: string) => void;
   onReplaceBrowser: () => void;
+  extensionWindow?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const rows = metadataRows(resource);
@@ -109,19 +120,41 @@ export default function ResourceTreeRow({
 
       {expanded ? (
         <div className="resource-tree-detail">
-          <p>
-            <span>{kindLabel(resource.kind)} · {resourceTreeStatus(resource)}</span>
-            {selected ? <span className="resource-tree-current-hint">当前预览</span> : null}
-          </p>
           <div className="resource-tree-actions" aria-label={`${title}操作`}>
-            {canOpen ? (
+            {canOpen && resource.kind === "terminal" ? (
               <button
                 type="button"
                 className="resource-action-open"
                 disabled={busy}
                 onClick={handleOpen}
+                title={extensionWindow ? "在扩展窗口查看终端" : "在底部面板打开终端"}
+                aria-label={extensionWindow ? "在扩展窗口查看终端" : "在底部面板打开终端"}
               >
-                {resource.kind === "terminal" ? "打开终端" : "打开浏览器预览"}
+                <span className={`codicon ${extensionWindow ? "codicon-open-preview" : "codicon-terminal"}`} aria-hidden="true" />
+              </button>
+            ) : null}
+            {canOpen && resource.kind === "terminal" && onOpenTerminalExtension ? (
+              <button
+                type="button"
+                className="resource-action-extension"
+                disabled={busy}
+                onClick={() => onOpenTerminalExtension(resource.resource_id)}
+                title="在扩展窗口打开终端"
+                aria-label="在扩展窗口打开终端"
+              >
+                <span className="codicon codicon-open-preview" aria-hidden="true" />
+              </button>
+            ) : null}
+            {canOpen && resource.kind === "browser" ? (
+              <button
+                type="button"
+                className="resource-action-open"
+                disabled={busy}
+                onClick={handleOpen}
+                title={extensionWindow ? "打开浏览器预览" : "在扩展窗口打开浏览器"}
+                aria-label={extensionWindow ? "打开浏览器预览" : "在扩展窗口打开浏览器"}
+              >
+                <span className="codicon codicon-open-preview" aria-hidden="true" />
               </button>
             ) : null}
             {resource.available_actions.map((action) => (
@@ -131,14 +164,23 @@ export default function ResourceTreeRow({
                 className={`resource-action-${action}`}
                 disabled={busy}
                 onClick={() => onControl(resource.kind, resource.resource_id, action)}
+                title={busy ? "处理中…" : actionLabel(resource, action)}
+                aria-label={busy ? "处理中…" : actionLabel(resource, action)}
               >
-                {busy ? "处理中…" : actionLabel(resource, action)}
+                <span className={`codicon ${resourceActionIcon(action)}`} aria-hidden="true" />
               </button>
             ))}
             {resource.kind === "browser" &&
             (resource.status === "lost" || resource.available_actions.includes("resume")) ? (
-              <button type="button" className="resource-action-open" disabled={busy} onClick={onReplaceBrowser}>
-                新建替代浏览器
+              <button
+                type="button"
+                className="resource-action-replace"
+                disabled={busy}
+                onClick={onReplaceBrowser}
+                title="新建替代浏览器"
+                aria-label="新建替代浏览器"
+              >
+                <span className="codicon codicon-add" aria-hidden="true" />
               </button>
             ) : null}
           </div>

@@ -31,7 +31,7 @@ export default function TerminalPanel({
   onSwitchToAutomation,
   onClose,
 }: TerminalPanelProps) {
-  const [terminalListWidth, setTerminalListWidth] = useState(260);
+  const [terminalListWidth, setTerminalListWidth] = useState<number | null>(null);
   const resizingRef = useRef(false);
   const selectedEntry = useMemo(
     () => entries.find(
@@ -136,12 +136,8 @@ export default function TerminalPanel({
         <aside
           className="terminal-panel-list"
           aria-label="当前工作区终端列表"
-          style={{ flexBasis: `${terminalListWidth}px` }}
+          style={{ flex: terminalListWidth === null ? "1 1 0" : `0 0 ${terminalListWidth}px` }}
         >
-          <div className="terminal-panel-list-heading">
-            <strong>终端</strong>
-            <span>{entries.length}</span>
-          </div>
           <div className="terminal-panel-list-scroll">
             {entries.map((entry) => (
               <button
@@ -153,8 +149,9 @@ export default function TerminalPanel({
               >
                 <span className="codicon codicon-terminal" aria-hidden="true" />
                 <span className="terminal-panel-list-copy">
-                  <strong>{entry.resource.name}</strong>
-                  <small>{entry.session_title || "未命名会话"}</small>
+                  <span className="terminal-panel-list-name">
+                    {entry.resource.name.replace(/^终端\s*\/\s*/u, "")}
+                  </span>
                 </span>
               </button>
             ))}

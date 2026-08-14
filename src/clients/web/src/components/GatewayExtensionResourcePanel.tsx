@@ -142,35 +142,6 @@ export default function GatewayExtensionResourcePanel({
       <div className="gateway-extension-scope-hint">
         所有 Gateway、工作区和会话申请的浏览器/终端；不跟随标准窗口当前会话。
       </div>
-      {entries.length > 0 ? (
-        <nav className="gateway-extension-resource-tabs" aria-label="扩展窗口资源标签" role="tablist">
-          {entries.map((entry) => {
-            const selected = entry.key === selectedKey;
-            const icon = entry.resource.kind === "browser" ? "codicon-globe" : "codicon-terminal";
-            return (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                className={`gateway-extension-resource-tab${selected ? " active" : ""}`}
-                key={entry.key}
-                title={`${entry.resource.name} · ${entry.workspace_name} · ${entry.session_title}`}
-                onClick={() => {
-                  onSelect(entry.key);
-                  onOpen(entry);
-                }}
-              >
-                <span className={`codicon ${icon}`} aria-hidden="true" />
-                <span>{entry.resource.name || kindLabel(entry.resource.kind)}</span>
-                <span
-                  className={`gateway-extension-resource-tab-state ${entry.resource.status}`}
-                  aria-label={entry.resource.status === "running" ? "运行中" : entry.resource.status}
-                />
-              </button>
-            );
-          })}
-        </nav>
-      ) : null}
       {notice ? <div className="resource-notice" role="status">{notice}</div> : null}
       {groupedErrors.map((error) => (
         <div className="resource-notice gateway-extension-error" key={error.message}>
@@ -246,6 +217,7 @@ export default function GatewayExtensionResourcePanel({
                           onOpen(entry);
                         }}
                         onReplaceBrowser={() => void onCreateReplacement(entry)}
+                        extensionWindow
                       />
                     ))}
                   </div>

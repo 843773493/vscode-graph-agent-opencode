@@ -38,6 +38,7 @@ export default function ResourcePanel({
   onRefresh,
   onControl,
   onOpenTerminalPreview,
+  onOpenTerminalExtension,
   onOpenBrowserPreview,
   onCloseResourcePreview,
   onCreateConnection,
@@ -57,6 +58,7 @@ export default function ResourcePanel({
     action: SessionResourceAction,
   ) => Promise<void>;
   onOpenTerminalPreview: (terminalId: string) => void;
+  onOpenTerminalExtension?: (terminalId: string) => void;
   onOpenBrowserPreview: (browserId: string) => void;
   onCloseResourcePreview: (
     kind: Extract<SessionResourceKind, "terminal" | "browser">,
@@ -233,7 +235,7 @@ export default function ResourcePanel({
     setOpenedBrowserId(resourceId);
     onOpenBrowserPreview(resourceId);
     setNoticeTechnicalDetails("");
-    setNotice("已打开浏览器预览；连接状态请在当前运行与连接界面查看");
+    setNotice("已在扩展窗口打开浏览器预览；连接状态请在当前运行与连接界面查看");
   };
   const handleCreateConnection = (kind: CreatableSessionConnectionKind) => {
     setCreateMenuOpen(false);
@@ -405,8 +407,10 @@ export default function ResourcePanel({
                               onControl={handleControl}
                               onCopy={handleCopy}
                               onOpenTerminal={handleOpenTerminal}
+                              onOpenTerminalExtension={onOpenTerminalExtension}
                               onOpenBrowser={handleOpenBrowser}
                               onReplaceBrowser={() => handleCreateConnection("browser")}
+                              extensionWindow={extensionWindow}
                             />
                           ))}
                         </div>

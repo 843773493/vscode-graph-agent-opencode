@@ -15,70 +15,6 @@
   line-height: 1.4;
 }
 
-.gateway-extension-resource-tabs {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 2px;
-  min-width: 0;
-  margin-top: 7px;
-  padding: 0 6px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--bt-panel-border);
-  scrollbar-width: thin;
-}
-
-.gateway-extension-resource-tab {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  max-width: min(220px, 80%);
-  min-height: 29px;
-  padding: 0 7px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--bt-text-muted);
-  font: inherit;
-  font-size: 10px;
-  cursor: pointer;
-}
-
-.gateway-extension-resource-tab:hover,
-.gateway-extension-resource-tab.active {
-  background: var(--bt-hover-background);
-  color: var(--bt-text-primary);
-}
-
-.gateway-extension-resource-tab.active {
-  border-bottom-color: var(--bt-accent);
-}
-
-.gateway-extension-resource-tab > span:nth-child(2) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.gateway-extension-resource-tab-state {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--bt-text-muted);
-}
-
-.gateway-extension-resource-tab-state.running {
-  background: var(--bt-status-success);
-}
-
-.gateway-extension-resource-tab-state.error,
-.gateway-extension-resource-tab-state.failed {
-  background: var(--bt-status-danger);
-}
-
 .gateway-extension-error {
   display: flex;
   flex-direction: column;
@@ -666,8 +602,16 @@
 }
 
 .resource-tree-actions button {
-  min-height: 24px;
-  padding: 0 7px;
+  display: inline-flex;
+  width: 26px;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.resource-tree-actions button .codicon {
+  font-size: 14px;
 }
 
 .resource-action-delete,
@@ -679,6 +623,16 @@
 .resource-action-open {
   color: var(--bt-status-success);
   border-color: color-mix(in srgb, var(--bt-status-success) 50%, var(--bt-border));
+}
+
+.resource-action-extension {
+  color: var(--bt-accent);
+  border-color: color-mix(in srgb, var(--bt-accent) 50%, var(--bt-border));
+}
+
+.resource-action-replace {
+  color: var(--bt-status-warning);
+  border-color: color-mix(in srgb, var(--bt-status-warning) 50%, var(--bt-border));
 }
 
 .resource-details {

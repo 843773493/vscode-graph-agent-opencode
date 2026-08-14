@@ -82,7 +82,7 @@ Node Inspector 没有与 VS Code `SourceBreakpoint.logMessage` 等价的独立 A
 
 ### 8. Add the product Skill and model-driven verification
 
-产品级调试说明唯一维护在 `resources/skills/debugging/`，包含 20 个扩展目标工具的 `tool_name` + `arguments_schema` 契约、通过 `invoke_custom_tool` 调用的方式、方案选择、断点到结束的强制顺序、暂停上下文约束和 Inspector 内部字段脱敏规则。默认 E2E 工作区准备器把 `resources/skills/` 复制到隔离工作区的 `/.boxteam/skills`，因此 `asset/` 不维护一份会漂移的产品 Skill 副本。
+产品级调试说明唯一维护在 `resources/skills/debugging/`，包含 20 个扩展目标工具的 `tool_name` + `arguments_schema` 契约、通过 `invoke_custom_tool` 调用的方式、基于 `state.status` 的最少调用决策树、并发操作处理、断点到结束的实际检查点、暂停上下文约束和 Inspector 内部字段脱敏规则。提示词优先告诉模型“先看状态再行动”：已有运行时就复用，人类推进后接受最新状态，`invalid_breakpoints` 只提醒不阻断。默认 E2E 工作区准备器把 `resources/skills/` 复制到隔离工作区的 `/.boxteam/skills`，因此 `asset/` 不维护一份会漂移的产品 Skill 副本。
 
 新增 `test_debug_prompt_flow.py` 启动真实 Workspace 后端，通过本地 OpenAI-compatible HTTP 服务返回确定性的模型 tool calls。它必须经过用户 session prompt、Skill `read_file`、调试工具调用、真实 Node Inspector 状态和最终 assistant marker；这样验证的是完整 Agent/model 协议边界，而不是直接调用工具 factory。另有 `test_debug_prompt_live.py`，仅在 `BOXTEAM_RUN_LIVE_DEBUG_E2E=1` 时使用当前配置的外部模型，验证真实模型是否遵守同一流程。
 
@@ -98,7 +98,7 @@ Node Inspector 没有与 VS Code `SourceBreakpoint.logMessage` 等价的独立 A
 
 方案中的路径全部相对当前工作区。后端通过枚举并严格校验 `debug/node/configurations/*.json` 发现方案，因此把单个方案文件复制到另一会话的同名目录即可使用；HTTP API 另提供跨会话复制。旧的单文件 `debug/node.json` 不读取、不迁移，也不提供兼容 DTO。
 
-源码变化使用 reconciliation hook：`get_state`、控制动作以及 start/restart 都会经过同一校验。Web 已定时读取状态，Agent 每个工具也会读取权威状态，因此无需给 NodeDebugService 再创建常驻文件 watcher。锚点优先匹配原行，再按代码行和相邻上下文寻找唯一最佳位置；歧义或文件删除时标记待更新。活动进程发生任何关联源码变化都设置 `requires_restart`，因为 Node 已加载的源码不会随磁盘文件自动更新。
+源码变化使用 reconciliation hook：`get_state`、控制动作以及 start/restart 都会经过同一校验。Web 已定时读取状态，Agent 每个工具也会读取权威状态，因此无需给 NodeDebugService 再创建常驻文件 watcher。fallback 策略不尝试按锚点重定位：关联文件内容变化后保留原请求行号并标记 `pending_update`，删除文件时标记 `source_deleted`，同时移除活动 Inspector 中的旧断点映射。活动进程发生任何关联源码变化都设置 `requires_restart` 和 `source_changed_paths`，因为 Node 已加载的源码不会随磁盘文件自动更新；这些标记只用于提醒，不阻止继续、暂停、单步或停止。只有显式重新设置断点才恢复为 `current`。`start_debugging` 和调试结束时的最后一个成功控制工具结果额外返回 `invalid_breakpoints`，让 Agent 在两个关键边界集中处理提醒。
 
 ### 11. Follow actual paused frames across JavaScript modules
 

@@ -672,7 +672,7 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
 
 
 @pytest.mark.asyncio
-async def test_active_debug_session_marks_changed_source_and_restarts_relocated_breakpoint(
+async def test_active_debug_session_invalidates_changed_source_without_blocking_controls(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
 ) -> None:
@@ -696,7 +696,7 @@ async def test_active_debug_session_marks_changed_source_and_restarts_relocated_
         configured = _payload(
             await tools["create_debug_configuration"].ainvoke(
                 {
-                    "name": "跨文件重定位",
+                    "name": "跨文件失效提醒",
                     "fileFullPath": _relative_path(workspace_root, entry_path),
                     "workingDirectory": ".",
                     "configurationName": "node-default",
@@ -726,15 +726,139 @@ async def test_active_debug_session_marks_changed_source_and_restarts_relocated_
         changed = await service.get_state("ses_e2e_debug")
         assert changed.requires_restart is True
         assert changed.source_changed_paths == ["debug-worker.mjs"]
-        assert changed.breakpoints[0].line == worker_line + 1
-        assert changed.breakpoints[0].relocation_status == "relocated"
+        assert changed.breakpoints[0].line == worker_line
+        assert changed.breakpoints[0].relocation_status == "pending_update"
+
+        # 源码变化只让断点失效，不阻止人类继续当前已经加载的 Node 代码。
+        continued = await service.apply_action(
+            session_id="ses_e2e_debug",
+            action="continue",
+            params={},
+        )
+        if continued.status == "running":
+            continued = await _wait_for_debug_state(
+                service,
+                "ses_e2e_debug",
+                expected_status="exited",
+            )
+        assert continued.status == "exited"
+        assert continued.breakpoints[0].relocation_status == "pending_update"
 
         restarted = _payload(await tools["restart_debugging"].ainvoke({}))
-        assert restarted["state"]["status"] == "paused"
+        assert restarted["state"]["status"] == "exited"
         assert restarted["state"]["requires_restart"] is False
-        assert restarted["state"]["call_stack"][0]["path"] == "debug-worker.mjs"
-        assert restarted["state"]["call_stack"][0]["line"] == worker_line + 1
-        assert restarted["state"]["breakpoints"][0]["relocation_status"] == "current"
+        assert restarted["state"]["breakpoints"][0]["relocation_status"] == "pending_update"
+        assert restarted["invalid_breakpoints"][0]["path"] == "debug-worker.mjs"
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
+    integration_workspace_root_path: str,
+    integration_workspace_config_path: str,
+) -> None:
+    workspace_root = Path(integration_workspace_root_path).resolve()
+    entry_path, worker_path, entry_line, worker_line = _write_cross_file_debug_fixture(
+        workspace_root
+    )
+    config_service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=Path(integration_workspace_config_path),
+        workspace_root=workspace_root,
+    )
+    config_service.validate_workspace_config()
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=config_service,
+    )
+    tools = _tool_map(workspace_root, service)
+
+    try:
+        configured = _payload(
+            await tools["create_debug_configuration"].ainvoke(
+                {
+                    "name": "开始结束失效反馈",
+                    "fileFullPath": _relative_path(workspace_root, entry_path),
+                    "workingDirectory": ".",
+                    "configurationName": "node-default",
+                    "arguments": [],
+                }
+            )
+        )
+        assert configured["ok"] is True
+        await tools["add_breakpoint"].ainvoke(
+            {
+                "fileFullPath": _relative_path(workspace_root, entry_path),
+                "line": entry_line,
+            }
+        )
+        await tools["add_breakpoint"].ainvoke(
+            {
+                "fileFullPath": _relative_path(workspace_root, worker_path),
+                "line": worker_line,
+            }
+        )
+
+        # 启动前只修改 worker，让它的断点先失效；entry 断点仍应真实命中。
+        worker_path.write_text(
+            "// 启动前新增说明\n" + worker_path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        started = _payload(
+            await tools["start_debugging"].ainvoke(
+                {
+                    "fileFullPath": _relative_path(workspace_root, entry_path),
+                    "workingDirectory": ".",
+                }
+            )
+        )
+        assert started["ok"] is True
+        assert started["state"]["status"] == "paused"
+        assert started["state"]["call_stack"][0]["path"] == "debug-entry.mjs"
+        assert started["state"]["call_stack"][0]["line"] == entry_line
+        assert started["invalid_breakpoints"] == [
+            {
+                "path": "debug-worker.mjs",
+                "line": worker_line,
+                "column": 1,
+                "original_line": worker_line,
+                "relocation_status": "pending_update",
+                "relocation_message": (
+                    "源码已变化，断点未自动重定位；请检查后重新设置 "
+                    f"debug-worker.mjs:{worker_line}"
+                ),
+            }
+        ]
+
+        # 运行中再修改 entry，让第二个原本有效的断点也失效。
+        entry_path.write_text(
+            "// 运行中新增说明\n" + entry_path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        changed = await service.get_state("ses_e2e_debug")
+        assert changed.status == "paused"
+        assert {breakpoint.relocation_status for breakpoint in changed.breakpoints} == {
+            "pending_update"
+        }
+        assert {breakpoint.path for breakpoint in changed.breakpoints} == {
+            "debug-entry.mjs",
+            "debug-worker.mjs",
+        }
+
+        finished = _payload(await tools["continue_execution"].ainvoke({}))
+        if finished["state"]["status"] == "running":
+            # 目标进程可能在 continue 返回后才完成退出；停止动作作为最终
+            # 控制调用仍必须返回同一组失效断点提醒。
+            finished = _payload(await tools["stop_debugging"].ainvoke({}))
+        assert finished["state"]["status"] == "exited"
+        assert {
+            item["path"] for item in finished["invalid_breakpoints"]
+        } == {"debug-entry.mjs", "debug-worker.mjs"}
+        assert all(
+            item["relocation_status"] == "pending_update"
+            for item in finished["invalid_breakpoints"]
+        )
     finally:
         await service.close()
 

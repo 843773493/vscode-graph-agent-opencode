@@ -65,61 +65,25 @@ def reconcile_breakpoint(
                 "relocation_message": f"断点源文件已删除: {breakpoint.path}",
             }
         )
+    if breakpoint.relocation_status in {"pending_update", "source_deleted"}:
+        # 源码变化后的断点必须由用户或 Agent 显式重新设置；即使文件恢复，
+        # 也不能根据旧锚点自动恢复，避免把断点悄悄绑定到错误代码。
+        return breakpoint
     if breakpoint.source_digest is None or breakpoint.source_line is None:
         return anchor_breakpoint(breakpoint, path)
     if current_digest == breakpoint.source_digest:
-        if breakpoint.relocation_status in {"pending_update", "source_deleted"}:
-            return anchor_breakpoint(
-                breakpoint,
-                path,
-                relocation_message="源码已恢复，断点锚点重新有效",
-            )
         return breakpoint
 
-    source_lines = _source_lines(path)
-    candidates = [
-        index + 1
-        for index, source_line in enumerate(source_lines)
-        if source_line == breakpoint.source_line
-    ]
-    relocated_line = _unique_anchor_match(
-        candidates,
-        source_lines,
-        previous_line=breakpoint.previous_line,
-        next_line=breakpoint.next_line,
-    )
-    if relocated_line is None:
-        return breakpoint.model_copy(
-            update={
-                "verified": False,
-                "actual_line": None,
-                "inspector_id": None,
-                "relocation_status": "pending_update",
-                "relocation_message": (
-                    "源码已变化，无法唯一定位原断点；请检查后重新设置 "
-                    f"{breakpoint.path}:{breakpoint.line}"
-                ),
-            }
-        )
-
-    previous_line = breakpoint.line
-    status = "relocated" if relocated_line != previous_line else "current"
-    message = (
-        f"源码变化后断点已从第 {previous_line} 行重定位到第 {relocated_line} 行"
-        if status == "relocated"
-        else "源码已变化，断点锚点仍位于原行"
-    )
-    return anchor_breakpoint(
-        breakpoint,
-        path,
-        line=relocated_line,
-        relocation_status=status,
-        relocation_message=message,
-    ).model_copy(
+    return breakpoint.model_copy(
         update={
             "verified": False,
             "actual_line": None,
             "inspector_id": None,
+            "relocation_status": "pending_update",
+            "relocation_message": (
+                "源码已变化，断点未自动重定位；请检查后重新设置 "
+                f"{breakpoint.path}:{breakpoint.line}"
+            ),
         }
     )
 
@@ -192,30 +156,6 @@ def _source_lines(path: Path) -> list[str]:
         return path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError as error:
         raise RuntimeError(f"源码断点文件不是 UTF-8 文本: {path}") from error
-
-
-def _unique_anchor_match(
-    candidates: list[int],
-    source_lines: list[str],
-    *,
-    previous_line: str | None,
-    next_line: str | None,
-) -> int | None:
-    if len(candidates) == 1:
-        return candidates[0]
-    if not candidates:
-        return None
-    scored: list[tuple[int, int]] = []
-    for line in candidates:
-        score = 0
-        if previous_line is not None and line > 1:
-            score += 1 if source_lines[line - 2] == previous_line else 0
-        if next_line is not None and line < len(source_lines):
-            score += 1 if source_lines[line] == next_line else 0
-        scored.append((score, line))
-    best_score = max(score for score, _line in scored)
-    best_lines = [line for score, line in scored if score == best_score]
-    return best_lines[0] if best_score > 0 and len(best_lines) == 1 else None
 
 
 __all__ = [

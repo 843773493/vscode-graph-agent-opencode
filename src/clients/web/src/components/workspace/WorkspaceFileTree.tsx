@@ -1169,9 +1169,10 @@ export default function WorkspaceFileTree({
             node.kind,
           )}
         >
-          <span className="codicon-lite files-tree-chevron">
-            {isDirectory ? (expanded ? "⌄" : "›") : ""}
-          </span>
+          <span
+            className={`codicon files-tree-chevron${isDirectory ? ` codicon-chevron-${expanded ? "down" : "right"}` : ""}`}
+            aria-hidden="true"
+          />
           <span className={`file-icon ${node.kind}`}>{fileIcon(node)}</span>
           <span className="file-label">{node.name}</span>
           {node.kind === "file" ? (
@@ -1266,9 +1267,10 @@ export default function WorkspaceFileTree({
             row.shortcutSource,
           )}
         >
-          <span className="codicon-lite files-tree-chevron">
-            {row.expanded ? "⌄" : "›"}
-          </span>
+          <span
+            className={`codicon files-tree-chevron codicon-chevron-${row.expanded ? "down" : "right"}`}
+            aria-hidden="true"
+          />
           {row.icon === "shortcut" ? (
             <span className="codicon codicon-bookmark file-icon" aria-hidden="true" />
           ) : row.icon === "filesystem" ? (
@@ -1300,9 +1302,10 @@ export default function WorkspaceFileTree({
             node.kind,
           )}
         >
-          <span className="codicon-lite files-tree-chevron">
-            {isDirectory ? (row.expanded ? "⌄" : "›") : ""}
-          </span>
+          <span
+            className={`codicon files-tree-chevron${isDirectory ? ` codicon-chevron-${row.expanded ? "down" : "right"}` : ""}`}
+            aria-hidden="true"
+          />
           <span className={`file-icon ${node.kind}`}>{fileIcon(node)}</span>
           <span className="file-label">{node.name}</span>
           {node.kind === "file" ? (
@@ -1441,7 +1444,10 @@ export default function WorkspaceFileTree({
                     shortcut.source,
                   )}
                 >
-                  <span className="codicon-lite files-tree-chevron">{expanded ? "⌄" : "›"}</span>
+                  <span
+                    className={`codicon files-tree-chevron codicon-chevron-${expanded ? "down" : "right"}`}
+                    aria-hidden="true"
+                  />
                   <span className="codicon codicon-bookmark file-icon" aria-hidden="true" />
                   <span className="file-label">{shortcut.label}</span>
                   <span className="files-tree-shortcut-kind">快捷路径</span>
@@ -1467,7 +1473,10 @@ export default function WorkspaceFileTree({
             "directory",
           )}
         >
-          <span className="codicon-lite files-tree-chevron">{rootExpanded ? "⌄" : "›"}</span>
+          <span
+            className={`codicon files-tree-chevron codicon-chevron-${rootExpanded ? "down" : "right"}`}
+            aria-hidden="true"
+          />
           <span className="file-icon directory">▣</span>
           <span className="file-label">{rootLabel}</span>
         </button>
@@ -1485,7 +1494,10 @@ export default function WorkspaceFileTree({
             "directory",
           )}
         >
-          <span className="codicon-lite files-tree-chevron">{filesystemRootExpanded ? "⌄" : "›"}</span>
+          <span
+            className={`codicon files-tree-chevron codicon-chevron-${filesystemRootExpanded ? "down" : "right"}`}
+            aria-hidden="true"
+          />
           <span className="codicon codicon-file-directory file-icon directory" aria-hidden="true" />
           <span className="file-label">/</span>
         </button>

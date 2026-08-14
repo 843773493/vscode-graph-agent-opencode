@@ -15,6 +15,11 @@ export const DEFAULT_MAIN_AREA_RATIOS: WebUiMainAreaRatios = {
   auxiliary: 1,
 };
 
+export const DEFAULT_EXTENSION_DEBUG_AREA_RATIOS = {
+  workspace_preview: 1.55,
+  auxiliary: 0.85,
+} satisfies Pick<WebUiMainAreaRatios, "workspace_preview" | "auxiliary">;
+
 export const LAYOUT_RESIZING_CLASS = "is-layout-resizing";
 export const GATEWAY_PANEL_RESIZING_CLASS = "is-gateway-panel-resizing";
 export const DEFAULT_GATEWAY_PANEL_HEIGHT = 286;

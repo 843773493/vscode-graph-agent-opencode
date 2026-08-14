@@ -250,8 +250,14 @@
 }
 
 .agent-sessions-section-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 14px;
+  height: 14px;
   color: var(--bt-text-subtle);
+  font-size: 12px;
+  line-height: 1;
   text-align: center;
 }
 

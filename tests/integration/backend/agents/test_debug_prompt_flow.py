@@ -426,7 +426,11 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
 
     skill_path = Path.cwd() / "resources" / "skills" / "debugging" / "SKILL.md"
     assert skill_path.is_file()
-    assert "start_debugging" in skill_path.read_text(encoding="utf-8")
+    skill_text = skill_path.read_text(encoding="utf-8")
+    assert "start_debugging" in skill_text
+    assert "先看状态再行动" in skill_text
+    assert "invalid_breakpoints" in skill_text
+    assert "不需要先交接控制权" in skill_text
 
     create_response = await scripted_client.post(
         "/api/v1/sessions",

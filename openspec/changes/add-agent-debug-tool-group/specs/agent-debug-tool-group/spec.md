@@ -236,7 +236,7 @@ evaluate_expression
 
 ### Requirement: Debugging Skill is discoverable and the prompt flow is verifiable
 
-系统 SHALL 在 `resources/skills/debugging/SKILL.md` 提供与 20 个扩展目标工具同步的 `tool_name` + `arguments_schema` JSON 契约、通过 `invoke_custom_tool` 调用的方式、调用顺序和安全边界。E2E 工作区 SHALL 从该产品资源复制 Skill 到 `/.boxteam/skills/debugging/SKILL.md`，不得维护一份会漂移的产品副本。
+系统 SHALL 在 `resources/skills/debugging/SKILL.md` 提供与 20 个扩展目标工具同步的 `tool_name` + `arguments_schema` JSON 契约、通过 `invoke_custom_tool` 调用的方式、面向模型的状态决策流程、并发处理规则和安全边界。该流程 SHALL 指导模型优先读取权威状态、只在必要时追加工具调用，并明确 `invalid_breakpoints` 的出现时机及处理方式；不得要求模型机械重复查询或为取得控制权而重启。E2E 工作区 SHALL 从该产品资源复制 Skill 到 `/.boxteam/skills/debugging/SKILL.md`，不得维护一份会漂移的产品副本。
 
 #### Scenario: Agent reads the debugging Skill before acting
 
@@ -247,6 +247,11 @@ evaluate_expression
 
 - **WHEN** 测试模型通过 OpenAI-compatible HTTP 接口从用户 prompt 返回调试工具调用
 - **THEN** 真实 Workspace 后端执行这些调用，Node Inspector 返回暂停、求值、单步和结束状态，最终 assistant message 返回稳定完成标记
+
+#### Scenario: Model follows authoritative state branches
+
+- **WHEN** 工具结果分别返回 `idle`、`running`、`paused`、`exited`、`failed`，或在开始/结束结果中返回 `invalid_breakpoints`
+- **THEN** Skill 让模型按状态选择最少的下一步：运行中不读取变量，暂停后依据真实 frame 分析，失效断点只作为提醒并不阻断控制，结束后才报告结果；模型不重复启动、不虚构断点命中，也不把普通状态查询当作结束反馈
 
 #### Scenario: External model verification is explicit
 
@@ -301,16 +306,18 @@ Web 右侧侧边栏的源码预览在没有活动文件、方案或暂停位置�
 
 ### Requirement: Breakpoints reconcile with changed source
 
-系统 SHALL 为会话源码断点保存足以识别原代码位置的源码锚点。读取调试状态、执行调试动作或启动/重启前 SHALL 检查关联文件版本：若锚点能唯一匹配新源码，系统更新断点行并报告 `relocated`；若不能唯一匹配，系统报告 `pending_update` 或 `source_deleted`，不得静默将旧行号安装到新源码。
+系统 SHALL 为会话源码断点保存足以识别原代码位置的源码锚点。读取调试状态、执行调试动作或启动/重启前 SHALL 检查关联文件版本；只要关联文件内容发生变化，相关断点 SHALL 保留原请求行号并标记为 `pending_update`，文件删除时标记为 `source_deleted`，不得自动重定位或静默将旧行号安装到新源码。
 
-活动调试进程加载源码后文件发生变化时，状态 SHALL 标记 `requires_restart`。重启后已成功安装的断点 SHALL 回到 `current` 状态。
+活动调试进程加载源码后文件发生变化时，状态 SHALL 标记 `requires_restart` 和 `source_changed_paths`，并移除 Inspector 中相关的旧断点映射。源码变化不得阻止 `continue_execution`、`pause_execution`、`step_*` 或 `stop_debugging`；目标进程可以继续执行已经加载的代码。只有 Agent 显式重新设置断点后，该断点才恢复为 `current` 并允许安装。
+
+`start_debugging` 的成功结果以及导致调试状态变为 `exited` 或 `failed` 的最后一个成功控制工具结果 SHALL 顶层包含 `invalid_breakpoints` 数组，列出路径、原请求行号、状态和提醒信息；其他工具不额外返回该顶层字段，但其完整 `state.breakpoints` 仍保留失效状态。
 
 #### Scenario: Lines are inserted before a breakpoint
 
 - **WHEN** 会话已保存断点，随后在断点源码之前插入若干行，且原源码锚点仍可唯一识别
-- **THEN** 系统把断点重定位到新行号，保留原行号供审计，并在下一次启动时安装新位置
+- **THEN** 系统不改变断点请求行号，将其标记为 `pending_update`，不安装该断点；继续或单步仍可驱动当前已加载的目标进程，Agent 在启动结果或最终结果中看到该断点的 `invalid_breakpoints` 提醒
 
 #### Scenario: Breakpoint anchor becomes ambiguous
 
 - **WHEN** 源码变化后存在多个同等匹配位置或原文件已删除
-- **THEN** 断点标记为待更新或源文件已删除，并保持未验证状态，不安装到猜测位置
+- **THEN** 断点标记为待更新或源文件已删除，并保持未验证状态，不安装到猜测位置；该失效状态不阻断调试控制动作

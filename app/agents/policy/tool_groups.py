@@ -29,7 +29,7 @@ AGENT_COLLABORATION_TOOL_GROUP = ToolGroupDefinition(
 )
 DEBUGGING_TOOL_GROUP = ToolGroupDefinition(
     group_id="debugging",
-    group_name="源码调试",
+    group_name="扩展工具 · Source Debugging",
     kind="debugging",
 )
 

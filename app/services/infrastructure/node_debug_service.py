@@ -695,6 +695,8 @@ class NodeDebugService:
                 {"enabled": True},
             )
             for breakpoint in runtime.breakpoints.values():
+                if breakpoint.relocation_status != "current":
+                    continue
                 await self._install_breakpoint(runtime, breakpoint)
             async with runtime.state_lock:
                 runtime.status = "starting"
@@ -860,6 +862,7 @@ class NodeDebugService:
                     log_message=breakpoint.log_message,
                 )
                 for breakpoint in runtime.breakpoints.values()
+                if breakpoint.relocation_status == "current"
             ]
         await self._stop_runtime(runtime)
         async with runtime.state_lock:
@@ -1419,6 +1422,7 @@ class NodeDebugService:
         changed = False
         should_persist = False
         relocation_messages: list[str] = []
+        invalidated_inspector_ids: list[tuple[str, str]] = []
         for breakpoint in breakpoints:
             next_breakpoint = reconcile_breakpoint(
                 breakpoint,
@@ -1432,6 +1436,17 @@ class NodeDebugService:
                     next_breakpoint.relocation_message
                     or f"断点状态已更新: {next_breakpoint.path}:{next_breakpoint.line}"
                 )
+            if (
+                runtime is not None
+                and next_breakpoint.relocation_status != "current"
+            ):
+                inspector_id = runtime.inspector_breakpoint_ids.get(
+                    breakpoint.breakpoint_id
+                )
+                if inspector_id is not None:
+                    invalidated_inspector_ids.append(
+                        (breakpoint.breakpoint_id, inspector_id)
+                    )
 
         if runtime is not None:
             active = runtime.status in {"starting", "running", "paused"}
@@ -1450,14 +1465,18 @@ class NodeDebugService:
                     self._append_action(
                         runtime,
                         "source_changed",
-                        "磁盘源码已变化，需要重启调试: "
+                        "磁盘源码已变化，相关断点已失效；如需运行新源码可重启调试: "
                         + "、".join(sorted(newly_changed_paths)),
                         actor="system",
                     )
             if changed:
-                runtime.breakpoints = {
-                    breakpoint.breakpoint_id: breakpoint for breakpoint in reconciled
-                }
+                async with runtime.state_lock:
+                    runtime.breakpoints = {
+                        breakpoint.breakpoint_id: breakpoint
+                        for breakpoint in reconciled
+                    }
+                    for breakpoint_id, _inspector_id in invalidated_inspector_ids:
+                        runtime.inspector_breakpoint_ids.pop(breakpoint_id, None)
                 for message in relocation_messages:
                     self._append_action(
                         runtime,
@@ -1465,6 +1484,22 @@ class NodeDebugService:
                         message,
                         actor="system",
                     )
+            if invalidated_inspector_ids and runtime.socket is not None:
+                for _breakpoint_id, inspector_id in invalidated_inspector_ids:
+                    try:
+                        await self._command(
+                            runtime,
+                            "Debugger.removeBreakpoint",
+                            {"breakpointId": inspector_id},
+                        )
+                    except Exception as error:  # noqa: BLE001 - 失效标记不能阻断调试
+                        self._append_action(
+                            runtime,
+                            "breakpoint_invalidation_failed",
+                            f"清理失效 Inspector 断点失败: {error}",
+                            actor="system",
+                            result="error",
+                        )
         elif changed:
             self._pending_breakpoints[session_id] = reconciled
             pending_actions = self._pending_actions.setdefault(session_id, [])

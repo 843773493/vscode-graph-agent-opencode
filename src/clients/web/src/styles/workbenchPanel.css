@@ -455,9 +455,9 @@
 
 .terminal-panel-list {
   display: flex;
-  flex: 0 0 260px;
+  flex: 1 1 0;
   flex-direction: column;
-  min-width: 190px;
+  min-width: 0;
   min-height: 0;
   border-right: 1px solid var(--bt-panel-border);
   background: var(--bt-bottom-panel-list-background);
@@ -479,26 +479,6 @@
   outline: none;
 }
 
-.terminal-panel-list-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 31px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--bt-panel-border);
-  color: var(--bt-text-muted);
-  font-size: 10px;
-}
-
-.terminal-panel-list-heading span {
-  min-width: 18px;
-  padding: 2px 5px;
-  border-radius: 9px;
-  background: var(--bt-badge-background);
-  color: var(--bt-badge-foreground);
-  text-align: center;
-}
-
 .terminal-panel-list-scroll {
   min-height: 0;
   overflow: auto;
@@ -510,13 +490,14 @@
   align-items: center;
   gap: 7px;
   width: 100%;
-  min-height: 43px;
-  padding: 5px 10px;
+  min-height: 26px;
+  padding: 4px 8px;
   border: 0;
   border-left: 2px solid transparent;
   border-bottom: 1px solid color-mix(in srgb, var(--bt-panel-border) 70%, transparent);
   background: transparent;
   color: var(--bt-text-muted);
+  line-height: 16px;
   text-align: left;
   cursor: pointer;
 }
@@ -534,26 +515,16 @@
 .terminal-panel-list-copy {
   display: flex;
   min-width: 0;
-  flex-direction: column;
 }
 
-.terminal-panel-list-copy strong,
-.terminal-panel-list-copy small {
+.terminal-panel-list-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.terminal-panel-list-copy strong {
   color: inherit;
   font-size: 10px;
   font-weight: 600;
-}
-
-.terminal-panel-list-copy small {
-  margin-top: 2px;
-  color: var(--bt-text-muted);
-  font-size: 9px;
 }
 
 .terminal-panel-empty-list {
@@ -565,7 +536,7 @@
 
 .terminal-panel-viewer {
   display: flex;
-  flex: 1 1 auto;
+  flex: 9 1 0;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
@@ -841,8 +812,7 @@
   }
 
   .terminal-panel-list {
-    flex-basis: 42%;
-    min-width: 185px;
+    min-width: 0;
   }
 
   .terminal-panel-list-scroll button {

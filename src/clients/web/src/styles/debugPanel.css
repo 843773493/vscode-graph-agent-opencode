@@ -876,19 +876,15 @@
   cursor: pointer;
 }
 
-.node-debug-gutter > span {
+.node-debug-gutter > .node-debug-breakpoint-placeholder {
   width: 7px;
   height: 7px;
   border: 1px solid transparent;
   border-radius: 50%;
 }
 
-.node-debug-gutter:hover > span {
+.node-debug-gutter:hover > .node-debug-breakpoint-placeholder {
   border-color: var(--bt-status-danger);
-}
-
-.node-debug-gutter.has-breakpoint > span {
-  background: var(--bt-status-danger);
 }
 
 .node-debug-gutter:disabled {
@@ -1438,7 +1434,7 @@
   cursor: pointer;
 }
 
-.node-debug-gutter > span {
+.node-debug-gutter > .node-debug-breakpoint-placeholder {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -1450,15 +1446,9 @@
   transform: translate(-50%, -50%);
 }
 
-.node-debug-code-line:hover .node-debug-gutter > span,
-.node-debug-gutter:focus-visible > span,
-.node-debug-gutter.has-breakpoint > span {
+.node-debug-code-line:hover .node-debug-gutter > .node-debug-breakpoint-placeholder,
+.node-debug-gutter:focus-visible > .node-debug-breakpoint-placeholder {
   opacity: 1;
-}
-
-.node-debug-gutter.has-breakpoint > span {
-  border-color: var(--bt-status-danger);
-  background: var(--bt-status-danger);
 }
 
 .node-debug-secondary {
@@ -1761,13 +1751,13 @@
   }
 }
 
-.app-shell.extension-window .workspace-editor-body-debug > .workspace-preview-panel {
-  flex: 1.55 1 0 !important;
+.app-shell.extension-window .workspace-editor-body-debug > .layout-sash-auxiliary-left {
+  display: block;
 }
 
+.app-shell.extension-window .workspace-editor-body-debug > .workspace-preview-panel,
 .app-shell.extension-window .workspace-editor-body-debug > .auxiliary-panel {
-  width: auto !important;
-  flex: 0.85 1 0 !important;
+  min-width: min(260px, 42vw);
 }
 
 /* 源码预览和扩展窗口共用的 VS Code 风格特殊断点标记。 */
@@ -1802,14 +1792,15 @@
   color: var(--bt-status-info, #45a9dc);
 }
 
+.node-debug-gutter.breakpoint-unverified > .node-debug-breakpoint-icon,
+.workspace-debug-editor-gutter.breakpoint-unverified > .node-debug-breakpoint-icon {
+  color: var(--bt-text-muted);
+}
+
 .node-debug-gutter > .node-debug-current-icon,
 .workspace-debug-editor-gutter > .node-debug-current-icon {
   color: var(--bt-status-warning);
   font-size: 16px;
-}
-
-.workspace-debug-editor-gutter.has-breakpoint::after {
-  display: none;
 }
 
 .node-debug-breakpoint-menu {

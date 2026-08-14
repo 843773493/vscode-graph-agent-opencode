@@ -58,7 +58,7 @@
 - [x] 8.1 删除 Agent 执行调试的接管、交接和控制模式协议/UI，保留共享动作与 actor 审计
 - [x] 8.2 更新 debugging Skill，说明人类可在模型工具调用之间操作 Web、终端和源码，模型必须接受最新权威状态
 - [x] 8.3 新增会话级 Node 调试配置存储，持久化入口、profile、参数、断点、动作和配置修订，不保存运行时连接句柄
-- [x] 8.4 为断点增加源码锚点、`current/relocated/pending_update/source_deleted` 状态和活动进程 `requires_restart` 标记
+- [x] 8.4 为断点增加源码锚点、`current/pending_update/source_deleted` 状态和活动进程 `requires_restart` 标记
 - [x] 8.5 让窄体源码预览在暂停时跟随实际 frame，未暂停时跟随最近新增或用户选择的跨文件断点
 - [x] 8.6 将 Node Inspector 与提示词调试 fixture 改为两个 JavaScript 文件，并验证 AI/人类共享操作、跨文件暂停和配置恢复
 - [x] 8.7 运行 Python 静态检查、focused tests、Web build、真实 Node/Web 全链路检查和 OpenSpec 严格校验
@@ -90,3 +90,15 @@
 - [x] 11.4 在右侧侧边栏源码预览和扩展窗口源码区实现右键创建、编辑、删除特殊断点，保留左键普通断点快捷操作
 - [x] 11.5 增加后端真实 Node、Agent 工具和 Web 交互回归测试
 - [x] 11.6 刷新 OpenAPI/生成类型并执行静态检查、聚焦测试、Web build 与 OpenSpec 严格校验
+
+## 12. 源码变化后的保守失效
+
+- [x] 12.1 禁止源码变化后的断点自动重定位，保留原请求行号并标记 `pending_update`/`source_deleted`
+- [x] 12.2 清理活动 Inspector 的失效断点映射，但不阻止继续、暂停、单步和停止
+- [x] 12.3 在调试开始和调试结束的工具结果中返回失效断点列表，并补充回归测试与 Skill 说明
+
+## 13. 面向模型的调试提示词
+
+- [x] 13.1 将 Skill 重写为基于 `state.status` 的最少调用决策流程，明确方案复用、暂停解释和结束确认
+- [x] 13.2 明确人类并发操作、新消息和 `invalid_breakpoints` 的处理规则，避免控制权交接和失效阻断误判
+- [x] 13.3 同步扩展工具短描述并通过提示词回归、静态检查和 OpenSpec 校验

@@ -556,9 +556,10 @@ export default function AgentSessionsPanel({
                         aria-expanded={!collapsed}
                         onClick={() => toggleSessionSection(section.id)}
                       >
-                        <span className="agent-sessions-section-chevron" aria-hidden="true">
-                          {collapsed ? '›' : '⌄'}
-                        </span>
+                        <span
+                          className={`codicon agent-sessions-section-chevron codicon-chevron-${collapsed ? "right" : "down"}`}
+                          aria-hidden="true"
+                        />
                         <span className="agent-sessions-section-label">{section.label}</span>
                       </button>
                       {!collapsed ? (

@@ -86,7 +86,6 @@ body.is-layout-resizing {
 .app-shell.extension-window .chat-panel,
 .app-shell.extension-window .layout-sash-agent-sessions-right,
 .app-shell.extension-window .layout-sash-workspace-editor-left,
-.app-shell.extension-window .layout-sash-auxiliary-left,
 .app-shell.extension-window .layout-sash-gateway-panel,
 .app-shell.extension-window .gateway-log-panel {
   display: none;
@@ -94,11 +93,6 @@ body.is-layout-resizing {
 
 .app-shell.extension-window .workspace-editor-shell {
   flex-grow: 1 !important;
-}
-
-.app-shell.extension-window .auxiliary-panel {
-  width: 100% !important;
-  flex: 1 1 auto !important;
 }
 
 .workspace-editor-header {
@@ -651,17 +645,6 @@ body.is-layout-resizing {
 .workspace-debug-editor-line:hover .workspace-debug-editor-gutter > span,
 .workspace-debug-editor-gutter:focus-visible > span {
   opacity: 1;
-}
-
-.workspace-debug-editor-gutter.has-breakpoint::after {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--bt-status-danger);
-  content: "";
 }
 
 .workspace-debug-editor-gutter .codicon {
@@ -1258,9 +1241,15 @@ body.is-layout-resizing {
 }
 
 .files-tree-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 10px;
   width: 10px;
+  height: 14px;
   color: var(--bt-text-muted);
+  font-size: 12px;
+  line-height: 1;
   text-align: center;
 }
 
@@ -1705,8 +1694,14 @@ button.files-tree-item:hover {
   z-index: 1;
   width: 44px;
   height: 56px;
-  font-size: 34px;
+  display: grid;
+  place-items: center;
+  font-size: 0;
   transform: translateY(-50%);
+}
+
+.message-media-viewer-nav .codicon {
+  font-size: 22px;
 }
 
 .message-media-viewer-nav.previous {

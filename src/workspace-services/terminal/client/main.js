@@ -45,6 +45,7 @@ function readHostThemeToken(token, fallback) {
 const terminal = new window.Terminal({
   cursorBlink: true,
   convertEol: true,
+  reflowRows: true,
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
   fontSize: 14,
   theme: {
@@ -67,6 +68,7 @@ fitAddon.fit();
 let socket = null;
 let attached = false;
 let deleted = false;
+let snapshotDisplay = "";
 let currentTerminalStatus = null;
 let statusPollTimer = null;
 let resizeFrame = null;
@@ -173,8 +175,7 @@ function markDeleted(message = "终端已删除或不存在", snapshot = null) {
     terminalIdElement.textContent = `${terminalId} · ${statusLabel("deleted")}`;
   }
   if (snapshot) {
-    terminal.clear();
-    terminal.write(snapshotDisplayBuffer(snapshot));
+    renderSnapshot(snapshotDisplayBuffer(snapshot));
   }
   setStatus(message);
   updateControls();
@@ -209,6 +210,12 @@ function snapshotDisplayBuffer(snapshot) {
   return snapshot.display_buffer ?? sanitizeTerminalDisplay(snapshot.buffer || "");
 }
 
+function renderSnapshot(display) {
+  snapshotDisplay = display;
+  terminal.clear();
+  terminal.write(display);
+}
+
 function rememberSequence(sequence) {
   if (!Number.isInteger(sequence) || sequence < lastSequence) {
     return;
@@ -238,6 +245,33 @@ function resizeRemote() {
   resizeFrame = window.requestAnimationFrame(() => {
     resizeFrame = null;
     fitAddon.fit();
+    const terminalElement = terminal.element;
+    const terminalParent = terminalElement?.parentElement;
+    const measureElement = terminalElement?.querySelector(
+      ".xterm-char-measure-element",
+    );
+    const measureTextLength = measureElement?.textContent?.length || 0;
+    const cellWidth = measureTextLength > 0
+      ? measureElement.getBoundingClientRect().width / measureTextLength
+      : 0;
+    const cellHeight = measureElement?.getBoundingClientRect().height || 0;
+    if (terminalParent && cellWidth > 0 && cellHeight > 0) {
+      const parentStyle = window.getComputedStyle(terminalParent);
+      const paddingWidth =
+        parseFloat(parentStyle.paddingLeft) + parseFloat(parentStyle.paddingRight);
+      const paddingHeight =
+        parseFloat(parentStyle.paddingTop) + parseFloat(parentStyle.paddingBottom);
+      const availableWidth = terminalParent.clientWidth - paddingWidth;
+      const availableHeight = terminalParent.clientHeight - paddingHeight;
+      const cols = Math.max(2, Math.floor(availableWidth / cellWidth));
+      const rows = Math.max(1, Math.floor(availableHeight / cellHeight));
+      if (terminal.cols !== cols || terminal.rows !== rows) {
+        terminal.resize(cols, rows);
+        if (deleted && snapshotDisplay) {
+          renderSnapshot(snapshotDisplay);
+        }
+      }
+    }
     if (!attached || socket?.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -280,8 +314,7 @@ async function loadSnapshot() {
   rememberSequence(snapshot.sequence || 0);
   updateTerminalTitle(snapshot);
   setStatus(describeSnapshot(snapshot));
-  terminal.clear();
-  terminal.write(snapshotDisplayBuffer(snapshot));
+  renderSnapshot(snapshotDisplayBuffer(snapshot));
   updateControls();
   return snapshot;
 }
@@ -316,8 +349,7 @@ async function syncTerminalState() {
     socket?.close();
     socket = null;
     setAttachButtonMode("detached");
-    terminal.clear();
-    terminal.write(snapshotDisplayBuffer(snapshot));
+    renderSnapshot(snapshotDisplayBuffer(snapshot));
     setStatus(describeSnapshot(snapshot));
   } else if (!attached) {
     setStatus(describeSnapshot(snapshot));
@@ -499,6 +531,10 @@ installTerminalUserActions({
   resizeTerminal: resizeRemote,
 });
 
+// 扩展窗口通过父页面调整 iframe 尺寸时，终端窗口自身不会收到 window.resize。
+// 监听终端容器尺寸，避免终端仍沿用打开瞬间的窄列数，导致路径逐段折行。
+const terminalResizeObserver = new ResizeObserver(() => resizeRemote());
+terminalResizeObserver.observe(terminalContainer);
 window.addEventListener("resize", resizeRemote);
 window.addEventListener("beforeunload", () => {
   if (resizeFrame !== null) {
@@ -510,6 +546,7 @@ window.addEventListener("beforeunload", () => {
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer);
   }
+  terminalResizeObserver.disconnect();
 });
 
 setAttachButtonMode("detached");

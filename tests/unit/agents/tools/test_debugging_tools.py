@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +11,7 @@ from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.debug_redaction import REDACTION_PLACEHOLDER
 from app.agents.tools.debugging import create_debugging_tools
 from app.schemas.public_v2.node_debug import (
+    NodeDebugBreakpointDTO,
     NodeDebugEvaluationDTO,
     NodeDebugStackFrameDTO,
     NodeDebugStateDTO,
@@ -102,6 +104,9 @@ def test_debug_tool_names_and_model_schemas_match_debug_mcp_shape(
     path_description = start_schema["properties"]["fileFullPath"]["description"]
     assert "工作区相对" in path_description
     assert "不能以 / 开头" in path_description
+    assert "已有活动方案时以方案保存的入口" in by_name["start_debugging"].description
+    assert "失效断点不会阻止继续" in by_name["continue_execution"].description
+    assert "重点查看 relocation_status" in by_name["list_breakpoints"].description
 
 
 @pytest.mark.asyncio
@@ -146,6 +151,66 @@ async def test_logpoint_maps_to_non_pausing_breakpoint_definition(
         tool_name="add_logpoint",
         tool_call_id="direct-backend-test",
     )
+
+
+@pytest.mark.asyncio
+async def test_start_and_final_control_result_include_invalid_breakpoints(
+    tmp_path: Path,
+) -> None:
+    invalid_breakpoint = NodeDebugBreakpointDTO(
+        breakpoint_id="node-bp-invalid",
+        path="fixture.mjs",
+        line=3,
+        original_line=3,
+        created_at=datetime.now(UTC),
+        relocation_status="pending_update",
+        relocation_message="源码已变化，断点未自动重定位",
+    )
+    started_state = NodeDebugStateDTO(
+        session_id="ses_debug_invalid_breakpoint",
+        status="paused",
+        breakpoints=[invalid_breakpoint],
+    )
+    finished_state = started_state.model_copy(update={"status": "exited"})
+    service = MagicMock()
+    service.start = AsyncMock(return_value=started_state)
+    service.apply_action = AsyncMock(return_value=finished_state)
+    service.get_state = AsyncMock(return_value=started_state)
+    service.record_tool_action = AsyncMock()
+    tools = create_debugging_tools(
+        session_id=started_state.session_id,
+        workspace_root=tmp_path,
+        node_debug_service=service,
+        invocation_context=ToolInvocationContext(),
+    )
+    by_name = {tool.name: tool for tool in tools}
+
+    start_result = json.loads(
+        await by_name["start_debugging"].ainvoke(
+            {"fileFullPath": "fixture.mjs", "workingDirectory": "."}
+        )
+    )
+    assert start_result["invalid_breakpoints"] == [
+        {
+            "path": "fixture.mjs",
+            "line": 3,
+            "column": 1,
+            "original_line": 3,
+            "relocation_status": "pending_update",
+            "relocation_message": "源码已变化，断点未自动重定位",
+        }
+    ]
+
+    service.get_state = AsyncMock(return_value=finished_state)
+    finish_result = json.loads(
+        await by_name["continue_execution"].ainvoke({})
+    )
+    assert len(finish_result["invalid_breakpoints"]) == 1
+
+    query_result = json.loads(
+        await by_name["list_breakpoints"].ainvoke({})
+    )
+    assert "invalid_breakpoints" not in query_result
 
 
 @pytest.fixture

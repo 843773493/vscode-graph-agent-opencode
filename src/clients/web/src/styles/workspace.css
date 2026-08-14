@@ -51,8 +51,13 @@
 }
 
 .workspace-switcher-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   color: var(--bt-text-muted);
+  font-size: 12px;
+  line-height: 1;
 }
 
 .workspace-switcher-menu {
