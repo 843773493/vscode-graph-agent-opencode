@@ -20,7 +20,9 @@ from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
+from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
+from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.agent_tools import build_default_tools
 from app.agents.custom_tools import build_custom_tool_bundle
@@ -238,6 +240,8 @@ def create_my_deep_agent(
     browser_manager_client: BrowserManagerClient | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
+    session_target_resolver: SessionTargetResolverProtocol | None = None,
+    session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     workspace_root: Path,
 ) -> Any:
@@ -298,6 +302,8 @@ def create_my_deep_agent(
             terminal_manager_client=terminal_manager_client,
             invocation_context=tool_invocation_context,
             workspace_root=workspace_root,
+            session_target_resolver=session_target_resolver,
+            session_message_delivery_service=session_message_delivery_service,
             include_test_tools=config_service.development_test_tools_enabled(),
         )
         custom_tool_bundle = build_custom_tool_bundle(
@@ -312,6 +318,7 @@ def create_my_deep_agent(
             job_service=job_service,
             session_context_query_service=session_context_query_service,
             workspace_session_context_client=workspace_session_context_client,
+            session_target_resolver=session_target_resolver,
             session_orchestrator=session_orchestrator,
             config_service=config_service,
             terminal_manager_client=terminal_manager_client,
@@ -442,6 +449,8 @@ def create_runtime_deep_agent_for_session(
     browser_manager_client: BrowserManagerClient | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
+    session_target_resolver: SessionTargetResolverProtocol | None = None,
+    session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     name: str | None = None,
     override_model: Any = None,
@@ -497,6 +506,8 @@ def create_runtime_deep_agent_for_session(
         browser_manager_client=browser_manager_client,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
+        session_target_resolver=session_target_resolver,
+        session_message_delivery_service=session_message_delivery_service,
         mcp_tools=mcp_tools,
         interrupt_on={tool_name: True for tool_name in confirmation_tool_names},
         config_service=service,

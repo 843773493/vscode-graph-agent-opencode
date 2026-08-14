@@ -16,6 +16,7 @@ class SessionOrchestratorProtocol(Protocol):
         *,
         metadata: dict[str, object] | None = None,
         dispatch_mode: MessageDispatchMode = "queued",
+        idempotency_key: str | None = None,
     ) -> MessageRunAccepted: ...
 
     async def create_and_run_internal(
@@ -24,6 +25,7 @@ class SessionOrchestratorProtocol(Protocol):
         message: PreparedInternalMessage,
         *,
         dispatch_mode: MessageDispatchMode = "queued",
+        idempotency_key: str | None = None,
     ) -> MessageRunAccepted: ...
 
     async def prepare_internal_message(

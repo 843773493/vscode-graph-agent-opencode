@@ -5,6 +5,7 @@ from langchain_core.tools import BaseTool
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import (
     SessionStoreProtocol,
@@ -33,6 +34,7 @@ def build_agent_collaboration_tools(
     session_subagent_service: SessionSubagentProtocol,
     team_service: TeamCoordinationProtocol,
     invocation_context: ToolInvocationContext,
+    session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
 ) -> list[BaseTool]:
     """构建默认启用的跨 Session Agent 协作工具组。"""
     return [
@@ -49,6 +51,7 @@ def build_agent_collaboration_tools(
             sender_session_id=session_id,
             sender_agent_id=sender_agent_id,
             session_orchestrator=session_orchestrator,
+            message_delivery_service=session_message_delivery_service,
         ),
         create_session_subagent_tool(
             parent_session_id=session_id,

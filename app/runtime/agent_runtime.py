@@ -12,8 +12,10 @@ from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
+from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
+from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.agent_factory import (
     create_runtime_deep_agent_for_session,
@@ -37,9 +39,9 @@ if TYPE_CHECKING:
 
 class AgentRuntimeDependencyProvider(Protocol):
     def get_goal_service(self) -> SessionGoalService: ...
-    def get_message_service(self) -> "MessageService": ...
+    def get_message_service(self) -> MessageService: ...
 
-    def get_session_service(self) -> "SessionService": ...
+    def get_session_service(self) -> SessionService: ...
 
     def get_session_orchestrator(self) -> SessionOrchestratorProtocol: ...
 
@@ -60,6 +62,12 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_workspace_session_context_client(
         self,
     ) -> WorkspaceSessionContextClientProtocol: ...
+
+    def get_session_target_resolver(self) -> SessionTargetResolverProtocol: ...
+
+    def get_session_message_delivery_service(
+        self,
+    ) -> SessionMessageDeliveryProtocol: ...
 
     def get_mcp_tools(self) -> list[BaseTool]: ...
 
@@ -105,6 +113,10 @@ def build_session_agent_runtime(
         ),
         workspace_session_context_client=(
             dependency_provider.get_workspace_session_context_client()
+        ),
+        session_target_resolver=dependency_provider.get_session_target_resolver(),
+        session_message_delivery_service=(
+            dependency_provider.get_session_message_delivery_service()
         ),
         mcp_tools=dependency_provider.get_mcp_tools(),
         checkpointer=checkpointer,

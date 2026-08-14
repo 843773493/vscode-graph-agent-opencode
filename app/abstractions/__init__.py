@@ -12,6 +12,15 @@ from app.abstractions.session_resources import (
     TerminalManagerClientProtocol,
 )
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_target import (
+    SessionTarget,
+    SessionTargetResolutionError,
+    SessionTargetResolverProtocol,
+)
+from app.abstractions.session_message import (
+    SessionMessageDeliveryProtocol,
+    SessionMessageTransportProtocol,
+)
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol, TeamStoreProtocol
 from app.abstractions.custom_tool_context import (
@@ -32,6 +41,11 @@ __all__ = [
     "JobServiceProtocol",
     "JobStepExecutor",
     "SessionOrchestratorProtocol",
+    "SessionTarget",
+    "SessionTargetResolutionError",
+    "SessionTargetResolverProtocol",
+    "SessionMessageDeliveryProtocol",
+    "SessionMessageTransportProtocol",
     "SessionSubagentProtocol",
     "TeamCoordinationProtocol",
     "TeamStoreProtocol",

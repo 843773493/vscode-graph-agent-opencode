@@ -17,6 +17,9 @@ from app.services.business.message_display import project_message_for_display
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.session_message_idempotency_store import (
+    SessionMessageIdempotencyStore,
+)
 
 
 class SessionOrchestrator:
@@ -28,12 +31,14 @@ class SessionOrchestrator:
         config_service: ConfigService,
         job_service: JobServiceProtocol,
         job_event_bus: JobEventBusProtocol,
+        idempotency_store: SessionMessageIdempotencyStore | None = None,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
         self._config_service = config_service
         self._job_service = job_service
         self._job_event_bus = job_event_bus
+        self._idempotency_store = idempotency_store
 
     async def create_and_run(
         self,
@@ -42,6 +47,7 @@ class SessionOrchestrator:
         *,
         metadata: dict[str, object] | None = None,
         dispatch_mode: MessageDispatchMode = "queued",
+        idempotency_key: str | None = None,
     ) -> MessageRunAccepted:
         self._reject_internal_message_on_user_path(content, metadata)
         session = await self._session_service.get(session_id)
@@ -55,6 +61,7 @@ class SessionOrchestrator:
             message_request,
             requested_agent_id=session.current_agent_id,
             dispatch_mode=dispatch_mode,
+            idempotency_key=idempotency_key,
         )
 
     async def create_and_run_internal(
@@ -63,6 +70,7 @@ class SessionOrchestrator:
         message: PreparedInternalMessage,
         *,
         dispatch_mode: MessageDispatchMode = "queued",
+        idempotency_key: str | None = None,
     ) -> MessageRunAccepted:
         validate_internal_message(message.content, message.metadata)
         session = await self._session_service.get(session_id)
@@ -75,6 +83,7 @@ class SessionOrchestrator:
             ),
             requested_agent_id=session.current_agent_id,
             dispatch_mode=dispatch_mode,
+            idempotency_key=idempotency_key,
         )
 
     async def prepare_user_message(
@@ -181,15 +190,23 @@ class SessionOrchestrator:
         *,
         requested_agent_id: str | None,
         dispatch_mode: MessageDispatchMode,
+        idempotency_key: str | None = None,
     ) -> MessageRunAccepted:
         async def prepare_and_dispatch() -> MessageRunAccepted:
+            if idempotency_key is not None and self._idempotency_store is not None:
+                existing = self._idempotency_store.get(session_id, idempotency_key)
+                if existing is not None:
+                    return existing
             message = await self._message_service.create(session_id, message_request)
-            return await self.dispatch_prepared_message(
+            result = await self.dispatch_prepared_message(
                 session_id,
                 message,
                 requested_agent_id=requested_agent_id,
                 dispatch_mode=dispatch_mode,
             )
+            if idempotency_key is not None and self._idempotency_store is not None:
+                self._idempotency_store.put(session_id, idempotency_key, result)
+            return result
 
         return await self._job_service.run_session_preparation(
             session_id,

@@ -8,23 +8,23 @@ import pytest
 from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
+from app.agents.agent_tools import (
+    build_default_tools,
+    create_background_message_collection_tool,
+    create_monitor_session_agent_end_tool,
+    create_send_message_to_session_tool,
+    create_system_time_emitter_tool,
+)
+from app.agents.tool_invocation_context import ToolInvocationContext
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType
+from app.runtime.agent_runtime import build_agent_tool_definitions
 from app.schemas.event import AgentEndEvent, AgentEndPayload
 from app.schemas.public_v2.job import JobDispatchSnapshotDTO
-from app.agents.agent_tools import (
-    create_background_message_collection_tool,
-    create_system_time_emitter_tool,
-    create_monitor_session_agent_end_tool,
-    create_send_message_to_session_tool,
-    build_default_tools,
-)
 from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
 )
-from app.runtime.agent_runtime import build_agent_tool_definitions
-from app.agents.tool_invocation_context import ToolInvocationContext
 
 
 class _DummyConfigService:
@@ -167,7 +167,6 @@ class _FakeJobEventBus:
         if self.queues.get(job_id) is queue:
             del self.queues[job_id]
             self.subscription_event_types.pop(job_id, None)
-        return None
 
     async def publish(self, *args, **kwargs):
         return None
@@ -240,6 +239,15 @@ class _FakeSessionOrchestrator:
             metadata=message.metadata,
             **kwargs,
         )
+
+
+class _FakeSessionMessageDelivery:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def dispatch(self, session_id, **kwargs):
+        self.calls.append({"session_id": session_id, **kwargs})
+        return _FakeResult()
 
 
 class _FakeSessionSubagentService:
@@ -714,6 +722,31 @@ async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
     assert metadata["communication_id"] == result["communication_id"]
     assert metadata["kind"] == "result"
     assert metadata["reply_required"] is False
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_session_uses_shared_delivery_route():
+    delivery = _FakeSessionMessageDelivery()
+    tool = create_send_message_to_session_tool(
+        sender_session_id="ses_sender",
+        session_orchestrator=_FakeSessionOrchestrator(),
+        message_delivery_service=delivery,
+    )
+
+    result = await tool.ainvoke(
+        {
+            "target_session_id": "ses_remote",
+            "target_workspace_id": "gw_target",
+            "content": "跨工作区消息",
+            "communication_id": "comm_retryable",
+        }
+    )
+
+    assert result["communication_id"] == "comm_retryable"
+    assert delivery.calls[0]["session_id"] == "ses_remote"
+    assert delivery.calls[0]["workspace_id"] == "gw_target"
+    assert delivery.calls[0]["idempotency_key"] == "comm_retryable"
+    assert delivery.calls[0]["simulate_user"] is False
 
 
 @pytest.mark.asyncio

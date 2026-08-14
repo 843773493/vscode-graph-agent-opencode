@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from .attachment import AttachmentRef
 from .common import MessageRole, RunMode, TimestampedDTO
@@ -10,7 +10,7 @@ from .job import (
     JobDispatchSnapshotDTO,
     JobDispatchStatus,
 )
-from .pending_request import PendingRequestKind
+from .pending_request import MessageDispatchMode, PendingRequestKind
 
 
 class MessageCreateRequest(BaseModel):
@@ -22,7 +22,7 @@ class MessageCreateRequest(BaseModel):
 
 class RunOptions(BaseModel):
     mode: RunMode = RunMode.single_agent
-    agent_id: Optional[str] = None
+    agent_id: str | None = None
     response_mode: str = "stream"
     async_run: bool = Field(default=True, alias="async")
     max_steps: int = 20
@@ -34,6 +34,18 @@ class RunOptions(BaseModel):
 class MessageRunRequest(BaseModel):
     message: MessageCreateRequest
     run: RunOptions
+
+
+class SessionMessageDispatchRequest(BaseModel):
+    """Gateway 代理的跨会话消息派发请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    simulate_user: StrictBool = False
+    dispatch_mode: MessageDispatchMode = "queued"
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class MessageRunAccepted(BaseModel):
