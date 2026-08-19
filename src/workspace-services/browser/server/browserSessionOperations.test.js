@@ -16,7 +16,111 @@ function session() {
   });
 }
 
+function liveSession() {
+  const browser = session();
+  const cdpCalls = [];
+  let navigationCount = 0;
+  const page = {
+    setViewportSize: async () => undefined,
+    goto: async () => {
+      navigationCount += 1;
+    },
+    evaluate: async () => undefined,
+  };
+  const cdpSession = {
+    send: async (method, params) => {
+      cdpCalls.push({ method, params });
+    },
+  };
+  browser.browser = {};
+  browser.context = {};
+  browser.page = page;
+  browser.cdpSession = cdpSession;
+  browser.activePageId = "page_device";
+  browser.pageEntries.set("page_device", {
+    pageId: "page_device",
+    page,
+    cdpSession,
+    webSockets: new Set(),
+  });
+  browser.syncAndEmitState = async () => browser.snapshot();
+  return { browser, cdpCalls, getNavigationCount: () => navigationCount };
+}
+
 describe("浏览器统一操作队列", () => {
+  test("设备型号切换更新设备参数并重新应用页面布局", async () => {
+    const { browser, cdpCalls, getNavigationCount } = liveSession();
+
+    await browser.setDeviceProfile("pixel-7");
+    expect(browser.record).toMatchObject({
+      device_profile: "pixel-7",
+      device_orientation: "portrait",
+      viewport: { width: 412, height: 839 },
+      device_scale_factor: 2.625,
+      touch_simulation_enabled: true,
+    });
+    expect(cdpCalls.find((call) => call.method === "Emulation.setTouchEmulationEnabled"))
+      .toMatchObject({ params: { enabled: true, maxTouchPoints: 5 } });
+
+    await browser.setDeviceProfile("pixel-7", "landscape");
+    expect(browser.record).toMatchObject({
+      device_profile: "pixel-7",
+      device_orientation: "landscape",
+      viewport: { width: 839, height: 412 },
+    });
+
+    await browser.setDeviceProfile("desktop");
+    expect(browser.record).toMatchObject({
+      device_profile: "desktop",
+      viewport: { width: 1280, height: 800 },
+      device_scale_factor: 1,
+      touch_simulation_enabled: false,
+    });
+    expect(getNavigationCount()).toBe(3);
+    expect(cdpCalls.find((call) => call.method === "Emulation.setEmitTouchEventsForMouse"
+      && call.params.enabled === false)).toMatchObject({
+      method: "Emulation.setEmitTouchEventsForMouse",
+      params: { enabled: false, configuration: "desktop" },
+    });
+  });
+
+  test("切换保存预设时保留自定义 DPR、UA、触摸和网络设置", async () => {
+    const { browser } = liveSession();
+
+    await browser.setDeviceSettings({
+      profileId: "iphone-13",
+      orientation: "portrait",
+      width: 264,
+      height: 478,
+      deviceScaleFactor: 1,
+      userAgent: "Custom Mobile UA",
+      touchSimulation: false,
+      networkProfileId: "slow-3g",
+    });
+
+    expect(browser.snapshot()).toMatchObject({
+      device_profile: "iphone-13",
+      viewport: { width: 264, height: 478 },
+      device_scale_factor_override: 1,
+      user_agent_override: "Custom Mobile UA",
+      touch_simulation_override: false,
+      network_profile_id: "slow-3g",
+    });
+  });
+
+  test("清空网络记录会释放当前页面的轻量缓冲区", async () => {
+    const { browser } = liveSession();
+    const entry = browser.pageEntries.get("page_device");
+    entry.networkRequests = [
+      { url: "https://example.com/one", status: 200 },
+      { url: "https://example.com/two", status: null },
+    ];
+
+    await browser.clearNetworkRequests();
+
+    expect(entry.networkRequests).toEqual([]);
+  });
+
   test("用户和模型操作按入队顺序执行并获得单调 revision", async () => {
     const browser = session();
     const order = [];

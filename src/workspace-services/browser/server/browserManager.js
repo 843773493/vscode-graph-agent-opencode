@@ -6,6 +6,11 @@ import { BrowserStateStore } from "./browserStateStore.js";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
 import { BrowserRuntimePool } from "./resources/browserRuntimePool.js";
 import { BrowserResourceGovernor } from "./resources/resourceGovernor.js";
+import {
+  DEFAULT_BROWSER_DEVICE_ORIENTATION,
+  DEFAULT_BROWSER_DEVICE_PROFILE,
+  resolveBrowserDeviceState,
+} from "./browserDeviceProfiles.js";
 
 function browserId() {
   return `browser_${randomUUID().replaceAll("-", "")}`;
@@ -133,10 +138,14 @@ export class BrowserManager {
         record.agent_lock_owner_id = null;
         record.agent_lock_expires_at = null;
       }
+      // TODO: Browser Manager 在无客户端的后台会话重启时可能先标记 lost；只要检查点仍在，就应允许后续唤醒恢复。
       const canRecoverFromCheckpoint = (
         record.status === "running"
         || record.status === "lost"
-      ) && ["frozen", "discarded"].includes(record.resource_state);
+      ) && (
+        ["frozen", "discarded"].includes(record.resource_state)
+        || Boolean(record.checkpoint)
+      );
       if (canRecoverFromCheckpoint) {
         const checkpoint = await this.stateStore.readCheckpoint(record.browser_id);
         if (checkpoint) {
@@ -238,7 +247,9 @@ export class BrowserManager {
     sessionId,
     title = "Browser Page",
     url = "about:blank",
-    viewport = { width: 1280, height: 800 },
+    viewport = null,
+    deviceProfile = DEFAULT_BROWSER_DEVICE_PROFILE,
+    deviceOrientation = DEFAULT_BROWSER_DEVICE_ORIENTATION,
   }) {
     const admission = this.createAdmissionTail.then(async () => {
       if (!sessionId) {
@@ -278,6 +289,7 @@ export class BrowserManager {
       }
       const id = browserId();
       const timestamp = nowIso();
+      const deviceState = resolveBrowserDeviceState(deviceProfile, deviceOrientation);
       const session = new BrowserSession({
         manager: this,
         record: {
@@ -286,7 +298,11 @@ export class BrowserManager {
           session_id: sessionId,
           title,
           url: normalizeBrowserUrl(url),
-          viewport,
+          viewport: viewport || { ...deviceState.viewport },
+          device_profile: deviceState.id,
+          device_orientation: deviceState.orientation,
+          device_scale_factor: deviceState.deviceScaleFactor,
+          touch_simulation_enabled: deviceState.hasTouch,
           resource_state: "background",
           resource_policy: "automatic",
           last_user_interaction_at: timestamp,

@@ -122,3 +122,57 @@ describe("浏览器画面确认协议", () => {
     }))).toThrow("frameId 必须是正整数");
   });
 });
+
+describe("浏览器设备模拟协议", () => {
+  test("接受设备配置与方向", () => {
+    const message = parseClientMessage(JSON.stringify({
+      type: "deviceProfile",
+      browserId: "browser_1",
+      profileId: "iphone-13",
+      orientation: "landscape",
+    }));
+    expect(message.profileId).toBe("iphone-13");
+    expect(message.orientation).toBe("landscape");
+  });
+
+  test("拒绝未知设备方向", () => {
+    expect(() => parseClientMessage(JSON.stringify({
+      type: "deviceProfile",
+      browserId: "browser_1",
+      profileId: "iphone-13",
+      orientation: "diagonal",
+    }))).toThrow("未知浏览器设备方向");
+  });
+
+  test("接受响应式设备设置", () => {
+    const message = parseClientMessage(JSON.stringify({
+      type: "deviceSettings",
+      browserId: "browser_1",
+      settings: {
+        width: 264,
+        height: 478,
+        deviceScaleFactor: 1,
+        touchSimulation: true,
+        networkProfileId: "slow-3g",
+      },
+    }));
+    expect(message.settings).toMatchObject({ width: 264, height: 478, networkProfileId: "slow-3g" });
+  });
+
+  test("接受调试快照和截图请求", () => {
+    expect(parseClientMessage(JSON.stringify({
+      type: "debugSnapshot",
+      browserId: "browser_1",
+      panel: "all",
+    })).type).toBe("debugSnapshot");
+    expect(parseClientMessage(JSON.stringify({
+      type: "captureScreenshot",
+      browserId: "browser_1",
+    })).type).toBe("captureScreenshot");
+    expect(parseClientMessage(JSON.stringify({
+      type: "command",
+      browserId: "browser_1",
+      name: "clearNetwork",
+    })).name).toBe("clearNetwork");
+  });
+});

@@ -66,14 +66,16 @@ export function pointerButtonName(button) {
   return "none";
 }
 
-export function remotePointFromEvent(canvas, event) {
+export function remotePointFromEvent(canvas, event, viewport = null) {
   const rect = canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) {
     throw new Error("canvas 尺寸无效，无法映射指针坐标");
   }
+  const width = viewport?.width || canvas.width;
+  const height = viewport?.height || canvas.height;
   return {
-    x: clamp(((event.clientX - rect.left) / rect.width) * canvas.width, 0, canvas.width),
-    y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height),
+    x: clamp(((event.clientX - rect.left) / rect.width) * width, 0, width),
+    y: clamp(((event.clientY - rect.top) / rect.height) * height, 0, height),
   };
 }
 

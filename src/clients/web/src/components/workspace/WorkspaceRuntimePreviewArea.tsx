@@ -36,7 +36,7 @@ export default function WorkspaceRuntimePreviewArea({
       aria-label={extensionWindow ? "扩展窗口" : "运行时预览"}
       data-extension-region={extensionWindow ? "primary" : undefined}
     >
-      <header className="workspace-runtime-preview-header">
+      {!extensionWindow ? <header className="workspace-runtime-preview-header">
         {onExitExtensionWindow ? (
           <button
             type="button"
@@ -79,7 +79,7 @@ export default function WorkspaceRuntimePreviewArea({
         >
           <span className="codicon codicon-close" aria-hidden="true" />
         </button>
-      </header>
+      </header> : null}
       {expanded ? (
         <iframe
           className={`workspace-runtime-preview-frame${isBrowser ? " browser" : " terminal"}`}

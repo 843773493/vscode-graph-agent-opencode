@@ -156,6 +156,17 @@ export async function inspectPageElement(page, refSelectors, { x, y }, documentR
       element.setAttribute(refAttribute, ref);
     }
     const rect = element.getBoundingClientRect();
+    const shorten = (value, maxLength) => {
+      const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+      return normalized.length > maxLength
+        ? `${normalized.slice(0, maxLength - 1)}…`
+        : normalized;
+    };
+    const attributes = Object.fromEntries(
+      [...element.attributes]
+        .filter((attribute) => attribute.name !== refAttribute)
+        .map((attribute) => [attribute.name, attribute.value]),
+    );
     const text = String(
       element.getAttribute("aria-label")
       || element.getAttribute("alt")
@@ -164,13 +175,208 @@ export async function inspectPageElement(page, refSelectors, { x, y }, documentR
       || element.textContent
       || "",
     ).replace(/\s+/g, " ").trim().slice(0, 240);
+    const ancestors = [];
+    let current = element;
+    while (current instanceof Element) {
+      ancestors.unshift({
+        tagName: current.tagName.toLowerCase(),
+        ...(current.id ? { id: current.id } : {}),
+        classNames: [...current.classList],
+      });
+      current = current.parentElement;
+    }
+
+    const keyComputedProperties = new Set([
+      "display",
+      "position",
+      "margin",
+      "margin-top",
+      "margin-right",
+      "margin-bottom",
+      "margin-left",
+      "padding",
+      "padding-top",
+      "padding-right",
+      "padding-bottom",
+      "padding-left",
+      "font-size",
+      "font-family",
+      "color",
+      "background-color",
+    ]);
+    const inheritableProperties = new Set([
+      "color",
+      "cursor",
+      "direction",
+      "font",
+      "font-family",
+      "font-size",
+      "font-style",
+      "font-weight",
+      "letter-spacing",
+      "line-height",
+      "list-style",
+      "text-align",
+      "text-indent",
+      "text-transform",
+      "visibility",
+      "white-space",
+      "word-break",
+      "word-spacing",
+      "writing-mode",
+    ]);
+    const referencedVars = new Set();
+    const authorPropertyNames = new Set(["display", "height", "width"]);
+    const normalRuleLines = [];
+    const pseudoRuleLines = [];
+    const inheritedRuleLines = [];
+    const seenRuleLines = new Set();
+
+    function collectDeclarations(style, propertyNames, onlyInheritable = false) {
+      for (const property of style) {
+        const value = style.getPropertyValue(property);
+        if (!value || property.startsWith("--")
+          || (onlyInheritable && !inheritableProperties.has(property))) {
+          continue;
+        }
+        propertyNames.add(property);
+        for (const match of value.matchAll(/var\(\s*(--[a-zA-Z0-9_-]+)/g)) {
+          referencedVars.add(match[1]);
+        }
+      }
+    }
+
+    function selectorMatches(target, selector) {
+      const normalized = selector.trim();
+      const pseudoMatch = normalized.match(/^(.*?)(::[a-zA-Z-]+)(?:\(.*\))?$/);
+      const targetSelector = pseudoMatch ? pseudoMatch[1].trim() : normalized;
+      try {
+        return target.matches(targetSelector || "*");
+      } catch {
+        return false;
+      }
+    }
+
+    function walkRules(rules, target, kind) {
+      for (const rule of rules || []) {
+        if (rule.type === 1) {
+          const selectors = String(rule.selectorText || "")
+            .split(",")
+            .map((selector) => selector.trim())
+            .filter(Boolean);
+          const matchingSelectors = selectors.filter((selector) => selectorMatches(target, selector));
+          if (matchingSelectors.length === 0) {
+            continue;
+          }
+          const cssText = String(rule.style?.cssText || "").trim();
+          if (!cssText) {
+            continue;
+          }
+          const hasPseudoSelector = matchingSelectors.some((selector) => selector.includes("::"));
+          const line = `${matchingSelectors.join(", ")} { ${cssText} }`;
+          if (seenRuleLines.has(`${kind}:${line}`)) {
+            continue;
+          }
+          seenRuleLines.add(`${kind}:${line}`);
+          if (kind === "inherited") {
+            collectDeclarations(rule.style, authorPropertyNames, true);
+            inheritedRuleLines.push(line);
+          } else if (hasPseudoSelector) {
+            collectDeclarations(rule.style, authorPropertyNames);
+            pseudoRuleLines.push(line);
+          } else {
+            collectDeclarations(rule.style, authorPropertyNames);
+            normalRuleLines.push(line);
+          }
+          continue;
+        }
+        if (rule.cssRules) {
+          walkRules(rule.cssRules, target, kind);
+        }
+      }
+    }
+
+    const inlineStyle = String(element.style?.cssText || "").trim();
+    if (inlineStyle) {
+      collectDeclarations(element.style, authorPropertyNames);
+      normalRuleLines.push(`element { ${inlineStyle} }`);
+    }
+    for (const styleSheet of document.styleSheets) {
+      try {
+        walkRules(styleSheet.cssRules, element, "direct");
+      } catch {
+        // 跨域样式表无法读取 CSSOM，保留可访问样式表的结果。
+      }
+    }
+    for (let ancestorElement = element.parentElement;
+      ancestorElement instanceof Element;
+      ancestorElement = ancestorElement.parentElement) {
+      for (const styleSheet of document.styleSheets) {
+        try {
+          walkRules(styleSheet.cssRules, ancestorElement, "inherited");
+        } catch {
+          // 跨域样式表无法读取 CSSOM，保留可访问样式表的结果。
+        }
+      }
+    }
+
+    const computedStyleDeclaration = window.getComputedStyle(element);
+    const computedStyles = {};
+    for (const property of keyComputedProperties) {
+      const value = computedStyleDeclaration.getPropertyValue(property);
+      if (value) {
+        computedStyles[property] = value;
+      }
+    }
+    for (const variable of referencedVars) {
+      const value = computedStyleDeclaration.getPropertyValue(variable);
+      if (value) {
+        computedStyles[variable] = value;
+      }
+    }
+    const computedStyleLines = [...normalRuleLines];
+    if (pseudoRuleLines.length > 0) {
+      computedStyleLines.push("", "/* Pseudo-elements */", ...pseudoRuleLines);
+    }
+    if (inheritedRuleLines.length > 0) {
+      computedStyleLines.push("", "/* Inherited */", ...inheritedRuleLines);
+    }
+    const resolvedLines = [...authorPropertyNames]
+      .map((property) => `${property}: ${computedStyleDeclaration.getPropertyValue(property)};`)
+      .filter((line) => !line.endsWith(": ;"));
+    if (resolvedLines.length > 0) {
+      computedStyleLines.push("", "/* Resolved values */", ...resolvedLines);
+    }
+    const variableLines = [...referencedVars]
+      .map((variable) => `${variable}: ${computedStyleDeclaration.getPropertyValue(variable)};`)
+      .filter((line) => !line.endsWith(": ;"));
+    if (variableLines.length > 0) {
+      computedStyleLines.push("", "/* CSS variables */", ...variableLines);
+    }
+    const computedStyle = computedStyleLines.join("\n");
+
+    const cleanClone = element.cloneNode(true);
+    if (cleanClone instanceof Element) {
+      cleanClone.removeAttribute(refAttribute);
+      for (const descendant of cleanClone.querySelectorAll(`[${refAttribute}]`)) {
+        descendant.removeAttribute(refAttribute);
+      }
+    }
+
     return {
       ref,
       selector: `[${refAttribute}="${CSS.escape(ref)}"]`,
       tag: element.tagName.toLowerCase(),
+      id: element.id || "",
+      classes: shorten(typeof element.className === "string" ? element.className : "", 240),
       role: element.getAttribute("role") || "",
       type: element.getAttribute("type") || "",
       text,
+      attributes,
+      outerHTML: cleanClone instanceof Element ? cleanClone.outerHTML : element.outerHTML,
+      computedStyle,
+      ancestors,
+      computedStyles,
       title: document.title || "",
       url: location.href,
       document_revision: revision,
@@ -180,6 +386,13 @@ export async function inspectPageElement(page, refSelectors, { x, y }, documentR
         width: rect.width,
         height: rect.height,
       },
+      dimensions: {
+        top: rect.y,
+        left: rect.x,
+        width: rect.width,
+        height: rect.height,
+      },
+      innerText: element.textContent || "",
     };
   }, { pointX: x, pointY: y, revision: documentRevision });
 

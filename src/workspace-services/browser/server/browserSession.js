@@ -19,6 +19,17 @@ import {
   NAVIGATION_TIMEOUT_MS,
   TOOL_TIMEOUT_MS,
 } from "./browserRuntime.js";
+import {
+  browserDeviceContextOptions,
+  browserDeviceEmulationOptions,
+  DEFAULT_BROWSER_DEVICE_ORIENTATION,
+  DEFAULT_BROWSER_DEVICE_PROFILE,
+  DEFAULT_BROWSER_NETWORK_PROFILE,
+  getBrowserNetworkProfile,
+  listBrowserDeviceProfiles,
+  listBrowserNetworkProfiles,
+  resolveBrowserDeviceState,
+} from "./browserDeviceProfiles.js";
 import { BrowserOperationQueue } from "./browserOperationQueue.js";
 import {
   captureBrowserCheckpoint,
@@ -26,6 +37,8 @@ import {
 } from "./resources/browserCheckpoint.js";
 
 const BROWSER_MODAL_DETECTION_MS = 1000;
+const MAX_DEBUG_BUFFER_ENTRIES = 200;
+const MAX_NETWORK_FAILURE_TEXT_LENGTH = 512;
 const AGENT_LOCK_LEASE_MS = 45_000;
 const SOFT_PROTECTION_LEASE_MS = 5 * 60_000;
 const PROTECTION_INSPECTION_RETRY_MS = 5_000;
@@ -60,12 +73,40 @@ export class BrowserSession extends EventEmitter {
     this.manager = manager;
     this.record = {
       viewport: { ...DEFAULT_VIEWPORT },
+      viewport_override: null,
+      device_profile: DEFAULT_BROWSER_DEVICE_PROFILE,
+      device_orientation: DEFAULT_BROWSER_DEVICE_ORIENTATION,
+      device_scale_factor_override: null,
+      user_agent_override: null,
+      touch_simulation_override: null,
+      network_profile_id: DEFAULT_BROWSER_NETWORK_PROFILE,
+      device_presets: [],
       client_count: 0,
       sequence: 0,
       resource_state: "background",
       resource_policy: "automatic",
       ...record,
     };
+    const baseDeviceState = resolveBrowserDeviceState(
+      this.record.device_profile,
+      this.record.device_orientation,
+    );
+    this.record.device_orientation = baseDeviceState.orientation;
+    if (this.record.viewport_override === undefined) {
+      const storedViewport = this.record.viewport;
+      const isCustomViewport = storedViewport
+        && (storedViewport.width !== baseDeviceState.viewport.width
+          || storedViewport.height !== baseDeviceState.viewport.height);
+      this.record.viewport_override = isCustomViewport ? { ...storedViewport } : null;
+    }
+    this.record.device_scale_factor_override = this.record.device_scale_factor_override ?? null;
+    this.record.user_agent_override = this.record.user_agent_override || null;
+    this.record.touch_simulation_override = this.record.touch_simulation_override ?? null;
+    this.record.network_profile_id = this.record.network_profile_id || DEFAULT_BROWSER_NETWORK_PROFILE;
+    this.record.device_presets = Array.isArray(this.record.device_presets)
+      ? this.record.device_presets
+      : [];
+    this.syncDeviceStateRecord();
     this.browser = null;
     this.browserHandle = null;
     this.context = null;
@@ -86,6 +127,9 @@ export class BrowserSession extends EventEmitter {
     this.activePageId = null;
     this.pageRegistrationPromises = new WeakMap();
     this.pointerController = new BrowserPointerController();
+    this.baseUserAgent = null;
+    this.basePlatform = null;
+    this.deviceEmulationApplied = false;
     this.runtimeGeneration = null;
     this.inFlightOperations = 0;
     this.pendingOperations = 0;
@@ -120,6 +164,36 @@ export class BrowserSession extends EventEmitter {
 
   get status() {
     return this.record.status;
+  }
+
+  deviceStateOverrides() {
+    return {
+      ...(this.record.viewport_override ? { viewport: this.record.viewport_override } : {}),
+      ...(this.record.device_scale_factor_override !== null
+        ? { deviceScaleFactor: this.record.device_scale_factor_override }
+        : {}),
+      ...(this.record.touch_simulation_override !== null
+        ? { touchEnabled: this.record.touch_simulation_override }
+        : {}),
+      ...(this.record.user_agent_override
+        ? { userAgent: this.record.user_agent_override }
+        : {}),
+    };
+  }
+
+  effectiveDeviceState() {
+    return resolveBrowserDeviceState(
+      this.record.device_profile,
+      this.record.device_orientation,
+      this.deviceStateOverrides(),
+    );
+  }
+
+  syncDeviceStateRecord() {
+    const state = this.effectiveDeviceState();
+    this.record.viewport = { ...state.viewport };
+    this.record.device_scale_factor = state.deviceScaleFactor;
+    this.record.touch_simulation_enabled = state.hasTouch;
   }
 
   noteNetworkActivity() {
@@ -769,6 +843,7 @@ export class BrowserSession extends EventEmitter {
     this.context = null;
     this.page = null;
     this.cdpSession = null;
+    this.deviceEmulationApplied = false;
     this.pageEntries.clear();
     this.activePageId = null;
     this.record.status = "lost";
@@ -786,14 +861,29 @@ export class BrowserSession extends EventEmitter {
       return this.snapshot();
     }
     try {
+      const deviceOptions = browserDeviceContextOptions(
+        this.record.device_profile,
+        this.record.device_orientation,
+        this.record.viewport_override,
+        this.deviceStateOverrides(),
+      );
       const runtime = await this.manager.runtimePool.acquireContext({
-        viewport: this.record.viewport || DEFAULT_VIEWPORT,
-        deviceScaleFactor: 1,
+        ...deviceOptions,
         ignoreHTTPSErrors: true,
       });
       this.assignRuntime(runtime);
       const initialPage = await this.context.newPage();
       await this.registerPage(initialPage, { pageId: this.id, activate: true });
+      if (!deviceOptions.isMobile) {
+        const browserDefaults = await initialPage.evaluate(() => ({
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+        }));
+        this.baseUserAgent = browserDefaults.userAgent;
+        this.basePlatform = browserDefaults.platform;
+      }
+      this.deviceEmulationApplied = true;
+      await this.applyDeviceEmulation(this.pageEntries.get(this.id));
       this.bindContextPageEvents();
       this.record.status = "running";
       this.record.resource_state = "background";
@@ -839,6 +929,7 @@ export class BrowserSession extends EventEmitter {
     this.context = null;
     this.page = null;
     this.cdpSession = null;
+    this.deviceEmulationApplied = false;
     this.streaming = false;
     this.pageEntries.clear();
     this.activePageId = null;
@@ -879,7 +970,12 @@ export class BrowserSession extends EventEmitter {
       createdAt: nowIso(),
       webSockets: new Set(),
       freezeStyleSheetId: null,
+      consoleMessages: [],
+      networkRequests: [],
     };
+    if (this.deviceEmulationApplied) {
+      await this.applyDeviceEmulation(entry);
+    }
     this.pageEntries.set(pageId, entry);
     cdpSession.on("Page.screencastFrame", (event) => {
       void this.handleScreencastFrame(event, entry);
@@ -908,11 +1004,40 @@ export class BrowserSession extends EventEmitter {
     });
     page.on("request", (request) => {
       this.noteNetworkActivity();
+      entry.networkRequests.push({
+        id: `${Date.now()}_${entry.networkRequests.length}`,
+        method: request.method(),
+        url: request.url(),
+        resource_type: request.resourceType(),
+        status: null,
+        failed: false,
+        started_at: nowIso(),
+      });
+      if (entry.networkRequests.length > MAX_DEBUG_BUFFER_ENTRIES) entry.networkRequests.shift();
       if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) {
         return;
       }
       entry.requestedUrl = request.url();
       entry.navigationError = null;
+    });
+    page.on("response", (response) => {
+      const request = response.request();
+      const matchingRequest = [...entry.networkRequests].reverse().find((item) => item.url === request.url()
+        && item.status === null);
+      if (matchingRequest) {
+        matchingRequest.status = response.status();
+        matchingRequest.finished_at = nowIso();
+      }
+    });
+    page.on("requestfailed", (request) => {
+      const matchingRequest = [...entry.networkRequests].reverse().find((item) => item.url === request.url()
+        && item.status === null);
+      if (matchingRequest) {
+        matchingRequest.failed = true;
+        matchingRequest.failure_text = (request.failure()?.errorText || "请求失败")
+          .slice(0, MAX_NETWORK_FAILURE_TEXT_LENGTH);
+        matchingRequest.finished_at = nowIso();
+      }
     });
     page.on("requestfailed", (request) => {
       if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) {
@@ -933,6 +1058,24 @@ export class BrowserSession extends EventEmitter {
       if (this.activePageId === pageId) {
         void this.syncAndEmitState({ persist: false }).then(() => this.manager.schedulePersist());
       }
+    });
+    page.on("console", (message) => {
+      entry.consoleMessages.push({
+        level: message.type(),
+        text: message.text(),
+        location: message.location(),
+        occurred_at: nowIso(),
+      });
+      if (entry.consoleMessages.length > MAX_DEBUG_BUFFER_ENTRIES) entry.consoleMessages.shift();
+    });
+    page.on("pageerror", (error) => {
+      entry.consoleMessages.push({
+        level: "error",
+        text: error instanceof Error ? error.message : String(error),
+        location: null,
+        occurred_at: nowIso(),
+      });
+      if (entry.consoleMessages.length > MAX_DEBUG_BUFFER_ENTRIES) entry.consoleMessages.shift();
     });
     page.on("domcontentloaded", () => {
       if (this.activePageId === pageId) {
@@ -1124,8 +1267,30 @@ export class BrowserSession extends EventEmitter {
       ...(frozen ? this.validCachedSoftProtectionReasons() : []),
       ...this.synchronousSoftProtectionReasons(),
     ])];
+    const deviceState = this.effectiveDeviceState();
     return {
       ...this.record,
+      device_emulation: {
+        profile_id: deviceState.id,
+        label: deviceState.label,
+        orientation: deviceState.orientation,
+        angle: deviceState.angle,
+        viewport: { ...deviceState.viewport },
+        base_viewport: { ...deviceState.baseViewport },
+        viewport_override: this.record.viewport_override
+          ? { ...this.record.viewport_override }
+          : null,
+        pixel_ratio: deviceState.deviceScaleFactor,
+        base_pixel_ratio: deviceState.baseDeviceScaleFactor,
+        touch_simulation: deviceState.hasTouch,
+        touch_simulation_override: this.record.touch_simulation_override,
+        user_agent: deviceState.userAgent,
+        user_agent_override: this.record.user_agent_override,
+        network_profile_id: this.record.network_profile_id,
+      },
+      device_profiles: listBrowserDeviceProfiles(),
+      network_profiles: listBrowserNetworkProfiles(),
+      device_presets: this.record.device_presets,
       agent_access_locked: agentLockActive,
       agent_lock_owner_id: agentLockActive ? this.record.agent_lock_owner_id : null,
       agent_lock_expires_at: agentLockActive ? this.record.agent_lock_expires_at : null,
@@ -1564,18 +1729,17 @@ export class BrowserSession extends EventEmitter {
     if (!entry || entry.page.isClosed() || entry.pageId !== this.activePageId) {
       return;
     }
-    const screenshot = await entry.cdpSession.send("Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 80,
-      fromSurface: true,
-    });
+    const screenshot = await this.captureFrameScreenshot(entry, 80);
+    const frameViewport = this.frameViewport();
     const frame = {
       frameId: ++this.frameSequence,
       browserId: this.id,
       pageId: entry.pageId,
-      jpeg: Buffer.from(screenshot.data, "base64"),
-      width: this.record.viewport?.width || DEFAULT_VIEWPORT.width,
-      height: this.record.viewport?.height || DEFAULT_VIEWPORT.height,
+      jpeg: screenshot.jpeg,
+      width: frameViewport.width,
+      height: frameViewport.height,
+      pixelWidth: screenshot.pixelWidth,
+      pixelHeight: screenshot.pixelHeight,
       pageScaleFactor: 1,
       timestamp: Date.now() / 1000,
     };
@@ -1593,13 +1757,23 @@ export class BrowserSession extends EventEmitter {
     if (!entry || entry.page.isClosed()) {
       return;
     }
+    const frameViewport = this.frameViewport();
+    const screenshot = frameViewport.pixelRatio > 1
+      ? await this.captureFrameScreenshot(entry, STREAM_PROFILES[this.streamProfile || "interactive"].quality)
+      : {
+        jpeg: Buffer.from(event.data, "base64"),
+        pixelWidth: frameViewport.width,
+        pixelHeight: frameViewport.height,
+      };
     entry.lastFrame = {
       frameId: ++this.frameSequence,
       browserId: this.id,
       pageId: entry.pageId,
-      jpeg: Buffer.from(event.data, "base64"),
-      width: event.metadata.deviceWidth || this.record.viewport?.width || DEFAULT_VIEWPORT.width,
-      height: event.metadata.deviceHeight || this.record.viewport?.height || DEFAULT_VIEWPORT.height,
+      jpeg: screenshot.jpeg,
+      width: frameViewport.width,
+      height: frameViewport.height,
+      pixelWidth: screenshot.pixelWidth,
+      pixelHeight: screenshot.pixelHeight,
       pageScaleFactor: event.metadata.pageScaleFactor || 1,
       timestamp: event.metadata.timestamp || Date.now() / 1000,
     };
@@ -1617,17 +1791,302 @@ export class BrowserSession extends EventEmitter {
     });
   }
 
+  frameViewport() {
+    const deviceState = this.effectiveDeviceState();
+    const width = deviceState.viewport.width || DEFAULT_VIEWPORT.width;
+    const height = deviceState.viewport.height || DEFAULT_VIEWPORT.height;
+    return {
+      width,
+      height,
+      pixelRatio: deviceState.deviceScaleFactor,
+    };
+  }
+
+  async captureFrameScreenshot(entry, quality) {
+    const frameViewport = this.frameViewport();
+    const screenshot = await entry.cdpSession.send("Page.captureScreenshot", {
+      format: "jpeg",
+      quality,
+      fromSurface: true,
+    });
+    return {
+      jpeg: Buffer.from(screenshot.data, "base64"),
+      pixelWidth: Math.round(frameViewport.width * frameViewport.pixelRatio),
+      pixelHeight: Math.round(frameViewport.height * frameViewport.pixelRatio),
+    };
+  }
+
+  async applyDeviceEmulation(entry) {
+    const deviceState = this.effectiveDeviceState();
+    const emulation = browserDeviceEmulationOptions(
+      this.record.device_profile,
+      this.record.device_orientation,
+      {
+        fallbackUserAgent: this.baseUserAgent,
+        fallbackPlatform: this.basePlatform,
+        viewport: deviceState.viewport,
+        deviceScaleFactor: deviceState.deviceScaleFactor,
+        touchEnabled: deviceState.hasTouch,
+        ...(this.record.user_agent_override
+          ? { userAgent: this.record.user_agent_override }
+          : {}),
+      },
+    );
+    await entry.page.setViewportSize({ width: emulation.width, height: emulation.height });
+    await entry.cdpSession.send("Emulation.setDeviceMetricsOverride", {
+      width: emulation.width,
+      height: emulation.height,
+      deviceScaleFactor: emulation.deviceScaleFactor,
+      mobile: emulation.mobile,
+      screenWidth: emulation.screenWidth,
+      screenHeight: emulation.screenHeight,
+      screenOrientation: emulation.screenOrientation,
+    });
+    await entry.cdpSession.send("Emulation.setTouchEmulationEnabled", {
+      enabled: emulation.touchEnabled,
+      ...(emulation.touchEnabled ? { maxTouchPoints: emulation.maxTouchPoints } : {}),
+    });
+    await entry.cdpSession.send("Emulation.setEmitTouchEventsForMouse", {
+      enabled: emulation.touchEnabled,
+      configuration: emulation.touchEnabled ? "mobile" : "desktop",
+    });
+    await entry.cdpSession.send("Emulation.setUserAgentOverride", {
+      userAgent: emulation.userAgent,
+      platform: emulation.platform,
+    });
+    const network = getBrowserNetworkProfile(this.record.network_profile_id);
+    await entry.cdpSession.send("Network.emulateNetworkConditions", {
+      offline: network.offline,
+      latency: network.latency,
+      downloadThroughput: network.downloadThroughput,
+      uploadThroughput: network.uploadThroughput,
+      connectionType: network.offline ? "none" : "wifi",
+    });
+  }
+
   async setViewport(width, height) {
+    return await this.setDeviceSettings({ width, height });
+  }
+
+  async setDeviceProfile(profileId, orientation = DEFAULT_BROWSER_DEVICE_ORIENTATION) {
+    return await this.setDeviceSettings({
+      profileId,
+      orientation,
+      resetProfileSettings: true,
+    });
+  }
+
+  async setDeviceSettings(settings = {}) {
     this.assertRunning();
-    if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
-      throw new Error(`非法 viewport: ${width}x${height}`);
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      throw new Error("浏览器设备设置必须是 object");
     }
-    this.record.viewport = { width, height };
-    await this.page.setViewportSize(this.record.viewport);
-    if (this.streaming) {
-      await this.stopScreencast();
-      await this.startScreencast();
+    if (settings.deviceScaleFactor !== undefined && settings.deviceScaleFactor !== null
+      && (!Number.isFinite(settings.deviceScaleFactor)
+        || settings.deviceScaleFactor < 0.1
+        || settings.deviceScaleFactor > 8)) {
+      throw new Error("deviceScaleFactor 必须在 0.1 到 8 之间");
     }
+    if (settings.userAgent !== undefined && settings.userAgent !== null
+      && (typeof settings.userAgent !== "string" || settings.userAgent.length > 2000)) {
+      throw new Error("userAgent 必须是长度不超过 2000 的字符串");
+    }
+    if (settings.touchSimulation !== undefined && settings.touchSimulation !== null
+      && typeof settings.touchSimulation !== "boolean") {
+      throw new Error("touchSimulation 必须是 boolean");
+    }
+    const profileId = settings.profileId ?? this.record.device_profile;
+    const orientation = settings.orientation ?? this.record.device_orientation;
+    if (typeof profileId !== "string" || !profileId.trim()) {
+      throw new Error("浏览器设备配置不能为空");
+    }
+    const nextBaseState = resolveBrowserDeviceState(profileId, orientation);
+    const previousSettings = {
+      device_profile: this.record.device_profile,
+      device_orientation: this.record.device_orientation,
+      viewport_override: this.record.viewport_override
+        ? { ...this.record.viewport_override }
+        : null,
+      device_scale_factor_override: this.record.device_scale_factor_override,
+      user_agent_override: this.record.user_agent_override,
+      touch_simulation_override: this.record.touch_simulation_override,
+      network_profile_id: this.record.network_profile_id,
+    };
+    const profileChanged = previousSettings.device_profile !== nextBaseState.id;
+    const orientationChanged = previousSettings.device_orientation !== nextBaseState.orientation;
+    const resetProfileSettings = settings.resetProfileSettings === true;
+    const resetAll = settings.reset === true;
+    const nextNetworkProfileId = resetAll || resetProfileSettings
+      ? DEFAULT_BROWSER_NETWORK_PROFILE
+      : (settings.networkProfileId ?? (profileChanged
+        ? DEFAULT_BROWSER_NETWORK_PROFILE
+        : previousSettings.network_profile_id));
+    getBrowserNetworkProfile(nextNetworkProfileId);
+    this.record.device_profile = nextBaseState.id;
+    this.record.device_orientation = nextBaseState.orientation;
+
+    let viewportOverride = previousSettings.viewport_override;
+    if (resetAll || resetProfileSettings || profileChanged) {
+      viewportOverride = null;
+    }
+    if (orientationChanged && viewportOverride && settings.width === undefined && settings.height === undefined) {
+      viewportOverride = {
+        width: viewportOverride.height,
+        height: viewportOverride.width,
+      };
+    }
+    if (settings.width !== undefined || settings.height !== undefined) {
+      const currentViewport = viewportOverride || nextBaseState.viewport;
+      const width = settings.width ?? currentViewport.width;
+      const height = settings.height ?? currentViewport.height;
+      if (!Number.isInteger(width) || width <= 0 || width > 4096
+        || !Number.isInteger(height) || height <= 0 || height > 4096) {
+        throw new Error(`非法 viewport: ${width}x${height}`);
+      }
+      viewportOverride = {
+        width,
+        height,
+      };
+    }
+    this.record.viewport_override = viewportOverride;
+    this.record.device_scale_factor_override = resetAll || resetProfileSettings
+      ? null
+      : (settings.deviceScaleFactor === undefined
+        ? profileChanged ? null : previousSettings.device_scale_factor_override
+        : settings.deviceScaleFactor);
+    this.record.user_agent_override = resetAll || resetProfileSettings
+      ? null
+      : (settings.userAgent === undefined
+        ? profileChanged ? null : previousSettings.user_agent_override
+        : settings.userAgent || null);
+    this.record.touch_simulation_override = resetAll || resetProfileSettings
+      ? null
+      : (settings.touchSimulation === undefined
+        ? profileChanged ? null : previousSettings.touch_simulation_override
+        : settings.touchSimulation);
+    this.record.network_profile_id = nextNetworkProfileId;
+    this.syncDeviceStateRecord();
+
+    const previousEffectiveState = resolveBrowserDeviceState(
+      previousSettings.device_profile,
+      previousSettings.device_orientation,
+      {
+        ...(previousSettings.viewport_override
+          ? { viewport: previousSettings.viewport_override }
+          : {}),
+        ...(previousSettings.device_scale_factor_override !== null
+          ? { deviceScaleFactor: previousSettings.device_scale_factor_override }
+          : {}),
+        ...(previousSettings.touch_simulation_override !== null
+          ? { touchEnabled: previousSettings.touch_simulation_override }
+          : {}),
+        ...(previousSettings.user_agent_override
+          ? { userAgent: previousSettings.user_agent_override }
+          : {}),
+      },
+    );
+    const shouldStream = this.streaming || this.clients.size > 0;
+    try {
+      if (this.streaming) {
+        await this.stopScreencast();
+      }
+      for (const entry of this.pageEntries.values()) {
+        await this.applyDeviceEmulation(entry);
+      }
+      const deviceEmulationChanged = profileChanged
+        || orientationChanged
+        || previousEffectiveState.userAgent !== this.effectiveDeviceState().userAgent
+        || previousEffectiveState.hasTouch !== this.effectiveDeviceState().hasTouch;
+      if (deviceEmulationChanged) {
+        for (const entry of this.pageEntries.values()) {
+          const targetUrl = entry.actualUrl || entry.url || this.record.url || "about:blank";
+          // TODO: 动态切换 UA 后 Chromium 可能复用切换前的桌面文档缓存，必须强制重新获取页面。
+          await entry.cdpSession.send("Network.setCacheDisabled", { cacheDisabled: true });
+          await entry.cdpSession.send("Network.setBypassServiceWorker", { bypass: true });
+          try {
+            const navigationUrl = targetUrl === "about:blank"
+              ? targetUrl
+              : (() => {
+                const url = new URL(targetUrl);
+                url.searchParams.set(
+                  "__boxteam_device_profile",
+                  `${this.record.device_profile}-${this.record.device_orientation}-${Date.now()}`,
+                );
+                return url.toString();
+              })();
+            let navigated = false;
+            for (let attempt = 0; attempt < 2 && !navigated; attempt += 1) {
+              try {
+                await entry.page.goto(navigationUrl, {
+                  timeout: NAVIGATION_TIMEOUT_MS,
+                  waitUntil: "domcontentloaded",
+                });
+                navigated = true;
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                if (attempt === 1 || !message.includes("ERR_NETWORK_CHANGED")) {
+                  throw error;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 250));
+              }
+            }
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            if (navigationUrl !== targetUrl) {
+              await entry.page.evaluate((url) => {
+                window.history.replaceState(null, document.title, url);
+              }, targetUrl);
+            }
+          } finally {
+            await entry.cdpSession.send("Network.setBypassServiceWorker", { bypass: false });
+            await entry.cdpSession.send("Network.setCacheDisabled", { cacheDisabled: false });
+          }
+        }
+      }
+      if (shouldStream) {
+        await this.startScreencast();
+        const activeEntry = this.pageEntries.get(this.activePageId);
+        if (activeEntry) {
+          await this.captureCurrentPageFrame(activeEntry);
+        }
+      }
+      return await this.syncAndEmitState();
+    } catch (error) {
+      this.record.device_profile = previousSettings.device_profile;
+      this.record.device_orientation = previousSettings.device_orientation;
+      this.record.viewport_override = previousSettings.viewport_override;
+      this.record.device_scale_factor_override = previousSettings.device_scale_factor_override;
+      this.record.user_agent_override = previousSettings.user_agent_override;
+      this.record.touch_simulation_override = previousSettings.touch_simulation_override;
+      this.record.network_profile_id = previousSettings.network_profile_id;
+      this.syncDeviceStateRecord();
+      for (const entry of this.pageEntries.values()) {
+        await this.applyDeviceEmulation(entry);
+      }
+      throw error;
+    }
+  }
+
+  async saveDevicePreset(name) {
+    this.assertRunning();
+    if (typeof name !== "string" || !name.trim()) {
+      throw new Error("设备预设名称不能为空");
+    }
+    const preset = {
+      id: `preset_${randomUUID().replaceAll("-", "")}`,
+      name: name.trim().slice(0, 80),
+      profile_id: this.record.device_profile,
+      orientation: this.record.device_orientation,
+      viewport: { ...this.effectiveDeviceState().viewport },
+      device_scale_factor: this.effectiveDeviceState().deviceScaleFactor,
+      user_agent: this.record.user_agent_override,
+      touch_simulation: this.effectiveDeviceState().hasTouch,
+      network_profile_id: this.record.network_profile_id,
+      created_at: nowIso(),
+    };
+    this.record.device_presets = [
+      ...this.record.device_presets.filter((item) => item.name !== preset.name),
+      preset,
+    ].slice(-20);
     return await this.syncAndEmitState();
   }
 
@@ -1775,6 +2234,88 @@ export class BrowserSession extends EventEmitter {
       mime_type: "image/png",
       byte_length: buffer.byteLength,
     };
+  }
+
+  async captureClientScreenshot() {
+    this.assertRunning();
+    const screenshot = await this.cdpSession.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+    });
+    return Buffer.from(screenshot.data, "base64");
+  }
+
+  async debugSnapshot() {
+    this.assertRunning();
+    const entry = this.pageEntries.get(this.activePageId);
+    if (!entry) {
+      throw new Error(`当前没有活动浏览器标签页: browser_id=${this.id}`);
+    }
+    const elements = await entry.page.evaluate(() => {
+      const maxDepth = 5;
+      const maxChildren = 80;
+      const summarize = (node, path, depth) => {
+        if (!(node instanceof Element) || depth > maxDepth) return null;
+        const attributes = {};
+        for (const attribute of [...node.attributes].slice(0, 20)) {
+          attributes[attribute.name] = attribute.value.slice(0, 300);
+        }
+        const text = [...node.childNodes]
+          .filter((child) => child.nodeType === Node.TEXT_NODE)
+          .map((child) => child.textContent || "")
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 240);
+        return {
+          node_id: path,
+          tag: node.tagName.toLowerCase(),
+          attributes,
+          text,
+          children: [...node.children]
+            .slice(0, maxChildren)
+            .map((child, index) => summarize(child, `${path}.${index}`, depth + 1))
+            .filter(Boolean),
+        };
+      };
+      return summarize(document.documentElement, "0", 0);
+    });
+    const sources = await entry.page.evaluate(() => {
+      const sourceTypes = new Set(["script", "stylesheet", "link", "css", "fetch", "xmlhttprequest"]);
+      const seen = new Set();
+      return performance.getEntriesByType("resource")
+        .filter((resource) => resource.name && (sourceTypes.has(resource.initiatorType) || /\.(?:js|css|map)(?:$|\?)/i.test(resource.name)))
+        .map((resource) => ({
+          url: resource.name,
+          type: resource.initiatorType || "resource",
+          duration_ms: Math.round(resource.duration),
+        }))
+        .filter((resource) => {
+          if (seen.has(resource.url)) return false;
+          seen.add(resource.url);
+          return true;
+        })
+        .slice(0, 200);
+    });
+    return {
+      page_id: entry.pageId,
+      title: entry.title || await this.page.title(),
+      url: entry.url || this.page.url(),
+      elements,
+      sources,
+      console: [...(entry.consoleMessages || [])],
+      network: [...(entry.networkRequests || [])],
+      captured_at: nowIso(),
+    };
+  }
+
+  async clearNetworkRequests() {
+    this.assertRunning();
+    const activeEntry = this.pageEntries.get(this.activePageId);
+    if (activeEntry) {
+      activeEntry.networkRequests.length = 0;
+    }
+    return await this.syncAndEmitState({ persist: false });
   }
 
   async runPlaywrightCode(args) {

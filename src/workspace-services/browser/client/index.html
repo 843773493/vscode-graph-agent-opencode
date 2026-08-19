@@ -10,125 +10,247 @@
   </head>
   <body>
     <main class="browser-shell">
-      <header class="browser-toolbar">
-        <div class="browser-title">
-          <strong>可附加浏览器</strong>
-          <span id="browser-id">未选择页面</span>
-          <span id="attach-state-badge" class="attach-state-badge attaching">正在初始化</span>
-          <span id="ai-control-badge" class="ai-control-badge" hidden>AI 已锁定</span>
-        </div>
-        <div class="browser-actions">
-          <button id="agent-lock-toggle" class="icon-button" type="button" title="锁定 AI 操作" aria-label="锁定 AI 操作" aria-pressed="false">
-            <span class="codicon codicon-unlock icon-agent-unlocked" aria-hidden="true"></span>
-            <span class="codicon codicon-lock icon-agent-locked" aria-hidden="true"></span>
-            <span class="sr-only">锁定 AI 操作</span>
-          </button>
-          <button id="element-picker-toggle" class="icon-button" type="button" title="选择页面元素" aria-label="选择页面元素">
-            <span class="codicon codicon-inspect" aria-hidden="true"></span>
-            <span class="sr-only">选择页面元素</span>
-          </button>
-          <button id="attach-toggle" class="icon-button" type="button" title="连接浏览器" aria-label="连接浏览器">
-            <span class="codicon codicon-vm-connect icon-connect" aria-hidden="true"></span>
-            <span class="codicon codicon-debug-disconnect icon-disconnect" aria-hidden="true"></span>
-            <span class="sr-only">连接浏览器</span>
-          </button>
-          <button id="refresh-state" class="icon-button" type="button" title="刷新页面状态" aria-label="刷新页面状态">
-            <span class="codicon codicon-refresh" aria-hidden="true"></span>
-            <span class="sr-only">刷新页面状态</span>
-          </button>
-          <button id="close-browser" class="icon-button danger-soft" type="button" title="关闭浏览器页面" aria-label="关闭浏览器页面">
-            <span class="codicon codicon-debug-stop" aria-hidden="true"></span>
-            <span class="sr-only">关闭浏览器页面</span>
-          </button>
-          <button id="delete-browser" class="icon-button danger" type="button" title="删除浏览器记录" aria-label="删除浏览器记录">
-            <span class="codicon codicon-trash" aria-hidden="true"></span>
-            <span class="sr-only">删除浏览器记录</span>
-          </button>
-        </div>
-      </header>
+      <span id="browser-id" hidden></span>
+      <span id="ai-control-badge" hidden></span>
 
-      <form id="url-form" class="url-toolbar">
-        <button id="back-button" class="icon-button" type="button" title="后退" aria-label="后退">
-          <span class="codicon codicon-arrow-left" aria-hidden="true"></span>
-        </button>
-        <button id="forward-button" class="icon-button" type="button" title="前进" aria-label="前进">
-          <span class="codicon codicon-arrow-right" aria-hidden="true"></span>
-        </button>
-        <button id="reload-button" class="icon-button" type="button" title="刷新页面" aria-label="刷新页面">
-          <span class="codicon codicon-refresh" aria-hidden="true"></span>
-        </button>
-        <input id="address-input" type="text" autocomplete="off" aria-label="浏览器地址" />
-        <button id="go-button" class="icon-button send-button" type="submit" title="打开地址" aria-label="打开地址">
-          <span class="codicon codicon-debug-start" aria-hidden="true"></span>
-        </button>
-      </form>
+      <div class="browser-layout">
+        <section class="browser-main-column">
+          <nav id="browser-tabs" class="browser-tabs" aria-label="浏览器标签页">
+            <div id="browser-tab-list" class="browser-tab-list"></div>
+            <button id="new-tab-button" class="new-tab-button" type="button" title="新建标签页" aria-label="新建标签页">
+              <span class="codicon codicon-add" aria-hidden="true"></span>
+            </button>
+          </nav>
 
-      <nav id="browser-tabs" class="browser-tabs" aria-label="浏览器标签页">
-        <div id="browser-tab-list" class="browser-tab-list"></div>
-        <button id="new-tab-button" class="new-tab-button" type="button" title="新建标签页" aria-label="新建标签页">
-          <span class="codicon codicon-add" aria-hidden="true"></span>
-        </button>
-      </nav>
-
-      <details id="download-shelf" class="download-shelf" hidden>
-        <summary id="download-summary">下载</summary>
-        <div id="download-list" class="download-list"></div>
-      </details>
-      <form id="find-bar" class="find-bar" hidden>
-        <input id="find-input" type="search" autocomplete="off" placeholder="在页面中查找" aria-label="在页面中查找" />
-        <button id="find-previous" type="button" title="上一个匹配项" aria-label="上一个匹配项">
-          <span class="codicon codicon-arrow-up" aria-hidden="true"></span>
-        </button>
-        <button id="find-next" type="submit" title="下一个匹配项" aria-label="下一个匹配项">
-          <span class="codicon codicon-arrow-down" aria-hidden="true"></span>
-        </button>
-        <button id="find-close" type="button" title="关闭查找" aria-label="关闭查找">
-          <span class="codicon codicon-close" aria-hidden="true"></span>
-        </button>
-      </form>
-
-      <section id="status-line" class="status-line">正在初始化浏览器连接…</section>
-      <section id="screen-stage" class="screen-stage" aria-label="浏览器远程画面">
-        <div id="screen-scroll" class="screen-scroll">
-          <div id="screen-content" class="screen-content">
-            <canvas id="screen-canvas" class="screen-canvas" tabindex="0"></canvas>
-            <textarea
-              id="browser-input-proxy"
-              class="browser-input-proxy"
-              aria-label="远程浏览器键盘输入"
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-            ></textarea>
-            <div id="participant-cursors" class="participant-cursors" aria-hidden="true"></div>
-            <div id="element-highlight" class="element-highlight" hidden>
-              <span id="element-highlight-label" class="element-highlight-label"></span>
+          <form id="url-form" class="url-toolbar">
+            <button id="back-button" class="icon-button" type="button" title="后退" aria-label="后退">
+              <span class="codicon codicon-arrow-left" aria-hidden="true"></span>
+            </button>
+            <button id="forward-button" class="icon-button" type="button" title="前进" aria-label="前进">
+              <span class="codicon codicon-arrow-right" aria-hidden="true"></span>
+            </button>
+            <button id="reload-button" class="icon-button" type="button" title="刷新页面" aria-label="刷新页面">
+              <span class="codicon codicon-refresh" aria-hidden="true"></span>
+            </button>
+            <input id="address-input" type="text" autocomplete="off" aria-label="浏览器地址" />
+            <button id="go-button" class="icon-button send-button" type="submit" title="打开地址" aria-label="打开地址">
+              <span class="codicon codicon-debug-start" aria-hidden="true"></span>
+            </button>
+            <div class="url-toolbar-actions" aria-label="浏览器控制">
+              <button id="status-line" class="status-button" type="button" title="正在初始化浏览器连接…" aria-label="正在初始化浏览器连接…" role="status">
+                <span class="codicon codicon-info" aria-hidden="true"></span>
+              </button>
+              <button id="attach-state-badge" class="attach-state-badge attaching" type="button" title="正在初始化" aria-label="正在初始化">
+                <span class="codicon codicon-circle-filled" aria-hidden="true"></span>
+              </button>
+              <button id="agent-lock-toggle" class="icon-button" type="button" title="锁定 AI 操作" aria-label="锁定 AI 操作" aria-pressed="false">
+                <span class="codicon codicon-unlock icon-agent-unlocked" aria-hidden="true"></span>
+                <span class="codicon codicon-lock icon-agent-locked" aria-hidden="true"></span>
+                <span class="sr-only">锁定 AI 操作</span>
+              </button>
+              <button id="element-picker-toggle" class="icon-button" type="button" title="选择页面元素" aria-label="选择页面元素">
+                <span class="codicon codicon-inspect" aria-hidden="true"></span>
+                <span class="sr-only">选择页面元素</span>
+              </button>
+              <button id="element-picker-add-toggle" class="icon-button element-picker-add-toggle" type="button" title="选择元素+" aria-label="选择元素+">
+                <span class="codicon codicon-inspect" aria-hidden="true"></span>
+                <span class="element-picker-add-mark" aria-hidden="true">＋</span>
+                <span class="sr-only">选择元素+</span>
+              </button>
+              <button id="copy-browser-logs" class="icon-button" type="button" title="复制日志" aria-label="复制日志">
+                <span class="codicon codicon-output" aria-hidden="true"></span>
+                <span class="sr-only">复制日志</span>
+              </button>
+              <button id="attach-toggle" class="icon-button" type="button" title="连接浏览器" aria-label="连接浏览器">
+                <span class="codicon codicon-vm-connect icon-connect" aria-hidden="true"></span>
+                <span class="codicon codicon-debug-disconnect icon-disconnect" aria-hidden="true"></span>
+                <span class="sr-only">连接浏览器</span>
+              </button>
+              <button id="refresh-state" class="icon-button" type="button" title="刷新页面状态" aria-label="刷新页面状态">
+                <span class="codicon codicon-refresh" aria-hidden="true"></span>
+                <span class="sr-only">刷新页面状态</span>
+              </button>
+              <button id="debug-toggle" class="icon-button" type="button" title="显示开发者工具" aria-label="显示开发者工具">
+                <span class="codicon codicon-debug-console" aria-hidden="true"></span>
+                <span class="sr-only">显示开发者工具</span>
+              </button>
+              <button id="close-browser" class="icon-button danger-soft" type="button" title="关闭浏览器页面" aria-label="关闭浏览器页面">
+                <span class="codicon codicon-debug-stop" aria-hidden="true"></span>
+                <span class="sr-only">关闭浏览器页面</span>
+              </button>
+              <button id="delete-browser" class="icon-button danger" type="button" title="删除浏览器记录" aria-label="删除浏览器记录">
+                <span class="codicon codicon-trash" aria-hidden="true"></span>
+                <span class="sr-only">删除浏览器记录</span>
+              </button>
             </div>
+            <div class="device-toolbar" aria-label="浏览器设备模拟">
+            <label class="device-profile-field">
+              <span>设备</span>
+              <select id="device-profile-select" aria-label="选择浏览器设备">
+                <option value="desktop">桌面</option>
+              </select>
+            </label>
+            <label class="device-size-field">
+              <span class="sr-only">宽度</span>
+              <input id="device-width-input" type="number" min="1" max="4096" inputmode="numeric" aria-label="视口宽度" />
+              <span aria-hidden="true">×</span>
+              <span class="sr-only">高度</span>
+              <input id="device-height-input" type="number" min="1" max="4096" inputmode="numeric" aria-label="视口高度" />
+            </label>
+            <label class="device-compact-field" title="设备像素比">
+              <span class="sr-only">DPR</span>
+              <select id="device-dpr-select" aria-label="设备像素比">
+                <option value="auto">自动</option>
+                <option value="1">1x</option>
+                <option value="2">2x</option>
+                <option value="3">3x</option>
+                <option value="4">4x</option>
+              </select>
+            </label>
+            <button id="device-fit-button" class="icon-button device-tool-button" type="button" title="实际尺寸 (1:1)" aria-label="实际尺寸 (1:1)" aria-pressed="false">
+              <span class="codicon codicon-screen-full" aria-hidden="true"></span>
+            </button>
+            <button id="device-rotate-button" class="device-rotate-button" type="button" title="旋转设备" aria-label="旋转设备">
+              <span class="codicon codicon-refresh" aria-hidden="true"></span>
+              <span>旋转</span>
+            </button>
+            <label class="device-network-field" title="网络限制">
+              <span class="sr-only">网络</span>
+              <select id="device-network-select" aria-label="网络限制">
+                <option value="none">无限制</option>
+              </select>
+            </label>
+            <details id="device-save-menu" class="device-menu">
+              <summary>保存</summary>
+              <div class="device-menu-popover">
+                <input id="device-preset-name" type="text" maxlength="80" placeholder="预设名称" aria-label="设备预设名称" />
+                <button id="device-save-preset" type="button">保存预设</button>
+              </div>
+            </details>
+            <details id="device-settings-menu" class="device-menu">
+              <summary class="icon-summary" title="更多设备设置" aria-label="更多设备设置">⋮</summary>
+              <div class="device-menu-popover device-settings-popover">
+                <label>用户代理<input id="device-ua-input" type="text" placeholder="跟随设备默认值" /></label>
+                <label class="checkbox-row"><input id="device-touch-input" type="checkbox" /> 模拟触摸</label>
+                <button id="device-screenshot-button" type="button">截图</button>
+                <button id="device-reset-button" type="button">重置尺寸和模拟</button>
+              </div>
+            </details>
+            <span id="device-summary" class="device-summary">桌面 · 1280×800 · DPR 1</span>
+            </div>
+          </form>
+
+          <details id="download-shelf" class="download-shelf" hidden>
+            <summary id="download-summary">下载</summary>
+            <div id="download-list" class="download-list"></div>
+          </details>
+          <form id="find-bar" class="find-bar" hidden>
+            <input id="find-input" type="search" autocomplete="off" placeholder="在页面中查找" aria-label="在页面中查找" />
+            <button id="find-previous" type="button" title="上一个匹配项" aria-label="上一个匹配项">
+              <span class="codicon codicon-arrow-up" aria-hidden="true"></span>
+            </button>
+            <button id="find-next" type="submit" title="下一个匹配项" aria-label="下一个匹配项">
+              <span class="codicon codicon-arrow-down" aria-hidden="true"></span>
+            </button>
+            <button id="find-close" type="button" title="关闭查找" aria-label="关闭查找">
+              <span class="codicon codicon-close" aria-hidden="true"></span>
+            </button>
+          </form>
+
+          <section id="screen-stage" class="screen-stage" aria-label="浏览器远程画面">
+            <div id="screen-scroll" class="screen-scroll">
+              <div id="screen-content" class="screen-content">
+                <canvas id="screen-canvas" class="screen-canvas" tabindex="0"></canvas>
+                <textarea
+                  id="browser-input-proxy"
+                  class="browser-input-proxy"
+                  aria-label="远程浏览器键盘输入"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                ></textarea>
+                <div id="participant-cursors" class="participant-cursors" aria-hidden="true"></div>
+                <div id="element-highlight" class="element-highlight" hidden>
+                  <span id="element-highlight-label" class="element-highlight-label"></span>
+                </div>
+                <div class="viewport-resize-handle viewport-resize-right" data-resize-axis="x" title="拖拽调整宽度"></div>
+                <div class="viewport-resize-handle viewport-resize-bottom" data-resize-axis="y" title="拖拽调整高度"></div>
+                <div class="viewport-resize-handle viewport-resize-corner" data-resize-axis="xy" title="拖拽调整宽高"></div>
+              </div>
+            </div>
+            <div id="screen-overlay" class="screen-overlay">正在连接浏览器…</div>
+          </section>
+          <dialog id="browser-modal" class="browser-modal">
+            <form id="browser-modal-form" method="dialog">
+              <h2 id="browser-modal-title">页面对话框</h2>
+              <p id="browser-modal-message"></p>
+              <input id="browser-modal-prompt" type="text" aria-label="页面对话框输入" hidden />
+              <input id="browser-modal-files" type="file" aria-label="选择上传文件" multiple hidden />
+              <div class="browser-modal-actions">
+                <button id="browser-modal-cancel" type="button">取消</button>
+                <button id="browser-modal-accept" type="submit">确定</button>
+              </div>
+            </form>
+          </dialog>
+          <div id="browser-context-menu" class="browser-context-menu" role="menu" hidden>
+            <button type="button" data-context-command="back">后退</button>
+            <button type="button" data-context-command="forward">前进</button>
+            <button type="button" data-context-command="reload">刷新</button>
+            <hr />
+            <button type="button" data-context-command="copy">复制所选文字</button>
+            <button type="button" data-context-command="paste">粘贴</button>
+            <hr />
+            <button type="button" data-context-command="newPage">新建标签页</button>
           </div>
-        </div>
-        <div id="screen-overlay" class="screen-overlay">正在连接浏览器…</div>
-      </section>
-      <dialog id="browser-modal" class="browser-modal">
-        <form id="browser-modal-form" method="dialog">
-          <h2 id="browser-modal-title">页面对话框</h2>
-          <p id="browser-modal-message"></p>
-          <input id="browser-modal-prompt" type="text" aria-label="页面对话框输入" hidden />
-          <input id="browser-modal-files" type="file" aria-label="选择上传文件" multiple hidden />
-          <div class="browser-modal-actions">
-            <button id="browser-modal-cancel" type="button">取消</button>
-            <button id="browser-modal-accept" type="submit">确定</button>
+        </section>
+
+        <aside id="debug-panel" class="debug-panel" aria-label="浏览器开发者工具" hidden>
+          <div class="debug-info-banner">
+            <span class="codicon codicon-info" aria-hidden="true"></span>
+            <span>Tool icons have been removed. The functionality is unchanged, and all tools are still available. If icons were important to your workflow, please share your feedback at <a href="https://issues.chromium.org/issues/525581082" target="_blank" rel="noreferrer">issues.chromium.org/issues/525581082</a>.</span>
+            <button id="debug-banner-close" type="button" class="debug-banner-close" aria-label="关闭提示">×</button>
           </div>
-        </form>
-      </dialog>
-      <div id="browser-context-menu" class="browser-context-menu" role="menu" hidden>
-        <button type="button" data-context-command="back">后退</button>
-        <button type="button" data-context-command="forward">前进</button>
-        <button type="button" data-context-command="reload">刷新</button>
-        <hr />
-        <button type="button" data-context-command="copy">复制所选文字</button>
-        <button type="button" data-context-command="paste">粘贴</button>
-        <hr />
-        <button type="button" data-context-command="newPage">新建标签页</button>
+          <div class="debug-header">
+            <div class="debug-tab-list" role="tablist" aria-label="开发者工具面板">
+              <button class="debug-tab is-active" type="button" data-debug-tab="welcome" role="tab">欢迎</button>
+              <button class="debug-tab" type="button" data-debug-tab="elements" role="tab">元素</button>
+              <button class="debug-tab" type="button" data-debug-tab="console" role="tab">控制台</button>
+              <button class="debug-tab" type="button" data-debug-tab="sources" role="tab">源代码</button>
+              <button class="debug-tab" type="button" data-debug-tab="network" role="tab">网络</button>
+              <button id="debug-add-panel" class="debug-add-panel" type="button" title="打开更多面板" aria-label="打开更多面板">＋</button>
+            </div>
+            <button id="debug-refresh" class="icon-button" type="button" title="刷新调试数据" aria-label="刷新调试数据">
+              <span class="codicon codicon-refresh" aria-hidden="true"></span>
+            </button>
+            <button id="debug-close" class="icon-button" type="button" title="隐藏调试工具" aria-label="隐藏调试工具">×</button>
+          </div>
+          <div class="debug-subtoolbar">
+            <span id="debug-page-label">未加载页面</span>
+            <button id="debug-clear" type="button">清空当前面板</button>
+          </div>
+          <section id="debug-welcome-panel" class="debug-content is-active debug-welcome-content" data-debug-content="welcome" role="tabpanel" aria-label="欢迎">
+          </section>
+          <section id="debug-elements-panel" class="debug-content" data-debug-content="elements" role="tabpanel">
+            <div id="debug-elements-tree" class="debug-elements-tree"><span class="debug-empty">点击刷新加载 DOM 树</span></div>
+          </section>
+          <section id="debug-console-panel" class="debug-content" data-debug-content="console" role="tabpanel">
+            <div class="debug-console-toolbar">
+              <span>控制台日志</span>
+            </div>
+            <div id="debug-console-list" class="debug-console-list"><span class="debug-empty">暂无控制台消息</span></div>
+          </section>
+          <section id="debug-sources-panel" class="debug-content" data-debug-content="sources" role="tabpanel">
+            <div id="debug-sources-list" class="debug-sources-list"><span class="debug-empty">暂无源代码资源</span></div>
+          </section>
+          <section id="debug-network-panel" class="debug-content" data-debug-content="network" role="tabpanel">
+            <div class="debug-network-head"><span>名称</span><span>状态</span><span>类型</span></div>
+            <div id="debug-network-list" class="debug-network-list"><span class="debug-empty">暂无网络请求</span></div>
+          </section>
+          <div class="debug-console-drawer">
+            <button id="debug-drawer-toggle" type="button">控制台抽屉</button>
+            <span id="debug-drawer-summary">暂无消息</span>
+          </div>
+        </aside>
       </div>
     </main>
     <script>
@@ -161,24 +283,29 @@
           event.preventDefault();
           const targetUrl = address.value.trim();
           if (!targetUrl) {
-            status.textContent = "请输入要打开的 URL";
+            status.title = "请输入要打开的 URL";
+            status.setAttribute("aria-label", "请输入要打开的 URL");
             status.classList.add("error");
             return;
           }
           window.BOXTEAM_BROWSER_EARLY_URL = targetUrl;
-          status.textContent = "浏览器正在初始化，将在连接后打开该地址";
+          status.title = "浏览器正在初始化，将在连接后打开该地址";
+          status.setAttribute("aria-label", "浏览器正在初始化，将在连接后打开该地址");
           status.classList.remove("error");
         });
         window.setTimeout(() => {
           if (window.BOXTEAM_BROWSER_CLIENT_READY === true) {
             return;
           }
-          badge.textContent = "初始化失败";
           badge.className = "attach-state-badge failed";
+          badge.title = "初始化失败";
+          badge.setAttribute("aria-label", "初始化失败");
           const failure = initializationFailures.at(-1);
-          status.textContent = failure
+          const statusMessage = failure
             ? `浏览器界面初始化失败：${failure}；请点击画面区域重新加载`
             : "浏览器界面初始化失败，请点击画面区域重新加载";
+          status.title = statusMessage;
+          status.setAttribute("aria-label", statusMessage);
           status.classList.add("error");
           overlay.textContent = "初始化失败，点击重新加载";
           overlay.style.cursor = "pointer";

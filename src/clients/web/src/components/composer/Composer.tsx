@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_BACKEND_PORT, getSessionCatalogBreadcrumb } from "../../api";
+import { DEFAULT_BACKEND_PORT } from "../../api";
 import { useComposerState } from "../../hooks";
 import { useComposerSlashCommands } from "../../hooks/useComposerSlashCommands";
 import { useComposerDraft } from "../../hooks/useComposerDraft";
@@ -11,7 +11,7 @@ import {
   nextEnabledSlashCommandIndex,
 } from "../../state/slashCommands";
 import type { ConversationContentView } from "../../types/frontend";
-import type { PendingRequestKind } from "../../types/backend";
+import type { DeliveryPolicy } from "../../types/backend";
 import {
   fileToSelectedAttachment,
   MEDIA_ONLY_PROMPT,
@@ -28,10 +28,9 @@ import ComposerViewControl from "./ComposerViewControl";
 import SessionNameDialog from "../SessionNameDialog";
 import WarmActionDialog from "../WarmActionDialog";
 import { useWarmConfirm } from "../WarmConfirmProvider";
-import WorkspaceSwitcher from "../workspace/WorkspaceSwitcher";
 import {
   formatBrowserElementSelections,
-  parseBrowserElementSelectedMessage,
+  parseBrowserElementSelectionBundle,
   type BrowserElementSelection,
 } from "../../utils/browserElementSelection";
 import {
@@ -55,6 +54,16 @@ function insertLineBreak(value: string, start: number, end: number): string {
   return value.slice(0, start) + "\n" + value.slice(end);
 }
 
+function nextDeliveryPolicy(policy: DeliveryPolicy): DeliveryPolicy {
+  if (policy === "after_turn") {
+    return "after_tool_result";
+  }
+  if (policy === "after_tool_result") {
+    return "after_interrupt";
+  }
+  return "after_turn";
+}
+
 function Composer() {
   const {
     state,
@@ -71,9 +80,7 @@ function Composer() {
     setWorkspaceDefaultProvider,
     switchContentView,
     createSession,
-    startNewSessionDraft,
     renameSession,
-    activateGatewayWorkspace,
     updateUiSettings,
     getLatestAssistantContent,
   } =
@@ -89,7 +96,6 @@ function Composer() {
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDialogSubmitting, setRenameDialogSubmitting] = useState(false);
   const [renameDialogError, setRenameDialogError] = useState<string | null>(null);
-  const [newSessionFolderPath, setNewSessionFolderPath] = useState<string | null>(null);
   const [goalEditOpen, setGoalEditOpen] = useState(false);
   const confirm = useWarmConfirm();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -104,7 +110,11 @@ function Composer() {
     currentSessionId && currentWorkspaceId
       ? sessionScopeKey(currentWorkspaceId, currentSessionId)
       : currentSessionId;
-  const [input, setInput] = useComposerDraft(currentWorkspaceId, currentSessionId);
+  const [input, setInput] = useComposerDraft(
+    currentWorkspaceId,
+    currentSessionId,
+    state.gatewayUserScope,
+  );
   // TODO: 附件包含 data URL，后续使用 IndexedDB 恢复；本轮只持久化文本草稿。
   const previousSessionIdRef = useRef<string | null>(currentSessionCacheKey);
   const visibleGoal = state.currentGoalSessionId === currentSessionId
@@ -126,12 +136,11 @@ function Composer() {
     ?? currentProviders[0]?.provider_id
     ?? currentAgentConfig?.model
     ?? "model";
-  const defaultPendingKind =
-    state.uiSettings.layout.pending_message_default_action ?? "steering";
+  const defaultDeliveryPolicy =
+    state.uiSettings.layout.delivery_policy_default ?? "after_turn";
   const currentView =
     VIEW_OPTIONS.find((option) => option.id === state.contentView) ??
     VIEW_OPTIONS[0];
-  const hasCurrentSessionHistory = state.hasCurrentSessionHistory;
   const showInterrupt = Boolean(state.currentActiveJobId);
   const queuedCount = state.queuedPendingCount;
   const composerHint = useMemo(() => {
@@ -143,11 +152,6 @@ function Composer() {
     return "Enter 发送 · Ctrl+Enter 换行";
   }, [queuedCount, showInterrupt]);
 
-  const activateNewSessionWorkspace = async (workspaceId: string) => {
-    await activateGatewayWorkspace(workspaceId);
-    // 工作区切换会刷新其既有会话；新会话选择器必须在刷新后恢复草稿态。
-    startNewSessionDraft(workspaceId);
-  };
   useEffect(() => {
     resizeTextarea(textareaRef.current);
   }, [input]);
@@ -173,17 +177,25 @@ function Composer() {
 
   useEffect(() => {
     const acceptBrowserElementSelection = (value: unknown) => {
-      const selection = parseBrowserElementSelectedMessage(value);
-      if (!selection || selection.workspaceId !== currentWorkspaceId) {
+      const bundle = parseBrowserElementSelectionBundle(value);
+      if (!bundle || bundle.workspaceId !== currentWorkspaceId) {
         return;
       }
-      setBrowserElements((current) => [
-        ...current.filter((item) =>
-          item.browserId !== selection.browserId || item.ref !== selection.ref
-        ),
-        selection,
-      ]);
-      setComposerNotice(`已添加页面元素 <${selection.tag}>`);
+      setBrowserElements((current) => {
+        const base = current.filter((item) => item.browserId !== bundle.browserId);
+        return bundle.elements.reduce((next, selection) => [
+          ...next.filter((item) =>
+            item.browserId !== selection.browserId || item.ref !== selection.ref
+          ),
+          selection,
+        ], base);
+      });
+      const lastSelection = bundle.elements[bundle.elements.length - 1];
+      setComposerNotice(
+        bundle.mode === "rich"
+          ? `已选择页面元素 <${lastSelection.tag}>（完整元素上下文）`
+          : `已选择页面元素 <${lastSelection.tag}>`,
+      );
       textareaRef.current?.focus();
     };
     const handleBrowserElementSelected = (event: MessageEvent<unknown>) => {
@@ -199,42 +211,6 @@ function Composer() {
       channel.close();
     };
   }, [currentWorkspaceId]);
-
-  useEffect(() => {
-    if (hasCurrentSessionHistory || !currentSessionId || !currentWorkspaceId) {
-      setNewSessionFolderPath(null);
-      return;
-    }
-    let cancelled = false;
-    setNewSessionFolderPath("正在读取会话位置…");
-    void getSessionCatalogBreadcrumb(
-      state.apiPort ?? DEFAULT_BACKEND_PORT,
-      currentWorkspaceId,
-      currentSessionId,
-    ).then((breadcrumb) => {
-      if (cancelled) {
-        return;
-      }
-      const folderNames = breadcrumb.items.slice(0, -1).map((item) => item.name);
-      setNewSessionFolderPath(
-        folderNames.length > 0 ? folderNames.join(" / ") : "会话根目录",
-      );
-    }).catch((error: unknown) => {
-      if (!cancelled) {
-        setNewSessionFolderPath(
-          `会话位置读取失败：${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    currentSessionId,
-    currentWorkspaceId,
-    hasCurrentSessionHistory,
-    state.apiPort,
-  ]);
 
   const renameCurrentSession = (inlineTitle: string) => {
     const session = state.currentSession;
@@ -431,7 +407,6 @@ function Composer() {
     createSession: async (title) => {
       await createSession(title);
     },
-    startNewSessionDraft,
     renameCurrentSession,
     switchContentView,
     compactSession,
@@ -442,7 +417,7 @@ function Composer() {
     setSlashCommandIndex(firstEnabledSlashCommandIndex(matchingSlashCommands));
   }, [matchingSlashCommands]);
 
-  const handleSend = (queue?: PendingRequestKind | null) => {
+  const handleSend = (deliveryPolicy: DeliveryPolicy = defaultDeliveryPolicy) => {
     if (submitSlashInput(slashCommandIndex)) {
       return;
     }
@@ -471,7 +446,7 @@ function Composer() {
         content_type: attachment.content_type,
         data_url: attachment.data_url,
       })),
-      queue,
+      deliveryPolicy,
     ).catch((error: unknown) => {
       setInput(typedContent);
       setAttachments(sentAttachments);
@@ -657,49 +632,15 @@ function Composer() {
 
     e.preventDefault();
     if (e.altKey && showInterrupt) {
-      handleSend(defaultPendingKind === "steering" ? "queued" : "steering");
+      handleSend(nextDeliveryPolicy(defaultDeliveryPolicy));
       return;
     }
-    handleSend(showInterrupt ? defaultPendingKind : null);
+    handleSend(defaultDeliveryPolicy);
   };
 
   return (
     <>
-      <footer className="composer new-chat-widget-content">
-        {!hasCurrentSessionHistory ? (
-          <div className="new-session-workspace-picker-container">
-            <div className="session-workspace-picker">
-              <span className="session-workspace-picker-label">
-                新会话位于
-              </span>
-              <WorkspaceSwitcher
-                workspaces={state.gatewayWorkspaces}
-                activeWorkspaceId={state.activeGatewayWorkspaceId}
-                switching={state.workspaceSwitching}
-                onActivate={activateNewSessionWorkspace}
-              />
-              {newSessionFolderPath ? (
-                <span
-                  className="session-workspace-picker-label"
-                  title={newSessionFolderPath}
-                >
-                  / {newSessionFolderPath}
-                </span>
-              ) : null}
-              <span className="session-workspace-picker-label session-workspace-picker-with-label">
-                使用
-              </span>
-              <span
-                className="sessions-chat-picker-slot sessions-chat-session-type-picker fixed"
-                title="本地运行时"
-                aria-label="使用本地运行时"
-              >
-                <span className="picker-icon" aria-hidden="true">▱</span>
-                <span className="sessions-chat-dropdown-label">本地</span>
-              </span>
-            </div>
-          </div>
-        ) : null}
+      <footer className="composer">
         <div className="composer-surface new-chat-input-container">
           <div className="new-chat-input-area">
             <div className="composer-copy sessions-chat-editor">
@@ -825,18 +766,14 @@ function Composer() {
                     showInterrupt={showInterrupt}
                     onClear={handleClear}
                     onInterrupt={handleInterrupt}
-                    onSend={() => handleSend(showInterrupt ? defaultPendingKind : null)}
-                    onAlternate={() => handleSend(
-                      defaultPendingKind === "steering" ? "queued" : "steering",
-                    )}
-                    defaultPendingKind={defaultPendingKind}
+                    onSend={() => handleSend(defaultDeliveryPolicy)}
+                    onAlternate={() => handleSend(nextDeliveryPolicy(defaultDeliveryPolicy))}
+                    defaultDeliveryPolicy={defaultDeliveryPolicy}
                     onToggleDefault={() => {
-                      const pendingMessageDefaultAction =
-                        defaultPendingKind === "steering" ? "queued" : "steering";
+                      const nextPolicy = nextDeliveryPolicy(defaultDeliveryPolicy);
                       void updateUiSettings({
                         layout: {
-                          pending_message_default_action:
-                            pendingMessageDefaultAction,
+                          delivery_policy_default: nextPolicy,
                         },
                       }).catch((error: unknown) => {
                         setStatus(

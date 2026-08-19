@@ -15,6 +15,7 @@ export function bindBrowserInputEvents({
   onContextMenu,
   onBrowserShortcut,
   sendIfAttached,
+  getRemoteViewport = () => ({ width: canvas.width, height: canvas.height }),
 }) {
   let consumePickerEscapeKeyUp = false;
   let composing = false;
@@ -80,12 +81,16 @@ export function bindBrowserInputEvents({
     keyboardTarget.focus({ preventScroll: true });
   }
 
+  function remotePoint(event) {
+    return remotePointFromEvent(canvas, event, getRemoteViewport());
+  }
+
   canvas.addEventListener("pointerdown", (event) => {
     if (!isAttached()) {
       return;
     }
     event.preventDefault();
-    const point = remotePointFromEvent(canvas, event);
+    const point = remotePoint(event);
     if (isPicking()) {
       onPickSelect(point);
       return;
@@ -114,7 +119,7 @@ export function bindBrowserInputEvents({
       return;
     }
     event.preventDefault();
-    const point = remotePointFromEvent(canvas, event);
+    const point = remotePoint(event);
     if (isPicking()) {
       onPickMove(point);
       return;
@@ -143,7 +148,7 @@ export function bindBrowserInputEvents({
       canvas.releasePointerCapture(event.pointerId);
     }
     flushBeforeBarrier();
-    const point = remotePointFromEvent(canvas, event);
+    const point = remotePoint(event);
     const clickCount = activeClickCounts.get(event.pointerId) || 1;
     activeClickCounts.delete(event.pointerId);
     activeButtons &= ~buttonMask(event.button);
@@ -167,7 +172,7 @@ export function bindBrowserInputEvents({
       return;
     }
     event.preventDefault();
-    const point = remotePointFromEvent(canvas, event);
+    const point = remotePoint(event);
     if (pendingWheel) {
       pendingWheel.x = point.x;
       pendingWheel.y = point.y;

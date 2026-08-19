@@ -21,6 +21,8 @@ function encodeBinaryFrame(frame) {
     pageId: frame.pageId,
     width: frame.width,
     height: frame.height,
+    pixelWidth: frame.pixelWidth || frame.width,
+    pixelHeight: frame.pixelHeight || frame.height,
     pageScaleFactor: frame.pageScaleFactor,
     timestamp: frame.timestamp,
   }), "utf8");
@@ -253,6 +255,8 @@ async function main() {
           title: payload.title,
           url: payload.url,
           viewport: payload.viewport,
+          deviceProfile: payload.device_profile,
+          deviceOrientation: payload.device_orientation,
         });
         sendJson(response, 200, { data: browser });
         return;
@@ -313,6 +317,23 @@ async function main() {
           const browser = manager.get(browserId);
           sendJson(response, 200, {
             data: await browser.setResourcePolicy(payload.policy),
+          });
+          return;
+        }
+
+        if (request.method === "PATCH" && action === "device-profile") {
+          const payload = await readJson(request);
+          const browser = manager.get(browserId);
+          sendJson(response, 200, {
+            data: await runHttpOperation(
+              request,
+              browser,
+              "device-profile",
+              () => browser.setDeviceProfile(
+                payload.profile_id || payload.device_profile,
+                payload.orientation || payload.device_orientation,
+              ),
+            ),
           });
           return;
         }
@@ -642,6 +663,7 @@ async function main() {
         client.sendJson({
           type: message.type === "selectElement" ? "elementSelected" : "elementHovered",
           browserId: attachedBrowser.id,
+          mode: message.mode === "rich" ? "rich" : "basic",
           element,
         });
         return;
@@ -651,6 +673,65 @@ async function main() {
             parsePositiveInt(message.width, "width"),
             parsePositiveInt(message.height, "height"),
           ));
+        return;
+      }
+      if (message.type === "deviceProfile") {
+        await runUserOperation(
+          message,
+          "device-profile",
+          () => attachedBrowser.setDeviceProfile(message.profileId, message.orientation),
+        );
+        return;
+      }
+      if (message.type === "deviceSettings") {
+        await runUserOperation(
+          message,
+          "device-settings",
+          () => attachedBrowser.setDeviceSettings(message.settings || {}),
+        );
+        return;
+      }
+      if (message.type === "saveDevicePreset") {
+        await runUserOperation(
+          message,
+          "save-device-preset",
+          () => attachedBrowser.saveDevicePreset(message.name),
+          { visible: false, interactive: true },
+        );
+        return;
+      }
+      if (message.type === "debugSnapshot") {
+        const output = await runUserOperation(
+          message,
+          "debug-snapshot",
+          () => attachedBrowser.debugSnapshot(),
+          { visible: false, interactive: true },
+        );
+        const data = Object.hasOwn(output, "result")
+          ? output.result
+          : Object.fromEntries(
+              Object.entries(output).filter(([key]) => !["operation", "operation_revision"].includes(key)),
+            );
+        client.sendJson({
+          type: "debugSnapshot",
+          browserId: attachedBrowser.id,
+          data,
+        });
+        return;
+      }
+      if (message.type === "captureScreenshot") {
+        const output = await runUserOperation(
+          message,
+          "capture-screenshot",
+          async () => ({ result: await attachedBrowser.captureClientScreenshot() }),
+          { visible: false, interactive: true },
+        );
+        client.sendJson({
+          type: "screenshotResult",
+          browserId: attachedBrowser.id,
+          mimeType: "image/png",
+          data: output.result.toString("base64"),
+        });
         return;
       }
       if (message.type === "command") {
@@ -669,6 +750,9 @@ async function main() {
           }
           if (message.name === "find") {
             return attachedBrowser.findText(message.query, message.backwards === true);
+          }
+          if (message.name === "clearNetwork") {
+            return attachedBrowser.clearNetworkRequests();
           }
           return attachedBrowser.navigate(message.name === "goto" ? "url" : message.name, message.url);
         });

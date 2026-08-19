@@ -14,6 +14,7 @@ export function createBrowserCollaborationUi({
   command,
   sendIfAttached,
   setStatus,
+  getRemoteViewport = () => ({ width: canvas.width, height: canvas.height }),
 }) {
   const cursorTimers = new Map();
 
@@ -30,6 +31,7 @@ export function createBrowserCollaborationUi({
   }
 
   function showParticipantPointer(pointer) {
+    const viewport = getRemoteViewport();
     let cursor = cursorLayer.querySelector(`[data-participant-id="${CSS.escape(pointer.participantId)}"]`);
     if (!cursor) {
       cursor = document.createElement("span");
@@ -38,8 +40,8 @@ export function createBrowserCollaborationUi({
       cursor.style.setProperty("--participant-color", participantColor(pointer.participantId));
       cursorLayer.append(cursor);
     }
-    cursor.style.left = `${pointer.x / canvas.width * 100}%`;
-    cursor.style.top = `${pointer.y / canvas.height * 100}%`;
+    cursor.style.left = `${pointer.x / viewport.width * 100}%`;
+    cursor.style.top = `${pointer.y / viewport.height * 100}%`;
     window.clearTimeout(cursorTimers.get(pointer.participantId));
     cursorTimers.set(pointer.participantId, window.setTimeout(() => {
       cursor.remove();

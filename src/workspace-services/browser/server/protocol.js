@@ -6,6 +6,11 @@ export const CLIENT_MESSAGE_TYPES = new Set([
   "paste",
   "command",
   "viewport",
+  "deviceProfile",
+  "deviceSettings",
+  "saveDevicePreset",
+  "debugSnapshot",
+  "captureScreenshot",
   "inspectElement",
   "selectElement",
   "handleDialog",
@@ -25,6 +30,8 @@ export const SERVER_MESSAGE_TYPES = new Set([
   "operationAck",
   "clipboardText",
   "participantPointer",
+  "debugSnapshot",
+  "screenshotResult",
   "error",
 ]);
 
@@ -41,6 +48,7 @@ const COMMAND_NAMES = new Set([
   "activatePage",
   "closePage",
   "find",
+  "clearNetwork",
 ]);
 
 function assertPlainObject(value) {
@@ -74,6 +82,46 @@ function assertOptionalNonNegativeNumber(value, fieldName) {
   assertFiniteNumber(value, fieldName);
   if (value < 0) {
     throw new Error(`${fieldName} 不能为负数`);
+  }
+}
+
+function validateDeviceSettings(settings) {
+  assertPlainObject(settings);
+  if (settings.profileId !== undefined
+    && (typeof settings.profileId !== "string" || !settings.profileId.trim())) {
+    throw new Error("deviceSettings.profileId 不能为空");
+  }
+  if (settings.orientation !== undefined
+    && !["portrait", "landscape"].includes(settings.orientation)) {
+    throw new Error(`未知浏览器设备方向: ${settings.orientation}`);
+  }
+  for (const fieldName of ["width", "height"]) {
+    if (settings[fieldName] === undefined) continue;
+    assertPositiveInteger(settings[fieldName], `deviceSettings.${fieldName}`);
+    if (settings[fieldName] > 4096) {
+      throw new Error(`deviceSettings.${fieldName} 不能超过 4096`);
+    }
+  }
+  if (settings.deviceScaleFactor !== undefined && settings.deviceScaleFactor !== null) {
+    assertFiniteNumber(settings.deviceScaleFactor, "deviceSettings.deviceScaleFactor");
+    if (settings.deviceScaleFactor < 0.1 || settings.deviceScaleFactor > 8) {
+      throw new Error("deviceSettings.deviceScaleFactor 必须在 0.1 到 8 之间");
+    }
+  }
+  if (settings.userAgent !== undefined && settings.userAgent !== null
+    && (typeof settings.userAgent !== "string" || settings.userAgent.length > 2000)) {
+    throw new Error("deviceSettings.userAgent 必须是长度不超过 2000 的字符串");
+  }
+  if (settings.touchSimulation !== undefined && settings.touchSimulation !== null
+    && typeof settings.touchSimulation !== "boolean") {
+    throw new Error("deviceSettings.touchSimulation 必须是 boolean");
+  }
+  if (settings.networkProfileId !== undefined
+    && (typeof settings.networkProfileId !== "string" || !settings.networkProfileId.trim())) {
+    throw new Error("deviceSettings.networkProfileId 不能为空");
+  }
+  if (settings.reset === true && Object.keys(settings).length > 1) {
+    throw new Error("deviceSettings.reset 不能和其他设置同时使用");
   }
 }
 
@@ -205,6 +253,27 @@ export function parseClientMessage(raw) {
       throw new Error(`viewport 过大: ${message.width}x${message.height}`);
     }
   }
+  if (message.type === "deviceProfile") {
+    if (typeof message.profileId !== "string" || !message.profileId.trim()) {
+      throw new Error("deviceProfile.profileId 不能为空");
+    }
+    if (message.orientation !== undefined
+      && !["portrait", "landscape"].includes(message.orientation)) {
+      throw new Error(`未知浏览器设备方向: ${message.orientation}`);
+    }
+  }
+  if (message.type === "deviceSettings") {
+    validateDeviceSettings(message.settings || {});
+  }
+  if (message.type === "saveDevicePreset") {
+    if (typeof message.name !== "string" || !message.name.trim() || message.name.length > 80) {
+      throw new Error("saveDevicePreset.name 必须是 1 到 80 个字符");
+    }
+  }
+  if (message.type === "debugSnapshot" && message.panel !== undefined
+    && !["elements", "console", "network", "all"].includes(message.panel)) {
+    throw new Error(`未知 debugSnapshot.panel: ${message.panel}`);
+  }
   if (message.type === "frameAck") {
     assertPositiveInteger(message.frameId, "frameId");
     assertOptionalNonNegativeNumber(message.decodeMs, "decodeMs");
@@ -215,6 +284,10 @@ export function parseClientMessage(raw) {
     assertFiniteNumber(message.y, "y");
     if (message.x < 0 || message.y < 0) {
       throw new Error("x/y 不能为负数");
+    }
+    if (message.type === "selectElement" && message.mode !== undefined
+      && !["basic", "rich"].includes(message.mode)) {
+      throw new Error(`未知元素选择模式: ${message.mode}`);
     }
   }
   if (message.type === "command") {
