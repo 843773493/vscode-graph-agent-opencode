@@ -14,6 +14,11 @@ function formatElementPath(ancestors) {
     .join(" > ");
 }
 
+// 与 smartpagetranslator 的普通元素选择保持一致：只复制元素本身的 HTML。
+export function formatBrowserElementBasicClipboard(element) {
+  return element.outerHTML || JSON.stringify(element, null, 2);
+}
+
 function classNamesFromSelection(element) {
   if (typeof element.classes !== "string") {
     return [];

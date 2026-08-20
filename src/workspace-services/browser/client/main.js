@@ -10,6 +10,7 @@ import {
   statusLabel,
 } from "./browserClientUtils.js";
 import {
+  formatBrowserElementBasicClipboard,
   formatBrowserElementClipboard,
 } from "./browserElementContext.js";
 
@@ -706,21 +707,12 @@ function announceSelectedElement(element, mode = pickingMode) {
   addBrowserToolLog("info", `${selectedMessage}: ${element.selector || element.tag}`);
   const clipboardText = selectionMode === "rich"
     ? formatBrowserElementClipboard([element])
-    : JSON.stringify({
-        ref: element.ref,
-        selector: element.selector,
-        tag: element.tag,
-        role: element.role,
-        type: element.type,
-        text: element.text,
-        title: element.title,
-        url: element.url,
-      }, null, 2);
+    : formatBrowserElementBasicClipboard(element);
   void collaborationUi.copyText(clipboardText)
     .then(() => {
       const copiedMessage = selectionMode === "rich"
         ? "已复制 VS Code 格式的完整元素上下文到本地剪贴板"
-        : "已复制元素摘要到本地剪贴板";
+        : "已复制元素内容到本地剪贴板";
       setStatus(copiedMessage);
       addBrowserToolLog("info", copiedMessage);
     })

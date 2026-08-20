@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  formatBrowserElementBasicClipboard,
   createBrowserElementContextValue,
   formatBrowserElementClipboard,
 } from "./browserElementContext.js";
@@ -21,6 +22,12 @@ const element = {
 };
 
 describe("浏览器元素剪贴板上下文", () => {
+  test("普通选择只复制元素 outerHTML，不包装为 JSON 或上下文 Markdown", () => {
+    expect(formatBrowserElementBasicClipboard(element)).toBe(element.outerHTML);
+    expect(formatBrowserElementBasicClipboard(element)).not.toContain("browser_id");
+    expect(formatBrowserElementBasicClipboard(element)).not.toContain("Attached Element Context");
+  });
+
   test("生成与 VS Code 相同的固定 Markdown 区块", () => {
     expect(createBrowserElementContextValue(element)).toBe([
       "Attached Element Context from Integrated Browser",
