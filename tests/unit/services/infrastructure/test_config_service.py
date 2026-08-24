@@ -10,6 +10,7 @@ import pytest
 from app.schemas.public_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
 def _write_workspace_config(tmp_path: Path, config: dict) -> Path:
@@ -29,6 +30,14 @@ def _base_config() -> dict:
                     "model": "model-a",
                     "api_key": "${TEST_API_KEY}",
                     "custom_llm_provider": "openai",
+                    "api_mode": {
+                        "protocol": "chat_completions",
+                        "model_info": {
+                            "supports_function_calling": True,
+                            "supports_reasoning": True,
+                        },
+                        "supports_reasoning": {"reasoning_content": True},
+                    },
                 }
             ]
         },
@@ -55,7 +64,20 @@ def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
             "endpoint": "https://chatgpt.com/backend-api/codex",
             "model": "gpt-5.6-luna",
             "custom_llm_provider": "chatgpt",
-            "api_mode": "responses",
+            "api_mode": {
+                "protocol": "responses",
+                "model_info": {
+                    "supports_function_calling": True,
+                    "supports_reasoning": True,
+                },
+                "supports_reasoning": {
+                    "reasoning_items": {
+                        "summary": True,
+                        "encrypted_content": True,
+                    }
+                },
+                "replay_policy": {"encrypted_content": "same_source"},
+            },
             "auth": {"type": "oauth", "method": "chatgpt"},
         }
     )
@@ -192,6 +214,106 @@ def test_workspace_local_config_is_merged_before_workspace_override(
 
     public_config = service.get_snapshot()
     assert public_config.source_details[2].loaded is True
+
+
+def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
+    tmp_path: Path,
+) -> None:
+    config = _base_config()
+    config["logger"]["level"] = "warning"
+    config_path = _write_workspace_config(tmp_path, config)
+    local_path = tmp_path / "workspace_local.jsonc"
+    local_path.write_text(json.dumps({"logger": {"level": "debug"}}), encoding="utf-8")
+    workspace_root = tmp_path / "workspace"
+    workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
+    workspace_path.parent.mkdir(parents=True)
+    workspace_path.write_text(
+        json.dumps({"agents": {"default": {"name": "Workspace Agent"}}}),
+        encoding="utf-8",
+    )
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        service = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+
+        assert service.get_logger_level() == "DEBUG"
+        assert service.list_agents()["default"]["name"] == "Workspace Agent"
+        assert [source.layer for source in service.get_source_details()] == [
+            "inline",
+            "sqlite",
+            "sqlite",
+            "sqlite",
+        ]
+        assert config_path.with_name("workspace.jsonc.migrated.bak").is_file()
+        assert local_path.with_name("workspace_local.jsonc.migrated.bak").is_file()
+        assert workspace_path.with_name("workspace.jsonc.migrated.bak").is_file()
+
+        config_path.write_text(json.dumps({"logger": {"level": "ERROR"}}), encoding="utf-8")
+        assert service.get_logger_level() == "DEBUG"
+    finally:
+        store.close()
+
+
+def test_workspace_config_restarts_from_sqlite_after_source_json_changes(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_workspace_config(tmp_path, _base_config())
+    workspace_root = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        first = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        assert first.get_logger_level() == "INFO"
+        config_path.write_text("{ this is not valid jsonc", encoding="utf-8")
+        second = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        assert second.get_logger_level() == "INFO"
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_public_runtime_overrides_restart_from_workspace_sqlite(tmp_path: Path):
+    config_path = _write_workspace_config(tmp_path, _base_config())
+    workspace_root = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        first = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        await first.update(ConfigUpdateRequest(default_model="runtime-model"))
+        second = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        assert (await second.get()).default_model == "runtime-model"
+        await second.update(ConfigUpdateRequest(default_model=None))
+        third = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace_root,
+            workspace_state_store=store,
+        )
+        assert (await third.get()).default_model == "model-a"
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio

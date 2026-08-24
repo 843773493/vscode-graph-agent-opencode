@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.gateway.config import load_gateway_config, resolve_gateway_path
+from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.main import gateway_config_sources
 
 
@@ -45,7 +46,6 @@ def test_load_gateway_config_accepts_remote_gateway(tmp_path: Path) -> None:
             }
         ],
     )
-
     result = load_gateway_config(config_path=config_path, schema_path=schema_path)
 
     assert len(result.workspaces) == 1
@@ -105,7 +105,6 @@ def test_load_gateway_config_skips_disabled_workspace(tmp_path: Path) -> None:
             }
         ],
     )
-
     assert (
         load_gateway_config(
             config_path=config_path,
@@ -114,6 +113,46 @@ def test_load_gateway_config_skips_disabled_workspace(tmp_path: Path) -> None:
         == ()
     )
 
+
+def test_gateway_history_loading_config_is_nested_and_uses_anchor_window(
+    tmp_path: Path,
+) -> None:
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    config_path.write_text(
+        json.dumps(
+            {
+                "$schema": "./gateway_schema.jsonc",
+                "config_version": 1,
+                "workspaces": [],
+                "features": {
+                    "session_history": {
+                        "loading": {
+                            "progressive": {
+                                "initial": {
+                                    "turns": 1,
+                                    "include": ["user", "tool_summary", "final_response"],
+                                },
+                                "anchor": {
+                                    "before_turns": 2,
+                                    "after_turns": 5,
+                                    "include": ["user", "final_response"],
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_gateway_config(config_path=config_path, schema_path=schema_path)
+
+    assert result.history_loading.initial_turns == 1
+    assert result.history_loading.anchor_before_turns == 2
+    assert result.history_loading.anchor_after_turns == 5
+    assert result.history_loading.anchor_limit("before") == 2
+    assert result.history_loading.anchor_limit("after") == 5
 
 def test_load_gateway_config_merges_local_override_and_records_sources(
     tmp_path: Path,
@@ -206,3 +245,27 @@ def test_resolve_gateway_relative_path_uses_installed_config_directory(
         )
         == (tmp_path / "keys" / "gateway_ed25519").resolve()
     )
+
+
+def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -> None:
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    local_config_path = tmp_path / "gateway_local.jsonc"
+    local_config_path.write_text(
+        json.dumps({"ui": {"theme": {"default_theme_id": "blue"}}}),
+        encoding="utf-8",
+    )
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        config = load_gateway_config(
+            config_path=config_path,
+            schema_path=schema_path,
+            local_config_path=local_config_path,
+            state_store=state,
+        )
+        assert config.default_theme_id == "blue"
+        assert state.get_config("gateway_mutable_override") is not None
+        assert state.get_config("gateway_local_mutable_override") is not None
+        assert config_path.with_name("gateway.jsonc.migrated.bak").is_file()
+        assert local_config_path.with_name("gateway_local.jsonc.migrated.bak").is_file()
+    finally:
+        state.close()

@@ -205,8 +205,7 @@ def _is_safe_api_round_boundary(
     if isinstance(messages[index], ToolMessage):
         return False
     return not (
-        isinstance(messages[index - 1], AIMessage)
-        and messages[index - 1].tool_calls
+        isinstance(messages[index - 1], AIMessage) and messages[index - 1].tool_calls
     )
 
 
@@ -278,7 +277,10 @@ def build_safe_compaction_partition(
         return partition
 
     # 没有可保留的完整轮次边界时，最终允许替换旧前缀，避免超限会话永久卡死。
-    if isinstance(event, Mapping) and event.get("strategy") == CACHE_PRESERVING_STRATEGY:
+    if (
+        isinstance(event, Mapping)
+        and event.get("strategy") == CACHE_PRESERVING_STRATEGY
+    ):
         summarize_end = max(
             summarize_end,
             len(_event_prefix_messages(event)) + 1,
@@ -301,13 +303,25 @@ def build_cache_preserving_event(
     file_path: str,
     strategy: str = CACHE_PRESERVING_STRATEGY,
 ) -> dict[str, object]:
-    return {
+    event: dict[str, object] = {
         "strategy": strategy,
         "cutoff_index": partition.state_cutoff,
         "cache_prefix_messages": partition.prefix_messages,
         "summary_message": summary_message,
         "file_path": file_path,
     }
+    cutoff_message = (
+        partition.messages_to_summarize[-1] if partition.messages_to_summarize else None
+    )
+    if cutoff_message is not None:
+        message_id = cutoff_message.id
+        if not isinstance(message_id, str) or not message_id:
+            metadata = cutoff_message.response_metadata or {}
+            candidate = metadata.get("message_id")
+            message_id = candidate if isinstance(candidate, str) else None
+        if message_id:
+            event["cutoff_message_id"] = message_id
+    return event
 
 
 def _summary_instruction(message_count: int) -> HumanMessage:
@@ -362,9 +376,7 @@ def _strip_media_content(content: object) -> tuple[object, bool]:
             continue
         block_type = item.get("type")
         if isinstance(block_type, str) and block_type in _MEDIA_BLOCK_MARKERS:
-            stripped.append(
-                {"type": "text", "text": _MEDIA_BLOCK_MARKERS[block_type]}
-            )
+            stripped.append({"type": "text", "text": _MEDIA_BLOCK_MARKERS[block_type]})
             changed = True
             continue
         if block_type == "tool_result" and "content" in item:
@@ -462,10 +474,7 @@ def compact_large_tool_payloads_for_summary(
 
     compacted: list[AnyMessage] = []
     for message_index, message in enumerate(messages):
-        if (
-            isinstance(message, ToolMessage)
-            and ("result", message_index, -1) in marked
-        ):
+        if isinstance(message, ToolMessage) and ("result", message_index, -1) in marked:
             compacted.append(
                 message.model_copy(
                     update={
@@ -521,9 +530,7 @@ def _overflow_retry_middle_messages(
         marker = (
             []
             if suffix and isinstance(suffix[0], HumanMessage)
-            else [
-                _compaction_retry_marker()
-            ]
+            else [_compaction_retry_marker()]
         )
         retries.append(
             [
@@ -606,8 +613,12 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
     def _compute_state_cutoff(event: object, effective_cutoff: int) -> int:
         return effective_cutoff_to_state_cutoff(event, effective_cutoff)
 
-    def _count_request_tokens(self, request: ModelRequest, messages: list[AnyMessage]) -> int:
-        counted = [request.system_message, *messages] if request.system_message else messages
+    def _count_request_tokens(
+        self, request: ModelRequest, messages: list[AnyMessage]
+    ) -> int:
+        counted = (
+            [request.system_message, *messages] if request.system_message else messages
+        )
         try:
             return self.token_counter(counted, tools=request.tools)
         except TypeError:
@@ -728,6 +739,18 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                 )
             )
             return _summary_response_text(response)
+        except ValueError:
+            # reasoning 模型可能在带完整工具和系统提示的摘要请求中只返回思考块。
+            # 摘要正文不能暴露思考内容，改用无工具的最小请求重新生成可见摘要。
+            response = handler(
+                self._summary_request(
+                    request,
+                    messages,
+                    remove_tools=True,
+                    minimal_system=True,
+                )
+            )
+            return _summary_response_text(response)
 
     async def _ainvoke_summary_candidate(
         self,
@@ -753,6 +776,18 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                     messages,
                     remove_tools=True,
                     minimal_system=minimal_system,
+                )
+            )
+            return _summary_response_text(response)
+        except ValueError:
+            # reasoning 模型可能在带完整工具和系统提示的摘要请求中只返回思考块。
+            # 摘要正文不能暴露思考内容，改用无工具的最小请求重新生成可见摘要。
+            response = await handler(
+                self._summary_request(
+                    request,
+                    messages,
+                    remove_tools=True,
+                    minimal_system=True,
                 )
             )
             return _summary_response_text(response)
@@ -844,9 +879,24 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         file_path = self._offload_to_backend(backend, partition.messages_to_summarize)
         if file_path is None:
             raise RuntimeError("缓存优先压缩无法保存被摘要的历史消息")
-        summary = self._create_cache_preserving_summary(request, handler, partition)
+        try:
+            summary = self._create_cache_preserving_summary(
+                request,
+                handler,
+                partition,
+            )
+        except (ContextOverflowError, SummaryToolCallError, ValueError, RuntimeError):
+            if request.state.get("_force_cache_compaction") is True:
+                return self._handle_unavailable_forced_compaction(
+                    request,
+                    handler,
+                    before,
+                )
+            raise
         model_file_path = backend_virtual_to_workspace_relative(file_path)
-        summary_message = self._build_new_messages_with_path(summary, model_file_path)[0]
+        summary_message = self._build_new_messages_with_path(summary, model_file_path)[
+            0
+        ]
         event = build_cache_preserving_event(
             partition,
             summary_message=summary_message,
@@ -862,7 +912,16 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             summary_message,
             *partition.preserved_messages,
         ]
-        self._ensure_compaction_reduces_tokens(request, before, modified)
+        try:
+            self._ensure_compaction_reduces_tokens(request, before, modified)
+        except RuntimeError:
+            if request.state.get("_force_cache_compaction") is True:
+                return self._handle_unavailable_forced_compaction(
+                    request,
+                    handler,
+                    before,
+                )
+            raise
         response = handler(request.override(messages=modified))
         return ExtendedModelResponse(
             model_response=response,
@@ -900,13 +959,24 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         )
         if file_path is None:
             raise RuntimeError("缓存优先压缩无法保存被摘要的历史消息")
-        summary = await self._acreate_cache_preserving_summary(
-            request,
-            handler,
-            partition,
-        )
+        try:
+            summary = await self._acreate_cache_preserving_summary(
+                request,
+                handler,
+                partition,
+            )
+        except (ContextOverflowError, SummaryToolCallError, ValueError, RuntimeError):
+            if request.state.get("_force_cache_compaction") is True:
+                return await self._ahandle_unavailable_forced_compaction(
+                    request,
+                    handler,
+                    before,
+                )
+            raise
         model_file_path = backend_virtual_to_workspace_relative(file_path)
-        summary_message = self._build_new_messages_with_path(summary, model_file_path)[0]
+        summary_message = self._build_new_messages_with_path(summary, model_file_path)[
+            0
+        ]
         event = build_cache_preserving_event(
             partition,
             summary_message=summary_message,
@@ -922,7 +992,16 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             summary_message,
             *partition.preserved_messages,
         ]
-        self._ensure_compaction_reduces_tokens(request, before, modified)
+        try:
+            self._ensure_compaction_reduces_tokens(request, before, modified)
+        except RuntimeError:
+            if request.state.get("_force_cache_compaction") is True:
+                return await self._ahandle_unavailable_forced_compaction(
+                    request,
+                    handler,
+                    before,
+                )
+            raise
         response = await handler(request.override(messages=modified))
         return ExtendedModelResponse(
             model_response=response,

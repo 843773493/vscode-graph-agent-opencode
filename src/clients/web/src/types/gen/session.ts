@@ -74,6 +74,12 @@ export interface SessionGenerationOriginDTO {
   generator_type_id: string;
   generator_type_version: string;
 }
+export interface SessionForkRequest {
+  mode?: "context_fork" | "history_prefix_fork" | "full_rollout_copy";
+  turn_id?: string | null;
+  anchor_mode?: "inclusive" | "before";
+  pinned?: boolean;
+}
 export interface SessionInformationErrorDTO {
   event_id: string;
   job_id: string;

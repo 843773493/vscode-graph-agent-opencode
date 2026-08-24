@@ -15,6 +15,7 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
     dependency_provider.get_job_service.return_value = job_service
     dependency_provider.get_checkpointer.return_value = MagicMock()
     mcp_tools = [MagicMock()]
+    hidden_tool_names = frozenset({"write_file"})
     dependency_provider.get_mcp_tools.return_value = mcp_tools
 
     with patch(
@@ -29,10 +30,12 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
             background_message_bus=MagicMock(),
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
+            model_hidden_tool_names=hidden_tool_names,
         )
 
     assert create_runtime.call_args.kwargs["job_service"] is job_service
     assert create_runtime.call_args.kwargs["mcp_tools"] is mcp_tools
+    assert create_runtime.call_args.kwargs["model_hidden_tool_names"] is hidden_tool_names
     assert create_runtime.call_args.kwargs["workspace_root"] == Path("/workspace")
 
 

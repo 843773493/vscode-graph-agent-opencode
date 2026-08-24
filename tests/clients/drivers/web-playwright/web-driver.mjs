@@ -27,6 +27,33 @@ export class WebPlaywrightDriver {
     });
     await this.#context.tracing.start({ screenshots: true, snapshots: true });
     this.#page = await this.#context.newPage();
+    await this.#page.goto(this.baseUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    const guestAccess = await this.#page.evaluate(async () => {
+      const credentialResponse = await fetch("/api/gateway/auth/local-credential");
+      if (!credentialResponse.ok) {
+        throw new Error(`获取 Gateway 本地凭据失败: HTTP ${credentialResponse.status}`);
+      }
+      const credentialPayload = await credentialResponse.json();
+      const token = credentialPayload?.data?.token;
+      if (typeof token !== "string" || token.length === 0) {
+        throw new Error("Gateway 本地凭据响应缺少 token");
+      }
+      const response = await fetch("/api/gateway/users/guest", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Local-Token": token,
+        },
+        body: JSON.stringify({ tracking: { source: "playwright" } }),
+      });
+      return { status: response.status, body: await response.text() };
+    });
+    if (guestAccess.status !== 200) {
+      throw new Error(`Playwright 默认游客登录失败: ${guestAccess.body}`);
+    }
     this.runContext.addCleanup("Web Playwright driver", () => this.close());
     return this;
   }

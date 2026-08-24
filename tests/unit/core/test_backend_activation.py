@@ -1,6 +1,3 @@
-import os
-from pathlib import Path
-
 from app.core import path_utils
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.gateway.schemas import GatewayUIAssetDTO
+from app.schemas.gateway import GatewayUIAssetDTO
 
 MAX_UI_ASSET_BYTES = 20 * 1024 * 1024
 SUPPORTED_FORMATS = {

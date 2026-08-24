@@ -21,7 +21,7 @@ from app.gateway.runtime.local_workspace import (
 )
 from app.gateway.runtime.process import wait_for_http_ok
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.schemas import (
+from app.schemas.gateway import (
     GatewayRuntimeBlockerDTO,
     GatewayRuntimeRestartResultDTO,
     GatewayRuntimeStateResultDTO,

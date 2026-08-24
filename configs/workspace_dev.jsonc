@@ -8,18 +8,29 @@
         "endpoint": "https://opencode.ai/zen/v1",
         "model": "big-pickle",
         "custom_llm_provider": "openai",
-        "api_mode": "chat_completions",
+        "api_mode": {
+          "protocol": "chat_completions",
+          "model_info": {
+            "supports_function_calling": true,
+            "supports_reasoning": true
+          },
+          "supports_reasoning": {"reasoning_content": true}
+        },
         "api_key": "${OPENCODE_ZEN_API_KEY}",
-        "capabilities": [
-          "reasoning_content_replay"
-        ]
       },
       {
         "id": "backup_1",
         "endpoint": "https://api.kilo.ai/api/gateway",
         "model": "openrouter/free",
         "custom_llm_provider": "openai",
-        "api_mode": "chat_completions",
+        "api_mode": {
+          "protocol": "chat_completions",
+          "model_info": {
+            "supports_function_calling": true,
+            "supports_reasoning": true
+          },
+          "supports_reasoning": {"reasoning_content": true}
+        },
         "api_key": "${KILO_API_KEY}"
       },
       {
@@ -27,7 +38,14 @@
         "endpoint": "https://openrouter.ai/api/v1",
         "model": "openrouter/free",
         "custom_llm_provider": "openrouter",
-        "api_mode": "chat_completions",
+        "api_mode": {
+          "protocol": "chat_completions",
+          "model_info": {
+            "supports_function_calling": true,
+            "supports_reasoning": true
+          },
+          "supports_reasoning": {"reasoning_content": true}
+        },
         "api_key": "${OPENROUTER_API_KEY}"
       },
       {
@@ -35,11 +53,20 @@
         "endpoint": "https://www.cctq.ai/v1",
         "model": "gpt-5.6-luna",
         "custom_llm_provider": "openai",
-        "api_mode": "responses",
+        "api_mode": {
+          "protocol": "responses",
+          "model_info": {
+            "supports_vision": true,
+            "supports_function_calling": true,
+            "supports_reasoning": true
+          },
+          "supports_reasoning": {
+            "reasoning_items": {"summary": true, "encrypted_content": true}
+          },
+          "request_features": {"prompt_cache_key": true},
+          "replay_policy": {"encrypted_content": "same_source"}
+        },
         "api_key": "${CCTQ_API_KEY}",
-        "capabilities": [
-          "image_input"
-        ],
         "request_options": {
           "overrides": {
             "reasoning": {
@@ -54,18 +81,27 @@
         "endpoint": "https://chatgpt.com/backend-api/codex",
         "model": "gpt-5.6-luna",
         "custom_llm_provider": "chatgpt",
-        "api_mode": "responses",
+        "api_mode": {
+          "protocol": "responses",
+          "model_info": {
+            "supports_vision": true,
+            "supports_function_calling": true,
+            "supports_reasoning": true
+          },
+          "supports_reasoning": {
+            "reasoning_items": {"summary": true, "encrypted_content": true}
+          },
+          "replay_policy": {"encrypted_content": "same_source"}
+        },
         "auth": {
           "type": "oauth",
           "method": "chatgpt"
         },
-        "capabilities": [
-          "image_input"
-        ],
         "request_options": {
           "overrides": {
             "reasoning": {
-              "effort": "high"
+              "effort": "high",
+              "summary": "auto"
             }
           }
         }

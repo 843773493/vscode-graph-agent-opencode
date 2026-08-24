@@ -19,7 +19,7 @@ interface ResolveNodeDebugSourceSelectionInput {
 function latestBreakpoint(
   breakpoints: NodeDebugBreakpoint[],
 ): NodeDebugBreakpoint | null {
-  return breakpoints.at(-1) ?? null;
+  return breakpoints.length > 0 ? breakpoints[breakpoints.length - 1] : null;
 }
 
 function frameLocation(

@@ -6,7 +6,10 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse
-from langchain_core.callbacks.manager import adispatch_custom_event, dispatch_custom_event
+from langchain_core.callbacks.manager import (
+    adispatch_custom_event,
+    dispatch_custom_event,
+)
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
@@ -26,6 +29,43 @@ class ProviderModelCandidate:
 
 
 MODEL_FAILED_CUSTOM_EVENT = "boxteam_model_failed"
+
+
+def _response_has_visible_output(
+    response: ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any],
+) -> bool:
+    if isinstance(response, AIMessage):
+        messages = [response]
+    elif isinstance(response, ModelResponse):
+        messages = list(response.result)
+    elif isinstance(response, ExtendedModelResponse):
+        model_response = response.model_response
+        if not isinstance(model_response, ModelResponse):
+            return False
+        messages = list(model_response.result)
+    else:
+        return False
+
+    for message in reversed(messages):
+        if not isinstance(message, AIMessage):
+            continue
+        if message.tool_calls or message.invalid_tool_calls:
+            return True
+        if message.text.strip():
+            return True
+    return False
+
+
+def _validate_visible_response(
+    candidate: ProviderModelCandidate,
+    response: ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any],
+) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
+    if not _response_has_visible_output(response):
+        raise RuntimeError(
+            "模型只返回内部推理，没有用户可见正文或工具调用。"
+            f" provider_id={candidate.provider_id} model={candidate.model_id}"
+        )
+    return response
 
 
 def _failure_payload(
@@ -69,7 +109,7 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         raise RuntimeError(
             f"当前模型上下文需要输入能力 [{required_text}]，"
             f"但没有匹配的 provider。已配置 provider: {configured}。"
-            "请为支持该输入类型的 provider 配置 capabilities。"
+            "请在 provider.api_mode.model_info 中配置对应的 supports_* 能力。"
         )
 
     def wrap_model_call(
@@ -80,8 +120,9 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         last_error: Exception | None = None
         for candidate in self._matching_candidates(request):
             try:
-                return handler(request.override(model=candidate.model))
-            except Exception as error:
+                response = handler(request.override(model=candidate.model))
+                return _validate_visible_response(candidate, response)
+            except Exception as error:  # noqa: BLE001 - provider 失败时必须尝试后续候选
                 last_error = error
                 dispatch_custom_event(
                     MODEL_FAILED_CUSTOM_EVENT,
@@ -99,8 +140,9 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         last_error: Exception | None = None
         for candidate in self._matching_candidates(request):
             try:
-                return await handler(request.override(model=candidate.model))
-            except Exception as error:
+                response = await handler(request.override(model=candidate.model))
+                return _validate_visible_response(candidate, response)
+            except Exception as error:  # noqa: BLE001 - provider 失败时必须尝试后续候选
                 last_error = error
                 await adispatch_custom_event(
                     MODEL_FAILED_CUSTOM_EVENT,

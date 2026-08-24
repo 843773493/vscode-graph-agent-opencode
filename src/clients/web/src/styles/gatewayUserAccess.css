@@ -1,0 +1,92 @@
+.gateway-user-access {
+  position: relative;
+}
+
+.gateway-user-access-button {
+  border-radius: 6px;
+}
+
+.gateway-user-access-menu {
+  width: min(420px, calc(100vw - 32px));
+  padding: 12px;
+  color: var(--bt-text-primary);
+  background: var(--bt-surface-raised);
+  border: 1px solid var(--bt-border-subtle);
+  border-radius: 10px;
+  box-shadow: var(--bt-shadow-floating);
+}
+
+.gateway-user-access-heading,
+.gateway-user-row > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.gateway-user-access-heading small,
+.gateway-user-row small {
+  color: var(--bt-text-secondary);
+  font-size: 11px;
+}
+
+.gateway-user-create-row,
+.gateway-user-row,
+.gateway-user-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gateway-user-create-row {
+  margin: 12px 0;
+}
+
+.gateway-user-create-row input {
+  min-width: 0;
+  flex: 1;
+}
+
+.gateway-user-list {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.gateway-user-row {
+  justify-content: space-between;
+  padding: 8px;
+  border: 1px solid var(--bt-border-subtle);
+  border-radius: 7px;
+}
+
+.gateway-user-row em {
+  color: var(--bt-warning);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.gateway-user-row-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.gateway-user-row-actions button,
+.gateway-user-create-row button,
+.gateway-user-guest-button {
+  padding: 4px 8px;
+}
+
+.gateway-user-row-actions .danger {
+  color: var(--bt-danger);
+}
+
+.gateway-user-guest-button {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.gateway-user-access-error {
+  margin-top: 8px;
+  color: var(--bt-danger);
+  font-size: 12px;
+}

@@ -30,7 +30,7 @@ describe("planTurnRefreshes", () => {
     expect(plan.genericTurnIds).toEqual(["job-other"]);
   });
 
-  test("没有终态时保留去重后的全部失效 Turn", () => {
+  test("没有终态时只刷新已经产生可查询内容的失效 Turn", () => {
     const plan = planTurnRefreshes([
       event("tool_call_end", "job-a"),
       event("text_end", "job-a"),
@@ -38,7 +38,18 @@ describe("planTurnRefreshes", () => {
     ]);
 
     expect(plan.terminalEventIndex).toBe(-1);
-    expect(plan.genericTurnIds).toEqual(["job-a", "job-b"]);
+    expect(plan.genericTurnIds).toEqual(["job-a"]);
+  });
+
+  test("Job 创建和用户消息事件只更新运行中占位，不提前查询尚未提交的 Turn", () => {
+    const plan = planTurnRefreshes([
+      event("job_created", "job-new"),
+      event("job_started", "job-new"),
+      event("message_created", "job-new"),
+    ]);
+
+    expect(plan.genericTurnIds).toEqual([]);
+    expect(plan.terminalEventIndex).toBe(-1);
   });
 
   test("多个终态事件以最后一个为终态对账目标", () => {

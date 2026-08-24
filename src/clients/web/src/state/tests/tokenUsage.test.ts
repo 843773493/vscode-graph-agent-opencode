@@ -33,6 +33,7 @@ const agentEnd: TraceEvent = {
 
 const traceConversation = {
   conversationId: "msg_usage",
+  displayMode: "history",
   sessionId: "ses_usage",
   userMessage: null,
   assistantMessages: [],

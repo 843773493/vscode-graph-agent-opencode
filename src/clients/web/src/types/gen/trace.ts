@@ -20,7 +20,6 @@ export interface TraceEventDTO {
     | "agent_end"
     | "error"
     | "job_created"
-    | "job_merged"
     | "job_started"
     | "job_completed"
     | "job_cancelled"

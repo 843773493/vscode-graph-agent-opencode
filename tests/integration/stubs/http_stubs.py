@@ -226,7 +226,12 @@ def generation_target_stub(
 
 
 @contextmanager
-def openai_chat_stub(port: int) -> Iterator[HTTPStubState]:
+def openai_chat_stub(
+    port: int,
+    *,
+    failure_marker: str | None = None,
+    failure_after_requests: int | None = None,
+) -> Iterator[HTTPStubState]:
     state = HTTPStubState()
 
     class Handler(BaseHTTPRequestHandler):
@@ -246,6 +251,20 @@ def openai_chat_stub(port: int) -> Iterator[HTTPStubState]:
             state.requests.append(
                 {"method": "POST", "path": self.path, "json": payload}
             )
+            should_fail = failure_after_requests is not None and len(
+                state.requests
+            ) > failure_after_requests
+            should_fail = should_fail or (
+                failure_marker is not None
+                and failure_marker in json.dumps(payload, ensure_ascii=False)
+            )
+            if should_fail:
+                _json_response(
+                    self,
+                    {"error": {"message": "集成测试模型替身故障"}},
+                    status=500,
+                )
+                return
             if payload.get("stream") is True:
                 chunks = [
                     {

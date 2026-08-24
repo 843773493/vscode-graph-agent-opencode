@@ -4,7 +4,7 @@ from typing import Protocol, runtime_checkable
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.schemas.public_v2.message import MessageDTO, MessageRunAccepted
-from app.schemas.public_v2.pending_request import MessageDispatchMode
+from app.schemas.public_v2.pending_request import DeliveryPolicy
 
 
 @runtime_checkable
@@ -15,7 +15,7 @@ class SessionOrchestratorProtocol(Protocol):
         content: str,
         *,
         metadata: dict[str, object] | None = None,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
         idempotency_key: str | None = None,
     ) -> MessageRunAccepted: ...
 
@@ -24,7 +24,7 @@ class SessionOrchestratorProtocol(Protocol):
         session_id: str,
         message: PreparedInternalMessage,
         *,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
         idempotency_key: str | None = None,
     ) -> MessageRunAccepted: ...
 

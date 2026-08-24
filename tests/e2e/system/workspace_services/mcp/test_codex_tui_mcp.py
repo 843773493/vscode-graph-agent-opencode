@@ -137,8 +137,11 @@ async def test_agent_auto_detects_and_uses_codex_tui_mcp(
         json={
             "message": {
                 "content": (
-                    "必须调用工具 mcp__tui-mcp__list_sessions 获取真实结果，"
-                    "不得猜测或跳过工具调用；调用完成后简要说明结果。"
+                    "必须通过 invoke_custom_tool 调用目标扩展工具 "
+                    "mcp__tui-mcp__list_sessions 获取真实结果，"
+                    "传入 tool_name=mcp__tui-mcp__list_sessions 和 arguments={}；"
+                    "不得猜测或跳过工具调用；"
+                    "调用完成后简要说明结果。"
                 )
             },
             "run": {"mode": "single_agent", "agent_id": "default"},
@@ -164,7 +167,7 @@ async def test_agent_auto_detects_and_uses_codex_tui_mcp(
     logs = logs_response.json()["data"]
     model_tool_call = _find_model_tool_call(
         logs,
-        tool_name="mcp__tui-mcp__list_sessions",
+        tool_name="invoke_custom_tool",
     )
 
     traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
@@ -173,12 +176,12 @@ async def test_agent_auto_detects_and_uses_codex_tui_mcp(
     tool_start = _find_tool_trace(
         traces,
         trace_type="tool_call_start",
-        tool_name="mcp__tui-mcp__list_sessions",
+        tool_name="invoke_custom_tool",
     )
     tool_end = _find_tool_trace(
         traces,
         trace_type="tool_call_end",
-        tool_name="mcp__tui-mcp__list_sessions",
+        tool_name="invoke_custom_tool",
     )
 
     evidence_path = (

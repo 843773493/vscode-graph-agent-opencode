@@ -2,9 +2,9 @@ import type {
   APIResponse,
   SessionTurnBootstrap,
   StaleTurnCursorError,
-  TurnDetailBatch,
-  TurnDetailBatchRequest,
-  TurnPage,
+  StaleTurnReferenceError,
+  TurnHistoryLoadRequest,
+  TurnHistoryPage,
 } from "../types/backend";
 import {
   HttpRequestError,
@@ -16,10 +16,37 @@ import {
 const SESSION_TURN_HISTORY_TIMEOUT_MS = 10_000;
 const TURN_DETAIL_WORKER_PARSE_THRESHOLD_BYTES = 256 * 1024;
 
+export type TurnHistoryInclude =
+  | "user"
+  | "text"
+  | "reasoning_summary"
+  | "reasoning_detail"
+  | "encrypted_reasoning_meta"
+  | "assistant_text"
+  | "assistant"
+  | "tool_summary"
+  | "tool_call"
+  | "tool_result"
+  | "thinking"
+  | "internal"
+  | "metadata"
+  | "final_response";
+
+type TurnHistoryLoadRequestPayload = Omit<TurnHistoryLoadRequest, "include"> & {
+  include?: TurnHistoryInclude[];
+};
+
 export class StaleTurnCursorHttpError extends Error {
   constructor(readonly detail: StaleTurnCursorError) {
     super(detail.message);
     this.name = "StaleTurnCursorHttpError";
+  }
+}
+
+export class StaleTurnReferenceHttpError extends Error {
+  constructor(readonly detail: StaleTurnReferenceError) {
+    super(detail.message);
+    this.name = "StaleTurnReferenceHttpError";
   }
 }
 
@@ -33,6 +60,16 @@ function isStaleTurnCursorError(value: unknown): value is StaleTurnCursorError {
     && typeof detail.message === "string";
 }
 
+function isStaleTurnReferenceError(value: unknown): value is StaleTurnReferenceError {
+  if (!value || typeof value !== "object") return false;
+  const detail = value as Partial<StaleTurnReferenceError>;
+  return detail.code === "stale_turn_reference"
+    && typeof detail.session_id === "string"
+    && Array.isArray(detail.turn_ids)
+    && detail.turn_ids.every((turnId) => typeof turnId === "string")
+    && typeof detail.message === "string";
+}
+
 function mapTurnCursorError(error: unknown): never {
   if (
     error instanceof HttpRequestError
@@ -40,6 +77,13 @@ function mapTurnCursorError(error: unknown): never {
     && isStaleTurnCursorError(error.detail)
   ) {
     throw new StaleTurnCursorHttpError(error.detail);
+  }
+  if (
+    error instanceof HttpRequestError
+    && error.status === 409
+    && isStaleTurnReferenceError(error.detail)
+  ) {
+    throw new StaleTurnReferenceHttpError(error.detail);
   }
   throw error;
 }
@@ -62,39 +106,19 @@ export async function getSessionTurnBootstrap(
   }
 }
 
-export async function listSessionTurns(
+export async function loadSessionHistory(
   port: number,
   sessionId: string,
-  workspaceId?: string | null,
-  options: { cursor?: string | null; limit?: number; signal?: AbortSignal } = {},
-): Promise<TurnPage> {
-  const params = new URLSearchParams({ limit: String(options.limit ?? 20) });
-  if (options.cursor) params.set("cursor", options.cursor);
-  const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns?${params.toString()}`;
-  try {
-    return unwrapApiData(await requestJson<APIResponse<TurnPage>>(port, path, {
-      headers: workspaceHeader(workspaceId),
-      timeoutMs: SESSION_TURN_HISTORY_TIMEOUT_MS,
-      signal: options.signal,
-    }));
-  } catch (error) {
-    mapTurnCursorError(error);
-  }
-}
-
-export async function getSessionTurnDetails(
-  port: number,
-  sessionId: string,
-  turnIds: TurnDetailBatchRequest["turn_ids"],
+  request: TurnHistoryLoadRequestPayload,
   workspaceId?: string | null,
   signal?: AbortSignal,
-): Promise<TurnDetailBatch> {
-  const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/details`;
+): Promise<TurnHistoryPage> {
+  const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/history`;
   try {
-    return unwrapApiData(await requestJson<APIResponse<TurnDetailBatch>>(port, path, {
+    return unwrapApiData(await requestJson<APIResponse<TurnHistoryPage>>(port, path, {
       method: "POST",
       headers: workspaceHeader(workspaceId),
-      body: JSON.stringify({ turn_ids: turnIds }),
+      body: JSON.stringify(request),
       timeoutMs: SESSION_TURN_HISTORY_TIMEOUT_MS,
       parseInWorkerAboveBytes: TURN_DETAIL_WORKER_PARSE_THRESHOLD_BYTES,
       signal,

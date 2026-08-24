@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -13,9 +14,10 @@ import httpx
 
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.schemas import (
+from app.schemas.gateway import (
     GatewayConfigReloadStatusDTO,
     GatewayConnectionKind,
     GatewayRemoteConnectionSummaryDTO,
@@ -66,8 +68,14 @@ class WorkspaceRouteLease:
 
 
 class GatewayWorkspaceRegistry:
-    def __init__(self, *, storage_path: Path) -> None:
+    def __init__(
+        self,
+        *,
+        storage_path: Path,
+        state_store: GatewayStateStore | None = None,
+    ) -> None:
         self._storage_path = storage_path
+        self._state_store = state_store
         self._targets: dict[str, WorkspaceTarget] = {}
         self._active_workspace_id: str | None = None
         self._order_customized = False
@@ -746,10 +754,19 @@ class GatewayWorkspaceRegistry:
         )
 
     def _load(self) -> None:
-        if not self._storage_path.exists():
+        state_payload = (
+            self._state_store.load_workspace_registry()
+            if self._state_store is not None
+            else None
+        )
+        migrated_to_sqlite = state_payload is None and self._state_store is not None
+        if state_payload is not None:
+            payload = state_payload
+        elif not self._storage_path.exists():
             return
-        with self._storage_path.open("r", encoding="utf-8") as file:
-            payload = json.load(file)
+        else:
+            with self._storage_path.open("r", encoding="utf-8") as file:
+                payload = json.load(file)
         schema_version = payload.get("schema_version", 1)
         if not isinstance(schema_version, int) or schema_version < 1:
             raise ValueError(
@@ -952,7 +969,13 @@ class GatewayWorkspaceRegistry:
         elif self._targets:
             self._active_workspace_id = next(iter(self._targets))
         self._order_customized = bool(payload.get("order_customized", False))
-        if migrated:
+        if migrated or migrated_to_sqlite:
+            if migrated_to_sqlite and self._storage_path.is_file():
+                backup_path = self._storage_path.with_name(
+                    f"{self._storage_path.name}.migrated.bak"
+                )
+                if not backup_path.exists():
+                    shutil.copy2(self._storage_path, backup_path)
             self._save()
 
     def _validate_parent_graph(self) -> None:
@@ -969,7 +992,6 @@ class GatewayWorkspaceRegistry:
                 current_id = self._targets[current_id].parent_workspace_id
 
     def _save(self) -> None:
-        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": _REGISTRY_SCHEMA_VERSION,
             "active_workspace_id": self._active_workspace_id,
@@ -980,6 +1002,10 @@ class GatewayWorkspaceRegistry:
             ],
             "targets": [asdict(target) for target in self._targets.values()],
         }
+        if self._state_store is not None:
+            self._state_store.replace_workspace_registry(payload)
+            return
+        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{self._storage_path.name}.",
             dir=self._storage_path.parent,

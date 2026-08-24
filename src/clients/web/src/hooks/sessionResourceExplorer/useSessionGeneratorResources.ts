@@ -10,7 +10,10 @@ import {
 } from "../../gatewayApi";
 import type {
   GenerationRun,
+  GeneratorDefinitionCreateRequest,
+  GeneratorDefinitionUpdateRequest,
   GeneratorPlacementPreview,
+  GeneratorPlacementPreviewRequest,
   SessionGeneratorDefinition,
   SessionGeneratorList,
 } from "../../types/backend";
@@ -35,7 +38,7 @@ export function useSessionGeneratorResources(apiPort: number) {
   }, [apiPort]);
 
   const createGenerator = useCallback(async (
-    payload: Record<string, unknown>,
+    payload: GeneratorDefinitionCreateRequest,
   ): Promise<SessionGeneratorDefinition> => {
     const created = await createSessionGenerator(apiPort, payload);
     await refreshGenerators();
@@ -69,7 +72,7 @@ export function useSessionGeneratorResources(apiPort: number) {
 
   const updateGenerator = useCallback(async (
     generatorId: string,
-    payload: Record<string, unknown>,
+    payload: GeneratorDefinitionUpdateRequest,
   ): Promise<SessionGeneratorDefinition> => {
     const updated = await updateSessionGenerator(apiPort, generatorId, payload);
     await refreshGenerators();
@@ -87,7 +90,7 @@ export function useSessionGeneratorResources(apiPort: number) {
   }, [apiPort, refreshGenerators]);
 
   const previewGenerator = useCallback(async (
-    payload: Record<string, unknown>,
+    payload: GeneratorPlacementPreviewRequest,
   ): Promise<GeneratorPlacementPreview> => {
     return previewSessionGeneratorPlacement(apiPort, payload);
   }, [apiPort]);

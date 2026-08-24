@@ -57,7 +57,7 @@ class _FakeSessionOrchestrator:
         session_id: str,
         message: object,
         *,
-        dispatch_mode: str = "queued",
+        delivery_policy: str = "after_turn",
     ) -> None:
         if self.error is not None:
             raise self.error
@@ -65,7 +65,7 @@ class _FakeSessionOrchestrator:
             {
                 "session_id": session_id,
                 "message": message,
-                "dispatch_mode": dispatch_mode,
+                "delivery_policy": delivery_policy,
             }
         )
 
@@ -86,7 +86,7 @@ def completed_terminal() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_scan_dispatches_one_terminal_completion_steering(
+async def test_scan_dispatches_one_terminal_completion_message(
     completed_terminal: dict[str, object],
 ) -> None:
     terminal_client = _FakeTerminalClient([completed_terminal])
@@ -101,7 +101,7 @@ async def test_scan_dispatches_one_terminal_completion_steering(
 
     assert len(orchestrator.calls) == 1
     assert orchestrator.calls[0]["session_id"] == "session_owner"
-    assert orchestrator.calls[0]["dispatch_mode"] == "steering"
+    assert orchestrator.calls[0]["delivery_policy"] == "after_tool_result"
     message = orchestrator.calls[0]["message"]
     assert message.metadata["structured_prompt_kind"] == (
         "terminal_execution_completed"

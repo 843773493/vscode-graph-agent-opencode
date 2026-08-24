@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, TypedDict
 
-from app.gateway.schemas import GatewayWorkspaceListDTO
+from app.schemas.gateway import GatewayWorkspaceListDTO
 from app.schemas.public_v2.session import (
     SessionDTO,
     SessionInformationSnapshotDTO,

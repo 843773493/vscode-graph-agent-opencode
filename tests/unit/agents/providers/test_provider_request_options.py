@@ -9,6 +9,14 @@ from app.agents.agent_factory import build_model_from_provider
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 
 
+def _chat_api_mode() -> dict[str, object]:
+    return {
+        "protocol": "chat_completions",
+        "model_info": {"supports_function_calling": True, "supports_reasoning": True},
+        "supports_reasoning": {"reasoning_content": True},
+    }
+
+
 class AsyncChunkStream:
     def __init__(
         self,
@@ -87,6 +95,7 @@ def test_build_model_omits_unspecified_generation_parameters():
             "model": "work-model",
             "api_key": "test-key",
             "endpoint": "https://example.com/v1",
+            "api_mode": _chat_api_mode(),
         },
         runtime_config={},
     )
@@ -132,6 +141,7 @@ async def test_minimal_model_does_not_send_unspecified_generation_parameters(
             "model": "work-model",
             "api_key": "test-key",
             "endpoint": "https://example.com/v1",
+            "api_mode": _chat_api_mode(),
         },
         runtime_config={},
     )
@@ -153,6 +163,7 @@ def test_build_model_passes_provider_request_overrides():
             "model": "gpt-5.4-mini",
             "api_key": "test-key",
             "endpoint": "https://example.com/v1",
+            "api_mode": _chat_api_mode(),
             "request_options": {
                 "overrides": {
                     "temperature": 1,
@@ -188,6 +199,7 @@ def test_request_overrides_replace_output_parameter_without_model_branch():
             "model": "vendor-special-model",
             "api_key": "test-key",
             "endpoint": "https://www.cctq.ai/v1",
+            "api_mode": _chat_api_mode(),
             "request_options": {
                 "overrides": {
                     "temperature": 1,
@@ -230,6 +242,7 @@ def test_build_model_rejects_unknown_provider_request_options():
                 "model": "gpt-5.4-mini",
                 "api_key": "test-key",
                 "endpoint": "https://example.com/v1",
+                "api_mode": _chat_api_mode(),
                 "request_options": {
                     "extra_body": {"reasoning": True},
                 },

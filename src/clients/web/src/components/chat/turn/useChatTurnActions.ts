@@ -1,6 +1,7 @@
 import React from "react";
 import type {
   AttachmentRef,
+  DeliveryPolicy,
   MessageReplayRequest,
 } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
@@ -19,10 +20,9 @@ export interface ChatTurnActionCallbacks {
     attachments?: AttachmentRef[],
   ) => Promise<void>;
   onRemovePending: (messageId: string) => Promise<void>;
-  onSendPendingImmediately: (messageId: string) => Promise<void>;
-  onChangePendingKind: (
+  onChangePendingPolicy: (
     messageId: string,
-    kind: "queued" | "steering",
+    policy: DeliveryPolicy,
   ) => Promise<void>;
 }
 
@@ -107,7 +107,12 @@ export function useChatTurnActions({
     action: MessageReplayRequest["action"],
     content?: string,
   ) => {
-    if (!userMessage || summaryOnly || actionRunning || sessionBusy) return;
+    if (
+      !userMessage
+      || summaryOnly
+      || actionRunning
+      || (sessionBusy && action !== "retry_failed")
+    ) return;
     setActionRunning(true);
     setActionError(null);
     try {

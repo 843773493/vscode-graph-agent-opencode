@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 from langchain.tools import ToolRuntime
@@ -98,7 +99,7 @@ class _FakeBackgroundMessageBus:
         class _Batch:
             interrupted = False
             timed_out = True
-            messages = []
+            messages: ClassVar[list] = []
 
             def model_dump(self, mode="json"):
                 return {
@@ -127,7 +128,7 @@ class _FakeBackgroundTaskRegistry:
                 self.session_id = session_id
                 self.task_name = task_name
                 self.status = "running"
-                self.created_at = datetime.now()
+                self.created_at = datetime.now(UTC)
                 self.started_at = self.created_at
                 self.ended_at = None
                 self.metadata = metadata or {}
@@ -179,7 +180,7 @@ class _FakeJobService:
     async def list(self, session_id=None):
         class _FakeTargetJob:
             job_id = "job_target_1"
-            created_at = datetime.now()
+            created_at = datetime.now(UTC)
 
         if session_id == "target_session":
             return [_FakeTargetJob()]
@@ -324,6 +325,38 @@ def test_tool_catalog_uses_model_visible_schema_without_runtime_fields():
         "value": {"title": "Value", "type": "string"}
     }
     assert definitions[0]["parameters"]["required"] == ["value"]
+
+
+def test_mcp_catalog_definition_uses_extension_group_metadata():
+    @tool
+    def mcp_status(value: str) -> str:
+        """查询 MCP 状态。"""
+        return value
+
+    mcp_status = mcp_status.model_copy(
+        update={"metadata": {"mcp_server_id": "tui-mcp"}}
+    )
+
+    @tool
+    def read_file(value: str) -> str:
+        """读取文件。"""
+        return value
+
+    tool_node = SimpleNamespace(
+        data=SimpleNamespace(tools_by_name={read_file.name: read_file})
+    )
+    agent = SimpleNamespace(
+        get_graph=lambda: SimpleNamespace(nodes={"tools": tool_node})
+    )
+
+    definitions = build_agent_tool_definitions(agent, extension_tools=[mcp_status])
+    mcp_definition = next(
+        definition for definition in definitions if definition["name"] == "mcp_status"
+    )
+
+    assert mcp_definition["kind"] == "extension"
+    assert mcp_definition["group_id"] == "mcp:tui-mcp"
+    assert mcp_definition["group_name"] == "扩展工具 · MCP · tui-mcp"
 
 
 @pytest.mark.asyncio
@@ -686,14 +719,15 @@ async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
         "queued_jobs_ahead": 0,
         "queued_job_count": 0,
         "pending_job_count": 1,
-        "pending_kind": None,
+        "delivery_policy": None,
+        "enqueue_sequence": None,
+        "queue_snapshot_version": 0,
     }
     assert result["simulate_user"] is False
     assert result["sender_session_id"] == "ses_sender"
     assert result["kind"] == "result"
     assert result["reply_required"] is False
-    assert result["dispatch_mode"] == "queued"
-    assert result["interrupted_job_id"] is None
+    assert result["delivery_policy"] == "after_turn"
     assert result["communication_id"].startswith("comm_")
     schema = tool.args_schema.model_json_schema()
     assert "role" not in schema["properties"]
@@ -714,7 +748,7 @@ async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
     )
     assert '"message"' not in submitted_content
     assert "message_role" not in orchestrator.calls[0]
-    assert orchestrator.calls[0]["dispatch_mode"] == "queued"
+    assert orchestrator.calls[0]["delivery_policy"] == "after_turn"
     metadata = orchestrator.calls[0]["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["source"] == "send_message_to_session"
@@ -821,12 +855,14 @@ async def test_send_message_to_session_returns_atomic_target_queue_snapshot():
         "queued_jobs_ahead": 2,
         "queued_job_count": 3,
         "pending_job_count": 4,
-        "pending_kind": None,
+        "delivery_policy": None,
+        "enqueue_sequence": None,
+        "queue_snapshot_version": 0,
     }
 
 
 @pytest.mark.asyncio
-async def test_send_message_to_session_forwards_steering_dispatch_mode():
+async def test_send_message_to_session_forwards_delivery_policy():
     orchestrator = _FakeSessionOrchestrator(_FakeQueuedResult())
     tool = create_send_message_to_session_tool(
         sender_session_id="ses_sender",
@@ -837,17 +873,16 @@ async def test_send_message_to_session_forwards_steering_dispatch_mode():
         {
             "target_session_id": "ses_target",
             "content": "请在安全边界调整方向",
-            "dispatch_mode": "steering",
+            "delivery_policy": "after_tool_result",
         }
     )
 
-    assert result["dispatch_mode"] == "steering"
-    assert result["interrupted_job_id"] is None
-    assert orchestrator.calls[0]["dispatch_mode"] == "steering"
+    assert result["delivery_policy"] == "after_tool_result"
+    assert orchestrator.calls[0]["delivery_policy"] == "after_tool_result"
 
 
 @pytest.mark.asyncio
-async def test_send_message_to_session_reports_immediate_interrupted_job():
+async def test_send_message_to_session_accepts_interrupt_delivery_policy():
     orchestrator = _FakeSessionOrchestrator(_FakeQueuedResult())
     tool = create_send_message_to_session_tool(
         sender_session_id="ses_sender",
@@ -858,13 +893,12 @@ async def test_send_message_to_session_reports_immediate_interrupted_job():
         {
             "target_session_id": "ses_target",
             "content": "立即停止并处理",
-            "dispatch_mode": "immediate",
+            "delivery_policy": "after_interrupt",
         }
     )
 
-    assert result["dispatch_mode"] == "immediate"
-    assert result["interrupted_job_id"] == "job_running"
-    assert orchestrator.calls[0]["dispatch_mode"] == "immediate"
+    assert result["delivery_policy"] == "after_interrupt"
+    assert orchestrator.calls[0]["delivery_policy"] == "after_interrupt"
 
 
 @pytest.mark.asyncio
@@ -906,7 +940,7 @@ async def test_send_message_to_session_simulated_user_preserves_plain_content():
         {
             "session_id": "ses_target",
             "content": "普通用户消息",
-            "dispatch_mode": "queued",
+            "delivery_policy": "after_turn",
         }
     ]
 

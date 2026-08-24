@@ -7,9 +7,13 @@ from typing import cast
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from starlette.requests import Request
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.server.workspace_proxy import (
+    _http_client,
+    _is_streaming_workspace_path,
     _stream_proxy_body,
     _stream_proxy_response,
 )
@@ -75,6 +79,7 @@ async def test_sse_proxy_ends_immediately_when_route_is_invalidated(
     stream = _stream_proxy_response(
         cast(httpx.Response, response),
         lease,
+        None,
     )
 
     await response.chunks.put(b": heartbeat\n\n")
@@ -99,3 +104,45 @@ async def test_binary_proxy_forwards_chunks_and_closes_upstream() -> None:
     await response.chunks.put(None)
     assert b"".join([chunk async for chunk in stream]) == b"binary-download"
     assert response.closed is True
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("sessions/ses_1/traces/stream", True),
+        ("session-catalog/events/stream", True),
+        ("workspace/files/events", True),
+        ("sessions/ses_1/bootstrap", False),
+        ("sessions/ses_1/history", False),
+    ],
+)
+def test_streaming_workspace_paths_use_explicit_classification(
+    path: str,
+    expected: bool,
+) -> None:
+    assert _is_streaming_workspace_path(path) is expected
+
+
+@pytest.mark.asyncio
+async def test_streaming_proxy_uses_dedicated_http_client() -> None:
+    application = FastAPI()
+    normal_client = httpx.AsyncClient()
+    streaming_client = httpx.AsyncClient()
+    application.state.http_client = normal_client
+    application.state.streaming_http_client = streaming_client
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/sessions/ses_1/traces/stream",
+            "app": application,
+            "headers": [],
+        }
+    )
+
+    try:
+        assert _http_client(request) is normal_client
+        assert _http_client(request, streaming=True) is streaming_client
+    finally:
+        await normal_client.aclose()
+        await streaming_client.aclose()

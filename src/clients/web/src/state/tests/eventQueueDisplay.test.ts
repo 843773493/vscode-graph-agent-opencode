@@ -70,6 +70,7 @@ assert(
 const failedItems = buildTraceTimelineItems([
   {
     conversationId: "conv_failed_tool",
+    displayMode: "history",
     sessionId: "ses_failed_tool",
     userMessage: null,
     events: [

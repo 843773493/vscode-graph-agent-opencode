@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.deps import (
     get_request_id,
@@ -10,18 +10,19 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.core.exceptions import NotFoundError
+from app.core.history_loading import parse_history_loading_header
 from app.schemas.public_v2.common import APIResponse
 from app.schemas.public_v2.turn import (
     SessionTurnBootstrapDTO,
-    TurnDetailBatchDTO,
-    TurnDetailBatchRequest,
-    TurnPageDTO,
+    TurnHistoryLoadRequest,
+    TurnHistoryPageDTO,
     TurnProjectionCorruptedErrorDTO,
 )
 from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.infrastructure.turn_history import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
+    StaleTurnReferenceError,
 )
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -30,16 +31,20 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 def _turn_history_http_error(
     session_id: str,
     error: Exception,
-    *,
-    missing_turn_is_not_found: bool = False,
 ) -> HTTPException:
     if isinstance(error, StaleTurnCursorError):
         return HTTPException(
             status_code=409, detail=error.detail.model_dump(mode="json")
         )
-    if isinstance(error, KeyError) and missing_turn_is_not_found:
+    if isinstance(error, StaleTurnReferenceError):
+        return HTTPException(
+            status_code=409, detail=error.detail.model_dump(mode="json")
+        )
+    if isinstance(error, KeyError):
         return HTTPException(status_code=404, detail=str(error))
     if isinstance(error, InvalidTurnCursorError):
+        return HTTPException(status_code=400, detail=str(error))
+    if isinstance(error, ValueError):
         return HTTPException(status_code=400, detail=str(error))
     return HTTPException(
         status_code=500,
@@ -57,7 +62,7 @@ def _turn_history_http_error(
 )
 async def get_session_turn_bootstrap(
     session_id: str,
-    background_tasks: BackgroundTasks,
+    request: Request,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     turn_history_service: Annotated[
@@ -66,63 +71,28 @@ async def get_session_turn_bootstrap(
     ],
 ):
     try:
-        result, needs_completion = await turn_history_service.bootstrap(session_id)
-    except NotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error.detail)) from error
-    except Exception as error:
-        raise _turn_history_http_error(session_id, error) from error
-    if needs_completion:
-        background_tasks.add_task(
-            turn_history_service.complete_migration,
+        result = await turn_history_service.bootstrap(
             session_id,
-        )
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get(
-    "/{session_id}/turns",
-    response_model=APIResponse[TurnPageDTO],
-    summary="按完整 Turn 倒序获取会话历史",
-)
-async def list_session_turns(
-    session_id: str,
-    background_tasks: BackgroundTasks,
-    _: Annotated[str, Depends(verify_local_token)],
-    request_id: Annotated[str, Depends(get_request_id)],
-    turn_history_service: Annotated[
-        SessionTurnHistoryService,
-        Depends(get_session_turn_history_service),
-    ],
-    limit: Annotated[int, Query(ge=1, le=20)] = 20,
-    cursor: str | None = Query(default=None),
-):
-    try:
-        result, needs_completion = await turn_history_service.list_turns(
-            session_id,
-            limit=limit,
-            cursor=cursor,
+            history_loading=parse_history_loading_header(
+                request.headers.get("X-BoxTeam-History-Loading")
+            ),
         )
     except NotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error.detail)) from error
     except Exception as error:
         raise _turn_history_http_error(session_id, error) from error
-    if needs_completion:
-        background_tasks.add_task(
-            turn_history_service.complete_migration,
-            session_id,
-        )
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(
-    "/{session_id}/turns/details",
-    response_model=APIResponse[TurnDetailBatchDTO],
-    summary="批量获取可视 Turn 完整详情",
+    "/{session_id}/history",
+    response_model=APIResponse[TurnHistoryPageDTO],
+    summary="按语义方向读取有界会话历史",
 )
-async def get_session_turn_details(
+async def load_session_history(
     session_id: str,
-    payload: TurnDetailBatchRequest,
-    background_tasks: BackgroundTasks,
+    payload: TurnHistoryLoadRequest,
+    request: Request,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     turn_history_service: Annotated[
@@ -131,21 +101,15 @@ async def get_session_turn_details(
     ],
 ):
     try:
-        result, needs_completion = await turn_history_service.get_details(
+        result = await turn_history_service.load_history(
             session_id,
-            payload.turn_ids,
+            payload,
+            history_loading=parse_history_loading_header(
+                request.headers.get("X-BoxTeam-History-Loading")
+            ),
         )
     except NotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error.detail)) from error
     except Exception as error:
-        raise _turn_history_http_error(
-            session_id,
-            error,
-            missing_turn_is_not_found=True,
-        ) from error
-    if needs_completion:
-        background_tasks.add_task(
-            turn_history_service.complete_migration,
-            session_id,
-        )
+        raise _turn_history_http_error(session_id, error) from error
     return APIResponse(data=result, request_id=request_id)

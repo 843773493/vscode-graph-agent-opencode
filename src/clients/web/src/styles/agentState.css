@@ -136,6 +136,9 @@
   margin: 0;
   padding: 12px;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bt-scrollbar-background) transparent;
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--bt-surface-background);
@@ -150,6 +153,24 @@
   );
   font-size: 12px;
   line-height: 1.55;
+}
+
+.agent-state-jsonl::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.agent-state-jsonl::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.agent-state-jsonl::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--bt-scrollbar-background);
+}
+
+.agent-state-jsonl::-webkit-scrollbar-thumb:hover {
+  background: var(--bt-scrollbar-hover-background);
 }
 
 .agent-state-list {

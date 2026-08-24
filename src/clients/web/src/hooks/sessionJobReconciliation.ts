@@ -1,12 +1,15 @@
 import { getJob, getSession } from "../api";
 import { listPendingRequests } from "../pendingRequestsApi";
 import {
+  removePendingForJob,
   removePendingForTraceEvent,
   writePendingSnapshot,
 } from "../state/conversations";
 import {
+  isJobTerminalTraceType,
   terminalStatusTextForEvent,
 } from "../state/traceEvents";
+import { cloneMaps } from "../state/appStateMaps";
 import { replaceSessionMetadata } from "../state/session/sessions";
 import type {
   Job,
@@ -78,8 +81,43 @@ export async function refreshTerminalSession(
   knownTerminalJob?: Job,
 ) {
   const terminalTurnId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
-  const [, updatedSession, pendingSnapshot] = await Promise.all([
+  const shouldRefreshTurnDetails = Boolean(
     terminalTurnId
+    && (
+      (terminalTraceEvent && isJobTerminalTraceType(terminalTraceEvent.type))
+      || (!terminalTraceEvent
+        && knownTerminalJob
+        && TERMINAL_JOB_STATUSES.has(knownTerminalJob.status))
+    ),
+  );
+
+  // 终态先从实时视图移除，避免网络请求期间把“正在处理”继续留在 DOM 中。
+  // refreshTurnDetails 完成后，历史时间线会用默认 projection 配置重新建立该 Turn。
+  setState((latest) => {
+    if (workspaceId && latest.currentSessionWorkspaceId !== workspaceId) {
+      return latest;
+    }
+    const next = cloneMaps(latest);
+    if (terminalTraceEvent) {
+      removePendingForTraceEvent(
+        next.pendingConversations,
+        sessionId,
+        terminalTraceEvent,
+        sessionCacheKey,
+      );
+    } else if (knownTerminalJob) {
+      removePendingForJob(
+        next.pendingConversations,
+        sessionId,
+        knownTerminalJob.job_id,
+        sessionCacheKey,
+      );
+    }
+    return next;
+  });
+
+  const [, updatedSession, pendingSnapshot] = await Promise.all([
+    shouldRefreshTurnDetails && terminalTurnId
       ? refreshTurnDetails([terminalTurnId])
       : Promise.resolve(),
     getSession(apiPort, sessionId, workspaceId),
@@ -99,6 +137,13 @@ export async function refreshTerminalSession(
         latestNext.pendingConversations,
         sessionCacheKey,
         terminalTraceEvent,
+      );
+    } else if (knownTerminalJob) {
+      removePendingForJob(
+        latestNext.pendingConversations,
+        sessionId,
+        knownTerminalJob.job_id,
+        sessionCacheKey,
       );
     }
     writePendingSnapshot(

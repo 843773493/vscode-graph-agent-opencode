@@ -4,8 +4,14 @@ import {
   getWorkspace,
   listAgents as apiListAgents,
 } from "../api";
-import { getGatewayUiSettings, listGatewayWorkspaces } from "../gatewayApi";
-import { readLastSessionId, writeCachedUiSettings } from "../state/storage";
+import {
+  activateGatewayWorkspace,
+  ensureGatewayUserAccess,
+  getLatestGatewayUserViewState,
+  getGatewayUiSettings,
+  listGatewayWorkspaces,
+} from "../gatewayApi";
+import { writeCachedUiSettings } from "../state/storage";
 import { sessionScopeKey } from "../state/session/sessionScope";
 import type { SetAppState } from "./contentViewLoaderTypes";
 import { loadAndApplyResolvedGatewayTheme } from "../theme";
@@ -16,12 +22,68 @@ import {
 } from "./workspaceSessionListRefresh";
 
 type WorkspaceBootstrapPayload = {
+  userAccess: Awaited<ReturnType<typeof ensureGatewayUserAccess>>;
+  userViewState: Awaited<ReturnType<typeof getLatestGatewayUserViewState>>;
   gatewayWorkspaces: Awaited<ReturnType<typeof listGatewayWorkspaces>>;
   uiSettings: Awaited<ReturnType<typeof getGatewayUiSettings>>;
   workspace: Awaited<ReturnType<typeof getWorkspace>>;
   workspaceSessionResults: PromiseSettledResult<WorkspaceSessionListSnapshot>[];
   agents: Awaited<ReturnType<typeof apiListAgents>>;
 };
+
+export function selectBootstrapSessionId({
+  preferredSessionId,
+  persistedSessionId,
+  previousSessionId,
+  userChanged,
+}: {
+  preferredSessionId?: string | null;
+  persistedSessionId?: string | null;
+  previousSessionId?: string | null;
+  userChanged: boolean;
+}): string | null {
+  if (!userChanged && preferredSessionId) return preferredSessionId;
+  if (persistedSessionId) return persistedSessionId;
+  return userChanged ? null : (previousSessionId ?? null);
+}
+
+export function selectBootstrapToolDetailsExpanded({
+  persistedToolDetailsExpanded,
+  previousToolDetailsExpanded,
+  userChanged,
+}: {
+  persistedToolDetailsExpanded?: boolean | null;
+  previousToolDetailsExpanded: boolean;
+  userChanged: boolean;
+}): boolean {
+  return userChanged
+    ? persistedToolDetailsExpanded ?? false
+    : previousToolDetailsExpanded;
+}
+
+export function canAcceptUserViewStateResponse(
+  currentUserId: string | null | undefined,
+  responseUserId: string,
+): boolean {
+  return typeof currentUserId === "string" && currentUserId === responseUserId;
+}
+
+export function canAcceptUserViewStateMutation({
+  currentUserId,
+  responseUserId,
+  currentLeaseGeneration,
+  requestLeaseGeneration,
+}: {
+  currentUserId: string | null | undefined;
+  responseUserId: string;
+  currentLeaseGeneration: number | null | undefined;
+  requestLeaseGeneration: number;
+}): boolean {
+  return (
+    canAcceptUserViewStateResponse(currentUserId, responseUserId)
+    && currentLeaseGeneration === requestLeaseGeneration
+  );
+}
 
 const initialBootstrapRequests = new Map<
   number,
@@ -31,12 +93,26 @@ const initialBootstrapRequests = new Map<
 async function loadWorkspaceBootstrap(
   apiPort: number,
 ): Promise<WorkspaceBootstrapPayload> {
+  const userAccess = await ensureGatewayUserAccess(apiPort);
+  const userViewState = userAccess.kind === "user"
+    ? await getLatestGatewayUserViewState(apiPort)
+    : null;
   const uiSettings = await getGatewayUiSettings(apiPort);
   if (!uiSettings.theme.resolved_theme) {
     throw new Error("Gateway UI Settings 缺少已解析主题");
   }
   await loadAndApplyResolvedGatewayTheme(uiSettings.theme.resolved_theme);
-  const gatewayWorkspaces = await listGatewayWorkspaces(apiPort);
+  let gatewayWorkspaces = await listGatewayWorkspaces(apiPort);
+  if (
+    userViewState &&
+    gatewayWorkspaces.items.some(
+      (workspace) => workspace.workspace_id === userViewState.workspace_id,
+    ) &&
+    gatewayWorkspaces.active_workspace_id !== userViewState.workspace_id
+  ) {
+    await activateGatewayWorkspace(apiPort, userViewState.workspace_id);
+    gatewayWorkspaces = await listGatewayWorkspaces(apiPort);
+  }
   const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
   const [workspace, workspaceSessionResults, agents] = await Promise.all([
     getWorkspace(apiPort, activeWorkspaceId),
@@ -48,6 +124,8 @@ async function loadWorkspaceBootstrap(
     apiListAgents(apiPort, activeWorkspaceId),
   ]);
   return {
+    userAccess,
+    userViewState,
     gatewayWorkspaces,
     uiSettings,
     workspace,
@@ -91,6 +169,8 @@ export function useWorkspaceBootstrap({
     try {
       const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
       const {
+        userAccess,
+        userViewState,
         gatewayWorkspaces,
         uiSettings,
         workspace,
@@ -138,6 +218,28 @@ export function useWorkspaceBootstrap({
       }
       setState((prev) => {
         const sessionsByWorkspace = new Map(prev.sessionsByWorkspace);
+        const userChanged =
+          prev.gatewayUserAccess?.kind !== userAccess.kind
+          || prev.gatewayUserAccess?.user_id !== userAccess.user_id
+          || (
+            userAccess.kind === "guest"
+            && prev.gatewayUserAccess?.expires_at !== userAccess.expires_at
+          );
+        const gatewayUserViewStates = userChanged
+          ? new Map()
+          : new Map(prev.gatewayUserViewStates);
+        const turnTimelinesBySession = userChanged
+          ? new Map()
+          : prev.turnTimelinesBySession;
+        const unreadSessionKeys = userChanged
+          ? new Set()
+          : prev.unreadSessionKeys;
+        if (userViewState) {
+          gatewayUserViewStates.set(
+            sessionScopeKey(userViewState.workspace_id, userViewState.session_id),
+            userViewState,
+          );
+        }
         for (const snapshot of workspaceSessionEntries) {
           if (isCurrentWorkspaceSessionListSnapshot(snapshot)) {
             sessionsByWorkspace.set(snapshot.workspaceId, snapshot.sessions);
@@ -155,10 +257,12 @@ export function useWorkspaceBootstrap({
         const activeSessions = activeWorkspaceId
           ? sessionsByWorkspace.get(activeWorkspaceId) ?? []
           : [];
-        const targetSessionId =
-          preferredSessionId ??
-          prev.currentSession?.session_id ??
-          readLastSessionId();
+        const targetSessionId = selectBootstrapSessionId({
+          preferredSessionId,
+          persistedSessionId: userViewState?.session_id,
+          previousSessionId: prev.currentSession?.session_id,
+          userChanged,
+        });
         const nextCurrentSession =
           activeSessions.find(
             (session) => session.session_id === targetSessionId,
@@ -179,8 +283,23 @@ export function useWorkspaceBootstrap({
           sessionsByWorkspace,
           sessionGatewayWorkspaceById,
           gatewayError: partialGatewayError,
+          gatewayUserAccess: userAccess,
+          gatewayUserViewStates,
+          turnTimelinesBySession,
+          // 用户切换会清空旧用户的 Turn 缓存。即使服务端为两个用户
+          // 选择了同一个 session_id，也必须让历史 bootstrap effect 重新执行，
+          // 否则当前会话会永远停留在“正在加载最新 Turn”。
+          sessionHistoryReloadNonce: userChanged
+            ? prev.sessionHistoryReloadNonce + 1
+            : prev.sessionHistoryReloadNonce,
+          unreadSessionKeys,
           uiSettings,
           uiSettingsLoaded: true,
+          expandDetails: selectBootstrapToolDetailsExpanded({
+            persistedToolDetailsExpanded: userViewState?.tool_details_expanded,
+            previousToolDetailsExpanded: prev.expandDetails,
+            userChanged,
+          }),
           workspaceRoot: workspace.root_path,
           workspaceName: workspace.name,
           agents,

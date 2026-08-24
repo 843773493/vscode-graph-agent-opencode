@@ -143,7 +143,7 @@ async def test_luna_responses_multiturn_prompt_cache_hit_rate(
     config_service: ConfigService,
 ) -> None:
     provider = config_service.get_llm_provider("backup_3")
-    assert provider["api_mode"] == "responses"
+    assert provider["api_mode"]["protocol"] == "responses"
     statistics, responses = await _run_three_rounds(
         provider,
         image_data_url=_test_image_data_url(),
@@ -152,13 +152,13 @@ async def test_luna_responses_multiturn_prompt_cache_hit_rate(
     assert statistics[2][1] > statistics[1][1], statistics
 
     reasoning_items = [
-        block["extras"]["response_item"]
+        block
         for response in responses
         for block in response.content
         if isinstance(block, dict)
         and block.get("type") == "reasoning"
-        and isinstance(block.get("extras"), dict)
-        and isinstance(block["extras"].get("response_item"), dict)
+        and isinstance(block.get("encrypted_content"), str)
+        and bool(block["encrypted_content"])
     ]
     print(f"\n[Luna Responses] encrypted_reasoning_items={len(reasoning_items)}")
     assert reasoning_items, "Luna 三轮响应均未返回 encrypted reasoning item"
@@ -176,8 +176,8 @@ async def test_big_pickle_chat_completions_multiturn_prompt_cache_hit_rate(
 ) -> None:
     provider = config_service.get_llm_provider("primary")
     assert provider["model"] == "big-pickle"
-    assert provider["api_mode"] == "chat_completions"
-    assert "prompt_cache_key" not in provider.get("capabilities", [])
+    assert provider["api_mode"]["protocol"] == "chat_completions"
+    assert "prompt_cache_key" not in provider["api_mode"].get("request_features", {})
     statistics, _ = await _run_three_rounds(provider)
     _assert_cache_hit("big-pickle Chat Completions", statistics)
     assert statistics[2][1] > statistics[1][1], statistics

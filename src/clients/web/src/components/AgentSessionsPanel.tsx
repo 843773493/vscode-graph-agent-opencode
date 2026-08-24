@@ -92,7 +92,7 @@ interface AgentSessionsPanelProps {
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
   activeJobIdsBySession: ReadonlyMap<string, string>;
   unreadSessionKeys: ReadonlySet<string>;
-  onCreateSession: (workspaceId?: string | null) => void;
+  onCreateSession: (workspaceId?: string | null) => Promise<void>;
   onCreateSessionInFolder: (
     workspaceId: string,
     folderId: string,
@@ -427,7 +427,12 @@ export default function AgentSessionsPanel({
             <button
               type="button"
               className="new-session-pill"
-              onClick={() => onCreateSession()}
+              onClick={() => {
+                void onCreateSession().catch((error: unknown) => {
+                  const message = error instanceof Error ? error.message : String(error);
+                  onStatusChange(`创建会话失败: ${message}`);
+                });
+              }}
               title="新建会话"
             >
               <span>新</span>
@@ -668,8 +673,8 @@ export default function AgentSessionsPanel({
             if (workspaceId !== activeGatewayWorkspaceId) {
               await onActivateWorkspace(workspaceId);
             }
-            onCreateSession(workspaceId);
-            onStatusChange(`已在 ${targetWorkspaceName} 打开新会话草稿`);
+            await onCreateSession(workspaceId);
+            onStatusChange(`已在 ${targetWorkspaceName} 创建会话`);
           }}
           onRequestCreateSessionFolder={(workspaceId, parentNodeId, locationName) => {
             setSessionFolderDialog({ workspaceId, parentNodeId, locationName });

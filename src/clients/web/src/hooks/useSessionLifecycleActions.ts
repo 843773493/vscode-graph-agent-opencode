@@ -267,47 +267,6 @@ export function useSessionLifecycleActions({
     ],
   );
 
-  const startNewSessionDraft = useCallback((workspaceId?: string | null) => {
-    abortCurrentStream();
-    invalidateAgentState();
-    clearLastSessionId();
-    setState((prev) => {
-      const next = cloneMaps(prev);
-      const targetWorkspaceId =
-        workspaceId ?? prev.activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
-      const targetWorkspace = prev.gatewayWorkspaces.find(
-        (item) => item.workspace_id === targetWorkspaceId,
-      );
-      if (targetWorkspaceId && targetWorkspace) {
-        next.activeGatewayWorkspaceId = targetWorkspaceId;
-        next.workspaceRoot = targetWorkspace.root_path;
-        next.workspaceName = targetWorkspace.name;
-        next.sessions = prev.sessionsByWorkspace.get(targetWorkspaceId) ?? [];
-      }
-      next.currentSession = null;
-      next.currentSessionWorkspaceId = null;
-      next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-      next.traceEvents = [];
-      next.llmRequestLogs = [];
-      next.llmRequestLogsLoadedAt = null;
-      next.llmRequestLogsLoading = false;
-      next.llmRequestLogsError = null;
-      next.sessionResources = [];
-      next.sessionResourcesLoadedAt = null;
-      next.sessionResourcesLoading = false;
-      next.sessionResourcesError = null;
-      next.contentView = "default";
-      next.status = "新会话";
-      Object.assign(next, resetAgentStateFields(next));
-      return next;
-    });
-  }, [
-    abortCurrentStream,
-    defaultGatewayWorkspaceId,
-    invalidateAgentState,
-    setState,
-  ]);
-
   const forkSessionContext = useCallback(
     async (workspaceId: string, sourceSessionId: string) => {
       setState((prev) => ({
@@ -495,16 +454,60 @@ export function useSessionLifecycleActions({
   const deleteSession = useCallback(
     async (sessionId: string, workspaceId?: string | null) => {
       const deletingCurrent = currentSession?.session_id === sessionId;
+      const workspaceIdForRequest =
+        workspaceId ?? currentSessionGatewayWorkspaceId ?? activeGatewayWorkspaceId;
       if (deletingCurrent) {
         abortCurrentStream();
         invalidateAgentState();
+        // 先切走当前会话，再等待删除请求完成。否则删除期间历史、Goal、
+        // 资源等 effect 仍会继续请求即将消失的 session，最终把 404/500
+        // 写回页面并覆盖用户刚选中的会话。
+        setState((previous) => {
+          if (previous.currentSession?.session_id !== sessionId) {
+            return previous;
+          }
+          const next = cloneMaps(previous);
+          const workspaceSessions = workspaceIdForRequest
+            ? previous.sessionsByWorkspace.get(workspaceIdForRequest) ?? previous.sessions
+            : previous.sessions;
+          const nextSession = workspaceSessions.find(
+            (candidate) => candidate.session_id !== sessionId,
+          ) ?? null;
+          next.currentSession = nextSession;
+          next.currentSessionWorkspaceId = nextSession ? workspaceIdForRequest : null;
+          next.sessions = workspaceSessions.filter(
+            (candidate) => candidate.session_id !== sessionId,
+          );
+          if (workspaceIdForRequest) {
+            next.sessionsByWorkspace.set(workspaceIdForRequest, next.sessions);
+          }
+          const cacheKey = workspaceIdForRequest
+            ? sessionScopeKey(workspaceIdForRequest, sessionId)
+            : sessionId;
+          next.pendingConversations.delete(cacheKey);
+          next.activeJobIdsBySession.delete(cacheKey);
+          next.turnTimelinesBySession.delete(cacheKey);
+          next.traceEvents = [];
+          next.llmRequestLogs = [];
+          next.llmRequestLogsLoadedAt = null;
+          next.sessionResources = [];
+          next.sessionResourcesLoadedAt = null;
+          next.sessionHistoryReloadNonce = previous.sessionHistoryReloadNonce + 1;
+          next.contentView = previous.contentView === "agent" ? "default" : previous.contentView;
+          next.currentGoal = null;
+          next.currentGoalSessionId = nextSession?.session_id ?? null;
+          next.goalLoading = Boolean(nextSession);
+          next.goalError = null;
+          Object.assign(next, resetAgentStateFields(next));
+          if (nextSession) writeLastSessionId(nextSession.session_id);
+          else clearLastSessionId();
+          return next;
+        });
       }
 
       setState((prev) => ({ ...prev, status: "正在删除会话" }));
 
       try {
-        const workspaceIdForRequest =
-          workspaceId ?? currentSessionGatewayWorkspaceId ?? activeGatewayWorkspaceId;
         const result = await apiDeleteSession(
           apiPort,
           sessionId,
@@ -538,10 +541,13 @@ export function useSessionLifecycleActions({
             next.sessionGatewayWorkspaceById.delete(cacheKey);
           }
 
-          if (
-            prev.currentSession
-            && !remainingIds.has(prev.currentSession.session_id)
-          ) {
+          const currentWasDeleted = deletingCurrent
+            ? prev.currentSession === null || prev.currentSession.session_id === sessionId
+            : Boolean(
+              prev.currentSession
+              && !remainingIds.has(prev.currentSession.session_id),
+            );
+          if (currentWasDeleted) {
             const nextSession = remainingSessions[0] ?? null;
             next.currentSession = nextSession;
             next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
@@ -871,7 +877,6 @@ export function useSessionLifecycleActions({
     createSession,
     deleteSession,
     forkSessionContext,
-    startNewSessionDraft,
     renameSession,
     setSessionParent,
     selectSession,

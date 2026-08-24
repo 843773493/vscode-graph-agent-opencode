@@ -2,7 +2,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.gateway.config import ConfiguredTheme, GatewayConfig
-from app.gateway.schemas import (
+from app.schemas.gateway import (
     GatewayThemeBackgroundDTO,
     GatewayThemeCatalogDTO,
     GatewayThemeOptionDTO,

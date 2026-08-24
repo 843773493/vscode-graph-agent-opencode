@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-from app.gateway.schemas import WebUISettingsDTO, WebUISettingsUpdateDTO
+from app.schemas.gateway import WebUISettingsDTO, WebUISettingsUpdateDTO
 
 
 def web_ui_settings_path(gateway_root: Path) -> Path:
@@ -55,6 +55,14 @@ def merge_web_ui_settings(
     gateway_root: Path,
 ) -> WebUISettingsDTO:
     current = read_web_ui_settings(gateway_root)
+    updated = merge_web_ui_settings_values(current, payload)
+    return write_web_ui_settings(updated, gateway_root=gateway_root)
+
+
+def merge_web_ui_settings_values(
+    current: WebUISettingsDTO,
+    payload: WebUISettingsUpdateDTO,
+) -> WebUISettingsDTO:
     data = current.model_dump()
     if payload.layout is not None:
         layout_patch = payload.layout.model_dump(exclude_unset=True)
@@ -77,7 +85,4 @@ def merge_web_ui_settings(
             seen_paths.add(path)
             recent_paths.append(path)
         data["recent_local_workspace_paths"] = recent_paths[:20]
-    return write_web_ui_settings(
-        WebUISettingsDTO.model_validate(data),
-        gateway_root=gateway_root,
-    )
+    return WebUISettingsDTO.model_validate(data)

@@ -14,9 +14,9 @@ from app.schemas.public_v2.job import (
 T = TypeVar("T")
 from app.schemas.public_v2.message import AttachmentRef
 from app.schemas.public_v2.pending_request import (
-    MessageDispatchMode,
+    DeliveryBoundary,
+    DeliveryPolicy,
     PendingRequestListDTO,
-    PendingRequestOrderItem,
     PendingRequestSummaryListDTO,
 )
 
@@ -87,6 +87,15 @@ class JobServiceProtocol(Protocol):
         attachments: list[AttachmentRef],
     ) -> PendingRequestListDTO: ...
 
+    async def update_pending_policy(
+        self,
+        session_id: str,
+        message_id: str,
+        *,
+        delivery_policy: DeliveryPolicy,
+        expected_snapshot_version: int | None = None,
+    ) -> PendingRequestListDTO: ...
+
     async def remove_pending(
         self,
         session_id: str,
@@ -94,18 +103,6 @@ class JobServiceProtocol(Protocol):
     ) -> PendingRequestListDTO: ...
 
     async def clear_pending(self, session_id: str) -> PendingRequestListDTO: ...
-
-    async def reorder_pending(
-        self,
-        session_id: str,
-        requests: list[PendingRequestOrderItem],
-    ) -> PendingRequestListDTO: ...
-
-    async def send_pending_immediately(
-        self,
-        session_id: str,
-        message_id: str,
-    ) -> PendingRequestListDTO: ...
 
     async def start_job(
         self,
@@ -118,5 +115,13 @@ class JobServiceProtocol(Protocol):
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
     ) -> JobDispatchSnapshotDTO: ...
+
+    async def notify_boundary(
+        self,
+        session_id: str,
+        boundary: DeliveryBoundary,
+        *,
+        tool_result_available: bool = True,
+    ) -> PendingRequestListDTO: ...

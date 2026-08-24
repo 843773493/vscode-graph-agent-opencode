@@ -485,7 +485,8 @@
         "id",
         "endpoint",
         "model",
-        "custom_llm_provider"
+        "custom_llm_provider",
+        "api_mode"
       ],
       "allOf": [
         {
@@ -498,12 +499,37 @@
                 "const": "chatgpt"
               },
               "api_mode": {
-                "const": "responses"
+                "properties": {
+                  "protocol": {
+                    "const": "responses"
+                  }
+                }
               }
             }
           },
           "else": {
             "required": ["api_key"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "api_mode": {
+                "properties": {
+                  "protocol": {
+                    "const": "anthropic_messages"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "custom_llm_provider": {
+                "const": "anthropic"
+              }
+              // 已验证：Anthropic Messages adapter 只在该 provider 适配族下实例化。
+            }
           }
         }
       ],
@@ -549,30 +575,245 @@
           "description": "LiteLLM custom_llm_provider 参数，例如 openai、openrouter、anthropic。"
         },
         "api_mode": {
-          "type": "string",
-          "enum": [
-            "chat_completions",
-            "responses"
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "protocol",
+            "model_info",
+            "supports_reasoning"
           ],
-          "default": "chat_completions",
-          "description": "模型请求协议。仅明确配置为 responses 时使用 OpenAI Responses API。"
-        },
-        "capabilities": {
-          "type": "array",
-          "description": "Provider capabilities used by request routing and protocol adaptation. reasoning_content_replay promotes historical LangChain reasoning blocks to Chat Completions assistant.reasoning_content.",
-          "items": {
-            "type": "string",
-            "enum": [
-              "text_input",
-              "image_input",
-              "video_input",
-              "audio_input",
-              "reasoning_content_replay",
-              "prompt_cache_key"
-            ]
+          "description": "Provider 请求协议、LiteLLM 对齐的模型能力、reasoning 线格式以及请求特性。",
+          "properties": {
+            "protocol": {
+              "type": "string",
+              "enum": [
+                "chat_completions",
+                "responses",
+                "anthropic_messages"
+              ],
+              "description": "选择 LiteLLM 请求协议；custom_llm_provider 只选择适配族，不替代协议。"
+              // 已验证：AgentFactory 根据 protocol 分派 Chat Completions、Responses 和 Anthropic Messages。
+            },
+            "model_info": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "模型能力声明，字段名与 LiteLLM ModelInfo 的 supports_* 字段保持一致；supports_video_input 是本项目对视频输入的显式补充。",
+              "properties": {
+                "supports_vision": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受图片输入；对应 LiteLLM supports_vision。"
+                  // 已验证：多模态输入路由使用该字段推导 image 能力。
+                },
+                "supports_video_input": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受视频输入；LiteLLM 当前没有统一 supports_video 字段，因此由本项目显式声明。"
+                  // 已验证：视频 content block 校验使用该字段，不再读取旧 capabilities 数组。
+                },
+                "supports_audio_input": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受音频输入；对应 LiteLLM supports_audio_input。"
+                  // 已验证：音频 content block 校验使用 LiteLLM 对齐字段。
+                },
+                "supports_audio_output": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否能输出音频；对应 LiteLLM supports_audio_output，当前只作为能力声明保存。"
+                  // 已验证：配置解析保留该能力，当前请求适配不把它误当成输入能力。
+                },
+                "supports_function_calling": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否支持工具/函数调用；对应 LiteLLM supports_function_calling。"
+                  // 已验证：模型能力路由可读取该字段。
+                },
+                "supports_reasoning": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否支持 reasoning；必须与 supports_reasoning 下至少一个实际线格式字段一致。"
+                  // 已验证：解析器会拒绝该字段与具体 reasoning 线格式不一致的配置。
+                }
+              }
+            },
+            "supports_reasoning": {
+              "type": "object",
+              "description": "按 protocol 声明模型返回和接收的 reasoning 字段；这里描述 wire format，不复制到 AIMessage.additional_kwargs。",
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reasoning_content": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Chat Completions 的 assistant.reasoning_content。"
+                      // 已验证：Chat Completions adapter 用该字段投影历史 reasoning_content。
+                    },
+                    "thinking_blocks": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Chat Completions 兼容端返回 thinking_blocks。"
+                      // 已验证：Chat Completions adapter 可从 payload 提取 thinking_blocks。
+                    }
+                  },
+                  "anyOf": [
+                    {"required": ["reasoning_content"]},
+                    {"required": ["thinking_blocks"]}
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reasoning_items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["summary", "encrypted_content"],
+                      "properties": {
+                        "summary": {
+                          "type": "boolean",
+                          "description": "Responses reasoning item 的 summary。"
+                          // 已验证：Responses 历史投影会保留 summary。
+                        },
+                        "encrypted_content": {
+                          "type": "boolean",
+                          "description": "Responses reasoning item 的 encrypted_content。"
+                          // 已验证：只有 replay_policy.same_source 时才回放该字段。
+                        }
+                      }
+                    }
+                  },
+                  "required": ["reasoning_items"]
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "thinking_blocks": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["thinking", "redacted_thinking"],
+                      "properties": {
+                        "thinking": {
+                          "type": "boolean",
+                          "description": "Anthropic Messages thinking block 的明文 thinking。"
+                          // 已验证：Anthropic 配置解析会映射到 thinking_blocks_thinking。
+                        },
+                        "redacted_thinking": {
+                          "type": "boolean",
+                          "description": "Anthropic Messages thinking block 的 redacted_thinking。"
+                          // 已验证：Anthropic 配置解析会映射到 thinking_blocks_redacted_thinking。
+                        }
+                      }
+                    }
+                  },
+                  "required": ["thinking_blocks"]
+                }
+              ]
+            },
+            "request_features": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "请求适配器可选附加的特性，不属于模型输入输出能力。",
+              "properties": {
+                "prompt_cache_key": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "是否向 Chat Completions 请求附加 prompt_cache_key。"
+                  // 已验证：prompt cache key 路径读取该字段，不再读取旧 capabilities 数组。
+                }
+              }
+            },
+            "replay_policy": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "历史 reasoning 回放规则；加密内容不能仅凭 custom_llm_provider 相同而回放。",
+              "properties": {
+                "encrypted_content": {
+                  "type": "string",
+                  "enum": ["same_source"],
+                  "default": "same_source",
+                  "description": "只允许同一稳定 provider 实例 ID 回放 Responses encrypted_content。"
+                  // 已验证：密文来源比较使用 provider.id，而不是 custom_llm_provider。
+                }
+              }
+            }
           },
-          "uniqueItems": true,
-          "default": []
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "protocol": {"const": "chat_completions"}
+                }
+              },
+              "then": {
+                "properties": {
+                  "supports_reasoning": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reasoning_content": {"type": "boolean"},
+                      "thinking_blocks": {"type": "boolean"}
+                    },
+                    "anyOf": [
+                      {"required": ["reasoning_content"]},
+                      {"required": ["thinking_blocks"]}
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "protocol": {"const": "responses"}
+                }
+              },
+              "then": {
+                "properties": {
+                  "supports_reasoning": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reasoning_items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["summary", "encrypted_content"],
+                        "properties": {
+                          "summary": {"type": "boolean"},
+                          "encrypted_content": {"type": "boolean"}
+                        }
+                      }
+                    },
+                    "required": ["reasoning_items"]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "protocol": {"const": "anthropic_messages"}
+                }
+              },
+              "then": {
+                "properties": {
+                  "supports_reasoning": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "thinking_blocks": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["thinking", "redacted_thinking"],
+                        "properties": {
+                          "thinking": {"type": "boolean"},
+                          "redacted_thinking": {"type": "boolean"}
+                        }
+                      }
+                    },
+                    "required": ["thinking_blocks"]
+                  }
+                }
+              }
+            }
+          ]
         },
         "auth_header": {
           "type": "string",

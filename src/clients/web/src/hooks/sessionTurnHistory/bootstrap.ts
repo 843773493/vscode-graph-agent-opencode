@@ -45,6 +45,7 @@ export function useTurnBootstrap({
   reloadNonce,
   manualReloadNonce,
   generationRef,
+  invalidatedTurnIdsRef,
   setState,
   loadTurnDetails,
 }: {
@@ -55,6 +56,7 @@ export function useTurnBootstrap({
   reloadNonce: number;
   manualReloadNonce: number;
   generationRef: MutableRefObject<number>;
+  invalidatedTurnIdsRef: MutableRefObject<Set<string>>;
   setState: SetAppState;
   loadTurnDetails: (
     turnIds: string[],
@@ -63,6 +65,9 @@ export function useTurnBootstrap({
   ) => Promise<void>;
 }): void {
   const bootstrapAbortRef = useRef<AbortController | null>(null);
+  const lastProjectionEpochRef = useRef<number | null>(null);
+  const lastScopeKeyRef = useRef<string | null>(null);
+  const visitedScopeKeysRef = useRef(new Set<string>());
 
   useEffect(() => {
     if (!apiPort || !sessionId || !sessionCacheKey) {
@@ -72,6 +77,14 @@ export function useTurnBootstrap({
     bootstrapAbortRef.current?.abort();
     const controller = new AbortController();
     bootstrapAbortRef.current = controller;
+    const isNewScope = lastScopeKeyRef.current !== sessionCacheKey;
+    const hasVisitedScope = visitedScopeKeysRef.current.has(sessionCacheKey);
+    if (isNewScope) {
+      invalidatedTurnIdsRef.current.clear();
+      lastProjectionEpochRef.current = null;
+      lastScopeKeyRef.current = sessionCacheKey;
+    }
+    visitedScopeKeysRef.current.add(sessionCacheKey);
     const targetGeneration = generationRef.current + 1;
     generationRef.current = targetGeneration;
     let pollTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -79,7 +92,9 @@ export function useTurnBootstrap({
     let pendingSnapshotIdentity: string | null = null;
 
     setState((previous) => {
-      const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
+      const timeline = isNewScope && !hasVisitedScope
+        ? createSessionTurnTimeline(sessionCacheKey)
+        : timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
       return {
         ...previous,
         turnTimelinesBySession: writeTurnTimelineCache(
@@ -103,6 +118,13 @@ export function useTurnBootstrap({
         );
         if (controller.signal.aborted || generationRef.current !== targetGeneration) return;
         const projectionState = bootstrap.projection_state ?? "ready";
+        if (
+          lastProjectionEpochRef.current !== null
+          && lastProjectionEpochRef.current !== bootstrap.projection_epoch
+        ) {
+          invalidatedTurnIdsRef.current.clear();
+        }
+        lastProjectionEpochRef.current = bootstrap.projection_epoch;
         const activeJobCount = bootstrap.active_job_count
           ?? bootstrap.active_jobs?.length
           ?? 0;
@@ -207,7 +229,10 @@ export function useTurnBootstrap({
             });
           }
         }
-        if (bootstrap.latest_turn) {
+        if (
+          bootstrap.latest_turn
+          && !invalidatedTurnIdsRef.current.has(bootstrap.latest_turn.turn_id)
+        ) {
           const detailIdentity = [
             bootstrap.projection_epoch,
             bootstrap.latest_turn.turn_id,
@@ -256,6 +281,7 @@ export function useTurnBootstrap({
   }, [
     apiPort,
     generationRef,
+    invalidatedTurnIdsRef,
     loadTurnDetails,
     manualReloadNonce,
     reloadNonce,

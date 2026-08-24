@@ -106,15 +106,39 @@ class BrowserManagerClient:
         url: str,
         title: str = "Browser Page",
         viewport: dict[str, int] | None = None,
+        device_profile: str | None = None,
+        device_orientation: str | None = None,
     ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "title": title,
+            "url": url,
+            "viewport": viewport or {"width": 1280, "height": 800},
+        }
+        if device_profile is not None:
+            payload["device_profile"] = device_profile
+        if device_orientation is not None:
+            payload["device_orientation"] = device_orientation
         response = await self._json_request(
             "POST",
             "/api/browsers",
+            payload,
+        )
+        return self._require_data(response)
+
+    async def set_device_profile(
+        self,
+        *,
+        browser_id: str,
+        device_profile: str,
+        device_orientation: str = "portrait",
+    ) -> dict[str, Any]:
+        response = await self._json_request(
+            "PATCH",
+            f"/api/browsers/{browser_id}/device-profile",
             {
-                "session_id": session_id,
-                "title": title,
-                "url": url,
-                "viewport": viewport or {"width": 1280, "height": 800},
+                "device_profile": device_profile,
+                "device_orientation": device_orientation,
             },
         )
         return self._require_data(response)

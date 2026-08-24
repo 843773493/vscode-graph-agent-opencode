@@ -13,7 +13,7 @@ from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.control.schemas import (
+from app.schemas.gateway_control import (
     GatewaySessionSearchMatchDTO,
     GatewaySessionSearchResultsDTO,
     GatewaySessionSearchWorkspaceStatusDTO,

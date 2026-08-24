@@ -13,7 +13,7 @@ from app.core.identifier import create_prefixed_id
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.control.generators import SessionGeneratorStore
-from app.gateway.control.schemas import (
+from app.schemas.gateway_control import (
     GenerationOutputDTO,
     GenerationRunDTO,
     GeneratorDefinitionCreateRequest,

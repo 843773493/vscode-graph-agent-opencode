@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -23,9 +24,9 @@ from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_litellm import ChatLiteLLM
 
+from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.provider_capabilities import (
     PROMPT_CACHE_KEY,
-    REASONING_CONTENT_REPLAY,
     parse_provider_capabilities,
 )
 from app.agents.providers._format_check import (
@@ -34,18 +35,24 @@ from app.agents.providers._format_check import (
     check_history_messages_accepted,
     validate_provider_format,
 )
+from app.agents.providers.litellm_content import (
+    MISSING,
+    build_ai_message_content,
+    canonicalize_ai_message,
+    project_ai_message_content,
+    reasoning_projection_rows,
+)
 from app.agents.upstream_request_trace import attach_upstream_trace_callback
 from app.core.identifier import create_prefixed_id
-from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
-        return value
+        return copy.deepcopy(value)
     if hasattr(value, "model_dump"):
         dumped = value.model_dump()
         if isinstance(dumped, dict):
-            return dumped
+            return copy.deepcopy(dumped)
     return {}
 
 
@@ -67,7 +74,9 @@ def _create_usage_metadata(usage: Any) -> UsageMetadata:
     input_tokens = int(_usage_value(usage, "prompt_tokens") or 0)
     output_tokens = int(_usage_value(usage, "completion_tokens") or 0)
     raw_total = _usage_value(usage, "total_tokens")
-    total_tokens = int(raw_total) if raw_total is not None else input_tokens + output_tokens
+    total_tokens = (
+        int(raw_total) if raw_total is not None else input_tokens + output_tokens
+    )
     metadata: UsageMetadata = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -140,10 +149,16 @@ class _StreamPartState:
 
     def decorate(self, block: dict[str, Any]) -> dict[str, Any]:
         block_type = block.get("type")
-        if block_type == "reasoning":
-            kind = "reasoning"
+        if block_type in {
+            "reasoning",
+            "reasoning_content",
+            "reasoning_items",
+            "thinking",
+            "redacted_thinking",
+        }:
+            pass
         elif block_type in {"text", "output_text", "refusal"}:
-            kind = "markdown"
+            pass
         else:
             self.close()
             return block
@@ -154,14 +169,20 @@ class _StreamPartState:
             raw_provider_part_id = extras.get("id") or extras.get("provider_part_id")
             if isinstance(raw_provider_part_id, str):
                 provider_part_id = raw_provider_part_id
+        if not isinstance(provider_part_id, str) and block_type == "reasoning_items":
+            items = block.get("reasoning_items")
+            first_item = items[0] if isinstance(items, list) and items else None
+            item_id = first_item.get("id") if isinstance(first_item, dict) else None
+            if isinstance(item_id, str):
+                provider_part_id = item_id
 
         provider_changed = (
             isinstance(provider_part_id, str)
             and self.active_provider_part_id is not None
             and provider_part_id != self.active_provider_part_id
         )
-        if self.active_kind != kind or provider_changed:
-            self.active_kind = kind
+        if self.active_kind != block_type or provider_changed:
+            self.active_kind = block_type
             self.active_part_id = create_prefixed_id("part")
             self.active_index = self.next_index
             self.active_provider_part_id = (
@@ -190,6 +211,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
 
     provider_id: str | None = None
     reasoning_content_replay: bool = False
+    thinking_blocks_replay: bool = False
 
     def _stream_attempt_count(self) -> int:
         """返回包含首次请求在内的流式请求总尝试次数。"""
@@ -275,7 +297,12 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 continue
 
             block_type = block.get("type")
-            if block_type in {"reasoning", "thinking", "redacted_thinking"}:
+            # LangChain 合并流式 content block 时，重复 delta 可能把 type
+            # 拼成 ``reasoningreasoningreasoning``。这些块仍然是内部思考，
+            # 不能作为 Chat Completions 正文透传给不支持该类型的目标模型。
+            if isinstance(block_type, str) and block_type.startswith(
+                ("reasoning", "thinking", "redacted_thinking")
+            ):
                 changed = True
                 continue
             if block_type == "output_text":
@@ -328,43 +355,26 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 continue
 
             block_type = block.get("type")
-            if block_type == "reasoning":
-                reasoning = block.get("reasoning")
-                if not isinstance(reasoning, str):
-                    reasoning = extract_reasoning_summary(block.get("summary"))
-                reasoning_block: dict[str, Any] = {
-                    "type": "reasoning",
-                    "reasoning": reasoning,
-                }
-                extras = dict(block.get("extras") or {})
-                if isinstance(block.get("id"), str):
-                    extras["id"] = block["id"]
-                if extras:
-                    reasoning_block["extras"] = extras
-                normalized.append(reasoning_block)
-                continue
-            if block_type in {"thinking", "redacted_thinking"}:
-                thinking = block.get("thinking") or block.get("text") or ""
-                reasoning_block = {
-                    "type": "reasoning",
-                    "reasoning": str(thinking),
-                }
-                extras = {
-                    key: value
-                    for key, value in block.items()
-                    if key not in {"type", "thinking", "text"}
-                }
-                if extras:
-                    reasoning_block["extras"] = extras
-                normalized.append(reasoning_block)
+            if block_type in {
+                "reasoning",
+                "reasoning_content",
+                "reasoning_items",
+                "thinking",
+                "redacted_thinking",
+            }:
+                # LiteLLM 已经给出标准 block 时整体复制，不能在这里按字段
+                # 白名单重建，否则 provider 新增的字段会在历史中丢失。
+                normalized.append(copy.deepcopy(block))
                 continue
             if block_type in {"text", "output_text"}:
                 text = block.get("text")
                 if isinstance(text, str):
                     normalized.append({"type": "text", "text": text})
                 continue
-            if block_type in {"tool_call", "tool_call_chunk", "refusal"}:
-                normalized.append(dict(block))
+            if block_type in {"tool_call", "tool_call_chunk"}:
+                continue
+            if isinstance(block_type, str):
+                normalized.append(copy.deepcopy(block))
                 continue
 
             fallback_text = block.get("text")
@@ -378,25 +388,14 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
 
     @staticmethod
     def _history_reasoning_content(content: Any) -> str | None:
-        """从 LangChain 标准 content blocks 提取可回放的思考文本。"""
-        if not isinstance(content, list):
-            return None
-
-        parts: list[str] = []
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            block_type = block.get("type")
-            if block_type == "reasoning":
-                reasoning = block.get("reasoning")
-                if not isinstance(reasoning, str):
-                    reasoning = extract_reasoning_summary(block.get("summary"))
-            elif block_type in {"thinking", "redacted_thinking"}:
-                reasoning = block.get("thinking") or block.get("text")
-            else:
-                continue
-            if isinstance(reasoning, str) and reasoning:
-                parts.append(reasoning)
+        """从直接 reasoning block 提取 Chat Completions 所需的思考文本。"""
+        parts = [
+            str(row["text"])
+            for row in reasoning_projection_rows(content)
+            if row.get("kind") in {"reasoning", "summary"}
+            and isinstance(row.get("text"), str)
+            and row["text"]
+        ]
         return "\n".join(parts) or None
 
     def _apply_reasoning_content_replay(
@@ -404,20 +403,33 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         message_dict: dict[str, Any],
         *,
         content: Any,
-        explicit_reasoning: Any = None,
     ) -> None:
-        if not self.reasoning_content_replay:
+        if not self.reasoning_content_replay and not self.thinking_blocks_replay:
             message_dict.pop("reasoning_content", None)
+            message_dict.pop("thinking_blocks", None)
             return
-        reasoning = (
-            explicit_reasoning
-            if isinstance(explicit_reasoning, str) and explicit_reasoning
-            else self._history_reasoning_content(content)
+        target_capabilities: set[str] = set()
+        if self.reasoning_content_replay:
+            target_capabilities.add("reasoning_content_replay")
+        if self.thinking_blocks_replay:
+            target_capabilities.add("thinking_blocks")
+        projection = project_ai_message_content(
+            content,
+            target_provider=self.provider_id,
+            target_capabilities=target_capabilities,
         )
-        if reasoning:
-            message_dict["reasoning_content"] = reasoning
+        if self.reasoning_content_replay:
+            reasoning = projection.get("reasoning_content")
+            if not isinstance(reasoning, str) or not reasoning:
+                reasoning = self._history_reasoning_content(content)
+            if reasoning:
+                message_dict["reasoning_content"] = reasoning
+        if self.thinking_blocks_replay and "thinking_blocks" in projection:
+            message_dict["thinking_blocks"] = projection["thinking_blocks"]
 
-    def _convert_messages_to_dicts(self, messages: Sequence[BaseMessage | dict[str, Any]]) -> list[dict[str, Any]]:
+    def _convert_messages_to_dicts(
+        self, messages: Sequence[BaseMessage | dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for message in messages:
             if isinstance(message, dict):
@@ -428,18 +440,56 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 elif role == "ai":
                     item["role"] = "assistant"
                 original_content = item.get("content")
-                item["content"] = self.normalize_history_content(original_content)
+                projection = project_ai_message_content(
+                    original_content,
+                    target_provider=self.provider_id,
+                    target_capabilities=(
+                        {
+                            *(
+                                {"reasoning_content_replay"}
+                                if self.reasoning_content_replay
+                                else set()
+                            ),
+                            *(
+                                {"thinking_blocks"}
+                                if self.thinking_blocks_replay
+                                else set()
+                            ),
+                        }
+                    ),
+                )
+                item["content"] = self.normalize_history_content(
+                    projection["content"]
+                )
                 if item.get("role") == "assistant":
                     self._apply_reasoning_content_replay(
                         item,
                         content=original_content,
-                        explicit_reasoning=item.get("reasoning_content"),
                     )
                 result.append(item)
                 continue
 
+            projection = project_ai_message_content(
+                message.content,
+                target_provider=self.provider_id,
+                target_capabilities=(
+                    {
+                        *(
+                            {"reasoning_content_replay"}
+                            if self.reasoning_content_replay
+                            else set()
+                        ),
+                        *(
+                            {"thinking_blocks"}
+                            if self.thinking_blocks_replay
+                            else set()
+                        ),
+                    }
+                ),
+                response_metadata=message.response_metadata,
+            )
             message_dict: dict[str, Any] = {
-                "content": self.normalize_history_content(message.content),
+                "content": self.normalize_history_content(projection["content"]),
             }
             if isinstance(message, ChatMessage):
                 message_dict["role"] = message.role
@@ -449,17 +499,17 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 message_dict["role"] = "assistant"
                 if message.tool_calls:
                     message_dict["tool_calls"] = [
-                        _openai_tool_call(tool_call)
-                        for tool_call in message.tool_calls
+                        _openai_tool_call(tool_call) for tool_call in message.tool_calls
                     ]
                 elif "tool_calls" in message.additional_kwargs:
                     message_dict["tool_calls"] = message.additional_kwargs["tool_calls"]
                 if "function_call" in message.additional_kwargs:
-                    message_dict["function_call"] = message.additional_kwargs["function_call"]
+                    message_dict["function_call"] = message.additional_kwargs[
+                        "function_call"
+                    ]
                 self._apply_reasoning_content_replay(
                     message_dict,
                     content=message.content,
-                    explicit_reasoning=message.additional_kwargs.get("reasoning_content"),
                 )
             elif isinstance(message, SystemMessage):
                 message_dict["role"] = "system"
@@ -472,7 +522,9 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 if message.name:
                     message_dict["name"] = message.name
             else:
-                raise ValueError(f"未知 LangChain message 类型: {type(message).__name__}")
+                raise TypeError(
+                    f"未知 LangChain message 类型: {type(message).__name__}"
+                )
 
             if message.name and "name" not in message_dict:
                 message_dict["name"] = message.name
@@ -507,6 +559,43 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 if isinstance(value, str) and value:
                     return value
         return ""
+
+    def _delta_reasoning_blocks(
+        self,
+        delta: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        thinking_blocks = delta.get("thinking_blocks")
+        if isinstance(thinking_blocks, list):
+            for raw_block in thinking_blocks:
+                block = _as_dict(raw_block)
+                if block.get("type") not in {"thinking", "redacted_thinking"}:
+                    continue
+                # thinking/redacted_thinking 已经是 LiteLLM 的完整 provider
+                # block，直接作为 AIMessage.content 的一部分传递。
+                blocks.append(block)
+        reasoning_items = delta.get("reasoning_items")
+        if isinstance(reasoning_items, list):
+            items = [
+                item
+                for raw_item in reasoning_items
+                if (item := _as_dict(raw_item))
+            ]
+            if items:
+                blocks.append(
+                    {
+                        "type": "reasoning_items",
+                        "reasoning_items": items,
+                    }
+                )
+        model_extra = delta.get("model_extra")
+        if isinstance(model_extra, Mapping):
+            blocks.extend(
+                self._delta_reasoning_blocks(
+                    model_extra,
+                )
+            )
+        return blocks
 
     def _delta_tool_call_chunks(self, raw_tool_calls: Any) -> list[dict[str, Any]]:
         tool_call_chunks: list[dict[str, Any]] = []
@@ -552,9 +641,26 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             chunks.append(
                 AIMessageChunk(
                     content=self._stream_content(
-                        [{"type": "reasoning", "reasoning": reasoning}],
+                        [
+                            {
+                                "type": "reasoning_content",
+                                "reasoning_content": reasoning,
+                            }
+                        ],
                         part_state=part_state,
                     ),
+                )
+            )
+
+        structured_reasoning = self._delta_reasoning_blocks(
+            delta,
+        )
+        for index, block in enumerate(structured_reasoning):
+            if index:
+                part_state.close()
+            chunks.append(
+                AIMessageChunk(
+                    content=[part_state.decorate(block)],
                 )
             )
 
@@ -578,15 +684,16 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 )
             )
 
-        provider_specific_fields = (
-            delta.get("provider_specific_fields")
-            or delta.get("vertex_ai_grounding_metadata")
+        provider_specific_fields = delta.get("provider_specific_fields") or delta.get(
+            "vertex_ai_grounding_metadata"
         )
         if provider_specific_fields is not None:
             chunks.append(
                 AIMessageChunk(
                     content="",
-                    additional_kwargs={"provider_specific_fields": provider_specific_fields},
+                    additional_kwargs={
+                        "provider_specific_fields": provider_specific_fields
+                    },
                 )
             )
 
@@ -682,7 +789,9 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         if chunk.get("provider_specific_fields"):
             delta["provider_specific_fields"] = chunk["provider_specific_fields"]
         elif chunk.get("vertex_ai_grounding_metadata"):
-            delta["vertex_ai_grounding_metadata"] = chunk["vertex_ai_grounding_metadata"]
+            delta["vertex_ai_grounding_metadata"] = chunk[
+                "vertex_ai_grounding_metadata"
+            ]
 
         result: list[ChatGenerationChunk] = []
         for message_chunk in self._delta_to_message_chunks(
@@ -711,19 +820,136 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             )
         return result
 
-    def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
-        result = super()._create_chat_result(response)
+    def _canonicalize_chat_result(self, result: ChatResult) -> ChatResult:
         generations: list[ChatGeneration] = []
         for generation in result.generations:
             message = generation.message
             if isinstance(message, AIMessage):
-                part_state = _StreamPartState()
+                message = canonicalize_ai_message(
+                    message,
+                    source_provider=self.provider_id,
+                )
+            generations.append(
+                ChatGeneration(
+                    message=message,
+                    generation_info=generation.generation_info,
+                )
+            )
+        return ChatResult(generations=generations, llm_output=result.llm_output)
+
+    def _generate_with_cache(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """覆盖 LangChain streaming=True 时绕过 _generate 的合并入口。"""
+        result = super()._generate_with_cache(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **kwargs,
+        )
+        return self._canonicalize_chat_result(result)
+
+    async def _agenerate_with_cache(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """覆盖异步 streaming=True 时绕过 _agenerate 的合并入口。"""
+        result = await super()._agenerate_with_cache(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **kwargs,
+        )
+        return self._canonicalize_chat_result(result)
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        stream: bool | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        result = super()._generate(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            stream=stream,
+            **kwargs,
+        )
+        return self._canonicalize_chat_result(result)
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        stream: bool | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        result = await super()._agenerate(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            stream=stream,
+            **kwargs,
+        )
+        return self._canonicalize_chat_result(result)
+
+    def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+        result = super()._create_chat_result(response)
+        generations: list[ChatGeneration] = []
+        raw_choices = response.get("choices") or []
+        for generation_index, generation in enumerate(result.generations):
+            message = generation.message
+            if isinstance(message, AIMessage):
+                raw_choice = (
+                    _as_dict(raw_choices[generation_index])
+                    if generation_index < len(raw_choices)
+                    else {}
+                )
+                raw_message = _as_dict(raw_choice.get("message"))
+                additional_kwargs = dict(message.additional_kwargs or {})
+                # 这里只读取 LiteLLM/LangChain 响应对象的临时 wire 字段，
+                # 立即转换为直接 content；它们不会作为消息的第二份来源保存。
+                raw_content = raw_message.get("content", message.content)
+                reasoning_content = raw_message.get(
+                    "reasoning_content",
+                    additional_kwargs.get("reasoning_content", MISSING),
+                )
+                thinking_blocks = raw_message.get(
+                    "thinking_blocks",
+                    additional_kwargs.get("thinking_blocks", MISSING),
+                )
+                reasoning_items = raw_message.get(
+                    "reasoning_items",
+                    additional_kwargs.get("reasoning_items", MISSING),
+                )
+                canonical_content = build_ai_message_content(
+                    raw_content,
+                    source_provider=self.provider_id,
+                    source_model=self.model_name or self.model,
+                    reasoning_content=reasoning_content,
+                    thinking_blocks=thinking_blocks,
+                    reasoning_items=reasoning_items,
+                )
+                for key in (
+                    "reasoning_content",
+                    "thinking_blocks",
+                    "reasoning_items",
+                ):
+                    additional_kwargs.pop(key, None)
                 message = message.model_copy(
                     update={
-                        "content": self._stream_content(
-                            message.content,
-                            part_state=part_state,
-                        ),
+                        "content": canonical_content,
+                        "additional_kwargs": additional_kwargs,
                     }
                 )
             generations.append(
@@ -863,11 +1089,14 @@ def build_litellm_chat_model(
         if runtime_name in runtime_config:
             request_parameters[request_name] = runtime_config[runtime_name]
     request_parameters.update(request_options.get("overrides") or {})
+    api_mode = parse_provider_api_mode(provider)
     capabilities = parse_provider_capabilities(provider)
     if prompt_cache_key is not None and PROMPT_CACHE_KEY in capabilities:
         extra_body = request_parameters.get("extra_body") or {}
         if not isinstance(extra_body, dict):
-            raise TypeError("Chat Completions request_options.overrides.extra_body 必须是对象")
+            raise TypeError(
+                "Chat Completions request_options.overrides.extra_body 必须是对象"
+            )
         request_parameters["extra_body"] = {
             **extra_body,
             "prompt_cache_key": prompt_cache_key,
@@ -881,7 +1110,8 @@ def build_litellm_chat_model(
         "streaming": True,
         "model_kwargs": request_parameters,
         "provider_id": provider.get("id"),
-        "reasoning_content_replay": REASONING_CONTENT_REPLAY in capabilities,
+        "reasoning_content_replay": api_mode.supports_reasoning.reasoning_content,
+        "thinking_blocks_replay": api_mode.supports_reasoning.thinking_blocks,
     }
 
     if provider.get("endpoint"):

@@ -81,7 +81,30 @@ describe("折叠详情按需解析", () => {
     );
 
     expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("codicon-chevron-right");
     expect(html).not.toContain(hiddenTail);
+  });
+
+  test("展开 reasoning 使用向下箭头", () => {
+    const html = renderToStaticMarkup(
+      <ThinkingSection
+        active
+        showRawDetails={false}
+        items={[{
+          kind: "aggregated_text",
+          id: "reasoning-2",
+          text: "正在思考",
+          partKind: "reasoning",
+          active: true,
+          timestamp: null,
+          eventCount: 1,
+          rawEvents: [],
+        }]}
+      />,
+    );
+
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("codicon-chevron-down");
   });
 
   test("折叠工具结果不挂载大型输出", () => {
@@ -104,6 +127,44 @@ describe("折叠详情按需解析", () => {
     );
 
     expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("codicon-chevron-right");
     expect(html).not.toContain(hiddenTail);
+  });
+
+  test("展开工具结果使用向下箭头", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <ToolRow
+          showRawDetails={false}
+          item={{
+            kind: "aggregated_tool",
+            id: "tool-2",
+            toolName: "custom_tool",
+            inputText: "{}",
+            resultText: "输出",
+            timestamp: null,
+            rawStart: {},
+            rawEnd: {},
+            active: false,
+          }}
+        />,
+      );
+    });
+
+    const summary = renderer!.root.findByProps({ className: "chat-tool-summary" });
+    expect(summary.props["aria-expanded"]).toBe(false);
+    expect(renderer!.root.findByProps({ className: "codicon codicon-chevron-right" }))
+      .toBeTruthy();
+
+    await act(async () => {
+      summary.props.onClick();
+    });
+
+    expect(summary.props["aria-expanded"]).toBe(true);
+    expect(renderer!.root.findByProps({ className: "codicon codicon-chevron-down" }))
+      .toBeTruthy();
+    renderer!.unmount();
   });
 });

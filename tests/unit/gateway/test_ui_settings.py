@@ -1,6 +1,6 @@
 import json
 
-from app.gateway.schemas import (
+from app.schemas.gateway import (
     WebUILayoutSettingsDTO,
     WebUISessionSidebarSettingsDTO,
     WebUISettingsUpdateDTO,

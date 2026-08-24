@@ -1,11 +1,7 @@
-import asyncio
-
 import pytest
 
 from app.core.job_event_bus import JobEventBus
 from app.prompting import PromptSection, internal_message_factory
-from app.schemas.public_v2.common import JobStatus
-from app.schemas.public_v2.pending_request import PendingRequestOrderItem
 from app.services.business.job.service import JobService
 
 
@@ -15,42 +11,31 @@ class _DummyJobExecutor:
 
 
 class _DummyTask:
-    def __init__(self) -> None:
-        self.cancel_called = False
-
     def done(self) -> bool:
-        return self.cancel_called
+        return False
 
     def cancel(self) -> None:
-        self.cancel_called = True
+        return None
 
 
-def _service() -> JobService:
-    return JobService(
+def _service(monkeypatch: pytest.MonkeyPatch) -> JobService:
+    service = JobService(
         job_event_bus=JobEventBus(),
         job_executor=_DummyJobExecutor(),
     )
-
-
-def _prevent_background_execution(
-    service: JobService,
-    monkeypatch: pytest.MonkeyPatch,
-    started_jobs: list[str] | None = None,
-) -> None:
-    def fake_start(job) -> None:
-        if started_jobs is not None:
-            started_jobs.append(job.job_id)
-        job.task = _DummyTask()
-
-    monkeypatch.setattr(service, "_start_job_task", fake_start)
+    monkeypatch.setattr(
+        service,
+        "_start_job_task",
+        lambda job: setattr(job, "task", _DummyTask()),
+    )
+    return service
 
 
 @pytest.mark.asyncio
-async def test_pending_requests_support_edit_reorder_and_remove(monkeypatch):
-    service = _service()
-    _prevent_background_execution(service, monkeypatch)
+async def test_pending_controls_edit_policy_remove_without_reordering(monkeypatch):
+    service = _service(monkeypatch)
     session_id = "session_pending_controls"
-    active = await service.start_job(
+    await service.start_job(
         session_id,
         "active",
         message_id="msg_active",
@@ -61,61 +46,65 @@ async def test_pending_requests_support_edit_reorder_and_remove(monkeypatch):
         "queued",
         message_id="msg_queued",
         message_created_at="2026-07-17T00:00:01+00:00",
+        delivery_policy="after_turn",
     )
-    steering = await service.start_job(
+    tail = await service.start_job(
         session_id,
-        "steering",
-        message_id="msg_steering",
+        "tail",
+        message_id="msg_tail",
         message_created_at="2026-07-17T00:00:02+00:00",
-        dispatch_mode="steering",
+        delivery_policy="after_interrupt",
     )
 
     snapshot = await service.list_pending(session_id)
-    assert active.job_status == "running"
-    assert queued.pending_kind == "queued"
-    assert steering.pending_kind == "steering"
+    assert queued.enqueue_sequence is not None
+    assert tail.enqueue_sequence is not None
     assert [item.message_id for item in snapshot.requests] == [
-        "msg_steering",
         "msg_queued",
+        "msg_tail",
     ]
-    assert snapshot.yield_requested is True
+    assert [item.enqueue_sequence for item in snapshot.requests] == [2, 3]
+    assert all(item.status == "queued" for item in snapshot.requests)
 
     updated = await service.update_pending(
         session_id,
-        "msg_queued",
-        content="queued edited",
+        "msg_tail",
+        content="tail edited",
         attachments=[],
     )
-    assert next(
-        item for item in updated.requests if item.message_id == "msg_queued"
-    ).content == "queued edited"
-
-    reordered = await service.reorder_pending(
-        session_id,
-        [
-            PendingRequestOrderItem(message_id="msg_queued", kind="steering"),
-            PendingRequestOrderItem(message_id="msg_steering", kind="queued"),
-        ],
+    assert next(item for item in updated.requests if item.message_id == "msg_tail").content == (
+        "tail edited"
     )
-    assert [
-        (item.message_id, item.kind) for item in reordered.requests
-    ] == [
-        ("msg_queued", "steering"),
-        ("msg_steering", "queued"),
+
+    changed = await service.update_pending_policy(
+        session_id,
+        "msg_tail",
+        delivery_policy="after_tool_result",
+        expected_snapshot_version=updated.snapshot_version,
+    )
+    changed_tail = next(item for item in changed.requests if item.message_id == "msg_tail")
+    assert changed_tail.delivery_policy == "after_tool_result"
+    assert [item.message_id for item in changed.requests] == [
+        "msg_queued",
+        "msg_tail",
     ]
 
-    after_remove = await service.remove_pending(session_id, "msg_steering")
-    assert [item.message_id for item in after_remove.requests] == ["msg_queued"]
+    with pytest.raises(ValueError, match="不支持重排"):
+        await service.reject_pending_reorder(session_id)
+
+    after_remove = await service.remove_pending(session_id, "msg_queued")
+    assert [item.message_id for item in after_remove.requests] == [
+        "msg_tail",
+    ]
 
 
 @pytest.mark.asyncio
 async def test_pending_request_uses_safe_display_content(monkeypatch):
-    service = _service()
-    _prevent_background_execution(service, monkeypatch)
+    service = _service(monkeypatch)
     session_id = "session_internal_display"
     await service.start_job(
         session_id,
-        "<generated_session_result>内部结果</generated_session_result>",
+        "active",
         message_id="msg_active",
         message_created_at="2026-07-17T00:00:00+00:00",
     )
@@ -139,302 +128,33 @@ async def test_pending_request_uses_safe_display_content(monkeypatch):
 
     snapshot = await service.list_pending(session_id)
 
-    assert snapshot.requests[0].content == (
-        "生成分支已结束，主会话正在处理返回结果。"
-    )
-    assert "generated_session_result" not in snapshot.requests[0].content
-    assert "secret_route" not in snapshot.requests[0].message_metadata
+    internal = next(item for item in snapshot.requests if item.message_id == "msg_internal")
+    assert internal.content == "生成分支已结束，主会话正在处理返回结果。"
+    assert "generated_session_result" not in internal.content
+    assert "secret_route" not in internal.message_metadata
 
 
 @pytest.mark.asyncio
-async def test_send_immediately_promotes_target_and_cancels_active(monkeypatch):
-    service = _service()
-    _prevent_background_execution(service, monkeypatch)
-    session_id = "session_send_immediately"
-    active = await service.start_job(
-        session_id,
-        "active",
-        message_id="msg_active",
-        message_created_at="2026-07-17T00:00:00+00:00",
-    )
-    first = await service.start_job(
-        session_id,
-        "first",
-        message_id="msg_first",
-        message_created_at="2026-07-17T00:00:01+00:00",
-    )
-    second = await service.start_job(
-        session_id,
-        "second",
-        message_id="msg_second",
-        message_created_at="2026-07-17T00:00:02+00:00",
-    )
-
-    await service.send_pending_immediately(session_id, "msg_second")
-
-    active_job = service._jobs[active.job_id]
-    assert active_job.status == JobStatus.cancelling
-    assert active_job.task.cancel_called is True
-    assert service._pending_queue.ids(session_id) == (
-        second.job_id,
-        first.job_id,
-    )
-
-
-@pytest.mark.asyncio
-async def test_plain_cancel_keeps_pending_requests_stopped(monkeypatch):
-    service = _service()
-    started_jobs: list[str] = []
-    _prevent_background_execution(service, monkeypatch, started_jobs)
-    active = await service.start_job(
-        "session_plain_cancel",
-        "active",
-        message_id="msg_active",
-        message_created_at="2026-07-17T00:00:00+00:00",
-    )
-    pending = await service.start_job(
-        "session_plain_cancel",
-        "pending",
-        message_id="msg_pending",
-        message_created_at="2026-07-17T00:00:01+00:00",
-    )
-
-    active_job = service._jobs[active.job_id]
-    active_job.status = JobStatus.cancelled
-    await service._schedule_next_job_if_needed(active_job)
-
-    assert started_jobs == [active.job_id]
-    assert service._pending_queue.ids("session_plain_cancel") == (pending.job_id,)
-    assert "session_plain_cancel" not in service._session_current_job
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("terminal_status", [JobStatus.failed, JobStatus.timed_out])
-async def test_failed_or_timed_out_job_dispatches_pending_requests(
-    monkeypatch,
-    terminal_status,
-):
-    service = _service()
-    started_jobs: list[str] = []
-    _prevent_background_execution(service, monkeypatch, started_jobs)
-    session_id = f"session_{terminal_status.value}_dispatch"
-    active = await service.start_job(
-        session_id,
-        "active",
-        message_id="msg_active",
-        message_created_at="2026-07-17T00:00:00+00:00",
-    )
-    pending = await service.start_job(
-        session_id,
-        "pending",
-        message_id="msg_pending",
-        message_created_at="2026-07-17T00:00:01+00:00",
-    )
-
-    active_job = service._jobs[active.job_id]
-    active_job.status = terminal_status
-    await service._schedule_next_job_if_needed(active_job)
-
-    assert service._session_current_job[session_id] == pending.job_id
-    assert service._jobs[pending.job_id].pending_kind is None
-    assert started_jobs == [active.job_id, pending.job_id]
-
-
-@pytest.mark.asyncio
-async def test_send_immediately_reserves_idle_session_before_concurrent_send(
-    monkeypatch,
-):
-    service = _service()
-    started_jobs: list[str] = []
-    _prevent_background_execution(service, monkeypatch, started_jobs)
-    session_id = "session_idle_immediate_race"
-    active = await service.start_job(
-        session_id,
-        "active",
-        message_id="msg_active",
-        message_created_at="2026-07-17T00:00:00+00:00",
-    )
-    target = await service.start_job(
-        session_id,
-        "立即发送目标",
-        message_id="msg_target",
-        message_created_at="2026-07-17T00:00:01+00:00",
-    )
-    active_job = service._jobs[active.job_id]
-    active_job.status = JobStatus.cancelled
-    await service._schedule_next_job_if_needed(active_job)
-
-    original_promote = service._pending_requests.promote_and_reserve_if_idle
-    reserved = asyncio.Event()
-    release = asyncio.Event()
-
-    async def promote_then_pause(*args, **kwargs):
-        result = await original_promote(*args, **kwargs)
-        reserved.set()
-        await release.wait()
-        return result
-
-    monkeypatch.setattr(
-        service._pending_requests,
-        "promote_and_reserve_if_idle",
-        promote_then_pause,
-    )
-    immediate_task = asyncio.create_task(
-        service.send_pending_immediately(session_id, "msg_target")
-    )
-    await reserved.wait()
-    new_dispatch = await service.start_job(
-        session_id,
-        "并发新消息",
-        message_id="msg_new",
-        message_created_at="2026-07-17T00:00:02+00:00",
-    )
-    release.set()
-    await immediate_task
-
-    assert new_dispatch.job_status == "queued"
-    assert started_jobs == [active.job_id, target.job_id]
-    assert service._session_current_job[session_id] == target.job_id
-
-
-@pytest.mark.asyncio
-async def test_send_immediately_rolls_back_reservation_when_persistence_fails(
-    monkeypatch,
-):
-    service = _service()
-    _prevent_background_execution(service, monkeypatch)
-    session_id = "session_immediate_persist_failure"
-    active = await service.start_job(
-        session_id,
-        "active",
-        message_id="msg_active",
-        message_created_at="2026-07-17T00:00:00+00:00",
-    )
+async def test_stale_policy_update_is_rejected(monkeypatch):
+    service = _service(monkeypatch)
+    session_id = "session_stale_policy"
     await service.start_job(
         session_id,
-        "pending",
-        message_id="msg_pending",
-        message_created_at="2026-07-17T00:00:01+00:00",
-    )
-    active_job = service._jobs[active.job_id]
-    active_job.status = JobStatus.cancelled
-    await service._schedule_next_job_if_needed(active_job)
-
-    async def fail_persist(_snapshot):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(service._pending_requests, "persist", fail_persist)
-
-    with pytest.raises(OSError, match="disk full"):
-        await service.send_pending_immediately(session_id, "msg_pending")
-
-    recovered_job_id = service._session_current_job[session_id]
-    assert service._jobs[recovered_job_id].message_id == "msg_pending"
-    assert all(
-        not job.internal_reservation for job in service._jobs.values()
-    )
-    public_jobs = await service.list(session_id)
-    assert all(not job.job_id.startswith("completed_") for job in public_jobs)
-
-
-@pytest.mark.asyncio
-async def test_persist_failure_with_concurrent_send_does_not_strand_queue(
-    monkeypatch,
-):
-    service = _service()
-    started_jobs: list[str] = []
-    _prevent_background_execution(service, monkeypatch, started_jobs)
-    session_id = "session_persist_concurrent_send"
-    active = await service.start_job(
-        session_id,
         "active",
         message_id="msg_active",
         message_created_at="2026-07-17T00:00:00+00:00",
     )
-    target = await service.start_job(
+    queued = await service.start_job(
         session_id,
-        "pending target",
-        message_id="msg_target",
+        "queued",
+        message_id="msg_queued",
         message_created_at="2026-07-17T00:00:01+00:00",
     )
-    active_job = service._jobs[active.job_id]
-    active_job.status = JobStatus.cancelled
-    await service._schedule_next_job_if_needed(active_job)
 
-    persist_started = asyncio.Event()
-    release_persist = asyncio.Event()
-    calls = 0
-
-    async def blocked_failure(_snapshot):
-        nonlocal calls
-        calls += 1
-        persist_started.set()
-        if calls == 1:
-            await release_persist.wait()
-        raise OSError("disk full")
-
-    monkeypatch.setattr(service._pending_requests, "persist", blocked_failure)
-    immediate_task = asyncio.create_task(
-        service.send_pending_immediately(session_id, "msg_target")
-    )
-    await persist_started.wait()
-    concurrent_task = asyncio.create_task(
-        service.start_job(
+    with pytest.raises(RuntimeError, match="快照已过期"):
+        await service.update_pending_policy(
             session_id,
-            "concurrent",
-            message_id="msg_concurrent",
-            message_created_at="2026-07-17T00:00:02+00:00",
+            "msg_queued",
+            delivery_policy="after_interrupt",
+            expected_snapshot_version=(queued.queue_snapshot_version or 0) - 1,
         )
-    )
-    await asyncio.sleep(0)
-    release_persist.set()
-    with pytest.raises(OSError, match="disk full"):
-        await immediate_task
-    with pytest.raises(OSError, match="disk full"):
-        await concurrent_task
-
-    assert service._session_current_job[session_id] == target.job_id
-    assert started_jobs == [active.job_id, target.job_id]
-    assert any(
-        job.message_id == "msg_concurrent" and job.status == JobStatus.queued
-        for job in service._jobs.values()
-    )
-
-
-@pytest.mark.asyncio
-async def test_second_persist_failure_always_cleans_reservation(monkeypatch):
-    service = _service()
-    _prevent_background_execution(service, monkeypatch)
-    session_id = "session_second_persist_failure"
-    active = await service.start_job(
-        session_id,
-        "active",
-        message_id="msg_active",
-        message_created_at="2026-07-17T00:00:00+00:00",
-    )
-    target = await service.start_job(
-        session_id,
-        "pending",
-        message_id="msg_pending",
-        message_created_at="2026-07-17T00:00:01+00:00",
-    )
-    active_job = service._jobs[active.job_id]
-    active_job.status = JobStatus.cancelled
-    await service._schedule_next_job_if_needed(active_job)
-    calls = 0
-
-    async def fail_second_persist(_snapshot):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("second persist failed")
-
-    monkeypatch.setattr(service._pending_requests, "persist", fail_second_persist)
-
-    with pytest.raises(OSError, match="second persist failed"):
-        await service.send_pending_immediately(session_id, "msg_pending")
-
-    assert service._session_current_job[session_id] == target.job_id
-    assert all(
-        not job.internal_reservation for job in service._jobs.values()
-    )

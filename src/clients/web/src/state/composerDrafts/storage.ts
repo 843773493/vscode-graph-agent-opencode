@@ -8,11 +8,16 @@ const NEW_SESSION_DRAFT_ID = "__new_session_draft__";
 export function composerDraftScopeKey(
   workspaceId: string | null,
   sessionId: string | null,
+  userScope?: string | null,
 ): string | null {
   if (!workspaceId) {
     return null;
   }
-  return sessionScopeKey(workspaceId, sessionId ?? NEW_SESSION_DRAFT_ID);
+  if (userScope === null) {
+    return null;
+  }
+  const scopePrefix = userScope ? `${userScope}::` : "";
+  return `${scopePrefix}${sessionScopeKey(workspaceId, sessionId ?? NEW_SESSION_DRAFT_ID)}`;
 }
 
 function readComposerDrafts(): Record<string, string> {

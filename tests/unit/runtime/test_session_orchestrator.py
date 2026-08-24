@@ -273,7 +273,7 @@ async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_forwards_cross_session_dispatch_mode():
+async def test_orchestrator_forwards_cross_session_delivery_policy():
     captured: dict[str, object] = {}
 
     class _FakeJobService:
@@ -282,7 +282,7 @@ async def test_orchestrator_forwards_cross_session_dispatch_mode():
 
         async def start_job(self, session_id, *args, **kwargs):
             captured.update(kwargs)
-            return _running_dispatch(session_id, "job_steering")
+            return _running_dispatch(session_id, "job_interrupt")
 
     orchestrator = SessionOrchestrator(
         message_service=_FakeMessageService(),
@@ -295,10 +295,10 @@ async def test_orchestrator_forwards_cross_session_dispatch_mode():
     await orchestrator.create_and_run(
         "ses_target",
         "调整执行方向",
-        dispatch_mode="steering",
+        delivery_policy="after_tool_result",
     )
 
-    assert captured["dispatch_mode"] == "steering"
+    assert captured["delivery_policy"] == "after_tool_result"
 
 
 @pytest.mark.asyncio

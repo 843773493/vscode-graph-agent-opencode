@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.control.schemas import (
+from app.schemas.gateway_control import (
     WorkspaceFolderCreateRequest,
     WorkspaceNavigationPlacementRequest,
 )

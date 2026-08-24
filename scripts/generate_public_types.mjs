@@ -7,6 +7,18 @@ import path from 'node:path';
 
 const workspaceRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
 const sourceDir = path.join(workspaceRoot, 'app', 'schemas', 'public_v2');
+const gatewaySchemaSources = [
+	{
+		moduleName: 'gateway',
+		inputModule: 'app.schemas.gateway',
+		filePath: path.join(workspaceRoot, 'app', 'schemas', 'gateway.py'),
+	},
+	{
+		moduleName: 'gateway_control',
+		inputModule: 'app.schemas.gateway_control',
+		filePath: path.join(workspaceRoot, 'app', 'schemas', 'gateway_control.py'),
+	},
+];
 const outputDir = path.join(workspaceRoot, 'src', 'clients', 'web', 'src', 'types', 'gen');
 const isWindows = process.platform === 'win32';
 const pydantic2tsExecutable = isWindows
@@ -111,6 +123,21 @@ async function getPublicPythonFiles() {
 		.sort();
 }
 
+async function getSchemaJobs() {
+	const publicFiles = await getPublicPythonFiles();
+	return [
+		...publicFiles.map((fileName) => {
+			const moduleName = path.basename(fileName, '.py');
+			return {
+				moduleName,
+				inputModule: 'app.schemas.public_v2.' + moduleName,
+				filePath: path.join(sourceDir, fileName),
+			};
+		}),
+		...gatewaySchemaSources,
+	];
+}
+
 async function ensureDirectory(directoryPath) {
 	await mkdir(directoryPath, { recursive: true });
 }
@@ -150,34 +177,44 @@ async function appendGeneratedTypeAliases(moduleName, filePath) {
 	}
 }
 
+async function getGeneratedTypeNames(filePath) {
+	const content = await readFile(filePath, 'utf8');
+	return [...content.matchAll(/^export (?:interface|type) (\w+)/gm)].map(
+		(match) => match[1],
+	);
+}
+
+const gatewayControlIndexExclusions = new Set(['SessionResourceDTO']);
+
 async function main() {
 	await ensurePathExists(path.join(workspaceRoot, 'pyproject.toml'), 'Python 项目文件');
 	await ensurePathExists(path.join(workspaceRoot, 'package.json'), '前端项目文件');
 	await ensurePathExists(sourceDir, '公开 DTO 源码目录');
+	for (const source of gatewaySchemaSources) {
+		await ensurePathExists(source.filePath, 'Gateway 协议源码文件 ' + source.filePath);
+	}
 	await ensureDirectory(outputDir);
 
-	const publicFiles = await getPublicPythonFiles();
-	if (publicFiles.length === 0) {
+	const schemaJobs = await getSchemaJobs();
+	if (schemaJobs.length === 0) {
 		throw new Error(`未找到任何 Python 文件: ${sourceDir}`);
 	}
 
 	await cleanGeneratedTsFiles();
 
-	for (const fileName of publicFiles) {
-		const moduleName = path.basename(fileName, '.py');
-		const inputModule = `app.schemas.public_v2.${moduleName}`;
-		const outputFile = path.join(outputDir, `${moduleName}.ts`);
+	for (const schemaJob of schemaJobs) {
+		const outputFile = path.join(outputDir, schemaJob.moduleName + '.ts');
 
 		await runCommand(pydantic2tsExecutable, [
 			'--module',
-			inputModule,
+			schemaJob.inputModule,
 			'--output',
 			outputFile,
 			'--json2ts-cmd',
 			json2tsExecutable,
 		]);
 		await ensureGeneratedHeader(outputFile);
-		await appendGeneratedTypeAliases(moduleName, outputFile);
+		await appendGeneratedTypeAliases(schemaJob.moduleName, outputFile);
 	}
 
 	await runCommand(pythonExecutable, [
@@ -200,7 +237,7 @@ async function main() {
 		"export type { LLMRequestLogRecordDTO } from './llm_request_log';",
 		"export type { AttachmentRef } from './attachment';",
 		"export type { MessageDTO, MessageRunAccepted, MessageRunRequest, RunOptions } from './message';",
-		"export type { PendingRequestDTO, PendingRequestListDTO, PendingRequestOrderItem, PendingRequestReorderRequest, PendingRequestUpdateRequest } from './pending_request';",
+		"export type { PendingRequestDTO, PendingRequestListDTO, PendingRequestUpdateRequest } from './pending_request';",
 		"export type { RuntimeInfoDTO, RuntimeShutdownDTO, RuntimeShutdownResultDTO, RuntimeStatusDTO, UiSnapshotResultDTO } from './runtime';",
 		"export type { SessionInformationSnapshotDTO, SessionDTO, SessionListResultDTO } from './session';",
 		'export type {',
@@ -225,9 +262,19 @@ async function main() {
 		"export type { ToolTestAttemptDTO, ToolTestProviderResultDTO, ToolTestRunDTO, ToolTestRunListDTO, ToolTestStartRequest } from './tool_test';",
 		"export type { SseErrorDTO } from './sse';",
 		"export type { TraceEventDTO } from './trace';",
-		"export type { SessionTurnBootstrapDTO, StaleTurnCursorErrorDTO, TurnAttachmentDTO, TurnCursorDTO, TurnDetailBatchDTO, TurnDetailBatchRequest, TurnDetailDTO, TurnJobSummaryDTO, TurnPageDTO, TurnProjectionCorruptedErrorDTO, TurnSummaryDTO, TurnUserMessageDTO, TurnUserMessageSummaryDTO } from './turn';",
+		"export type { SessionTurnBootstrapDTO, StaleTurnCursorErrorDTO, TurnAttachmentDTO, TurnCursorDTO, TurnDetailBatchDTO, TurnDetailBatchRequest, TurnDetailDTO, TurnJobSummaryDTO, TurnPageDTO, TurnProjectionCorruptedErrorDTO, TurnSummaryDTO, TurnToolSummaryDTO, TurnUserMessageDTO, TurnUserMessageSummaryDTO } from './turn';",
 		"export type { WorkspaceContextDTO, WorkspaceDTO, WorkspaceFileChangeBatchDTO, WorkspaceFileChangeDTO, WorkspaceFileContentDTO, WorkspaceFileListDTO, WorkspaceFileNodeDTO, WorkspaceFileUpdateRequest, WorkspaceFileWatchRequest } from './workspace';",
 	];
+	for (const schemaSource of gatewaySchemaSources) {
+		const outputFile = path.join(outputDir, schemaSource.moduleName + '.ts');
+		const generatedTypeNames = await getGeneratedTypeNames(outputFile);
+		const typeNames = schemaSource.moduleName === 'gateway_control'
+			? generatedTypeNames.filter((name) => !gatewayControlIndexExclusions.has(name))
+			: generatedTypeNames;
+		indexLines.push(
+			'export type { ' + typeNames.join(', ') + " } from './" + schemaSource.moduleName + "';",
+		);
+	}
 	await writeFile(path.join(outputDir, 'index.ts'), `${indexLines.join('\n')}\n`, 'utf8');
 }
 

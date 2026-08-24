@@ -20,7 +20,6 @@ MAX_COMPACT_LINE_BYTES = 64 * 1024
 TURN_PROJECTED_EVENT_TYPES = frozenset(
     {
         "job_created",
-        "job_merged",
         "job_started",
         "job_completed",
         "job_cancelled",

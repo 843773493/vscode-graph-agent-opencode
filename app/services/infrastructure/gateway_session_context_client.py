@@ -6,7 +6,7 @@ import httpx
 from pydantic import BaseModel
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
-from app.gateway.schemas import GatewayWorkspaceListDTO
+from app.schemas.gateway import GatewayWorkspaceListDTO
 from app.schemas.public_v2.session_context import (
     SessionContextReadRequest,
     SessionContextReadResultDTO,

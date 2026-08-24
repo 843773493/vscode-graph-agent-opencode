@@ -2,6 +2,7 @@ import type { ConversationView } from "../types/frontend";
 import {
   aggregateConversationEvents,
   buildPendingStatusItem,
+  isLiveConversationView,
 } from "./trace/traceAggregation";
 import { normalizeTimelineMessage } from "./timelineMessages";
 import type { TimelineItem } from "./timelineTypes";
@@ -38,7 +39,8 @@ export function buildTraceTimelineItems(
     const aggregated = aggregateConversationEvents(
       conv.events,
       conv.conversationId,
-      conv.status === "running" || conv.status === "queued",
+      isLiveConversationView(conv)
+        && (conv.status === "running" || conv.status === "queued"),
     );
     if (aggregated.length === 0) {
       const statusItem = buildPendingStatusItem(conv);

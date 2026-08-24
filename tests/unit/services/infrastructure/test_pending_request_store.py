@@ -8,24 +8,36 @@ from app.schemas.public_v2.pending_request import PendingRequestDTO
 from app.services.infrastructure.pending_request_store import PendingRequestStore
 
 
+def _request(
+    session_id: str,
+    *,
+    sequence: int,
+    content: str = "内容",
+) -> PendingRequestDTO:
+    now = datetime.now(UTC)
+    return PendingRequestDTO(
+        job_id=f"job_{sequence}",
+        message_id=f"msg_{sequence}",
+        session_id=session_id,
+        content=content,
+        delivery_policy="after_turn",
+        enqueue_sequence=sequence,
+        position=sequence - 1,
+        agent_id="default",
+        message_created_at=now.isoformat(),
+        created_at=now,
+        updated_at=now,
+        snapshot_version=sequence,
+    )
+
+
 @pytest.mark.asyncio
 async def test_pending_request_store_round_trip(tmp_path, session_bundle_factory):
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_restore"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
-    request = PendingRequestDTO(
-        job_id="job_restore",
-        message_id="msg_restore",
-        session_id=session_id,
-        content="重启后继续保留",
-        kind="steering",
-        position=0,
-        agent_id="default",
-        message_created_at="2026-07-17T00:00:00+00:00",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
+    request = _request(session_id, sequence=1)
 
     await store.save(session_id, [request])
     restored = await store.load(session_id)
@@ -44,20 +56,11 @@ async def test_pending_summary_read_is_bounded_and_skips_full_detail(
     session_id = "ses_pending_summary"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
-    now = datetime.now(UTC)
     requests = [
-        PendingRequestDTO(
-            job_id=f"job_{index}",
-            message_id=f"msg_{index}",
-            session_id=session_id,
+        _request(
+            session_id,
+            sequence=index + 1,
             content="x" * (512 * 1024),
-            kind="queued",
-            position=index,
-            agent_id="default",
-            message_created_at=now.isoformat(),
-            message_metadata={"large": "y" * 128 * 1024},
-            created_at=now,
-            updated_at=now,
         )
         for index in range(40)
     ]
@@ -97,7 +100,7 @@ async def test_pending_summary_read_is_bounded_and_skips_full_detail(
     summaries = await store.load_summaries(session_id, limit=8)
 
     assert [item.job_id for item in summaries.requests] == [
-        f"job_{index}" for index in range(8)
+        f"job_{index}" for index in range(1, 9)
     ]
     assert summaries.request_count == 40
     assert summaries.truncated is True
@@ -105,105 +108,38 @@ async def test_pending_summary_read_is_bounded_and_skips_full_detail(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_payload", [[], None])
-async def test_pending_store_explicitly_migrates_legacy_array_schema(
+async def test_legacy_pending_schema_is_rejected_without_compatibility_migration(
     tmp_path,
     session_bundle_factory,
-    legacy_payload,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_pending_legacy"
     session_dir = session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
-    now = datetime.now(UTC)
-    requests = (
-        []
-        if legacy_payload == []
-        else [
-            PendingRequestDTO(
-                job_id="job_legacy",
-                message_id="msg_legacy",
-                session_id=session_id,
-                content="x" * (2 * 1024 * 1024),
-                kind="queued",
-                position=0,
-                agent_id="default",
-                message_created_at=now.isoformat(),
-                created_at=now,
-                updated_at=now,
-            )
-        ]
-    )
     path = session_dir / "pending_requests.json"
-    path.write_text(
-        json.dumps(
-            [request.model_dump(mode="json") for request in requests],
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    await store.migrate_schema(session_id)
-    summaries = await store.load_summaries(session_id, limit=8)
-    restored = await store.load(session_id)
-
-    assert summaries.request_count == len(requests)
-    assert [item.job_id for item in summaries.requests] == [
-        request.job_id for request in requests
-    ]
-    assert restored == requests
-    with path.open("rb") as stream:
-        assert json.loads(stream.readline())["version"] == 1
-
-
-@pytest.mark.asyncio
-async def test_pending_schema_migration_is_atomic_when_publish_fails(
-    tmp_path,
-    session_bundle_factory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sessions_dir = tmp_path / "sessions"
-    session_id = "ses_pending_migration_crash"
-    session_dir = session_bundle_factory(sessions_dir, session_id)
-    store = PendingRequestStore(sessions_dir=sessions_dir)
-    path = session_dir / "pending_requests.json"
-    legacy = "[]\n"
+    legacy = json.dumps(
+        [{"job_id": "legacy", "kind": "steering"}],
+        ensure_ascii=False,
+    ) + "\n"
     path.write_text(legacy, encoding="utf-8")
 
-    def fail_replace(source, target):
-        raise OSError("模拟 pending schema 原子发布前崩溃")
-
-    monkeypatch.setattr(
-        "app.services.infrastructure.pending_request_store.os.replace",
-        fail_replace,
-    )
-    with pytest.raises(OSError, match="原子发布前崩溃"):
+    with pytest.raises(RuntimeError, match="旧 pending kind"):
         await store.migrate_schema(session_id)
-
     assert path.read_text(encoding="utf-8") == legacy
-    assert not list(session_dir.glob(".pending_requests.json.*"))
 
 
 @pytest.mark.asyncio
-async def test_pending_schema_migration_runs_explicitly_for_all_sessions_at_startup(
+async def test_store_rejects_duplicate_queue_sequences(
     tmp_path,
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
-    session_ids = ("ses_legacy_a", "ses_legacy_b")
-    for session_id in session_ids:
-        session_dir = session_bundle_factory(sessions_dir, session_id)
-        (session_dir / "pending_requests.json").write_text(
-            json.dumps([], indent=2) + "\n",
-            encoding="utf-8",
-        )
+    session_id = "ses_pending_corrupt"
+    session_bundle_factory(sessions_dir, session_id)
     store = PendingRequestStore(sessions_dir=sessions_dir)
 
-    migrated = await store.migrate_all()
-
-    assert migrated == 2
-    assert await store.migrate_all() == 0
-    for session_id in session_ids:
-        assert (await store.load_summaries(session_id, limit=8)).request_count == 0
+    with pytest.raises(RuntimeError, match="重复入队序号"):
+        await store.save(
+            session_id,
+            [_request(session_id, sequence=1), _request(session_id, sequence=1)],
+        )

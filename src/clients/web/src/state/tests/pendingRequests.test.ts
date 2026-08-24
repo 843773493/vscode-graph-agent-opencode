@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ConversationView } from "../../types/frontend";
 
 import {
   pendingSnapshotToConversations,
@@ -8,7 +9,7 @@ import {
 
 
 describe("待处理消息状态", () => {
-  test("以后端 position 排序，并始终放在历史轮次之后", () => {
+  test("以后端 enqueue_sequence 排序，并始终放在历史轮次之后", () => {
     const pending = pendingSnapshotToConversations({
       session_id: "ses_pending",
       requests: [
@@ -17,30 +18,38 @@ describe("待处理消息状态", () => {
           message_id: "msg_queued",
           session_id: "ses_pending",
           content: "后发送但排第二",
-          kind: "queued",
+          delivery_policy: "after_turn",
+          enqueue_sequence: 2,
           position: 1,
+          status: "queued",
           agent_id: "default",
           message_created_at: "2026-07-17T00:00:01Z",
           created_at: "2026-07-17T00:00:01Z",
           updated_at: "2026-07-17T00:00:01Z",
+          snapshot_version: 2,
         },
         {
-          job_id: "job_steering",
-          message_id: "msg_steering",
+          job_id: "job_interrupt",
+          message_id: "msg_interrupt",
           session_id: "ses_pending",
-          content: "引导消息排第一",
-          kind: "steering",
+          content: "消息排第一",
+          delivery_policy: "after_interrupt",
+          enqueue_sequence: 1,
           position: 0,
+          status: "queued",
           agent_id: "default",
           message_created_at: "2026-07-17T00:00:02Z",
           created_at: "2026-07-17T00:00:02Z",
           updated_at: "2026-07-17T00:00:02Z",
+          snapshot_version: 2,
         },
       ],
+      snapshot_version: 2,
     });
     const history = {
       ...pending[0],
       conversationId: "msg_history",
+      displayMode: "history" as const,
       pending: false,
       pendingPosition: undefined,
       source: "turn" as const,
@@ -51,10 +60,10 @@ describe("待处理消息状态", () => {
       sortConversationViews([pending[0], history, pending[1]]).map(
         (conversation) => conversation.conversationId,
       ),
-    ).toEqual(["msg_history", "msg_steering", "msg_queued"]);
+    ).toEqual(["msg_history", "msg_interrupt", "msg_queued"]);
   });
 
-  test("待处理快照独立保留 active job，刷新后仍可停止或发送 Steering", () => {
+  test("待处理快照独立保留 active job，刷新后仍可停止或继续发送", () => {
     const pending = new Map();
     const active = new Map<string, string>();
 
@@ -65,6 +74,7 @@ describe("待处理消息状态", () => {
         session_id: "ses_active",
         active_job_id: "job_active",
         requests: [],
+        snapshot_version: 1,
       },
       "workspace::ses_active",
     );
@@ -77,5 +87,54 @@ describe("待处理消息状态", () => {
         status: "running",
       }),
     ]);
+  });
+
+  test("后端快照移除终态任务时不保留实时失败回合", () => {
+    const pending = new Map<string, ConversationView[]>([
+      ["workspace::ses_failed", [{
+        conversationId: "msg_failed",
+        displayMode: "live" as const,
+        sessionId: "ses_failed",
+        userMessage: {
+          message_id: "msg_failed",
+          session_id: "ses_failed",
+          role: "user" as const,
+          content: "压缩后继续",
+          attachments: [],
+          metadata: {},
+          created_at: "2026-07-24T00:00:00Z",
+          updated_at: "2026-07-24T00:00:00Z",
+        },
+        assistantMessages: [],
+        events: [{
+          event_id: "evt_failed",
+          session_id: "ses_failed",
+          job_id: "job_failed",
+          type: "job_failed",
+          phase: "job",
+          title: "任务失败",
+          content: "模型没有返回可见内容",
+          timestamp: "2026-07-24T00:00:01Z",
+        }],
+        status: "error" as const,
+        jobId: "job_failed",
+        pending: false,
+        source: "pending" as const,
+      }]],
+    ]);
+
+    writePendingSnapshot(
+      pending,
+      new Map(),
+      {
+        session_id: "ses_failed",
+        active_job_id: null,
+        requests: [],
+        snapshot_version: 2,
+      },
+      "workspace::ses_failed",
+    );
+
+    expect(pending.has("workspace::ses_failed")).toBe(false);
   });
 });

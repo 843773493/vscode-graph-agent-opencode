@@ -1,8 +1,9 @@
 """会话轮次重试、重新生成和编辑后继续的权威上下文回退。"""
+
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import ClassVar, Protocol
 from uuid import uuid4
@@ -11,7 +12,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.turn_history import TurnHistoryStoreProtocol
 from app.core.checkpoint_config import build_checkpoint_config
 from app.schemas.public_v2.common import JobStatus, MessageRole
 from app.schemas.public_v2.message import (
@@ -24,9 +24,7 @@ from app.schemas.public_v2.message import (
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 
-CONTEXT_ONLY_NOTICE = (
-    "已移除目标消息及其后的会话上下文；工作区文件修改不会被撤销。"
-)
+CONTEXT_ONLY_NOTICE = "已移除目标消息及其后的会话上下文；工作区文件修改不会被撤销。"
 
 
 class PreparedMessageDispatcher(Protocol):
@@ -37,6 +35,10 @@ class PreparedMessageDispatcher(Protocol):
         *,
         requested_agent_id: str | None,
     ) -> MessageRunAccepted: ...
+
+
+class FailedJobTraceReader(Protocol):
+    def read_message_events(self, session_id: str) -> Iterable[object]: ...
 
 
 class SessionTurnReplayService:
@@ -58,14 +60,14 @@ class SessionTurnReplayService:
         session_service: SessionService,
         job_service: JobServiceProtocol,
         dispatcher: PreparedMessageDispatcher,
-        turn_history_store: TurnHistoryStoreProtocol,
+        trace_event_store: FailedJobTraceReader,
     ) -> None:
         self._checkpointer = checkpointer
         self._message_service = message_service
         self._session_service = session_service
         self._job_service = job_service
         self._dispatcher = dispatcher
-        self._turn_history_store = turn_history_store
+        self._trace_event_store = trace_event_store
         self._session_locks: dict[str, asyncio.Lock] = {}
 
     async def replay(
@@ -73,6 +75,8 @@ class SessionTurnReplayService:
         session_id: str,
         target_message_id: str,
         request: MessageReplayRequest,
+        *,
+        target_turn_id: str | None = None,
     ) -> MessageReplayAccepted:
         if not request.acknowledge_context_only:
             raise ValueError(
@@ -125,21 +129,8 @@ class SessionTurnReplayService:
             removed_message_count = await self._append_replay_checkpoint(
                 session_id=session_id,
                 target_message_id=target_message_id,
+                target_turn_id=target_turn_id,
                 action=request.action,
-            )
-            self._turn_history_store.truncate_from_message(
-                session_id,
-                target_message_id,
-            )
-            replacement = replacement.model_copy(
-                update={
-                    "metadata": {
-                        **replacement.metadata,
-                        "turn_projection_epoch": (
-                            self._turn_history_store.projection_epoch(session_id)
-                        ),
-                    }
-                }
             )
             accepted = await self._dispatcher.dispatch_prepared_message(
                 session_id,
@@ -155,6 +146,34 @@ class SessionTurnReplayService:
                 workspace_changes_reverted=False,
                 notice=CONTEXT_ONLY_NOTICE,
             )
+
+    async def replay_turn(
+        self,
+        session_id: str,
+        turn_id: str,
+        request: MessageReplayRequest,
+    ) -> MessageReplayAccepted:
+        """以用户可见的 Turn ID 解析目标，内部再定位用户消息。"""
+        visible_messages = (
+            await self._message_service.list(session_id=session_id, limit=100_000)
+        ).items
+        target = next(
+            (
+                message
+                for message in visible_messages
+                if message.role == MessageRole.user
+                and message.metadata.get("turn_id") == turn_id
+            ),
+            None,
+        )
+        if target is None:
+            raise ValueError(f"当前有效上下文中不存在目标 Turn: turn_id={turn_id}")
+        return await self.replay(
+            session_id,
+            target.message_id,
+            request,
+            target_turn_id=turn_id,
+        )
 
     async def _assert_session_idle(self, session_id: str) -> None:
         active = [
@@ -180,7 +199,9 @@ class SessionTurnReplayService:
                 raise ValueError("编辑并从此处继续需要非空消息内容")
             return
 
-        user_messages = [message for message in visible_messages if message.role == MessageRole.user]
+        user_messages = [
+            message for message in visible_messages if message.role == MessageRole.user
+        ]
         if not user_messages or user_messages[-1].message_id != target.message_id:
             raise ValueError("重试或重新生成只能作用于当前最后一个用户轮次")
         if request.content is not None:
@@ -206,9 +227,33 @@ class SessionTurnReplayService:
             if job.message_id == message_id
         ]
         if not matching_jobs:
+            if self._trace_has_failed_job(session_id, message_id):
+                return True
             raise ValueError(f"目标轮次缺少对应 Job: message_id={message_id}")
         matching_jobs.sort(key=lambda job: job.created_at)
         return matching_jobs[-1].status in {JobStatus.failed, JobStatus.timed_out}
+
+    def _trace_has_failed_job(self, session_id: str, message_id: str) -> bool:
+        job_message_ids: dict[str, str] = {}
+        terminal_statuses: dict[str, str] = {}
+        for event in self._trace_event_store.read_message_events(session_id):
+            event_type = getattr(event, "type", None)
+            job_id = getattr(event, "job_id", None)
+            payload = getattr(event, "payload", None)
+            if not isinstance(job_id, str) or payload is None:
+                continue
+            if event_type == "job_created":
+                created_message_id = getattr(payload, "message_id", None)
+                if isinstance(created_message_id, str):
+                    job_message_ids[job_id] = created_message_id
+            elif event_type in {"job_completed", "job_cancelled", "job_failed"}:
+                terminal_statuses[job_id] = event_type
+
+        return any(
+            job_message_id == message_id
+            and terminal_statuses.get(job_id) == "job_failed"
+            for job_id, job_message_id in job_message_ids.items()
+        )
 
     @staticmethod
     def _resolved_content(request: MessageReplayRequest, target: MessageDTO) -> str:
@@ -222,9 +267,12 @@ class SessionTurnReplayService:
         *,
         session_id: str,
         target_message_id: str,
+        target_turn_id: str | None,
         action: str,
     ) -> int:
-        latest = await self._checkpointer.aget_tuple(build_checkpoint_config(session_id))
+        latest = await self._checkpointer.aget_tuple(
+            build_checkpoint_config(session_id)
+        )
         if latest is None:
             raise ValueError("当前会话没有可回退的 checkpoint")
         latest_messages = self._checkpoint_messages(latest)
@@ -234,18 +282,79 @@ class SessionTurnReplayService:
                 f"目标用户消息不在最新 checkpoint 中: message_id={target_message_id}"
             )
 
-        base, base_messages = await self._checkpoint_before_message(
-            latest=latest,
-            target_message_id=target_message_id,
+        latest_versions = latest.checkpoint.get("channel_versions")
+        if not isinstance(latest_versions, dict):
+            raise TypeError("最新 checkpoint.channel_versions 必须是 dict")
+        # 先解析所有 replay 必需的下一版本。这个校验必须发生在 rewind
+        # 之前，否则损坏的 channel version 会留下只有回退、没有新 checkpoint
+        # 的半完成状态。
+        next_messages_version = self._checkpointer.get_next_version(
+            latest_versions.get("messages"),
+            None,
         )
+        next_summarization_version = self._checkpointer.get_next_version(
+            latest_versions.get("_summarization_event"),
+            None,
+        )
+
+        if target_turn_id is not None:
+            materialize = getattr(
+                self._checkpointer,
+                "amaterialize_turn_anchor",
+                None,
+            )
+            rewind_to_turn = getattr(self._checkpointer, "arewind_to_turn", None)
+            if not callable(materialize) or not callable(rewind_to_turn):
+                raise RuntimeError("当前 checkpoint saver 不支持 Turn replay")
+            _anchor, base_messages = await materialize(
+                latest.config,
+                turn_id=target_turn_id,
+                anchor_mode="before",
+            )
+            active_config = await rewind_to_turn(
+                latest.config,
+                turn_id=target_turn_id,
+                anchor_mode="before",
+            )
+            base = await self._checkpointer.aget_tuple(
+                build_checkpoint_config(session_id)
+            )
+            if base is None:
+                raise RuntimeError("Turn rewind 后无法读取 active checkpoint")
+        else:
+            base, base_messages = await self._checkpoint_before_message(
+                latest=latest,
+                target_message_id=target_message_id,
+            )
+
+            active_config = latest.config
+            rewind = getattr(self._checkpointer, "arewind", None)
+            base_checkpoint_id = base.checkpoint.get("id")
+            if callable(rewind) and isinstance(base_checkpoint_id, str):
+                source_anchor = (
+                    target_message_id
+                    if self._message_index(
+                        self._checkpoint_messages(base),
+                        target_message_id,
+                    )
+                    >= 0
+                    else None
+                )
+                active_config = await rewind(
+                    latest.config,
+                    checkpoint_id=base_checkpoint_id,
+                    source_anchor=source_anchor,
+                    anchor_mode="before",
+                )
 
         checkpoint = deepcopy(base.checkpoint)
         channel_values = checkpoint.get("channel_values")
         channel_versions = checkpoint.get("channel_versions")
-        latest_versions = latest.checkpoint.get("channel_versions")
         if not isinstance(channel_values, dict):
             raise TypeError("回退 checkpoint.channel_values 必须是 dict")
-        if not isinstance(channel_versions, dict) or not isinstance(latest_versions, dict):
+        if not isinstance(channel_versions, dict) or not isinstance(
+            latest_versions, dict
+        ):
             raise TypeError("回退 checkpoint.channel_versions 必须是 dict")
 
         channel_values["messages"] = base_messages
@@ -255,17 +364,9 @@ class SessionTurnReplayService:
             cutoff_index = summarization_event.get("cutoff_index")
             if isinstance(cutoff_index, int) and cutoff_index > len(base_messages):
                 channel_values.pop("_summarization_event")
-                event_version = self._checkpointer.get_next_version(
-                    latest_versions.get("_summarization_event"),
-                    None,
-                )
-                channel_versions["_summarization_event"] = event_version
-                new_versions["_summarization_event"] = event_version
+                channel_versions["_summarization_event"] = next_summarization_version
+                new_versions["_summarization_event"] = next_summarization_version
 
-        next_messages_version = self._checkpointer.get_next_version(
-            latest_versions.get("messages"),
-            None,
-        )
         channel_versions["messages"] = next_messages_version
         new_versions["messages"] = next_messages_version
         checkpoint["channel_values"] = channel_values
@@ -274,7 +375,7 @@ class SessionTurnReplayService:
         checkpoint["pending_sends"] = []
         checkpoint["updated_channels"] = list(new_versions)
         await self._checkpointer.aput(
-            config=latest.config,
+            config=active_config,
             checkpoint=checkpoint,
             metadata={
                 "source": "session_turn_replay",
@@ -311,9 +412,10 @@ class SessionTurnReplayService:
                 return checkpoint, checkpoint_messages[:target_index]
             parent = await self._checkpointer.aget_tuple(checkpoint.parent_config)
             if parent is None:
-                raise RuntimeError(
-                    "目标消息 checkpoint 声明了父 checkpoint，但父状态无法读取"
-                )
+                # 首个真实 checkpoint 可能继承 LangGraph 尚未落盘的内存
+                # 初始 checkpoint。当前 checkpoint 已经包含目标消息前的完整
+                # 快照，此时直接使用它的前缀即可，不应让 replay 变成 500。
+                return checkpoint, checkpoint_messages[:target_index]
             parent_messages = self._checkpoint_messages(parent)
             if self._message_index(parent_messages, target_message_id) < 0:
                 return parent, parent_messages
@@ -338,7 +440,10 @@ class SessionTurnReplayService:
                 metadata = message.get("response_metadata") or {}
             else:
                 continue
-            if isinstance(metadata, Mapping) and metadata.get("message_id") == message_id:
+            if (
+                isinstance(metadata, Mapping)
+                and metadata.get("message_id") == message_id
+            ):
                 return index
         return -1
 

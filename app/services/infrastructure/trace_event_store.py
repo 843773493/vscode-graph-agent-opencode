@@ -19,6 +19,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import Event
 from app.services.infrastructure.turn_history.trace_cursor import (
     TraceCursorGoneError,
+    encode_trace_cursor,
     events_after_cursor,
     offset_after_event,
 )
@@ -159,6 +160,55 @@ class TraceEventStore:
             tail_limit=tail_limit if after_event_id is None else None,
         )
         return events_after_cursor(session_id, events, after_event_id)
+
+    def read_terminal_job_statuses(
+        self,
+        session_id: str,
+        job_ids: set[str],
+        *,
+        tail_limit: int = 4096,
+    ) -> dict[str, str]:
+        """从持久化 Trace 尾部恢复指定 Job 的终态。
+
+        只在 rollout 中仍为 running 的 Turn 上调用，用于覆盖服务进程重启前
+        尚未来得及写入 turns.status 的失败或取消任务；正常历史读取不会扫描
+        Trace，也不会改变新的 rollout/SQLite 快路径。
+        """
+        if not job_ids:
+            return {}
+        terminal_types = {
+            "job_completed": "completed",
+            "job_failed": "failed",
+            "job_cancelled": "cancelled",
+        }
+        statuses: dict[str, str] = {}
+        for event in self.read_events(session_id, tail_limit=tail_limit):
+            status = terminal_types.get(event.type)
+            if status is not None and event.job_id in job_ids:
+                statuses[event.job_id] = status
+        return statuses
+
+    def latest_event_cursor(self, session_id: str) -> str | None:
+        """读取事件日志尾部的可验证传输游标，供新 SSE 连接跳过历史事件。"""
+        with self._file_locks[session_id]:
+            file = self._trace_file(session_id)
+            latest = self._read_last_event_line(file)
+            if latest is None:
+                return None
+            start, end, line = latest
+            try:
+                raw_event = json.loads(line.decode("utf-8"))
+                event = _AnyEvent.model_validate(raw_event).root
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Trace 尾部事件无法解析: session_id={session_id}"
+                ) from exc
+        return encode_trace_cursor(
+            event_id=event.event_id,
+            start=start,
+            end=end,
+            line=line,
+        )
 
     def read_trace_page(
         self,
@@ -327,6 +377,39 @@ class TraceEventStore:
                 newline_count += chunk.count(b"\n")
         raw_lines = b"".join(reversed(chunks)).splitlines()
         return [line.decode("utf-8") for line in raw_lines[-limit:]]
+
+    @staticmethod
+    def _read_last_event_line(file: Path) -> tuple[int, int, bytes] | None:
+        if not file.exists() or file.stat().st_size == 0:
+            return None
+
+        with file.open("rb") as stream:
+            file_size = file.stat().st_size
+            content_end = file_size
+            while content_end > 0:
+                stream.seek(content_end - 1)
+                if stream.read(1) != b"\n":
+                    break
+                content_end -= 1
+            if content_end == 0:
+                return None
+
+            search_end = content_end
+            line_start = 0
+            while search_end > 0:
+                chunk_start = max(0, search_end - 64 * 1024)
+                stream.seek(chunk_start)
+                chunk = stream.read(search_end - chunk_start)
+                newline_index = chunk.rfind(b"\n")
+                if newline_index >= 0:
+                    line_start = chunk_start + newline_index + 1
+                    break
+                search_end = chunk_start
+
+            line_end = content_end + (1 if content_end < file_size else 0)
+            stream.seek(line_start)
+            line = stream.read(line_end - line_start)
+        return line_start, line_end, line
 
     def ensure_cursor(self, session_id: str, after_event_id: str | None) -> None:
         """在响应 SSE 之前验证游标，使失效游标能返回明确的 HTTP 状态。"""

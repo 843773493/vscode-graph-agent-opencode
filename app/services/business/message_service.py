@@ -1,6 +1,7 @@
 """MessageService：从 LangGraph checkpoint 读取会话历史。"""
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -11,7 +12,7 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from app.abstractions.session_context import AgentContextState
 from app.agents.cache_preserving_summarization import apply_summarization_event
@@ -29,7 +30,6 @@ from app.services.business.message_display import project_message_for_display
 from app.services.business.system_reminder_checkpoint_service import (
     append_system_reminder_checkpoint,
 )
-from app.services.infrastructure.message_history_store import MessageHistoryStore
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
@@ -39,25 +39,9 @@ class MessageService:
         self,
         checkpointer: BaseCheckpointSaver | None = None,
         attachment_store: SessionAttachmentStore | None = None,
-        history_store: MessageHistoryStore | None = None,
     ) -> None:
         self._checkpointer = checkpointer
         self._attachment_store = attachment_store
-        self._history_store = history_store
-
-    def has_checkpoint_history(self, session_id: str) -> bool:
-        if self._history_store is None:
-            raise RuntimeError("MessageService 未配置 history_store，无法检测旧会话")
-        return bool(self._history_store.latest_checkpoint_id(session_id))
-
-    async def list_visible_messages_for_turn_migration(
-        self,
-        session_id: str,
-    ) -> list[MessageDTO]:
-        messages, _checkpoint_id = await self._load_messages_with_checkpoint_id(
-            session_id
-        )
-        return messages
 
     @staticmethod
     def _message_to_dto(
@@ -400,9 +384,25 @@ class MessageService:
                     if isinstance(part.get("index"), int):
                         text_block["index"] = part["index"]
                     content_blocks.append(text_block)
-            elif part_type == "reasoning":
-                reasoning_text = part.get("reasoning")
+            elif part_type in {"reasoning", "thinking"}:
+                reasoning_text = (
+                    part.get("thinking") or part.get("text")
+                    if part_type == "thinking"
+                    else part.get("reasoning")
+                )
                 if not isinstance(reasoning_text, str):
+                    raw_content = part.get("content")
+                    if isinstance(raw_content, list):
+                        reasoning_text = "".join(
+                            item.get("text", "")
+                            for item in raw_content
+                            if isinstance(item, Mapping)
+                            and item.get("type") in {"reasoning_text", "text"}
+                            and isinstance(item.get("text"), str)
+                        )
+                    else:
+                        reasoning_text = ""
+                if not reasoning_text:
                     reasoning_text = extract_reasoning_summary(part.get("summary"))
                 reasoning_block: dict[str, object] = {
                     "type": "reasoning",
@@ -416,11 +416,6 @@ class MessageService:
                     reasoning_block["id"] = part["id"]
                 if isinstance(part.get("index"), int):
                     reasoning_block["index"] = part["index"]
-                extras: dict[str, object] = {}
-                if "extras" in part and isinstance(part["extras"], dict):
-                    extras.update(part["extras"])
-                if extras:
-                    reasoning_block["extras"] = extras
                 content_blocks.append(reasoning_block)
             elif part_type == "refusal":
                 refusal_text = part.get("refusal", "")
@@ -503,31 +498,81 @@ class MessageService:
         limit: int = 50,
         cursor: str | None = None,
     ) -> CursorPage[MessageDTO]:
-        if self._history_store is None:
-            messages = await self._load_messages(session_id)
-            return CursorPage(
-                items=messages[-limit:],
-                next_cursor=None,
-                has_more=len(messages) > limit,
-            )
-
-        checkpoint_id = self._history_store.latest_checkpoint_id(session_id)
-        if not self._history_store.is_current(session_id, checkpoint_id):
-            messages, loaded_checkpoint_id = await self._load_messages_with_checkpoint_id(
-                session_id
-            )
-            self._history_store.replace(
-                session_id,
-                loaded_checkpoint_id,
-                messages,
-            )
-            checkpoint_id = loaded_checkpoint_id
-        return self._history_store.page(
-            session_id,
-            checkpoint_id,
-            limit=limit,
-            cursor=cursor,
+        checkpoint_tuple = (
+            await self._checkpointer.aget_tuple(build_checkpoint_config(session_id))
+            if self._checkpointer is not None
+            else None
         )
+        if checkpoint_tuple is None:
+            return CursorPage(items=[], next_cursor=None, has_more=False)
+        checkpoint_id = str(checkpoint_tuple.checkpoint.get("id") or "")
+        if not checkpoint_id:
+            raise RuntimeError(f"checkpoint 缺少有效 id: session_id={session_id}")
+        if limit < 1:
+            raise ValueError("消息分页 limit 必须大于 0")
+        messages = self._visible_messages_from_checkpoint(
+            session_id,
+            checkpoint_tuple,
+        )
+        end = (
+            len(messages)
+            if cursor is None
+            else self._decode_visible_cursor(cursor, session_id, checkpoint_id)
+        )
+        if end < 0 or end > len(messages):
+            raise ValueError("消息历史游标位置无效")
+        start = max(0, end - limit)
+        # 消息分页不能把一轮截成孤立的 assistant 回复。
+        while start > 0 and messages[start].role != MessageRole.user:
+            start -= 1
+        return CursorPage(
+            items=messages[start:end],
+            next_cursor=(
+                self._encode_visible_cursor(session_id, checkpoint_id, start)
+                if start > 0
+                else None
+            ),
+            has_more=start > 0,
+        )
+
+    @staticmethod
+    def _encode_visible_cursor(
+        session_id: str,
+        checkpoint_id: str,
+        before: int,
+    ) -> str:
+        payload = json.dumps(
+            {
+                "session_id": session_id,
+                "checkpoint_id": checkpoint_id,
+                "before": before,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_visible_cursor(
+        cursor: str,
+        session_id: str,
+        checkpoint_id: str,
+    ) -> int:
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(cursor + padding))
+        except (ValueError, json.JSONDecodeError) as error:
+            raise ValueError("消息历史游标格式无效") from error
+        if not isinstance(payload, dict):
+            raise TypeError("消息历史游标内容无效")
+        if (
+            payload.get("session_id") != session_id
+            or payload.get("checkpoint_id") != checkpoint_id
+        ):
+            raise ValueError("消息历史已更新，请重新加载最新消息")
+        before = payload.get("before")
+        if isinstance(before, bool) or not isinstance(before, int):
+            raise TypeError("消息历史游标缺少 before")
+        return before
 
     async def get(self, session_id: str, message_id: str) -> MessageDTO:
         messages = await self._load_messages(session_id)
@@ -743,6 +788,21 @@ class MessageService:
         if not isinstance(raw_messages, list):
             return [], str(checkpoint_tuple.checkpoint.get("id") or "")
 
+        return self._visible_messages_from_checkpoint(session_id, checkpoint_tuple), str(
+            checkpoint_tuple.checkpoint.get("id") or ""
+        )
+
+    def _visible_messages_from_checkpoint(
+        self,
+        session_id: str,
+        checkpoint_tuple: CheckpointTuple,
+    ) -> list[MessageDTO]:
+        raw_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get(
+            "messages", []
+        )
+        if not isinstance(raw_messages, list):
+            return []
+
         result: list[MessageDTO] = []
         seen_visible_messages: set[tuple[str, str]] = set()
         for index, message in enumerate(raw_messages):
@@ -758,4 +818,4 @@ class MessageService:
                 continue
             seen_visible_messages.add(visible_key)
             result.append(dto)
-        return result, str(checkpoint_tuple.checkpoint.get("id") or "")
+        return result

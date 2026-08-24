@@ -1,16 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
 from app.core.config_sources import ConfigSource, config_revision
+from app.core.history_loading import (
+    DEFAULT_ANCHOR_INCLUDE,
+    DEFAULT_INITIAL_INCLUDE,
+    HistoryLoadingConfig,
+)
 from app.core.path_utils import (
     get_user_config_root,
     get_user_gateway_config_path,
     get_user_gateway_local_config_path,
     get_user_gateway_schema_path,
 )
+from app.gateway.control.gateway_state import GatewayStateStore
 from configs.installer import resolve_config_resource_source
 from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
 
@@ -40,6 +47,9 @@ class ConfiguredTheme:
     background: dict[str, object] | None = None
 
 
+GatewayHistoryLoadingConfig = HistoryLoadingConfig
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayConfig:
     workspaces: tuple[ConfiguredRemoteGateway, ...] = ()
@@ -53,6 +63,9 @@ class GatewayConfig:
     gateway_process_health_poll_interval_seconds: float = 0.5
     gateway_process_connection_drain_timeout_seconds: float = 2
     default_workspace_skill_groups: tuple[str, ...] = ()
+    history_loading: GatewayHistoryLoadingConfig = field(
+        default_factory=GatewayHistoryLoadingConfig,
+    )
     revision: str = ""
     schema_path: Path | None = None
     source_paths: tuple[Path, ...] = ()
@@ -116,12 +129,65 @@ def _skill_groups_config(raw: dict[str, object]) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _history_loading_config(raw: dict[str, object]) -> GatewayHistoryLoadingConfig:
+    initial_value = _nested_config_value(
+        raw,
+        "features",
+        "session_history",
+        "loading",
+        "progressive",
+        "initial",
+    )
+    anchor_value = _nested_config_value(
+        raw,
+        "features",
+        "session_history",
+        "loading",
+        "progressive",
+        "anchor",
+    )
+    initial = cast(dict[str, object], initial_value or {})
+    anchor = cast(dict[str, object], anchor_value or {})
+    initial_turns = initial.get("turns", 1)
+    anchor_before_turns = anchor.get("before_turns", 4)
+    anchor_after_turns = anchor.get("after_turns", 4)
+    initial_include = initial.get(
+        "include",
+        list(DEFAULT_INITIAL_INCLUDE),
+    )
+    anchor_include = anchor.get("include", list(DEFAULT_ANCHOR_INCLUDE))
+    if (
+        isinstance(initial_turns, bool)
+        or not isinstance(initial_turns, int)
+        or initial_turns < 1
+        or isinstance(anchor_before_turns, bool)
+        or not isinstance(anchor_before_turns, int)
+        or anchor_before_turns < 1
+        or isinstance(anchor_after_turns, bool)
+        or not isinstance(anchor_after_turns, int)
+        or anchor_after_turns < 1
+        or not isinstance(initial_include, list)
+        or not all(isinstance(item, str) for item in initial_include)
+        or not isinstance(anchor_include, list)
+        or not all(isinstance(item, str) for item in anchor_include)
+    ):
+        raise TypeError("Gateway 历史加载配置结构非法")
+    return GatewayHistoryLoadingConfig(
+        initial_turns=initial_turns,
+        initial_include=tuple(initial_include),
+        anchor_before_turns=anchor_before_turns,
+        anchor_after_turns=anchor_after_turns,
+        anchor_include=tuple(anchor_include),
+    )
+
+
 def load_gateway_config(
     *,
     config_path: Path | None = None,
     schema_path: Path | None = None,
     local_config_path: Path | None = None,
     inline_config_path: Path | None = None,
+    state_store: GatewayStateStore | None = None,
 ) -> GatewayConfig:
     """加载 Gateway 内置默认、用户配置和本地覆盖。"""
     resolved_config_path = config_path or get_user_gateway_config_path()
@@ -139,38 +205,80 @@ def load_gateway_config(
     )
     raw_gateway_config = read_jsonc_object(resolved_inline_config_path)
     source_paths: list[Path] = [resolved_inline_config_path]
-    source_details = [
+    user_override: dict[str, object] | None = None
+    local_override: dict[str, object] | None = None
+    source_details: list[ConfigSource] = [
         ConfigSource(
             path=resolved_inline_config_path,
             layer="inline",
             precedence=0,
             loaded=True,
-        ),
-        ConfigSource(
-            path=resolved_config_path,
-            layer="user",
-            precedence=1,
-            loaded=resolved_config_path.is_file(),
-        ),
-        ConfigSource(
-            path=resolved_local_config_path,
-            layer="user_local",
-            precedence=2,
-            loaded=resolved_local_config_path.is_file(),
-        ),
+        )
     ]
-    if resolved_config_path.is_file():
-        raw_gateway_config = merge_json_objects(
-            raw_gateway_config,
-            read_jsonc_object(resolved_config_path),
+    if state_store is None:
+        source_details.extend(
+            [
+                ConfigSource(
+                    path=resolved_config_path,
+                    layer="user",
+                    precedence=1,
+                    loaded=resolved_config_path.is_file(),
+                ),
+                ConfigSource(
+                    path=resolved_local_config_path,
+                    layer="user_local",
+                    precedence=2,
+                    loaded=resolved_local_config_path.is_file(),
+                ),
+            ]
         )
-        source_paths.append(resolved_config_path)
-    if resolved_local_config_path.is_file():
-        raw_gateway_config = merge_json_objects(
-            raw_gateway_config,
-            read_jsonc_object(resolved_local_config_path),
+        if resolved_config_path.is_file():
+            raw_gateway_config = merge_json_objects(
+                raw_gateway_config,
+                read_jsonc_object(resolved_config_path),
+            )
+            source_paths.append(resolved_config_path)
+        if resolved_local_config_path.is_file():
+            raw_gateway_config = merge_json_objects(
+                raw_gateway_config,
+                read_jsonc_object(resolved_local_config_path),
+            )
+            source_paths.append(resolved_local_config_path)
+    else:
+        user_override = _load_or_migrate_gateway_override(
+            state_store=state_store,
+            config_key="gateway_mutable_override",
+            path=resolved_config_path,
         )
-        source_paths.append(resolved_local_config_path)
+        local_override = _load_or_migrate_gateway_override(
+            state_store=state_store,
+            config_key="gateway_local_mutable_override",
+            path=resolved_local_config_path,
+        )
+        source_details.extend(
+            [
+                ConfigSource(
+                    path=state_store.path,
+                    layer="sqlite",
+                    precedence=1,
+                    loaded=user_override is not None,
+                ),
+                ConfigSource(
+                    path=state_store.path,
+                    layer="sqlite",
+                    precedence=2,
+                    loaded=local_override is not None,
+                ),
+            ]
+        )
+    if user_override is not None:
+        raw_gateway_config = merge_json_objects(raw_gateway_config, user_override)
+        if state_store.path not in source_paths:
+            source_paths.append(state_store.path)
+    if local_override is not None:
+        raw_gateway_config = merge_json_objects(raw_gateway_config, local_override)
+        if state_store.path not in source_paths:
+            source_paths.append(state_store.path)
     validate_config(
         raw_gateway_config,
         config_path=resolved_config_path,
@@ -271,11 +379,35 @@ def load_gateway_config(
             default=2,
         ),
         default_workspace_skill_groups=_skill_groups_config(raw_gateway_config),
+        history_loading=_history_loading_config(raw_gateway_config),
         revision=config_revision(raw_gateway_config),
         schema_path=resolved_schema_path,
         source_paths=tuple(source_paths),
         source_details=tuple(source_details),
     )
+
+
+def _load_or_migrate_gateway_override(
+    *,
+    state_store: GatewayStateStore,
+    config_key: str,
+    path: Path,
+) -> dict[str, object] | None:
+    record = state_store.get_config(config_key)
+    if record is not None:
+        return record.payload
+    if not path.is_file():
+        return None
+    payload = read_jsonc_object(path)
+    backup_path = path.with_name(f"{path.name}.migrated.bak")
+    if not backup_path.exists():
+        shutil.copy2(path, backup_path)
+    state_store.set_config(
+        config_key=config_key,
+        config_version=int(payload.get("config_version", 1)),
+        payload=payload,
+    )
+    return payload
 
 
 def _configured_theme_background(

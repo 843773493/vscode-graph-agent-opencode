@@ -4,8 +4,8 @@
   "workspaces": [], // load_gateway_config 读取远程 Gateway 注册项。
   "ui": {
     "theme": {
-      "default_theme_id": "warm", // Gateway 主题解析器使用默认主题 ID。
-      "custom_themes": [] // Gateway 主题解析器读取用户自定义主题。
+      "default_theme_id": "warm", // 首个普通用户 profile 的主题迁移默认值。
+      "custom_themes": [] // 首个普通用户创建时迁移到其 profile，运行时按用户隔离。
     }
   },
   "features": {
@@ -19,6 +19,21 @@
     "session_generators": {
       "scheduler": {
         "poll_interval_seconds": 1 // SessionGeneratorScheduler 轮询周期已接入配置。
+      }
+    },
+    "session_history": {
+      "loading": {
+        "progressive": {
+          "initial": {
+            "turns": 1,
+            "include": ["user", "thinking", "tool_summary", "final_response"]
+          },
+          "anchor": {
+            "before_turns": 4,
+            "after_turns": 4,
+            "include": ["user", "final_response"]
+          }
+        }
       }
     }
   },

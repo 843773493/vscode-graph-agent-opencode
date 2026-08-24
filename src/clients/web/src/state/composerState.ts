@@ -1,11 +1,10 @@
-import type { Agent, GatewayWorkspace, Session, SessionGoal, WebUiSettings } from "../types/backend";
+import type { Agent, Session, SessionGoal, WebUiSettings } from "../types/backend";
 import type { AppState, ConversationContentView } from "../types/frontend";
 
 export interface ComposerStateSnapshot {
   apiPort: number | null;
-  gatewayWorkspaces: GatewayWorkspace[];
   activeGatewayWorkspaceId: string | null;
-  workspaceSwitching: boolean;
+  gatewayUserScope: string | null;
   uiSettings: WebUiSettings;
   agents: Agent[];
   currentSession: Session | null;
@@ -18,7 +17,6 @@ export interface ComposerStateSnapshot {
   compactLoading: boolean;
   currentActiveJobId: string | null;
   queuedPendingCount: number;
-  hasCurrentSessionHistory: boolean;
 }
 
 export function selectComposerState(
@@ -30,9 +28,12 @@ export function selectComposerState(
     : [];
   return {
     apiPort: state.apiPort,
-    gatewayWorkspaces: state.gatewayWorkspaces,
     activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
-    workspaceSwitching: state.workspaceSwitching,
+    gatewayUserScope: state.gatewayUserAccess
+      ? state.gatewayUserAccess.kind === "user" && state.gatewayUserAccess.user_id
+        ? `user:${state.gatewayUserAccess.user_id}`
+        : null
+      : null,
     uiSettings: state.uiSettings,
     agents: state.agents,
     currentSession: state.currentSession,
@@ -49,8 +50,6 @@ export function selectComposerState(
     queuedPendingCount: pendingConversations.filter(
       (conversation) => conversation.pending && conversation.status === "queued",
     ).length,
-    // 已选中的会话始终按会话模式展示，不能等待历史内容判断，避免长历史切换时闪回新会话选择器。
-    hasCurrentSessionHistory: state.currentSession !== null,
   };
 }
 

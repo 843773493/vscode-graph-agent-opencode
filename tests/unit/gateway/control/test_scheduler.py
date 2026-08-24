@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.scheduler import SessionGeneratorScheduler
-from app.gateway.control.schemas import (
+from app.schemas.gateway_control import (
     GeneratorDefinitionCreateRequest,
     GeneratorPlacementDTO,
     GeneratorPoliciesDTO,

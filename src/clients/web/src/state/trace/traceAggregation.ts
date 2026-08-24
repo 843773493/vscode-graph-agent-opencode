@@ -22,6 +22,11 @@ import {
 
 type TextPart = Extract<TimelineItem, { kind: "aggregated_text" }>;
 
+/** 只有待处理消息和实时事件允许显示 live 状态。历史投影即使残留状态字段也不能进入实时渲染。 */
+export function isLiveConversationView(conv: ConversationView): boolean {
+  return conv.displayMode === "live" && conv.source === "pending";
+}
+
 function requiredPartId(partId: string | null, eventType: string): string {
   if (!partId) {
     throw new Error(`事件 ${eventType} 缺少 part_id`);
@@ -428,7 +433,10 @@ export function aggregateConversationEvents(
 export function buildPendingStatusItem(
   conv: ConversationView,
 ): Extract<TimelineItem, { kind: "status" }> | null {
-  if (conv.status !== "running" && conv.status !== "queued") {
+  if (
+    !isLiveConversationView(conv)
+    || (conv.status !== "running" && conv.status !== "queued")
+  ) {
     return null;
   }
 

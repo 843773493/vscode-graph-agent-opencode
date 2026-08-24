@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.schemas import GatewayManagedWorkspaceDTO
+from app.schemas.gateway import GatewayManagedWorkspaceDTO
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 
 

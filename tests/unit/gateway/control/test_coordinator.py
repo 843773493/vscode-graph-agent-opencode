@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
-from app.gateway.control.schemas import GeneratorDefinitionCreateRequest
+from app.schemas.gateway_control import GeneratorDefinitionCreateRequest
 from app.gateway.registry import WorkspaceTarget
 
 

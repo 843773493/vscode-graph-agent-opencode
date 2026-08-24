@@ -88,3 +88,28 @@ async def test_live_watcher_delivers_external_file_change(tmp_path: Path) -> Non
     finally:
         await stream.aclose()
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_live_watcher_ignores_workspace_internal_state(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    internal = workspace / ".boxteam"
+    internal.mkdir(parents=True)
+    service = WorkspaceFileWatchService(workspace_root=workspace)
+    stream = service.subscribe([])
+    try:
+        first_batch = asyncio.create_task(anext(stream))
+        while not service._watchers or not all(
+            watcher.ready.is_set() for watcher in service._watchers.values()
+        ):
+            await asyncio.sleep(0)
+        internal_file = internal / "rollout" / "index.sqlite-shm"
+        internal_file.parent.mkdir()
+        internal_file.write_bytes(b"internal")
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(first_batch, timeout=0.5)
+    finally:
+        await stream.aclose()
+        await service.shutdown()

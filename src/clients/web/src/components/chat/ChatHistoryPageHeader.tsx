@@ -6,14 +6,12 @@ export default function ChatHistoryPageHeader({
   hasOlderMessages,
   loadingOlderMessages,
   error,
-  onLoadOlder,
   onRetry,
 }: {
   projectionState: TurnProjectionState;
   hasOlderMessages: boolean;
   loadingOlderMessages: boolean;
   error: string | null;
-  onLoadOlder: () => void;
   onRetry: () => void;
 }): React.ReactNode {
   return (
@@ -21,13 +19,9 @@ export default function ChatHistoryPageHeader({
       {projectionState === "partial" ? (
         <span role="status">旧 Turn 正在迁移，完成后可继续向上加载</span>
       ) : hasOlderMessages ? (
-        <button
-          type="button"
-          disabled={loadingOlderMessages}
-          onClick={onLoadOlder}
-        >
-          {loadingOlderMessages ? "正在加载更早消息…" : "加载更早消息"}
-        </button>
+        <span role="status">
+          {loadingOlderMessages ? "正在加载更早消息…" : "继续向上滚动加载更早消息"}
+        </span>
       ) : (
         <span>已到达会话起点</span>
       )}

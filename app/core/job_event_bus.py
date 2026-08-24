@@ -38,8 +38,6 @@ from app.schemas.event import (
     JobCreatedPayload,
     JobFailedEvent,
     JobFailedPayload,
-    JobMergedEvent,
-    JobMergedPayload,
     JobStartedEvent,
     JobStartedPayload,
     LLMRequestEvent,
@@ -124,7 +122,6 @@ class EventType:
     """事件类型常量"""
     # Job 生命周期
     JOB_CREATED = "job_created"
-    JOB_MERGED = "job_merged"
     JOB_STARTED = "job_started"
     JOB_COMPLETED = "job_completed"
     JOB_FAILED = "job_failed"
@@ -191,7 +188,6 @@ class EventFactorySpec:
 EVENT_FACTORY_REGISTRY: dict[str, EventFactorySpec] = {
     EventType.MESSAGE_CREATED: EventFactorySpec(EventType.MESSAGE_CREATED, MessageCreatedEvent, MessageCreatedPayload),
     EventType.JOB_CREATED: EventFactorySpec(EventType.JOB_CREATED, JobCreatedEvent, JobCreatedPayload),
-    EventType.JOB_MERGED: EventFactorySpec(EventType.JOB_MERGED, JobMergedEvent, JobMergedPayload),
     EventType.JOB_STARTED: EventFactorySpec(EventType.JOB_STARTED, JobStartedEvent, JobStartedPayload),
     EventType.JOB_COMPLETED: EventFactorySpec(EventType.JOB_COMPLETED, JobCompletedEvent, JobCompletedPayload),
     EventType.JOB_CANCELLED: EventFactorySpec(EventType.JOB_CANCELLED, JobCancelledEvent, JobCancelledPayload),

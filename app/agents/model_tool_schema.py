@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from jsonschema import Draft202012Validator
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -30,6 +31,21 @@ def validate_model_tool_arguments(
             "模型工具参数必须是 object: "
             f"tool_name={tool.name} actual_type={type(arguments).__name__}"
         )
+    tool_call_schema = getattr(tool, "tool_call_schema", None)
+    if isinstance(tool_call_schema, dict):
+        Draft202012Validator(tool_call_schema).validate(arguments)
+        properties = tool_call_schema.get("properties")
+        if not isinstance(properties, dict):
+            raise TypeError(
+                "工具参数 schema 无法提取公开字段: "
+                f"tool_name={tool.name}"
+            )
+        return {
+            field_name: arguments[field_name]
+            for field_name in properties
+            if field_name in arguments
+        }
+
     parsed = get_model_tool_schema(tool).model_validate(arguments)
     return parsed.model_dump()
 

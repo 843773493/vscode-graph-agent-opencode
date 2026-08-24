@@ -1,78 +1,31 @@
 import type { WebUiSettings } from "../types/backend";
 import {
   createDefaultWebUiSettings,
-  normalizeWebUiSettings,
 } from "./uiSettings/preferences";
 
-const LAST_SESSION_STORAGE_KEY = "boxteam.web.currentSessionId";
-const UI_SETTINGS_CACHE_KEY = "boxteam.web.uiSettings";
-const UNREAD_SESSIONS_STORAGE_KEY = "boxteam.web.unreadSessionKeys";
+// 用户会话和视图位置由 Gateway 用户状态保存；这些函数保留空实现只为让会话动作不再写共享浏览器状态。
+export function readLastSessionId(): string | null {
+  return null;
+}
 
-function emptyUiSettings(): WebUiSettings {
+export function writeLastSessionId(_sessionId: string): void {}
+
+export function clearLastSessionId(): void {}
+
+export function readCachedUiSettings(): WebUiSettings {
+  // 用户 UI 设置由 Gateway 当前用户 profile 返回，不能从未分用户的浏览器缓存读取。
   return createDefaultWebUiSettings();
 }
 
-export function readLastSessionId(): string | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  return window.localStorage.getItem(LAST_SESSION_STORAGE_KEY);
-}
-
-export function writeLastSessionId(sessionId: string): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(LAST_SESSION_STORAGE_KEY, sessionId);
-}
-
-export function clearLastSessionId(): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.removeItem(LAST_SESSION_STORAGE_KEY);
-}
-
-export function readCachedUiSettings(): WebUiSettings {
-  if (typeof window === "undefined") {
-    return emptyUiSettings();
-  }
-  const raw = window.localStorage.getItem(UI_SETTINGS_CACHE_KEY);
-  if (!raw) {
-    return emptyUiSettings();
-  }
-  const parsed = JSON.parse(raw) as Partial<WebUiSettings>;
-  return normalizeWebUiSettings(parsed);
-}
-
-export function writeCachedUiSettings(settings: WebUiSettings): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(UI_SETTINGS_CACHE_KEY, JSON.stringify(settings));
+export function writeCachedUiSettings(_settings: WebUiSettings): void {
+  // 保留调用边界，实际不写浏览器缓存，避免不同用户共享视图设置。
 }
 
 export function readUnreadSessionKeys(): Set<string> {
-  if (typeof window === "undefined") {
-    return new Set();
-  }
-  const raw = window.localStorage.getItem(UNREAD_SESSIONS_STORAGE_KEY);
-  if (!raw) {
-    return new Set();
-  }
-  const parsed: unknown = JSON.parse(raw);
-  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string")) {
-    throw new Error("本地未读会话状态格式无效");
-  }
-  return new Set(parsed);
+  // 未读状态属于当前页面访问，不进入跨用户的 localStorage。
+  return new Set();
 }
 
-export function writeUnreadSessionKeys(sessionKeys: Set<string>): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(
-    UNREAD_SESSIONS_STORAGE_KEY,
-    JSON.stringify([...sessionKeys]),
-  );
+export function writeUnreadSessionKeys(_sessionKeys: Set<string>): void {
+  // 未读提示由当前页面内存维护，用户切换后由后端摘要流重新驱动。
 }

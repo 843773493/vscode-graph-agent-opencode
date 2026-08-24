@@ -12,6 +12,8 @@ from typing import Any, Literal, Optional, Self, Union
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
+from app.schemas.public_v2.pending_request import DeliveryBoundary, DeliveryPolicy
+
 # ============= 1. 基础事件结构（所有事件的公共字段） =============
 
 class BaseEvent(BaseModel):
@@ -61,14 +63,9 @@ class JobCreatedPayload(BaseModel):
     attachments: list[Any] = Field(default_factory=list)
     message_created_at: datetime | None = None
     message_metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class JobMergedPayload(BaseModel):
-    """多个排队 steering Job 合并为一次实际执行。"""
-
-    session_id: str
-    merged_job_ids: list[str] = Field(min_length=1)
-    source_message_ids: list[str] = Field(min_length=2)
+    delivery_policy: DeliveryPolicy | None = None
+    enqueue_sequence: int | None = Field(default=None, ge=1)
+    queue_snapshot_version: int = Field(default=0, ge=0)
 
 
 class JobStartedPayload(BaseModel):
@@ -101,6 +98,11 @@ class StatusChangePayload(BaseModel):
     queued_jobs_ahead: Optional[int] = Field(default=None, ge=0)
     queued_job_count: Optional[int] = Field(default=None, ge=0)
     pending_job_count: Optional[int] = Field(default=None, ge=1)
+    message_id: Optional[str] = None
+    enqueue_sequence: Optional[int] = Field(default=None, ge=1)
+    delivery_policy: DeliveryPolicy | None = None
+    boundary: DeliveryBoundary | None = None
+    queue_snapshot_version: int = Field(default=0, ge=0)
 
 
 class AgentStartPayload(BaseModel):
@@ -151,6 +153,7 @@ class ToolCallStartPayload(BaseModel):
     agent_id: str | None = None
     skill_names: list[str] = Field(default_factory=list)
     invocation_tool_name: str | None = None
+    call_index: int | None = Field(default=None, ge=0)
 
 
 class FileEditPayload(BaseModel):
@@ -192,6 +195,7 @@ class ToolCallEndPayload(BaseModel):
     tool_output: ToolOutputReferencePayload | None = None
     file_edit: FileEditPayload | None = None
     file_edits: list[FileEditPayload] = Field(default_factory=list)
+    call_index: int | None = Field(default=None, ge=0)
 
 
 class ErrorPayload(BaseModel):
@@ -226,16 +230,25 @@ class TextDeltaPayload(BaseModel):
     """TEXT_DELTA 事件的 payload"""
     text: str
     kind: Literal["markdown", "reasoning"]
+    carrier_type: str | None = None
+    content_block_index: int | None = Field(default=None, ge=0)
+    item_index: int | None = Field(default=None, ge=0)
 
 
 class TextStartPayload(BaseModel):
     """TEXT_START 事件的 payload（标记 assistant 文本开始）"""
     kind: Literal["markdown", "reasoning"]
+    carrier_type: str | None = None
+    content_block_index: int | None = Field(default=None, ge=0)
+    item_index: int | None = Field(default=None, ge=0)
 
 
 class TextEndPayload(BaseModel):
     """TEXT_END 事件的 payload（标记 assistant 文本结束）"""
     kind: Literal["markdown", "reasoning"]
+    carrier_type: str | None = None
+    content_block_index: int | None = Field(default=None, ge=0)
+    item_index: int | None = Field(default=None, ge=0)
     text: str = ""
 
 
@@ -251,13 +264,6 @@ class JobCreatedEvent(BaseEvent):
     """任务已创建事件"""
     type: Literal["job_created"] = "job_created"
     payload: JobCreatedPayload
-
-
-class JobMergedEvent(BaseEvent):
-    """排队 Job 已合并到 event.job_id 指向的实际执行 Turn。"""
-
-    type: Literal["job_merged"] = "job_merged"
-    payload: JobMergedPayload
 
 
 class JobStartedEvent(BaseEvent):
@@ -387,7 +393,6 @@ class TextEndEvent(BaseEvent):
 Event = Union[
     MessageCreatedEvent,
     JobCreatedEvent,
-    JobMergedEvent,
     JobStartedEvent,
     JobCompletedEvent,
     JobCancelledEvent,

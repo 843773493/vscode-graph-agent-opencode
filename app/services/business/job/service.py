@@ -24,10 +24,9 @@ from app.schemas.public_v2.job import (
 )
 from app.schemas.public_v2.message import AttachmentRef
 from app.schemas.public_v2.pending_request import (
-    MessageDispatchMode,
-    PendingRequestKind,
+    DeliveryBoundary,
+    DeliveryPolicy,
     PendingRequestListDTO,
-    PendingRequestOrderItem,
     PendingRequestSummaryListDTO,
 )
 from app.services.business.job.control_service import JobControlService
@@ -35,7 +34,11 @@ from app.services.business.job.lifecycle import (
     TERMINAL_JOB_STATUSES,
     transition_job_status,
 )
-from app.services.business.job.pending_queue import JobPendingQueue
+from app.services.business.job.pending_queue import (
+    JobPendingQueue,
+    QueueBoundary,
+    QueueEntry,
+)
 from app.services.business.job.pending_request_service import (
     JobPendingRequestService,
 )
@@ -77,8 +80,8 @@ class JobState:
     ended_at: datetime | None = None
     task: asyncio.Task | None = None
     steps: list[StepDTO] = field(default_factory=list)
-    pending_kind: PendingRequestKind | None = None
-    dispatch_pending_after_cancel: bool = False
+    delivery_policy: DeliveryPolicy | None = None
+    delivery_boundary: DeliveryBoundary | None = None
     internal_reservation: bool = False
     cancellation_reason: str | None = None
 
@@ -462,6 +465,27 @@ class JobService:
 
         return await self.run_session_preparation(session_id, update_prepared)
 
+    async def update_pending_policy(
+        self,
+        session_id: str,
+        message_id: str,
+        *,
+        delivery_policy: DeliveryPolicy,
+        expected_snapshot_version: int | None = None,
+    ) -> PendingRequestListDTO:
+        async def update_prepared() -> PendingRequestListDTO:
+            await self._ensure_pending_loaded(session_id)
+            snapshot = await self._pending_requests.update_policy(
+                session_id,
+                message_id,
+                delivery_policy=delivery_policy,
+                expected_snapshot_version=expected_snapshot_version,
+            )
+            await self._publish_pending(snapshot, "pending_policy_updated")
+            return snapshot
+
+        return await self.run_session_preparation(session_id, update_prepared)
+
     async def remove_pending(
         self,
         session_id: str,
@@ -484,91 +508,12 @@ class JobService:
 
         return await self.run_session_preparation(session_id, clear_prepared)
 
-    async def reorder_pending(
-        self,
-        session_id: str,
-        requests: list[PendingRequestOrderItem],
-    ) -> PendingRequestListDTO:
-        async def reorder_prepared() -> PendingRequestListDTO:
+    async def reject_pending_reorder(self, session_id: str) -> None:
+        async def reject_prepared() -> None:
             await self._ensure_pending_loaded(session_id)
-            snapshot = await self._pending_requests.reorder(session_id, requests)
-            await self._publish_pending(snapshot, "pending_requests_reordered")
-            return snapshot
+            await self._pending_requests.reject_reorder(session_id)
 
-        return await self.run_session_preparation(session_id, reorder_prepared)
-
-    async def send_pending_immediately(
-        self,
-        session_id: str,
-        message_id: str,
-    ) -> PendingRequestListDTO:
-        async def send_prepared() -> PendingRequestListDTO:
-            return await self._send_pending_immediately_prepared(
-                session_id,
-                message_id,
-            )
-
-        return await self.run_session_preparation(session_id, send_prepared)
-
-    async def _send_pending_immediately_prepared(
-        self,
-        session_id: str,
-        message_id: str,
-    ) -> PendingRequestListDTO:
-        await self._ensure_pending_loaded(session_id)
-        reservation = self._new_dispatch_reservation(session_id)
-        try:
-            snapshot, reserved = (
-                await self._pending_requests.promote_and_reserve_if_idle(
-                    session_id,
-                    message_id,
-                    reservation,
-                )
-            )
-        except BaseException:
-            try:
-                await self._start_next_pending(session_id)
-            except BaseException:
-                import logging
-
-                logging.getLogger(__name__).exception(
-                    "立即发送持久化失败后的队列恢复也失败: session_id=%s",
-                    session_id,
-                )
-            raise
-        if reserved:
-            transition_job_status(reservation, JobStatus.completed)
-            try:
-                await self._schedule_next_job_if_needed(reservation)
-            finally:
-                self._jobs.pop(reservation.job_id, None)
-        else:
-            current_job_id = snapshot.active_job_id
-            current_job = (
-                self._jobs.get(current_job_id) if current_job_id else None
-            )
-            if (
-                current_job is not None
-                and current_job.task is not None
-                and not current_job.task.done()
-            ):
-                transition_job_status(
-                    current_job,
-                    JobStatus.cancelling,
-                    error_message="为立即发送排队消息而停止",
-                )
-                current_job.dispatch_pending_after_cancel = True
-                SessionInterruptState.set(
-                    session_id,
-                    cancellation_reason="pending_request_send_immediately",
-                )
-                current_job.task.cancel()
-        snapshot = await self._pending_requests.list(session_id)
-        await self._publish_pending(
-            snapshot,
-            "pending_request_send_immediately",
-        )
-        return snapshot
+        await self.run_session_preparation(session_id, reject_prepared)
 
     async def delete_session_jobs(self, session_id: str) -> int:
         async with self._dispatch_lock:
@@ -618,7 +563,7 @@ class JobService:
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
     ) -> JobDispatchSnapshotDTO:
         async def start_prepared() -> JobDispatchSnapshotDTO:
             return await self._start_job_prepared(
@@ -630,7 +575,7 @@ class JobService:
                 attachments=attachments,
                 message_created_at=message_created_at,
                 message_metadata=message_metadata,
-                dispatch_mode=dispatch_mode,
+                delivery_policy=delivery_policy,
             )
 
         return await self.run_session_preparation(session_id, start_prepared)
@@ -646,7 +591,7 @@ class JobService:
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
     ) -> JobDispatchSnapshotDTO:
         self.assert_accepting_jobs()
         async with self._dispatch_lock:
@@ -703,6 +648,22 @@ class JobService:
         if self._bus is None:
             raise RuntimeError("JobService 未绑定 JobEventBus")
 
+        dispatch = await self._enqueue_or_dispatch(
+            job,
+            delivery_policy=delivery_policy,
+        )
+        logger.info(
+            "[job_service] enqueue_or_dispatch result: job_id=%s status=%s "
+            "blocked_by=%s queued_ahead=%s pending=%s",
+            resolved_job_id,
+            dispatch.job_status,
+            dispatch.blocked_by_job_id,
+            dispatch.queued_jobs_ahead,
+            dispatch.pending_job_count,
+        )
+        snapshot = await self._pending_requests.list(session_id)
+        await self._pending_requests.persist(snapshot)
+
         await self._bus.publish(
             job_id=resolved_job_id,
             event_type=EventType.JOB_CREATED,
@@ -717,46 +678,25 @@ class JobService:
                     attachment.model_dump(mode="json", exclude={"data_url"})
                     for attachment in job.attachments
                 ],
+                "delivery_policy": delivery_policy,
+                "enqueue_sequence": dispatch.enqueue_sequence,
+                "queue_snapshot_version": dispatch.queue_snapshot_version,
             },
-            agent_id="job_service"
+            agent_id="job_service",
         )
         logger.info(
-            "[job_service] JOB_CREATED published: job_id=%s session_id=%s",
+            "[job_service] JOB_CREATED published after queue commit: job_id=%s session_id=%s",
             resolved_job_id,
             session_id,
         )
 
-        dispatch = await self._enqueue_or_dispatch(
-            job,
-            dispatch_mode=dispatch_mode,
+        if dispatch.job_status == JobStatus.queued.value and dispatch.active_job_id is None:
+            await self._start_next_pending(session_id, boundary="idle")
+            dispatch = self._existing_dispatch_snapshot(job)
+        await self._publish_pending(
+            await self._pending_requests.list(session_id),
+            "pending_request_enqueued",
         )
-        logger.info(
-            "[job_service] enqueue_or_dispatch result: job_id=%s status=%s "
-            "blocked_by=%s queued_ahead=%s pending=%s",
-            resolved_job_id,
-            dispatch.job_status,
-            dispatch.blocked_by_job_id,
-            dispatch.queued_jobs_ahead,
-            dispatch.pending_job_count,
-        )
-        if dispatch.job_status == JobStatus.queued.value:
-            snapshot = await self._pending_requests.list(session_id)
-            await self._pending_requests.persist(snapshot)
-            await self._bus.publish(
-                job_id=resolved_job_id,
-                event_type=EventType.STATUS_CHANGE,
-                payload={
-                    "status": JobStatus.queued.value,
-                    "reason": "pending_request_enqueued",
-                    "session_id": session_id,
-                    "blocked_by_job_id": dispatch.blocked_by_job_id,
-                    "queued_jobs_ahead": dispatch.queued_jobs_ahead,
-                    "queued_job_count": dispatch.queued_job_count,
-                    "pending_job_count": dispatch.pending_job_count,
-                },
-                agent_id="job_service",
-            )
-
         return dispatch
 
     def _existing_dispatch_snapshot(
@@ -769,10 +709,6 @@ class JobService:
         if job.job_id in queued_ids:
             queued_ahead = queued_ids.index(job.job_id)
             active_job_id = self._session_current_job.get(job.session_id)
-            if active_job_id is None:
-                raise RuntimeError(
-                    f"持久队列中的 Job 缺少活动任务: job_id={job.job_id}"
-                )
             return JobDispatchSnapshotDTO(
                 session_id=job.session_id,
                 job_id=job.job_id,
@@ -781,8 +717,10 @@ class JobService:
                 blocked_by_job_id=active_job_id,
                 queued_jobs_ahead=queued_ahead,
                 queued_job_count=len(queued_ids),
-                pending_job_count=1 + len(queued_ids),
-                pending_kind=job.pending_kind or "queued",
+                pending_job_count=len(queued_ids) + (1 if active_job_id else 0),
+                delivery_policy=job.delivery_policy,
+                enqueue_sequence=self._pending_queue.entry(job.job_id).enqueue_sequence,
+                queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
             )
         if self._session_current_job.get(job.session_id) != job.job_id:
             raise RuntimeError(
@@ -798,7 +736,8 @@ class JobService:
             queued_jobs_ahead=0,
             queued_job_count=len(queued_ids),
             pending_job_count=1 + len(queued_ids),
-            pending_kind=None,
+            delivery_policy=None,
+            queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
         )
 
     def _is_terminal_status(self, status: JobStatus) -> bool:
@@ -841,64 +780,40 @@ class JobService:
         self,
         job: JobState,
         *,
-        dispatch_mode: MessageDispatchMode,
+        delivery_policy: DeliveryPolicy,
     ) -> JobDispatchSnapshotDTO:
         async with self._dispatch_lock:
+            entry = self._pending_queue.append(
+                job.session_id,
+                job.job_id,
+                delivery_policy,
+            )
+            job.delivery_policy = delivery_policy
+            transition_job_status(job, JobStatus.queued)
             current_job_id = self._session_current_job.get(job.session_id)
-            if current_job_id:
-                current_job = self._jobs.get(current_job_id)
-                if current_job and not self._is_terminal_status(current_job.status):
-                    pending_kind: PendingRequestKind = (
-                        "steering" if dispatch_mode == "steering" else "queued"
-                    )
-                    queued_jobs_ahead = self._pending_queue.append(
-                        job.session_id,
-                        job.job_id,
-                        pending_kind,
-                    )
-                    job.pending_kind = pending_kind
-                    transition_job_status(job, JobStatus.queued)
-                    if dispatch_mode == "immediate":
-                        self._pending_queue.promote(job.session_id, job.job_id)
-                        queued_jobs_ahead = 0
-                        if current_job.task is not None and not current_job.task.done():
-                            transition_job_status(
-                                current_job,
-                                JobStatus.cancelling,
-                                error_message="为跨会话立即消息而停止",
-                            )
-                            current_job.dispatch_pending_after_cancel = True
-                            SessionInterruptState.set(
-                                job.session_id,
-                                cancellation_reason="session_message_immediate",
-                            )
-                            current_job.task.cancel()
-                    waiting_job_count = len(self._pending_queue.ids(job.session_id))
-                    return JobDispatchSnapshotDTO(
-                        session_id=job.session_id,
-                        job_id=job.job_id,
-                        job_status="queued",
-                        active_job_id=current_job_id,
-                        blocked_by_job_id=current_job_id,
-                        queued_jobs_ahead=queued_jobs_ahead,
-                        queued_job_count=waiting_job_count,
-                        pending_job_count=1 + waiting_job_count,
-                        pending_kind=pending_kind,
-                    )
-
-            self._session_current_job[job.session_id] = job.job_id
-            transition_job_status(job, JobStatus.running)
-            self._start_job_task(job)
+            current_job = self._jobs.get(current_job_id) if current_job_id else None
+            if current_job is not None and self._is_terminal_status(current_job.status):
+                self._session_current_job.pop(job.session_id, None)
+                current_job_id = None
+            waiting_ids = self._pending_queue.ids(job.session_id)
+            queued_ids = tuple(
+                queued_job_id
+                for queued_job_id in waiting_ids
+                if queued_job_id != current_job_id
+            )
+            queued_index = queued_ids.index(job.job_id)
             return JobDispatchSnapshotDTO(
                 session_id=job.session_id,
                 job_id=job.job_id,
-                job_status="running",
-                active_job_id=job.job_id,
-                blocked_by_job_id=None,
-                queued_jobs_ahead=0,
-                queued_job_count=0,
-                pending_job_count=1,
-                pending_kind=None,
+                job_status="queued",
+                active_job_id=current_job_id,
+                blocked_by_job_id=current_job_id,
+                queued_jobs_ahead=queued_index,
+                queued_job_count=len(queued_ids),
+                pending_job_count=len(queued_ids) + (1 if current_job_id else 0),
+                delivery_policy=delivery_policy,
+                enqueue_sequence=entry.enqueue_sequence,
+                queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
             )
 
     async def _schedule_next_job_if_needed(self, finished_job: JobState) -> None:
@@ -909,7 +824,7 @@ class JobService:
             JobStatus.timed_out,
         } or (
             finished_job.status == JobStatus.cancelled
-            and finished_job.dispatch_pending_after_cancel
+            and finished_job.delivery_boundary == "after_interrupt"
         )
         if not should_continue:
             async with self._dispatch_lock:
@@ -927,85 +842,13 @@ class JobService:
             if current_job_id != finished_job.job_id:
                 return
 
-            next_job: JobState | None = None
-            next_group: tuple[str, ...] = ()
-            while True:
-                candidate_group = self._pending_queue.peek_next_group(
-                    finished_job.session_id
-                )
-                if not candidate_group:
-                    break
-                next_job_id = candidate_group[0]
-                candidate = self._jobs.get(next_job_id)
-                if candidate and candidate.status == JobStatus.queued:
-                    next_job = candidate
-                    next_group = candidate_group
-                    break
-                self._pending_queue.pop_next_group(finished_job.session_id)
-
-            if next_job is None:
+            if not self._pending_queue.peek_head(finished_job.session_id):
                 self._session_current_job.pop(finished_job.session_id, None)
                 return
-
-            merged_jobs = [
-                self._jobs[group_job_id]
-                for group_job_id in next_group
-                if group_job_id in self._jobs
-            ]
-            merge_event_payload: dict[str, object] | None = None
-            if len(next_group) > 1:
-                merge_event_payload = {
-                    "session_id": next_job.session_id,
-                    "merged_job_ids": [
-                        merged_job.job_id for merged_job in merged_jobs[1:]
-                    ],
-                    "source_message_ids": [
-                        merged_job.message_id for merged_job in merged_jobs
-                    ],
-                }
-                if self._bus is None:
-                    raise RuntimeError("JobService 未绑定 JobEventBus")
-                await self._bus.publish(
-                    job_id=next_job.job_id,
-                    event_type=EventType.JOB_MERGED,
-                    payload=merge_event_payload,
-                    agent_id="job_service",
-                )
-
-            popped_group = self._pending_queue.pop_next_group(
-                finished_job.session_id
-            )
-            if popped_group != next_group:
-                raise RuntimeError(
-                    "调度下一 Job 时队列内容发生变化: "
-                    f"expected={list(next_group)} actual={list(popped_group)}"
-                )
-            if len(next_group) > 1:
-                next_job.message = "\n\n".join(
-                    merged_job.message for merged_job in merged_jobs
-                )
-                next_job.attachments = [
-                    attachment
-                    for merged_job in merged_jobs
-                    for attachment in merged_job.attachments
-                ]
-                now = datetime.now()
-                for merged_job in merged_jobs[1:]:
-                    transition_job_status(
-                        merged_job,
-                        JobStatus.cancelled,
-                        error_message=(
-                            f"Steering 消息已合并到 {next_job.job_id}"
-                        ),
-                        now=now,
-                    )
-            self._session_current_job[finished_job.session_id] = next_job.job_id
-            next_job.pending_kind = None
-            transition_job_status(next_job, JobStatus.running)
-            self._start_job_task(next_job)
-
-        await self._pending_requests.persist(
-            await self._pending_requests.list(finished_job.session_id)
+        await self._start_next_pending(
+            finished_job.session_id,
+            boundary=finished_job.delivery_boundary or "after_turn",
+            tool_result_available=False,
         )
 
     async def _run_job_background(self, job_id: str, session_id: str, message: str):
@@ -1055,9 +898,6 @@ class JobService:
                 updated_at=job.updated_at,
                 ended_at=job.ended_at,
                 task=job.task,
-                yield_requested=lambda: self._pending_queue.yield_requested(
-                    job.session_id
-                ),
             ))
             job.result = result
             transition_job_status(job, JobStatus.completed)
@@ -1110,8 +950,8 @@ class JobService:
                     raise RuntimeError(
                         f"会话正在删除，拒绝恢复待处理队列: {session_id}"
                     )
-                restored: list[tuple[str, PendingRequestKind]] = []
-                for record in sorted(records, key=lambda item: item.position):
+                restored: list[QueueEntry] = []
+                for record in sorted(records, key=lambda item: item.enqueue_sequence):
                     self._jobs[record.job_id] = JobState(
                         job_id=record.job_id,
                         session_id=record.session_id,
@@ -1124,13 +964,22 @@ class JobService:
                         attachments=list(record.attachments),
                         created_at=record.created_at,
                         updated_at=record.updated_at,
-                        pending_kind=record.kind,
+                        delivery_policy=record.delivery_policy,
                     )
-                    restored.append((record.job_id, record.kind))
+                    restored.append(
+                        QueueEntry(
+                            job_id=record.job_id,
+                            enqueue_sequence=record.enqueue_sequence,
+                            delivery_policy=record.delivery_policy,
+                            waiting_reason=record.waiting_reason,
+                            last_boundary=record.last_boundary,
+                            snapshot_version=record.snapshot_version,
+                        )
+                    )
                 self._pending_queue.restore(session_id, restored)
                 should_resume = bool(restored)
             if should_resume:
-                await self._start_next_pending(session_id)
+                await self._start_next_pending(session_id, boundary="idle")
 
     async def _publish_pending(
         self,
@@ -1142,6 +991,12 @@ class JobService:
             event_job_id = snapshot.requests[0].job_id
         if event_job_id is None or self._bus is None:
             return
+        head = snapshot.requests[0] if snapshot.requests else None
+        boundary = (
+            reason.removeprefix("boundary_")
+            if reason.startswith("boundary_")
+            else None
+        )
         await self._bus.publish(
             job_id=event_job_id,
             event_type=EventType.STATUS_CHANGE,
@@ -1149,37 +1004,81 @@ class JobService:
                 "status": "running" if snapshot.active_job_id else "queued",
                 "reason": reason,
                 "session_id": snapshot.session_id,
-                "yield_requested": snapshot.yield_requested,
+                "message_id": head.message_id if head is not None else None,
+                "enqueue_sequence": head.enqueue_sequence if head is not None else None,
+                "delivery_policy": head.delivery_policy if head is not None else None,
+                "boundary": boundary,
+                "queue_snapshot_version": snapshot.snapshot_version,
+                "requests": [
+                    {
+                        "message_id": request.message_id,
+                        "job_id": request.job_id,
+                        "enqueue_sequence": request.enqueue_sequence,
+                        "delivery_policy": request.delivery_policy,
+                        "status": request.status,
+                        "waiting_reason": request.waiting_reason,
+                    }
+                    for request in snapshot.requests
+                ],
             },
             agent_id="job_service",
         )
 
-    async def _start_next_pending(self, session_id: str) -> None:
-        placeholder = self._new_dispatch_reservation(session_id)
+    async def _start_next_pending(
+        self,
+        session_id: str,
+        *,
+        boundary: QueueBoundary = "idle",
+        tool_result_available: bool = True,
+    ) -> bool:
         async with self._dispatch_lock:
             current_job_id = self._session_current_job.get(session_id)
             current_job = self._jobs.get(current_job_id) if current_job_id else None
-            if current_job is not None and not self._is_terminal_status(
-                current_job.status
-            ):
-                return
-            self._session_current_job[session_id] = placeholder.job_id
-            self._jobs[placeholder.job_id] = placeholder
-        transition_job_status(placeholder, JobStatus.completed)
-        try:
-            await self._schedule_next_job_if_needed(placeholder)
-        finally:
-            self._jobs.pop(placeholder.job_id, None)
-
-    @staticmethod
-    def _new_dispatch_reservation(session_id: str) -> JobState:
-        return JobState(
-            job_id=create_prefixed_id("completed"),
-            session_id=session_id,
-            message="",
-            message_id=create_prefixed_id("msg"),
-            message_created_at=datetime.now().isoformat(),
-            agent_id="default",
-            status=JobStatus.running,
-            internal_reservation=True,
+            if current_job is not None and not self._is_terminal_status(current_job.status):
+                return False
+            entry = self._pending_queue.take_head(
+                session_id,
+                boundary,
+                tool_result_available=tool_result_available,
+            )
+            if entry is None:
+                self._session_current_job.pop(session_id, None)
+                return False
+            next_job = self._jobs.get(entry.job_id)
+            if next_job is None:
+                raise RuntimeError(
+                    f"FIFO 队列引用不存在的 Job: session_id={session_id}, job_id={entry.job_id}"
+                )
+            self._session_current_job[session_id] = next_job.job_id
+            next_job.delivery_boundary = entry.last_boundary
+            transition_job_status(next_job, JobStatus.running)
+        await self._pending_requests.persist(
+            await self._pending_requests.list(session_id)
         )
+        self._start_job_task(next_job)
+        return True
+
+    async def notify_boundary(
+        self,
+        session_id: str,
+        boundary: DeliveryBoundary,
+        *,
+        tool_result_available: bool = True,
+    ) -> PendingRequestListDTO:
+        """记录边界，并在允许时从队列取出队首消息开始执行。"""
+        await self._ensure_pending_loaded(session_id)
+        async with self._dispatch_lock:
+            current_job_id = self._session_current_job.get(session_id)
+            current_job = self._jobs.get(current_job_id) if current_job_id else None
+            if current_job is not None and not self._is_terminal_status(current_job.status):
+                current_job.delivery_boundary = boundary
+        if current_job is None or self._is_terminal_status(current_job.status):
+            await self._start_next_pending(
+                session_id,
+                boundary=boundary,
+                tool_result_available=tool_result_available,
+            )
+        snapshot = await self._pending_requests.list(session_id)
+        await self._pending_requests.persist(snapshot)
+        await self._publish_pending(snapshot, f"boundary_{boundary}")
+        return snapshot

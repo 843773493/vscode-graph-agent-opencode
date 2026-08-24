@@ -1499,10 +1499,6 @@ button.files-tree-item:hover {
     width: calc(100% - 20px);
   }
 
-  .session-workspace-picker-label,
-  .sessions-chat-picker-slot {
-    font-size: 15px;
-  }
 }
 
 .event-card-content th {

@@ -17,12 +17,14 @@ export interface ToolDTO {
   group_id?: string;
   group_name?: string;
   kind?: string;
-  enabled?: boolean;
+  execution_enabled: boolean;
+  model_visible: boolean;
   test_supported?: boolean;
 }
 export interface ToolSelectionChange {
   tool_id: string;
-  enabled: boolean;
+  execution_enabled: boolean;
+  model_visible: boolean;
 }
 export interface ToolSelectionPatchRequest {
   agent_id?: string;

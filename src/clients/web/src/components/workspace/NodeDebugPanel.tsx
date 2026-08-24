@@ -140,14 +140,15 @@ export default function NodeDebugPanel({
     () => (scriptArgs.trim() ? scriptArgs.trim().split(/\s+/u) : []),
     [scriptArgs],
   );
+  const currentArgs = state?.args ?? [];
   const hasUnsavedConfigurationChanges = Boolean(
     state?.active_configuration_id
       && (
         scriptPath.trim() !== (state.script_path ?? "")
         || workingDirectory.trim() !== (state.working_directory ?? "")
         || (configurationName || null) !== (state.launch_profile_name ?? null)
-        || normalizedDraftArgs.length !== state.args.length
-        || normalizedDraftArgs.some((argument, index) => argument !== state.args[index])
+        || normalizedDraftArgs.length !== currentArgs.length
+        || normalizedDraftArgs.some((argument, index) => argument !== currentArgs[index])
       ),
   );
   const recentActions = useMemo(
@@ -173,7 +174,7 @@ export default function NodeDebugPanel({
     if (!state) return;
     setScriptPath(state.script_path ?? "");
     setWorkingDirectory(state.working_directory ?? "");
-    setScriptArgs(state.args.join(" "));
+    setScriptArgs((state.args ?? []).join(" "));
     setConfigurationName(state.launch_profile_name ?? "");
     setSelectedSourceLocation(null);
     followedBreakpointRef.current = null;
@@ -183,7 +184,7 @@ export default function NodeDebugPanel({
     if (!state) return;
     setScriptPath(state.script_path ?? "");
     setWorkingDirectory(state.working_directory ?? "");
-    setScriptArgs(state.args.join(" "));
+    setScriptArgs((state.args ?? []).join(" "));
     setConfigurationName(state.launch_profile_name ?? "");
   }, [state?.configuration_revision]);
 
@@ -707,7 +708,7 @@ export default function NodeDebugPanel({
       {state?.error_message ? <div className="debug-error" role="alert">{state.error_message}</div> : null}
       {state?.requires_restart ? (
         <div className="debug-warning" role="status">
-          源码已变化，相关断点已失效；当前进程仍可继续。需要运行新源码时再重启并重新设置断点：{state.source_changed_paths.join("、")}
+            源码已变化，相关断点已失效；当前进程仍可继续。需要运行新源码时再重启并重新设置断点：{(state.source_changed_paths ?? []).join("、")}
         </div>
       ) : null}
       {error ? <div className="debug-error" role="alert">{error}</div> : null}

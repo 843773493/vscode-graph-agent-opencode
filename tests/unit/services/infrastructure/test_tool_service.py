@@ -56,6 +56,23 @@ class _DependencyToolCatalogStub(_ToolCatalogStub):
         return tools
 
 
+class _DebuggingToolCatalogStub(_ToolCatalogStub):
+    def get_available_tools(self, agent_id: str = "default") -> list[dict]:
+        tools = super().get_available_tools(agent_id)
+        tools.append(
+            {
+                "id": "start_debugging",
+                "name": "start_debugging",
+                "description": "启动调试",
+                "parameters": {"type": "object"},
+                "group_id": "debugging",
+                "group_name": "扩展工具 · Source Debugging",
+                "kind": "debugging",
+            }
+        )
+        return tools
+
+
 def _service(
     tmp_path: Path,
     *,
@@ -66,6 +83,31 @@ def _service(
         selection_store=ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
         test_supported_tools={"read_file"},
     )
+
+
+async def test_source_debugging_is_model_hidden_by_default(tmp_path: Path) -> None:
+    service = _service(tmp_path, tool_catalog=_DebuggingToolCatalogStub())
+
+    debugging_tool = await service.get("start_debugging")
+
+    assert debugging_tool.execution_enabled is True
+    assert debugging_tool.model_visible is False
+
+    changed = await service.update_selection(
+        ToolSelectionPatchRequest(
+            changes=[
+                ToolSelectionChange(
+                    tool_id="start_debugging",
+                    execution_enabled=True,
+                    model_visible=True,
+                )
+            ]
+        )
+    )
+
+    assert [(tool.tool_id, tool.model_visible) for tool in changed] == [
+        ("start_debugging", True)
+    ]
 
 
 async def test_get_unknown_tool_raises_domain_error(tmp_path: Path) -> None:
@@ -99,7 +141,11 @@ async def test_update_selection_rejects_unknown_tool_without_writing(
         await service.update_selection(
             ToolSelectionPatchRequest(
                 changes=[
-                    ToolSelectionChange(tool_id="missing", enabled=False)
+                    ToolSelectionChange(
+                        tool_id="missing",
+                        execution_enabled=False,
+                        model_visible=False,
+                    )
                 ]
             )
         )
@@ -109,7 +155,13 @@ async def test_update_selection_rejects_unknown_tool_without_writing(
 
 async def test_unknown_tool_selection_maps_to_http_400(tmp_path: Path) -> None:
     request = ToolSelectionPatchRequest(
-        changes=[ToolSelectionChange(tool_id="missing", enabled=False)]
+        changes=[
+            ToolSelectionChange(
+                tool_id="missing",
+                execution_enabled=False,
+                model_visible=False,
+            )
+        ]
     )
 
     with pytest.raises(HTTPException) as error:
@@ -132,19 +184,27 @@ async def test_update_selection_persists_and_reports_changed_tool(
     changed = await service.update_selection(
         ToolSelectionPatchRequest(
             changes=[
-                ToolSelectionChange(tool_id="write_file", enabled=False)
+                ToolSelectionChange(
+                    tool_id="write_file",
+                    execution_enabled=False,
+                    model_visible=False,
+                )
             ]
         )
     )
 
-    assert [(tool.tool_id, tool.enabled) for tool in changed] == [
-        ("write_file", False)
+    assert [
+        (tool.tool_id, tool.execution_enabled, tool.model_visible)
+        for tool in changed
+    ] == [
+        ("write_file", False, False)
     ]
     assert {
-        tool.tool_id: tool.enabled for tool in await service.list()
+        tool.tool_id: (tool.execution_enabled, tool.model_visible)
+        for tool in await service.list()
     } == {
-        "read_file": True,
-        "write_file": False,
+        "read_file": (True, True),
+        "write_file": (False, False),
     }
 
 
@@ -165,7 +225,8 @@ async def test_update_selection_rejects_dependency_conflict_atomically(
                 changes=[
                     ToolSelectionChange(
                         tool_id="send_message_to_session",
-                        enabled=False,
+                        execution_enabled=False,
+                        model_visible=False,
                     )
                 ]
             )
@@ -187,18 +248,26 @@ async def test_update_selection_accepts_consistent_dependency_changes(
             changes=[
                 ToolSelectionChange(
                     tool_id="send_message_to_session",
-                    enabled=False,
+                    execution_enabled=False,
+                    model_visible=False,
                 ),
-                ToolSelectionChange(tool_id="task", enabled=False),
+                ToolSelectionChange(
+                    tool_id="task",
+                    execution_enabled=False,
+                    model_visible=False,
+                ),
                 ToolSelectionChange(
                     tool_id="create_team_member",
-                    enabled=False,
+                    execution_enabled=False,
+                    model_visible=False,
                 ),
             ]
         )
     )
 
-    assert {tool.tool_id for tool in changed if not tool.enabled} == {
+    assert {
+        tool.tool_id for tool in changed if not tool.execution_enabled
+    } == {
         "send_message_to_session",
         "task",
         "create_team_member",

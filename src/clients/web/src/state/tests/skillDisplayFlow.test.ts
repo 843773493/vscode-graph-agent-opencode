@@ -95,6 +95,7 @@ const skillEvents: TraceEvent[] = [
 
 const conversation: ConversationView = {
   conversationId: "conv_skill_display",
+  displayMode: "history",
   sessionId: "ses_skill_display",
   userMessage: null,
   events: skillEvents,

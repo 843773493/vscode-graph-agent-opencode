@@ -10,7 +10,7 @@ import type {
   MessageReplayRequest,
   MessageRunAccepted,
   MessageRunRequest,
-  PendingRequestKind,
+  DeliveryPolicy,
 } from "../types/backend";
 import {
   getApiBaseUrl,
@@ -165,7 +165,7 @@ export async function sendUserMessage(
   agentId: string = DEFAULT_AGENT_ID,
   attachments: AttachmentRef[] = [],
   workspaceId?: string | null,
-  queue?: PendingRequestKind | null,
+  deliveryPolicy: DeliveryPolicy = "after_turn",
 ): Promise<MessageRunAccepted> {
   const payload: MessageRunRequest = {
     message: {
@@ -179,7 +179,7 @@ export async function sendUserMessage(
       agent_id: agentId,
       response_mode: "stream",
       async: true,
-      queue: queue ?? undefined,
+      delivery_policy: deliveryPolicy,
     },
   };
 

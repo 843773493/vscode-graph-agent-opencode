@@ -11,7 +11,7 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextAccessError,
     WorkspaceSessionContextTransportProtocol,
 )
-from app.gateway.schemas import GatewayWorkspaceListDTO
+from app.schemas.gateway import GatewayWorkspaceListDTO
 from app.schemas.public_v2.session_context import (
     SessionContextItemDTO,
     SessionContextPartialErrorDTO,

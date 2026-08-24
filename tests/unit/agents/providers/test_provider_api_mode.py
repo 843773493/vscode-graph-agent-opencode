@@ -3,8 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
-from langchain_core.messages import HumanMessage, SystemMessage, message_chunk_to_message
+from langchain_core.messages import (
+    HumanMessage,
+    SystemMessage,
+    message_chunk_to_message,
+)
 
 from app.agents.agent_factory import build_model_from_provider
 from app.agents.providers.litellm_chat import (
@@ -17,17 +20,41 @@ from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
 )
-from app.services.orchestration.agent_stream_helpers import is_tracked_chat_model_event
+from app.services.orchestration.agent_stream_helpers import (
+    is_tracked_chat_model_event,
+)
 
 
-def _provider(api_mode: str) -> dict[str, str]:
+def _provider(api_mode: str) -> dict[str, object]:
+    if api_mode == "responses":
+        structured_api_mode: dict[str, object] = {
+            "protocol": "responses",
+            "model_info": {
+                "supports_function_calling": True,
+                "supports_reasoning": True,
+            },
+            "supports_reasoning": {
+                "reasoning_items": {"summary": True, "encrypted_content": True}
+            },
+            "request_features": {"prompt_cache_key": True},
+            "replay_policy": {"encrypted_content": "same_source"},
+        }
+    else:
+        structured_api_mode = {
+            "protocol": "chat_completions",
+            "model_info": {
+                "supports_function_calling": True,
+                "supports_reasoning": True,
+            },
+            "supports_reasoning": {"reasoning_content": True},
+        }
     return {
         "id": "provider-test",
         "endpoint": "https://example.com/v1",
         "model": "test-model",
         "api_key": "test-key",
         "custom_llm_provider": "openai",
-        "api_mode": api_mode,
+        "api_mode": structured_api_mode,
     }
 
 
@@ -36,9 +63,121 @@ def test_chat_completions_mode_uses_litellm_chat_model():
     assert isinstance(model, BoxteamLiteLLMChatModel)
 
 
+def test_litellm_output_projection_preserves_reasoning_and_provider_summary():
+    normalized = BoxteamLiteLLMChatModel.normalize_output_content(
+        [
+            {"type": "reasoning", "reasoning": "模型推理"},
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "安全摘要"}],
+            },
+        ]
+    )
+
+    assert normalized == [
+        {"type": "reasoning", "reasoning": "模型推理"},
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "安全摘要"}],
+        },
+    ]
+
+
+def test_litellm_output_projection_preserves_redacted_reasoning_payload_marker():
+    normalized = BoxteamLiteLLMChatModel.normalize_output_content(
+        [
+            {
+                "type": "redacted_thinking",
+                "encrypted_content": "provider-secret",
+            }
+        ]
+    )
+
+    assert normalized == [
+        {
+            "type": "redacted_thinking",
+            "encrypted_content": "provider-secret",
+        }
+    ]
+
+
+def test_litellm_unified_reasoning_fields_use_ordered_carrier_blocks():
+    model = BoxteamLiteLLMChatModel(
+        model="openai/test-model",
+        api_key="test-key",
+        api_base="https://example.com/v1",
+    )
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "最终回答",
+                    "reasoning_content": "兼容推理",
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "结构化推理",
+                            "signature": "sig-1",
+                        },
+                        {"type": "redacted_thinking", "data": "sealed-1"},
+                    ],
+                    "reasoning_items": [
+                        {
+                            "type": "reasoning",
+                            "id": "rs-1",
+                            "encrypted_content": "encrypted-1",
+                            "summary": [
+                                {"type": "summary_text", "text": "安全摘要"}
+                            ],
+                        }
+                    ],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+
+    message = model._create_chat_result(response).generations[0].message
+
+    assert isinstance(message.content, list)
+    assert message.content == [
+        {"type": "reasoning_content", "reasoning_content": "兼容推理"},
+        {
+            "type": "thinking",
+            "thinking": "结构化推理",
+            "signature": "sig-1",
+        },
+        {"type": "redacted_thinking", "data": "sealed-1"},
+        {
+            "type": "reasoning_items",
+            "reasoning_items": [
+                {
+                    "type": "reasoning",
+                    "id": "rs-1",
+                    "encrypted_content": "encrypted-1",
+                    "summary": [{"type": "summary_text", "text": "安全摘要"}],
+                }
+            ],
+        },
+        {"type": "text", "text": "最终回答"},
+    ]
+    assert all(
+        block.get("type") != "litellm_payload"
+        for block in message.content
+        if isinstance(block, dict)
+    )
+    assert "reasoning_content" not in message.additional_kwargs
+    assert "thinking_blocks" not in message.additional_kwargs
+    assert "reasoning_items" not in message.additional_kwargs
+
+
 def test_chat_completions_mode_forwards_stable_prompt_cache_key():
     provider = _provider("chat_completions")
-    provider["capabilities"] = ["prompt_cache_key"]
+    api_mode = provider["api_mode"]
+    assert isinstance(api_mode, dict)
+    api_mode["request_features"] = {"prompt_cache_key": True}
     model = build_model_from_provider(
         provider,
         {},
@@ -64,12 +203,133 @@ def test_chat_completions_mode_omits_cache_key_without_capability():
 
 def test_chat_completions_reasoning_replay_capability_configures_model():
     provider = _provider("chat_completions")
-    provider["capabilities"] = ["reasoning_content_replay"]
 
     model = build_model_from_provider(provider, {})
 
     assert isinstance(model, BoxteamLiteLLMChatModel)
     assert model.reasoning_content_replay is True
+
+
+def test_chat_completions_thinking_blocks_configures_model_projection():
+    provider = _provider("chat_completions")
+    provider["api_mode"] = {
+        "protocol": "chat_completions",
+        "model_info": {"supports_function_calling": True, "supports_reasoning": True},
+        "supports_reasoning": {"thinking_blocks": True},
+    }
+
+    model = build_model_from_provider(provider, {})
+
+    assert isinstance(model, BoxteamLiteLLMChatModel)
+    assert model.reasoning_content_replay is False
+    assert model.thinking_blocks_replay is True
+
+
+def test_anthropic_messages_mode_uses_anthropic_adapter():
+    from app.agents.providers.anthropic_messages import (
+        BoxteamAnthropicMessagesModel,
+    )
+
+    provider = {
+        "id": "anthropic-test",
+        "endpoint": "https://example.com/anthropic",
+        "model": "claude-test",
+        "api_key": "test-key",
+        "custom_llm_provider": "anthropic",
+        "api_mode": {
+            "protocol": "anthropic_messages",
+            "model_info": {"supports_reasoning": True},
+            "supports_reasoning": {
+                "thinking_blocks": {
+                    "thinking": True,
+                    "redacted_thinking": True,
+                }
+            },
+        },
+    }
+
+    model = build_model_from_provider(provider, {})
+
+    assert isinstance(model, BoxteamAnthropicMessagesModel)
+    assert model.thinking_blocks_replay is True
+    assert model.redacted_thinking_replay is True
+
+
+def test_anthropic_history_projects_direct_content_to_thinking_blocks():
+    from langchain_core.messages import AIMessage
+
+    from app.agents.providers.anthropic_messages import (
+        BoxteamAnthropicMessagesModel,
+    )
+    from app.agents.providers.litellm_content import build_ai_message_content
+
+    model = BoxteamAnthropicMessagesModel(
+        model_name="claude-test",
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        provider_id="anthropic-test",
+        thinking_blocks_replay=True,
+        redacted_thinking_replay=True,
+    )
+    message = AIMessage(
+        content=build_ai_message_content(
+            "最终回答",
+            source_provider="anthropic-test",
+            thinking_blocks=[
+                {"type": "thinking", "thinking": "分析"},
+                {"type": "redacted_thinking", "data": "sealed"},
+            ],
+        ),
+        response_metadata={"provider_id": "anthropic-test"},
+    )
+
+    projected = model._project_ai_message(message)
+
+    assert projected.content == [
+        {"type": "thinking", "thinking": "分析"},
+        {"type": "redacted_thinking", "data": "sealed"},
+        {"type": "text", "text": "最终回答"},
+    ]
+
+
+def test_anthropic_history_drops_reasoning_for_unsupported_target():
+    from langchain_core.messages import AIMessage
+
+    from app.agents.providers.anthropic_messages import (
+        BoxteamAnthropicMessagesModel,
+    )
+
+    model = BoxteamAnthropicMessagesModel(
+        model_name="claude-test",
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        provider_id="target-provider",
+        thinking_blocks_replay=False,
+        redacted_thinking_replay=False,
+    )
+    message = AIMessage(
+        content=[
+            {"type": "reasoning_content", "reasoning_content": "私有推理"},
+            {
+                "type": "reasoning_items",
+                "reasoning_items": [
+                    {"type": "reasoning", "content": [{"type": "text", "text": "内部项"}]},
+                ],
+            },
+            {"type": "thinking", "thinking": "思考"},
+            {"type": "redacted_thinking", "data": "sealed"},
+            {"type": "text", "text": "可见回答"},
+        ],
+        tool_calls=[
+            {"id": "call-1", "name": "read_file", "args": {"path": "a.txt"}},
+        ],
+        response_metadata={"provider_id": "source-provider"},
+    )
+
+    projected = model._project_ai_message(message)
+
+    assert projected.content == [{"type": "text", "text": "可见回答"}]
+    assert projected.tool_calls == message.tool_calls
 
 
 def test_responses_mode_uses_encrypted_reasoning_and_stable_cache_key():
@@ -104,7 +364,7 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
         "endpoint": "https://chatgpt.com/backend-api/codex",
         "model": "gpt-5.6-luna",
         "custom_llm_provider": "chatgpt",
-        "api_mode": "responses",
+        "api_mode": _provider("responses")["api_mode"],
         "auth": {"type": "oauth", "method": "chatgpt"},
     }
 
@@ -116,10 +376,7 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
 
     assert isinstance(model, BoxteamOpenAIResponsesModel)
     assert model._client_params["custom_llm_provider"] == "chatgpt"
-    assert (
-        model._client_params["litellm_session_id"]
-        == "ses_chatgpt_cache_affinity"
-    )
+    assert model._client_params["litellm_session_id"] == "ses_chatgpt_cache_affinity"
     assert "prompt_cache_key" not in model._client_params
 
     payload = model._responses_payload(
@@ -148,20 +405,13 @@ def test_responses_history_replays_encrypted_reasoning_without_server_id():
         content=[
             {
                 "type": "reasoning",
-                "reasoning": "摘要",
-                "id": "part-local",
-                "index": 0,
-                "extras": {
-                    "response_item": {
-                        "type": "reasoning",
-                        "id": "rs_server",
-                        "status": "completed",
-                        "encrypted_content": "encrypted-reasoning",
-                        "summary": [],
-                    }
-                },
+                "id": "rs_server",
+                "status": "completed",
+                "encrypted_content": "encrypted-reasoning",
+                "summary": [],
             }
-        ]
+        ],
+        response_metadata={"provider_id": "provider-test"},
     )
     payload = model._responses_payload([message], None, {})
     assert payload["input"] == [
@@ -183,12 +433,12 @@ def test_responses_history_drops_unportable_provider_reasoning_id():
             content=[
                 {
                     "type": "reasoning",
-                    "reasoning": "",
                     "id": "part-local",
-                    "index": 0,
-                    "extras": {"provider_part_id": "rs_server"},
+                    "status": "completed",
+                    "summary": [],
                 }
-            ]
+            ],
+            response_metadata={"provider_id": "provider-test"},
         ),
         HumanMessage(content="空响应恢复，请继续处理"),
     ]
@@ -206,6 +456,31 @@ def test_responses_history_drops_unportable_provider_reasoning_id():
     assert "provider_part_id" not in str(payload)
 
 
+def test_responses_history_drops_encrypted_reasoning_from_another_provider():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    model = build_model_from_provider(_provider("responses"), {})
+    history = [
+        HumanMessage(content="跨模型继续"),
+        AIMessage(
+            content=[
+                {
+                    "type": "reasoning",
+                    "encrypted_content": "foreign-provider-payload",
+                    "summary": [],
+                },
+                {"type": "text", "text": "保留可见正文"},
+            ],
+            response_metadata={"provider_id": "primary"},
+        ),
+    ]
+
+    payload = model._responses_payload(history, None, {})
+
+    assert "foreign-provider-payload" not in str(payload)
+    assert any(item.get("type") == "message" for item in payload["input"])
+
+
 def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -216,9 +491,9 @@ def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
             content=[
                 {
                     "type": "reasoning",
-                    "reasoning": "",
-                    "id": "part-local",
-                    "extras": {"provider_part_id": "rs_server"},
+                    "id": "rs_server",
+                    "status": "completed",
+                    "summary": [],
                 }
             ],
             tool_calls=[
@@ -237,8 +512,7 @@ def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
 
     assert "provider_part_id" not in str(payload)
     assert any(
-        item.get("type") == "function_call"
-        and item.get("call_id") == "call_readme"
+        item.get("type") == "function_call" and item.get("call_id") == "call_readme"
         for item in payload["input"]
     )
     assert any(
@@ -266,17 +540,12 @@ def test_responses_payload_converts_image_and_replays_encrypted_reasoning():
             content=[
                 {
                     "type": "reasoning",
-                    "reasoning": "图片分析摘要",
-                    "extras": {
-                        "response_item": {
-                            "type": "reasoning",
-                            "encrypted_content": "encrypted-image-reasoning",
-                            "summary": [],
-                        }
-                    },
+                    "encrypted_content": "encrypted-image-reasoning",
+                    "summary": [],
                 },
                 {"type": "text", "text": "图片中有测试图案"},
-            ]
+            ],
+            response_metadata={"provider_id": "provider-test"},
         ),
     ]
 
@@ -312,27 +581,50 @@ def test_responses_payload_converts_image_and_replays_encrypted_reasoning():
     }
 
 
-def test_responses_output_normalizes_encrypted_reasoning_into_extras():
+def test_responses_output_keeps_direct_reasoning_item():
     block = BoxteamOpenAIResponsesModel._normalize_response_block(
         {
             "type": "reasoning",
             "id": "rs_server",
             "status": "completed",
+            "content": [
+                {"type": "reasoning_text", "text": "先确认范围"},
+            ],
             "encrypted_content": "encrypted-reasoning",
             "summary": [{"type": "summary_text", "text": "摘要"}],
+            "provider_extension": {"trace_group": "reasoning-1"},
         }
     )
     assert block == {
         "type": "reasoning",
-        "reasoning": "摘要",
         "id": "rs_server",
-        "extras": {
-            "response_item": {
-                "type": "reasoning",
-                "encrypted_content": "encrypted-reasoning",
-                "summary": [{"type": "summary_text", "text": "摘要"}],
-            }
-        },
+        "status": "completed",
+        "content": [
+            {"type": "reasoning_text", "text": "先确认范围"},
+        ],
+        "encrypted_content": "encrypted-reasoning",
+        "summary": [{"type": "summary_text", "text": "摘要"}],
+        "provider_extension": {"trace_group": "reasoning-1"},
+    }
+
+
+def test_responses_output_text_only_normalizes_type_without_dropping_fields():
+    block = BoxteamOpenAIResponsesModel._normalize_response_block(
+        {
+            "type": "output_text",
+            "text": "完成",
+            "annotations": [{"type": "url_citation", "url": "https://example.com"}],
+            "phase": "final_answer",
+            "provider_extension": {"trace_group": "text-1"},
+        }
+    )
+
+    assert block == {
+        "type": "text",
+        "text": "完成",
+        "annotations": [{"type": "url_citation", "url": "https://example.com"}],
+        "phase": "final_answer",
+        "provider_extension": {"trace_group": "text-1"},
     }
 
 
@@ -366,19 +658,28 @@ def test_responses_stream_keeps_one_portable_reasoning_item() -> None:
             original_schema=None,
         )
         indexes = (index, output_index, sub_index)
-        assert chunk is not None
-        chunks.append(chunk.message)
+        if event_type == "response.output_item.added":
+            assert chunk is None
+        else:
+            assert chunk is not None
+            chunks.append(chunk.message)
 
-    message = message_chunk_to_message(chunks[0] + chunks[1])
+    message = message_chunk_to_message(chunks[0])
+    from app.agents.providers.litellm_content import canonicalize_ai_message
+
+    message = canonicalize_ai_message(message, source_provider="openai")
     assert isinstance(message.content, list)
     assert len(message.content) == 1
-    reasoning = message.content[0]
-    assert reasoning["type"] == "reasoning"
-    assert reasoning["reasoning"] == ""
-    assert reasoning["extras"]["response_item"] == {
-        "type": "reasoning",
-        "summary": [],
-        "encrypted_content": "encrypted-reasoning",
+    assert message.content[0] == {
+        "type": "reasoning_items",
+        "reasoning_items": [
+            {
+                "type": "reasoning",
+                "id": "rs_test",
+                "summary": [],
+                "encrypted_content": "encrypted-reasoning",
+            }
+        ],
     }
 
 

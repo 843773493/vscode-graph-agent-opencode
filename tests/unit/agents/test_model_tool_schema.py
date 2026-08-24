@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 import pytest
+from jsonschema import ValidationError as JsonSchemaValidationError
 from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from pydantic import ValidationError
@@ -86,3 +87,24 @@ def test_model_tool_schema_exports_dictionary_schema_for_protocol_tools() -> Non
     assert export_model_tool_json_schema(
         _ToolWithDictionarySchema(),  # type: ignore[arg-type]
     ) == {"type": "object"}
+
+
+def test_model_tool_arguments_validate_dictionary_schema_for_protocol_tools() -> None:
+    class _ToolWithDictionarySchema:
+        name = "dictionary_schema"
+        tool_call_schema: ClassVar[dict[str, Any]] = {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        }
+
+    assert validate_model_tool_arguments(
+        _ToolWithDictionarySchema(),  # type: ignore[arg-type]
+        {"value": "ready", "ignored": "not-forwarded"},
+    ) == {"value": "ready"}
+
+    with pytest.raises(JsonSchemaValidationError):
+        validate_model_tool_arguments(  # type: ignore[arg-type]
+            _ToolWithDictionarySchema(),
+            {"value": 123},
+        )

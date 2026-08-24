@@ -4,10 +4,86 @@ import {
   appendTraceEventsToPendingConversations,
   getConversationsForSession,
   pendingSnapshotToConversations,
+  removePendingForTraceEvent,
   syncActiveJobConversation,
 } from "../conversations";
 import { createSessionTurnTimeline } from "../session/turnTimeline";
-import type { AppState } from "../../types/frontend";
+import {
+  buildPendingStatusItem,
+  isLiveConversationView,
+} from "../trace/traceAggregation";
+import type { AppState, ConversationView } from "../../types/frontend";
+import type { TraceEvent } from "../../types/backend";
+
+test("历史 Turn 不显示实时事件流等待状态", () => {
+  const historyConversation: ConversationView = {
+    conversationId: "turn_history_running",
+    displayMode: "history",
+    sessionId: "ses_history_projection",
+    userMessage: null,
+    events: [],
+    status: "running",
+    jobId: "job_history_projection",
+    pending: false,
+    source: "turn",
+  };
+
+  expect(buildPendingStatusItem(historyConversation)).toBeNull();
+});
+
+test("非 pending 来源即使带有 live 标记也不显示实时等待状态", () => {
+  const staleHistoryConversation: ConversationView = {
+    conversationId: "turn_stale_history",
+    displayMode: "live",
+    sessionId: "ses_stale_history",
+    userMessage: null,
+    events: [],
+    status: "running",
+    jobId: "job_stale_history",
+    pending: false,
+    source: "turn",
+  };
+
+  expect(buildPendingStatusItem(staleHistoryConversation)).toBeNull();
+});
+
+test("Job 终态先移除 live Turn，历史视图不会与实时视图并存", () => {
+  const sessionId = "ses_terminal_projection";
+  const jobId = "job_terminal_projection";
+  const liveConversation: ConversationView = {
+    conversationId: "msg_terminal_projection",
+    displayMode: "live",
+    sessionId,
+    userMessage: null,
+    events: [],
+    status: "running",
+    jobId,
+    pending: true,
+    source: "pending",
+  };
+  const state = {
+    pendingConversations: new Map([[sessionId, [liveConversation]]]),
+    turnTimelinesBySession: new Map(),
+  } as unknown as AppState;
+  const terminalEvent: TraceEvent = {
+    event_id: "evt_terminal_projection",
+    session_id: sessionId,
+    job_id: jobId,
+    type: "job_completed",
+    phase: "job",
+    title: "任务完成",
+    content: "",
+    timestamp: "2026-08-21T00:00:00Z",
+  };
+
+  removePendingForTraceEvent(
+    state.pendingConversations,
+    sessionId,
+    terminalEvent,
+  );
+
+  expect(getConversationsForSession(sessionId, state)).toEqual([]);
+});
 
 test("内部 Goal continuation 不构造用户可见会话", () => {
   const state = {
@@ -53,7 +129,9 @@ test("排队中的内部展示消息保留安全正文和展示类型", () => {
       session_id: "ses_report",
       content: "生成分支已结束，主会话正在处理返回结果。",
       attachments: [],
-      kind: "queued",
+      delivery_policy: "after_turn",
+      enqueue_sequence: 1,
+      status: "queued",
       position: 0,
       agent_id: "default",
       message_created_at: "2026-07-28T00:00:00Z",
@@ -62,7 +140,9 @@ test("排队中的内部展示消息保留安全正文和展示类型", () => {
       },
       created_at: "2026-07-28T00:00:00Z",
       updated_at: "2026-07-28T00:00:00Z",
+      snapshot_version: 1,
     }],
+    snapshot_version: 1,
   });
 
   expect(conversations[0]?.userMessage?.content).not.toContain(
@@ -255,6 +335,7 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
   ]);
   expect(conversations[0]?.status).toBe("running");
   expect(conversations[0]?.activeJobOverlay).toBe(true);
+  expect(isLiveConversationView(conversations[0]!)).toBe(true);
 
   syncActiveJobConversation(state.pendingConversations, sessionId, null);
   expect(state.pendingConversations.has(sessionId)).toBe(false);

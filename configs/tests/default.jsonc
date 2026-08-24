@@ -8,10 +8,11 @@
         "model": "big-pickle",
         "api_key": "${OPENCODE_ZEN_API_KEY}",
         "custom_llm_provider": "openai",
-        "api_mode": "chat_completions",
-        "capabilities": [
-          "reasoning_content_replay"
-        ]
+        "api_mode": {
+          "protocol": "chat_completions",
+          "model_info": {"supports_function_calling": true, "supports_reasoning": true},
+          "supports_reasoning": {"reasoning_content": true}
+        }
       },
       {
         "id": "backup_1",
@@ -19,7 +20,11 @@
         "model": "openrouter/free",
         "api_key": "${KILO_API_KEY}",
         "custom_llm_provider": "openai",
-        "api_mode": "chat_completions"
+        "api_mode": {
+          "protocol": "chat_completions",
+          "model_info": {"supports_function_calling": true, "supports_reasoning": true},
+          "supports_reasoning": {"reasoning_content": true}
+        }
       },
       {
         "id": "backup_2",
@@ -27,7 +32,11 @@
         "model": "openrouter/free",
         "api_key": "${OPENROUTER_API_KEY}",
         "custom_llm_provider": "openrouter",
-        "api_mode": "chat_completions"
+        "api_mode": {
+          "protocol": "chat_completions",
+          "model_info": {"supports_function_calling": true, "supports_reasoning": true},
+          "supports_reasoning": {"reasoning_content": true}
+        }
       },
       {
         "id": "backup_3",
@@ -35,10 +44,12 @@
         "model": "gpt-5.6-luna",
         "api_key": "${CCTQ_API_KEY}",
         "custom_llm_provider": "openai",
-        "api_mode": "responses",
-        "capabilities": [
-          "image_input"
-        ],
+        "api_mode": {
+          "protocol": "responses",
+          "model_info": {"supports_vision": true, "supports_function_calling": true, "supports_reasoning": true},
+          "supports_reasoning": {"reasoning_items": {"summary": true, "encrypted_content": true}},
+          "replay_policy": {"encrypted_content": "same_source"}
+        },
         "request_options": {
           "overrides": {
             "reasoning": {
@@ -53,14 +64,16 @@
         "endpoint": "https://chatgpt.com/backend-api/codex",
         "model": "gpt-5.6-luna",
         "custom_llm_provider": "chatgpt",
-        "api_mode": "responses",
+        "api_mode": {
+          "protocol": "responses",
+          "model_info": {"supports_vision": true, "supports_function_calling": true, "supports_reasoning": true},
+          "supports_reasoning": {"reasoning_items": {"summary": true, "encrypted_content": true}},
+          "replay_policy": {"encrypted_content": "same_source"}
+        },
         "auth": {
           "type": "oauth",
           "method": "chatgpt"
         },
-        "capabilities": [
-          "image_input"
-        ]
       }
     ]
   },

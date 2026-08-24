@@ -18,7 +18,6 @@ class TraceEventMapper:
         "error",
         "message_created",
         "job_created",
-        "job_merged",
         "job_started",
         "job_completed",
         "job_cancelled",
@@ -96,9 +95,6 @@ class TraceEventMapper:
             return "message", "用户消息已创建", payload.get("content") or "用户消息已记录", "completed", None
         if event_type == "job_created":
             return "job", "任务已创建", payload.get("message") or "任务已创建，准备执行", "running", None
-        if event_type == "job_merged":
-            merged_count = len(payload.get("merged_job_ids") or [])
-            return "job", "任务已合并", f"已合并 {merged_count} 个排队任务", "running", None
         if event_type == "job_started":
             return "job", "任务已开始", payload.get("message") or "任务已开始执行", "running", None
         if event_type == "job_completed":

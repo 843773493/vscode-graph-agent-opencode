@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from app.gateway.schemas import GatewayConnectionKind
+from app.schemas.gateway import GatewayConnectionKind
 
 
 _LEGACY_WORKSPACE_ID_PATTERN = re.compile(r"^gw_[0-9a-f]{12}$")

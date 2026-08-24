@@ -1,0 +1,93 @@
+{
+  // LiteLLM assistant response 的完整字段示例。
+  // 本文件只用于人工检查字段归属，不是运行时配置，也不是 rollout fixture。
+  // content 是项目内部的有序 carrier 序列。
+  // reasoning_content、reasoning_items 各自作为独立 block 保存，
+  // 保留 LiteLLM 原始字段名和跨 block 顺序，不合并为 type=reasoning。
+  "type": "ai",
+  "content": [
+    {
+      // 项目内部 carrier block：保留 LiteLLM 的原始字段和顺序位置。
+      "type": "reasoning_content",
+      "reasoning_content": "已确认需要先读取配置，再决定是否调用工具。"
+    },
+    {
+      // 项目内部 carrier block：保留 LiteLLM 的原始字段和顺序位置。
+      "type": "reasoning_items",
+      "reasoning_items": [
+        {
+          "type": "reasoning",
+          "id": "rs_item_002",
+          "status": "completed",
+          "content": [
+            {
+              "type": "reasoning_text",
+              "text": "先确认工作区结构，再检查目标文件和相关测试。"
+            }
+          ],
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "已确定检查范围和执行顺序。"
+            }
+          ],
+          // 只有目标 provider 支持且来源 provider 相同，才允许回放此字段。
+          "encrypted_content": "encrypted-reasoning-placeholder-002"
+        }
+      ]
+    },
+    {
+      // ChatCompletionThinkingBlock：直接属于 assistant.content。
+      "type": "thinking",
+      "thinking": "工具参数已经准备好，下一步检查工具返回值。",
+      "signature": "anthropic-thinking-signature-placeholder-003"
+    },
+    {
+      // ChatCompletionRedactedThinkingBlock：直接属于 assistant.content。
+      "type": "redacted_thinking",
+      "data": "redacted-thinking-placeholder-004"
+    },
+    {
+      // 普通 assistant 可见内容，仅放在 content。
+      "type": "text",
+      "text": "我先检查工作区结构，然后读取目标文件。"
+    },
+    {
+      "type": "text",
+      "text": "已完成检查，目标文件符合预期，下一步可以运行测试。"
+    }
+  ],
+
+  // 工具调用单独放在 AIMessage.tool_calls 中，不复制到 content。
+  "tool_calls": [
+    {
+      "type": "tool_call",
+      "id": "call_inspect_file_001",
+      "name": "inspect_file",
+      "args": {
+        "path": "src/example.ts",
+        "line_offset": 1,
+        "max_lines": 80
+      },
+      "index": 0
+    }
+  ],
+  "invalid_tool_calls": [],
+  "additional_kwargs": {},
+  "response_metadata": {
+    "model_provider": "litellm",
+    "custom_llm_provider": "openai",
+    "provider_id": "backup_1",
+    "model_name": "openrouter/free",
+    "response_id": "resp_example_001"
+  },
+  "usage_metadata": {
+    "input_tokens": 4096,
+    "output_tokens": 768,
+    "total_tokens": 4864,
+    "input_token_details": {
+      "cache_read": 1024,
+      "cache_creation": 0
+    }
+  }
+}

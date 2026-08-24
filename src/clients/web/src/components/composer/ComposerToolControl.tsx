@@ -20,6 +20,10 @@ import type {
 } from "../../types/toolTesting";
 import ComposerToolTree, { type ToolGroup } from "./ComposerToolTree";
 import AnchoredOverlay from "../AnchoredOverlay";
+import {
+  applyToolSelectionChanges,
+  restoreToolSelectionAfterSaveFailure,
+} from "./toolSelectionState";
 
 const TOOL_GROUP_KIND_ORDER: Record<ToolKind, number> = {
   default: 0,
@@ -146,15 +150,10 @@ export default function ComposerToolControl({
     changes: ToolSelectionChange[],
     successMessage: string,
   ) => {
+    const previousTools = tools;
     const changedIds = new Set(changes.map((change) => change.tool_id));
-    const enabledById = new Map(
-      changes.map((change) => [change.tool_id, change.enabled]),
-    );
     setSavingToolIds((current) => new Set([...current, ...changedIds]));
-    setTools((current) => current.map((tool) => {
-      const enabled = enabledById.get(tool.tool_id);
-      return enabled === undefined ? tool : { ...tool, enabled };
-    }));
+    setTools((current) => applyToolSelectionChanges(current, changes));
     setError(null);
     try {
       const updatedTools = await updateToolSelection(
@@ -173,15 +172,16 @@ export default function ComposerToolControl({
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : String(saveError);
       setError(`工具设置保存失败：${message}`);
-      const refreshedTools = await getToolCatalog(apiPort, agentId, workspaceId);
-      const refreshedById = new Map(
-        refreshedTools
-          .filter((tool) => changedIds.has(tool.tool_id))
-          .map((tool) => [tool.tool_id, tool]),
-      );
-      setTools((current) => current.map(
-        (tool) => refreshedById.get(tool.tool_id) ?? tool,
-      ));
+      try {
+        const refreshedTools = await getToolCatalog(apiPort, agentId, workspaceId);
+        setTools(restoreToolSelectionAfterSaveFailure(previousTools, refreshedTools));
+      } catch (refreshError) {
+        setTools(restoreToolSelectionAfterSaveFailure(previousTools, null));
+        const refreshMessage = refreshError instanceof Error
+          ? refreshError.message
+          : String(refreshError);
+        setError(`工具设置保存失败，且状态刷新失败：${message}；${refreshMessage}`);
+      }
       throw saveError;
     } finally {
       setSavingToolIds((current) => {
@@ -194,27 +194,60 @@ export default function ComposerToolControl({
     }
   };
 
-  const toggleTool = (toolId: string) => {
+  const toggleToolExecution = (toolId: string) => {
     const tool = tools.find((item) => item.tool_id === toolId);
     if (!tool || savingToolIds.has(toolId)) {
       return;
     }
     void saveChanges(
-      [{ tool_id: toolId, enabled: !tool.enabled }],
+      [{
+        tool_id: toolId,
+        execution_enabled: !tool.execution_enabled,
+        model_visible: tool.execution_enabled ? false : tool.model_visible,
+      }],
       `${tool.name} 工具设置已保存`,
     ).catch(() => {
       onStatus("工具设置保存失败");
     });
   };
 
-  const toggleGroup = (group: ToolGroup) => {
+  const toggleToolModelVisibility = (toolId: string) => {
+    const tool = tools.find((item) => item.tool_id === toolId);
+    if (!tool || savingToolIds.has(toolId) || !tool.execution_enabled) {
+      return;
+    }
+    void saveChanges(
+      [{
+        tool_id: toolId,
+        execution_enabled: true,
+        model_visible: !tool.model_visible,
+      }],
+      `${tool.name} 的模型可见性已保存`,
+    ).catch(() => {
+      onStatus("工具设置保存失败");
+    });
+  };
+
+  const toggleGroupCapability = (
+    group: ToolGroup,
+    capability: "execution" | "model",
+  ) => {
     if (group.items.some((tool) => savingToolIds.has(tool.tool_id))) {
       return;
     }
-    const enableGroup = group.items.some((tool) => !tool.enabled);
+    const enableGroup = capability === "execution"
+      ? group.items.some((tool) => !tool.execution_enabled)
+      : group.items.some(
+          (tool) => tool.execution_enabled && !tool.model_visible,
+        );
     const changes = group.items.map((tool) => ({
       tool_id: tool.tool_id,
-      enabled: enableGroup,
+      execution_enabled: capability === "execution"
+        ? enableGroup
+        : tool.execution_enabled,
+      model_visible: capability === "execution"
+        ? (enableGroup ? tool.model_visible : false)
+        : (tool.execution_enabled && enableGroup),
     }));
     void saveChanges(changes, `${group.name} 工具组设置已保存`).catch(() => {
       onStatus("工具组设置保存失败");
@@ -240,7 +273,8 @@ export default function ComposerToolControl({
       });
   };
 
-  const enabledCount = tools.filter((tool) => tool.enabled).length;
+  const executionCount = tools.filter((tool) => tool.execution_enabled).length;
+  const modelVisibleCount = tools.filter((tool) => tool.model_visible).length;
 
   return (
     <div className="composer-tool-control" ref={controlRef}>
@@ -268,7 +302,11 @@ export default function ComposerToolControl({
           <header className="composer-tool-menu-header">
             <div>
               <strong>工具</strong>
-              <span>{loading ? "正在读取…" : `${enabledCount}/${tools.length} 已开启`}</span>
+              <span>
+                {loading
+                  ? "正在读取…"
+                  : `${executionCount}/${tools.length} 可调用 · ${modelVisibleCount}/${tools.length} 模型可见`}
+              </span>
             </div>
             <div className="composer-tool-menu-header-actions">
               <button
@@ -306,8 +344,9 @@ export default function ComposerToolControl({
               else next.add(groupId);
               return next;
             })}
-            onToggleGroup={toggleGroup}
-            onToggleTool={toggleTool}
+            onToggleGroupCapability={toggleGroupCapability}
+            onToggleToolExecution={toggleToolExecution}
+            onToggleToolModelVisibility={toggleToolModelVisibility}
             onRunTest={runTest}
           />
         </section>

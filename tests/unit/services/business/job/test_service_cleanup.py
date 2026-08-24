@@ -49,7 +49,7 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs():
         message_created_at="2026-07-14T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
-        pending_kind="queued",
+        delivery_policy="after_turn",
     )
     other_job = JobState(
         job_id="job_other",
@@ -64,7 +64,7 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs():
     service._jobs[queued_job.job_id] = queued_job
     service._jobs[other_job.job_id] = other_job
     service._session_current_job[session_id] = running_job.job_id
-    service._pending_queue.append(session_id, queued_job.job_id, "queued")
+    service._pending_queue.append(session_id, queued_job.job_id, "after_turn")
 
     deleted_count = await service.delete_session_jobs(session_id)
 

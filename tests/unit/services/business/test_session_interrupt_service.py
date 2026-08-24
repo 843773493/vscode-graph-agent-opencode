@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.session_interrupt_state import SessionInterruptState
 from app.schemas.public_v2.common import ControlAction, JobStatus, RunMode
 from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO
@@ -20,6 +20,7 @@ class FakeJobService:
     def __init__(self, job: JobDTO) -> None:
         self.job = job
         self.control_requests: list[JobControlRequest] = []
+        self.boundary_notifications: list[tuple[str, bool]] = []
 
     async def list(self, session_id: str | None = None) -> list[JobDTO]:
         if session_id is None or self.job.session_id == session_id:
@@ -39,6 +40,17 @@ class FakeJobService:
             status=JobStatus.cancelling,
             control_state="cancelling",
         )
+
+    async def notify_boundary(
+        self,
+        session_id: str,
+        boundary: str,
+        *,
+        tool_result_available: bool,
+    ) -> None:
+        assert session_id == self.job.session_id
+        assert boundary == "after_interrupt"
+        self.boundary_notifications.append((boundary, tool_result_available))
 
 
 class FakeJobEventBus:
@@ -84,7 +96,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     job_id = f"job_user_interrupt_{phase}"
     SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
-    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     message_service = MessageService(checkpointer=saver)
     config = build_checkpoint_config(session_id)
     await saver.aput(
@@ -134,6 +146,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     assert result.tool_name == tool_name
     assert job_service.control_requests
     assert job_service.control_requests[0].action == ControlAction.cancel
+    assert job_service.boundary_notifications == [("after_interrupt", False)]
     assert SessionInterruptState.get(session_id).user_interrupt_reminder_injected is True
     assert event_bus.events
     assert event_bus.events[-1]["event_type"] == "session_interrupted"
@@ -175,7 +188,7 @@ async def test_user_interrupt_fails_when_system_reminder_checkpoint_missing(
     SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
 
-    saver = FileSystemCheckpointSaver(sessions_dir=tmp_path)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     message_service = MessageService(checkpointer=saver)
     SessionInterruptState.set(
         session_id,

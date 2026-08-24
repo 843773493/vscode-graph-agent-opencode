@@ -12,7 +12,7 @@ from app.schemas.public_v2.message import (
     MessageRunAccepted,
     SessionMessageDispatchRequest,
 )
-from app.schemas.public_v2.pending_request import MessageDispatchMode
+from app.schemas.public_v2.pending_request import DeliveryPolicy
 from app.services.infrastructure.config_service import ConfigService
 
 ResponseDTO = TypeVar("ResponseDTO", bound=BaseModel)
@@ -59,14 +59,14 @@ class GatewaySessionMessageClient:
         content: str,
         metadata: dict[str, object],
         simulate_user: bool,
-        dispatch_mode: MessageDispatchMode,
+        delivery_policy: DeliveryPolicy,
         idempotency_key: str | None,
     ) -> MessageRunAccepted:
         payload = SessionMessageDispatchRequest(
             content=content,
             metadata=metadata,
             simulate_user=simulate_user,
-            dispatch_mode=dispatch_mode,
+            delivery_policy=delivery_policy,
             idempotency_key=idempotency_key,
         )
         return await self._request(

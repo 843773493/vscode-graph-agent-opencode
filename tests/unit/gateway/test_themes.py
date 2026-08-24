@@ -9,8 +9,11 @@ from PIL import Image
 from app.core.path_utils import get_user_gateway_config_path
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import ConfiguredTheme, GatewayConfig
+from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.control.user_access import UserAccessService, USER_ACCESS_COOKIE_NAME
+from app.gateway.control.user_profile import UserProfileStore
 from app.gateway.main import app
-from app.gateway.schemas import GatewayThemeBackgroundDTO, WebUISettingsDTO
+from app.schemas.gateway import GatewayThemeBackgroundDTO, WebUISettingsDTO
 from app.gateway.theme import (
     import_ui_asset,
     load_validated_theme_config,
@@ -284,8 +287,34 @@ def test_remote_background_rejects_non_http_scheme(tmp_path):
         )
 
 
-def test_gateway_theme_api_switches_and_serves_uploaded_background():
+def test_gateway_theme_api_switches_and_serves_uploaded_background(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    gateway_root = tmp_path / "gateway"
+    monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(gateway_root))
+    state = GatewayStateStore(path=gateway_root / "gateway.sqlite")
+    request.addfinalizer(state.close)
+    access_service = UserAccessService(state=state)
+    user = access_service.create_user(display_name="主题测试用户", user_id="theme-user")
+    UserProfileStore(gateway_root=gateway_root).ensure_user(
+        user_id=user.user_id,
+        display_name=user.display_name,
+    )
+    access = access_service.acquire_user(
+        user_id=user.user_id,
+        client_label="unit-test",
+    )
+    monkeypatch.setattr(app.state, "user_access_service", access_service, raising=False)
+    monkeypatch.setattr(
+        app.state,
+        "user_profile_store",
+        UserProfileStore(gateway_root=gateway_root),
+        raising=False,
+    )
     client = TestClient(app)
+    client.cookies.set(USER_ACCESS_COOKIE_NAME, access.access_session_id)
     headers = {"X-Local-Token": get_gateway_local_token()}
 
     catalog_response = client.get("/api/gateway/themes", headers=headers)
@@ -344,6 +373,56 @@ def test_gateway_theme_api_switches_and_serves_uploaded_background():
     )
     assert blocked_delete.status_code == 409
     assert "正在被主题引用" in blocked_delete.json()["detail"]
+
+
+def test_gateway_theme_assets_are_isolated_by_user_profile(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    gateway_root = tmp_path / "gateway"
+    monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(gateway_root))
+    state = GatewayStateStore(path=gateway_root / "gateway.sqlite")
+    request.addfinalizer(state.close)
+    access_service = UserAccessService(state=state)
+    profiles = UserProfileStore(gateway_root=gateway_root)
+    user_a = access_service.create_user(display_name="主题用户 A", user_id="theme-a")
+    user_b = access_service.create_user(display_name="主题用户 B", user_id="theme-b")
+    profiles.ensure_user(user_id=user_a.user_id, display_name=user_a.display_name)
+    profiles.ensure_user(user_id=user_b.user_id, display_name=user_b.display_name)
+    access_a = access_service.acquire_user(user_id=user_a.user_id, client_label="A")
+    access_b = access_service.acquire_user(user_id=user_b.user_id, client_label="B")
+    monkeypatch.setattr(app.state, "user_access_service", access_service, raising=False)
+    monkeypatch.setattr(app.state, "user_profile_store", profiles, raising=False)
+    client = TestClient(app)
+    headers = {"X-Local-Token": get_gateway_local_token()}
+
+    client.cookies.set(USER_ACCESS_COOKIE_NAME, access_a.access_session_id)
+    upload_response = client.post(
+        "/api/gateway/ui-assets",
+        headers=headers,
+        files={"file": ("background.png", _png_bytes(), "image/png")},
+    )
+    assert upload_response.status_code == 200, upload_response.text
+    asset_id = upload_response.json()["data"]["asset_id"]
+    assert (
+        profiles.theme_assets_path(user_id=user_a.user_id) / "ui-assets" / "manifest.json"
+    ).is_file()
+    assert not (
+        profiles.theme_assets_path(user_id=user_b.user_id)
+        / "ui-assets"
+        / "manifest.json"
+    ).exists()
+
+    client.cookies.set(USER_ACCESS_COOKIE_NAME, access_b.access_session_id)
+    list_response = client.get("/api/gateway/ui-assets", headers=headers)
+    assert list_response.status_code == 200, list_response.text
+    assert list_response.json()["data"]["items"] == []
+    other_user_response = client.get(
+        f"/api/gateway/ui-assets/{asset_id}",
+        headers=headers,
+    )
+    assert other_user_response.status_code == 404
 
 
 def test_invalid_theme_config_keeps_previous_valid_snapshot(tmp_path):

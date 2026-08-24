@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-ConfigSourceLayer = Literal["inline", "user", "user_local", "workspace"]
+ConfigSourceLayer = Literal["inline", "user", "user_local", "workspace", "sqlite"]
 
 
 @dataclass(frozen=True, slots=True)

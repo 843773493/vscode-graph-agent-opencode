@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.gateway.config import ConfiguredRemoteGateway, GatewayConfig
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.gateway.schemas import AddSshWorkspaceRequest
+from app.schemas.gateway import AddSshWorkspaceRequest
 from app.gateway.ssh_command import build_ssh_command
 from app.gateway.ssh_config import (
     UserSshHost,

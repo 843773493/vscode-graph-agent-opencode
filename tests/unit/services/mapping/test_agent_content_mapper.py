@@ -21,6 +21,22 @@ def test_split_agent_content_separates_standard_blocks():
     assert text == "最终回答"
 
 
+def test_split_agent_content_reads_direct_reasoning_and_thinking_blocks():
+    reasoning, text = split_agent_content(
+        [
+            {
+                "type": "reasoning",
+                "content": [{"type": "reasoning_text", "text": "先分析"}],
+            },
+            {"type": "thinking", "thinking": "再确认"},
+            {"type": "text", "text": "最终回答"},
+        ]
+    )
+
+    assert reasoning == "先分析再确认"
+    assert text == "最终回答"
+
+
 def test_split_agent_content_treats_string_as_visible_text():
     reasoning, text = split_agent_content("普通正文")
 
@@ -91,6 +107,53 @@ def test_extract_agent_stream_parts_preserves_response_item_extras():
     )
 
     assert parts[0].extras == {"response_item": response_item}
+
+
+def test_extract_agent_stream_parts_accepts_all_canonical_reasoning_carriers():
+    parts = extract_agent_stream_content_parts(
+        [
+            {
+                "type": "reasoning_content",
+                "reasoning_content": "直接推理",
+                "id": "part-content",
+                "index": 0,
+            },
+            {
+                "type": "reasoning_items",
+                "reasoning_items": [
+                    {"type": "reasoning", "summary": [{"text": "摘要"}]}
+                ],
+                "id": "part-items",
+                "index": 1,
+            },
+            {
+                "type": "redacted_thinking",
+                "data": "sealed",
+                "id": "part-redacted",
+                "index": 2,
+            },
+            {
+                "type": "text",
+                "text": "回答",
+                "id": "part-text",
+                "index": 3,
+            },
+        ]
+    )
+
+    assert [part.block_type for part in parts] == [
+        "reasoning_content",
+        "reasoning_items",
+        "redacted_thinking",
+        "text",
+    ]
+    assert [part.kind for part in parts] == [
+        "reasoning",
+        "reasoning",
+        "reasoning",
+        "markdown",
+    ]
+    assert [part.text for part in parts] == ["直接推理", "摘要", "", "回答"]
 
 
 def test_extract_agent_stream_parts_rejects_text_without_part_identity():

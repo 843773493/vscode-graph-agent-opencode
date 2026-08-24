@@ -8,10 +8,9 @@ from typing import Protocol
 from app.schemas.public_v2.common import JobStatus
 from app.schemas.public_v2.message import AttachmentRef
 from app.schemas.public_v2.pending_request import (
+    DeliveryPolicy,
     PendingRequestDTO,
-    PendingRequestKind,
     PendingRequestListDTO,
-    PendingRequestOrderItem,
     PendingRequestSummaryDTO,
     PendingRequestSummaryListDTO,
 )
@@ -29,7 +28,7 @@ class PendingJob(Protocol):
     message_created_at: str
     message_metadata: dict[str, object]
     attachments: list[AttachmentRef]
-    pending_kind: PendingRequestKind | None
+    delivery_policy: DeliveryPolicy | None
     status: JobStatus
     error_message: str | None
     created_at: datetime
@@ -38,7 +37,7 @@ class PendingJob(Protocol):
 
 
 class JobPendingRequestController:
-    """实现待处理消息的查询和用户控制，不负责 Job 执行调度。"""
+    """实现待处理消息的查询和控制，不负责模型执行。"""
 
     def __init__(
         self,
@@ -53,11 +52,7 @@ class JobPendingRequestController:
         self._get_jobs = get_jobs
         self._get_current_jobs = get_current_jobs
 
-    def _job_by_message_id(
-        self,
-        session_id: str,
-        message_id: str,
-    ) -> PendingJob:
+    def _job_by_message_id(self, session_id: str, message_id: str) -> PendingJob:
         jobs = self._get_jobs()
         for job_id in self._queue.ids(session_id):
             job = jobs.get(job_id)
@@ -65,10 +60,10 @@ class JobPendingRequestController:
                 return job
         raise ValueError(f"Session {session_id} 中不存在待处理消息 {message_id}")
 
-    @staticmethod
-    def _dto(job: PendingJob, position: int) -> PendingRequestDTO:
-        if job.pending_kind is None:
-            raise RuntimeError(f"待处理 Job 缺少 kind: job_id={job.job_id}")
+    def _dto(self, job: PendingJob, position: int) -> PendingRequestDTO:
+        entry = self._queue.entry(job.job_id)
+        if job.delivery_policy is None:
+            raise RuntimeError(f"待处理 Job 缺少 delivery_policy: job_id={job.job_id}")
         display_projection = project_message_for_display(
             job.message,
             job.message_metadata,
@@ -79,13 +74,18 @@ class JobPendingRequestController:
             session_id=job.session_id,
             content=display_projection.content,
             attachments=list(job.attachments),
-            kind=job.pending_kind,
+            delivery_policy=entry.delivery_policy,
+            enqueue_sequence=entry.enqueue_sequence,
             position=position,
+            status="queued",
+            waiting_reason=entry.waiting_reason,
+            last_boundary=entry.last_boundary,
             agent_id=job.agent_id,
             message_created_at=job.message_created_at,
             message_metadata=display_projection.metadata,
             created_at=job.created_at,
             updated_at=job.updated_at,
+            snapshot_version=self._queue.snapshot_version(job.session_id),
         )
 
     async def list(self, session_id: str) -> PendingRequestListDTO:
@@ -101,35 +101,48 @@ class JobPendingRequestController:
         async with self._lock:
             jobs = self._get_jobs()
             job_ids = self._queue.ids(session_id)
-            summaries = [
-                PendingRequestSummaryDTO(
-                    job_id=jobs[job_id].job_id,
-                    message_id=jobs[job_id].message_id,
-                    updated_at=jobs[job_id].updated_at,
+            summaries = []
+            for job_id in job_ids[:limit]:
+                job = jobs.get(job_id)
+                if job is None:
+                    raise RuntimeError(
+                        f"FIFO 队列引用不存在的 Job: session_id={session_id}, job_id={job_id}"
+                    )
+                entry = self._queue.entry(job_id)
+                summaries.append(
+                    PendingRequestSummaryDTO(
+                        job_id=job.job_id,
+                        message_id=job.message_id,
+                        enqueue_sequence=entry.enqueue_sequence,
+                        delivery_policy=entry.delivery_policy,
+                        status="queued",
+                        updated_at=job.updated_at,
+                    )
                 )
-                for job_id in job_ids[:limit]
-                if job_id in jobs
-            ]
             return PendingRequestSummaryListDTO(
                 session_id=session_id,
                 active_job_id=self._get_current_jobs().get(session_id),
                 requests=summaries,
                 request_count=len(job_ids),
+                snapshot_version=self._queue.snapshot_version(session_id),
                 truncated=len(summaries) < len(job_ids),
             )
 
     def _snapshot_unlocked(self, session_id: str) -> PendingRequestListDTO:
         jobs = self._get_jobs()
-        requests = [
-            self._dto(jobs[job_id], position)
-            for position, job_id in enumerate(self._queue.ids(session_id))
-            if job_id in jobs
-        ]
+        requests = []
+        for position, job_id in enumerate(self._queue.ids(session_id)):
+            job = jobs.get(job_id)
+            if job is None:
+                raise RuntimeError(
+                    f"FIFO 队列引用不存在的 Job: session_id={session_id}, job_id={job_id}"
+                )
+            requests.append(self._dto(job, position))
         return PendingRequestListDTO(
             session_id=session_id,
             active_job_id=self._get_current_jobs().get(session_id),
-            yield_requested=self._queue.yield_requested(session_id),
             requests=requests,
+            snapshot_version=self._queue.snapshot_version(session_id),
         )
 
     async def update(
@@ -148,19 +161,37 @@ class JobPendingRequestController:
             job.message = normalized_content
             job.attachments = list(attachments)
             job.updated_at = datetime.now()
+            self._queue.touch(session_id)
         return await self.list(session_id)
 
-    async def remove(
+    async def update_policy(
         self,
         session_id: str,
         message_id: str,
+        *,
+        delivery_policy: DeliveryPolicy,
+        expected_snapshot_version: int | None,
     ) -> PendingRequestListDTO:
         async with self._lock:
-            job = self._job_by_message_id(session_id, message_id)
-            if not self._queue.remove(session_id, job.job_id):
+            current_version = self._queue.snapshot_version(session_id)
+            if (
+                expected_snapshot_version is not None
+                and expected_snapshot_version != current_version
+            ):
                 raise RuntimeError(
-                    f"撤回待处理消息时队列状态不一致: job_id={job.job_id}"
+                    f"队列快照已过期: session_id={session_id}, "
+                    f"expected={expected_snapshot_version}, actual={current_version}"
                 )
+            job = self._job_by_message_id(session_id, message_id)
+            self._queue.update_policy(session_id, job.job_id, delivery_policy)
+            job.delivery_policy = delivery_policy
+            job.updated_at = datetime.now()
+        return await self.list(session_id)
+
+    async def remove(self, session_id: str, message_id: str) -> PendingRequestListDTO:
+        async with self._lock:
+            job = self._job_by_message_id(session_id, message_id)
+            self._queue.remove(session_id, job.job_id)
             transition_job_status(
                 job,
                 JobStatus.cancelled,
@@ -170,71 +201,20 @@ class JobPendingRequestController:
 
     async def clear(self, session_id: str) -> PendingRequestListDTO:
         async with self._lock:
-            removed_ids = self._queue.clear(session_id)
+            removed = self._queue.clear(session_id)
             jobs = self._get_jobs()
             now = datetime.now()
-            for job_id in removed_ids:
-                job = jobs.get(job_id)
-                if job is None:
-                    continue
-                transition_job_status(
-                    job,
-                    JobStatus.cancelled,
-                    error_message="消息已从队列撤回",
-                    now=now,
-                )
+            for entry in removed:
+                job = jobs.get(entry.job_id)
+                if job is not None:
+                    transition_job_status(
+                        job,
+                        JobStatus.cancelled,
+                        error_message="消息已从队列撤回",
+                        now=now,
+                    )
         return await self.list(session_id)
 
-    async def reorder(
-        self,
-        session_id: str,
-        requests: list[PendingRequestOrderItem],
-    ) -> PendingRequestListDTO:
+    async def reject_reorder(self, session_id: str) -> None:
         async with self._lock:
-            all_jobs = self._get_jobs()
-            jobs = [
-                all_jobs[job_id]
-                for job_id in self._queue.ids(session_id)
-                if job_id in all_jobs
-            ]
-            self._queue.reorder(
-                session_id,
-                requests,
-                job_id_by_message_id={
-                    job.message_id: job.job_id for job in jobs
-                },
-            )
-            kind_by_message_id = {
-                item.message_id: item.kind for item in requests
-            }
-            for job in jobs:
-                job.pending_kind = kind_by_message_id[job.message_id]
-                job.updated_at = datetime.now()
-        return await self.list(session_id)
-
-    async def promote_and_reserve_if_idle(
-        self,
-        session_id: str,
-        message_id: str,
-        reservation: PendingJob,
-    ) -> tuple[PendingRequestListDTO, bool]:
-        async with self._lock:
-            target = self._job_by_message_id(session_id, message_id)
-            self._queue.promote(session_id, target.job_id)
-            current_jobs = self._get_current_jobs()
-            reserved = current_jobs.get(session_id) is None
-            if reserved:
-                self._get_jobs()[reservation.job_id] = reservation
-                current_jobs[session_id] = reservation.job_id
-            return self._snapshot_unlocked(session_id), reserved
-
-    async def release_reservation(
-        self,
-        session_id: str,
-        reservation_job_id: str,
-    ) -> None:
-        async with self._lock:
-            current_jobs = self._get_current_jobs()
-            if current_jobs.get(session_id) == reservation_job_id:
-                current_jobs.pop(session_id, None)
-            self._get_jobs().pop(reservation_job_id, None)
+            self._queue.reject_reorder(session_id)

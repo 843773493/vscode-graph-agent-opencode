@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from collections.abc import Callable
 from typing import Optional, Protocol
 
 from app.schemas.public_v2.common import JobStatus
@@ -24,7 +23,6 @@ class JobRuntimeStateProtocol(Protocol):
     created_at: datetime
     updated_at: datetime
     ended_at: Optional[datetime]
-    yield_requested: Callable[[], bool]
 
 
 class JobExecutorProtocol(Protocol):

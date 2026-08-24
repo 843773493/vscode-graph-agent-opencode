@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { useAppState } from '../hooks';
 import AnchoredOverlay from './AnchoredOverlay';
+import GatewayUserAccessMenu from './GatewayUserAccessMenu';
 
 export type WorkbenchView = "sessions" | "gateway";
 
@@ -134,6 +135,7 @@ export default function Toolbar({
         </div>
       </div>
       <div className="toolbar-group toolbar-group-right">
+        <GatewayUserAccessMenu />
         <button
           type="button"
           className="toolbar-update-button"

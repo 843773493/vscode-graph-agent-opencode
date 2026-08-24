@@ -37,6 +37,7 @@ from app.agents.model_capability_routing import (
     build_provider_model_candidate,
 )
 from app.agents.policy import custom_tool_spec_names, validate_tool_dependencies
+from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.skill_runtime import (
     append_skill_middlewares,
     discover_workspace_skill_sources,
@@ -89,6 +90,7 @@ def build_model_from_provider(
     prompt_cache_key: str | None = None,
 ) -> Any:
     """从单个 provider 配置构建模型实例。"""
+    api_mode = parse_provider_api_mode(provider)
     custom_llm_provider = provider.get("custom_llm_provider")
     if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
         raise ValueError(
@@ -109,15 +111,16 @@ def build_model_from_provider(
                 "ChatGPT provider 必须配置 auth.type='oauth' 和 "
                 "auth.method='chatgpt'"
             )
-        if provider.get("api_mode") != "responses":
-            raise ValueError("ChatGPT OAuth provider 必须配置 api_mode='responses'")
+        if api_mode.protocol != "responses":
+            raise ValueError(
+                "ChatGPT OAuth provider 必须配置 api_mode.protocol='responses'"
+            )
         token_dir = configure_litellm_chatgpt_auth_directory()
         ensure_chatgpt_oauth_ready(token_dir)
         ensure_litellm_chatgpt_model_capabilities(provider["model"])
 
     request_options = _get_provider_request_options(provider)
-    api_mode = provider.get("api_mode", "chat_completions")
-    if api_mode == "responses":
+    if api_mode.protocol == "responses":
         from app.agents.providers.openai_responses import build_openai_responses_model
 
         return build_openai_responses_model(
@@ -126,8 +129,23 @@ def build_model_from_provider(
             request_options=request_options,
             prompt_cache_key=prompt_cache_key,
         )
-    if api_mode != "chat_completions":
-        raise ValueError(f"provider.api_mode 不受支持: {api_mode!r}")
+    if api_mode.protocol == "anthropic_messages":
+        if custom_llm_provider != "anthropic":
+            raise ValueError(
+                "Anthropic Messages provider 必须配置 "
+                "custom_llm_provider='anthropic'"
+            )
+        from app.agents.providers.anthropic_messages import (
+            build_anthropic_messages_model,
+        )
+
+        return build_anthropic_messages_model(
+            provider=provider,
+            runtime_config=runtime_config,
+            request_options=request_options,
+        )
+    if api_mode.protocol != "chat_completions":
+        raise ValueError(f"provider.api_mode.protocol 不受支持: {api_mode.protocol!r}")
 
     from app.agents.providers.litellm_chat import build_litellm_chat_model
 
@@ -225,6 +243,7 @@ def create_my_deep_agent(
     permissions: list[FilesystemPermission] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     custom_tool_confirmation_names: frozenset[str] = frozenset(),
+    model_hidden_tool_names: frozenset[str] = frozenset(),
     debug: bool = False,
     name: str | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
@@ -305,7 +324,6 @@ def create_my_deep_agent(
             terminal_manager_client=terminal_manager_client,
             invocation_context=tool_invocation_context,
             workspace_root=workspace_root,
-            session_target_resolver=session_target_resolver,
             session_message_delivery_service=session_message_delivery_service,
             include_test_tools=config_service.development_test_tools_enabled(),
         )
@@ -333,9 +351,22 @@ def create_my_deep_agent(
             custom_tool_bundle.tools,
             resolved_tool_denylist,
         )
-        resolved_tools = [*visible_tools, *(mcp_tools or [])]
-        if custom_tools:
-            resolved_tools.append(create_custom_tool_invoker_tool(custom_tools))
+        extension_tools = [
+            *custom_tools,
+            *filter_tools_by_name(list(mcp_tools or []), resolved_tool_denylist),
+        ]
+        resolved_tools = [*visible_tools]
+        if extension_tools:
+            resolved_tools.append(
+                create_custom_tool_invoker_tool(
+                    extension_tools,
+                    model_visible_tool_names={
+                        tool.name
+                        for tool in extension_tools
+                        if tool.name not in model_hidden_tool_names
+                    },
+                )
+            )
     resolved_tools = filter_tools_by_name(resolved_tools, resolved_tool_denylist)
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
@@ -399,6 +430,7 @@ def create_my_deep_agent(
         tool_output_middleware=tool_output_middleware,
         memory=memory,
         custom_tool_confirmation_names=custom_tool_confirmation_names,
+        model_hidden_tool_names=model_hidden_tool_names,
     )
 
     agent = create_agent(
@@ -449,6 +481,7 @@ def create_runtime_deep_agent_for_session(
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
+    model_hidden_tool_names: frozenset[str] = frozenset(),
     checkpointer: BaseCheckpointSaver | None = None,
     terminal_manager_client: TerminalManagerClient | None = None,
     browser_manager_client: BrowserManagerClient | None = None,
@@ -506,6 +539,7 @@ def create_runtime_deep_agent_for_session(
         enabled_tool_names=enabled_tool_names,
         enabled_runtime_middleware_names=enabled_runtime_middleware_names,
         tool_denylist=set(tool_policy.disabled_names) | set(tool_denylist or set()),
+        model_hidden_tool_names=model_hidden_tool_names,
         custom_tool_specs=custom_tool_specs,
         name=name or agent_id,
         background_task_registry=background_task_registry,

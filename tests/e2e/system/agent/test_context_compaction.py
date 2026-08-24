@@ -29,8 +29,8 @@ from app.agents.upstream_request_trace import (
     end_upstream_capture,
 )
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from app.core.path_utils import get_session_path_resolver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.services.infrastructure.config_service import ConfigService
 from tests.support.api_waiters import wait_for_job_done
 
@@ -41,7 +41,7 @@ def _seed_checkpoint_messages(
     session_id: str,
     pair_count: int = 5,
 ) -> None:
-    saver = FileSystemCheckpointSaver(
+    saver = RolloutCheckpointSaver(
         sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
     )
     messages = []
@@ -84,7 +84,7 @@ def _append_checkpoint_messages(
     pair_count: int,
 ) -> None:
     """保留中间件私有状态，仅向现有会话追加用于压缩的历史消息。"""
-    saver = FileSystemCheckpointSaver(
+    saver = RolloutCheckpointSaver(
         sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
     )
     checkpoint_tuple = saver.get_tuple(build_checkpoint_config(session_id))
@@ -278,7 +278,7 @@ async def test_session_context_compact_writes_summarization_event(
     assert result["summary"] is None
     assert result["history_file_path"] is None
 
-    saver = FileSystemCheckpointSaver(
+    saver = RolloutCheckpointSaver(
         sessions_dir=Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
     )
     scheduled_checkpoint = saver.get_tuple(build_checkpoint_config(session_id))
@@ -516,7 +516,7 @@ async def test_cache_preserving_middleware_forked_summary_hits_main_prompt_cache
         workspace_root=e2e_workspace_root_path,
     )
     provider = config_service.get_llm_provider("primary")
-    assert "prompt_cache_key" not in provider.get("capabilities", [])
+    assert "prompt_cache_key" not in provider["api_mode"].get("request_features", {})
     model = build_model_from_provider(provider, {})
     middleware = CachePreservingSummarizationMiddleware(
         model=model,
@@ -701,13 +701,12 @@ def _nested_mapping_values(value: object, key: str) -> list[object]:
 
 def _encrypted_reasoning_items(message: AIMessage) -> list[dict]:
     return [
-        block["extras"]["response_item"]
+        block
         for block in message.content
         if isinstance(block, dict)
         and block.get("type") == "reasoning"
-        and isinstance(block.get("extras"), dict)
-        and isinstance(block["extras"].get("response_item"), dict)
-        and block["extras"]["response_item"].get("encrypted_content")
+        and isinstance(block.get("encrypted_content"), str)
+        and bool(block["encrypted_content"])
     ]
 
 
@@ -725,8 +724,8 @@ async def test_luna_image_reasoning_compaction_hits_prompt_cache(
     )
     provider = config_service.get_llm_provider("backup_3")
     assert provider["model"] == "gpt-5.6-luna"
-    assert provider["api_mode"] == "responses"
-    assert "image_input" in provider["capabilities"]
+    assert provider["api_mode"]["protocol"] == "responses"
+    assert provider["api_mode"]["model_info"]["supports_vision"] is True
 
     cache_key = f"luna-image-compact-e2e-{uuid.uuid4().hex}"
     model = build_model_from_provider(provider, {}, prompt_cache_key=cache_key)

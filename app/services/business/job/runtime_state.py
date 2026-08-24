@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from collections.abc import Callable
 from typing import Optional
 
 from app.schemas.public_v2.common import JobStatus
@@ -28,4 +27,3 @@ class JobRuntimeState:
     updated_at: datetime = field(default_factory=datetime.now)
     ended_at: Optional[datetime] = None
     task: Optional[asyncio.Task] = None
-    yield_requested: Callable[[], bool] = field(default=lambda: False)

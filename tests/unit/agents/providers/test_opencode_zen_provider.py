@@ -194,10 +194,24 @@ def test_normalize_history_content_normalizes_output_text_without_reasoning(
     ]
 
 
+def test_normalize_history_content_drops_repeated_reasoning_block_type(
+    model: BoxteamLiteLLMChatModel,
+):
+    """流式合并产生重复 type 时，内部 reasoning 仍不得发送给上游。"""
+    result = model._normalize_history_content(
+        [
+            {"type": "reasoningreasoningreasoning", "summary": []},
+            {"type": "text", "text": "最终回答"},
+        ]
+    )
+
+    assert result == [{"type": "text", "text": "最终回答"}]
+
+
 def test_stream_parses_reasoning_content_from_delta(
     model: BoxteamLiteLLMChatModel,
 ):
-    """流式响应中 delta.reasoning_content 应正确解析成标准 reasoning。"""
+    """流式响应中 delta.reasoning_content 应解析为同名 carrier。"""
 
     chunks = model._convert_stream_response_chunk(
         {
@@ -216,8 +230,8 @@ def test_stream_parses_reasoning_content_from_delta(
     assert len(chunks) == 1
     assert chunks[0].message.additional_kwargs == {}
     block = chunks[0].message.content[0]
-    assert block["type"] == "reasoning"
-    assert block["reasoning"] == "这是思考过程"
+    assert block["type"] == "reasoning_content"
+    assert block["reasoning_content"] == "这是思考过程"
     assert block["id"].startswith("part_")
     assert block["index"] == 0
 
@@ -225,7 +239,7 @@ def test_stream_parses_reasoning_content_from_delta(
 def test_stream_parses_reasoning_content_from_model_extra(
     model: BoxteamLiteLLMChatModel,
 ):
-    """流式响应中 delta.model_extra.reasoning_content 应正确解析 reasoning。"""
+    """流式响应中 delta.model_extra.reasoning_content 应解析为 carrier。"""
 
     chunks = model._convert_stream_response_chunk(
         {
@@ -246,9 +260,62 @@ def test_stream_parses_reasoning_content_from_model_extra(
     assert len(chunks) == 1
     assert chunks[0].message.additional_kwargs == {}
     block = chunks[0].message.content[0]
-    assert block["reasoning"] == "通过 model_extra 的思考"
+    assert block["type"] == "reasoning_content"
+    assert block["reasoning_content"] == "通过 model_extra 的思考"
     assert block["id"].startswith("part_")
     assert block["index"] == 0
+
+
+def test_stream_parses_litellm_thinking_blocks_and_reasoning_items(
+    model: BoxteamLiteLLMChatModel,
+):
+    chunks = model._convert_stream_response_chunk(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": "流式思考",
+                                "signature": "sig-stream",
+                            }
+                        ],
+                        "reasoning_items": [
+                            {
+                                "type": "reasoning",
+                                "id": "rs-stream",
+                                "encrypted_content": "enc-stream",
+                                "summary": [],
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        first_chunk_yielded=False,
+        part_state=_StreamPartState(),
+    )
+
+    assert len(chunks) == 2
+    thinking = chunks[0].message.content[0]
+    item = chunks[1].message.content[0]
+    assert thinking["type"] == "thinking"
+    assert thinking["thinking"] == "流式思考"
+    assert thinking["signature"] == "sig-stream"
+    assert thinking["id"].startswith("part_")
+    assert thinking["index"] == 0
+    assert item["type"] == "reasoning_items"
+    assert item["reasoning_items"] == [
+        {
+            "type": "reasoning",
+            "id": "rs-stream",
+            "encrypted_content": "enc-stream",
+            "summary": [],
+        }
+    ]
+    assert item["id"].startswith("part_")
+    assert item["index"] == 1
 
 
 def test_split_tool_arguments_merge_into_one_structured_call(
@@ -315,7 +382,7 @@ def test_streamed_plain_text_chunks_concatenate_without_injected_newlines(
     assert message.content[0]["index"] == 0
 
 
-def test_reasoning_deltas_merge_by_authoritative_part_identity(
+def test_reasoning_deltas_merge_as_adjacent_carrier_blocks(
     model: BoxteamLiteLLMChatModel,
 ):
     part_state = _StreamPartState()
@@ -328,20 +395,12 @@ def test_reasoning_deltas_merge_by_authoritative_part_identity(
         part_state=part_state,
     )[0]
 
-    first_block = first.content[0]
-    second_block = second.content[0]
-    assert first_block["id"] == second_block["id"]
-    assert first_block["index"] == second_block["index"] == 0
-
     message = message_chunk_to_message(first + second)
-    assert message.content == [
-        {
-            "type": "reasoning",
-            "reasoning": "先分析再决定",
-            "id": first_block["id"],
-            "index": 0,
-        }
-    ]
+    assert len(message.content) == 1
+    assert message.content[0]["type"] == "reasoning_content"
+    assert message.content[0]["reasoning_content"] == "先分析再决定"
+    assert message.content[0]["id"].startswith("part_")
+    assert message.content[0]["index"] == 0
 
 
 def test_reasoning_text_and_post_tool_reasoning_use_distinct_parts(
@@ -374,8 +433,16 @@ def test_reasoning_text_and_post_tool_reasoning_use_distinct_parts(
     )[0]
 
     blocks = [reasoning.content[0], text.content[0], after_tool.content[0]]
-    assert [block["index"] for block in blocks] == [0, 1, 2]
-    assert len({block["id"] for block in blocks}) == 3
+    assert [block["type"] for block in blocks] == [
+        "reasoning_content",
+        "text",
+        "reasoning_content",
+    ]
+    assert [block.get("reasoning_content") for block in blocks] == [
+        "分析",
+        None,
+        "工具后分析",
+    ]
 
 
 def test_concurrent_model_streams_do_not_share_part_state(

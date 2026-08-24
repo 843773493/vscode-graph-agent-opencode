@@ -1,34 +1,30 @@
 ## Why
 
-长历史会话在切换时仍会恢复完整 Trace、重算消息分组并同步解析大型 Markdown，导致 Composer 与历史时间线争用主线程，用户必须等待历史加载后才能稳定输入。当前基于单条消息和 checkpoint 的分页也无法保证一个 Job 完整呈现，且普通追加、压缩或终态更新可能使已加载历史失效。
+本变更最初描述了独立的 Turn 投影和旧 Trace 迁移路径。当前实现已经确定由单个 rollout 的 `rollout.jsonl` 与 `index.sqlite` 直接提供会话历史，因此需要把本变更收敛为 rollout-backed 历史读取与 Web 默认渐进加载契约，避免与 `refactor-rollout-checkpoint-storage` 重复或冲突。
 
 ## What Changes
 
-- 新增以执行 Job 为权威边界的 Turn 读取模型和稳定游标，分页永远返回完整 Turn。
-- 新增有严格大小上限的会话 bootstrap，优先返回最新 Turn 骨架、活动 Job 状态和增量事件游标，不读取完整 checkpoint 或完整 Trace。
-- 将 Composer 的草稿、输入和发送状态从完整会话时间线状态中解耦，使切换长会话和流式更新期间仍可立即输入。
-- 将最新 Turn 的完整详情、历史 Turn 和 Trace 改为分层、按需加载，并对大型 Markdown 采用非阻塞的渐进渲染。
-- 使用 `turn_id + revision` 合并 bootstrap、分页、终态协调和 SSE 更新，保留已加载的旧历史并处理竞态。
-- 将编辑重发、重新生成和失败重试视为破坏性历史重排：同步截断模型 checkpoint 与 Turn 展示投影，递增投影 epoch，并确保后台旧 staging 不能覆盖已发布的新历史。
-- 破坏性重排只通过有界 Turn header 定位和隐藏后缀，完整 detail 使用流式复制，避免编辑长历史时批量解析工具 Trace 与大型正文。
-- 增加覆盖长历史、大型 Markdown、完整 Turn 分页、稳定游标、SSE 竞态和上下文压缩的后端及真实浏览器 E2E。
-- **BREAKING**：浏览器聊天时间线的权威分页协议从 message 列表迁移为 Turn 列表；旧 message 查询保留给兼容的单消息读取和内部诊断，不再作为主时间线加载协议。
+- 将 `/bootstrap` 与 `/history` 的主时间线数据源固定为会话 rollout 的 `rollout.jsonl` 和 `index.sqlite`；上下文边界由 SQLite view 表达，不创建物理 segment 或 chunk。
+- 以完整 Turn 为边界支持从头、从尾、游标前、游标后和游标中心加载，并按 include 策略返回用户消息、工具摘要、工具详情和最终响应。
+- 将默认 Web 加载固定为无锚点时最新 1 个 Turn；恢复已有位置时使用 `around(anchor)` 一次加载前后各 4 个 Turn，默认只返回用户消息和最终响应，并通过 before/after 游标继续双向加载。
+- 将 `rewind`、`continue/resume` 和 `replay` 的职责分开；`replay` 是 `rewind + 可选编辑 + continue`，SQLite context view 只由上下文边界创建。
+- 为当前 Turn 提供立即重载的工具详情开关；默认工具详情折叠，不改变其它 Turn 或 Gateway 默认策略。
+- 使用 `asset/custom_tool_test_workspace` 的确定性 mock 会话和预生成真实 128 Turn 会话验证历史加载；测试运行时只复制整个工作区，不引入真实模型长 E2E 或多会话摘要基准。
+- 将历史投影细分为 `assistant_text`、`thinking`、`tool_summary`、`tool_call`、`tool_result` 和 `final_response`；`thinking` 使用可读 `reasoning`、安全 `summary` 或不携带正文的 `encrypted` 块，最新 1 个 Turn 默认增加可展示 thinking，但不加载 Codex encrypted reasoning 原文。
+- 以 `turn_finalize`/`final_message_sequence` 作为最终响应权威定位，禁止通过 role 或完整消息 heuristic 作为主路径。
+- 为 128 Turn 混合 reasoning/tool fixture 增加真实 8011 链路的 p50/p95 性能验收，不增加 20+ 会话摘要基准。
+- 真实模型会话与大型工具 mock 会话使用不同 session ID；生成 mock fixture 不得覆盖真实会话。
 
 ## Capabilities
 
-### New Capabilities
-
-- `session-turn-history`: 定义 Job/Turn 投影、bootstrap、稳定游标、详情水合、增量事件合并和破坏性重排语义。
-- `responsive-session-composer`: 定义切换长会话时 Composer 的独立生命周期、同步草稿恢复、发送可用性和竞态处理。
-- `progressive-turn-rendering`: 定义最新 Turn 优先、可视区域详情加载、Markdown 渐进渲染、虚拟列表分页和性能验收行为。
-
 ### Modified Capabilities
 
-无。
+- `session-turn-history`: 改为 rollout-backed 的有界历史读取、游标和内容投影。
+- `progressive-turn-rendering`: 改为最新 Turn、around(anchor)、before/after 双向加载和每 Turn 活动统计折叠行。
 
 ## Impact
 
-- 后端：会话、Job、Trace、消息历史基础设施与 `/api/v1/sessions/*` 路由。
-- 前端：全局状态分层、会话切换、SSE 恢复、Turn 时间线、Composer、Markdown 和虚拟滚动组件。
-- 存储：在每个会话节点内增加可增量恢复和压实的 Turn 投影，不改变 checkpoint 作为模型上下文权威来源的职责。
-- 测试：新增后端协议测试、投影恢复测试、破坏性 replay/staging 并发测试和使用隔离工作区的真实浏览器长会话 E2E。
+- 后端历史读取只通过 `RolloutHistoryReader`、rollout JSONL 和 SQLite 索引完成；Trace 与旧 turn projection 不再作为主时间线回退来源。
+- Gateway 负责解析所属 Gateway 的嵌套历史加载配置，代理 Gateway 只透传所属 Gateway 的结果。
+- Web 只实现默认加载体验，保留前端后续扩展其它加载策略的接口。
+- 测试使用 `asset/custom_tool_test_workspace/` 作为只读模板，由正式 fixture 复制到 `out/tests/.../workspace`；后端真实 128 Turn 测试使用 `ses_8128...`，浏览器大型工具投影测试使用确定性 `ses_9f4e...`。不在测试运行时调用真实模型，不修改资产目录。

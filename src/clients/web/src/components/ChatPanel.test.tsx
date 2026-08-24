@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import ChatPanel from "./ChatPanel";
+import ChatPanel, { transcriptConversationsForDisplay } from "./ChatPanel";
+import type { ConversationView } from "../types/frontend";
 
 function emptyPanelProps(onRetryHistory: () => void) {
   return {
@@ -10,13 +11,17 @@ function emptyPanelProps(onRetryHistory: () => void) {
     conversations: [],
     expandDetails: false,
     hasActiveSession: true,
+    hasNewerMessages: false,
     hasOlderMessages: false,
+    loadingNewerMessages: false,
     loadingOlderMessages: false,
     historyLoading: false,
     projectionState: "ready" as const,
     timelineGeneration: 1,
     projectionEpoch: 1,
     historyError: "Turn 投影索引损坏：manifest ordinal 不连续",
+    onLoadAroundTurn: async () => {},
+    onLoadNewerMessages: async () => {},
     onLoadOlderMessages: async () => {},
     loadingDetailTurnIds: [],
     onLoadTurnDetails: async () => {},
@@ -25,9 +30,7 @@ function emptyPanelProps(onRetryHistory: () => void) {
     onReplayTurn: async () => {},
     onUpdatePending: async () => {},
     onRemovePending: async () => {},
-    onClearPending: async () => {},
-    onReorderPending: async () => {},
-    onSendPendingImmediately: async () => {},
+    onChangePendingPolicy: async () => {},
   };
 }
 
@@ -75,4 +78,26 @@ describe("ChatPanel 历史错误", () => {
     renderer!.unmount();
   });
 
+});
+
+describe("ChatPanel transcript 投影", () => {
+  test("排队消息不进入 transcript，正在执行的消息仍然保留", () => {
+    const queued = {
+      pending: true,
+      activeJobOverlay: false,
+    } as ConversationView;
+    const active = {
+      pending: true,
+      activeJobOverlay: true,
+    } as ConversationView;
+    const history = {
+      pending: false,
+      activeJobOverlay: false,
+    } as ConversationView;
+
+    expect(transcriptConversationsForDisplay([queued, active, history])).toEqual([
+      active,
+      history,
+    ]);
+  });
 });

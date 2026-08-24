@@ -134,15 +134,30 @@ function conversationFromTurn(turn: TurnRecord): ConversationView {
         updated_at: turn.updated_at,
       }]
     : [];
+  const thinkingBlocks = (turn.thinking_blocks ?? []).map((block) => ({
+    kind: block.kind,
+    text: block.text ?? "",
+  }));
+  const toolSummary = turn.tool_summary ?? [];
 
   return {
     conversationId: turn.turn_id,
+    displayMode: "history",
     turnId: turn.turn_id,
     turnRevision: turn.revision,
     turnItemsView: isTurnDetail(turn) ? "full" : "summary",
+    activityStats: turn.activity_stats
+      ? {
+          duration_ms: turn.activity_stats.duration_ms ?? null,
+          message_count: turn.activity_stats.message_count ?? 0,
+        }
+      : undefined,
     sessionId: turn.session_id,
     userMessage,
     assistantMessages,
+    thinkingBlocks,
+    toolSummary,
+    responseParts: turn.response_parts ?? [],
     events: isTurnDetail(turn) ? (turn.items ?? []) as TraceEvent[] : [],
     status: turnConversationStatus(turn),
     jobId: turn.job_id,
@@ -150,6 +165,8 @@ function conversationFromTurn(turn: TurnRecord): ConversationView {
     source: "turn",
   };
 }
+
+const turnConversationCache = new WeakMap<TurnRecord, ConversationView>();
 
 function turnTimelineConversations(
   state: AppState,
@@ -162,7 +179,16 @@ function turnTimelineConversations(
   }
   return timeline.orderedTurnIds.flatMap((turnId) => {
     const turn = timeline.turnsById[turnId];
-    return turn?.session_id === sessionId ? [conversationFromTurn(turn)] : [];
+    if (turn?.session_id !== sessionId) {
+      return [];
+    }
+    const cached = turnConversationCache.get(turn);
+    if (cached) {
+      return [cached];
+    }
+    const conversation = conversationFromTurn(turn);
+    turnConversationCache.set(turn, conversation);
+    return [conversation];
   });
 }
 
@@ -184,8 +210,8 @@ export function sortConversationViews(
     }
     if (left.pending && right.pending) {
       return (
-        (left.pendingPosition ?? Number.MAX_SAFE_INTEGER)
-        - (right.pendingPosition ?? Number.MAX_SAFE_INTEGER)
+        (left.enqueueSequence ?? left.pendingPosition ?? Number.MAX_SAFE_INTEGER)
+        - (right.enqueueSequence ?? right.pendingPosition ?? Number.MAX_SAFE_INTEGER)
       );
     }
     return conversationStartTime(left) - conversationStartTime(right);
@@ -235,10 +261,11 @@ function mergeConversation(
   return {
     ...persisted,
     ...pending,
+    displayMode: pending.displayMode,
     userMessage: persisted.userMessage ?? pending.userMessage,
     assistantMessages,
     events: dedupeTraceEvents([...persisted.events, ...pending.events]),
-    source: persisted.source,
+    source: pending.source === "pending" ? "pending" : persisted.source,
   };
 }
 
@@ -414,6 +441,15 @@ export function writePendingSnapshot(
   snapshot: PendingRequestList,
   mapKey: string = snapshot.session_id,
 ) {
+  const existingSnapshotVersion = Math.max(
+    0,
+    ...(pendingMap.get(mapKey) ?? []).map(
+      (conversation) => conversation.queueSnapshotVersion ?? 0,
+    ),
+  );
+  if ((snapshot.snapshot_version ?? 0) < existingSnapshotVersion) {
+    return;
+  }
   const existingActiveConversation = snapshot.active_job_id
     ? (pendingMap.get(mapKey) ?? []).find(
         (conversation) => conversation.jobId === snapshot.active_job_id,
@@ -428,7 +464,14 @@ export function writePendingSnapshot(
   ) {
     snapshotConversations.push(
       existingActiveConversation
-      ?? createActiveJobOverlay(snapshot.session_id, snapshot.active_job_id),
+        ? {
+            ...existingActiveConversation,
+            pending: true,
+            pendingPosition: undefined,
+            deliveryPolicy: undefined,
+            activeJobOverlay: true,
+          }
+        : createActiveJobOverlay(snapshot.session_id, snapshot.active_job_id),
     );
   }
   writePendingList(
@@ -450,6 +493,7 @@ function createActiveJobOverlay(
 ): ConversationView {
   return {
     conversationId: `active-job:${jobId}`,
+    displayMode: "live",
     sessionId,
     userMessage: null,
     assistantMessages: [],
@@ -473,7 +517,15 @@ export function syncActiveJobConversation(
   const retained = existing.filter(
     (conversation) =>
       !conversation.activeJobOverlay || conversation.jobId === activeJobId,
-  );
+  ).map((conversation) => conversation.jobId === activeJobId
+    ? {
+        ...conversation,
+        pending: true,
+        pendingPosition: undefined,
+        deliveryPolicy: undefined,
+        activeJobOverlay: true,
+      }
+    : conversation);
   if (
     activeJobId
     && !retained.some((conversation) => conversation.jobId === activeJobId)
@@ -486,8 +538,11 @@ export function syncActiveJobConversation(
 export function pendingSnapshotToConversations(
   snapshot: PendingRequestList,
 ): ConversationView[] {
-  return (snapshot.requests ?? []).map((request) => ({
+  return [...(snapshot.requests ?? [])]
+    .sort((left, right) => left.enqueue_sequence - right.enqueue_sequence)
+    .map((request) => ({
     conversationId: request.message_id,
+    displayMode: "live" as const,
     sessionId: request.session_id,
     userMessage: {
       message_id: request.message_id,
@@ -499,7 +554,7 @@ export function pendingSnapshotToConversations(
         ...request.message_metadata,
         source: "pending",
         job_id: request.job_id,
-        pending_kind: request.kind,
+        delivery_policy: request.delivery_policy,
       },
       created_at: request.created_at,
       updated_at: request.updated_at,
@@ -509,10 +564,13 @@ export function pendingSnapshotToConversations(
     status: "queued",
     jobId: request.job_id,
     pending: true,
-    pendingKind: request.kind,
+    deliveryPolicy: request.delivery_policy,
+    enqueueSequence: request.enqueue_sequence,
+    waitingReason: request.waiting_reason,
+    queueSnapshotVersion: snapshot.snapshot_version,
     pendingPosition: request.position,
     source: "pending",
-  }));
+    }));
 }
 
 export function removePendingForTraceEvent(
@@ -521,6 +579,9 @@ export function removePendingForTraceEvent(
   event: TraceEvent,
   mapKey: string = sessionId,
 ) {
+  if (!isJobTerminalTraceType(event.type)) {
+    return;
+  }
   const pendingList = map.get(mapKey) ?? [];
   if (pendingList.length === 0) {
     return;
@@ -532,6 +593,31 @@ export function removePendingForTraceEvent(
     pendingList.filter(
       (conversation) => !conversationMatchesTraceEvent(conversation, event),
     ),
+    mapKey,
+  );
+}
+
+/**
+ * 在无法收到终止 SSE（例如浏览器恢复、连接重连或页面切换）时，按 Job
+ * 身份立即移除实时 Turn。后续由历史 projection 重新建立 history 视图。
+ */
+export function removePendingForJob(
+  map: Map<string, ConversationView[]>,
+  sessionId: string,
+  jobId: string,
+  mapKey: string = sessionId,
+): void {
+  if (!jobId) {
+    return;
+  }
+  const pendingList = map.get(mapKey) ?? [];
+  if (pendingList.length === 0) {
+    return;
+  }
+  writePendingList(
+    map,
+    sessionId,
+    pendingList.filter((conversation) => conversation.jobId !== jobId),
     mapKey,
   );
 }
@@ -549,7 +635,7 @@ export function getConversationsForSession(
   const pendingList = state.pendingConversations.get(sessionCacheKey) ?? [];
 
   if (pendingList.length === 0) {
-    return dedupeConversationViews(turnConversations);
+    return turnConversations;
   }
 
   const merged = [...turnConversations];

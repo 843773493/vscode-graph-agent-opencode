@@ -42,7 +42,9 @@ describe("useSessionTurnHistory pending bootstrap", () => {
                 message_id: "msg_queued_only",
                 status: "queued",
                 updated_at: "2026-07-29T00:00:00Z",
+                snapshot_version: 1,
               }],
+              snapshot_version: 1,
               active_job_count: 1,
             },
           });
@@ -61,14 +63,18 @@ describe("useSessionTurnHistory pending bootstrap", () => {
                 session_id: SESSION_ID,
                 content: "排队消息真实内容",
                 attachments: [],
-                kind: "queued",
+                delivery_policy: "after_turn",
+                enqueue_sequence: 1,
+                status: "queued",
                 position: 1,
                 agent_id: "default",
                 message_created_at: "2026-07-29T00:00:00Z",
                 message_metadata: {},
                 created_at: "2026-07-29T00:00:00Z",
                 updated_at: "2026-07-29T00:00:00Z",
+                snapshot_version: 1,
               }],
+              snapshot_version: 1,
             },
           });
         }
@@ -83,6 +89,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         sessionId: SESSION_ID,
         workspaceId: WORKSPACE_ID,
         sessionCacheKey: SCOPE_KEY,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
         setState: (update) => {
           currentState = typeof update === "function" ? update(currentState) : update;
@@ -111,6 +118,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
     let currentState = appState();
     currentState.pendingConversations.set(SCOPE_KEY, [{
       conversationId: "old-queued",
+      displayMode: "live",
       sessionId: SESSION_ID,
       userMessage: null,
       events: [],
@@ -144,6 +152,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         sessionId: SESSION_ID,
         workspaceId: WORKSPACE_ID,
         sessionCacheKey: SCOPE_KEY,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
         setState: (update) => {
           currentState = typeof update === "function" ? update(currentState) : update;

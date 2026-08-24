@@ -16,7 +16,7 @@ from app.agents.tools.testing import (
     LARGE_TEST_TARGET_VALUE,
 )
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.path_utils import get_session_path_resolver
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
@@ -128,7 +128,7 @@ async def _write_source_session_checkpoint(
     session_id: str,
     source_marker: str,
 ) -> None:
-    saver = FileSystemCheckpointSaver(
+    saver = RolloutCheckpointSaver(
         sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
     )
     messages = [

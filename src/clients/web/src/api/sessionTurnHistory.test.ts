@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   getSessionTurnBootstrap,
-  getSessionTurnDetails,
-  listSessionTurns,
+  loadSessionHistory,
   StaleTurnCursorHttpError,
 } from "./sessionTurnHistory";
 import { HttpRequestError } from "./http";
@@ -21,7 +20,7 @@ afterEach(() => {
 });
 
 describe("Turn 历史 API client", () => {
-  test("按约定路径请求 bootstrap、分页和批量详情", async () => {
+  test("按约定路径请求 bootstrap 和语义化历史", async () => {
     const requests: Array<{ path: string; method: string; body: unknown }> = [];
     globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
       const [input, init] = args;
@@ -55,13 +54,20 @@ describe("Turn 历史 API client", () => {
     }, originalFetch);
 
     await getSessionTurnBootstrap(49_211, "ses_api", "workspace");
-    await listSessionTurns(49_211, "ses_api", "workspace", {
-      cursor: "opaque cursor",
-    });
-    await getSessionTurnDetails(
+    await loadSessionHistory(
       49_211,
       "ses_api",
-      ["job_1", "job_2"],
+      { direction: "before", cursor: "opaque cursor", turns: 4 },
+      "workspace",
+    );
+    await loadSessionHistory(
+      49_211,
+      "ses_api",
+      {
+        direction: "around",
+        turn_ids: ["job_1", "job_2"],
+        turns: 2,
+      },
       "workspace",
     );
 
@@ -72,14 +78,18 @@ describe("Turn 历史 API client", () => {
         body: null,
       },
       {
-        path: "/api/v1/sessions/ses_api/turns?limit=20&cursor=opaque+cursor",
-        method: "GET",
-        body: null,
+        path: "/api/v1/sessions/ses_api/history",
+        method: "POST",
+        body: { direction: "before", cursor: "opaque cursor", turns: 4 },
       },
       {
-        path: "/api/v1/sessions/ses_api/turns/details",
+        path: "/api/v1/sessions/ses_api/history",
         method: "POST",
-        body: { turn_ids: ["job_1", "job_2"] },
+        body: {
+          direction: "around",
+          turn_ids: ["job_1", "job_2"],
+          turns: 2,
+        },
       },
     ]);
   });
@@ -103,7 +113,12 @@ describe("Turn 历史 API client", () => {
     }, originalFetch);
 
     expect(
-      listSessionTurns(49_212, "ses_stale", "workspace", { cursor: "old" }),
+      loadSessionHistory(
+        49_212,
+        "ses_stale",
+        { direction: "before", cursor: "old" },
+        "workspace",
+      ),
     ).rejects.toBeInstanceOf(StaleTurnCursorHttpError);
   });
 

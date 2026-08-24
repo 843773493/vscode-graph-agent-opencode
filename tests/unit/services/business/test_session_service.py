@@ -468,7 +468,8 @@ class TestSessionService:
         session_dir = get_session_path(created.session_id)
         assert session_dir.exists()
         for relative_path in (
-            "checkpoints/checkpoints.jsonl",
+            "rollout/rollout.jsonl",
+            "rollout/index.sqlite",
             "logs/traces/events.jsonl",
             "logs/llm_requests/1.json",
             "resources/background_tasks.json",

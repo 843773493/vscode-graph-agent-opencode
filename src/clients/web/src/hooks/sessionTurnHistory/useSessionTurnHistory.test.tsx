@@ -3,6 +3,10 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { partialBootstrapPollDelay } from "./bootstrap";
 import {
+  createSessionTurnTimeline,
+  upsertTurns,
+} from "../../state/session/turnTimeline";
+import {
   SESSION_ID,
   SCOPE_KEY,
   WORKSPACE_ID,
@@ -21,6 +25,69 @@ afterEach(() => {
 });
 
 describe("useSessionTurnHistory partial bootstrap", () => {
+  test("进入新的会话 scope 会先丢弃旧缓存，避免水合已失效 Turn", async () => {
+    const apiPort = 9114;
+    installWindow(apiPort);
+    let currentState = appState();
+    currentState.turnTimelinesBySession.set(
+      SCOPE_KEY,
+      upsertTurns(
+        createSessionTurnTimeline(SCOPE_KEY),
+        [turnDetail(1)],
+      ),
+    );
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = new URL(String(input), `http://127.0.0.1:${apiPort}`).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_credential_scope_reset",
+            data: { token: "turn-history-scope-reset-token" },
+          });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_bootstrap_scope_reset",
+            data: { ...bootstrap("ready", 1), latest_turn: null },
+          });
+        }
+        throw new Error(`测试收到未预期请求: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    function Harness(): React.ReactNode {
+      useSessionTurnHistory({
+        apiPort,
+        sessionId: SESSION_ID,
+        workspaceId: WORKSPACE_ID,
+        sessionCacheKey: SCOPE_KEY,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
+        reloadNonce: 0,
+        setState: (update) => {
+          currentState = typeof update === "function" ? update(currentState) : update;
+        },
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+      await wait(30);
+    });
+
+    const timeline = currentState.turnTimelinesBySession.get(SCOPE_KEY);
+    expect(timeline?.orderedTurnIds).toEqual([]);
+    expect(timeline?.turnsById.job_latest).toBeUndefined();
+    act(() => renderer!.unmount());
+  });
+
   test("轮询直到 ready，且 epoch 切换会重新水合相同 revision 的最新 Turn", async () => {
     const apiPort = 9107;
     installWindow(apiPort);
@@ -57,7 +124,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: payload,
           });
         }
-        if (path === `/api/v1/sessions/${SESSION_ID}/turns/details`) {
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
           detailCalls += 1;
           const detailRequestNumber = detailCalls;
           if (detailRequestNumber === 1) {
@@ -84,6 +151,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
         sessionId: SESSION_ID,
         workspaceId: WORKSPACE_ID,
         sessionCacheKey: SCOPE_KEY,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
         setState: (update) => {
           currentState = typeof update === "function" ? update(currentState) : update;
@@ -152,6 +220,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
         sessionId: SESSION_ID,
         workspaceId: WORKSPACE_ID,
         sessionCacheKey: SCOPE_KEY,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
         setState: (update) => {
           currentState = typeof update === "function" ? update(currentState) : update;
@@ -223,16 +292,19 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { ...bootstrap("ready", 1), latest_turn: null },
           });
         }
-        if (path === `/api/v1/sessions/${SESSION_ID}/turns/details`) {
-          requestSignals.detail = init?.signal ?? null;
-          return pendingUntilAbort(requestSignals.detail, () => {
-            detailAbortObserved = true;
-          });
-        }
-        if (path === `/api/v1/sessions/${SESSION_ID}/turns`) {
+        if (
+          path === `/api/v1/sessions/${SESSION_ID}/history`
+          && JSON.parse(String(init?.body ?? "{}")).direction === "before"
+        ) {
           requestSignals.page = init?.signal ?? null;
           return pendingUntilAbort(requestSignals.page, () => {
             pageAbortObserved = true;
+          });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          requestSignals.detail = init?.signal ?? null;
+          return pendingUntilAbort(requestSignals.detail, () => {
+            detailAbortObserved = true;
           });
         }
         throw new Error(`测试收到未预期请求: ${path}`);
@@ -246,6 +318,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
         sessionId: SESSION_ID,
         workspaceId: WORKSPACE_ID,
         sessionCacheKey: SCOPE_KEY,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce,
         setState: (update) => {
           currentState = typeof update === "function" ? update(currentState) : update;

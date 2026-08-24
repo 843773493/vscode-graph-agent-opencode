@@ -12,13 +12,15 @@ class ToolDTO(BaseModel):
     group_id: str = "default"
     group_name: str = "默认工具"
     kind: str = "default"
-    enabled: bool = True
+    execution_enabled: bool
+    model_visible: bool
     test_supported: bool = False
 
 
 class ToolSelectionChange(BaseModel):
     tool_id: str = Field(min_length=1)
-    enabled: bool
+    execution_enabled: bool
+    model_visible: bool
 
 
 class ToolSelectionPatchRequest(BaseModel):

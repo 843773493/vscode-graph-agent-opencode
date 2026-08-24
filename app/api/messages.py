@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.abstractions.internal_message import PreparedInternalMessage
@@ -26,18 +28,16 @@ from app.schemas.public_v2.message import (
 )
 from app.schemas.public_v2.pending_request import (
     PendingRequestListDTO,
-    PendingRequestReorderRequest,
+    PendingRequestPolicyUpdateRequest,
     PendingRequestUpdateRequest,
 )
 from app.services.business.job.service import JobAdmissionClosedError
 from app.services.business.message_service import MessageService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
-from app.services.infrastructure.message_history_store import (
-    StaleMessageHistoryCursorError,
-)
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
+logger = logging.getLogger(__name__)
 
 
 @router.get(
@@ -129,50 +129,38 @@ async def clear_pending_requests(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.put(
-    "/{session_id}/pending-requests/order",
+@router.patch(
+    "/{session_id}/pending-requests/{message_id}/policy",
     response_model=APIResponse[PendingRequestListDTO],
-    summary="重排会话待处理消息",
+    summary="修改待处理消息投递策略",
 )
-async def reorder_pending_requests(
-    session_id: str,
-    payload: PendingRequestReorderRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
-):
-    try:
-        result = await job_service.reorder_pending(session_id, payload.requests)
-    except (KeyError, ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.post(
-    "/{session_id}/pending-requests/{message_id}/send-immediately",
-    response_model=APIResponse[PendingRequestListDTO],
-    summary="立即发送指定待处理消息",
-)
-async def send_pending_request_immediately(
+async def update_pending_request_policy(
     session_id: str,
     message_id: str,
+    payload: PendingRequestPolicyUpdateRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
 ):
     try:
-        result = await job_service.send_pending_immediately(
+        result = await job_service.update_pending_policy(
             session_id,
             message_id,
+            delivery_policy=payload.delivery_policy,
+            expected_snapshot_version=payload.expected_snapshot_version,
         )
     except ValueError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.post("/{session_id}/messages", response_model=APIResponse[MessageRunAccepted], summary="发送消息并创建任务")
+@router.post(
+    "/{session_id}/messages",
+    response_model=APIResponse[MessageRunAccepted],
+    summary="发送消息并创建任务",
+)
 async def create_message_and_run(
     session_id: str,
     payload: MessageRunRequest,
@@ -207,7 +195,7 @@ async def dispatch_inter_agent_message(
             result = await session_orchestrator.create_and_run(
                 session_id,
                 payload.content,
-                dispatch_mode=payload.dispatch_mode,
+                delivery_policy=payload.delivery_policy,
                 idempotency_key=payload.idempotency_key,
             )
         else:
@@ -217,7 +205,7 @@ async def dispatch_inter_agent_message(
                     content=payload.content,
                     metadata=payload.metadata,
                 ),
-                dispatch_mode=payload.dispatch_mode,
+                delivery_policy=payload.delivery_policy,
                 idempotency_key=payload.idempotency_key,
             )
     except ValueError as error:
@@ -227,7 +215,11 @@ async def dispatch_inter_agent_message(
     return APIResponse(message="ok", data=result, request_id=request_id)
 
 
-@router.get("/{session_id}/messages", response_model=APIResponse[CursorPage[MessageDTO]], summary="获取消息列表")
+@router.get(
+    "/{session_id}/messages",
+    response_model=APIResponse[CursorPage[MessageDTO]],
+    summary="获取消息列表",
+)
 async def list_messages(
     session_id: str,
     limit: int = Query(default=50, ge=1, le=200),
@@ -242,7 +234,7 @@ async def list_messages(
             limit=limit,
             cursor=cursor,
         )
-    except StaleMessageHistoryCursorError as error:
+    except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -301,7 +293,11 @@ async def get_agent_state_messages(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{session_id}/messages/{message_id}", response_model=APIResponse[MessageDTO], summary="获取单条消息")
+@router.get(
+    "/{session_id}/messages/{message_id}",
+    response_model=APIResponse[MessageDTO],
+    summary="获取单条消息",
+)
 async def get_message(
     session_id: str,
     message_id: str,
@@ -324,12 +320,42 @@ async def replay_message_turn(
     payload: MessageReplayRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    replay_service: SessionTurnReplayService = Depends(
-        get_session_turn_replay_service
-    ),
+    replay_service: SessionTurnReplayService = Depends(get_session_turn_replay_service),
 ):
     try:
         result = await replay_service.replay(session_id, message_id, payload)
     except ValueError as exc:
+        logger.exception(
+            "消息重放失败: session_id=%s message_id=%s action=%s",
+            session_id,
+            message_id,
+            payload.action,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/turns/{turn_id}/replay",
+    response_model=APIResponse[MessageReplayAccepted],
+    summary="重试、重新生成或编辑指定 Turn",
+)
+async def replay_turn(
+    session_id: str,
+    turn_id: str,
+    payload: MessageReplayRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    replay_service: SessionTurnReplayService = Depends(get_session_turn_replay_service),
+):
+    try:
+        result = await replay_service.replay_turn(session_id, turn_id, payload)
+    except ValueError as exc:
+        logger.exception(
+            "Turn 重放失败: session_id=%s turn_id=%s action=%s",
+            session_id,
+            turn_id,
+            payload.action,
+        )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)

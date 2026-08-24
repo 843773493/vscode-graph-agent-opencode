@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -31,54 +31,84 @@ def _service(sessions_dir: Path) -> JobService:
     )
 
 
+def _prevent_background_execution(
+    service: JobService,
+    monkeypatch: pytest.MonkeyPatch,
+    started_jobs: list[str] | None = None,
+) -> None:
+    def fake_start(job) -> None:
+        if started_jobs is not None:
+            started_jobs.append(job.job_id)
+        job.task = _PendingTask()
+
+    monkeypatch.setattr(service, "_start_job_task", fake_start)
+
+
+def _request(
+    session_id: str,
+    *,
+    job_id: str,
+    message_id: str,
+    sequence: int,
+) -> PendingRequestDTO:
+    now = datetime.now(UTC)
+    return PendingRequestDTO(
+        job_id=job_id,
+        message_id=message_id,
+        session_id=session_id,
+        content=message_id,
+        delivery_policy="after_turn",
+        enqueue_sequence=sequence,
+        position=sequence - 1,
+        agent_id="default",
+        message_created_at=now.isoformat(),
+        created_at=now,
+        updated_at=now,
+        snapshot_version=1,
+    )
+
+
 @pytest.mark.asyncio
-async def test_job_service_restores_accepted_pending_requests(
+async def test_job_service_restores_only_messages_still_in_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_bundle_factory,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, "ses_restart")
-    first = _service(sessions_dir)
-    monkeypatch.setattr(
-        first,
-        "_start_job_task",
-        lambda job: setattr(job, "task", _PendingTask()),
-    )
-    await first.start_job(
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    await store.save(
         "ses_restart",
-        "active",
-        message_id="msg_active",
-        message_created_at="2026-07-17T00:00:00+00:00",
-    )
-    await first.start_job(
-        "ses_restart",
-        "queued after restart",
-        message_id="msg_queued",
-        message_created_at="2026-07-17T00:00:01+00:00",
-        dispatch_mode="queued",
+        [
+            _request(
+                "ses_restart",
+                job_id="job_first",
+                message_id="msg_first",
+                sequence=1,
+            ),
+            _request(
+                "ses_restart",
+                job_id="job_second",
+                message_id="msg_second",
+                sequence=2,
+            ),
+        ],
     )
 
-    second = _service(sessions_dir)
+    service = _service(sessions_dir)
     started_jobs: list[str] = []
-    monkeypatch.setattr(
-        second,
-        "_start_job_task",
-        lambda job: (
-            started_jobs.append(job.job_id),
-            setattr(job, "task", _PendingTask()),
-        ),
-    )
-    restored = await second.list_pending("ses_restart")
+    _prevent_background_execution(service, monkeypatch, started_jobs)
 
-    assert restored.active_job_id is not None
-    assert restored.requests == []
-    assert second._jobs[restored.active_job_id].message == "queued after restart"
-    assert started_jobs == [restored.active_job_id]
+    restored = await service.list_pending("ses_restart")
+
+    assert restored.active_job_id == "job_first"
+    assert [item.message_id for item in restored.requests] == ["msg_second"]
+    assert restored.requests[0].status == "queued"
+    assert started_jobs == ["job_first"]
 
 
 @pytest.mark.asyncio
-async def test_restore_and_new_send_never_start_two_jobs(
+async def test_restore_and_new_send_keep_one_session_fifo_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_bundle_factory,
@@ -86,34 +116,18 @@ async def test_restore_and_new_send_never_start_two_jobs(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, "ses_restore_race")
     store = PendingRequestStore(sessions_dir=sessions_dir)
-    now = datetime.now(timezone.utc)
     await store.save(
         "ses_restore_race",
-        [
-            PendingRequestDTO(
-                job_id="job_restored_first",
-                message_id="msg_restored_first",
-                session_id="ses_restore_race",
-                content="必须先执行",
-                kind="queued",
-                position=0,
-                agent_id="default",
-                message_created_at=now.isoformat(),
-                created_at=now,
-                updated_at=now,
-            )
-        ],
+        [_request(
+            "ses_restore_race",
+            job_id="job_restored_first",
+            message_id="msg_restored_first",
+            sequence=1,
+        )],
     )
     service = _service(sessions_dir)
     started_jobs: list[str] = []
-    monkeypatch.setattr(
-        service,
-        "_start_job_task",
-        lambda job: (
-            started_jobs.append(job.job_id),
-            setattr(job, "task", _PendingTask()),
-        ),
-    )
+    _prevent_background_execution(service, monkeypatch, started_jobs)
 
     _snapshot, new_dispatch = await asyncio.gather(
         service.list_pending("ses_restore_race"),
@@ -121,10 +135,11 @@ async def test_restore_and_new_send_never_start_two_jobs(
             "ses_restore_race",
             "后发送",
             message_id="msg_new",
-            message_created_at=now.isoformat(),
+            message_created_at=datetime.now(UTC).isoformat(),
         ),
     )
 
     assert started_jobs == ["job_restored_first"]
     assert new_dispatch.job_status == "queued"
     assert service._session_current_job["ses_restore_race"] == "job_restored_first"
+    assert service._pending_queue.ids("ses_restore_race") == (new_dispatch.job_id,)

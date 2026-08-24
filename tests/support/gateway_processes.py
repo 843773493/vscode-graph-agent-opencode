@@ -36,6 +36,25 @@ class GatewayProcess:
     port: int
 
 
+async def acquire_gateway_guest(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/gateway/users/guest",
+        json={"tracking": {"test": True}},
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"Gateway 测试游客登录失败: {response.text}")
+
+
+def _is_running_backend(backend_url: str) -> bool:
+    if backend_url == "managed-by-gateway":
+        return False
+    try:
+        with urlopen(f"{backend_url.rstrip('/')}/api/v1/health", timeout=1) as response:
+            return response.status == 200
+    except OSError:
+        return False
+
+
 def wait_for_gateway_ready(port: int, process: subprocess.Popen[str]) -> None:
     deadline = time.monotonic() + READY_TIMEOUT_SECONDS
     request = Request(
@@ -63,6 +82,7 @@ def start_gateway_process(
     port: int,
     ssh_tunnel_port_range: tuple[int, int] | None = None,
     extra_env: dict[str, str] | None = None,
+    refresh_config: bool = False,
 ) -> GatewayProcess:
     kill_process_on_port(port)
     project_root = Path.cwd().resolve()
@@ -72,6 +92,7 @@ def start_gateway_process(
         config_root=boxteam_home / "config",
         profile="default",
         project_root=project_root,
+        force=refresh_config,
     )
     log_dir = workspace_root / ".boxteam" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -88,6 +109,8 @@ def start_gateway_process(
     env["BOXTEAM_GATEWAY_ROOT"] = str(workspace_root / ".boxteam" / "gateway")
     env["BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
+    if _is_running_backend(default_backend_url):
+        env["BOXTEAM_DEFAULT_BACKEND_URL"] = default_backend_url
     env["PYTHONUNBUFFERED"] = "1"
     env["BOXTEAM_PYTHON_BIN"] = str(python_executable)
     node_executable = shutil.which("node")

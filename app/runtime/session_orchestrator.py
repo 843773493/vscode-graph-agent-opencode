@@ -12,7 +12,7 @@ from app.schemas.public_v2.message import (
     MessageRunAccepted,
     MessageRunRequest,
 )
-from app.schemas.public_v2.pending_request import MessageDispatchMode
+from app.schemas.public_v2.pending_request import DeliveryPolicy
 from app.services.business.message_display import project_message_for_display
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
@@ -46,7 +46,7 @@ class SessionOrchestrator:
         content: str,
         *,
         metadata: dict[str, object] | None = None,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
         idempotency_key: str | None = None,
     ) -> MessageRunAccepted:
         self._reject_internal_message_on_user_path(content, metadata)
@@ -60,7 +60,7 @@ class SessionOrchestrator:
             session_id,
             message_request,
             requested_agent_id=session.current_agent_id,
-            dispatch_mode=dispatch_mode,
+            delivery_policy=delivery_policy,
             idempotency_key=idempotency_key,
         )
 
@@ -69,7 +69,7 @@ class SessionOrchestrator:
         session_id: str,
         message: PreparedInternalMessage,
         *,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
         idempotency_key: str | None = None,
     ) -> MessageRunAccepted:
         validate_internal_message(message.content, message.metadata)
@@ -82,7 +82,7 @@ class SessionOrchestrator:
                 metadata=dict(message.metadata),
             ),
             requested_agent_id=session.current_agent_id,
-            dispatch_mode=dispatch_mode,
+            delivery_policy=delivery_policy,
             idempotency_key=idempotency_key,
         )
 
@@ -171,7 +171,7 @@ class SessionOrchestrator:
         logger = logging.getLogger(__name__)
         logger.info("[session_orchestrator] create_message begin: session_id=%s", session_id)
         requested_agent_id = payload.run.agent_id if payload.run else None
-        dispatch_mode: MessageDispatchMode = payload.run.queue or "queued"
+        delivery_policy: DeliveryPolicy = payload.run.delivery_policy
         self._reject_internal_message_on_user_path(
             payload.message.content,
             payload.message.metadata,
@@ -180,7 +180,7 @@ class SessionOrchestrator:
             session_id,
             payload.message,
             requested_agent_id=requested_agent_id,
-            dispatch_mode=dispatch_mode,
+            delivery_policy=delivery_policy,
         )
 
     async def _create_and_dispatch(
@@ -189,7 +189,7 @@ class SessionOrchestrator:
         message_request: MessageCreateRequest,
         *,
         requested_agent_id: str | None,
-        dispatch_mode: MessageDispatchMode,
+        delivery_policy: DeliveryPolicy,
         idempotency_key: str | None = None,
     ) -> MessageRunAccepted:
         async def prepare_and_dispatch() -> MessageRunAccepted:
@@ -202,7 +202,7 @@ class SessionOrchestrator:
                 session_id,
                 message,
                 requested_agent_id=requested_agent_id,
-                dispatch_mode=dispatch_mode,
+                delivery_policy=delivery_policy,
             )
             if idempotency_key is not None and self._idempotency_store is not None:
                 self._idempotency_store.put(session_id, idempotency_key, result)
@@ -219,7 +219,7 @@ class SessionOrchestrator:
         message: MessageDTO,
         *,
         requested_agent_id: str | None,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
         job_id: str | None = None,
     ) -> MessageRunAccepted:
         """调度一条已生成稳定 message_id 的用户消息。"""
@@ -248,7 +248,7 @@ class SessionOrchestrator:
             attachments=message.attachments,
             message_created_at=message.created_at.isoformat(),
             message_metadata=job_message_metadata,
-            dispatch_mode=dispatch_mode,
+            delivery_policy=delivery_policy,
         )
         job_id = dispatch.job_id
         logger.info("[session_orchestrator] start_job returned: session_id=%s job_id=%s", session_id, job_id)

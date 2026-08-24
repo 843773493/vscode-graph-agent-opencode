@@ -7,9 +7,15 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
+from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
+from app.gateway.control.user_access import (
+    USER_ACCESS_COOKIE_NAME,
+    UserAccessContext,
+    UserAccessService,
+)
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
@@ -29,6 +35,7 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
 
 
 def _registry(request: Request) -> GatewayWorkspaceRegistry:
@@ -38,11 +45,46 @@ def _registry(request: Request) -> GatewayWorkspaceRegistry:
     return registry
 
 
-def _http_client(request: Request) -> httpx.AsyncClient:
+def _http_client(request: Request, *, streaming: bool = False) -> httpx.AsyncClient:
     client = getattr(request.app.state, "http_client", None)
+    if streaming:
+        client = getattr(request.app.state, "streaming_http_client", None)
     if not isinstance(client, httpx.AsyncClient):
-        raise RuntimeError("Gateway HTTP client 尚未初始化")
+        client_name = "streaming_http_client" if streaming else "http_client"
+        raise RuntimeError(f"Gateway {client_name} 尚未初始化")
     return client
+
+
+def _is_streaming_workspace_path(path: str) -> bool:
+    """判断工作区 API 是否会返回长期占用连接的 SSE。"""
+    return (
+        path.endswith("/traces/stream")
+        or path.endswith("/events/stream")
+        or path.endswith("/files/events")
+    )
+
+
+def _user_access_service(request: Request) -> UserAccessService:
+    service = getattr(request.app.state, "user_access_service", None)
+    if not isinstance(service, UserAccessService):
+        raise RuntimeError("Gateway 用户访问服务尚未初始化")
+    return service
+
+
+def verify_user_access_for_proxy(
+    request: Request,
+    auth: GatewayAuthContext = Depends(verify_gateway_access),
+) -> UserAccessContext | None:
+    # 联邦请求已经由上游 Gateway 持有并校验用户访问租约，不能把浏览器 Cookie
+    # 传播到下游 Gateway 或 Workspace Backend。
+    if auth.kind == "federation":
+        return None
+    context = _user_access_service(request).resolve_cookie(
+        request.cookies.get(USER_ACCESS_COOKIE_NAME)
+    )
+    if context is None:
+        raise HTTPException(status_code=401, detail="user_session_required")
+    return context
 
 
 def _proxy_headers(
@@ -61,9 +103,17 @@ def _proxy_headers(
             "x-local-token",
             "x-boxteam-federation-token",
             "x-boxteam-workspace-id",
+            HISTORY_LOADING_HEADER,
+            "cookie",
         }
     }
     headers["X-Request-ID"] = get_request_id(request)
+    application = request.scope.get("app")
+    gateway_config = getattr(getattr(application, "state", None), "gateway_config", None)
+    history_loading = getattr(gateway_config, "history_loading", None)
+    if isinstance(history_loading, HistoryLoadingConfig):
+        # 每一跳都覆盖入站策略，确保会话所属 Gateway 是最终权威来源。
+        headers["X-BoxTeam-History-Loading"] = history_loading.as_header_value()
     if target is not None and target.connection_kind == "remote_gateway":
         connection_id = target.remote_gateway_connection_id
         remote_workspace_id = target.remote_workspace_id
@@ -91,16 +141,28 @@ def _response_headers(response: httpx.Response) -> dict[str, str]:
 async def _stream_proxy_response(
     response: httpx.Response,
     route_lease: WorkspaceRouteLease,
+    user_access: UserAccessContext | None,
 ) -> AsyncIterator[bytes]:
     iterator = response.aiter_bytes()
     next_chunk = asyncio.create_task(anext(iterator))
     route_changed = asyncio.create_task(route_lease.invalidated.wait())
+    user_session_changed = (
+        asyncio.create_task(user_access.invalidated.wait())
+        if user_access is not None
+        else None
+    )
     try:
         while True:
+            wait_tasks = {next_chunk, route_changed}
+            if user_session_changed is not None:
+                wait_tasks.add(user_session_changed)
             completed, _ = await asyncio.wait(
-                {next_chunk, route_changed},
+                wait_tasks,
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            if user_session_changed is not None and user_session_changed in completed:
+                yield b": user-session-invalidated\n\n"
+                return
             if route_changed in completed:
                 yield b": gateway-route-invalidated\n\n"
                 return
@@ -111,10 +173,15 @@ async def _stream_proxy_response(
             yield chunk
             next_chunk = asyncio.create_task(anext(iterator))
     finally:
-        for task in (next_chunk, route_changed):
+        for task in (next_chunk, route_changed, user_session_changed):
+            if task is None:
+                continue
             if not task.done():
                 task.cancel()
-        await asyncio.gather(next_chunk, route_changed, return_exceptions=True)
+        pending_tasks = [next_chunk, route_changed]
+        if user_session_changed is not None:
+            pending_tasks.append(user_session_changed)
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
         await response.aclose()
 
 
@@ -131,6 +198,7 @@ async def _proxy_workspace_request(
     request: Request,
     *,
     auth: GatewayAuthContext | None,
+    user_access: UserAccessContext | None,
     include_credentials: bool,
 ) -> Response:
     registry = _registry(request)
@@ -158,7 +226,10 @@ async def _proxy_workspace_request(
         )
         else f"{target.backend_url.rstrip('/')}/api/v1/{path}"
     )
-    client = _http_client(request)
+    client = _http_client(
+        request,
+        streaming=_is_streaming_workspace_path(path),
+    )
     request_content = (
         request.stream()
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}
@@ -187,7 +258,7 @@ async def _proxy_workspace_request(
         headers = _response_headers(response)
         headers["X-BoxTeam-Route-Revision"] = route_lease.token
         return StreamingResponse(
-            _stream_proxy_response(response, route_lease),
+            _stream_proxy_response(response, route_lease, user_access),
             status_code=response.status_code,
             media_type=media_type,
             headers=headers,
@@ -211,6 +282,7 @@ async def proxy_context_read(request: Request) -> Response:
         "context/read",
         request,
         auth=None,
+        user_access=None,
         include_credentials=False,
     )
 
@@ -225,6 +297,7 @@ async def proxy_context_search(request: Request) -> Response:
         "context/search",
         request,
         auth=None,
+        user_access=None,
         include_credentials=False,
     )
 
@@ -237,10 +310,12 @@ async def proxy_workspace_api(
     path: str,
     request: Request,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
+    user_access: UserAccessContext | None = Depends(verify_user_access_for_proxy),
 ) -> Response:
     return await _proxy_workspace_request(
         path,
         request,
         auth=auth,
+        user_access=user_access,
         include_credentials=True,
     )

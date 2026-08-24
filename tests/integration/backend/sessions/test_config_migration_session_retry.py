@@ -51,7 +51,6 @@ async def test_persisted_failed_session_retries_with_migrated_current_tools(
             "model": "e2e-stub-model",
             "api_key": "e2e-local-model-key",
             "custom_llm_provider": "openai",
-            "api_mode": "chat_completions",
         }
     )
     config["agents"]["default"]["model"] = {

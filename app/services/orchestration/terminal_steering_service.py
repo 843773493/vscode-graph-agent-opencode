@@ -75,7 +75,7 @@ class TerminalSteeringService:
                             "terminal_id": terminal_id,
                         },
                     ),
-                    dispatch_mode="steering",
+                    delivery_policy="after_tool_result",
                 )
             except BaseException:
                 await self._terminal_client.finish_terminal_steering(

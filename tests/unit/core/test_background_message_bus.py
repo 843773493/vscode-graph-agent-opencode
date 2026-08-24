@@ -5,7 +5,6 @@ import pytest
 from app.core.background_message_bus import (
     BackgroundMessageBus,
     emit_background_message,
-    emit_interrupt_background_message,
 )
 from app.abstractions.background_message_bus import BackgroundMessageKind
 

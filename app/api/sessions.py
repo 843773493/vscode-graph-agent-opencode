@@ -41,6 +41,7 @@ from app.schemas.public_v2.session import (
     SessionDTO,
     SessionInformationSnapshotDTO,
     SessionInterruptResultDTO,
+    SessionForkRequest,
     SessionUpdateRequest,
 )
 from app.schemas.public_v2.session_changes import (
@@ -236,11 +237,20 @@ async def get_session_information(
 )
 async def fork_session_context(
     session_id: str,
+    payload: SessionForkRequest | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     fork_service: SessionContextForkService = Depends(get_session_context_fork_service),
 ):
-    result = await fork_service.fork(session_id)
+    request = payload or SessionForkRequest()
+    result = await fork_service.fork(
+        session_id,
+        mode=request.mode,
+        turn_id=request.turn_id,
+        anchor_mode=request.anchor_mode,
+        pinned=request.pinned,
+        place_under_source=request.pinned,
+    )
     return APIResponse(data=result, request_id=request_id)
 
 

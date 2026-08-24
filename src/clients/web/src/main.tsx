@@ -24,6 +24,7 @@ import './styles/workbenchPanel.css';
 import './styles/portForwardPanel.css';
 import './styles/debugPanel.css';
 import './styles/themeSurfaces.css';
+import './styles/gatewayUserAccess.css';
 
 declare global {
   interface Window {
@@ -44,13 +45,13 @@ window.__graphAgentRoot = root;
 
 root.render(
   <React.StrictMode>
-    <AppProvider>
-      <WarmConfirmProvider>
-        <AppErrorBoundary>
+    <AppErrorBoundary>
+      <AppProvider>
+        <WarmConfirmProvider>
           <App />
-        </AppErrorBoundary>
-      </WarmConfirmProvider>
-    </AppProvider>
+        </WarmConfirmProvider>
+      </AppProvider>
+    </AppErrorBoundary>
   </React.StrictMode>,
 );
 

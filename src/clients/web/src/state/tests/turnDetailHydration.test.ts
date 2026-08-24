@@ -9,6 +9,7 @@ import {
 function conversation(index: number, itemsView: "summary" | "full" = "summary"): ConversationView {
   return {
     conversationId: `turn-${index}`,
+    displayMode: "history",
     turnId: `turn-${index}`,
     turnRevision: 1,
     turnItemsView: itemsView,

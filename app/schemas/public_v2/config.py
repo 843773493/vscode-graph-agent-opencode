@@ -17,7 +17,7 @@ class ConfigDTO(BaseModel):
 
 class ConfigSourceDTO(BaseModel):
     path: str
-    layer: Literal["inline", "user", "user_local", "workspace"]
+    layer: Literal["inline", "user", "user_local", "workspace", "sqlite"]
     precedence: int
     loaded: bool
 

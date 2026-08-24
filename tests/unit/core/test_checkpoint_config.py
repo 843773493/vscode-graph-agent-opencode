@@ -8,8 +8,6 @@
 """
 from __future__ import annotations
 
-import pytest
-
 from app.core.checkpoint_config import build_checkpoint_config
 
 

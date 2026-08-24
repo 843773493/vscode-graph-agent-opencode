@@ -35,13 +35,17 @@ def test_provider_capabilities_accept_only_canonical_names() -> None:
     capabilities = parse_provider_capabilities(
         {
             "id": "canonical-provider",
-            "capabilities": [
-                "image_input",
-                "video_input",
-                "audio_input",
-                "reasoning_content_replay",
-                "prompt_cache_key",
-            ],
+            "api_mode": {
+                "protocol": "chat_completions",
+                "model_info": {
+                    "supports_vision": True,
+                    "supports_video_input": True,
+                    "supports_audio_input": True,
+                    "supports_reasoning": True,
+                },
+                "supports_reasoning": {"reasoning_content": True},
+                "request_features": {"prompt_cache_key": True},
+            },
         }
     )
 
@@ -50,23 +54,61 @@ def test_provider_capabilities_accept_only_canonical_names() -> None:
         "image_input",
         "video_input",
         "audio_input",
-        "reasoning_content_replay",
         "prompt_cache_key",
     }
 
 
-@pytest.mark.parametrize("capability", ["vision", "image", "Image_input", "unknown"])
-def test_provider_capabilities_reject_legacy_and_unknown_names(
-    capability: str,
-) -> None:
-    with pytest.raises(
-        ValueError,
-        match=rf"不支持的 capability: '{capability}'",
-    ):
+def test_provider_capabilities_reject_unknown_model_info_field() -> None:
+    with pytest.raises(ValueError, match="model_info.*unknown"):
         parse_provider_capabilities(
             {
                 "id": "invalid-provider",
-                "capabilities": [capability],
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {"unknown": True},
+                    "supports_reasoning": {},
+                },
+            }
+        )
+
+
+def test_provider_capabilities_reject_old_flat_capabilities_field() -> None:
+    with pytest.raises(TypeError, match="provider.api_mode 必须是对象"):
+        parse_provider_capabilities(
+            {
+                "id": "invalid-provider",
+                "capabilities": ["image_input"],
+            }
+        )
+
+
+def test_provider_capabilities_reject_unknown_request_feature() -> None:
+    with pytest.raises(ValueError, match="request_features.*unknown"):
+        parse_provider_capabilities(
+            {
+                "id": "invalid-provider",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {},
+                    "supports_reasoning": {},
+                    "request_features": {"unknown": True},
+                },
+            }
+        )
+
+
+def test_provider_capabilities_reject_legacy_reasoning_name_in_api_mode() -> None:
+    with pytest.raises(ValueError, match="api_mode.*reasoning_content_replay"):
+        parse_provider_capabilities(
+            {
+                "id": "invalid-provider",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {},
+                    "supports_reasoning": {
+                        "reasoning_content_replay": True,
+                    },
+                },
             }
         )
 
@@ -188,6 +230,60 @@ async def test_text_request_falls_back_in_configured_order(monkeypatch: pytest.M
                 "model": "primary",
                 "error_type": "RuntimeError",
                 "error": "primary failed",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_response_falls_back_to_next_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary_model = _model()
+    fallback_model = _model()
+    middleware = CapabilityRoutingMiddleware(
+        [
+            _candidate("primary", primary_model),
+            _candidate("fallback", fallback_model),
+        ]
+    )
+    requested_models: list[BaseChatModel] = []
+    failed_events: list[tuple[str, dict[str, str]]] = []
+
+    async def record_failed_event(name: str, data: dict[str, str]) -> None:
+        failed_events.append((name, data))
+
+    monkeypatch.setattr(
+        "app.agents.model_capability_routing.adispatch_custom_event",
+        record_failed_event,
+    )
+
+    async def handler(request: ModelRequest) -> AIMessage:
+        requested_models.append(request.model)
+        if request.model is primary_model:
+            return AIMessage(
+                content=[{"type": "reasoning", "reasoning": "内部推理"}]
+            )
+        return AIMessage(content="ok")
+
+    request = ModelRequest(
+        model=primary_model,
+        messages=[HumanMessage(content="只处理文本")],
+    )
+
+    response = await middleware.awrap_model_call(request, handler)
+
+    assert isinstance(response, AIMessage)
+    assert response.text == "ok"
+    assert requested_models == [primary_model, fallback_model]
+    assert failed_events == [
+        (
+            "boxteam_model_failed",
+            {
+                "provider_id": "primary",
+                "model": "primary",
+                "error_type": "RuntimeError",
+                "error": "模型只返回内部推理，没有用户可见正文或工具调用。 provider_id=primary model=primary",
             },
         )
     ]

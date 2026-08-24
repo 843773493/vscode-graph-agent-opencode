@@ -8,8 +8,9 @@ import {
 export function useComposerDraft(
   workspaceId: string | null,
   sessionId: string | null,
+  userScope?: string | null,
 ): [string, Dispatch<SetStateAction<string>>] {
-  const scopeKey = composerDraftScopeKey(workspaceId, sessionId);
+  const scopeKey = composerDraftScopeKey(workspaceId, sessionId, userScope);
   const activeScopeKeyRef = useRef(scopeKey);
   const [draftState, setDraftState] = useState(() => ({
     scopeKey,

@@ -78,10 +78,29 @@ const pythonBin = path.resolve(
 );
 const nodeBin =
   process.env.NODE_BIN ?? (process.platform === "win32" ? "node.exe" : "node");
-const onlyLaunch = process.argv.slice(2).includes("--only-launch");
-const restartDelayArgument = process.argv
-  .slice(2)
-  .find((argument) => argument.startsWith("--restart-delay-ms="));
+const cliArguments = process.argv.slice(2);
+const onlyLaunch = cliArguments.includes("--only-launch");
+const serviceArgumentIndex = cliArguments.findIndex(
+  (argument) => argument === "--service" || argument.startsWith("--service="),
+);
+const serviceArgument =
+  serviceArgumentIndex === -1
+    ? null
+    : cliArguments[serviceArgumentIndex] === "--service"
+      ? cliArguments[serviceArgumentIndex + 1] ?? null
+      : cliArguments[serviceArgumentIndex].slice("--service=".length);
+const serviceMode = serviceArgument ?? "all";
+if (!["all", "backend", "gateway", "web"].includes(serviceMode)) {
+  throw new Error(
+    `--service 必须是 all、backend、gateway 或 web，实际为 ${String(serviceMode)}`,
+  );
+}
+if (onlyLaunch && serviceMode !== "all") {
+  throw new Error("--only-launch 只能与 --service=all 一起使用");
+}
+const restartDelayArgument = cliArguments.find((argument) =>
+  argument.startsWith("--restart-delay-ms="),
+);
 const restartDelayMs = restartDelayArgument
   ? Number(restartDelayArgument.slice("--restart-delay-ms=".length))
   : 0;
@@ -97,6 +116,7 @@ if (
 const detachedReadyFile = process.env.BOXTEAM_DEV_READY_FILE ?? null;
 const host = "127.0.0.1";
 const basePorts = {
+  backend: 8010,
   frontend: 8011,
   terminalFrontend: 8013,
   gateway: 8014,
@@ -111,6 +131,13 @@ function requirePath(targetPath, label) {
   if (!existsSync(targetPath)) {
     throw new Error(`${label}不存在: ${targetPath}`);
   }
+}
+
+function selectedPorts() {
+  if (serviceMode === "backend") return [ports.backend];
+  if (serviceMode === "gateway") return [ports.gateway];
+  if (serviceMode === "web") return [ports.frontend];
+  return Object.values(ports);
 }
 
 function spawnProcess(command, args, cwd, environment) {
@@ -305,6 +332,7 @@ function listenerPidsUnix(targetPort) {
 }
 
 async function cleanDevelopmentPorts() {
+  const targetPorts = selectedPorts();
   if (process.platform === "win32") {
     const netstat = Bun.spawnSync(["netstat", "-ano", "-p", "tcp"], {
       cwd: projectRoot,
@@ -314,14 +342,14 @@ async function cleanDevelopmentPorts() {
     if (netstat.exitCode !== 0) {
       throw new Error("无法检查 Windows 开发端口占用");
     }
-    const targetPorts = new Set(Object.values(ports).map(String));
+    const targetPortNames = new Set(targetPorts.map(String));
     const pids = new Set();
     for (const line of new TextDecoder()
       .decode(netstat.stdout)
       .split(/\r?\n/)) {
       const columns = line.trim().split(/\s+/);
       if (!/LISTENING/i.test(line)) continue;
-      if (!targetPorts.has(columns[1]?.split(":").at(-1))) continue;
+      if (!targetPortNames.has(columns[1]?.split(":").at(-1))) continue;
       if (/^\d+$/.test(columns.at(-1))) pids.add(columns.at(-1));
     }
     for (const pid of pids) {
@@ -337,9 +365,7 @@ async function cleanDevelopmentPorts() {
     return;
   }
 
-  const pids = new Set(
-    Object.values(ports).flatMap((port) => listenerPidsUnix(port)),
-  );
+  const pids = new Set(targetPorts.flatMap((port) => listenerPidsUnix(port)));
   for (const pid of pids) {
     Bun.spawnSync(["kill", "-TERM", pid], {
       cwd: projectRoot,
@@ -348,7 +374,7 @@ async function cleanDevelopmentPorts() {
     });
   }
   if (pids.size > 0) await Bun.sleep(1_000);
-  for (const port of Object.values(ports)) {
+  for (const port of targetPorts) {
     for (const pid of listenerPidsUnix(port)) {
       Bun.spawnSync(["kill", "-KILL", pid], {
         cwd: projectRoot,
@@ -389,7 +415,9 @@ async function main() {
     requirePath(targetPath, label);
   }
   mkdirSync(defaultWorkspaceRoot, { recursive: true });
-  await stopPreviousLauncher();
+  if (serviceMode === "all" || serviceMode === "gateway") {
+    await stopPreviousLauncher();
+  }
   await cleanDevelopmentPorts();
 
   const runtimeManifest = writeDevelopmentManifest();
@@ -422,75 +450,116 @@ async function main() {
       `boxteam_home=${boxteamHome}\n`,
   );
   installDevelopmentConfiguration(environment);
-  installNodeDebugFixture();
-  const terminalFrontend = spawnProcess(
-    nodeBin,
-    [
-      "server.js",
-      "--host",
-      "0.0.0.0",
-      "--port",
-      String(ports.terminalFrontend),
-      "--backend-url",
-      "auto",
-      "--workspace-root",
-      defaultWorkspaceRoot,
-      "--asset-root",
-      projectRoot,
-    ],
-    terminalFrontendRoot,
-    environment,
-  );
-  const browserFrontend = spawnProcess(
-    nodeBin,
-    [
-      "server.js",
-      "--host",
-      "0.0.0.0",
-      "--port",
-      String(ports.browserFrontend),
-      "--backend-url",
-      "auto",
-      "--workspace-root",
-      defaultWorkspaceRoot,
-      "--asset-root",
-      projectRoot,
-    ],
-    browserFrontendRoot,
-    environment,
-  );
-  const launcher = spawnProcess(
-    nodeBin,
-    [
-      launcherEntry,
-      "start",
-      "--runtime-manifest",
-      runtimeManifest,
-      "--no-open",
-    ],
-    projectRoot,
-    environment,
-  );
-  const processes = [terminalFrontend, browserFrontend, launcher];
+  const processes = [];
+  if (serviceMode === "backend") {
+    processes.push(
+      spawnProcess(
+        pythonBin,
+        [
+          "-m",
+          "uvicorn",
+          "app.main:app",
+          "--host",
+          host,
+          "--port",
+          String(ports.backend),
+          "--reload",
+        ],
+        projectRoot,
+        environment,
+      ),
+    );
+  } else if (serviceMode === "web") {
+    processes.push(spawnProcess("bun", ["run", "dev"], webRoot, environment));
+  } else {
+    if (serviceMode === "all") {
+      installNodeDebugFixture();
+      processes.push(
+        spawnProcess(
+          nodeBin,
+          [
+            "server.js",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            String(ports.terminalFrontend),
+            "--backend-url",
+            "auto",
+            "--workspace-root",
+            defaultWorkspaceRoot,
+            "--asset-root",
+            projectRoot,
+          ],
+          terminalFrontendRoot,
+          environment,
+        ),
+      );
+      processes.push(
+        spawnProcess(
+          nodeBin,
+          [
+            "server.js",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            String(ports.browserFrontend),
+            "--backend-url",
+            "auto",
+            "--workspace-root",
+            defaultWorkspaceRoot,
+            "--asset-root",
+            projectRoot,
+          ],
+          browserFrontendRoot,
+          environment,
+        ),
+      );
+    }
+    processes.push(
+      spawnProcess(
+        nodeBin,
+        [
+          launcherEntry,
+          "start",
+          "--runtime-manifest",
+          runtimeManifest,
+          "--no-open",
+        ],
+        projectRoot,
+        environment,
+      ),
+    );
+  }
 
   try {
-    await Promise.all([
-      waitForHttpOk(
+    if (serviceMode === "backend") {
+      await waitForHttpOk(
+        `http://${host}:${ports.backend}/api/v1/health`,
+        "backend",
+      );
+    } else if (serviceMode === "web") {
+      await waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend");
+    } else {
+      await waitForHttpOk(
         `http://${host}:${ports.gateway}/api/gateway/health`,
         "gateway",
-      ),
-      waitForHttpOk(
-        `http://${host}:${ports.terminalFrontend}/health`,
-        "terminal frontend",
-      ),
-      waitForHttpOk(
-        `http://${host}:${ports.browserFrontend}/health`,
-        "browser frontend",
-      ),
-    ]);
-    const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
-    processes.push(frontend);
-    await waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend");
+      );
+      if (serviceMode === "all") {
+        await Promise.all([
+          waitForHttpOk(
+            `http://${host}:${ports.terminalFrontend}/health`,
+            "terminal frontend",
+          ),
+          waitForHttpOk(
+            `http://${host}:${ports.browserFrontend}/health`,
+            "browser frontend",
+          ),
+        ]);
+        const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
+        processes.push(frontend);
+        await waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend");
+      }
+    }
     if (detachedReadyFile !== null) {
       writeFileSync(
         detachedReadyFile,

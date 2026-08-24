@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -35,6 +36,7 @@ from app.services.infrastructure.config import (
     ConfigSnapshotStore,
     build_config_snapshot,
 )
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.installer import resolve_config_resource_source
 from configs.layout_migrations import migrate_legacy_workspace_configuration
 from configs.runtime import merge_json_objects, read_jsonc_object
@@ -46,6 +48,7 @@ ConfigCandidateApplier = Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[No
 
 class ConfigService:
     _WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION = 1
+    _RUNTIME_OVERRIDE_CONFIG_KEY = "workspace_runtime_override"
 
     def __init__(
         self,
@@ -54,6 +57,7 @@ class ConfigService:
         config_path: str | Path | None = None,
         workspace_root: str | Path | None = None,
         inline_config_path: str | Path | None = None,
+        workspace_state_store: WorkspaceStateStore | None = None,
     ) -> None:
         resolved_config_dir = (
             Path(config_dir).expanduser().resolve()
@@ -73,7 +77,15 @@ class ConfigService:
         self._workspace_root = (
             Path(workspace_root).expanduser().resolve() if workspace_root else None
         )
-        self._runtime_config_overrides: dict[str, Any] = {}
+        self._workspace_state_store = workspace_state_store
+        runtime_override = (
+            workspace_state_store.get_config(self._RUNTIME_OVERRIDE_CONFIG_KEY)
+            if workspace_state_store is not None
+            else None
+        )
+        self._runtime_config_overrides: dict[str, Any] = (
+            dict(runtime_override.payload) if runtime_override is not None else {}
+        )
         self._mcp_tool_names: frozenset[str] | None = None
         self._snapshot_store = ConfigSnapshotStore(
             candidate_builder=self._build_candidate_snapshot,
@@ -86,7 +98,7 @@ class ConfigService:
 
     def _resolve_schema_path(self) -> Path:
         config_path = self._get_workspace_config_path()
-        if config_path.is_file():
+        if self._workspace_state_store is None and config_path.is_file():
             schema_reference = read_jsonc_object(config_path).get("$schema")
             if (
                 isinstance(schema_reference, str)
@@ -147,59 +159,143 @@ class ConfigService:
                 precedence=0,
                 loaded=True,
             ),
-            ConfigSource(
+            self._config_source(
                 path=config_path,
                 layer="user",
                 precedence=1,
-                loaded=config_path.is_file(),
+                config_key="workspace_mutable_override",
             )
         ]
         config = self._read_config_source(self._inline_config_path)
-        if config_path.is_file():
+        user_override = self._read_shared_override(
+            config_key="workspace_mutable_override",
+            path=config_path,
+        )
+        if user_override is not None:
             config = merge_json_objects(
                 config,
-                self._read_config_source(config_path),
+                user_override,
             )
-            source_paths.append(config_path)
+            self._append_source_path(source_paths, config_path)
 
         local_config_path = self._get_workspace_local_config_path()
         source_details.append(
             ConfigSource(
-                path=local_config_path,
-                layer="user_local",
+                path=(
+                    self._workspace_state_store.path
+                    if self._workspace_state_store is not None
+                    else local_config_path
+                ),
+                layer=("sqlite" if self._workspace_state_store is not None else "user_local"),
                 precedence=2,
-                loaded=local_config_path.is_file(),
+                loaded=self._has_shared_override(
+                    config_key="workspace_local_mutable_override",
+                    path=local_config_path,
+                ),
             )
         )
-        if local_config_path.is_file():
+        local_override = self._read_shared_override(
+            config_key="workspace_local_mutable_override",
+            path=local_config_path,
+        )
+        if local_override is not None:
             config = merge_json_objects(
                 config,
-                self._read_config_source(local_config_path),
+                local_override,
             )
-            source_paths.append(local_config_path)
+            self._append_source_path(source_paths, local_config_path)
 
         if self._workspace_root is not None:
             migrate_legacy_workspace_configuration(
                 workspace_root=self._workspace_root,
                 workspace_schema_path=self._resolve_schema_path(),
             )
-            config, workspace_override_path = self._apply_workspace_override(
-                config,
-                self._workspace_root,
-            )
             workspace_path = get_workspace_config_path(self._workspace_root)
             source_details.append(
-                ConfigSource(
+                self._config_source(
                     path=workspace_path,
                     layer="workspace",
                     precedence=3,
-                    loaded=workspace_path.is_file(),
+                    config_key="workspace_root_mutable_override",
                 )
             )
-            if workspace_override_path is not None:
-                source_paths.append(workspace_override_path)
+            workspace_override = self._read_shared_override(
+                config_key="workspace_root_mutable_override",
+                path=workspace_path,
+            )
+            if workspace_override is not None:
+                config = merge_json_objects(config, workspace_override)
+                self._append_source_path(source_paths, workspace_path)
         self._validate_agent_tool_policies(config)
         return config, tuple(source_paths), tuple(source_details)
+
+    def _config_source(
+        self,
+        *,
+        path: Path,
+        layer: str,
+        precedence: int,
+        config_key: str,
+    ) -> ConfigSource:
+        if self._workspace_state_store is None:
+            return ConfigSource(
+                path=path,
+                layer=layer,  # type: ignore[arg-type]
+                precedence=precedence,
+                loaded=path.is_file(),
+            )
+        return ConfigSource(
+            path=self._workspace_state_store.path,
+            layer="sqlite",
+            precedence=precedence,
+            loaded=self._workspace_state_store.get_config(config_key) is not None
+            or path.is_file(),
+        )
+
+    def _append_source_path(self, source_paths: list[Path], path: Path) -> None:
+        resolved_path = (
+            self._workspace_state_store.path
+            if self._workspace_state_store is not None
+            else path
+        )
+        if resolved_path not in source_paths:
+            source_paths.append(resolved_path)
+
+    def _has_shared_override(self, *, config_key: str, path: Path) -> bool:
+        if self._workspace_state_store is None:
+            return path.is_file()
+        return self._workspace_state_store.get_config(config_key) is not None or path.is_file()
+
+    def _read_shared_override(
+        self,
+        *,
+        config_key: str,
+        path: Path,
+    ) -> dict[str, Any] | None:
+        if self._workspace_state_store is None:
+            return self._read_config_source(path) if path.is_file() else None
+        record = self._workspace_state_store.get_config(config_key)
+        if record is not None:
+            payload = dict(record.payload)
+            self._preflight_override(payload, source_path=self._workspace_state_store.path)
+            return payload
+        if not path.is_file():
+            return None
+        payload = self._read_config_source(path)
+        backup_path = path.with_name(f"{path.name}.migrated.bak")
+        if not backup_path.exists():
+            shutil.copy2(path, backup_path)
+        self._workspace_state_store.set_config(
+            config_key=config_key,
+            config_version=int(payload.get("config_version", 1)),
+            payload=payload,
+        )
+        return payload
+
+    @staticmethod
+    def _preflight_override(payload: dict[str, Any], *, source_path: Path) -> None:
+        # SQLite 中的数据已经经过 JSON 解析；仍执行自定义工具工厂预检，保持来源边界一致。
+        ConfigService._preflight_custom_tool_factories(payload, source_path=source_path)
 
     @staticmethod
     def _read_config_source(
@@ -642,6 +738,17 @@ class ConfigService:
                 self._runtime_config_overrides.pop(key, None)
             else:
                 self._runtime_config_overrides[key] = value
+        if self._workspace_state_store is not None:
+            if self._runtime_config_overrides:
+                self._workspace_state_store.set_config(
+                    config_key=self._RUNTIME_OVERRIDE_CONFIG_KEY,
+                    config_version=1,
+                    payload=self._runtime_config_overrides,
+                )
+            else:
+                self._workspace_state_store.delete_config(
+                    self._RUNTIME_OVERRIDE_CONFIG_KEY
+                )
         return self._build_public_config()
 
     def _build_public_config(self) -> ConfigDTO:

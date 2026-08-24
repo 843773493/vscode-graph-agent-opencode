@@ -1,58 +1,61 @@
 import React from "react";
 
-import type { PendingRequestKind } from "../../types/backend";
+import type { DeliveryPolicy } from "../../types/backend";
+
+const POLICY_LABELS: Record<DeliveryPolicy, string> = {
+  after_turn: "本轮结束后投递",
+  after_tool_result: "工具结果后投递",
+  after_interrupt: "中断边界后投递",
+};
 
 export default function PendingRequestActions({
-  kind,
+  deliveryPolicy,
   disabled,
   onEdit,
-  onSendImmediately,
   onRemove,
-  onChangeKind,
+  onChangePolicy,
 }: {
-  kind: PendingRequestKind;
+  deliveryPolicy: DeliveryPolicy;
   disabled: boolean;
   onEdit: () => void;
-  onSendImmediately: () => void;
   onRemove: () => void;
-  onChangeKind: (kind: PendingRequestKind) => void;
+  onChangePolicy: (policy: DeliveryPolicy) => void;
 }): React.ReactNode {
   return (
     <div
       className="chat-pending-actions"
       role="toolbar"
-      aria-label="待处理消息操作"
+      aria-label="待处理消息投递策略"
     >
-      <span className="chat-pending-kind">
-        {kind === "steering" ? "引导" : "已排队"}
-      </span>
-      <button type="button" disabled={disabled} onClick={onEdit} title="编辑">
+      <span className="chat-pending-kind">{POLICY_LABELS[deliveryPolicy]}</span>
+      {(Object.keys(POLICY_LABELS) as DeliveryPolicy[]).map((policy) => (
+        <button
+          key={policy}
+          type="button"
+          disabled={disabled || policy === deliveryPolicy}
+          aria-pressed={policy === deliveryPolicy}
+          title={POLICY_LABELS[policy]}
+          aria-label={POLICY_LABELS[policy]}
+          onClick={() => onChangePolicy(policy)}
+        >
+          {policy === deliveryPolicy ? "✓" : "·"}
+        </button>
+      ))}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onEdit}
+        title="编辑待处理消息"
+        aria-label="编辑待处理消息"
+      >
         <span className="codicon codicon-edit" aria-hidden="true" />
       </button>
       <button
         type="button"
         disabled={disabled}
-        onClick={onSendImmediately}
-        title="立即发送"
-      >
-        <span className="codicon codicon-debug-continue" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => onChangeKind(kind === "steering" ? "queued" : "steering")}
-        title={kind === "steering" ? "改为当前请求完成后发送" : "改为引导消息"}
-      >
-        <span
-          className={`codicon codicon-${kind === "steering" ? "list-ordered" : "git-pull-request-go-to-changes"}`}
-          aria-hidden="true"
-        />
-      </button>
-      <button
-        type="button"
-        disabled={disabled}
         onClick={onRemove}
-        title="从队列撤回"
+        title="从 FIFO 队列撤回"
+        aria-label="从 FIFO 队列撤回"
       >
         <span className="codicon codicon-close" aria-hidden="true" />
       </button>

@@ -34,6 +34,7 @@ from tests.e2e.system.gateway.gateway_target import (
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
+    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
     workspace_root_from_response,
@@ -106,6 +107,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
+            await acquire_gateway_guest(client)
             list_response = await client.get("/api/gateway/workspaces")
             assert list_response.status_code == 200, list_response.text
             workspace_list = list_response.json()["data"]
@@ -169,6 +171,12 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 "openBrowserPage",
                 "runPlaywrightCode",
             } <= remote_tool_ids
+            remote_tool_payload = remote_tools_response.json()["data"]
+            assert all(
+                {"execution_enabled", "model_visible"} <= item.keys()
+                for item in remote_tool_payload
+            )
+            assert remote_tools_response.headers.get("X-Request-ID")
 
             remote_tool_tests_response = await client.get(
                 "/api/v1/tools/tests",

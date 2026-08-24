@@ -3,6 +3,7 @@ import { cloneMaps } from "../../state/appStateMaps";
 import { updateAttachmentSummariesFromTraces } from "../../state/attachments";
 import {
   appendTraceEventsToPendingConversations,
+  removePendingForTraceEvent,
   writePendingSnapshot,
 } from "../../state/conversations";
 import { goalStreamMutation } from "../../state/sessionGoal";
@@ -10,6 +11,7 @@ import {
   appendBoundedLiveTraceEvents,
   appendReceivedEvents,
   buildTraceEvent,
+  isJobTerminalTraceType,
   tracePayloadString,
 } from "../../state/traceEvents";
 import {
@@ -78,6 +80,16 @@ function updateCurrentSessionFromEvents(
       context.sessionCacheKey,
       true,
     );
+    for (const traceEvent of traceEvents) {
+      if (isJobTerminalTraceType(traceEvent.type)) {
+        removePendingForTraceEvent(
+          next.pendingConversations,
+          context.sessionId,
+          traceEvent,
+          context.sessionCacheKey,
+        );
+      }
+    }
     for (const event of events) {
       const mutation = goalStreamMutation(event);
       if (mutation?.kind === "updated") {

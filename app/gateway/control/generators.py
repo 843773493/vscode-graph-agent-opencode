@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
 from app.core.session_paths import validate_generator_physical_segment
-from app.gateway.control.schemas import (
+from app.schemas.gateway_control import (
     GenerationRunDTO,
     GenerationRunListDTO,
     GeneratorDefinitionCreateRequest,

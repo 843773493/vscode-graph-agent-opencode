@@ -42,6 +42,7 @@ from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
@@ -86,6 +87,7 @@ class _AppContainerProtocol:
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
     mcp_runtime_manager: McpRuntimeManager
+    workspace_activity_service: WorkspaceActivityService
 
 
 def verify_local_token(x_local_token: str | None = Header(default=None)) -> str:
@@ -156,6 +158,13 @@ def get_job_service(request: Request) -> JobServiceProtocol:
     service = getattr(_get_container(request), "job_service", None)
     if not isinstance(service, JobServiceProtocol):
         raise RuntimeError("JobService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_workspace_activity_service(request: Request) -> WorkspaceActivityService:
+    service = getattr(_get_container(request), "workspace_activity_service", None)
+    if not isinstance(service, WorkspaceActivityService):
+        raise RuntimeError("Workspace 活动事件服务尚未在应用启动阶段初始化")
     return service
 
 

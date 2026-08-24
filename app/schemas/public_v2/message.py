@@ -10,7 +10,7 @@ from .job import (
     JobDispatchSnapshotDTO,
     JobDispatchStatus,
 )
-from .pending_request import MessageDispatchMode, PendingRequestKind
+from .pending_request import DeliveryPolicy
 
 
 class MessageCreateRequest(BaseModel):
@@ -21,6 +21,8 @@ class MessageCreateRequest(BaseModel):
 
 
 class RunOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     mode: RunMode = RunMode.single_agent
     agent_id: str | None = None
     response_mode: str = "stream"
@@ -28,10 +30,12 @@ class RunOptions(BaseModel):
     max_steps: int = 20
     timeout_seconds: int = 600
     context: dict[str, object] = Field(default_factory=dict)
-    queue: PendingRequestKind | None = None
+    delivery_policy: DeliveryPolicy = "after_turn"
 
 
 class MessageRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     message: MessageCreateRequest
     run: RunOptions
 
@@ -44,7 +48,7 @@ class SessionMessageDispatchRequest(BaseModel):
     content: str = Field(min_length=1)
     metadata: dict[str, object] = Field(default_factory=dict)
     simulate_user: StrictBool = False
-    dispatch_mode: MessageDispatchMode = "queued"
+    delivery_policy: DeliveryPolicy = "after_turn"
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 

@@ -4,8 +4,7 @@ import {
   clearPendingRequests as apiClearPendingRequests,
   listPendingRequests as apiListPendingRequests,
   removePendingRequest as apiRemovePendingRequest,
-  reorderPendingRequests as apiReorderPendingRequests,
-  sendPendingRequestImmediately as apiSendPendingRequestImmediately,
+  updatePendingRequestPolicy as apiUpdatePendingRequestPolicy,
   updatePendingRequest as apiUpdatePendingRequest,
 } from "../pendingRequestsApi";
 import { cloneMaps } from "../state/appStateMaps";
@@ -14,7 +13,7 @@ import {
 } from "../state/conversations";
 import type {
   AttachmentRef,
-  PendingRequestOrderItem,
+  DeliveryPolicy,
   PendingRequestList,
   Session,
 } from "../types/backend";
@@ -138,27 +137,21 @@ export function usePendingRequestActions({
     );
   }, [apiPort, applyServerMutation, requireTarget]);
 
-  const reorderPendingRequests = useCallback(async (
-    requests: PendingRequestOrderItem[],
+  const updatePendingRequestPolicy = useCallback(async (
+    messageId: string,
+    deliveryPolicy: DeliveryPolicy,
+    expectedSnapshotVersion?: number,
   ) => {
     const target = requireTarget();
     await applyServerMutation(target, () =>
-      apiReorderPendingRequests(
-        apiPort,
-        target.sessionId,
-        { requests },
-        target.workspaceId,
-      ),
-    );
-  }, [apiPort, applyServerMutation, requireTarget]);
-
-  const sendPendingRequestImmediately = useCallback(async (messageId: string) => {
-    const target = requireTarget();
-    await applyServerMutation(target, () =>
-      apiSendPendingRequestImmediately(
+      apiUpdatePendingRequestPolicy(
         apiPort,
         target.sessionId,
         messageId,
+        {
+          delivery_policy: deliveryPolicy,
+          expected_snapshot_version: expectedSnapshotVersion,
+        },
         target.workspaceId,
       ),
     );
@@ -168,7 +161,6 @@ export function usePendingRequestActions({
     updatePendingRequest,
     removePendingRequest,
     clearPendingRequests,
-    reorderPendingRequests,
-    sendPendingRequestImmediately,
+    updatePendingRequestPolicy,
   };
 }

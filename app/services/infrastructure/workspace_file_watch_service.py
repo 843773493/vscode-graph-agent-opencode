@@ -183,6 +183,7 @@ class WorkspaceFileWatchService:
                         path=str(Path(path).resolve()),
                     )
                     for change, path in sorted(raw_changes, key=lambda item: item[1])
+                    if not self._is_internal_workspace_path(Path(path))
                 )
                 if changes:
                     self._publish(subscribers, WorkspaceFileChangeBatch(changes=changes))
@@ -224,3 +225,12 @@ class WorkspaceFileWatchService:
         if change == Change.modified:
             return "edit"
         raise ValueError(f"未知文件变更类型: {change}")
+
+    def _is_internal_workspace_path(self, path: Path) -> bool:
+        """过滤工作区内部状态，避免会话状态刷新文件树。"""
+        internal_root = self._workspace_root / ".boxteam"
+        try:
+            path.resolve().relative_to(internal_root)
+        except ValueError:
+            return False
+        return True

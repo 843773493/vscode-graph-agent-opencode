@@ -59,19 +59,19 @@ class _Orchestrator:
         self.calls = []
 
     async def create_and_run(
-        self, session_id, content, *, metadata, dispatch_mode="queued"
+        self, session_id, content, *, metadata, delivery_policy="after_turn"
     ):
-        self.calls.append((session_id, content, metadata, dispatch_mode))
+        self.calls.append((session_id, content, metadata, delivery_policy))
 
     async def create_and_run_internal(
         self,
         session_id,
         message,
         *,
-        dispatch_mode="queued",
+        delivery_policy="after_turn",
     ):
         self.calls.append(
-            (session_id, message.content, message.metadata, dispatch_mode)
+            (session_id, message.content, message.metadata, delivery_policy)
         )
 
 
@@ -225,8 +225,8 @@ async def test_budget_limited_goal_dispatches_codex_aligned_wrap_up_prompt():
     current = await goals.get("sess_1")
     assert current.status == GoalStatus.budget_limited
     assert len(orchestrator.calls) == 1
-    _, content, metadata, dispatch_mode = orchestrator.calls[0]
-    assert dispatch_mode == "queued"
+    _, content, metadata, delivery_policy = orchestrator.calls[0]
+    assert delivery_policy == "after_turn"
     assert metadata["structured_prompt_kind"] == "goal_budget_limited"
     assert metadata["goal_budget_limited"] is True
     assert "累计时间：37 秒" in content
@@ -238,7 +238,7 @@ async def test_budget_limited_goal_dispatches_codex_aligned_wrap_up_prompt():
 
 
 @pytest.mark.asyncio
-async def test_active_objective_edit_yields_to_internal_steering():
+async def test_active_objective_edit_queues_internal_goal_message():
     goals = SessionGoalService(
         store=_Store(), session_service=_Sessions(), job_event_bus=_Bus()
     )
@@ -261,7 +261,7 @@ async def test_active_objective_edit_yields_to_internal_steering():
 
     assert runtime._job_goal_ids.get(running.job_id) is None
     assert len(orchestrator.calls) == 1
-    assert orchestrator.calls[0][3] == "steering"
+    assert orchestrator.calls[0][3] == "after_turn"
     assert "取代此前的 Goal" in orchestrator.calls[0][1]
     assert "新目标" in orchestrator.calls[0][1]
     assert "<untrusted_objective " in orchestrator.calls[0][1]

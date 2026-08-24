@@ -12,6 +12,7 @@ import pytest
 
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
+    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -65,6 +66,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
+            await acquire_gateway_guest(client)
             workspaces_response = await client.get("/api/gateway/workspaces")
             assert workspaces_response.status_code == 200, workspaces_response.text
             parent_workspace_id = workspaces_response.json()["data"][
@@ -160,6 +162,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
+            await acquire_gateway_guest(client)
             sessions_response = await client.get("/api/v1/sessions", params={"limit": 100})
             assert sessions_response.status_code == 200, sessions_response.text
             remaining = {

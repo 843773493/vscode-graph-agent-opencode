@@ -9,12 +9,15 @@
 
 # 不可修改内容
 
-- 不要提交测试运行时生成的 `.boxteam/checkpoints`、`.boxteam/logs`、`.boxteam/sessions` 或缓存产物。
-- 不要把真实用户工作区数据放入该模板。
+- 不要提交测试运行时生成的 `.boxteam/checkpoints`、`.boxteam/logs` 或缓存产物。
+- `.boxteam/sessions` 仅可提交明确标注的静态 rollout fixture，不能写入运行时变更；其中可以包含预生成、明确标注用途的真实模型响应快照。
+- 不要把真实用户工作区数据放入该模板；真实模型快照必须是专门生成的测试资源，不得包含用户隐私或运行时状态。
 
 # 规范
 
 - 模板应保持最小化，只保留测试输入文件。
+- mock rollout fixture 用于验证历史加载，不代表真实用户数据；其会话内容必须是确定性的测试数据。
+- 真实模型快照只用于验证多 provider、reasoning、summary、encrypted reasoning 和 checkpoint 投影，测试运行时只读，不得重新生成或覆盖。
 
 ## 扩展工具
 

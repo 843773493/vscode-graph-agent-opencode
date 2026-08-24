@@ -6,24 +6,15 @@ import contextvars
 import pytest
 from langchain_core.runnables import RunnableLambda
 
-from app.core.job_event_bus import EventType, JobEventBus
+from app.core.job_event_bus import JobEventBus
 from app.schemas.public_v2.common import ControlAction, JobStatus
 from app.schemas.public_v2.job import JobControlRequest
-from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.job.service import JobDrainBlocker, JobService, JobState
 
 
 class _DummyJobExecutor:
     async def run(self, job):
         return "ok"
-
-
-class _FailingMergeEventBus:
-    async def publish(self, *, event_type, **kwargs):
-        del kwargs
-        if event_type == EventType.JOB_MERGED:
-            raise RuntimeError("merge event failed")
-        return None
 
 
 def create_job_service() -> JobService:
@@ -200,11 +191,12 @@ async def test_job_control_resume_waits_for_paused_task_to_finish() -> None:
         message_id="msg_pause_resume",
         message_created_at="2026-08-09T00:00:00+00:00",
         agent_id="default",
-        status=JobStatus.running,
+        status=JobStatus.queued,
+        delivery_policy="after_turn",
     )
     service._jobs[job.job_id] = job
-    service._session_current_job[session_id] = job.job_id
-    service._start_job_task(job)
+    service._pending_queue.append(session_id, job.job_id, "after_turn")
+    assert await service._start_next_pending(session_id, boundary="idle") is True
     await started.wait()
 
     await service.control(
@@ -580,7 +572,6 @@ async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch
 
     first_job = service._jobs[first_job_id]
     first_job.status = JobStatus.completed
-
     await service._schedule_next_job_if_needed(first_job)
 
     assert started_jobs == [first_job_id, second_job_id]
@@ -590,147 +581,37 @@ async def test_start_job_queues_same_session_until_previous_finishes(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_merge_event_failure_keeps_next_job_queued(monkeypatch):
-    service = JobService(
-        job_event_bus=_FailingMergeEventBus(),
-        job_executor=_DummyJobExecutor(),
-    )
-    started_jobs: list[str] = []
-
-    def fake_start_job_task(job):
-        started_jobs.append(job.job_id)
-        job.task = DummyTask(done=False)
-
-    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
-    session_id = "session_merge_event_failure"
-    first = await service.start_job(
-        session_id,
-        "first",
-        message_id="msg_merge_first",
-        message_created_at="2026-08-09T00:00:00+00:00",
-    )
-    second = await service.start_job(
-        session_id,
-        "second",
-        message_id="msg_merge_second",
-        message_created_at="2026-08-09T00:00:01+00:00",
-        dispatch_mode="steering",
-    )
-    third = await service.start_job(
-        session_id,
-        "third",
-        message_id="msg_merge_third",
-        message_created_at="2026-08-09T00:00:02+00:00",
-        dispatch_mode="steering",
-    )
-
-    first_job = service._jobs[first.job_id]
-    transition_job_status(first_job, JobStatus.completed)
-
-    with pytest.raises(RuntimeError, match="merge event failed"):
-        await service._schedule_next_job_if_needed(first_job)
-
-    assert started_jobs == [first.job_id]
-    assert service._session_current_job[session_id] == first.job_id
-    assert service._pending_queue.ids(session_id) == (
-        second.job_id,
-        third.job_id,
-    )
-    assert service._jobs[second.job_id].status == JobStatus.queued
-    assert service._jobs[third.job_id].status == JobStatus.queued
-
-
-@pytest.mark.asyncio
-async def test_immediate_dispatch_promotes_message_and_cancels_active_job(
+async def test_boundary_notification_keeps_fifo_head_and_records_waiting_reason(
     monkeypatch,
 ):
     service = create_job_service()
-    started_jobs: list[str] = []
-
-    def fake_start_job_task(job):
-        started_jobs.append(job.job_id)
-        job.task = DummyTask(done=False)
-
-    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
-
-    session_id = "session_immediate_dispatch"
-    active = await service.start_job(
+    monkeypatch.setattr(
+        service,
+        "_start_job_task",
+        lambda job: setattr(job, "task", DummyTask(done=False)),
+    )
+    session_id = "session_boundary_dispatch"
+    await service.start_job(
         session_id,
-        "正在执行",
+        "active",
         message_id="msg_active",
         message_created_at="2026-07-27T00:00:00+00:00",
     )
     queued = await service.start_job(
         session_id,
-        "普通排队",
+        "等待中断",
         message_id="msg_queued",
         message_created_at="2026-07-27T00:00:01+00:00",
+        delivery_policy="after_interrupt",
     )
-    immediate = await service.start_job(
+
+    snapshot = await service.notify_boundary(
         session_id,
-        "立即处理",
-        message_id="msg_immediate",
-        message_created_at="2026-07-27T00:00:02+00:00",
-        dispatch_mode="immediate",
+        "after_tool_result",
+        tool_result_available=True,
     )
 
-    active_job = service._jobs[active.job_id]
-    assert active_job.status == JobStatus.cancelling
-    assert active_job.dispatch_pending_after_cancel is True
-    assert active_job.error_message == "为跨会话立即消息而停止"
-    assert active_job.task is not None
-    assert active_job.task.cancel_called is True
-    assert immediate.job_status == "queued"
-    assert immediate.blocked_by_job_id == active.job_id
-    assert immediate.queued_jobs_ahead == 0
-    assert service._pending_queue.ids(session_id) == (
-        immediate.job_id,
-        queued.job_id,
-    )
-    assert service._pending_queue.kind(immediate.job_id) == "queued"
-    assert started_jobs == [active.job_id]
-
-
-@pytest.mark.asyncio
-async def test_steering_dispatch_yields_without_cancelling_active_job(
-    monkeypatch,
-):
-    service = create_job_service()
-
-    def fake_start_job_task(job):
-        job.task = DummyTask(done=False)
-
-    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
-
-    session_id = "session_steering_dispatch"
-    active = await service.start_job(
-        session_id,
-        "正在执行",
-        message_id="msg_active",
-        message_created_at="2026-07-27T00:00:00+00:00",
-    )
-    queued = await service.start_job(
-        session_id,
-        "普通排队",
-        message_id="msg_queued",
-        message_created_at="2026-07-27T00:00:01+00:00",
-    )
-    steering = await service.start_job(
-        session_id,
-        "调整方向",
-        message_id="msg_steering",
-        message_created_at="2026-07-27T00:00:02+00:00",
-        dispatch_mode="steering",
-    )
-
-    active_job = service._jobs[active.job_id]
-    assert active_job.status == JobStatus.running
-    assert active_job.dispatch_pending_after_cancel is False
-    assert active_job.task is not None
-    assert active_job.task.cancel_called is False
-    assert steering.pending_kind == "steering"
-    assert service._pending_queue.ids(session_id) == (
-        steering.job_id,
-        queued.job_id,
-    )
-    assert service._pending_queue.yield_requested(session_id) is True
+    request = next(item for item in snapshot.requests if item.message_id == "msg_queued")
+    assert request.status == "queued"
+    assert request.waiting_reason is None
+    assert service._pending_queue.ids(session_id) == (queued.job_id,)

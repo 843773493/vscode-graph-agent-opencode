@@ -343,7 +343,11 @@ def scripted_backend_process(
             "model": "debug-e2e-model",
             "api_key": "debug-e2e-key",
             "custom_llm_provider": "openai",
-            "api_mode": "chat_completions",
+            "api_mode": {
+                "protocol": "chat_completions",
+                "model_info": {"supports_function_calling": True, "supports_reasoning": True},
+                "supports_reasoning": {"reasoning_content": True},
+            },
         }
     ]
     agents = config["agents"]

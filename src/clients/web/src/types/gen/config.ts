@@ -29,7 +29,7 @@ export interface ConfigReloadStatusDTO {
 }
 export interface ConfigSourceDTO {
   path: string;
-  layer: "inline" | "user" | "user_local" | "workspace";
+  layer: "inline" | "user" | "user_local" | "workspace" | "sqlite";
   precedence: number;
   loaded: boolean;
 }

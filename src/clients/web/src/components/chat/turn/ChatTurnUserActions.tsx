@@ -1,4 +1,5 @@
 import React from "react";
+import type { DeliveryPolicy } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
 import { fileToSelectedAttachment } from "../../../utils/mediaAttachments";
 import AnchoredOverlay from "../../AnchoredOverlay";
@@ -18,11 +19,10 @@ export function ChatTurnUserSection({
   actions,
   onLoadAgentStateMessageRawContent,
   onRemovePending,
-  onSendPendingImmediately,
-  onChangePendingKind,
+  onChangePendingPolicy,
 }: Pick<
   ChatTurnActionCallbacks,
-  "onRemovePending" | "onSendPendingImmediately" | "onChangePendingKind"
+  "onRemovePending" | "onChangePendingPolicy"
 > & {
   apiPort: number;
   workspaceId?: string | null;
@@ -309,25 +309,21 @@ export function ChatTurnUserSection({
           </div>
         ) : null}
         {conversation.pending
+          && !conversation.activeJobOverlay
           && !actions.isInternalDisplayMessage
-          && conversation.pendingKind ? (
+          && conversation.deliveryPolicy ? (
           <PendingRequestActions
-            kind={conversation.pendingKind}
+            deliveryPolicy={conversation.deliveryPolicy}
             disabled={actions.actionRunning}
             onEdit={actions.startEditing}
-            onSendImmediately={() => {
-              void actions.executePendingAction(
-                () => onSendPendingImmediately(userMessage.message_id),
-              );
-            }}
             onRemove={() => {
               void actions.executePendingAction(
                 () => onRemovePending(userMessage.message_id),
               );
             }}
-            onChangeKind={(kind) => {
+            onChangePolicy={(policy: DeliveryPolicy) => {
               void actions.executePendingAction(
-                () => onChangePendingKind(userMessage.message_id, kind),
+                () => onChangePendingPolicy(userMessage.message_id, policy),
               );
             }}
           />

@@ -23,7 +23,6 @@ export type {
   JobControlResponseDTO as JobControlResponse,
 } from "./gen/job";
 import type { LLMRequestLogRecordDTO } from "./gen/llm_request_log";
-import type { PendingRequestOrderItem as PendingRequestOrderItemType } from "./gen/pending_request";
 export type { AttachmentRef } from "./gen/attachment";
 export type {
   AgentStateMessagesDTO as AgentStateMessages,
@@ -37,11 +36,13 @@ export type {
 export type {
   PendingRequestDTO as PendingRequest,
   PendingRequestListDTO as PendingRequestList,
-  PendingRequestOrderItem,
-  PendingRequestReorderRequest,
+  PendingRequestPolicyUpdateRequest,
   PendingRequestUpdateRequest,
 } from "./gen/pending_request";
-export type PendingRequestKind = PendingRequestOrderItemType["kind"];
+export type DeliveryPolicy =
+  | "after_turn"
+  | "after_tool_result"
+  | "after_interrupt";
 
 export type SessionGoalStatus =
   | "active"
@@ -91,17 +92,107 @@ import type {
   SessionFileReviewResultDTO,
 } from "./gen/session_changes";
 import type { TraceEventDTO } from "./gen/trace";
+import type {
+  ActivateGatewayWorkspaceResultDTO,
+  AddLocalWorkspaceRequest as GeneratedAddLocalWorkspaceRequest,
+  AddRemoteGatewayRequest as GeneratedAddRemoteGatewayRequest,
+  CreateFederationManagedWorkspaceRequest as GeneratedCreateFederationManagedWorkspaceRequest,
+  CreateGatewayGuestRequest as GeneratedCreateGatewayGuestRequest,
+  CreateGatewayManagedWorkspaceRequest as GeneratedCreateGatewayManagedWorkspaceRequest,
+  CreateGatewayUserRequest as GeneratedCreateGatewayUserRequest,
+  DevelopmentRuntimeRestartDTO,
+  GatewayConfigReloadStatusDTO,
+  GatewayConfigSourceDTO,
+  GatewayConfigSourcesDTO,
+  GatewayDiagnosticLogDTO,
+  GatewayDiagnosticWorkspaceDTO,
+  GatewayDiagnosticsDTO,
+  GatewayDirectoryEntryDTO,
+  GatewayDirectoryListDTO,
+  GatewayHealthDTO,
+  GatewayInboundAccessListDTO,
+  GatewayInboundPeerDTO,
+  GatewayInboundWorkspaceDTO,
+  GatewayManagedWorkspaceDTO,
+  GatewayManagedWorkspaceListDTO,
+  GatewayRemoteConnectionSummaryDTO,
+  GatewayRuntimeBlockerDTO,
+  GatewayRuntimeRestartResultDTO,
+  GatewayRuntimeStateResultDTO,
+  GatewayServiceStatusDTO,
+  GatewayThemeBackgroundDTO,
+  GatewayThemeCatalogDTO,
+  GatewayThemeOptionDTO,
+  GatewayUIAssetDTO,
+  GatewayUIAssetListDTO,
+  GatewayUserAccessDTO,
+  GatewayUserDTO,
+  GatewayUserLeaseDTO,
+  GatewayUserListDTO,
+  GatewayUserViewStateDTO,
+  GatewayUserViewStateUpdateRequest as GeneratedGatewayUserViewStateUpdateRequest,
+  GatewayWorkspaceDTO,
+  GatewayWorkspaceListDTO,
+  PortForwardDTO,
+  PortForwardListDTO,
+  ReorderGatewayWorkspacesRequest as GeneratedReorderGatewayWorkspacesRequest,
+  ResolvedGatewayThemeDTO,
+  SshConnectionOptionDTO,
+  SshConnectionOptionListDTO,
+  UpdateGatewayWorkspaceRequest as GeneratedUpdateGatewayWorkspaceRequest,
+  WebUIGatewayConsoleSettingsDTO,
+  WebUILayoutSettingsDTO,
+  WebUIMainAreaRatiosDTO,
+  WebUISessionSidebarSettingsDTO,
+  WebUISettingsDTO,
+  WebUISettingsUpdateDTO,
+  WebUIThemeSettingsDTO,
+  WebUIWorkspaceBottomPanelSettingsDTO,
+  WebUIWorkspaceFileTreeSettingsDTO,
+} from "./gen/gateway";
+import type {
+  GatewayResourceDTO,
+  GatewayResourceListDTO,
+  GatewayResourceScopeErrorDTO,
+  GatewaySessionSearchMatchDTO,
+  GatewaySessionSearchResultsDTO,
+  GatewaySessionSearchWorkspaceStatusDTO,
+  GenerationOutputDTO,
+  GenerationRunDTO,
+  GenerationRunListDTO,
+  GeneratorDefinitionDTO,
+  GeneratorDefinitionCreateRequest as GeneratedGeneratorDefinitionCreateRequest,
+  GeneratorDefinitionListDTO,
+  GeneratorDefinitionUpdateRequest as GeneratedGeneratorDefinitionUpdateRequest,
+  GeneratorManualRunRequest as GeneratedGeneratorManualRunRequest,
+  GeneratorPlacementPreviewDTO,
+  GeneratorPlacementPreviewRequest as GeneratedGeneratorPlacementPreviewRequest,
+  GeneratorSessionStrategyDTO,
+  SessionLocatorDTO,
+  WorkspaceNavigationNodeDTO,
+  WorkspaceFolderCreateRequest as GeneratedWorkspaceFolderCreateRequest,
+  WorkspaceNavigationNodeUpdateRequest as GeneratedWorkspaceNavigationNodeUpdateRequest,
+  WorkspaceNavigationPlacementRequest as GeneratedWorkspaceNavigationPlacementRequest,
+  WorkspaceNavigationTreeDTO,
+} from "./gen/gateway_control";
 export type { TraceEventDTO as SessionStreamEvent } from "./gen/trace";
 export type {
   SessionTurnBootstrapDTO as SessionTurnBootstrap,
   StaleTurnCursorErrorDTO as StaleTurnCursorError,
+  StaleTurnReferenceErrorDTO as StaleTurnReferenceError,
   TurnAttachmentDTO as TurnAttachment,
+  TurnActivityStatsDTO as TurnActivityStats,
   TurnDetailBatchDTO as TurnDetailBatch,
   TurnDetailBatchRequest,
   TurnDetailDTO as TurnDetail,
+  TurnHistoryLoadRequest,
+  TurnHistoryPageDTO as TurnHistoryPage,
   TurnJobSummaryDTO as TurnJobSummary,
   TurnPageDTO as TurnPage,
   TurnSummaryDTO as TurnSummary,
+  TurnResponsePartDTO as TurnResponsePart,
+  TurnResponseSourceDTO as TurnResponseSource,
+  TurnThinkingBlockDTO as TurnThinkingBlock,
   TurnUserMessageDTO as TurnUserMessage,
   TurnUserMessageSummaryDTO as TurnUserMessageSummary,
 } from "./gen/turn";
@@ -222,217 +313,143 @@ export interface CursorPage<T> {
   has_more?: boolean;
 }
 
-export interface GatewayWorkspace {
-  workspace_id: string;
-  parent_workspace_id?: string | null;
-  name: string;
-  root_path: string;
-  backend_url: string;
-  connection_kind: "local" | "remote_gateway";
-  status: "ready" | "offline";
-  active: boolean;
-  managed: boolean;
-  removable: boolean;
-  system_default: boolean;
-  runtime_action?:
-    | "start_managed_backend"
-    | "safe_restart_managed_backend"
-    | "force_restart_managed_backend"
-    | "reconnect_remote_gateway"
-    | "probe_external_backend";
-  config_reload?: GatewayConfigReloadStatus;
-  remote: GatewayRemoteConnectionSummary | null;
-  services: Record<string, GatewayServiceStatus>;
-  connection_error?: string | null;
-  checked_at: string;
+export interface SessionActivity {
+  event_seq: number;
+  event_id: string;
+  session_id: string;
+  status: "completed" | "failed" | "cancelled" | string;
+  summary: string;
+  occurred_at: string;
 }
 
-export interface GatewayConfigReloadStatus {
-  available: boolean;
+type DeepRequired<T> = T extends null
+  ? null
+  : T extends readonly (infer Item)[]
+    ? DeepRequired<Item>[]
+    : T extends object
+      ? { [Key in keyof T]-?: DeepRequired<Exclude<T[Key], undefined>> }
+      : T;
+
+export type AddLocalWorkspaceRequest = GeneratedAddLocalWorkspaceRequest;
+export type AddRemoteGatewayRequest = GeneratedAddRemoteGatewayRequest;
+export type CreateFederationManagedWorkspaceRequest =
+  GeneratedCreateFederationManagedWorkspaceRequest;
+export type CreateGatewayGuestRequest = GeneratedCreateGatewayGuestRequest;
+export type CreateGatewayUserRequest = GeneratedCreateGatewayUserRequest;
+export type AcquireGatewayUserRequest = import("./gen/gateway").AcquireGatewayUserRequest;
+export type GatewayUserViewStateUpdateRequest =
+  GeneratedGatewayUserViewStateUpdateRequest;
+type GeneratorNamingRequest = Omit<
+  NonNullable<GeneratedGeneratorDefinitionCreateRequest["naming"]>,
+  "path_template"
+> & {
+  path_template?: string[];
+};
+export type GeneratorDefinitionCreateRequest = Omit<
+  GeneratedGeneratorDefinitionCreateRequest,
+  "naming"
+> & {
+  naming?: GeneratorNamingRequest;
+};
+export type GeneratorDefinitionUpdateRequest = Omit<
+  GeneratedGeneratorDefinitionUpdateRequest,
+  "naming"
+> & {
+  naming?: GeneratorNamingRequest | null;
+};
+export type GeneratorManualRunRequest = GeneratedGeneratorManualRunRequest;
+export type GeneratorPlacementPreviewRequest = Omit<
+  GeneratedGeneratorPlacementPreviewRequest,
+  "naming"
+> & {
+  naming: GeneratorNamingRequest;
+};
+export type WorkspaceFolderCreateRequest = GeneratedWorkspaceFolderCreateRequest;
+export type WorkspaceNavigationNodeUpdateRequest =
+  GeneratedWorkspaceNavigationNodeUpdateRequest;
+export type WorkspaceNavigationPlacementRequest =
+  GeneratedWorkspaceNavigationPlacementRequest;
+
+export type GatewayWorkspace = Omit<
+  Required<GatewayWorkspaceDTO>,
+  "parent_workspace_id" | "runtime_action" | "config_reload" | "connection_error"
+> & {
+  parent_workspace_id?: string | null;
+  runtime_action?: GatewayWorkspaceDTO["runtime_action"];
+  config_reload?: GatewayConfigReloadStatus;
+  connection_error?: string | null;
+};
+export type GatewayUserLease = Required<GatewayUserLeaseDTO>;
+export type GatewayUser = Omit<Required<GatewayUserDTO>, "lease"> & {
+  lease: GatewayUserLease;
+};
+export type GatewayUserList = Omit<Required<GatewayUserListDTO>, "items"> & {
+  items: GatewayUser[];
+};
+export type GatewayUserAccess = Required<GatewayUserAccessDTO>;
+export type GatewayUserViewState = DeepRequired<GatewayUserViewStateDTO>;
+export type GatewayConfigReloadStatus = Omit<
+  Required<GatewayConfigReloadStatusDTO>,
+  "healthy" | "revision" | "reason" | "last_error" | "error"
+> & {
   healthy?: boolean | null;
   revision?: string | null;
-  restart_required: boolean;
-  reason?: "invalid_config" | "restart_required" | "apply_failed" | null;
-  changed_sections: string[];
+  reason?: GatewayConfigReloadStatusDTO["reason"];
   last_error?: string | null;
   error?: string | null;
-}
-
-export interface GatewayRemoteConnectionSummary {
-  gateway_connection_id: string;
-  remote_workspace_id: string;
-  gateway_id: string;
-  name: string;
-  host: string;
-  port: number;
-  username: string;
-  ssh_config_host?: string | null;
-  remote_gateway_port: number;
-}
-
-export interface GatewayServiceStatus {
-  status: "ready" | "offline" | "unavailable";
-  health_path: string;
-  local_url?: string | null;
-  local_port?: number | null;
-  remote_host?: string | null;
-  remote_port?: number | null;
-  error?: string | null;
-}
-
-export interface GatewayWorkspaceList {
-  active_workspace_id: string | null;
+};
+export type GatewayConfigSource = GatewayConfigSourceDTO;
+export type GatewayConfigSources = GatewayConfigSourcesDTO;
+export type GatewayRemoteConnectionSummary = GatewayRemoteConnectionSummaryDTO;
+export type GatewayServiceStatus = GatewayServiceStatusDTO;
+export type GatewayWorkspaceList = Omit<
+  Required<GatewayWorkspaceListDTO>,
+  "items"
+> & {
   items: GatewayWorkspace[];
-}
+};
 
-export interface GatewayResourceScopeError {
-  scope_key: string;
-  label: string;
-  message: string;
-}
-
-export interface GatewayResourceItem {
-  gateway_connection_id: string | null;
-  gateway_name: string;
-  workspace_id: string;
-  workspace_name: string;
-  connection_kind: "local" | "remote_gateway";
-  session_id: string;
-  session_title: string;
+export type GatewayResourceScopeError = GatewayResourceScopeErrorDTO;
+export type GatewayResourceItem = Omit<GatewayResourceDTO, "resource"> & {
   resource: SessionResource;
-}
-
-export interface GatewayResourceList {
+};
+export type GatewayResourceList = Omit<GatewayResourceListDTO, "items" | "errors"> & {
   items: GatewayResourceItem[];
   errors: GatewayResourceScopeError[];
-}
+};
+export type GatewayDiagnosticLog = DeepRequired<GatewayDiagnosticLogDTO>;
+export type GatewayDiagnosticWorkspace = DeepRequired<GatewayDiagnosticWorkspaceDTO>;
+export type GatewayDiagnostics = DeepRequired<GatewayDiagnosticsDTO>;
 
-export interface GatewayDiagnosticLog {
-  log_id: string;
-  source: "gateway" | "workspace";
-  workspace_id: string | null;
-  workspace_name: string | null;
-  service: string;
-  label: string;
-  status: "available" | "empty" | "unavailable";
-  tail: string;
-  truncated: boolean;
-  line_count: number;
-  size_bytes: number;
-  updated_at: string | null;
-  error: string | null;
-}
+export type GatewayPortForwardProtocol = PortForwardDTO["protocol"];
+export type GatewayPortForwardStatus = PortForwardDTO["status"];
+export type GatewayPortForward = PortForwardDTO;
+export type GatewayPortForwardList = PortForwardListDTO;
+export type CreateGatewayPortForwardRequest = import("./gen/gateway").CreatePortForwardRequest;
+export type ChangeGatewayPortForwardLocalPortRequest =
+  import("./gen/gateway").ChangePortForwardLocalPortRequest;
+export type ChangeGatewayPortForwardLabelRequest =
+  import("./gen/gateway").ChangePortForwardLabelRequest;
 
-export interface GatewayDiagnosticWorkspace {
-  workspace_id: string;
-  name: string;
-  root_path: string;
-  connection_kind: "local" | "remote_gateway";
-  status: "ready" | "offline";
-  managed: boolean;
-  system_default: boolean;
-  connection_error: string | null;
-}
-
-export interface GatewayDiagnostics {
-  gateway_id: string;
-  gateway_name: string;
-  gateway_connection_id: string | null;
-  connection_kind: "local" | "remote_gateway";
-  status: "ready" | "degraded" | "offline";
-  checked_at: string;
-  selected_workspace_id: string | null;
-  selected_log_id: string | null;
-  workspaces: GatewayDiagnosticWorkspace[];
-  logs: GatewayDiagnosticLog[];
-}
-
-export type GatewayPortForwardProtocol = "http" | "https" | "tcp";
-
-export type GatewayPortForwardStatus =
-  | "starting"
-  | "active"
-  | "error"
-  | "stopped";
-
-export interface GatewayPortForward {
-  forward_id: string;
-  workspace_id: string;
-  connection_id: string;
-  remote_host: string;
-  remote_port: number;
-  local_host: string;
-  local_port: number;
-  protocol: GatewayPortForwardProtocol;
-  label: string | null;
-  status: GatewayPortForwardStatus;
-  error: string | null;
-  local_url: string | null;
-}
-
-export interface GatewayPortForwardList {
-  items: GatewayPortForward[];
-}
-
-export interface CreateGatewayPortForwardRequest {
-  remote_port: number;
-  local_port?: number | null;
-  protocol: GatewayPortForwardProtocol;
-  label?: string | null;
-}
-
-export interface ChangeGatewayPortForwardLocalPortRequest {
-  local_port: number;
-}
-
-export interface ChangeGatewayPortForwardLabelRequest {
-  label: string | null;
-}
-
-export interface GatewayManagedWorkspace {
-  workspace_id: string;
-  name: string;
-  root_path: string;
-  status: "ready" | "offline";
-  removable: boolean;
-  system_default: boolean;
-}
-
-export interface GatewayManagedWorkspaceList {
+export type GatewayManagedWorkspace = Required<GatewayManagedWorkspaceDTO>;
+export type GatewayManagedWorkspaceList = Omit<
+  Required<GatewayManagedWorkspaceListDTO>,
+  "gateway_connection_id" | "items"
+> & {
   gateway_connection_id?: string | null;
-  gateway_id: string;
-  gateway_name: string;
-  connection_kind: "local" | "remote_gateway";
   items: GatewayManagedWorkspace[];
-}
-
-export interface AddManagedGatewayWorkspaceRequest {
-  gateway_connection_id?: string | null;
-  root_path: string;
-  name?: string | null;
-  create_directory?: boolean;
-}
-
-export interface GatewayInboundPeer {
-  connection_id: string;
-  peer_gateway_id: string;
-  credential_expires_at: string;
-}
-
-export interface GatewayInboundWorkspace {
-  workspace_id: string;
-  name: string;
-  root_path: string;
-  status: "ready" | "offline";
-  managed: boolean;
-  system_default: boolean;
-}
-
-export interface GatewayInboundAccessList {
-  gateway_id: string;
+};
+export type AddManagedGatewayWorkspaceRequest =
+  GeneratedCreateGatewayManagedWorkspaceRequest;
+export type GatewayInboundPeer = Required<GatewayInboundPeerDTO>;
+export type GatewayInboundWorkspace = Required<GatewayInboundWorkspaceDTO>;
+export type GatewayInboundAccessList = Omit<
+  Required<GatewayInboundAccessListDTO>,
+  "peers" | "items"
+> & {
   peers: GatewayInboundPeer[];
   items: GatewayInboundWorkspace[];
-}
+};
 
 export interface GatewayDeviceConnection {
   connection_id: string;
@@ -468,42 +485,23 @@ export interface CreatedGatewayDeviceConnection {
   connection_info: GatewayDeviceConnectionInfo;
 }
 
-export interface GatewayRuntimeBlocker {
-  kind: "job" | "tool" | "background_task";
-  resource_id: string;
-  session_id: string;
-  status: string;
-  detail?: string | null;
-}
-
-export interface GatewayRuntimeRestartResult {
-  workspace_id: string;
-  status: "restarted" | "blocked";
-  forced: boolean;
+export type GatewayRuntimeBlocker = Required<GatewayRuntimeBlockerDTO>;
+export type GatewayRuntimeRestartResult = Omit<
+  Required<GatewayRuntimeRestartResultDTO>,
+  "blockers" | "workspaces"
+> & {
   blockers: GatewayRuntimeBlocker[];
   workspaces: GatewayWorkspaceList;
-}
-
-export interface GatewayRuntimeStateResult {
-  workspace_id: string;
-  status: "started" | "stopped" | "blocked";
+};
+export type GatewayRuntimeStateResult = Omit<
+  Required<GatewayRuntimeStateResultDTO>,
+  "blockers" | "workspaces"
+> & {
   blockers: GatewayRuntimeBlocker[];
   workspaces: GatewayWorkspaceList;
-}
-
-export interface GatewayHealth {
-  status: "ok";
-  active_workspace_id: string | null;
-  process_id: number;
-  development_restart_available: boolean;
-}
-
-export interface DevelopmentRuntimeRestartResult {
-  status: "scheduled";
-  previous_process_id: number;
-  helper_process_id: number;
-  delay_ms: number;
-}
+};
+export type GatewayHealth = GatewayHealthDTO;
+export type DevelopmentRuntimeRestartResult = DevelopmentRuntimeRestartDTO;
 
 interface AddSshGatewayWorkspaceRequestBase {
   name?: string | null;
@@ -533,179 +531,101 @@ export type AddSshGatewayWorkspaceRequest =
   | AddSshGatewayWorkspaceFromConfigRequest
   | AddSshGatewayWorkspaceManualRequest;
 
-export interface UpdateGatewayWorkspaceRequest {
-  name?: string;
-  parent_workspace_id?: string | null;
-}
+export type UpdateGatewayWorkspaceRequest = GeneratedUpdateGatewayWorkspaceRequest;
+export type ReorderGatewayWorkspacesRequest = GeneratedReorderGatewayWorkspacesRequest;
 
-export interface ReorderGatewayWorkspacesRequest {
-  workspace_ids: string[];
-}
-
-export interface WebUiMainAreaRatios {
-  agent_sessions: number;
-  chat: number;
-  workspace_preview: number;
-  auxiliary: number;
-}
+export type WebUiMainAreaRatios = Required<WebUIMainAreaRatiosDTO>;
 
 export type WebUiBottomPanelTab = "terminal" | "output" | "ports" | "automation";
 
 /** 仅用于读取旧版本设置；新的底部面板状态统一使用 output。 */
 export type LegacyWebUiBottomPanelTab = WebUiBottomPanelTab | "gateway";
 
-export interface WebUiWorkspaceBottomPanelSettings {
-  visible?: boolean | null;
-  height?: number | null;
-  tab?: LegacyWebUiBottomPanelTab | null;
-  terminal_id?: string | null;
-}
+export type WebUiWorkspaceBottomPanelSettings =
+  WebUIWorkspaceBottomPanelSettingsDTO;
 
-export interface WebUiLayoutSettings {
-  workbench_view?: "sessions" | "gateway" | null;
-  agent_sessions_panel_open?: boolean | null;
-  chat_visible?: boolean | null;
-  auxiliary_visible?: boolean | null;
-  panel_visible?: boolean | null;
-  /** automation 仅为旧布局迁移保留，新设置写入底部面板。 */
-  auxiliary_tab?: "changes" | "files" | "automation" | "resources" | "debug" | null;
-  /** automation 仅为旧布局迁移保留，新设置写入底部面板。 */
-  auxiliary_tab_order?: Array<"changes" | "files" | "automation" | "resources" | "debug"> | null;
+export type WebUiLayoutSettings = Omit<
+  WebUILayoutSettingsDTO,
+  "auxiliary_tab_order" | "main_area_ratios" | "workspace_preview_file_paths"
+> & {
   main_area_ratios?: WebUiMainAreaRatios | null;
-  bottom_panel_by_workspace?: Record<string, WebUiWorkspaceBottomPanelSettings> | null;
-  workspace_preview_visible?: boolean | null;
-  workspace_preview_maximized?: boolean | null;
+  auxiliary_tab_order?: Array<
+    "changes" | "files" | "automation" | "resources" | "debug"
+  > | null;
   workspace_preview_file_paths?: string[] | null;
-  workspace_preview_active_file_path?: string | null;
-  customizations_collapsed?: boolean | null;
-  customizations_height?: number | null;
-  panel_height?: number | null;
-  content_view?:
-    | "default"
-    | "events"
-    | "requests"
-    | "changes"
-    | "resources"
-    | "agent"
-    | null;
-  pending_message_default_action?: "steering" | "queued" | null;
-}
+};
 
-export interface WebUiSessionSidebarSettings {
-  filter_mode: "all" | "current" | "attachments" | "agent" | "named";
-  sort_mode: "created" | "updated";
-  grouping_mode: "workspace" | "time";
-  workspace_group_capped: boolean;
-  collapsed_workspace_ids: string[];
-  collapsed_session_ids: string[];
-  expanded_root_tree_ids: string[];
-  collapsed_section_ids: string[];
-}
+export type WebUiSessionSidebarSettings =
+  Required<WebUISessionSidebarSettingsDTO>;
 
-export interface WebUiWorkspaceFileTreeSettings {
-  expanded_paths_by_workspace: Record<string, string[]>;
-}
+export type WebUiWorkspaceFileTreeSettings =
+  Required<WebUIWorkspaceFileTreeSettingsDTO>;
 
-export interface WebUiGatewayConsoleSettings {
-  view: "routing" | "managed";
-}
+export type WebUiGatewayConsoleSettings = WebUIGatewayConsoleSettingsDTO;
 
-export interface GatewayThemeBackground {
-  type: "remote" | "gateway_asset";
+export type GatewayThemeBackground = Omit<
+  Required<GatewayThemeBackgroundDTO>,
+  "url" | "asset_id"
+> & {
   url?: string | null;
   asset_id?: string | null;
-  position: string;
-  size: string;
-  repeat: "no-repeat" | "repeat" | "repeat-x" | "repeat-y" | "space" | "round";
-  appearance: "immersive" | "theme";
-  overlay: string;
-}
+};
 
-export interface ResolvedGatewayTheme {
-  id: string;
-  label: string;
-  color_scheme: "light" | "dark";
-  tokens: Record<`--bt-${string}`, string>;
-  background_image_url?: string | null;
-}
+export type ResolvedGatewayTheme = ResolvedGatewayThemeDTO;
 
-export interface GatewayThemeOption {
-  id: string;
-  label: string;
-  extends: "warm" | "green" | "blue";
-  source: "builtin" | "gateway_config";
-  preview_tokens: Record<string, string>;
-  background_image_url?: string | null;
-}
+export type GatewayThemeOption = GatewayThemeOptionDTO;
 
-export interface GatewayThemeCatalog {
-  current_theme_id: string;
-  items: GatewayThemeOption[];
-  current_theme: ResolvedGatewayTheme;
-}
+export type GatewayThemeCatalog = GatewayThemeCatalogDTO;
 
-export interface GatewayUiAsset {
-  asset_id: string;
-  original_filename: string;
-  content_type: string;
-  size: number;
-  sha256: string;
-  imported_at: string;
-  url: string;
-  referenced_theme_ids: string[];
-}
+export type GatewayUiAsset = Required<GatewayUIAssetDTO>;
+export type GatewayUiAssetList = Omit<
+  Required<GatewayUIAssetListDTO>,
+  "items"
+> & {
+  items: GatewayUiAsset[];
+};
 
-export interface WebUiThemeSettings {
-  theme_id: string;
-  background?: GatewayThemeBackground | null;
-  resolved_theme?: ResolvedGatewayTheme | null;
-}
+export type WebUiThemeSettings = Required<WebUIThemeSettingsDTO>;
 
-export interface WebUiSettings {
+export type WebUiSettings = Omit<
+  Required<WebUISettingsDTO>,
+  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme"
+> & {
   layout: WebUiLayoutSettings;
   session_sidebar: WebUiSessionSidebarSettings;
   workspace_file_tree: WebUiWorkspaceFileTreeSettings;
   gateway_console: WebUiGatewayConsoleSettings;
   theme: WebUiThemeSettings;
-  recent_local_workspace_paths: string[];
-}
+};
 
-export interface WebUiSettingsUpdate {
+export type WebUiSettingsUpdate = Omit<
+  WebUISettingsUpdateDTO,
+  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme"
+> & {
   layout?: WebUiLayoutSettings | null;
   session_sidebar?: Partial<WebUiSessionSidebarSettings> | null;
   workspace_file_tree?: Partial<WebUiWorkspaceFileTreeSettings> | null;
   gateway_console?: Partial<WebUiGatewayConsoleSettings> | null;
   theme?: Partial<WebUiThemeSettings> | null;
-  recent_local_workspace_paths?: string[] | null;
-}
+};
 
-export interface GatewayDirectoryEntry {
-  name: string;
-  path: string;
-}
+export type GatewayDirectoryEntry = Required<GatewayDirectoryEntryDTO>;
 
-export interface GatewayDirectoryList {
-  path: string;
+export type GatewayDirectoryList = Omit<
+  Required<GatewayDirectoryListDTO>,
+  "parent_path"
+> & {
   parent_path?: string | null;
-  home_path: string;
-  entries: GatewayDirectoryEntry[];
-  truncated: boolean;
-  limit: number;
-}
+};
 
-export interface WorkspaceNavigationNode {
-  node_id: string;
-  kind: "workspace_folder" | "workspace_ref";
-  name: string;
-  parent_node_id?: string | null;
-  workspace_id?: string | null;
-  position: number;
-}
+export type WorkspaceNavigationNode = DeepRequired<WorkspaceNavigationNodeDTO>;
 
-export interface WorkspaceNavigationTree {
-  revision: string;
+export type WorkspaceNavigationTree = Omit<
+  DeepRequired<WorkspaceNavigationTreeDTO>,
+  "nodes"
+> & {
   nodes: WorkspaceNavigationNode[];
-}
+};
 
 export interface SessionCatalogNode {
   node_id: string;
@@ -728,121 +648,70 @@ export interface SessionCatalogPage {
   total: number;
 }
 
-export interface GatewaySessionSearchMatch {
-  workspace_id: string;
-  workspace_name: string;
-  node_id: string;
-  node_kind: "workspace_folder" | "workspace" | "folder" | "session";
-  name: string;
-  session_id?: string | null;
-  relative_path: string;
-  storage_relative_path?: string | null;
-  breadcrumb_names: string[];
-  breadcrumb_node_ids: string[];
-}
+export type GatewaySessionSearchMatch = DeepRequired<GatewaySessionSearchMatchDTO>;
 
-export interface GatewaySessionSearchWorkspaceStatus {
-  workspace_id: string;
-  workspace_name: string;
-  status: "available" | "stale" | "unavailable";
-  error?: string | null;
-}
+export type GatewaySessionSearchWorkspaceStatus =
+  DeepRequired<GatewaySessionSearchWorkspaceStatusDTO>;
 
-export interface GatewaySessionSearchResults {
+export type GatewaySessionSearchResults = Omit<
+  DeepRequired<GatewaySessionSearchResultsDTO>,
+  "items" | "workspaces"
+> & {
   items: GatewaySessionSearchMatch[];
   workspaces: GatewaySessionSearchWorkspaceStatus[];
-  total: number;
-}
+};
 
-export type GeneratorSessionStrategyMode =
-  | "new_per_run"
-  | "continue_existing"
-  | "fork_new_and_report_back";
+export type GeneratorSessionStrategyMode = NonNullable<
+  GeneratorSessionStrategyDTO["mode"]
+>;
 
-export interface SessionGeneratorDefinition {
-  generator_id: string;
+export type SessionGeneratorDefinition = Omit<
+  GeneratorDefinitionDTO,
+  "name" | "enabled" | "status" | "revision" | "trigger" | "placement" | "session_strategy" | "naming" | "config"
+> & {
   name: string;
   enabled: boolean;
-  status: "ready" | "paused" | "blocked";
-  status_reason?: string | null;
+  status: NonNullable<GeneratorDefinitionDTO["status"]>;
   revision: number;
-  trigger: {
-    type: "manual" | "interval" | "cron";
-    expression?: string | null;
-    interval_seconds?: number | null;
-    timezone: string;
-  };
-  placement: {
-    kind: "workspace" | "session" | "session_folder";
-    workspace_id: string;
-    session_id?: string | null;
-    folder_id?: string | null;
-  };
-  execution_workspace_id: string;
-  session_strategy: {
+  trigger: NonNullable<GeneratorDefinitionDTO["trigger"]>;
+  placement: NonNullable<GeneratorDefinitionDTO["placement"]>;
+  session_strategy: Omit<
+    NonNullable<GeneratorDefinitionDTO["session_strategy"]>,
+    "mode"
+  > & {
     mode: GeneratorSessionStrategyMode;
-    target?: { workspace_id: string; session_id: string } | null;
-    concurrency: "queue";
-    report_back: "none" | "link" | "summary" | "summary_and_link" | "full" | "continue_agent";
   };
-  naming: { title_template: string; path_template: string[] };
+  naming: Required<NonNullable<GeneratorDefinitionDTO["naming"]>>;
   config: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-}
+};
 
-export interface SessionGeneratorList {
-  revision: string;
+export type SessionGeneratorList = Omit<GeneratorDefinitionListDTO, "items"> & {
   items: SessionGeneratorDefinition[];
-}
+};
 
-export interface GenerationRun {
-  run_id: string;
-  generator_id: string;
-  idempotency_key: string;
-  status: "planned" | "dispatching" | "running" | "reporting" | "completed" | "partial" | "failed" | "cancelled" | "skipped";
-  outputs: Array<{
-    kind: "session";
-    workspace_id: string;
-    session_id: string;
-    title?: string | null;
-    navigation_path: string[];
-    storage_relative_path?: string | null;
-  }>;
-  execution_workspace_id?: string | null;
-  message_id?: string | null;
-  job_id?: string | null;
-  report_back_job_id?: string | null;
-  error?: string | null;
-}
+type GenerationOutput = Omit<GenerationOutputDTO, "kind" | "navigation_path"> & {
+  kind: "session";
+  navigation_path: string[];
+};
 
-export interface GenerationRunList {
+export type GenerationRun = Omit<GenerationRunDTO, "outputs"> & {
+  outputs: GenerationOutput[];
+};
+
+export type GenerationRunList = Omit<GenerationRunListDTO, "items"> & {
   items: GenerationRun[];
-}
+};
 
-export interface GeneratorPlacementPreview {
-  preview_kind: "logical_physical_path_template";
-  title: string;
-  path_segments: string[];
-  session_path_segment: string;
-  relative_path: string;
-}
+export type GeneratorPlacementPreview = Required<GeneratorPlacementPreviewDTO>;
 
-export interface SshConnectionOption {
-  connection_id: string;
-  source: "boxteam" | "ssh_config";
-  label: string;
-  host: string;
-  port: number;
-  username: string;
-  workspace_id?: string | null;
-  ssh_config_host?: string | null;
-  initial_path?: string | null;
-}
+export type SshConnectionOption = SshConnectionOptionDTO;
 
-export interface SshConnectionOptionList {
+export type SshConnectionOptionList = Omit<
+  Required<SshConnectionOptionListDTO>,
+  "items"
+> & {
   items: SshConnectionOption[];
-}
+};
 
 export type SessionResourceKind = SessionResourceDTO["kind"];
 export type SessionResourceAction = NonNullable<SessionResourceDTO["available_actions"]>[number];

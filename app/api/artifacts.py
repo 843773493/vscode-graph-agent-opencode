@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_artifact_service, verify_local_token
-from app.schemas.public_v2.artifact import ArtifactDTO
 from app.services.infrastructure.artifact_service import ArtifactService
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])

@@ -13,7 +13,7 @@ from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
-from app.gateway.schemas import CreatePortForwardRequest
+from app.schemas.gateway import CreatePortForwardRequest
 from app.gateway.server.port_forwarding import get_port_forward_manager
 
 

@@ -26,18 +26,23 @@ import {
   startManagedGatewayWorkspaceBackend as apiStartManagedGatewayWorkspaceBackend,
   stopManagedGatewayWorkspaceBackend as apiStopManagedGatewayWorkspaceBackend,
 } from "./gatewayApi";
+import {
+  getGatewayUserViewState,
+  putGatewayUserViewState,
+} from "./gatewayApi";
+import type { TurnHistoryInclude } from "./api/sessionTurnHistory";
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
   GatewayRuntimeRestartResult,
   AttachmentRef,
   MessageReplayRequest,
-  PendingRequestKind,
-  PendingRequestOrderItem,
+  DeliveryPolicy,
   SessionResourceAction,
   SessionResourceKind,
   SessionFileChange,
   Session,
+  SessionCompactResult,
   SessionGoal,
   SessionGoalUpdateRequest,
   WebUiSettings,
@@ -55,9 +60,13 @@ import { useContentViewEffects } from "./hooks/useContentViewEffects";
 import { useSessionTurnHistory } from "./hooks/sessionTurnHistory/useSessionTurnHistory";
 import { useSessionEventStream } from "./hooks/useSessionEventStream";
 import { useBackgroundSessionActivity } from "./hooks/useBackgroundSessionActivity";
+import { useWorkspaceSessionActivity } from "./hooks/useWorkspaceSessionActivity";
 import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
 import { useSessionActions } from "./hooks/useSessionActions";
-import { useWorkspaceBootstrap } from "./hooks/useWorkspaceBootstrap";
+import {
+  canAcceptUserViewStateMutation,
+  useWorkspaceBootstrap,
+} from "./hooks/useWorkspaceBootstrap";
 import { useWorkspaceInformationClipboard } from "./hooks/useWorkspaceInformationClipboard";
 import { useGatewayWorkspaceHierarchy } from "./hooks/useGatewayWorkspaceHierarchy";
 import { useUiSettingsController } from "./hooks/useUiSettingsController";
@@ -80,6 +89,7 @@ import {
   createLatestSerialTaskQueue,
   createSerialTaskQueue,
 } from "./hooks/serialTaskQueue";
+import type { SessionTurnTimeline } from "./state/session/turnTimeline";
 
 export { getConversationsForSession } from "./state/conversations";
 export { FRONTEND_EVENT_QUEUE_LIMIT } from "./state/traceEvents";
@@ -97,6 +107,8 @@ const INITIAL_STATE: AppState = {
   sessionHistoryReloadNonce: 0,
   workspaceSwitching: false,
   gatewayError: null,
+  gatewayUserAccess: null,
+  gatewayUserViewStates: new Map(),
   uiSettings: CACHED_UI_SETTINGS,
   uiSettingsLoaded: false,
   workspaceRoot: null,
@@ -152,7 +164,7 @@ interface AppContextType {
   sendMessage: (
     content: string,
     attachments?: AttachmentRef[],
-    queue?: PendingRequestKind | null,
+    deliveryPolicy?: DeliveryPolicy,
   ) => Promise<void>;
   updatePendingRequest: (
     messageId: string,
@@ -161,12 +173,20 @@ interface AppContextType {
   ) => Promise<void>;
   removePendingRequest: (messageId: string) => Promise<void>;
   clearPendingRequests: () => Promise<void>;
-  reorderPendingRequests: (
-    requests: PendingRequestOrderItem[],
+  updatePendingRequestPolicy: (
+    messageId: string,
+    deliveryPolicy: DeliveryPolicy,
+    expectedSnapshotVersion?: number,
   ) => Promise<void>;
-  sendPendingRequestImmediately: (messageId: string) => Promise<void>;
+  loadAroundTurn: (anchorTurnId: string) => Promise<void>;
+  loadNewerMessages: () => Promise<void>;
   loadOlderMessages: () => Promise<void>;
-  loadTurnDetails: (turnIds: string[]) => Promise<void>;
+  loadTurnDetails: (
+    turnIds: string[],
+    requestIdentity?: string | null,
+    refreshAfterInFlight?: boolean,
+    include?: TurnHistoryInclude[],
+  ) => Promise<void>;
   loadAgentStateMessageRawContent: (
     sessionId: string,
     messageId: string,
@@ -181,7 +201,7 @@ interface AppContextType {
     content?: string,
     attachments?: AttachmentRef[],
   ) => Promise<void>;
-  compactSession: () => Promise<void>;
+  compactSession: () => Promise<SessionCompactResult>;
   refreshGoal: () => Promise<SessionGoal | null>;
   updateGoal: (
     payload: SessionGoalUpdateRequest,
@@ -210,7 +230,6 @@ interface AppContextType {
     workspaceId: string,
     sourceSessionId: string,
   ) => Promise<void>;
-  startNewSessionDraft: (workspaceId?: string | null) => void;
   renameSession: (
     sessionId: string,
     title: string,
@@ -276,6 +295,12 @@ interface AppContextType {
   updateUiSettings: (
     input: WebUiSettingsUpdate | ((current: WebUiSettings) => WebUiSettingsUpdate),
   ) => Promise<void>;
+  saveSessionViewState: (payload: {
+    turn_anchor: string | null;
+    scroll_offset: number;
+    follow_latest: boolean;
+    tool_details_expanded?: boolean;
+  }) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -295,9 +320,7 @@ type ComposerContextActions = Pick<
   | "setWorkspaceDefaultProvider"
   | "switchContentView"
   | "createSession"
-  | "startNewSessionDraft"
   | "renameSession"
-  | "activateGatewayWorkspace"
   | "updateUiSettings"
 >;
 
@@ -341,6 +364,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     currentSessionId && currentSessionGatewayWorkspaceId
       ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSessionId)
       : currentSessionId;
+  const getCurrentTurnTimeline = useCallback((): SessionTurnTimeline | null => {
+    const latest = latestStateRef.current;
+    if (!currentSessionCacheKey) return null;
+    return latest.turnTimelinesBySession.get(currentSessionCacheKey) ?? null;
+  }, [currentSessionCacheKey]);
   const currentActiveJobId = currentSessionCacheKey
     ? state.activeJobIdsBySession.get(currentSessionCacheKey) ?? null
     : null;
@@ -383,6 +411,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState,
   });
   const {
+    loadAroundTurn,
+    loadNewerTurns: loadNewerMessages,
     loadOlderTurns: loadOlderMessages,
     loadTurnDetails,
     refreshTurnHistory,
@@ -391,6 +421,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     sessionId: currentSessionId,
     workspaceId: currentSessionGatewayWorkspaceId,
     sessionCacheKey: currentSessionCacheKey,
+    getCurrentTimeline: getCurrentTurnTimeline,
     reloadNonce: state.sessionHistoryReloadNonce,
     setState,
   });
@@ -414,6 +445,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useBackgroundSessionActivity({
     apiPort: state.apiPort,
     activeJobIdsBySession: state.activeJobIdsBySession,
+    currentSessionCacheKey,
+    setState,
+  });
+  useWorkspaceSessionActivity({
+    apiPort: state.apiPort,
+    workspaceId: state.activeGatewayWorkspaceId,
     currentSessionCacheKey,
     setState,
   });
@@ -546,13 +583,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     updatePendingRequest,
     removePendingRequest,
     clearPendingRequests,
-    reorderPendingRequests,
-    sendPendingRequestImmediately,
+    updatePendingRequestPolicy,
     setSessionParent,
-    selectSession,
-    selectWorkspaceSession,
+    selectSession: selectSessionCallback,
+    selectWorkspaceSession: selectWorkspaceSessionCallback,
     sendMessage,
-    startNewSessionDraft,
     switchAgent,
     switchModel,
     setWorkspaceDefaultAgent,
@@ -570,6 +605,137 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     invalidateAgentState,
     refreshAgentStateSnapshot,
   });
+
+  const persistSessionViewState = useCallback(
+    async (workspaceId: string | null, sessionId: string) => {
+      const latest = latestStateRef.current;
+      if (!workspaceId || latest.gatewayUserAccess?.kind !== "user") return;
+      const requestLeaseGeneration = latest.gatewayUserAccess.lease_generation;
+      try {
+        const existing = await getGatewayUserViewState(
+          latest.apiPort ?? DEFAULT_BACKEND_PORT,
+          workspaceId,
+          sessionId,
+        );
+        const updated = await putGatewayUserViewState(
+          latest.apiPort ?? DEFAULT_BACKEND_PORT,
+          workspaceId,
+          sessionId,
+          {
+            turn_anchor: existing?.turn_anchor ?? null,
+            scroll_offset: existing?.scroll_offset ?? 0,
+            follow_latest: existing?.follow_latest ?? true,
+            projection_version: existing?.projection_version ?? 1,
+            tool_details_expanded: existing?.tool_details_expanded ?? false,
+          },
+        );
+        setState((previous) => {
+          if (
+            !canAcceptUserViewStateMutation({
+              currentUserId: previous.gatewayUserAccess?.user_id,
+              responseUserId: updated.user_id,
+              currentLeaseGeneration:
+                previous.gatewayUserAccess?.lease_generation,
+              requestLeaseGeneration,
+            })
+          ) {
+            return previous;
+          }
+          const next = cloneMaps(previous);
+          next.gatewayUserViewStates.set(
+            sessionScopeKey(workspaceId, sessionId),
+            updated,
+          );
+          if (
+            previous.currentSession?.session_id === sessionId
+            && previous.currentSessionWorkspaceId === workspaceId
+          ) {
+            next.expandDetails = updated.tool_details_expanded;
+          }
+          return next;
+        });
+      } catch (error: unknown) {
+        setState((previous) => ({
+          ...previous,
+          ...(previous.gatewayUserAccess?.lease_generation === requestLeaseGeneration
+            ? {
+                status: `保存用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`,
+              }
+            : {}),
+        }));
+      }
+    },
+    [],
+  );
+
+  const saveSessionViewState = useCallback((payload: {
+    turn_anchor: string | null;
+    scroll_offset: number;
+    follow_latest: boolean;
+    tool_details_expanded?: boolean;
+  }) => {
+    const latest = latestStateRef.current;
+    const workspaceId = latest.currentSessionWorkspaceId ?? latest.activeGatewayWorkspaceId;
+    const sessionId = latest.currentSession?.session_id;
+    if (!workspaceId || !sessionId || latest.gatewayUserAccess?.kind !== "user") return;
+    const requestLeaseGeneration = latest.gatewayUserAccess.lease_generation;
+    const cacheKey = sessionScopeKey(workspaceId, sessionId);
+    const existing = latest.gatewayUserViewStates.get(cacheKey);
+    void putGatewayUserViewState(
+      latest.apiPort ?? DEFAULT_BACKEND_PORT,
+      workspaceId,
+      sessionId,
+      {
+        turn_anchor: payload.turn_anchor,
+        scroll_offset: payload.scroll_offset,
+        follow_latest: payload.follow_latest,
+        projection_version: existing?.projection_version ?? 1,
+        tool_details_expanded: payload.tool_details_expanded
+          ?? existing?.tool_details_expanded
+          ?? latest.expandDetails,
+      },
+    ).then((updated) => {
+      setState((previous) => {
+        if (
+          !canAcceptUserViewStateMutation({
+            currentUserId: previous.gatewayUserAccess?.user_id,
+            responseUserId: updated.user_id,
+            currentLeaseGeneration:
+              previous.gatewayUserAccess?.lease_generation,
+            requestLeaseGeneration,
+          })
+        ) {
+          return previous;
+        }
+        const next = cloneMaps(previous);
+        next.gatewayUserViewStates.set(cacheKey, updated);
+        return next;
+      });
+    }).catch((error: unknown) => {
+      setState((previous) => ({
+        ...previous,
+        ...(previous.gatewayUserAccess?.lease_generation === requestLeaseGeneration
+          ? {
+              status: `保存用户视图位置失败: ${error instanceof Error ? error.message : String(error)}`,
+            }
+          : {}),
+      }));
+    });
+  }, []);
+
+  const selectSession = useCallback((sessionId: string) => {
+    selectSessionCallback(sessionId);
+    const latest = latestStateRef.current;
+    void persistSessionViewState(
+      latest.currentSessionWorkspaceId ?? latest.activeGatewayWorkspaceId,
+      sessionId,
+    );
+  }, [persistSessionViewState, selectSessionCallback]);
+
+  const selectWorkspaceSession = useCallback((workspaceId: string, sessionId: string) => {
+    selectWorkspaceSessionCallback(workspaceId, sessionId);
+    void persistSessionViewState(workspaceId, sessionId);
+  }, [persistSessionViewState, selectWorkspaceSessionCallback]);
 
   const toggleAgentSessionsPanel = useCallback(() => {
     let nextOpen: boolean | null = null;
@@ -590,7 +756,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const toggleExpandDetails = useCallback((expand: boolean) => {
     setState((prev) => ({ ...prev, expandDetails: expand }));
-  }, []);
+    const latest = latestStateRef.current;
+    const workspaceId = latest.currentSessionWorkspaceId ?? latest.activeGatewayWorkspaceId;
+    const sessionId = latest.currentSession?.session_id;
+    const existing = workspaceId && sessionId
+      ? latest.gatewayUserViewStates.get(sessionScopeKey(workspaceId, sessionId))
+      : null;
+    saveSessionViewState({
+      turn_anchor: existing?.turn_anchor ?? null,
+      scroll_offset: existing?.scroll_offset ?? 0,
+      follow_latest: existing?.follow_latest ?? true,
+      tool_details_expanded: expand,
+    });
+  }, [saveSessionViewState]);
 
   const { invalidateWorkspaceRefreshes, refreshSessions } = useWorkspaceBootstrap({
     apiPort: state.apiPort,
@@ -1233,8 +1411,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updatePendingRequest,
       removePendingRequest,
       clearPendingRequests,
-      reorderPendingRequests,
-      sendPendingRequestImmediately,
+      updatePendingRequestPolicy,
+      loadAroundTurn,
+      loadNewerMessages,
       loadOlderMessages,
       loadTurnDetails,
       loadAgentStateMessageRawContent,
@@ -1255,7 +1434,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       openWorkspaceSession,
       createSession,
       forkSessionContext,
-      startNewSessionDraft,
       renameSession,
       setSessionParent,
       deleteSession,
@@ -1284,6 +1462,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       copySessionInformation,
       copyWorkspaceInformation,
       updateUiSettings,
+      saveSessionViewState,
     }),
     [
       state,
@@ -1293,8 +1472,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updatePendingRequest,
       removePendingRequest,
       clearPendingRequests,
-      reorderPendingRequests,
-      sendPendingRequestImmediately,
+      updatePendingRequestPolicy,
+      loadAroundTurn,
+      loadNewerMessages,
       loadOlderMessages,
       loadTurnDetails,
       loadAgentStateMessageRawContent,
@@ -1315,7 +1495,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       openWorkspaceSession,
       createSession,
       forkSessionContext,
-      startNewSessionDraft,
       renameSession,
       setSessionParent,
       deleteSession,
@@ -1345,6 +1524,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       copySessionInformation,
       copyWorkspaceInformation,
       updateUiSettings,
+      saveSessionViewState,
     ],
   );
 
@@ -1371,12 +1551,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setWorkspaceDefaultProvider,
     switchContentView,
     createSession,
-    startNewSessionDraft,
     renameSession,
-    activateGatewayWorkspace,
     updateUiSettings,
   }), [
-    activateGatewayWorkspace,
     clearGoal,
     compactSession,
     composerState,
@@ -1389,7 +1566,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setStatus,
     setWorkspaceDefaultAgent,
     setWorkspaceDefaultProvider,
-    startNewSessionDraft,
     switchAgent,
     switchContentView,
     switchModel,

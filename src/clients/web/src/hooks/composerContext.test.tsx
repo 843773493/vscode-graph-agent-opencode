@@ -12,7 +12,10 @@ import {
   selectComposerState,
   type ComposerStateSnapshot,
 } from "../state/composerState";
-import { writeComposerDraft } from "../state/composerDrafts/storage";
+import {
+  composerDraftScopeKey,
+  writeComposerDraft,
+} from "../state/composerDrafts/storage";
 import type { AppState } from "../types/frontend";
 import { createSessionTurnTimeline } from "../state/session/turnTimeline";
 
@@ -67,7 +70,20 @@ const composerActions: Omit<ComposerContextType, "state"> = {
   getLatestAssistantContent: () => null,
   setStatus: () => undefined,
   sendMessage: async () => undefined,
-  compactSession: async () => undefined,
+  compactSession: async () => ({
+    session_id: "session",
+    status: "scheduled",
+    message: "测试压缩",
+    before_message_count: 0,
+    effective_message_count_before: 0,
+    effective_message_count_after: 0,
+    summarized_message_count: 0,
+    retained_message_count: 0,
+    summary: null,
+    history_file_path: null,
+    strategy: null,
+    compacted_at: null,
+  }),
   refreshGoal: async () => null,
   updateGoal: async () => {
     throw new Error("测试不调用 updateGoal");
@@ -82,9 +98,7 @@ const composerActions: Omit<ComposerContextType, "state"> = {
   createSession: async () => {
     throw new Error("测试不调用 createSession");
   },
-  startNewSessionDraft: () => undefined,
   renameSession: async () => undefined,
-  activateGatewayWorkspace: async () => undefined,
   updateUiSettings: async () => undefined,
 };
 
@@ -204,5 +218,50 @@ describe("Composer React 状态边界", () => {
       props: {},
       children: ["草稿 B"],
     });
+  });
+
+  test("同一会话的不同普通用户不共享草稿", () => {
+    const storage = createMemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { localStorage: storage },
+    });
+    const userAKey = composerDraftScopeKey("workspace", "session", "user:user-a");
+    const userBKey = composerDraftScopeKey("workspace", "session", "user:user-b");
+    writeComposerDraft(userAKey, "用户 A 草稿");
+    writeComposerDraft(userBKey, "用户 B 草稿");
+
+    function DraftConsumer({ userScope }: { userScope: string }) {
+      const [draft] = useComposerDraft("workspace", "session", userScope);
+      return <span>{draft}</span>;
+    }
+
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(<DraftConsumer userScope="user:user-a" />);
+    });
+    expect(renderer.toJSON()).toEqual({
+      type: "span",
+      props: {},
+      children: ["用户 A 草稿"],
+    });
+    act(() => {
+      renderer.update(<DraftConsumer userScope="user:user-b" />);
+    });
+    expect(renderer.toJSON()).toEqual({
+      type: "span",
+      props: {},
+      children: ["用户 B 草稿"],
+    });
+    renderer.unmount();
+  });
+
+  test("游客不写入持久化草稿", () => {
+    const storage = createMemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { localStorage: storage },
+    });
+    expect(composerDraftScopeKey("workspace", "session", null)).toBeNull();
   });
 });

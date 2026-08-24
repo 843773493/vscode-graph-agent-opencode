@@ -70,6 +70,12 @@ class SessionInterruptService:
             JobControlRequest(action=ControlAction.cancel),
         )
 
+        await self._job_service.notify_boundary(
+            session_id,
+            "after_interrupt",
+            tool_result_available=False,
+        )
+
         if self._job_event_bus is not None:
             await self._job_event_bus.publish(
                 job_id=active_job.job_id,

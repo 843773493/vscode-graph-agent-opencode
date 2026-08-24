@@ -12,9 +12,11 @@ import {
   beginTurnBootstrap,
   createSessionTurnTimeline,
   decideTurnProjectionEpoch,
+  dropTurn,
   markTurnsLoading,
   turnIdsInvalidatedByEvents,
   upsertTurn,
+  upsertTurns,
   writeTurnTimelineCache,
 } from "../session/turnTimeline";
 
@@ -69,6 +71,32 @@ function detail(turnId: string, ordinal: number, revision = 1): TurnDetail {
   };
 }
 
+function projectedToolDetail(
+  turnId: string,
+  ordinal: number,
+  expanded: boolean,
+): TurnDetail {
+  return {
+    ...detail(turnId, ordinal),
+    items: [{
+      event_id: `${turnId}:tool_call`,
+      part_id: "call_1",
+      session_id: SESSION_ID,
+      job_id: turnId,
+      type: "tool_call_start",
+      phase: "tool",
+      title: "调用工具 read_fixture",
+      content: expanded ? "{" : "",
+      status: "completed",
+      tool_name: "read_fixture",
+      skill_names: [],
+      step_id: null,
+      timestamp: "2026-07-28T00:00:01Z",
+      raw: expanded ? { payload: { args: { path: "fixture.json" } } } : {},
+    }],
+  };
+}
+
 function bootstrap(latestTurn: TurnSummary, epoch = 1): SessionTurnBootstrap {
   return {
     session: {
@@ -94,10 +122,15 @@ describe("Turn timeline revision 合并", () => {
     timeline = upsertTurn(timeline, summary("job_2", 2, 2));
     timeline = upsertTurn(timeline, summary("job_2", 2, 3));
 
-    expect(timeline.turnsById.job_2).toEqual(detail("job_2", 2, 3));
+    expect(timeline.turnsById.job_2).toMatchObject({
+      ...detail("job_2", 2, 3),
+      item_count: 1,
+      source_message_count: 1,
+      merged_job_count: 0,
+    });
   });
 
-  test("同 revision 同 view 内容一致复用对象，不一致明确报错", () => {
+  test("同 revision 同投影内容一致复用对象，投影差异合并而不崩溃", () => {
     let timeline = upsertTurn(
       createSessionTurnTimeline(SCOPE_KEY),
       summary("job_2", 2, 3),
@@ -108,10 +141,118 @@ describe("Turn timeline revision 合并", () => {
     timeline = upsertTurn(timeline, summary("job_2", 2, 3));
     expect(timeline).toBe(previousTimeline);
     expect(timeline.turnsById.job_2).toBe(previousRecord);
-    expect(() => upsertTurn(timeline, {
+    timeline = upsertTurn(timeline, {
       ...summary("job_2", 2, 3),
       response_preview: "同 revision 的冲突正文",
-    })).toThrow("Turn 同 revision 内容不一致");
+    });
+    expect(timeline.turnsById.job_2.response_preview).toBe("同 revision 的冲突正文");
+  });
+
+  test("同 revision 的摘要和完整详情会合并，详情空字段不会抹掉摘要", () => {
+    const summaryRecord: TurnSummary = {
+      ...summary("job_2", 2, 3),
+      tool_summary: [{
+        tool_name: "read_fixture",
+        status: "completed",
+        tool_call_id: "call_1",
+      }],
+    };
+    const fullRecord: TurnDetail = {
+      ...projectedToolDetail("job_2", 2, true),
+      revision: 3,
+      tool_summary: [],
+    };
+
+    let timeline = upsertTurn(
+      createSessionTurnTimeline(SCOPE_KEY),
+      summaryRecord,
+    );
+    timeline = upsertTurn(timeline, fullRecord);
+
+    const merged = timeline.turnsById.job_2;
+    expect(merged.items_view).toBe("full");
+    expect("items" in merged && merged.items).toHaveLength(1);
+    expect("final_response" in merged && merged.final_response).toBe("full job_2");
+    expect(merged.tool_summary).toEqual(summaryRecord.tool_summary);
+  });
+
+  test("同 revision 的工具摘要详情可以升级为完整详情", () => {
+    let timeline = upsertTurn(
+      createSessionTurnTimeline(SCOPE_KEY),
+      projectedToolDetail("job_2", 2, false),
+    );
+
+    timeline = upsertTurn(timeline, projectedToolDetail("job_2", 2, true));
+    expect(timeline.turnsById.job_2).toEqual(projectedToolDetail("job_2", 2, true));
+
+    const expandedTimeline = timeline;
+    timeline = upsertTurn(timeline, projectedToolDetail("job_2", 2, false));
+    expect(timeline).toBe(expandedTimeline);
+  });
+
+  test("工具详情替换摘要占位事件，不产生重复工具块", () => {
+    const summaryItems = [
+      {
+        event_id: "job_2:tool_summary:0",
+        part_id: "call_1",
+        session_id: SESSION_ID,
+        job_id: "job_2",
+        type: "tool_call_start" as const,
+        phase: "tool" as const,
+        title: "调用工具 read_fixture",
+        content: "",
+        status: "completed" as const,
+        tool_name: "read_fixture",
+        skill_names: [],
+        step_id: null,
+        timestamp: "2026-07-28T00:00:01Z",
+        raw: {},
+      },
+      {
+        event_id: "job_2:tool_summary:1",
+        part_id: "call_1",
+        session_id: SESSION_ID,
+        job_id: "job_2",
+        type: "tool_call_end" as const,
+        phase: "tool" as const,
+        title: "工具结果 read_fixture",
+        content: "",
+        status: "completed" as const,
+        tool_name: "read_fixture",
+        skill_names: [],
+        step_id: null,
+        timestamp: "2026-07-28T00:00:01Z",
+        raw: {},
+      },
+    ];
+    const detailItems = [
+      {
+        ...summaryItems[0],
+        event_id: "job_2:tool_call:1:0",
+        content: "",
+        raw: { payload: { args: { path: "fixture.json" } } },
+      },
+      {
+        ...summaryItems[1],
+        event_id: "job_2:tool_result:2",
+        content: "mock-tool-ok",
+        raw: { payload: { result: "mock-tool-ok" } },
+      },
+    ];
+    let timeline = upsertTurn(
+      createSessionTurnTimeline(SCOPE_KEY),
+      {
+        ...detail("job_2", 2),
+        items: summaryItems,
+      },
+    );
+    timeline = upsertTurn(timeline, {
+      ...detail("job_2", 2),
+      items: detailItems,
+    });
+
+    const merged = timeline.turnsById.job_2;
+    expect("items" in merged && merged.items).toEqual(detailItems);
   });
 
   test("较低 revision 的 merge 元数据不会隐藏较新 Turn", () => {
@@ -217,6 +358,20 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.turnsById.job_4).toBe(existingJob4);
   });
 
+  test("64 Turn 历史页一次性合并并保持顺序", () => {
+    const timeline = upsertTurns(
+      createSessionTurnTimeline(SCOPE_KEY),
+      Array.from({ length: 64 }, (_, index) => summary(
+        `job_${index + 1}`,
+        index + 1,
+      )),
+    );
+
+    expect(timeline.orderedTurnIds).toHaveLength(64);
+    expect(timeline.orderedTurnIds[0]).toBe("job_1");
+    expect(timeline.orderedTurnIds.at(-1)).toBe("job_64");
+  });
+
   test("执行 Turn 水合后隐藏已合并 Job，旧分页也不能重新加入", () => {
     let timeline = createSessionTurnTimeline(SCOPE_KEY);
     timeline = upsertTurn(timeline, summary("job_1", 1));
@@ -236,12 +391,43 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.orderedTurnIds).toEqual(["job_1"]);
   });
 
-  test("job_merged 会让执行 Turn 详情失效并触发刷新", () => {
+  test("job_completed 会让执行 Turn 详情失效并触发刷新", () => {
     expect(turnIdsInvalidatedByEvents([
       { type: "text_delta", job_id: "job_ignored" },
-      { type: "job_merged", job_id: "job_execution" },
+      { type: "job_completed", job_id: "job_execution" },
       { type: "text_end", job_id: "job_execution" },
     ])).toEqual(["job_execution"]);
+  });
+
+  test("丢弃当前 view 已失效的 Turn，并阻止旧异步响应重新加入", () => {
+    let timeline = upsertTurns(
+      createSessionTurnTimeline(SCOPE_KEY),
+      [summary("job_old", 1), summary("job_new", 2)],
+    );
+    timeline = dropTurn(timeline, "job_old");
+    timeline = upsertTurn(timeline, summary("job_old", 1, 2));
+
+    expect(timeline.orderedTurnIds).toEqual(["job_new"]);
+    expect(timeline.turnsById.job_old).toBeUndefined();
+    expect(timeline.invalidatedTurnIds).toEqual(["job_old"]);
+  });
+
+  test("成功的详情响应可以复活被旧失效标记拦截的 Turn", () => {
+    let timeline = upsertTurn(
+      createSessionTurnTimeline(SCOPE_KEY),
+      summary("job_tool", 1),
+    );
+    timeline = dropTurn(timeline, "job_tool");
+    timeline = applyTurnDetails(timeline, {
+      items: [projectedToolDetail("job_tool", 1, true)],
+      projection_epoch: 1,
+    });
+
+    expect(timeline.invalidatedTurnIds).toEqual([]);
+    expect(timeline.orderedTurnIds).toEqual(["job_tool"]);
+    expect(timeline.turnsById.job_tool.items_view).toBe("full");
+    expect("items" in timeline.turnsById.job_tool
+      && timeline.turnsById.job_tool.items).toHaveLength(1);
   });
 
   test("破坏性 epoch 变化在 bootstrap 时清空旧投影", () => {
@@ -268,9 +454,9 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.eventCursor).toBe(null);
   });
 
-  test("LRU 只保留最近八个 session scope", () => {
+  test("LRU 只保留最近 64 个 session scope", () => {
     let cache = new Map<string, ReturnType<typeof createSessionTurnTimeline>>();
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 70; index += 1) {
       const key = `scope-${index}`;
       cache = writeTurnTimelineCache(
         cache,
@@ -278,15 +464,8 @@ describe("Turn timeline revision 合并", () => {
         createSessionTurnTimeline(key),
       );
     }
-    expect([...cache.keys()]).toEqual([
-      "scope-2",
-      "scope-3",
-      "scope-4",
-      "scope-5",
-      "scope-6",
-      "scope-7",
-      "scope-8",
-      "scope-9",
-    ]);
+    expect([...cache.keys()]).toEqual(
+      Array.from({ length: 64 }, (_, index) => `scope-${index + 6}`),
+    );
   });
 });

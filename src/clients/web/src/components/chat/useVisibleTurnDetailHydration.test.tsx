@@ -23,6 +23,7 @@ function deferred(): Deferred {
 function summaryConversation(sessionId: string): ConversationView {
   return {
     conversationId: `${sessionId}:job_same`,
+    displayMode: "history",
     turnId: "job_same",
     turnRevision: 1,
     turnItemsView: "summary",

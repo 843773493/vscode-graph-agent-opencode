@@ -6,6 +6,7 @@ import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.exceptions import NotFoundError
@@ -31,6 +32,12 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.mapping.trace_event_mapper import TraceEventMapper
 
 
+class ForkRelationshipChecker(Protocol):
+    def pinned_fork_children(self, source_thread_id: str) -> tuple[str, ...]: ...
+
+    def release_fork_retentions(self, child_session_id: str) -> None: ...
+
+
 class SessionService:
     DEFAULT_SESSION_TITLES = {"", "新会话", "未命名"}
 
@@ -40,10 +47,12 @@ class SessionService:
         config_service: ConfigService,
         trace_event_store: TraceEventStore,
         path_resolver: SessionPathResolver | None = None,
+        fork_relationship_checker: ForkRelationshipChecker | None = None,
     ):
         self._config_service = config_service
         self._trace_event_store = trace_event_store
         self._path_resolver = path_resolver or get_session_path_resolver()
+        self._fork_relationship_checker = fork_relationship_checker
         self._path_resolver.initialize()
         self._job_service: JobServiceProtocol | None = None
         self._change_listeners: list[Callable[[str, str], None]] = []
@@ -490,6 +499,16 @@ class SessionService:
         except KeyError as error:
             raise NotFoundError(f"Session {session_id} not found") from error
 
+        if self._fork_relationship_checker is not None:
+            pinned_children = self._fork_relationship_checker.pinned_fork_children(
+                session_id
+            )
+            if pinned_children:
+                raise RuntimeError(
+                    "会话存在 pinned fork，不能删除源会话: "
+                    f"session_id={session_id}, children={','.join(pinned_children)}"
+                )
+
         physical_children = self._path_resolver.child_nodes(session_id)
         descendant_session_ids = self._path_resolver.descendant_session_ids(session_id)
         if physical_children and not cascade:
@@ -500,6 +519,12 @@ class SessionService:
             )
         if not session_dir.exists():
             raise NotFoundError(f"Session {session_id} not found")
+
+        if self._fork_relationship_checker is not None:
+            for child_session_id in (*descendant_session_ids, session_id):
+                self._fork_relationship_checker.release_fork_retentions(
+                    child_session_id
+                )
 
         deleted_descendant_ids = self._path_resolver.delete_session_subtree(session_id)
         if deleted_descendant_ids != descendant_session_ids:

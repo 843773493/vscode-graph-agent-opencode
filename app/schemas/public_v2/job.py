@@ -13,7 +13,7 @@ from .common import (
     StepStatus,
     TimestampedDTO,
 )
-from .pending_request import PendingRequestKind
+from .pending_request import DeliveryPolicy
 
 JobDispatchStatus = Literal["queued", "running"]
 
@@ -24,12 +24,14 @@ class JobDispatchSnapshotDTO(BaseModel):
     session_id: str
     job_id: str
     job_status: JobDispatchStatus
-    active_job_id: str
+    active_job_id: str | None = None
     blocked_by_job_id: Optional[str] = None
     queued_jobs_ahead: int = Field(ge=0)
     queued_job_count: int = Field(ge=0)
     pending_job_count: int = Field(ge=1)
-    pending_kind: PendingRequestKind | None = None
+    delivery_policy: DeliveryPolicy | None = None
+    enqueue_sequence: int | None = Field(default=None, ge=1)
+    queue_snapshot_version: int = Field(default=0, ge=0)
 
 
 class JobDTO(TimestampedDTO):

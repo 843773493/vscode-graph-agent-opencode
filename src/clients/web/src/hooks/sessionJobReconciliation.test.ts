@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Dispatch, SetStateAction } from "react";
-import { getSessionTurnDetails } from "../api/sessionTurnHistory";
+import { loadSessionHistory } from "../api/sessionTurnHistory";
 
 import type {
   AppState,
@@ -12,6 +12,7 @@ import type {
   PendingRequestList,
   Session,
   TraceEvent,
+  TurnDetailBatch,
   TurnDetailBatchRequest,
 } from "../types/backend";
 import { reconcileActiveJob } from "./sessionJobReconciliation";
@@ -58,6 +59,7 @@ function assistantMessage(content: string = "恢复后的回复"): Message {
 function pendingConversation(): ConversationView {
   return {
     conversationId: "msg_user_active",
+    displayMode: "live",
     sessionId: SESSION_ID,
     userMessage: null,
     events: [],
@@ -134,6 +136,8 @@ function appState(): AppState {
     sessionHistoryReloadNonce: 0,
     workspaceSwitching: false,
     gatewayError: null,
+    gatewayUserAccess: null,
+    gatewayUserViewStates: new Map(),
     uiSettings: {
       layout: {},
       session_sidebar: {
@@ -277,7 +281,7 @@ function installMockBackend({
           has_more: false,
         });
       }
-      if (url.pathname === `/api/v1/sessions/${SESSION_ID}/turns/details`) {
+      if (url.pathname === `/api/v1/sessions/${SESSION_ID}/history`) {
         return apiResponse({
           projection_epoch: turnProjectionEpoch,
           items: [{
@@ -327,12 +331,20 @@ function turnDetailRefresher(
   harness: ReturnType<typeof stateHarness>,
 ): (turnIds: string[]) => Promise<void> {
   return async (turnIds) => {
-    const batch = await getSessionTurnDetails(
+    const page = await loadSessionHistory(
       port,
       SESSION_ID,
-      turnIds as TurnDetailBatchRequest["turn_ids"],
+      {
+        direction: "around",
+        turn_ids: turnIds as TurnDetailBatchRequest["turn_ids"],
+        turns: turnIds.length,
+      },
       WORKSPACE_ID,
     );
+    const batch = {
+      items: page.items as TurnDetailBatch["items"],
+      projection_epoch: page.projection_epoch,
+    };
     harness.setState((latest) => {
       const timeline = latest.turnTimelinesBySession.get(SESSION_CACHE_KEY);
       if (!timeline) return latest;
@@ -394,7 +406,7 @@ describe("运行中 Job 对账", () => {
       "恢复后的回复",
     );
     expect(harness.current().status).toBe("任务已完成");
-    expect(requests.filter((path) => path.endsWith("/turns/details"))).toHaveLength(1);
+    expect(requests.filter((path) => path.endsWith("/history"))).toHaveLength(1);
   });
 
   test("终态 Trace 丢失时仍以 completed Job 刷新 Turn 并清除转圈", async () => {
@@ -432,8 +444,38 @@ describe("运行中 Job 对账", () => {
       `/api/v1/jobs/${ACTIVE_JOB_ID}`,
       `/api/v1/sessions/${SESSION_ID}/pending-requests`,
       `/api/v1/sessions/${SESSION_ID}`,
-      `/api/v1/sessions/${SESSION_ID}/turns/details`,
+      `/api/v1/sessions/${SESSION_ID}/history`,
     ]);
+  });
+
+  test("历史回填未完成前先从实时视图移除活动 Turn", async () => {
+    const port = 49_107;
+    installMockBackend({
+      port,
+      activeJob: job("completed"),
+      traces: [],
+    });
+    const harness = stateHarness(appState());
+    let releaseRefresh!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const reconciliation = reconcileActiveJob(
+      port,
+      SESSION_ID,
+      WORKSPACE_ID,
+      SESSION_CACHE_KEY,
+      ACTIVE_JOB_ID,
+      async () => refreshStarted,
+      harness.setState,
+    );
+
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(harness.current().pendingConversations.has(SESSION_CACHE_KEY)).toBe(
+      false,
+    );
+    releaseRefresh();
+    await reconciliation;
   });
 
   test("终态 detail 来自未来 epoch 时不合并并通过 reloadNonce 请求 bootstrap", async () => {
@@ -490,9 +532,9 @@ describe("运行中 Job 对账", () => {
     expect(harness.current().unreadSessionKeys.has(SESSION_CACHE_KEY)).toBe(true);
   });
 
-  test("失败 Job 在缺少终态 Trace 时显示后端错误并清除转圈", async () => {
+  test("失败 Job 在缺少终态 Trace 时移除实时视图并刷新历史", async () => {
     const port = 49_102;
-    installMockBackend({
+    const requests = installMockBackend({
       port,
       activeJob: job("failed", "上游模型连接失败"),
       traces: [],
@@ -514,6 +556,10 @@ describe("运行中 Job 对账", () => {
       false,
     );
     expect(harness.current().status).toBe("任务失败: 上游模型连接失败");
+    expect(harness.current().pendingConversations.has(SESSION_CACHE_KEY)).toBe(
+      false,
+    );
+    expect(requests.filter((path) => path.endsWith("/history"))).toHaveLength(1);
   });
 
   test("Job 仍在运行时只发一个轻量请求且不修改状态", async () => {

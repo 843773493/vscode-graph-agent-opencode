@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.services.business.message_service import MessageService
 from app.services.business.session_resource_actions import (
     browser_available_actions,
@@ -459,7 +459,7 @@ async def test_cancel_monitor_background_task_injects_system_reminder(
     session_id = "ses_cancel_monitor"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
-    saver = FileSystemCheckpointSaver(sessions_dir=sessions_dir)
+    saver = RolloutCheckpointSaver(sessions_dir=sessions_dir)
     config = build_checkpoint_config(session_id)
     await saver.aput(
         config,

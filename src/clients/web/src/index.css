@@ -1704,7 +1704,7 @@ body {
 .chat-stream-empty-history {
   align-self: center;
   width: min(420px, 100%);
-  margin: auto 0;
+  margin: auto;
   padding: 18px 22px;
   border: 1px solid color-mix(in srgb, var(--bt-text-muted) 18%, transparent);
   border-radius: 8px;
@@ -1757,69 +1757,6 @@ body {
 
 .session-view-surface:not(:has(.chat-stream-blank)) .composer {
   padding-top: 10px;
-}
-
-.new-session-workspace-picker-container {
-  display: block;
-  width: 100%;
-  max-width: 800px;
-  padding: 0 0 11px;
-}
-
-.session-workspace-picker {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  min-width: 0;
-}
-
-.session-workspace-picker-label {
-  color: var(--bt-text-muted);
-  font-size: 18px;
-  line-height: 1.25;
-  white-space: nowrap;
-}
-
-.sessions-chat-picker-slot {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 260px;
-  height: 28px;
-  padding: 3px 5px;
-  border: 0;
-  border-radius: var(--bt-radius-small);
-  background: transparent;
-  color: var(--bt-text-primary);
-  font: inherit;
-  font-size: 18px;
-  cursor: pointer;
-}
-
-.sessions-chat-picker-slot:hover {
-  background: var(--bt-toolbar-hover-background);
-}
-
-.sessions-chat-picker-slot.fixed {
-  cursor: default;
-}
-
-.sessions-chat-picker-slot.fixed:hover {
-  background: transparent;
-}
-
-.sessions-chat-dropdown-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sessions-chat-dropdown-chevron {
-  color: var(--bt-text-muted);
-  font-size: 12px;
 }
 
 .composer-surface.new-chat-input-container {

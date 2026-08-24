@@ -1,5 +1,11 @@
 import React from "react";
 
+const DELIVERY_POLICY_LABELS = {
+  after_turn: "本轮结束后投递",
+  after_tool_result: "工具结果后投递",
+  after_interrupt: "中断边界后投递",
+} as const;
+
 export default function ComposerActionButtons({
   hasContent,
   showInterrupt,
@@ -8,7 +14,7 @@ export default function ComposerActionButtons({
   onSend,
   onAlternate,
   onToggleDefault,
-  defaultPendingKind,
+  defaultDeliveryPolicy,
 }: {
   hasContent: boolean;
   showInterrupt: boolean;
@@ -17,7 +23,7 @@ export default function ComposerActionButtons({
   onSend: () => void;
   onAlternate: () => void;
   onToggleDefault: () => void;
-  defaultPendingKind: "steering" | "queued";
+  defaultDeliveryPolicy: "after_turn" | "after_tool_result" | "after_interrupt";
 }): React.ReactNode {
   return (
     <>
@@ -80,15 +86,11 @@ export default function ComposerActionButtons({
           className="composer-icon-button queue-message-button"
           disabled={!hasContent}
           onClick={onAlternate}
-          title={
-            defaultPendingKind === "steering"
-              ? "改为排队，在当前请求完整结束后发送"
-              : "改为引导，在下一个安全边界发送"
-          }
-          aria-label="使用另一种待处理消息发送方式"
+          title="使用下一种投递边界发送"
+          aria-label="使用下一种投递边界发送"
         >
           <span
-            className={`codicon codicon-${defaultPendingKind === "steering" ? "list-ordered" : "git-pull-request-go-to-changes"}`}
+            className="codicon codicon-list-ordered"
             aria-hidden="true"
           />
         </button>
@@ -98,8 +100,8 @@ export default function ComposerActionButtons({
           type="button"
           className="composer-icon-button hover-only"
           onClick={onToggleDefault}
-          title={`默认发送方式：${defaultPendingKind === "steering" ? "引导" : "排队"}，点击切换`}
-          aria-label="切换运行中消息的默认发送方式"
+          title={`新消息默认：${DELIVERY_POLICY_LABELS[defaultDeliveryPolicy]}；点击切换`}
+          aria-label={`切换新消息默认投递策略（当前为${DELIVERY_POLICY_LABELS[defaultDeliveryPolicy]}）`}
         >
           <span className="codicon codicon-settings-gear" aria-hidden="true" />
         </button>

@@ -17,14 +17,13 @@ from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import (
     get_session_path_resolver,
     get_workspace_root,
 )
-from app.prompting.migration import migrate_prompt_checkpoint_channel_value
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
@@ -62,9 +61,7 @@ from app.services.business.session_resource_service import SessionResourceServic
 from app.services.business.session_service import SessionService
 from app.services.business.session_target_resolver import SessionTargetResolver
 from app.services.business.session_turn_history import (
-    SessionTurnHistoryMigrator,
     SessionTurnHistoryService,
-    TurnHistoryProjector,
 )
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.team.service import TeamCoordinationService
@@ -91,10 +88,12 @@ from app.services.infrastructure.historical_terminal_record_reader import (
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpRuntimeManager
-from app.services.infrastructure.message_history_store import MessageHistoryStore
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
 from app.services.infrastructure.pending_request_store import PendingRequestStore
+from app.services.infrastructure.rollout_checkpoint_runtime import (
+    RolloutCheckpointRuntime,
+)
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.infrastructure.session_changes_store import SessionChangesStore
@@ -109,11 +108,11 @@ from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.trace_event_recorder import TraceEventRecorder
 from app.services.infrastructure.trace_event_store import TraceEventStore
-from app.services.infrastructure.turn_history import TurnHistoryStore
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
+from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
@@ -292,10 +291,12 @@ class AppContainer:
     background_task_registry: BackgroundTaskRegistry
     background_message_bus: BackgroundMessageBus
     trace_event_store: TraceEventStore
-    turn_history_store: TurnHistoryStore
     trace_event_recorder: TraceEventRecorder
+    rollout_checkpoint_runtime: RolloutCheckpointRuntime
+    checkpointer: RolloutCheckpointSaver
     mcp_runtime_manager: McpRuntimeManager
     pending_request_store: PendingRequestStore
+    workspace_activity_service: WorkspaceActivityService
 
 
 def build_app_container(
@@ -309,6 +310,9 @@ def build_app_container(
     )
     resolved_boxteam_root = resolved_workspace_root / ".boxteam"
     resolved_sessions_root = resolved_boxteam_root / "sessions"
+    workspace_activity_service = WorkspaceActivityService(
+        workspace_root=resolved_workspace_root,
+    )
     session_path_resolver = get_session_path_resolver(resolved_sessions_root)
     session_path_resolver.initialize()
     job_event_bus = JobEventBus()
@@ -317,15 +321,13 @@ def build_app_container(
     )
     background_message_bus = BackgroundMessageBus()
     trace_event_store = TraceEventStore(sessions_dir=resolved_sessions_root)
-    turn_history_store = TurnHistoryStore(resolved_sessions_root)
-    turn_history_projector = TurnHistoryProjector(turn_history_store)
     trace_event_recorder = TraceEventRecorder(
         bus=job_event_bus,
         store=trace_event_store,
-        turn_projector=turn_history_projector,
     )
     config_service = ConfigService(
         workspace_root=resolved_workspace_root,
+        workspace_state_store=workspace_activity_service.store,
     )
     terminal_manager_client = TerminalManagerClient(config_service=config_service)
     browser_manager_client = BrowserManagerClient(config_service=config_service)
@@ -339,10 +341,10 @@ def build_app_container(
         config_service=config_service,
     )
 
-    checkpointer = FileSystemCheckpointSaver(
+    rollout_checkpoint_runtime = RolloutCheckpointRuntime(
         sessions_dir=resolved_sessions_root,
-        channel_value_migrator=migrate_prompt_checkpoint_channel_value,
     )
+    checkpointer = rollout_checkpoint_runtime.saver
 
     mcp_runtime_manager = McpRuntimeManager(
         raw_config=config_service.get_mcp_config(),
@@ -352,12 +354,12 @@ def build_app_container(
     message_service = MessageService(
         checkpointer=checkpointer,
         attachment_store=session_attachment_store,
-        history_store=MessageHistoryStore(resolved_sessions_root),
     )
     session_service = SessionService(
         config_service=config_service,
         trace_event_store=trace_event_store,
         path_resolver=session_path_resolver,
+        fork_relationship_checker=checkpointer,
     )
     file_tree_settings_service = FileTreeSettingsService(
         workspace_root=resolved_workspace_root,
@@ -434,24 +436,11 @@ def build_app_container(
         pending_request_store=pending_request_store,
     )
     session_service.bind_job_service(job_service)
-    session_turn_history_migrator = SessionTurnHistoryMigrator(
-        store=turn_history_store,
-        trace_event_store=trace_event_store,
-        legacy_message_source=message_service,
-        staging_store_factory=lambda: TurnHistoryStore(
-            resolved_sessions_root,
-            directory_name="turn_history_staging",
-            write_durability="publish",
-        ),
-        projector_factory=TurnHistoryProjector,
-    )
     session_turn_history_service = SessionTurnHistoryService(
-        store=turn_history_store,
-        projector=turn_history_projector,
-        trace_event_store=trace_event_store,
+        checkpointer=checkpointer,
         session_service=session_service,
         job_service=job_service,
-        migrator=session_turn_history_migrator,
+        trace_event_store=trace_event_store,
     )
     dependency_provider.set_job_service(job_service)
     session_orchestrator = SessionOrchestrator(
@@ -510,7 +499,7 @@ def build_app_container(
         session_service=session_service,
         job_service=job_service,
         dispatcher=session_orchestrator,
-        turn_history_store=turn_history_store,
+        trace_event_store=trace_event_store,
     )
 
     agent_service = AgentService(config_service=config_service)
@@ -649,8 +638,10 @@ def build_app_container(
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
         trace_event_store=trace_event_store,
-        turn_history_store=turn_history_store,
         trace_event_recorder=trace_event_recorder,
+        rollout_checkpoint_runtime=rollout_checkpoint_runtime,
+        checkpointer=checkpointer,
         mcp_runtime_manager=mcp_runtime_manager,
         pending_request_store=pending_request_store,
+        workspace_activity_service=workspace_activity_service,
     )

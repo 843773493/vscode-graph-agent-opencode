@@ -1,0 +1,5 @@
+{
+  "fixture_turn": 22,
+  "topic": "Gateway 路由",
+  "purpose": "供历史工具调用回放读取的确定性工作区样本"
+}

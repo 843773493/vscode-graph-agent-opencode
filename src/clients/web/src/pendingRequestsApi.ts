@@ -2,7 +2,7 @@ import { requestJson, unwrapApiData, workspaceHeader } from "./api";
 import type {
   APIResponse,
   PendingRequestList,
-  PendingRequestReorderRequest,
+  PendingRequestPolicyUpdateRequest,
   PendingRequestUpdateRequest,
 } from "./types/backend";
 
@@ -71,36 +71,22 @@ export async function clearPendingRequests(
   );
 }
 
-export async function reorderPendingRequests(
-  port: number,
-  sessionId: string,
-  payload: PendingRequestReorderRequest,
-  workspaceId?: string | null,
-): Promise<PendingRequestList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<PendingRequestList>>(
-      port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/pending-requests/order`,
-      {
-        method: "PUT",
-        headers: workspaceHeader(workspaceId),
-        body: JSON.stringify(payload),
-      },
-    ),
-  );
-}
-
-export async function sendPendingRequestImmediately(
+export async function updatePendingRequestPolicy(
   port: number,
   sessionId: string,
   messageId: string,
+  payload: PendingRequestPolicyUpdateRequest,
   workspaceId?: string | null,
 ): Promise<PendingRequestList> {
   return unwrapApiData(
     await requestJson<APIResponse<PendingRequestList>>(
       port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/pending-requests/${encodeURIComponent(messageId)}/send-immediately`,
-      { method: "POST", headers: workspaceHeader(workspaceId) },
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/pending-requests/${encodeURIComponent(messageId)}/policy`,
+      {
+        method: "PATCH",
+        headers: workspaceHeader(workspaceId),
+        body: JSON.stringify(payload),
+      },
     ),
   );
 }

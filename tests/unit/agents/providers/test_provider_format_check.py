@@ -72,13 +72,35 @@ def test_standard_reasoning_and_text_blocks_pass():
     assert check_content_blocks_are_standard(chunks).passed
 
 
+def test_direct_responses_reasoning_item_passes():
+    chunks = [
+        _chunk(
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "status": "completed",
+                    "content": [
+                        {"type": "reasoning_text", "text": "思考"}
+                    ],
+                    "summary": [],
+                    "encrypted_content": "sealed",
+                },
+                {"type": "text", "text": "回答"},
+            ]
+        )
+    ]
+
+    assert check_content_blocks_are_standard(chunks).passed
+
+
 def test_invalid_content_block_fails():
     item = check_content_blocks_are_standard(
-        [_chunk([{"type": "thinking", "text": "思考"}])]
+        [_chunk([{"type": "unsupported", "text": "思考"}])]
     )
 
     assert not item.passed
-    assert "thinking" in item.detail
+    assert "unsupported" in item.detail
 
 
 def test_chunk_merge_has_no_private_marker_noise():
@@ -201,10 +223,10 @@ async def test_litellm_fixture_stream_uses_standard_blocks():
     assert chunks[0].message.additional_kwargs == {}
     reasoning = chunks[0].message.content[0]
     answer = chunks[-1].message.content[0]
-    assert reasoning["type"] == "reasoning"
-    assert reasoning["reasoning"] == "思考"
-    assert reasoning["id"].startswith("part_")
-    assert reasoning["index"] == 0
+    assert reasoning == {
+        "type": "reasoning_content",
+        "reasoning_content": "思考",
+    }
     assert answer["type"] == "text"
     assert answer["text"] == "回答"
     assert answer["id"].startswith("part_")

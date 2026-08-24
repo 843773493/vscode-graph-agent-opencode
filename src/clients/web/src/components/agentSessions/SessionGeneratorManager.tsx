@@ -393,6 +393,11 @@ export default function SessionGeneratorManager({
           <label>目录模板（留空表示挂载文件夹）<input value={pathTemplate} onChange={(event) => setPathTemplate(event.target.value)} /></label>
           <div className="session-generator-preview">
             <button type="button" onClick={() => {
+              const previewWorkspaceId = targetWorkspaceId || activeWorkspaceId;
+              if (!previewWorkspaceId) {
+                reportError("预览命名路径失败", new Error("请先选择目标工作区"));
+                return;
+              }
               void generatorResources.previewGenerator({
                 name: name.trim(),
                 naming: {
@@ -402,7 +407,7 @@ export default function SessionGeneratorManager({
                 session_title: name.trim(),
                 placement: {
                   kind: placementKind,
-                  workspace_id: targetWorkspaceId || activeWorkspaceId,
+                  workspace_id: previewWorkspaceId,
                   session_id: placementKind === "session" ? targetSessionId.trim() : null,
                   folder_id: placementKind === "session_folder" ? targetFolderId : null,
                 },
@@ -411,7 +416,7 @@ export default function SessionGeneratorManager({
                   target: strategy === "new_per_run"
                     ? null
                     : {
-                      workspace_id: targetWorkspaceId || activeWorkspaceId,
+                      workspace_id: previewWorkspaceId,
                       session_id: targetSessionId.trim(),
                     },
                   concurrency: "queue",

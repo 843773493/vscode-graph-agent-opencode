@@ -1,0 +1,15 @@
+{
+  "created_at": "2026-08-17T00:00:00+00:00",
+  "updated_at": "2026-08-17T00:00:00+00:00",
+  "session_id": "ses_8128d7f0a4b64aa0b3f1c9e7d2a65018",
+  "workspace_id": "ws_custom_tool_fixture",
+  "title": "真实模型 128 Turn checkpoint 压测",
+  "title_source": "user",
+  "current_agent_id": "default",
+  "current_provider_id": "primary",
+  "parent_session_id": null,
+  "context_source_session_id": null,
+  "kind": "normal",
+  "delegation": null,
+  "generation_origin": null
+}

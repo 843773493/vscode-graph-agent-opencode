@@ -1,7 +1,11 @@
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
+  AcquireGatewayUserRequest,
+  ActivateGatewayWorkspaceResultDTO,
   APIResponse,
+  CreateGatewayGuestRequest,
+  CreateGatewayUserRequest,
   GatewayInboundAccessList,
   GatewayDeviceConnectionList,
   GatewayDeviceAccessAddressList,
@@ -21,6 +25,7 @@ import type {
   WebUiSettingsUpdate,
   GatewayThemeCatalog,
   GatewayUiAsset,
+  GatewayUiAssetList,
   GatewaySessionSearchResults,
   GenerationRun,
   GenerationRunList,
@@ -33,9 +38,24 @@ import type {
   ChangeGatewayPortForwardLabelRequest,
   GatewayPortForwardList,
   GatewayResourceList,
+  GatewayUser,
+  GatewayUserAccess,
+  GatewayUserList,
+  GatewayUserViewState,
+  GatewayUserViewStateUpdateRequest,
+  GeneratorDefinitionCreateRequest,
+  GeneratorDefinitionUpdateRequest,
+  GeneratorPlacementPreviewRequest,
+  WorkspaceFolderCreateRequest,
+  WorkspaceNavigationNodeUpdateRequest,
+  WorkspaceNavigationPlacementRequest,
 } from "./types/backend";
 import { HttpRequestError, requestJson, unwrapApiData } from "./api";
 import type { CreatableSessionConnectionKind } from "./types/frontend";
+
+const WEB_GUEST_REQUEST: CreateGatewayGuestRequest = {
+  tracking: { source: "web" },
+};
 
 export interface CreatedSessionConnection {
   kind: CreatableSessionConnectionKind;
@@ -107,6 +127,159 @@ export async function getGatewayHealth(port: number): Promise<GatewayHealth> {
     await requestJson<APIResponse<GatewayHealth>>(
       port,
       "/api/gateway/health",
+    ),
+  );
+}
+
+export async function getCurrentGatewayUser(
+  port: number,
+): Promise<GatewayUserAccess> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayUserAccess>>(
+      port,
+      "/api/gateway/users/current",
+    ),
+  );
+}
+
+export async function ensureGatewayUserAccess(
+  port: number,
+): Promise<GatewayUserAccess> {
+  try {
+    return await getCurrentGatewayUser(port);
+  } catch (error: unknown) {
+    if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
+    return unwrapApiData(
+      await requestJson<APIResponse<GatewayUserAccess>>(
+        port,
+        "/api/gateway/users/guest",
+        { method: "POST", body: JSON.stringify(WEB_GUEST_REQUEST) },
+      ),
+    );
+  }
+}
+
+export async function acquireGatewayGuest(
+  port: number,
+): Promise<GatewayUserAccess> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayUserAccess>>(
+      port,
+      "/api/gateway/users/guest",
+      { method: "POST", body: JSON.stringify(WEB_GUEST_REQUEST) },
+    ),
+  );
+}
+
+export async function listGatewayUsers(port: number): Promise<GatewayUserList> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayUserList>>(port, "/api/gateway/users"),
+  );
+}
+
+export async function createGatewayUser(
+  port: number,
+  payload: CreateGatewayUserRequest,
+): Promise<GatewayUser> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayUser>>(port, "/api/gateway/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function deleteGatewayUser(port: number, userId: string): Promise<void> {
+  await requestJson<APIResponse<{ user_id: string }>>(
+    port,
+    `/api/gateway/users/${encodeURIComponent(userId)}`,
+    { method: "DELETE" },
+  );
+}
+
+async function acquireGatewayUser(
+  port: number,
+  userId: string,
+  path: "access" | "takeover",
+  clientLabel?: string,
+): Promise<GatewayUserAccess> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayUserAccess>>(
+      port,
+      `/api/gateway/users/${encodeURIComponent(userId)}/${path}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          client_label: clientLabel ?? null,
+        } satisfies AcquireGatewayUserRequest),
+      },
+    ),
+  );
+}
+
+export function selectGatewayUser(
+  port: number,
+  userId: string,
+  clientLabel?: string,
+): Promise<GatewayUserAccess> {
+  return acquireGatewayUser(port, userId, "access", clientLabel);
+}
+
+export function takeoverGatewayUser(
+  port: number,
+  userId: string,
+  clientLabel?: string,
+): Promise<GatewayUserAccess> {
+  return acquireGatewayUser(port, userId, "takeover", clientLabel);
+}
+
+export async function heartbeatGatewayUser(
+  port: number,
+): Promise<GatewayUserAccess> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayUserAccess>>(
+      port,
+      "/api/gateway/users/current/heartbeat",
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function getGatewayUserViewState(
+  port: number,
+  workspaceId: string,
+  sessionId: string,
+): Promise<GatewayUserViewState | null> {
+  const response = await requestJson<APIResponse<GatewayUserViewState | null>>(
+    port,
+    `/api/gateway/users/current/view-state?workspace_id=${encodeURIComponent(workspaceId)}&session_id=${encodeURIComponent(sessionId)}`,
+  );
+  if (!response.request_id) throw new Error("用户视图状态响应缺少 request_id");
+  return response.data;
+}
+
+export async function getLatestGatewayUserViewState(
+  port: number,
+): Promise<GatewayUserViewState | null> {
+  const response = await requestJson<APIResponse<GatewayUserViewState | null>>(
+    port,
+    "/api/gateway/users/current/view-state/latest",
+  );
+  if (!response.request_id) throw new Error("用户最新视图状态响应缺少 request_id");
+  return response.data;
+}
+
+export async function putGatewayUserViewState(
+  port: number,
+  workspaceId: string,
+  sessionId: string,
+  payload: GatewayUserViewStateUpdateRequest,
+): Promise<GatewayUserViewState> {
+  return unwrapApiData(
+    await requestJson<APIResponse<GatewayUserViewState>>(
+      port,
+      `/api/gateway/users/current/view-state?workspace_id=${encodeURIComponent(workspaceId)}&session_id=${encodeURIComponent(sessionId)}`,
+      { method: "PUT", body: JSON.stringify(payload) },
     ),
   );
 }
@@ -274,13 +447,17 @@ export async function createWorkspaceNavigationFolder(
   name: string,
   parentNodeId?: string | null,
 ): Promise<WorkspaceNavigationTree> {
+  const payload: WorkspaceFolderCreateRequest = {
+    name,
+    parent_node_id: parentNodeId ?? null,
+  };
   return unwrapApiData(
     await requestJson<APIResponse<WorkspaceNavigationTree>>(
       port,
       "/api/gateway/workspace-navigation/folders",
       {
         method: "POST",
-        body: JSON.stringify({ name, parent_node_id: parentNodeId ?? null }),
+        body: JSON.stringify(payload),
       },
     ),
   );
@@ -291,11 +468,12 @@ export async function renameWorkspaceNavigationFolder(
   nodeId: string,
   name: string,
 ): Promise<WorkspaceNavigationTree> {
+  const payload: WorkspaceNavigationNodeUpdateRequest = { name };
   return unwrapApiData(
     await requestJson<APIResponse<WorkspaceNavigationTree>>(
       port,
       `/api/gateway/workspace-navigation/nodes/${encodeURIComponent(nodeId)}`,
-      { method: "PATCH", body: JSON.stringify({ name }) },
+      { method: "PATCH", body: JSON.stringify(payload) },
     ),
   );
 }
@@ -315,12 +493,7 @@ export async function deleteWorkspaceNavigationFolder(
 
 export async function placeWorkspaceNavigationNode(
   port: number,
-  payload: {
-    node_id: string;
-    parent_node_id: string | null;
-    mode: "before" | "after" | "last";
-    target_node_id?: string;
-  },
+  payload: WorkspaceNavigationPlacementRequest,
 ): Promise<WorkspaceNavigationTree> {
   return unwrapApiData(
     await requestJson<APIResponse<WorkspaceNavigationTree>>(
@@ -362,7 +535,7 @@ export async function listSessionGenerators(
 
 export async function createSessionGenerator(
   port: number,
-  payload: Record<string, unknown>,
+  payload: GeneratorDefinitionCreateRequest,
 ): Promise<SessionGeneratorDefinition> {
   return unwrapApiData(
     await requestJson<APIResponse<SessionGeneratorDefinition>>(
@@ -401,7 +574,7 @@ export async function listSessionGeneratorRuns(
 export async function updateSessionGenerator(
   port: number,
   generatorId: string,
-  payload: Record<string, unknown>,
+  payload: GeneratorDefinitionUpdateRequest,
 ): Promise<SessionGeneratorDefinition> {
   return unwrapApiData(
     await requestJson<APIResponse<SessionGeneratorDefinition>>(
@@ -427,7 +600,7 @@ export async function deleteSessionGenerator(
 
 export async function previewSessionGeneratorPlacement(
   port: number,
-  payload: Record<string, unknown>,
+  payload: GeneratorPlacementPreviewRequest,
 ): Promise<GeneratorPlacementPreview> {
   return unwrapApiData(
     await requestJson<APIResponse<GeneratorPlacementPreview>>(
@@ -502,7 +675,7 @@ export async function activateGatewayWorkspace(
   workspaceId: string,
 ): Promise<string> {
   const result = unwrapApiData(
-    await requestJson<APIResponse<{ active_workspace_id: string }>>(
+    await requestJson<APIResponse<ActivateGatewayWorkspaceResultDTO>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/activate`,
       { method: "POST" },
@@ -711,7 +884,7 @@ export async function getGatewayThemes(port: number): Promise<GatewayThemeCatalo
 
 export async function listGatewayUiAssets(port: number): Promise<GatewayUiAsset[]> {
   const result = unwrapApiData(
-    await requestJson<APIResponse<{ items: GatewayUiAsset[] }>>(
+    await requestJson<APIResponse<GatewayUiAssetList>>(
       port,
       "/api/gateway/ui-assets",
     ),
@@ -736,7 +909,7 @@ export async function uploadGatewayUiAsset(
 
 export async function deleteGatewayUiAsset(port: number, assetId: string): Promise<GatewayUiAsset[]> {
   const result = unwrapApiData(
-    await requestJson<APIResponse<{ items: GatewayUiAsset[] }>>(
+    await requestJson<APIResponse<GatewayUiAssetList>>(
       port,
       `/api/gateway/ui-assets/${encodeURIComponent(assetId)}`,
       { method: "DELETE" },

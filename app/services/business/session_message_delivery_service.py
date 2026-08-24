@@ -8,7 +8,7 @@ from app.abstractions.session_message import (
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.schemas.public_v2.message import MessageRunAccepted
-from app.schemas.public_v2.pending_request import MessageDispatchMode
+from app.schemas.public_v2.pending_request import DeliveryPolicy
 
 
 class SessionMessageDeliveryService(SessionMessageDeliveryProtocol):
@@ -34,7 +34,7 @@ class SessionMessageDeliveryService(SessionMessageDeliveryProtocol):
         metadata: dict[str, object],
         internal_message: PreparedInternalMessage | None,
         simulate_user: bool,
-        dispatch_mode: MessageDispatchMode,
+        delivery_policy: DeliveryPolicy,
         idempotency_key: str | None,
     ) -> MessageRunAccepted:
         target = await self._target_resolver.resolve_session(
@@ -48,14 +48,14 @@ class SessionMessageDeliveryService(SessionMessageDeliveryProtocol):
                 content=content,
                 metadata={} if simulate_user else metadata,
                 simulate_user=simulate_user,
-                dispatch_mode=dispatch_mode,
+                delivery_policy=delivery_policy,
                 idempotency_key=idempotency_key,
             )
         if simulate_user:
             return await self._session_orchestrator.create_and_run(
                 target.session_id,
                 content,
-                dispatch_mode=dispatch_mode,
+                delivery_policy=delivery_policy,
                 idempotency_key=idempotency_key,
             )
         if internal_message is None:
@@ -63,7 +63,7 @@ class SessionMessageDeliveryService(SessionMessageDeliveryProtocol):
         return await self._session_orchestrator.create_and_run_internal(
             target.session_id,
             internal_message,
-            dispatch_mode=dispatch_mode,
+            delivery_policy=delivery_policy,
             idempotency_key=idempotency_key,
         )
 

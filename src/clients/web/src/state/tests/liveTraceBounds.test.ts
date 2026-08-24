@@ -64,6 +64,7 @@ describe("Live Trace 有界保留", () => {
   test("pending Job 压实 delta 对象但保持完整流式正文", () => {
     const conversation: ConversationView = {
       conversationId: "message-live-bound",
+      displayMode: "live",
       sessionId: SESSION_ID,
       userMessage: null,
       assistantMessages: [],

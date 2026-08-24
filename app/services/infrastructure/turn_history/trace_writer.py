@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 MESSAGE_TRACE_TYPES = frozenset(
     {
         "job_created",
-        "job_merged",
         "job_started",
         "job_completed",
         "job_cancelled",

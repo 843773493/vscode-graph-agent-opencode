@@ -77,7 +77,7 @@ function ToolRow({
         <span className="chat-tool-preview">{toolCollapsedText(item)}</span>
         {hasDetails ? (
           <span
-            className={`codicon ${open ? "codicon-chevron-up" : "codicon-chevron-down"}`}
+            className={`codicon ${open ? "codicon-chevron-down" : "codicon-chevron-right"}`}
             aria-hidden="true"
           />
         ) : null}

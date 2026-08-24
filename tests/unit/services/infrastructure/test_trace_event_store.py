@@ -154,6 +154,36 @@ async def test_store_reads_only_latest_trace_tail(tmp_path: Path, session_bundle
 
 
 @pytest.mark.asyncio
+async def test_store_reads_latest_event_cursor_without_replaying_trace(
+    tmp_path: Path,
+    session_bundle_factory,
+):
+    session_id = "ses_latest_cursor"
+    store, _ = _create_store(tmp_path, session_bundle_factory, session_id)
+    now = datetime.now(UTC)
+
+    for index in range(3):
+        await store.append(
+            session_id,
+            AgentStartEvent(
+                event_id=f"evt_latest_{index}",
+                job_id="job_latest_cursor",
+                agent_id="default",
+                timestamp=now,
+                payload=AgentStartPayload(
+                    message=f"start {index}",
+                    agent_id="default",
+                ),
+            ),
+        )
+
+    cursor = store.latest_event_cursor(session_id)
+    assert cursor is not None
+    assert cursor.startswith("tc1.")
+    store.ensure_cursor(session_id, cursor)
+
+
+@pytest.mark.asyncio
 async def test_trace_diagnostic_page_reads_tail_then_older_with_opaque_cursor(
     tmp_path: Path,
     session_bundle_factory,

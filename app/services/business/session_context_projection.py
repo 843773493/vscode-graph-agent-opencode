@@ -4,6 +4,10 @@ import hashlib
 import json
 
 from app.prompting.validation import internal_prompt_metadata
+from app.agents.providers.litellm_content import (
+    reasoning_projection_rows,
+    visible_text as litellm_visible_text,
+)
 from app.schemas.public_v2.session import SessionDTO
 from app.schemas.public_v2.session_context import (
     SessionContextInclude,
@@ -50,6 +54,9 @@ def visible_text(record: dict[str, object]) -> str:
     if record_role(record) == "tool" or record.get("tool_call_id") is not None:
         return ""
     content = record.get("content")
+    projected = litellm_visible_text(content)
+    if projected:
+        return projected.strip()
     if isinstance(content, str):
         return content.strip()
     parts: list[str] = []
@@ -346,19 +353,13 @@ def _content_blocks(record: dict[str, object]) -> list[dict[str, object]]:
 
 
 def _reasoning_text(record: dict[str, object]) -> str:
-    parts: list[str] = []
-    top_level = record.get("reasoning_content")
-    if isinstance(top_level, str) and top_level.strip():
-        parts.append(top_level.strip())
-    for block in _content_blocks(record):
-        if block.get("type") != "reasoning":
-            continue
-        for key in ("reasoning", "text", "summary"):
-            value = block.get(key)
-            if isinstance(value, str) and value.strip():
-                parts.append(value.strip())
-                break
-    return "\n".join(parts)
+    return "\n".join(
+        str(row["text"])
+        for row in reasoning_projection_rows(record.get("content"))
+        if row.get("kind") in {"reasoning", "summary"}
+        and isinstance(row.get("text"), str)
+        and row["text"]
+    )
 
 
 def _tool_calls(record: dict[str, object]) -> list[dict[str, object]]:

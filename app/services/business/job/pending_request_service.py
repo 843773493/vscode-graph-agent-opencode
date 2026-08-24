@@ -6,12 +6,11 @@ from collections.abc import Callable
 from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.schemas.public_v2.message import AttachmentRef
 from app.schemas.public_v2.pending_request import (
+    DeliveryPolicy,
     PendingRequestDTO,
     PendingRequestListDTO,
-    PendingRequestOrderItem,
     PendingRequestSummaryListDTO,
 )
-from app.services.business.job.pending_queue import JobPendingQueue
 from app.services.business.job.pending_request_controller import (
     JobPendingRequestController,
     PendingJob,
@@ -19,12 +18,12 @@ from app.services.business.job.pending_request_controller import (
 
 
 class JobPendingRequestService:
-    """聚合待处理请求的状态控制与持久化，不参与 Job 执行。"""
+    """聚合 FIFO 队列状态控制与持久化。"""
 
     def __init__(
         self,
         *,
-        queue: JobPendingQueue,
+        queue,
         lock: asyncio.Lock,
         store: PendingRequestStoreProtocol | None,
         get_jobs: Callable[[], dict[str, PendingJob]],
@@ -77,11 +76,24 @@ class JobPendingRequestService:
         await self.persist(snapshot)
         return snapshot
 
-    async def remove(
+    async def update_policy(
         self,
         session_id: str,
         message_id: str,
+        *,
+        delivery_policy: DeliveryPolicy,
+        expected_snapshot_version: int | None,
     ) -> PendingRequestListDTO:
+        snapshot = await self._controller.update_policy(
+            session_id,
+            message_id,
+            delivery_policy=delivery_policy,
+            expected_snapshot_version=expected_snapshot_version,
+        )
+        await self.persist(snapshot)
+        return snapshot
+
+    async def remove(self, session_id: str, message_id: str) -> PendingRequestListDTO:
         snapshot = await self._controller.remove(session_id, message_id)
         await self.persist(snapshot)
         return snapshot
@@ -91,36 +103,8 @@ class JobPendingRequestService:
         await self.persist(snapshot)
         return snapshot
 
-    async def reorder(
-        self,
-        session_id: str,
-        requests: list[PendingRequestOrderItem],
-    ) -> PendingRequestListDTO:
-        snapshot = await self._controller.reorder(session_id, requests)
-        await self.persist(snapshot)
-        return snapshot
-
-    async def promote_and_reserve_if_idle(
-        self,
-        session_id: str,
-        message_id: str,
-        reservation: PendingJob,
-    ) -> tuple[PendingRequestListDTO, bool]:
-        snapshot, reserved = await self._controller.promote_and_reserve_if_idle(
-            session_id,
-            message_id,
-            reservation,
-        )
-        try:
-            await self.persist(snapshot)
-        except BaseException:
-            if reserved:
-                await self._controller.release_reservation(
-                    session_id,
-                    reservation.job_id,
-                )
-            raise
-        return snapshot, reserved
+    async def reject_reorder(self, session_id: str) -> None:
+        await self._controller.reject_reorder(session_id)
 
     async def persist(self, snapshot: PendingRequestListDTO) -> None:
         if self._store is None:

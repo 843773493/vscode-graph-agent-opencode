@@ -209,7 +209,7 @@ class GoalRuntimeService:
                         "goal_objective_updated": True,
                     },
                 ),
-                dispatch_mode="steering",
+                delivery_policy="after_turn",
             )
 
         try:

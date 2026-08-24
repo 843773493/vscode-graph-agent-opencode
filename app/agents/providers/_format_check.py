@@ -1,34 +1,33 @@
 """Provider 输出格式校验库。"""
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk
 
-
 __all__ = [
-    "MessageFormatValidator",
+    "ALL_CHECKS",
     "FixtureStreamBuilder",
     "FormatCheckItem",
     "FormatCheckResult",
+    "MessageFormatValidator",
+    "MixedReasoningTextFixture",
+    "ReasoningAndToolFixture",
     "ReasoningOnlyFixture",
     "TextOnlyFixture",
-    "MixedReasoningTextFixture",
     "ToolCallFixture",
-    "ReasoningAndToolFixture",
     "build_default_fixtures",
+    "check_chunks",
     "check_chunks_are_aimessage_chunks",
-    "check_no_private_stream_markers",
     "check_content_blocks_are_standard",
+    "check_history_messages_accepted",
+    "check_no_private_stream_markers",
     "check_stream_merges_without_private_marker_noise",
     "check_tool_call_chunks_have_required_fields",
-    "check_chunks",
-    "ALL_CHECKS",
     "validate_provider_format",
-    "check_history_messages_accepted",
 ]
 
 
@@ -36,6 +35,10 @@ SUPPORTED_CONTENT_BLOCK_TYPES = frozenset(
     {
         "text",
         "reasoning",
+        "reasoning_content",
+        "reasoning_items",
+        "thinking",
+        "redacted_thinking",
         "refusal",
         "tool_call_chunk",
         "tool_call",
@@ -44,7 +47,7 @@ SUPPORTED_CONTENT_BLOCK_TYPES = frozenset(
 
 
 class MessageFormatValidator(Protocol):
-    def self_check(self) -> "FormatCheckResult":
+    def self_check(self) -> FormatCheckResult:
         ...
 
 
@@ -194,11 +197,31 @@ def check_content_blocks_are_standard(
             if block_type not in SUPPORTED_CONTENT_BLOCK_TYPES:
                 bad.append((index, str(block_type)))
                 continue
-            if block_type == "reasoning" and not (
-                isinstance(block.get("reasoning"), str)
-                or isinstance(block.get("summary"), list)
+            if block_type == "reasoning":
+                raw_content = block.get("content")
+                has_reasoning_content = isinstance(raw_content, list) and any(
+                    isinstance(item, dict)
+                    and item.get("type") in {"reasoning_text", "text"}
+                    and isinstance(item.get("text"), str)
+                    for item in raw_content
+                )
+                if not (
+                    isinstance(block.get("reasoning"), str)
+                    or isinstance(block.get("summary"), list)
+                    or has_reasoning_content
+                    or isinstance(block.get("encrypted_content"), str)
+                ):
+                    bad.append((index, "reasoning_without_content"))
+            if block_type == "reasoning_content" and not isinstance(
+                block.get("reasoning_content"), str
             ):
-                bad.append((index, "reasoning_without_text"))
+                bad.append((index, "reasoning_content_without_string"))
+            if block_type == "reasoning_items":
+                items = block.get("reasoning_items")
+                if not isinstance(items, list) or not all(
+                    isinstance(item, dict) for item in items
+                ):
+                    bad.append((index, "reasoning_items_without_object_array"))
             if block_type == "text" and not isinstance(block.get("text"), str):
                 bad.append((index, "text_without_text"))
     if bad:
@@ -206,7 +229,11 @@ def check_content_blocks_are_standard(
             name="content 必须使用 LangChain 标准 content blocks",
             passed=False,
             detail=f"异常 content block: {bad[:5]}",
-            remediation="使用 {'type':'reasoning','reasoning': ...} 或 {'type':'text','text': ...}。",
+            remediation=(
+                "reasoning_content 使用字符串 carrier，reasoning_items 使用对象数组 carrier；"
+                "provider reasoning item 保留 content/summary/encrypted_content；"
+                "可见文本使用 {'type':'text','text': ...}。"
+            ),
         )
     return FormatCheckItem(
         name="content 必须使用 LangChain 标准 content blocks",
@@ -375,13 +402,19 @@ def _check_fixture_expectations(
 ) -> list[FormatCheckItem]:
     items: list[FormatCheckItem] = []
     if fixture_name in {"reasoning_only", "mixed_reasoning_text", "reasoning_then_tool"}:
-        has_reasoning = _stream_has_block_type(chunks, "reasoning")
+        has_reasoning = any(
+            _stream_has_block_type(chunks, block_type)
+            for block_type in ("reasoning_content", "reasoning_items", "reasoning")
+        )
         items.append(
             FormatCheckItem(
                 name="需要 reasoning 的 fixture 必须产出 reasoning content block",
                 passed=has_reasoning,
                 detail="" if has_reasoning else f"fixture={fixture_name}",
-                remediation="把 reasoning_content 转成 {'type':'reasoning','reasoning': delta}。",
+                remediation=(
+                    "把 reasoning_content 转成 "
+                    "{'type':'reasoning_content','reasoning_content': delta}。"
+                ),
             )
         )
     if fixture_name in {"text_only", "mixed_reasoning_text", "tool_call", "reasoning_then_tool"}:
@@ -409,7 +442,7 @@ async def validate_provider_format(
     for fixture in fixtures:
         try:
             chunks = await fixture.run(provider)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 自检必须把 fixture 异常转为报告
             result.add(
                 FormatCheckItem(
                     name=f"[{fixture.name}] fixture 自身运行出错",
@@ -465,7 +498,7 @@ def check_history_messages_accepted(
         )
     try:
         result_dicts = converter(list(messages))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 自检必须把转换异常转为报告
         return FormatCheckItem(
             name="_convert_messages_to_dicts 不应抛异常",
             passed=False,
@@ -489,7 +522,12 @@ def check_history_messages_accepted(
                 invalid_content_blocks.append((index, "non_dict"))
                 continue
             block_type = block.get("type")
-            if block_type in {"reasoning", "output_text"}:
+            if block_type in {
+                "reasoning",
+                "reasoning_content",
+                "reasoning_items",
+                "output_text",
+            }:
                 invalid_content_blocks.append((index, str(block_type)))
 
     if bad_roles:
@@ -505,8 +543,8 @@ def check_history_messages_accepted(
             passed=False,
             detail=f"以下历史消息仍含不可直传块: {invalid_content_blocks}",
             remediation=(
-                "从 content 剥离 reasoning；provider 支持时提升为顶层 "
-                "reasoning_content，并把 output_text 转为 text。"
+                "从 content 剥离 reasoning carrier；provider 支持时投影为请求字段，"
+                "并把 output_text 转为 text。"
             ),
         )
     return FormatCheckItem(

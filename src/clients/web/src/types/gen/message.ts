@@ -28,12 +28,14 @@ export interface JobDispatchSnapshotDTO {
   session_id: string;
   job_id: string;
   job_status: "queued" | "running";
-  active_job_id: string;
+  active_job_id?: string | null;
   blocked_by_job_id?: string | null;
   queued_jobs_ahead: number;
   queued_job_count: number;
   pending_job_count: number;
-  pending_kind?: ("queued" | "steering") | null;
+  delivery_policy?: ("after_turn" | "after_tool_result" | "after_interrupt") | null;
+  enqueue_sequence?: number | null;
+  queue_snapshot_version?: number;
 }
 export interface MessageCreateRequest {
   role?: MessageRole;
@@ -92,7 +94,19 @@ export interface RunOptions {
   context?: {
     [k: string]: unknown;
   };
-  queue?: ("queued" | "steering") | null;
+  delivery_policy?: "after_turn" | "after_tool_result" | "after_interrupt";
+}
+/**
+ * Gateway 代理的跨会话消息派发请求。
+ */
+export interface SessionMessageDispatchRequest {
+  content: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  simulate_user?: boolean;
+  delivery_policy?: "after_turn" | "after_tool_result" | "after_interrupt";
+  idempotency_key?: string | null;
 }
 export interface TimestampedDTO {
   created_at: string;

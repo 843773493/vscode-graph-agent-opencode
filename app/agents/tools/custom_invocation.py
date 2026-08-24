@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
+import json
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
-from app.agents.model_tool_schema import validate_model_tool_arguments
+from app.agents.model_tool_schema import (
+    export_model_tool_json_schema,
+    validate_model_tool_arguments,
+)
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
 
 
@@ -60,7 +64,11 @@ async def _invoke_target_tool_without_nested_callbacks(
     return await target_tool.ainvoke(call_arguments)
 
 
-def create_custom_tool_invoker_tool(custom_tools: Sequence[BaseTool]) -> BaseTool:
+def create_custom_tool_invoker_tool(
+    custom_tools: Sequence[BaseTool],
+    *,
+    model_visible_tool_names: Iterable[str] = (),
+) -> BaseTool:
     """创建固定扩展工具入口，通过参数分发到工作区配置的自定义工具。"""
     tools_by_name: dict[str, BaseTool] = {}
     for custom_tool in custom_tools:
@@ -88,12 +96,31 @@ def create_custom_tool_invoker_tool(custom_tools: Sequence[BaseTool]) -> BaseToo
             arguments,
         )
 
+    visible_names = set(model_visible_tool_names)
+    visible_definitions = []
+    for custom_tool in custom_tools:
+        if custom_tool.name not in visible_names:
+            continue
+        visible_definitions.append(
+            {
+                "name": custom_tool.name,
+                "description": custom_tool.description or "",
+                "parameters": export_model_tool_json_schema(custom_tool),
+            }
+        )
+    schema_hint = (
+        "当前可直接参考的目标扩展工具定义："
+        + json.dumps(visible_definitions, ensure_ascii=False, separators=(",", ":"))
+        if visible_definitions
+        else "目标扩展工具的详细定义未提供；请先从当前 Skill 或其它上下文获取目标工具名和参数。"
+    )
     description = (
         "调用工作区配置的扩展工具。"
         "当需要执行未直接出现在 tools 列表中的目标扩展工具时，必须真实调用本工具，"
         "不要在正文里复述或伪造调用。"
         "目标工具名称和参数来自当前工作区的 AGENTS.md、SKILL.md 或普通说明文档。"
         '调用参数格式: {"tool_name": "<目标工具名>", "arguments": {}}。'
+        + schema_hint
     )
     return StructuredTool.from_function(
         coroutine=invoke_custom_tool,

@@ -1,15 +1,17 @@
 import React from "react";
 import { Virtuoso } from "react-virtuoso";
+import type { TurnHistoryInclude } from "../api/sessionTurnHistory";
 import type {
   AttachmentRef,
   MessageReplayRequest,
-  PendingRequestKind,
-  PendingRequestOrderItem,
+  DeliveryPolicy,
   SessionChangesSummary,
+  GatewayUserViewState,
 } from "../types/backend";
 import type { ConversationView } from "../types/frontend";
 import { conversationTurnKey } from "../state/session/turnDetailHydration";
 import type { TurnProjectionState } from "../state/session/turnTimeline";
+import { isLiveConversationView } from "../state/trace/traceAggregation";
 import ChatHistoryEmptyState from "./chat/ChatHistoryEmptyState";
 import ChatHistoryPageHeader from "./chat/ChatHistoryPageHeader";
 import ChatTurn from "./chat/ChatTurn";
@@ -17,22 +19,35 @@ import ChatTurnErrorBoundary from "./chat/ChatTurnErrorBoundary";
 import { useTurnVirtualScroller } from "./chat/useTurnVirtualScroller";
 import { useVisibleTurnDetailHydration } from "./chat/useVisibleTurnDetailHydration";
 
+export function transcriptConversationsForDisplay(
+  conversations: readonly ConversationView[],
+): ConversationView[] {
+  return conversations.filter((conversation) =>
+    !conversation.pending || conversation.activeJobOverlay,
+  );
+}
+
 export default function ChatPanel({
   apiPort,
   workspaceId,
   conversations,
   expandDetails,
   hasActiveSession,
+  hasNewerMessages,
   hasOlderMessages,
+  loadingNewerMessages,
   loadingOlderMessages,
   historyLoading,
   projectionState,
   timelineGeneration,
   projectionEpoch,
   historyError,
+  onLoadAroundTurn,
+  onLoadNewerMessages,
   onLoadOlderMessages,
   loadingDetailTurnIds,
   onLoadTurnDetails,
+  onLoadToolDetails,
   onLoadAgentStateMessageRawContent,
   onRetryHistory,
   sessionChangeSummary,
@@ -41,25 +56,36 @@ export default function ChatPanel({
   onReplayTurn,
   onUpdatePending,
   onRemovePending,
-  onClearPending,
-  onReorderPending,
-  onSendPendingImmediately,
+  onChangePendingPolicy,
+  viewState,
+  onViewStateChange,
+  onViewStateRestoreStatus,
 }: {
   apiPort: number;
   workspaceId?: string | null;
   conversations: ConversationView[];
   expandDetails: boolean;
   hasActiveSession: boolean;
+  hasNewerMessages: boolean;
   hasOlderMessages: boolean;
+  loadingNewerMessages: boolean;
   loadingOlderMessages: boolean;
   historyLoading: boolean;
   projectionState: TurnProjectionState;
   timelineGeneration: number;
   projectionEpoch: number | null;
   historyError: string | null;
+  onLoadAroundTurn: (anchorTurnId: string) => Promise<void>;
+  onLoadNewerMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
   loadingDetailTurnIds: readonly string[];
-  onLoadTurnDetails: (turnIds: string[]) => Promise<void>;
+  onLoadTurnDetails: (
+    turnIds: string[],
+    requestIdentity?: string | null,
+    refreshAfterInFlight?: boolean,
+    include?: TurnHistoryInclude[],
+  ) => Promise<void>;
+  onLoadToolDetails?: (turnId: string) => Promise<void>;
   onLoadAgentStateMessageRawContent: (
     sessionId: string,
     messageId: string,
@@ -81,24 +107,52 @@ export default function ChatPanel({
     attachments?: AttachmentRef[],
   ) => Promise<void>;
   onRemovePending: (messageId: string) => Promise<void>;
-  onClearPending: () => Promise<void>;
-  onReorderPending: (requests: PendingRequestOrderItem[]) => Promise<void>;
-  onSendPendingImmediately: (messageId: string) => Promise<void>;
+  onChangePendingPolicy: (
+    messageId: string,
+    policy: DeliveryPolicy,
+    expectedSnapshotVersion?: number,
+  ) => Promise<void>;
+  viewState?: GatewayUserViewState | null;
+  onViewStateChange?: (payload: {
+    turn_anchor: string | null;
+    scroll_offset: number;
+    follow_latest: boolean;
+  }) => void;
+  onViewStateRestoreStatus?: (message: string) => void;
 }): React.ReactNode {
-  const [draggedPendingId, setDraggedPendingId] = React.useState<string | null>(null);
   const [pendingActionError, setPendingActionError] = React.useState<string | null>(null);
   const [pendingActionRunning, setPendingActionRunning] = React.useState(false);
-  const sessionId = conversations[0]?.sessionId ?? "empty";
+  const transcriptConversations = React.useMemo(
+    () => transcriptConversationsForDisplay(conversations),
+    [conversations],
+  );
+  const sessionId = transcriptConversations[0]?.sessionId
+    ?? conversations[0]?.sessionId
+    ?? "empty";
   const {
     bindScroller,
     firstItemIndex,
     followOutput,
     handleAtBottomChange,
-    loadOlderPreservingAnchor,
+    handleEndReached,
+    handleStartReached,
     scrollToLatest,
     showJumpToLatest,
     streamRef,
-  } = useTurnVirtualScroller({ conversations, sessionId, onLoadOlderMessages });
+  } = useTurnVirtualScroller({
+    conversations: transcriptConversations,
+    sessionId,
+    onLoadNewerMessages,
+    onLoadOlderMessages,
+    onLoadAroundTurn,
+    hasNewerMessages,
+    hasOlderMessages,
+    loadingNewerMessages,
+    loadingOlderMessages,
+    viewState,
+    onViewStateChange,
+    onViewStateRestoreStatus,
+  });
   const {
     detailHydrationError,
     clearDetailHydrationError,
@@ -107,31 +161,30 @@ export default function ChatPanel({
     sessionId,
     timelineGeneration,
     projectionEpoch,
-    conversations,
+    conversations: transcriptConversations,
     firstItemIndex,
     loadingTurnIds: loadingDetailTurnIds,
     onLoadTurnDetails,
   });
   const sessionBusy = conversations.some(
-    (conversation) => conversation.status === "running" || conversation.status === "queued",
+    (conversation) => isLiveConversationView(conversation)
+      && (conversation.status === "running" || conversation.status === "queued"),
   );
   const pendingRequests = conversations
     .filter((conversation) =>
       conversation.pending
+      && !conversation.activeJobOverlay
       && conversation.userMessage
-      && conversation.pendingKind,
+      && conversation.deliveryPolicy,
     )
     .map((conversation) => ({
       message_id: conversation.userMessage!.message_id,
-      kind: conversation.pendingKind!,
-    }));
-  const firstSteeringId = pendingRequests.find(
-    (request) => request.kind === "steering",
-  )?.message_id ?? null;
-  const firstQueuedId = pendingRequests.find(
-    (request) => request.kind === "queued",
-  )?.message_id ?? null;
-  const firstPendingId = pendingRequests[0]?.message_id ?? null;
+      deliveryPolicy: conversation.deliveryPolicy!,
+      enqueueSequence: conversation.enqueueSequence ?? Number.MAX_SAFE_INTEGER,
+      waitingReason: conversation.waitingReason,
+      snapshotVersion: conversation.queueSnapshotVersion,
+    }))
+    .sort((left, right) => left.enqueueSequence - right.enqueueSequence);
 
   const runPendingAction = React.useCallback(async (
     action: () => Promise<void>,
@@ -151,39 +204,13 @@ export default function ChatPanel({
     }
   }, [pendingActionRunning]);
 
-  const changePendingKind = React.useCallback(async (
+  const changePendingPolicy = React.useCallback(async (
     messageId: string,
-    kind: PendingRequestKind,
+    policy: DeliveryPolicy,
   ) => {
-    await onReorderPending(
-      pendingRequests.map((request) =>
-        request.message_id === messageId ? { ...request, kind } : request),
-    );
-  }, [onReorderPending, pendingRequests]);
-
-  const dropPendingBefore = React.useCallback(async (targetMessageId: string) => {
-    if (!draggedPendingId || draggedPendingId === targetMessageId) {
-      return;
-    }
-    const reordered = [...pendingRequests];
-    const sourceIndex = reordered.findIndex(
-      (request) => request.message_id === draggedPendingId,
-    );
-    const targetIndex = reordered.findIndex(
-      (request) => request.message_id === targetMessageId,
-    );
-    if (sourceIndex === -1 || targetIndex === -1) {
-      throw new Error("拖拽重排时找不到待处理消息");
-    }
-    if (reordered[sourceIndex].kind !== reordered[targetIndex].kind) {
-      setDraggedPendingId(null);
-      return;
-    }
-    const [moved] = reordered.splice(sourceIndex, 1);
-    reordered.splice(targetIndex, 0, moved);
-    setDraggedPendingId(null);
-    await onReorderPending(reordered);
-  }, [draggedPendingId, onReorderPending, pendingRequests]);
+    const request = pendingRequests.find((item) => item.message_id === messageId);
+    await onChangePendingPolicy(messageId, policy, request?.snapshotVersion);
+  }, [onChangePendingPolicy, pendingRequests]);
 
   const updatePending = React.useCallback((
     messageId: string,
@@ -195,15 +222,12 @@ export default function ChatPanel({
   const removePending = React.useCallback((messageId: string) => runPendingAction(
     () => onRemovePending(messageId),
   ), [onRemovePending, runPendingAction]);
-  const sendPendingImmediately = React.useCallback((messageId: string) => runPendingAction(
-    () => onSendPendingImmediately(messageId),
-  ), [onSendPendingImmediately, runPendingAction]);
-  const updatePendingKind = React.useCallback((
+  const updatePendingPolicy = React.useCallback((
     messageId: string,
-    kind: PendingRequestKind,
+    policy: DeliveryPolicy,
   ) => runPendingAction(
-    () => changePendingKind(messageId, kind),
-  ), [changePendingKind, runPendingAction]);
+    () => changePendingPolicy(messageId, policy),
+  ), [changePendingPolicy, runPendingAction]);
   const retryHistory = React.useCallback(() => {
     clearDetailHydrationError();
     onRetryHistory();
@@ -213,9 +237,11 @@ export default function ChatPanel({
     <section className="chat-stream-shell">
       <section
         data-expand-details={String(expandDetails)}
+        data-turn-count={transcriptConversations.length}
+        data-first-turn-id={transcriptConversations[0] ? conversationTurnKey(transcriptConversations[0]) : ""}
         className="chat-stream-virtual-shell"
       >
-      {conversations.length === 0 ? (
+      {transcriptConversations.length === 0 ? (
         hasActiveSession ? (
           <ChatHistoryEmptyState
             historyError={historyError}
@@ -235,10 +261,12 @@ export default function ChatPanel({
         ref={streamRef}
         scrollerRef={bindScroller}
         className="chat-stream chat-transcript chat-virtual-list"
-        data={conversations}
+        data={transcriptConversations}
         firstItemIndex={firstItemIndex}
-        initialTopMostItemIndex={conversations.length - 1}
+        initialTopMostItemIndex={transcriptConversations.length - 1}
         computeItemKey={(_, conversation) => conversationTurnKey(conversation)}
+        startReached={handleStartReached}
+        endReached={handleEndReached}
         followOutput={followOutput}
         atBottomStateChange={handleAtBottomChange}
         rangeChanged={hydrateVisibleTurns}
@@ -249,9 +277,6 @@ export default function ChatPanel({
               hasOlderMessages={hasOlderMessages}
               loadingOlderMessages={loadingOlderMessages}
               error={historyError ?? detailHydrationError}
-              onLoadOlder={() => {
-                void loadOlderPreservingAnchor().catch(() => undefined);
-              }}
               onRetry={retryHistory}
             />
           ),
@@ -266,73 +291,7 @@ export default function ChatPanel({
               className="chat-virtual-turn"
               data-turn-id={conversationTurnKey(conversation)}
             >
-              {conversation.userMessage?.message_id === firstSteeringId ? (
-                <div className="chat-pending-divider">
-                  <span>引导消息 · {pendingRequests.filter((item) => item.kind === "steering").length}</span>
-                  {conversation.userMessage?.message_id === firstPendingId ? (
-                    <button
-                      type="button"
-                      disabled={pendingActionRunning}
-                      onClick={() => void runPendingAction(onClearPending).catch(() => undefined)}
-                    >
-                      全部撤回
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-              {conversation.userMessage?.message_id === firstQueuedId ? (
-                <div className="chat-pending-divider">
-                  <span>排队消息 · {pendingRequests.filter((item) => item.kind === "queued").length}</span>
-                  {conversation.userMessage?.message_id === firstPendingId ? (
-                    <button
-                      type="button"
-                      disabled={pendingActionRunning}
-                      onClick={() => void runPendingAction(onClearPending).catch(() => undefined)}
-                    >
-                      全部撤回
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-              <div
-                className={conversation.pending ? "chat-pending-draggable" : undefined}
-                onDragOver={(event) => {
-                  const dragged = pendingRequests.find(
-                    (request) => request.message_id === draggedPendingId,
-                  );
-                  if (
-                    conversation.pending
-                    && dragged
-                    && dragged.kind === conversation.pendingKind
-                  ) {
-                    event.preventDefault();
-                  }
-                }}
-                onDrop={(event) => {
-                  if (!conversation.pending || !conversation.userMessage) {
-                    return;
-                  }
-                  event.preventDefault();
-                  void runPendingAction(
-                    () => dropPendingBefore(conversation.userMessage!.message_id),
-                  ).catch(() => undefined);
-                }}
-              >
-                {conversation.pending && conversation.userMessage ? (
-                  <button
-                    type="button"
-                    draggable={!pendingActionRunning}
-                    className="chat-pending-drag-handle"
-                    title="拖拽重排待处理消息"
-                    aria-label="拖拽重排待处理消息"
-                    onDragStart={() => {
-                      setDraggedPendingId(conversation.userMessage!.message_id);
-                    }}
-                    onDragEnd={() => setDraggedPendingId(null)}
-                  >
-                    <span className="codicon codicon-gripper" aria-hidden="true" />
-                  </button>
-                ) : null}
+              <div>
                 <ChatTurnErrorBoundary
                   conversationId={conversation.conversationId}
                 >
@@ -341,14 +300,15 @@ export default function ChatPanel({
                     workspaceId={workspaceId}
                     conversation={conversation}
                     showRawDetails={expandDetails}
-                    isLastTurn={index === firstItemIndex + conversations.length - 1}
+                    isLastTurn={index === firstItemIndex + transcriptConversations.length - 1}
                     sessionBusy={sessionBusy}
                     onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}
+                    onLoadTurnDetails={onLoadTurnDetails}
+                    onLoadToolDetails={onLoadToolDetails}
                     onReplayTurn={onReplayTurn}
                     onUpdatePending={updatePending}
                     onRemovePending={removePending}
-                    onSendPendingImmediately={sendPendingImmediately}
-                    onChangePendingKind={updatePendingKind}
+                    onChangePendingPolicy={updatePendingPolicy}
                   />
                 </ChatTurnErrorBoundary>
               </div>

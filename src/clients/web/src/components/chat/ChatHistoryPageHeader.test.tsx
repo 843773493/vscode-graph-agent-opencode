@@ -13,7 +13,6 @@ describe("ChatHistoryPageHeader", () => {
           hasOlderMessages={false}
           loadingOlderMessages={false}
           error={null}
-          onLoadOlder={() => undefined}
           onRetry={() => undefined}
         />,
       );

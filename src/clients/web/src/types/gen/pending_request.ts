@@ -13,7 +13,7 @@ export interface AttachmentRef {
   data_url?: string | null;
 }
 /**
- * 会话中尚未开始执行的用户请求。
+ * 会话 FIFO 队列中的单条用户消息。
  */
 export interface PendingRequestDTO {
   job_id: string;
@@ -21,8 +21,12 @@ export interface PendingRequestDTO {
   session_id: string;
   content: string;
   attachments?: AttachmentRef[];
-  kind: "queued" | "steering";
+  delivery_policy: "after_turn" | "after_tool_result" | "after_interrupt";
+  enqueue_sequence: number;
   position: number;
+  status?: "queued";
+  waiting_reason?: string | null;
+  last_boundary?: ("idle" | "after_turn" | "after_tool_result" | "after_interrupt") | null;
   agent_id: string;
   message_created_at: string;
   message_metadata?: {
@@ -30,23 +34,24 @@ export interface PendingRequestDTO {
   };
   created_at: string;
   updated_at: string;
+  snapshot_version: number;
 }
 export interface PendingRequestListDTO {
   session_id: string;
   active_job_id?: string | null;
-  yield_requested?: boolean;
   requests?: PendingRequestDTO[];
+  snapshot_version?: number;
 }
-export interface PendingRequestOrderItem {
-  message_id: string;
-  kind: "queued" | "steering";
-}
-export interface PendingRequestReorderRequest {
-  requests: PendingRequestOrderItem[];
+export interface PendingRequestPolicyUpdateRequest {
+  delivery_policy: "after_turn" | "after_tool_result" | "after_interrupt";
+  expected_snapshot_version?: number | null;
 }
 export interface PendingRequestSummaryDTO {
   job_id: string;
   message_id: string;
+  enqueue_sequence: number;
+  delivery_policy: "after_turn" | "after_tool_result" | "after_interrupt";
+  status: "queued";
   updated_at: string;
 }
 export interface PendingRequestSummaryListDTO {
@@ -54,6 +59,7 @@ export interface PendingRequestSummaryListDTO {
   active_job_id?: string | null;
   requests?: PendingRequestSummaryDTO[];
   request_count: number;
+  snapshot_version?: number;
   truncated?: boolean;
 }
 export interface PendingRequestUpdateRequest {

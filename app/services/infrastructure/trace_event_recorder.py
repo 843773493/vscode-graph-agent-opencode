@@ -5,7 +5,6 @@ from collections import defaultdict
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.trace_event_sink import TraceEventSinkProtocol
-from app.abstractions.turn_history import TurnEventProjectorProtocol
 from app.schemas.event import Event
 
 
@@ -17,11 +16,9 @@ class TraceEventRecorder:
         *,
         bus: JobEventBusProtocol,
         store: TraceEventSinkProtocol,
-        turn_projector: TurnEventProjectorProtocol | None = None,
     ) -> None:
         self._bus = bus
         self._store = store
-        self._turn_projector = turn_projector
         self._job_sessions: dict[str, str] = {}
         self._session_locks: defaultdict[str, asyncio.Lock] = defaultdict(
             asyncio.Lock
@@ -49,14 +46,7 @@ class TraceEventRecorder:
             )
 
         async with self._session_locks[session_id]:
-            receipt = await self._store.append(session_id, event)
-            if self._turn_projector is not None:
-                await asyncio.to_thread(
-                    self._turn_projector.record_event,
-                    session_id,
-                    event,
-                    source_offset=receipt.projected_event_offset,
-                )
+            await self._store.append(session_id, event)
             if event.type == "job_created":
                 self._job_sessions[event.job_id] = session_id
 

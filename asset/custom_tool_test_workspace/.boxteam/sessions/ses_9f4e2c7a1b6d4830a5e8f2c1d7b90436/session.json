@@ -1,0 +1,15 @@
+{
+  "created_at": "2026-08-01T00:00:00+00:00",
+  "updated_at": "2026-08-01T00:00:00+00:00",
+  "session_id": "ses_9f4e2c7a1b6d4830a5e8f2c1d7b90436",
+  "workspace_id": "ws_custom_tool_fixture",
+  "title": "大型工具调用：128 Turn 历史投影压测",
+  "title_source": "user",
+  "current_agent_id": "default",
+  "current_provider_id": "primary",
+  "parent_session_id": null,
+  "context_source_session_id": null,
+  "kind": "normal",
+  "delegation": null,
+  "generation_origin": null
+}

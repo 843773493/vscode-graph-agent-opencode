@@ -35,6 +35,7 @@ from app.agents.middleware_prompts import (
     TODO_SYSTEM_PROMPT,
     TODO_TOOL_DESCRIPTION,
 )
+from app.agents.model_tool_visibility import ModelToolVisibilityMiddleware
 from app.agents.request_replay_middleware import PromptReplayCaptureMiddleware
 from app.agents.skill_runtime import (
     append_skill_middlewares,
@@ -169,6 +170,7 @@ def build_deep_agent_middleware(
     tool_output_middleware: ToolOutputMiddleware,
     memory: list[str] | None,
     custom_tool_confirmation_names: frozenset[str] = frozenset(),
+    model_hidden_tool_names: frozenset[str] = frozenset(),
 ) -> list[AgentMiddleware]:
     deepagent_middleware: list[AgentMiddleware] = [
         tool_invocation_context_middleware,
@@ -225,6 +227,11 @@ def build_deep_agent_middleware(
         deepagent_middleware,
         workspace_root=workspace_root,
     )
+
+    if model_hidden_tool_names:
+        deepagent_middleware.append(
+            ModelToolVisibilityMiddleware(model_hidden_tool_names)
+        )
 
     if runtime_middleware:
         deepagent_middleware.extend(runtime_middleware)

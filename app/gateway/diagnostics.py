@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.schemas import (
+from app.schemas.gateway import (
     GatewayDiagnosticLogDTO,
     GatewayDiagnosticsDTO,
     GatewayDiagnosticStatus,

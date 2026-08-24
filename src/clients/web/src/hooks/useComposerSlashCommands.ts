@@ -7,7 +7,7 @@ import {
   type SlashCommandOption,
 } from "../state/slashCommands";
 import type { ConversationContentView } from "../types/frontend";
-import type { Session } from "../types/backend";
+import type { Session, SessionCompactResult } from "../types/backend";
 import type { SelectedAttachment } from "../utils/mediaAttachments";
 
 function copyTextWithSelection(text: string): boolean {
@@ -50,7 +50,6 @@ export function useComposerSlashCommands({
   setViewMenuOpen,
   setStatus,
   createSession,
-  startNewSessionDraft,
   renameCurrentSession,
   switchContentView,
   compactSession,
@@ -68,10 +67,9 @@ export function useComposerSlashCommands({
   setViewMenuOpen: Dispatch<SetStateAction<boolean>>;
   setStatus: (text: string) => void;
   createSession: (title?: string) => Promise<void>;
-  startNewSessionDraft: () => void;
   renameCurrentSession: (inlineTitle: string) => void;
   switchContentView: (view: ConversationContentView) => void;
-  compactSession: () => Promise<void>;
+  compactSession: () => Promise<SessionCompactResult>;
   runGoalCommand: (args: string) => void;
 }) {
   const slashCommands = COMPOSER_SLASH_COMMANDS;
@@ -94,11 +92,7 @@ export function useComposerSlashCommands({
           break;
         case "new":
           setAttachments([]);
-          if (args.trim()) {
-            void createSession(args.trim());
-          } else {
-            startNewSessionDraft();
-          }
+          void createSession(args.trim() || undefined);
           break;
         case "rename":
           renameCurrentSession(args);
@@ -176,7 +170,19 @@ export function useComposerSlashCommands({
           break;
         case "compact":
           if (currentSession && !compactLoading) {
-            void compactSession();
+            void compactSession()
+              .then((result) => {
+                setComposerNotice(result.status === "scheduled"
+                  ? "已安排上下文压缩，将在下一条消息发送前执行"
+                  : result.status === "compacted"
+                    ? `已压缩上下文：${result.summarized_message_count} 条消息`
+                    : `上下文未压缩：${result.message}`);
+              })
+              .catch((error: unknown) => {
+                setAttachmentError(
+                  `上下文压缩失败：${error instanceof Error ? error.message : String(error)}`,
+                );
+              });
           }
           break;
         case "goal":
@@ -198,7 +204,6 @@ export function useComposerSlashCommands({
       setInput,
       setStatus,
       setViewMenuOpen,
-      startNewSessionDraft,
       compactLoading,
       currentSession,
       getLatestAssistantContent,

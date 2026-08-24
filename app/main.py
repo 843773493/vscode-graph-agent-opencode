@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from app.api.mcp import router as mcp_router
 from app.api.messages import router as messages_router
 from app.api.node_debug import router as node_debug_router
 from app.api.runtime import router as runtime_router
+from app.api.session_activity import router as session_activity_router
 from app.api.session_navigation import router as session_navigation_router
 from app.api.session_turns import router as session_turns_router
 from app.api.sessions import router as sessions_router
@@ -35,6 +37,14 @@ from app.services.infrastructure.config import (
 load_boxteam_env()
 
 logger = logging.getLogger(__name__)
+
+
+async def _prune_workspace_activity_periodically(container) -> None:
+    while True:
+        await asyncio.sleep(3600)
+        removed = container.workspace_activity_service.prune()
+        if removed:
+            logger.info("清理 Workspace 会话活动事件: removed=%s", removed)
 
 
 @asynccontextmanager
@@ -74,6 +84,12 @@ async def lifespan(_: FastAPI):
 
     await container.mcp_runtime_manager.start()
     try:
+        removed_activity_events = container.workspace_activity_service.prune()
+        if removed_activity_events:
+            logger.info(
+                "启动时清理 Workspace 会话活动事件: removed=%s",
+                removed_activity_events,
+            )
         container.config_service.set_mcp_tool_names(
             container.mcp_runtime_manager.get_tool_ids()
         )
@@ -110,6 +126,36 @@ async def lifespan(_: FastAPI):
         await container.job_event_bus.register_durable_listener(
             container.goal_runtime_service.on_event
         )
+
+        async def record_session_activity(event) -> None:
+            if event.type not in {"job_completed", "job_failed", "job_cancelled"}:
+                return
+            job = await container.job_service.get(event.job_id)
+            status = {
+                "job_completed": "completed",
+                "job_failed": "failed",
+                "job_cancelled": "cancelled",
+            }[event.type]
+            if status != "completed":
+                container.checkpointer.mark_turn_terminal_status(
+                    session_id=job.session_id,
+                    turn_id=job.job_id,
+                    status=status,
+                )
+            summary = {
+                "completed": "任务完成",
+                "failed": "任务失败",
+                "cancelled": "任务已取消",
+            }[status]
+            await container.workspace_activity_service.append(
+                event_id=event.event_id,
+                session_id=job.session_id,
+                status=status,
+                summary=summary,
+                occurred_at=event.timestamp.isoformat(),
+            )
+
+        await container.job_event_bus.register_durable_listener(record_session_activity)
         reconciled_jobs = await container.runtime_service.reconcile_stale_executions()
         if reconciled_jobs:
             logger.warning(
@@ -119,19 +165,28 @@ async def lifespan(_: FastAPI):
         await container.session_generation_service.start()
         await container.terminal_steering_service.start()
         await container.goal_runtime_service.resume_active_goals()
+        activity_prune_task = asyncio.create_task(
+            _prune_workspace_activity_periodically(container)
+        )
         try:
             yield
         finally:
+            activity_prune_task.cancel()
+            await asyncio.gather(activity_prune_task, return_exceptions=True)
             await container.node_debug_service.close()
             await container.terminal_steering_service.shutdown()
             await container.session_generation_service.shutdown()
             await container.job_event_bus.unregister_durable_listener(
                 container.goal_runtime_service.on_event
             )
+            await container.job_event_bus.unregister_durable_listener(
+                record_session_activity
+            )
             await container.config_service.stop_watching()
             await container.workspace_file_watch_service.shutdown()
             await container.tool_test_service.shutdown()
             await container.trace_event_recorder.stop()
+            container.workspace_activity_service.close()
     finally:
         await container.mcp_runtime_manager.shutdown()
         _.state.container = None
@@ -166,6 +221,7 @@ async def health():
 
 
 app.include_router(workspace_router, prefix="/api/v1")
+app.include_router(session_activity_router, prefix="/api/v1")
 app.include_router(runtime_router, prefix="/api/v1")
 app.include_router(sessions_router, prefix="/api/v1")
 app.include_router(session_turns_router, prefix="/api/v1")

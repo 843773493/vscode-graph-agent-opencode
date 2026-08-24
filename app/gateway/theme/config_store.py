@@ -37,7 +37,16 @@ def _gateway_config_file_revision() -> str:
     return digest.hexdigest()
 
 
-def load_validated_theme_config(*, gateway_root: Path) -> GatewayConfig:
+def load_validated_theme_config(
+    *,
+    gateway_root: Path,
+    config: GatewayConfig | None = None,
+) -> GatewayConfig:
+    if config is not None:
+        definitions = theme_definitions(config)
+        for theme_id in definitions:
+            resolve_theme(theme_id, config=config, gateway_root=gateway_root)
+        return config
     config_path = get_user_gateway_config_path()
     with _THEME_CONFIG_LOCK:
         cached = _THEME_CONFIG_SNAPSHOTS.get(config_path)

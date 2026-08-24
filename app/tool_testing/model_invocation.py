@@ -16,14 +16,16 @@ from litellm.exceptions import (
     Timeout,
 )
 
+from app.agents.providers.litellm_content import visible_text
 from app.prompting import internal_message_factory
-
 
 MAX_MODEL_CALLS_PER_ATTEMPT = 3
 MAX_TRANSIENT_RETRIES = 3
 TRANSIENT_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
 
-_REASONING_BLOCK_TYPES = frozenset({"reasoning", "thinking"})
+_REASONING_BLOCK_TYPES = frozenset(
+    {"reasoning", "thinking", "redacted_thinking"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +93,7 @@ async def probe_tool_call_with_transient_retries(
                 ),
                 transient_retries=retry_index,
                 failure=result.failure,
-                exchanges=tuple([*all_exchanges, *result.exchanges]),
+                exchanges=(*all_exchanges, *result.exchanges),
             )
         except ToolCallProbeInvocationError as error:
             total_model_calls += error.model_calls
@@ -266,25 +268,22 @@ async def probe_tool_call(
 
 def _is_reasoning_only(response: AIMessage) -> bool:
     content = response.content
-    if isinstance(content, str):
-        reasoning_content = response.additional_kwargs.get("reasoning_content")
-        return not content.strip() and bool(reasoning_content)
     if not isinstance(content, list) or not content:
+        return False
+    if visible_text(content).strip():
         return False
 
     saw_reasoning = False
     for block in content:
-        if isinstance(block, str):
-            if block.strip():
-                return False
-            continue
         if not isinstance(block, dict):
             return False
         block_type = block.get("type")
         if block_type in _REASONING_BLOCK_TYPES:
             saw_reasoning = True
             continue
-        if block_type == "text" and not str(block.get("text") or "").strip():
+        if block_type in {"text", "output_text"} and not str(
+            block.get("text") or ""
+        ).strip():
             continue
         return False
     return saw_reasoning

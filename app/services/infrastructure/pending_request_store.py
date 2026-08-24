@@ -15,7 +15,7 @@ from app.schemas.public_v2.pending_request import (
     PendingRequestSummaryListDTO,
 )
 
-_PENDING_HEADER_VERSION = 1
+_PENDING_HEADER_VERSION = 2
 _PENDING_HEADER_MAX_BYTES = 64 * 1024
 _PENDING_SUMMARY_LIMIT = 8
 
@@ -23,6 +23,7 @@ _PENDING_SUMMARY_LIMIT = 8
 class _PendingRequestHeader(BaseModel):
     version: int = _PENDING_HEADER_VERSION
     request_count: int = Field(ge=0)
+    snapshot_version: int = Field(default=0, ge=0)
     summaries: list[PendingRequestSummaryDTO] = Field(default_factory=list)
 
 
@@ -43,10 +44,17 @@ class PendingRequestStore:
         path = self._path(session_id)
         if not path.exists():
             return []
-        payload = await asyncio.to_thread(self._read_detail, path)
-        if not isinstance(payload, list):
-            raise TypeError(f"待处理消息文件必须是 JSON 数组: {path}")
-        return [PendingRequestDTO.model_validate(item) for item in payload]
+        try:
+            payload = await asyncio.to_thread(self._read_detail, path)
+            if not isinstance(payload, list):
+                raise TypeError(f"待处理消息文件必须是 JSON 数组: {path}")
+            requests = [PendingRequestDTO.model_validate(item) for item in payload]
+            self._validate_records(session_id, requests)
+        except Exception as error:
+            raise RuntimeError(
+                f"待处理队列恢复失败: session_id={session_id}, path={path}, reason={error}"
+            ) from error
+        return requests
 
     async def migrate_schema(self, session_id: str) -> None:
         path = self._path(session_id)
@@ -54,9 +62,10 @@ class PendingRequestStore:
             return
         if await asyncio.to_thread(self._is_current_schema, path):
             return
-        requests = await asyncio.to_thread(self._read_legacy_requests, path)
-        content = self._serialize_current(requests)
-        await asyncio.to_thread(self._atomic_write, path, content)
+        raise RuntimeError(
+            "检测到旧 pending kind 元数据；新 FIFO 实现不提供兼容迁移，"
+            f"请在启用新实现前清理该队列文件: session_id={session_id}, path={path}"
+        )
 
     async def migrate_all(self) -> int:
         migrated = 0
@@ -95,6 +104,7 @@ class PendingRequestStore:
             session_id=session_id,
             requests=items,
             request_count=header.request_count,
+            snapshot_version=header.snapshot_version,
             truncated=len(items) < header.request_count,
         )
 
@@ -105,6 +115,7 @@ class PendingRequestStore:
     ) -> None:
         path = self._path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        self._validate_records(session_id, requests)
         content = self._serialize_current(requests)
         await asyncio.to_thread(self._atomic_write, path, content)
 
@@ -117,10 +128,17 @@ class PendingRequestStore:
         )
         header = _PendingRequestHeader(
             request_count=len(requests),
+            snapshot_version=max(
+                (item.snapshot_version for item in requests),
+                default=0,
+            ),
             summaries=[
                 PendingRequestSummaryDTO(
                     job_id=item.job_id,
                     message_id=item.message_id,
+                    enqueue_sequence=item.enqueue_sequence,
+                    delivery_policy=item.delivery_policy,
+                    status=item.status,
                     updated_at=item.updated_at,
                 )
                 for item in requests[:_PENDING_SUMMARY_LIMIT]
@@ -133,6 +151,21 @@ class PendingRequestStore:
                 f"bytes={len(header_line)}, max={_PENDING_HEADER_MAX_BYTES}"
             )
         return header_line + detail.encode("utf-8") + b"\n"
+
+    @staticmethod
+    def _validate_records(
+        session_id: str,
+        requests: list[PendingRequestDTO],
+    ) -> None:
+        sequences = [request.enqueue_sequence for request in requests]
+        if len(sequences) != len(set(sequences)):
+            raise RuntimeError(
+                f"待处理队列存在重复入队序号: session_id={session_id}, sequences={sequences}"
+            )
+        if sequences != sorted(sequences):
+            raise RuntimeError(
+                f"待处理队列入队序号未严格递增: session_id={session_id}, sequences={sequences}"
+            )
 
     async def delete(self, session_id: str) -> None:
         path = self._path(session_id)
@@ -161,14 +194,6 @@ class PendingRequestStore:
         except (RuntimeError, ValueError):
             return False
         return True
-
-    @staticmethod
-    def _read_legacy_requests(path: Path) -> list[PendingRequestDTO]:
-        raw = path.read_text(encoding="utf-8")
-        payload = json.loads(raw)
-        if not isinstance(payload, list):
-            raise TypeError(f"旧待处理消息文件必须是 JSON 数组: {path}")
-        return [PendingRequestDTO.model_validate(item) for item in payload]
 
     @classmethod
     def _read_detail(cls, path: Path) -> object:

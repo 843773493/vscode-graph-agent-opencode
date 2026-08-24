@@ -9,7 +9,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,7 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
     source_session_id = source["session_id"]
     message_timestamp = datetime.now(UTC).isoformat()
 
-    checkpointer = FileSystemCheckpointSaver(
+    checkpointer = RolloutCheckpointSaver(
         sessions_dir=Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
     )
     checkpoint = {
@@ -40,6 +40,7 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
                         content="项目代号是 ORBIT",
                         response_metadata={
                             "message_id": "msg_orbit_user",
+                            "turn_id": "turn-orbit-1",
                             "created_at": message_timestamp,
                             "updated_at": message_timestamp,
                         },
@@ -67,6 +68,11 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
         {"source": "loop", "step": 1, "parents": {}},
         {"messages": 1, "scratchpad": 1},
     )
+    checkpointer.finalize_turn(
+        session_id=source_session_id,
+        turn_id="turn-orbit-1",
+        final_message_id="msg_orbit_assistant",
+    )
 
     fork_response = await client.post(
         f"/api/v1/sessions/{source_session_id}/fork-context"
@@ -75,7 +81,7 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
     child = fork_response.json()["data"]
     child_session_id = child["session_id"]
 
-    assert child["parent_session_id"] == source_session_id
+    assert child["parent_session_id"] is None
     assert child["context_source_session_id"] == source_session_id
     assert child["current_agent_id"] == source["current_agent_id"]
     assert child["title"] == "上下文 Fork E2E（上下文副本）"
@@ -90,8 +96,8 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
     child_path = Path(e2e_workspace_root_path) / ".boxteam" / "sessions" / nodes[
         child_session_id
     ]["storage_relative_path"]
-    assert child_path.parent == source_path / "children"
-    assert nodes[source_session_id]["has_children"] is True
+    assert child_path.parent == source_path.parent
+    assert nodes[source_session_id]["has_children"] is False
 
     source_state_response = await client.get(
         f"/api/v1/sessions/{source_session_id}/agent-state/messages"

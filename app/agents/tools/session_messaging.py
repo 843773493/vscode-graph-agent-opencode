@@ -11,7 +11,7 @@ from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.identifier import create_prefixed_id
 from app.prompting import PromptSection, internal_message_factory
-from app.schemas.public_v2.pending_request import MessageDispatchMode
+from app.schemas.public_v2.pending_request import DeliveryPolicy
 
 
 def create_send_message_to_session_tool(
@@ -69,14 +69,11 @@ def create_send_message_to_session_tool(
                 description="是否模拟普通用户发送；false 时由系统注入发送方身份并包装跨会话提醒",
             ),
         ),
-        dispatch_mode=(
-            MessageDispatchMode,
+        delivery_policy=(
+            DeliveryPolicy,
             Field(
-                default="queued",
-                description=(
-                    "目标 Session 的调度方式：queued 排队，steering 在安全边界引导，"
-                    "immediate 取消当前 Job 后立即处理"
-                ),
+                default="after_turn",
+                description="目标 Session 的投递边界：turn 结束、tool-result 后或 interrupt 后",
             ),
         ),
     )
@@ -90,7 +87,7 @@ def create_send_message_to_session_tool(
         kind: Literal["question", "reply", "progress", "result"] = "result",
         reply_to_communication_id: str | None = None,
         simulate_user: bool = False,
-        dispatch_mode: MessageDispatchMode = "queued",
+        delivery_policy: DeliveryPolicy = "after_turn",
     ) -> dict[str, Any]:
         """向目标 session 发送消息并启动任务。
 
@@ -157,20 +154,20 @@ def create_send_message_to_session_tool(
                     metadata=dict(internal_message.metadata),
                     internal_message=(None if simulate_user else internal_message),
                     simulate_user=simulate_user,
-                    dispatch_mode=dispatch_mode,
+                    delivery_policy=delivery_policy,
                     idempotency_key=communication_id,
                 )
             elif simulate_user:
                 result = await session_orchestrator.create_and_run(
                     target_session_id,
                     content,
-                    dispatch_mode=dispatch_mode,
+                    delivery_policy=delivery_policy,
                 )
             else:
                 result = await session_orchestrator.create_and_run_internal(
                     target_session_id,
                     internal_message,
-                    dispatch_mode=dispatch_mode,
+                    delivery_policy=delivery_policy,
                 )
         except WorkspaceSessionContextAccessError as error:
             raise ValueError(str(error)) from error
@@ -189,12 +186,7 @@ def create_send_message_to_session_tool(
             "kind": kind,
             "reply_required": kind == "question",
             "reply_to_communication_id": reply_to_communication_id,
-            "dispatch_mode": dispatch_mode,
-            "interrupted_job_id": (
-                result.dispatch.blocked_by_job_id
-                if dispatch_mode == "immediate" and result.status == "queued"
-                else None
-            ),
+            "delivery_policy": delivery_policy,
         }
 
     return send_message_to_session

@@ -5,7 +5,11 @@ import {
   type MutableRefObject,
 } from "react";
 import { HttpRequestError } from "../../api/http";
-import { getSessionTurnDetails } from "../../api/sessionTurnHistory";
+import {
+  loadSessionHistory,
+  StaleTurnReferenceHttpError,
+  type TurnHistoryInclude,
+} from "../../api/sessionTurnHistory";
 import {
   applyTurnDetails,
   createSessionTurnTimeline,
@@ -17,6 +21,27 @@ import {
 } from "../../state/session/turnTimeline";
 import type { TurnDetailBatchRequest } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
+
+const TURN_DETAIL_COMMIT_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const;
+
+async function waitForTurnCommit(
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) return false;
+  await new Promise<void>((resolve) => {
+    const timer = globalThis.setTimeout(resolve, delayMs);
+    signal.addEventListener(
+      "abort",
+      () => {
+        globalThis.clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+  return !signal.aborted;
+}
 
 function timelineForScope(
   timelines: Map<string, SessionTurnTimeline>,
@@ -50,11 +75,12 @@ export function useTurnDetailLoader({
   generationRef: MutableRefObject<number>;
   requestSignal: AbortSignal;
   setState: SetAppState;
-  onMissingTurn: () => void;
+  onMissingTurn: (turnIds: string[]) => void;
 }): (
   turnIds: string[],
   requestIdentity?: string | null,
   refreshAfterInFlight?: boolean,
+  include?: TurnHistoryInclude[],
 ) => Promise<void> {
   const inFlightByTurnId = useRef(new Map<string, {
     requestIdentity: string | null;
@@ -73,6 +99,7 @@ export function useTurnDetailLoader({
   }
   const requestNewDetails = useCallback(async (
     requestIds: TurnDetailBatchRequest["turn_ids"],
+    include?: TurnHistoryInclude[],
   ) => {
     if (!apiPort || !sessionId || !sessionCacheKey) return;
     const targetGeneration = generationRef.current;
@@ -90,20 +117,50 @@ export function useTurnDetailLoader({
     });
 
     try {
-      const batch = await getSessionTurnDetails(
-        apiPort,
-        sessionId,
-        requestIds,
-        workspaceId,
-        requestSignal,
-      );
+      let page: Awaited<ReturnType<typeof loadSessionHistory>> | null = null;
+      for (
+        let attempt = 0;
+        attempt <= TURN_DETAIL_COMMIT_RETRY_DELAYS_MS.length;
+        attempt += 1
+      ) {
+        try {
+          page = await loadSessionHistory(
+            apiPort,
+            sessionId,
+            {
+              direction: "around",
+              turn_ids: requestIds,
+              ...(include ? { include } : {}),
+            },
+            workspaceId,
+            requestSignal,
+          );
+          break;
+        } catch (error) {
+          if (
+            !(error instanceof HttpRequestError)
+            || error.status !== 404
+            || attempt >= TURN_DETAIL_COMMIT_RETRY_DELAYS_MS.length
+          ) {
+            throw error;
+          }
+          const shouldContinue = await waitForTurnCommit(
+            TURN_DETAIL_COMMIT_RETRY_DELAYS_MS[attempt],
+            requestSignal,
+          );
+          if (!shouldContinue) return;
+        }
+      }
+      if (page === null) {
+        throw new Error("Turn 详情请求未返回结果");
+      }
       startTransition(() => {
         setState((previous) => {
           const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
           if (timeline.generation !== targetGeneration) return previous;
           const epochDecision = decideTurnProjectionEpoch(
             timeline.projectionEpoch,
-            batch.projection_epoch,
+            page.projection_epoch,
           );
           if (epochDecision === "discard_older") return previous;
           if (epochDecision === "refresh_bootstrap") {
@@ -118,15 +175,22 @@ export function useTurnDetailLoader({
             turnTimelinesBySession: writeTurnTimelineCache(
               previous.turnTimelinesBySession,
               sessionCacheKey,
-              applyTurnDetails(timeline, batch),
+            applyTurnDetails(timeline, {
+              items: page.items,
+              projection_epoch: page.projection_epoch,
+            }),
             ),
           };
         });
       });
     } catch (error) {
       if (requestSignal.aborted) return;
+      if (error instanceof StaleTurnReferenceHttpError) {
+        onMissingTurn(error.detail.turn_ids);
+        return;
+      }
       if (error instanceof HttpRequestError && error.status === 404) {
-        onMissingTurn();
+        onMissingTurn(requestIds);
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -158,6 +222,7 @@ export function useTurnDetailLoader({
     turnIds: string[],
     requestIdentity: string | null = null,
     refreshAfterInFlight: boolean = false,
+    include?: TurnHistoryInclude[],
   ) => {
     if (!apiPort || !sessionId || !sessionCacheKey || turnIds.length === 0) return;
     const requestIds = detailRequestIds(turnIds);
@@ -185,6 +250,7 @@ export function useTurnDetailLoader({
 
             const request = requestNewDetails(
               [turnId] as TurnDetailBatchRequest["turn_ids"],
+              include,
             );
             inFlightByTurnId.current.set(turnId, {
               requestIdentity: null,
@@ -236,6 +302,7 @@ export function useTurnDetailLoader({
       let request: Promise<void>;
       request = requestNewDetails(
         newIds as TurnDetailBatchRequest["turn_ids"],
+        include,
       ).finally(() => {
         for (const turnId of newIds) {
           if (inFlightByTurnId.current.get(turnId)?.request === request) {

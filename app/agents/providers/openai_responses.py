@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import litellm
 from langchain_core.callbacks import (
@@ -16,12 +17,15 @@ from langchain_openai.chat_models.base import (
     _convert_responses_chunk_to_generation_chunk,
 )
 
+from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.providers.litellm_chat import (
     BoxteamLiteLLMChatModel,
-    _StreamPartState,
     _message_chunk_token,
+    _StreamPartState,
 )
-from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+from app.agents.providers.litellm_content import (
+    project_ai_message_content,
+)
 from app.agents.upstream_request_trace import attach_upstream_trace_callback
 
 
@@ -63,85 +67,100 @@ def _responses_usage_metadata(usage: Any) -> UsageMetadata:
 class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
     """LiteLLM Responses API 包装层，保留加密 reasoning 和标准 content blocks。"""
 
-    responses_include: list[str] = ["reasoning.encrypted_content"]
+    responses_include: ClassVar[list[str]] = ["reasoning.encrypted_content"]
     responses_store: bool = False
+    reasoning_items_summary_replay: bool = False
+    reasoning_items_encrypted_replay: bool = False
 
-    @staticmethod
-    def _history_messages(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+    def _history_messages(self, messages: Sequence[BaseMessage]) -> list[BaseMessage]:
         prepared: list[BaseMessage] = []
         for message in messages:
-            if not isinstance(message, AIMessage) or not isinstance(message.content, list):
+            if not isinstance(message, AIMessage):
                 prepared.append(message)
                 continue
 
-            content: list[Any] = []
-            for block in message.content:
-                if not isinstance(block, dict):
-                    content.append(block)
-                    continue
-                block_type = block.get("type")
-                extras = block.get("extras")
-                if block_type == "reasoning" and isinstance(extras, dict):
-                    response_item = extras.get("response_item")
-                    if isinstance(response_item, dict):
-                        content.append(_without_server_state(response_item))
+            projection = project_ai_message_content(
+                message.content,
+                target_provider=self.provider_id,
+                target_capabilities={
+                    "reasoning_items",
+                    *(
+                        {"reasoning_summary"}
+                        if self.reasoning_items_summary_replay
+                        else set()
+                    ),
+                    *(
+                        {"encrypted_reasoning_replay"}
+                        if self.reasoning_items_encrypted_replay
+                        else set()
+                    ),
+                },
+                response_metadata=message.response_metadata,
+            )
+            content = projection["content"]
+            projected_items = projection.get("reasoning_items")
+            prepared_content: list[Any] = []
+            if isinstance(content, str) and content:
+                prepared_content.append({"type": "text", "text": content})
+            elif isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
                         continue
-                if block_type == "reasoning":
-                    # store=false 时，只有 provider 服务端 ID、没有加密内容的
-                    # reasoning item 无法跨请求安全回放。LangChain 会把内部
-                    # provider_part_id 提升成 Responses 顶层字段，上游不接受。
-                    continue
-                if block_type in {"text", "output_text"}:
-                    text_block: dict[str, Any] = {
-                        "type": "text",
-                        "text": block.get("text", ""),
-                    }
-                    if isinstance(extras, dict) and isinstance(extras.get("phase"), str):
-                        text_block["phase"] = extras["phase"]
-                    content.append(text_block)
-                    continue
-                content.append(_without_server_state(block))
+                    block_type = block.get("type")
+                    if block_type in {"text", "output_text"}:
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            prepared_content.append({"type": "text", "text": text})
+                    elif block_type == "refusal":
+                        prepared_content.append(dict(block))
+                    elif block_type in {"image", "image_url", "input_image"}:
+                        prepared_content.append(_without_server_state(block))
+            if isinstance(projected_items, list):
+                prepared_content.extend(
+                    dict(item)
+                    for item in projected_items
+                    if isinstance(item, dict)
+                )
             has_tool_calls = bool(
                 message.tool_calls
                 or message.additional_kwargs.get("tool_calls")
                 or message.additional_kwargs.get("function_call")
             )
-            if content or has_tool_calls:
-                prepared.append(message.model_copy(update={"content": content}))
+            reasoning_content = [
+                block
+                for block in prepared_content
+                if isinstance(block, dict) and block.get("type") == "reasoning"
+            ]
+            visible_content = [
+                block
+                for block in prepared_content
+                if not (isinstance(block, dict) and block.get("type") == "reasoning")
+            ]
+            if reasoning_content and (visible_content or has_tool_calls):
+                prepared.append(
+                    message.model_copy(
+                        update={
+                            "content": reasoning_content,
+                            "tool_calls": [],
+                        }
+                    )
+                )
+                prepared_content = visible_content
+            if prepared_content or has_tool_calls:
+                prepared.append(message.model_copy(update={"content": prepared_content}))
         return prepared
 
     @staticmethod
     def _normalize_response_block(block: dict[str, Any]) -> dict[str, Any] | None:
         block_type = block.get("type")
-        if block_type == "reasoning":
-            reasoning = extract_reasoning_summary(block.get("summary"))
-            result: dict[str, Any] = {
-                "type": "reasoning",
-                "reasoning": reasoning,
-                **({"id": block["id"]} if isinstance(block.get("id"), str) else {}),
-            }
-            if isinstance(block.get("encrypted_content"), str) and block[
-                "encrypted_content"
-            ]:
-                result["extras"] = {
-                    "response_item": _without_server_state(block)
-                }
+        if block_type in {"reasoning", "text", "output_text", "refusal"}:
+            # Responses/LiteLLM 已经完成了 provider block 的组装。这里仅做
+            # 类型归一，不按字段白名单重建，保留 annotations、phase 以及
+            # provider 后续增加的字段。
+            result = copy.deepcopy(block)
+            if block_type == "output_text":
+                result["type"] = "text"
             return result
-        if block_type in {"text", "output_text"}:
-            extras: dict[str, Any] = {}
-            if isinstance(block.get("phase"), str):
-                extras["phase"] = block["phase"]
-            result: dict[str, Any] = {
-                "type": "text",
-                "text": block.get("text", ""),
-            }
-            if isinstance(block.get("id"), str):
-                result["id"] = block["id"]
-            if extras:
-                result["extras"] = extras
-            return result
-        if block_type == "refusal":
-            return dict(block)
         return None
 
     def _normalize_generation_chunk(
@@ -161,9 +180,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     normalized.append(part_state.decorate(normalized_block))
             content = normalized
         return ChatGenerationChunk(
-            message=message.model_copy(
-                update={"content": content}
-            ),
+            message=message.model_copy(update={"content": content}),
             generation_info=generation_chunk.generation_info,
         )
 
@@ -222,7 +239,9 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 instruction_parts.append(content)
                 continue
             if not isinstance(content, list):
-                raise TypeError("ChatGPT system message content 必须是字符串或内容块列表")
+                raise TypeError(
+                    "ChatGPT system message content 必须是字符串或内容块列表"
+                )
             for block in content:
                 if not isinstance(block, dict) or block.get("type") not in {
                     "text",
@@ -271,17 +290,21 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             event_type == "response.output_item.added"
             and event_item_dict.get("type") == "reasoning"
         ):
-            output_index = int(getattr(event, "output_index"))
+            output_index = int(event.output_index)
             if current_output_index != output_index:
                 current_index += 1
             current_output_index = output_index
             current_sub_index = 0
-            block: dict[str, Any] = {
-                "type": "reasoning",
-                "reasoning": extract_reasoning_summary(event_item_dict.get("summary")),
-            }
-            if isinstance(event_item_dict.get("id"), str):
-                block["id"] = event_item_dict["id"]
+            block = self._normalize_response_block(event_item_dict)
+            if block is None:
+                raise RuntimeError("Responses reasoning item 转换失败")
+            has_body = bool(
+                block.get("content")
+                or block.get("summary")
+                or block.get("encrypted_content")
+            )
+            if not has_body:
+                return current_index, current_output_index, current_sub_index, None
             chunk = ChatGenerationChunk(
                 message=AIMessageChunk(content=[part_state.decorate(block)])
             )
@@ -293,7 +316,6 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             block = self._normalize_response_block(event_item_dict)
             if block is None:
                 raise RuntimeError("Responses reasoning item 转换失败")
-            block["reasoning"] = ""
             chunk = ChatGenerationChunk(
                 message=AIMessageChunk(content=[part_state.decorate(block)])
             )
@@ -434,6 +456,11 @@ def build_openai_responses_model(
     request_options: dict[str, Any],
     prompt_cache_key: str | None,
 ) -> BoxteamOpenAIResponsesModel:
+    api_mode = parse_provider_api_mode(provider)
+    if api_mode.protocol != "responses":
+        raise ValueError(
+            "build_openai_responses_model 只接受 api_mode.protocol='responses'"
+        )
     request_parameters: dict[str, Any] = {}
     for name in ("temperature", "top_p", "max_output_tokens"):
         if name in runtime_config:
@@ -442,10 +469,16 @@ def build_openai_responses_model(
     if provider["custom_llm_provider"] == "chatgpt":
         if prompt_cache_key is not None:
             request_parameters["litellm_session_id"] = prompt_cache_key
-    else:
+    elif api_mode.request_features.prompt_cache_key:
         request_parameters["prompt_cache_key"] = (
             prompt_cache_key or f"boxteam:{provider['id']}"
         )
+
+    responses_include = (
+        ["reasoning.encrypted_content"]
+        if api_mode.supports_reasoning.reasoning_items_encrypted_content
+        else []
+    )
 
     return BoxteamOpenAIResponsesModel(
         model=provider["model"],
@@ -457,4 +490,7 @@ def build_openai_responses_model(
         streaming=True,
         model_kwargs=request_parameters,
         provider_id=provider.get("id"),
+        responses_include=responses_include,
+        reasoning_items_summary_replay=api_mode.supports_reasoning.reasoning_items_summary,
+        reasoning_items_encrypted_replay=api_mode.supports_reasoning.reasoning_items_encrypted_content,
     )

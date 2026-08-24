@@ -10,6 +10,7 @@ from .session_resource import SessionResourceKind
 
 TitleSource = Literal["default", "user", "auto"]
 SessionKind = Literal["normal", "context_fork", "delegated"]
+SessionForkMode = Literal["context_fork", "history_prefix_fork", "full_rollout_copy"]
 DelegationStartStatus = Literal["pending", "running", "failed"]
 
 
@@ -39,6 +40,15 @@ class SessionCreateRequest(BaseModel):
     agent_id: Optional[str] = None
     title_source: Optional[TitleSource] = None
     folder_id: Optional[str] = None
+
+
+class SessionForkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: SessionForkMode = "context_fork"
+    turn_id: str | None = None
+    anchor_mode: Literal["inclusive", "before"] = "inclusive"
+    pinned: bool = False
 
 
 class SessionUpdateRequest(BaseModel):

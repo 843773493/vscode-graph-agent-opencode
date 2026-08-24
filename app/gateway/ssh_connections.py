@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from app.gateway.config import load_gateway_config
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.gateway.schemas import (
+from app.schemas.gateway import (
     AddSshWorkspaceRequest,
     SshConnectionOptionDTO,
 )

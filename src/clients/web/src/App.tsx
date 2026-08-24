@@ -1,6 +1,7 @@
 import AgentStatePanel from "./components/AgentStatePanel";
 import BootstrapState from "./components/BootstrapState";
 import ChatPanel from "./components/ChatPanel";
+import PendingQueueBar from "./components/chat/PendingQueueBar";
 import Composer from "./components/composer/Composer";
 import EventQueuePanel from "./components/EventQueuePanel";
 import AgentSessionsPanel from "./components/AgentSessionsPanel";
@@ -156,7 +157,6 @@ export default function AppShell() {
     createSession,
     selectSession,
     openWorkspaceSession,
-    startNewSessionDraft,
     forkSessionContext,
     renameSession,
     setSessionParent,
@@ -181,13 +181,15 @@ export default function AppShell() {
     copySessionInformation,
     copyWorkspaceInformation,
     updateUiSettings,
+    saveSessionViewState,
     setStatus,
     replayTurn,
     updatePendingRequest,
     removePendingRequest,
     clearPendingRequests,
-    reorderPendingRequests,
-    sendPendingRequestImmediately,
+    updatePendingRequestPolicy,
+    loadAroundTurn,
+    loadNewerMessages,
     loadOlderMessages,
     loadTurnDetails,
     loadAgentStateMessageRawContent,
@@ -195,6 +197,15 @@ export default function AppShell() {
     loadOlderTraceHistory,
     refreshTraceHistory,
   } = useAppState();
+  const loadCurrentTurnToolDetails = useCallback(
+    (turnId: string) => loadTurnDetails(
+      [turnId],
+      `tool-details:${turnId}`,
+      false,
+      ["user", "tool_call", "tool_result", "final_response"],
+    ),
+    [loadTurnDetails],
+  );
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
   const [sessionCatalogRefreshVersions, setSessionCatalogRefreshVersions] =
     useState<ReadonlyMap<string, number>>(new Map());
@@ -499,6 +510,7 @@ export default function AppShell() {
     apiPort: resolvedApiPort,
     workspaceId: activeSessionWorkspaceId,
     sessionId: activeSession?.session_id ?? null,
+    enabled: auxiliaryVisible && auxiliaryTab === "debug",
     onStatusChange: setStatus,
   });
   const extensionResourceKey = extensionWindowRequest?.workspaceId &&
@@ -1162,10 +1174,32 @@ export default function AppShell() {
   const resetGatewayPanelHeight = () => {
     updateBottomPanelState({ height: DEFAULT_GATEWAY_PANEL_HEIGHT });
   };
-  const handleCreateSession = (workspaceId?: string | null) => {
+  const handleCreateSession = async (workspaceId?: string | null) => {
     setNameDialog(null);
     setNameDialogError(null);
-    startNewSessionDraft(workspaceId);
+    // 顶部“新建会话”属于当前 Gateway 工作区；只有尚未激活工作区时
+    // 才回退到系统默认 home，避免从测试/远程工作区误建到 home。
+    const targetWorkspaceId = workspaceId
+      ?? state.activeGatewayWorkspaceId
+      ?? state.gatewayWorkspaces.find(
+        (workspace) => workspace.system_default,
+      )?.workspace_id;
+    if (!targetWorkspaceId) {
+      const error = new Error("未找到默认 home 工作区，无法创建会话");
+      setStatus(`创建会话失败: ${error.message}`);
+      throw error;
+    }
+    try {
+      if (targetWorkspaceId !== state.activeGatewayWorkspaceId) {
+        await activateGatewayWorkspace(targetWorkspaceId);
+      }
+      await createSession(DEFAULT_SESSION_TITLE, targetWorkspaceId);
+      invalidateSessionCatalog(targetWorkspaceId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`创建会话失败: ${message}`);
+      throw error;
+    }
   };
   const handleCreateSessionInFolder = async (
     workspaceId: string,
@@ -1406,8 +1440,10 @@ export default function AppShell() {
             conversations={conversations}
             expandDetails={state.expandDetails}
             hasActiveSession={Boolean(activeSession)}
-            hasOlderMessages={activeTurnTimeline?.hasMore ?? false}
-            loadingOlderMessages={activeTurnTimeline?.loadingOlder ?? false}
+            hasOlderMessages={activeTurnTimeline?.hasBefore ?? activeTurnTimeline?.hasMore ?? false}
+            loadingOlderMessages={activeTurnTimeline?.loadingBefore ?? activeTurnTimeline?.loadingOlder ?? false}
+            hasNewerMessages={activeTurnTimeline?.hasAfter ?? false}
+            loadingNewerMessages={activeTurnTimeline?.loadingAfter ?? false}
             historyLoading={Boolean(activeSession) && (
               !activeTurnTimeline || activeTurnTimeline.phase === "bootstrapping"
             )}
@@ -1416,8 +1452,11 @@ export default function AppShell() {
             projectionEpoch={activeTurnTimeline?.projectionEpoch ?? null}
             historyError={activeTurnTimeline?.error ?? null}
             onLoadOlderMessages={loadOlderMessages}
+            onLoadNewerMessages={loadNewerMessages}
+            onLoadAroundTurn={loadAroundTurn}
             loadingDetailTurnIds={activeTurnTimeline?.loadingDetailIds ?? []}
             onLoadTurnDetails={loadTurnDetails}
+            onLoadToolDetails={loadCurrentTurnToolDetails}
             onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
             onRetryHistory={refreshTurnHistory}
             sessionChangeSummary={activeSessionChangeHint}
@@ -1426,9 +1465,14 @@ export default function AppShell() {
             onReplayTurn={replayTurn}
             onUpdatePending={updatePendingRequest}
             onRemovePending={removePendingRequest}
-            onClearPending={clearPendingRequests}
-            onReorderPending={reorderPendingRequests}
-            onSendPendingImmediately={sendPendingRequestImmediately}
+            onChangePendingPolicy={updatePendingRequestPolicy}
+            viewState={
+              activeSessionCacheKey
+                ? state.gatewayUserViewStates.get(activeSessionCacheKey) ?? null
+                : null
+            }
+            onViewStateChange={saveSessionViewState}
+            onViewStateRestoreStatus={setStatus}
           />
         </div>
       </>
@@ -1463,7 +1507,9 @@ export default function AppShell() {
           if (workbenchView === "gateway") {
             handleWorkbenchViewChange("sessions");
           }
-          handleCreateSession();
+          void handleCreateSession().catch((error: unknown) => {
+            console.error("在默认 home 工作区创建会话失败", error);
+          });
         }}
         auxiliaryVisible={auxiliaryVisible}
         onToggleAuxiliaryPanel={handleToggleAuxiliaryPanel}
@@ -1597,8 +1643,19 @@ export default function AppShell() {
               style={{ flexBasis: 0, flexGrow: mainAreaRatios.chat }}
             >
               <div className="session-view-surface">
-                <div className="session-view-content">{renderContentView()}</div>
-                <Composer />
+                {activeSession ? (
+                  <>
+                    <div className="session-view-content">{renderContentView()}</div>
+                    <PendingQueueBar
+                      conversations={conversations}
+                      onClear={clearPendingRequests}
+                      onUpdate={updatePendingRequest}
+                      onRemove={removePendingRequest}
+                      onChangePolicy={updatePendingRequestPolicy}
+                    />
+                    <Composer />
+                  </>
+                ) : null}
               </div>
             </section>
           ) : null}

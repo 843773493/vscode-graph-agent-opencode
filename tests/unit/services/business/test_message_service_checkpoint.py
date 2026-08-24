@@ -6,11 +6,10 @@ import json
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.public_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
-from app.services.infrastructure.message_history_store import MessageHistoryStore
 
 
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
@@ -27,7 +26,7 @@ def _visible_metadata(message_id: str, **extra: object) -> dict[str, object]:
 
 def _create_saver(tmp_path, session_bundle_factory, session_id: str):
     session_dir = session_bundle_factory(tmp_path, session_id)
-    return FileSystemCheckpointSaver(sessions_dir=tmp_path), session_dir
+    return RolloutCheckpointSaver(sessions_dir=tmp_path), session_dir
 
 
 @pytest.mark.asyncio
@@ -64,10 +63,7 @@ async def test_message_service_loads_history_from_checkpoint(
         {"messages": 1},
     )
 
-    service = MessageService(
-        checkpointer=saver,
-        history_store=MessageHistoryStore(tmp_path),
-    )
+    service = MessageService(checkpointer=saver)
     messages = await service.list(session_id="sess1", limit=10)
 
     assert len(messages.items) == 2
@@ -83,7 +79,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, session_dir = _create_saver(
+    saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
         "sess_paged",
@@ -115,10 +111,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
         {"messages": 1},
     )
 
-    service = MessageService(
-        checkpointer=saver,
-        history_store=MessageHistoryStore(tmp_path),
-    )
+    service = MessageService(checkpointer=saver)
     latest = await service.list(session_id="sess_paged", limit=4)
     assert [item.content for item in latest.items] == [
         "问题 4",
@@ -128,7 +121,6 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
     ]
     assert latest.has_more is True
     assert latest.next_cursor is not None
-    assert (session_dir / "message_history" / "index.json").is_file()
 
     older = await service.list(
         session_id="sess_paged",
@@ -292,7 +284,7 @@ async def test_message_service_returns_empty_when_no_checkpoint(
 
 
 @pytest.mark.asyncio
-async def test_message_service_rejects_visible_message_without_persisted_identity(
+async def test_message_service_restores_identity_from_rollout_index(
     tmp_path,
     session_bundle_factory,
 ):
@@ -317,11 +309,14 @@ async def test_message_service_rejects_visible_message_without_persisted_identit
         {"messages": 1},
     )
 
-    with pytest.raises(RuntimeError, match="缺少持久化 message_id"):
-        await MessageService(checkpointer=saver).list(
-            session_id="sess_invalid_message",
-            limit=10,
-        )
+    messages = await MessageService(checkpointer=saver).list(
+        session_id="sess_invalid_message",
+        limit=10,
+    )
+
+    assert len(messages.items) == 1
+    assert messages.items[0].message_id.startswith("generated-")
+    assert messages.items[0].created_at.tzinfo is not None
 
 
 @pytest.mark.asyncio
@@ -435,7 +430,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
 
 
 @pytest.mark.asyncio
-async def test_message_service_dedupes_visible_messages_by_message_id(
+async def test_message_service_preserves_distinct_canonical_message_ids(
     tmp_path,
     session_bundle_factory,
 ):
@@ -472,12 +467,13 @@ async def test_message_service_dedupes_visible_messages_by_message_id(
 
     assert [(item.role.value, item.message_id) for item in messages.items] == [
         ("user", "msg_user_001"),
+        ("user", "langchain-copy-id"),
         ("assistant", "msg_assistant_001"),
     ]
 
 
 @pytest.mark.asyncio
-async def test_agent_state_dedupes_consecutive_duplicate_records(
+async def test_agent_state_preserves_distinct_canonical_message_records(
     tmp_path,
     session_bundle_factory,
 ):
@@ -517,8 +513,8 @@ async def test_agent_state_dedupes_consecutive_duplicate_records(
     state_snapshot = await service.get_agent_state_messages("sess_state_dedupe")
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
 
-    assert state_snapshot.message_count == 2
-    assert [record["role"] for record in records] == ["user", "assistant"]
+    assert state_snapshot.message_count == 3
+    assert [record["role"] for record in records] == ["user", "user", "assistant"]
     assert records[0]["response_metadata"]["message_id"] == "msg_user_001"
 
 

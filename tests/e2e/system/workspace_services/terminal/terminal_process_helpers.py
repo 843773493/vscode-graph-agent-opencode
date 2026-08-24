@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from tests.support.ports import E2E_PORT_BLOCK_SIZE
 
 
@@ -39,7 +39,7 @@ def seed_historical_terminal_checkpoint(
     session_id: str,
     terminal_id: str,
 ) -> None:
-    saver = FileSystemCheckpointSaver(
+    saver = RolloutCheckpointSaver(
         sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
     )
     terminal_payload = {

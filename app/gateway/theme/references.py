@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.gateway.config import GatewayConfig
-from app.gateway.schemas import WebUISettingsDTO
+from app.schemas.gateway import WebUISettingsDTO
 from app.gateway.theme.assets import import_ui_asset_file, update_ui_asset_references
 
 

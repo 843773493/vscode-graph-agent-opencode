@@ -75,14 +75,12 @@ function ThinkingSection({
           className={`codicon ${active ? "codicon-loading codicon-modifier-spin" : "codicon-check"}`}
           aria-hidden="true"
         />
-        <span className="chat-thinking-label">
-          {active ? "正在思考" : "已完成思考"}
-        </span>
+        {active ? <span className="chat-thinking-label">正在思考</span> : null}
         {!open ? (
           <span className="chat-thinking-preview">{collapsedPreview(items)}</span>
         ) : null}
         <span
-          className={`codicon ${open ? "codicon-chevron-up" : "codicon-chevron-down"}`}
+          className={`codicon ${open ? "codicon-chevron-down" : "codicon-chevron-right"}`}
           aria-hidden="true"
         />
       </button>

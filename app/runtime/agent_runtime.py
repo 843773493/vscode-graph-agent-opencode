@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -88,6 +89,7 @@ def build_session_agent_runtime(
     override_model: Any = None,
     model_routing_enabled: bool = True,
     tool_denylist: set[str] | None = None,
+    model_hidden_tool_names: frozenset[str] = frozenset(),
     preferred_provider_id: str | None = None,
     workspace_root: Path,
 ) -> Any:
@@ -133,6 +135,7 @@ def build_session_agent_runtime(
         override_model=override_model,
         model_routing_enabled=model_routing_enabled,
         tool_denylist=tool_denylist,
+        model_hidden_tool_names=model_hidden_tool_names,
         preferred_provider_id=preferred_provider_id,
         workspace_root=workspace_root,
     )
@@ -165,7 +168,11 @@ def get_configured_custom_tool_names(
     return set(custom_tool_names & policy.enabled_names)
 
 
-def build_agent_tool_definitions(agent: Any) -> list[dict[str, Any]]:
+def build_agent_tool_definitions(
+    agent: Any,
+    *,
+    extension_tools: Sequence[BaseTool] = (),
+) -> list[dict[str, Any]]:
     """返回 Agent 当前可用工具定义，隐藏 DeepAgents 图结构细节。"""
     tool_map = extract_agent_tools_by_name(agent)
     if not tool_map:
@@ -174,6 +181,11 @@ def build_agent_tool_definitions(agent: Any) -> list[dict[str, Any]]:
             "Agent 图中未找到包含 tools_by_name 的节点。\n"
             "这是严重错误，需要立即修复，不能静默降级。"
         )
+
+    for tool in extension_tools:
+        if tool.name in tool_map:
+            raise RuntimeError(f"扩展工具与 Agent 工具命名冲突: {tool.name}")
+        tool_map[tool.name] = tool
 
     tools: list[dict[str, Any]] = []
     for tool_name, tool in tool_map.items():
@@ -186,8 +198,8 @@ def build_agent_tool_definitions(agent: Any) -> list[dict[str, Any]]:
         group_fields = (
             {
                 "group_id": f"mcp:{mcp_server_id}",
-                "group_name": f"MCP · {mcp_server_id}",
-                "kind": "mcp",
+                "group_name": f"扩展工具 · MCP · {mcp_server_id}",
+                "kind": "extension",
             }
             if isinstance(mcp_server_id, str) and mcp_server_id
             else group.as_catalog_fields()

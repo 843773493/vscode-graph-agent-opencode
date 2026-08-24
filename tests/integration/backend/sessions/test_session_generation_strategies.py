@@ -2,18 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
 import commentjson
 import httpx
 import pytest
-from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.base import empty_checkpoint
 
-from app.core.checkpoint_config import build_checkpoint_config
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.ports import integration_port_block_for_file
@@ -39,7 +34,6 @@ def generation_backend(
             "model": "e2e-stub-model",
             "api_key": "e2e-local-model-key",
             "custom_llm_provider": "openai",
-            "api_mode": "chat_completions",
         }
     )
     config_path.write_text(
@@ -78,74 +72,6 @@ async def _create_session(client: httpx.AsyncClient, title: str) -> str:
     response = await client.post("/api/v1/sessions", json={"title": title})
     assert response.status_code == 200, response.text
     return str(response.json()["data"]["session_id"])
-
-
-@pytest.mark.asyncio
-async def test_v1_internal_checkpoint_migrates_before_continuation(
-    generation_client: httpx.AsyncClient,
-    generation_backend: tuple[str, Path, HTTPStubState],
-):
-    session_id = await _create_session(
-        generation_client,
-        "v1 structured prompt migration",
-    )
-    workspace_root = generation_backend[1]
-    saver = FileSystemCheckpointSaver(
-        sessions_dir=workspace_root / ".boxteam" / "sessions"
-    )
-    old_message = HumanMessage(
-        content="<system_reminder>\n旧版提醒，请继续。\n</system_reminder>",
-        response_metadata={
-            "internal": True,
-            "structured_prompt_kind": "checkpoint_reminder",
-            "structured_prompt_schema_version": 1,
-            "source": "legacy_e2e",
-        },
-    )
-    messages_version = saver.get_next_version(None, None)
-    checkpoint = empty_checkpoint()
-    checkpoint["id"] = str(uuid.uuid4())
-    checkpoint["channel_values"] = {"messages": [old_message]}
-    checkpoint["channel_versions"] = {"messages": messages_version}
-    checkpoint["updated_channels"] = ["messages"]
-    await saver.aput(
-        build_checkpoint_config(session_id),
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": messages_version},
-    )
-
-    response = await generation_client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={
-            "message": {"content": "继续，并只回复迁移成功。"},
-            "run": {"mode": "single_agent", "agent_id": "default"},
-        },
-    )
-    assert response.status_code == 200, response.text
-    await wait_for_job_done(
-        generation_client,
-        response.json()["data"]["job_id"],
-        max_attempts=20,
-    )
-
-    state_response = await generation_client.get(
-        f"/api/v1/sessions/{session_id}/agent-state/messages"
-    )
-    assert state_response.status_code == 200, state_response.text
-    records = [
-        json.loads(line)
-        for line in state_response.json()["data"]["jsonl"].splitlines()
-        if line.strip()
-    ]
-    migrated = next(
-        record
-        for record in records
-        if record.get("response_metadata", {}).get("source") == "legacy_e2e"
-    )
-    assert migrated["response_metadata"]["structured_prompt_schema_version"] == 2
-    assert 'encoding="mixed"' not in str(migrated["content"])
-    assert "旧版提醒，请继续。" in str(migrated["content"])
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: 最新 Turn 先于旧历史完整呈现
-客户端 SHALL 在会话切换时先呈现最新 Turn summary，并立即请求其 full detail；旧历史页和完整 Trace 不得阻塞这一过程。
+客户端 SHALL 在会话切换时先呈现最新 Turn summary；完整中间消息只在用户点击该 Turn 的活动统计行后请求，旧历史页和完整 Trace 不得阻塞这一过程。
 
 #### Scenario: 切换到长会话
 - **WHEN** bootstrap 返回最新 Turn summary
-- **THEN** 最新用户输入和 Job 状态先显示，随后同一 Turn 被 full detail 原位水合
+- **THEN** 最新用户输入、最终响应和活动统计先显示，完整中间消息保持未加载，直到用户明确展开该 Turn
 
 ### Requirement: Markdown 渐进且非阻塞渲染
 客户端 SHALL 先提交轻量文本或稳定骨架，超过固定阈值的 Turn detail JSON SHALL 在主线程外解码和解析，再以低优先级增强 Markdown；大型详情处理和 Markdown 解析不得阻塞 Composer 输入。
@@ -53,9 +53,20 @@
 - **WHEN** Turn 只有 `job_cancelled` 而没有 `session_interrupted`
 - **THEN** 时间线显示“任务已取消”，不显示“已由用户中断”或“运行失败”
 
-### Requirement: 长历史体验具备可重复验收
-项目 SHALL 提供隔离工作区 E2E，覆盖大量完整 Turn、大型 Markdown、慢 bootstrap、向前分页、实时更新和上下文压缩，并 SHALL 验证 Composer 先可用、最新 Turn 优先和 cursor 稳定。
+### Requirement: 历史体验具备可重复的 stub 验收
 
-#### Scenario: 真实浏览器长会话验收
-- **WHEN** E2E 在包含大量 Markdown Turn 的会话中执行切换、输入、分页和实时完成
-- **THEN** 测试以可观察 UI 和请求断言证明输入未被阻塞、最新 Turn 先出现、分页完整且旧历史未丢失
+项目 SHALL 提供隔离 workspace 的 deterministic stub integration/component/API tests，覆盖最新 1 个 Turn、around(anchor)、before/after 双向分页、活动统计折叠、当前 Turn 工具详情重载、慢历史请求和实时更新。测试 SHALL 验证 Composer 可用、最新 Turn 优先、分页完整且旧历史不丢失；本变更不要求真实模型或长时间真实浏览器 E2E。
+
+#### Scenario: stub 历史加载验收
+
+- **WHEN** 测试使用 stub API 执行会话切换、输入、向前分页和当前 Turn 工具详情切换
+- **THEN** 测试通过返回的请求参数和可观察状态证明输入未被历史读取阻塞、around/before/after 按配置加载、Turn 完整且旧历史保留
+
+### Requirement: thinking 与工具摘要默认折叠且不加载加密 payload
+
+客户端 SHALL 将每个历史 Turn 的 `thinking_blocks`、tool summary 和活动统计渲染为始终存在的折叠行；折叠行显示耗时和隐藏消息统计，`reasoning` 块显示可读思考，`summary` 块显示安全摘要，`encrypted` 块只显示加密思考提示，不显示 provider payload。默认历史响应不得包含 provider encrypted reasoning。用户展开或请求工具详情时，客户端只能请求对应的受限投影，不得把其它 Turn 的完整 assistant/tool 内容一并解析。
+
+#### Scenario: 128 Turn 混合历史
+
+- **WHEN** 测试在 128 Turn 中混合普通 reasoning、Codex encrypted reasoning、tool_call/tool_result 和 final_response，并从 8011 逐级向前加载
+- **THEN** 每个 Turn 的统计行默认折叠，around/before/after 默认只显示 user/final_response，encrypted payload 不出现在网络响应；点击一个 Turn 后只加载该 Turn 的中间详情，加载和锚点恢复达到性能预算。该测试读取复制后的确定性 mock 会话，不在运行时调用真实模型。

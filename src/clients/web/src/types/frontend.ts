@@ -11,8 +11,11 @@ import type {
   SessionGoal,
   SessionResource,
   TraceEvent,
+  TurnResponsePart,
   WebUiSettings,
-  PendingRequestKind,
+  DeliveryPolicy,
+  GatewayUserAccess,
+  GatewayUserViewState,
 } from "./backend";
 import type { SessionTurnTimeline } from "../state/session/turnTimeline";
 
@@ -69,14 +72,33 @@ export type FrontendReceivedEvent =
 
 export interface ConversationView {
   conversationId: string;
+  /**
+   * history 只允许使用 Turn projection；live 只允许使用 pending/SSE 状态。
+   * 活动 Turn 终止后必须先移除 live 视图，再由历史 projection 建立 history 视图。
+   */
+  displayMode: "history" | "live";
   /** 展示历史中的权威 Turn 身份；待处理消息和旧诊断路径没有该字段。 */
   turnId?: string;
   turnRevision?: number;
   turnItemsView?: "summary" | "full";
+  activityStats?: {
+    duration_ms: number | null;
+    message_count: number;
+  };
   sessionId: string;
   userMessage: Message | null;
   /** 当历史 trace 不完整时，用持久化 Assistant 消息恢复最终正文。 */
   assistantMessages?: Message[];
+  thinkingBlocks?: Array<{
+    kind: "reasoning" | "summary" | "encrypted";
+    text: string;
+  }>;
+  toolSummary?: Array<{
+    tool_name: string;
+    status: string;
+    tool_call_id?: string | null;
+  }>;
+  responseParts?: TurnResponsePart[];
   // 助手消息内容由 ChatPanel 从 traceEvents 聚合得到，不再在 hooks 中维护。
   events: TraceEvent[];
   status: "queued" | "running" | "done" | "error";
@@ -84,7 +106,10 @@ export interface ConversationView {
   pending: boolean;
   pendingSubmissionId?: string;
   activeJobOverlay?: boolean;
-  pendingKind?: PendingRequestKind;
+  deliveryPolicy?: DeliveryPolicy;
+  enqueueSequence?: number;
+  waitingReason?: string | null;
+  queueSnapshotVersion?: number;
   pendingPosition?: number;
   source: "turn" | "pending";
 }
@@ -118,6 +143,8 @@ export interface AppState {
   sessionHistoryReloadNonce: number;
   workspaceSwitching: boolean;
   gatewayError: string | null;
+  gatewayUserAccess: GatewayUserAccess | null;
+  gatewayUserViewStates: Map<string, GatewayUserViewState>;
   uiSettings: WebUiSettings;
   uiSettingsLoaded: boolean;
   workspaceRoot: string | null;

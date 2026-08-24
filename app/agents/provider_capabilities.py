@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from app.agents.provider_api_mode import parse_provider_api_mode
+
 ProviderCapability = str
 
 TEXT_INPUT = "text_input"
 IMAGE_INPUT = "image_input"
 VIDEO_INPUT = "video_input"
 AUDIO_INPUT = "audio_input"
-REASONING_CONTENT_REPLAY = "reasoning_content_replay"
 PROMPT_CACHE_KEY = "prompt_cache_key"
 
 SUPPORTED_PROVIDER_CAPABILITIES: frozenset[ProviderCapability] = frozenset(
@@ -18,7 +19,6 @@ SUPPORTED_PROVIDER_CAPABILITIES: frozenset[ProviderCapability] = frozenset(
         IMAGE_INPUT,
         VIDEO_INPUT,
         AUDIO_INPUT,
-        REASONING_CONTENT_REPLAY,
         PROMPT_CACHE_KEY,
     }
 )
@@ -36,23 +36,18 @@ CONTENT_BLOCK_CAPABILITY_REQUIREMENTS: dict[str, set[ProviderCapability]] = {
 
 
 def parse_provider_capabilities(provider: dict[str, Any]) -> set[ProviderCapability]:
-    """读取并严格校验 provider capabilities。"""
-    raw_capabilities = provider.get("capabilities", [])
+    """从结构化 api_mode 派生输入能力和请求特性。"""
+    api_mode = parse_provider_api_mode(provider)
     capabilities: set[ProviderCapability] = {TEXT_INPUT}
-    if not isinstance(raw_capabilities, list):
-        raise TypeError("provider.capabilities 必须是字符串数组")
-
-    for item in raw_capabilities:
-        if not isinstance(item, str):
-            raise TypeError("provider.capabilities 只能包含字符串")
-        if item not in SUPPORTED_PROVIDER_CAPABILITIES:
-            provider_id = provider.get("id") or provider.get("model") or "<unknown>"
-            supported = ", ".join(sorted(SUPPORTED_PROVIDER_CAPABILITIES))
-            raise ValueError(
-                f"provider {provider_id!r} 包含不支持的 capability: {item!r}。"
-                f"允许值: {supported}"
-            )
-        capabilities.add(item)
+    model_info = api_mode.model_info
+    if model_info.supports_vision:
+        capabilities.add(IMAGE_INPUT)
+    if model_info.supports_video_input:
+        capabilities.add(VIDEO_INPUT)
+    if model_info.supports_audio_input:
+        capabilities.add(AUDIO_INPUT)
+    if api_mode.request_features.prompt_cache_key:
+        capabilities.add(PROMPT_CACHE_KEY)
     return capabilities
 
 

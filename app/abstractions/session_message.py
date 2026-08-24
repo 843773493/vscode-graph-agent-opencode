@@ -4,7 +4,7 @@ from typing import Protocol
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.schemas.public_v2.message import MessageRunAccepted
-from app.schemas.public_v2.pending_request import MessageDispatchMode
+from app.schemas.public_v2.pending_request import DeliveryPolicy
 
 
 class SessionMessageTransportProtocol(Protocol):
@@ -16,7 +16,7 @@ class SessionMessageTransportProtocol(Protocol):
         content: str,
         metadata: dict[str, object],
         simulate_user: bool,
-        dispatch_mode: MessageDispatchMode,
+        delivery_policy: DeliveryPolicy,
         idempotency_key: str | None,
     ) -> MessageRunAccepted: ...
 
@@ -31,7 +31,7 @@ class SessionMessageDeliveryProtocol(Protocol):
         metadata: dict[str, object],
         internal_message: PreparedInternalMessage | None,
         simulate_user: bool,
-        dispatch_mode: MessageDispatchMode,
+        delivery_policy: DeliveryPolicy,
         idempotency_key: str | None,
     ) -> MessageRunAccepted: ...
 

@@ -8,9 +8,9 @@ export {
 } from "./api/http";
 export {
   getSessionTurnBootstrap,
-  getSessionTurnDetails,
-  listSessionTurns,
+  loadSessionHistory,
   StaleTurnCursorHttpError,
+  StaleTurnReferenceHttpError,
 } from "./api/sessionTurnHistory";
 export {
   listSessionTraceHistory,

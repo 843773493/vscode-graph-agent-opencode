@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -112,7 +113,6 @@ class AgentEventStreamResult:
     token_usage: ModelTokenUsagePayload = field(
         default_factory=ModelTokenUsagePayload
     )
-    yielded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,7 +343,6 @@ async def process_agent_event_stream(
     publish: Callable[[str, dict[str, Any]], Awaitable[None]],
     session_changes_service: SessionChangesRecorderProtocol,
     workspace_root: Path,
-    yield_requested: Callable[[], bool] | None = None,
 ) -> AgentEventStreamResult:
     """消费 DeepAgent 事件流，并发布前端可观察的 trace 事件。"""
     collected_text_parts: list[str] = []
@@ -351,6 +350,7 @@ async def process_agent_event_stream(
     latest_model_parts: dict[str, dict[str, object]] = {}
     current_text_part_id: str | None = None
     current_text_part_kind: str | None = None
+    current_text_part_source: dict[str, object] = {}
     text_part_chunks: dict[str, list[str]] = {}
     text_part_kinds: dict[str, str] = {}
     started_text_part_ids: set[str] = set()
@@ -374,7 +374,6 @@ async def process_agent_event_stream(
         session_id=session_id,
         job_id=turn_id,
     )
-    yielded = False
 
     def track_model_run(run_id: str) -> None:
         if run_id in tracked_model_run_ids:
@@ -395,13 +394,14 @@ async def process_agent_event_stream(
                 "part_id": current_text_part_id,
                 "kind": current_text_part_kind,
                 "text": text,
+                **current_text_part_source,
             },
         )
         pending_text_delta_chunks = []
         last_text_delta_flush_at = time.monotonic()
 
     async def close_current_text_part() -> None:
-        nonlocal current_text_part_id, current_text_part_kind
+        nonlocal current_text_part_id, current_text_part_kind, current_text_part_source
         nonlocal pending_text_delta_chunks
         if current_text_part_id is None or current_text_part_kind is None:
             return
@@ -412,25 +412,44 @@ async def process_agent_event_stream(
                 "part_id": current_text_part_id,
                 "kind": current_text_part_kind,
                 "text": "".join(text_part_chunks[current_text_part_id]),
+                **current_text_part_source,
             },
         )
         current_text_part_id = None
         current_text_part_kind = None
+        current_text_part_source = {}
         pending_text_delta_chunks = []
 
     def record_latest_model_part(part: AgentStreamContentPart) -> None:
         existing = latest_model_parts.get(part.part_id)
-        text_key = "reasoning" if part.block_type == "reasoning" else (
-            "refusal" if part.block_type == "refusal" else "text"
+        text_key = (
+            "reasoning_content"
+            if part.block_type == "reasoning_content"
+            else "thinking"
+            if part.block_type == "thinking"
+            else "reasoning"
+            if part.block_type == "reasoning"
+            else "refusal"
+            if part.block_type == "refusal"
+            else "text"
         )
         if existing is None:
             latest_model_part_order.append(part.part_id)
-            latest_model_parts[part.part_id] = {
+            initial: dict[str, object] = {
                 "type": part.block_type,
-                text_key: part.text,
                 "id": part.part_id,
                 "index": part.index,
             }
+            if part.block_type == "reasoning_items":
+                items = part.payload.get("reasoning_items") if part.payload else None
+                initial["reasoning_items"] = copy.deepcopy(items) if isinstance(items, list) else []
+            elif part.block_type == "redacted_thinking":
+                data = part.payload.get("data") if part.payload else None
+                if isinstance(data, str):
+                    initial["data"] = data
+            else:
+                initial[text_key] = part.text
+            latest_model_parts[part.part_id] = initial
             if part.extras:
                 latest_model_parts[part.part_id]["extras"] = dict(part.extras)
             return
@@ -439,10 +458,33 @@ async def process_agent_event_stream(
                 f"模型流 part 身份冲突: part_id={part.part_id} "
                 f"existing={existing!r} incoming={part!r}"
             )
-        current_text = existing.get(text_key)
-        if not isinstance(current_text, str):
-            raise TypeError(f"模型流 part 缺少 {text_key}: part_id={part.part_id}")
-        existing[text_key] = current_text + part.text
+        if part.block_type == "reasoning_items":
+            current_items = existing.get("reasoning_items")
+            incoming_items = part.payload.get("reasoning_items") if part.payload else None
+            if not isinstance(current_items, list) or not isinstance(incoming_items, list):
+                raise TypeError(f"模型流 part 缺少 reasoning_items: part_id={part.part_id}")
+            for incoming in incoming_items:
+                incoming_id = incoming.get("id") if isinstance(incoming, dict) else None
+                if isinstance(incoming_id, str):
+                    replaced = False
+                    for index, current in enumerate(current_items):
+                        if isinstance(current, dict) and current.get("id") == incoming_id:
+                            current_items[index] = copy.deepcopy(incoming)
+                            replaced = True
+                            break
+                    if replaced:
+                        continue
+                if incoming not in current_items:
+                    current_items.append(copy.deepcopy(incoming))
+        elif part.block_type == "redacted_thinking":
+            data = part.payload.get("data") if part.payload else None
+            if isinstance(data, str):
+                existing["data"] = data
+        else:
+            current_text = existing.get(text_key)
+            if not isinstance(current_text, str):
+                raise TypeError(f"模型流 part 缺少 {text_key}: part_id={part.part_id}")
+            existing[text_key] = current_text + part.text
         if part.extras:
             existing_extras = existing.get("extras")
             merged_extras = (
@@ -453,11 +495,22 @@ async def process_agent_event_stream(
 
     async def publish_text_delta(part: AgentStreamContentPart) -> None:
         nonlocal current_text_part_id, current_text_part_kind, last_text_delta_flush_at
+        nonlocal current_text_part_source
         if current_text_part_id != part.part_id:
             await close_current_text_part()
         if current_text_part_id is None:
             current_text_part_id = part.part_id
             current_text_part_kind = part.kind
+            current_text_part_source = {
+                "carrier_type": part.block_type,
+                "content_block_index": part.index,
+                **(
+                    {"item_index": part.extras["item_index"]}
+                    if part.extras is not None
+                    and isinstance(part.extras.get("item_index"), int)
+                    else {}
+                ),
+            }
             known_kind = text_part_kinds.get(part.part_id)
             if known_kind is not None and known_kind != part.kind:
                 raise RuntimeError(
@@ -473,7 +526,11 @@ async def process_agent_event_stream(
             if part.part_id not in started_text_part_ids:
                 await publish(
                     EventType.TEXT_START,
-                    {"part_id": current_text_part_id, "kind": part.kind},
+                    {
+                        "part_id": current_text_part_id,
+                        "kind": part.kind,
+                        **current_text_part_source,
+                    },
                 )
                 started_text_part_ids.add(part.part_id)
         elif current_text_part_kind != part.kind:
@@ -584,14 +641,6 @@ async def process_agent_event_stream(
             continue
 
         if event_type == "on_chat_model_end" and is_tracked_chat_model_event(name):
-            if (
-                yield_requested is not None
-                and yield_requested()
-                and not _model_end_contains_tool_calls(data.get("output"))
-            ):
-                await close_current_text_part()
-                yielded = True
-                break
             continue
 
         if event_type == "on_tool_start":
@@ -770,13 +819,6 @@ async def process_agent_event_stream(
                 EventType.TOOL_CALL_END,
                 payload,
             )
-            if (
-                not interrupt_state.active_tools_by_run_id
-                and yield_requested is not None
-                and yield_requested()
-            ):
-                yielded = True
-                break
 
     final_text_part_id = (
         current_text_part_id if current_text_part_kind == "markdown" else None
@@ -805,5 +847,4 @@ async def process_agent_event_stream(
         successful_tool_calls=tuple(successful_tool_calls),
         completed_custom_tool_names=tuple(completed_custom_tool_names),
         token_usage=token_usage,
-        yielded=yielded,
     )

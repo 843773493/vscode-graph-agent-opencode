@@ -328,6 +328,80 @@ async def test_custom_tool_invoker_dispatches_configured_tool_without_skill_acti
     assert result == "4568"
 
 
+def test_custom_tool_invoker_description_contains_only_visible_extension_schemas():
+    from langchain_core.tools import tool
+
+    @tool
+    def visible_extension(value: str) -> str:
+        """可见扩展工具。"""
+        return value
+
+    @tool
+    def hidden_extension(secret: str) -> str:
+        """隐藏扩展工具。"""
+        return secret
+
+    invoker = create_custom_tool_invoker_tool(
+        [visible_extension, hidden_extension],
+        model_visible_tool_names={visible_extension.name},
+    )
+
+    assert "visible_extension" in invoker.description
+    assert "可见扩展工具" in invoker.description
+    assert "hidden_extension" not in invoker.description
+    assert "隐藏扩展工具" not in invoker.description
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_invoker_executes_mcp_style_target_and_validates_schema():
+    from langchain_core.tools import tool
+
+    @tool
+    def mcp_status(value: str) -> str:
+        """MCP 状态查询 stub。"""
+        return f"status:{value}"
+
+    mcp_status = mcp_status.model_copy(
+        update={"metadata": {"mcp_server_id": "tui-mcp"}}
+    )
+    invoker = create_custom_tool_invoker_tool([mcp_status])
+
+    result = await invoker.ainvoke(
+        {
+            "tool_name": "mcp_status",
+            "arguments": {"value": "ready"},
+        }
+    )
+
+    assert result == "status:ready"
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_invoker_uses_ainvoke_for_mcp_style_base_tool():
+    from langchain_core.tools import BaseTool
+
+    class AinvokeOnlyMcpTool(BaseTool):
+        name: str = "mcp_async_status"
+        description: str = "只暴露 ainvoke 的 MCP stub。"
+
+        def _run(self, value: str) -> str:
+            raise AssertionError("该 stub 不应走同步 _run")
+
+        async def ainvoke(self, input, config=None, **kwargs):
+            return f"async-status:{input['value']}"
+
+    invoker = create_custom_tool_invoker_tool([AinvokeOnlyMcpTool()])
+
+    result = await invoker.ainvoke(
+        {
+            "tool_name": "mcp_async_status",
+            "arguments": {"value": "ready"},
+        }
+    )
+
+    assert result == "async-status:ready"
+
+
 @pytest.mark.asyncio
 async def test_custom_tool_invoker_preserves_container_injected_invocation_context(
     tmp_path,

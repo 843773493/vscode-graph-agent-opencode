@@ -11,8 +11,9 @@ import type {
   AttachmentRef,
   MessageReplayRequest,
   MessageRunAccepted,
-  PendingRequestKind,
+  DeliveryPolicy,
   Session,
+  SessionCompactResult,
 } from "../types/backend";
 import type { ConversationContentView, ConversationView } from "../types/frontend";
 import { cloneMaps } from "../state/appStateMaps";
@@ -56,7 +57,7 @@ export function useSessionRunActions({
     async (
       content: string,
       attachments: AttachmentRef[] = [],
-      queue?: PendingRequestKind | null,
+      deliveryPolicy: DeliveryPolicy = "after_turn",
     ) => {
       let session = currentSession;
       if (!session) {
@@ -150,6 +151,7 @@ export function useSessionRunActions({
         const next = cloneMaps(prev);
         const conversation: ConversationView = {
           conversationId: pendingSubmissionId,
+          displayMode: "live",
           sessionId: activeSession.session_id,
           userMessage: {
             message_id: pendingSubmissionId,
@@ -169,9 +171,10 @@ export function useSessionRunActions({
           status: "running",
           jobId: null,
           pending: true,
+          activeJobOverlay: true,
           pendingSubmissionId,
           source: "pending",
-          pendingKind: queue ?? undefined,
+          deliveryPolicy,
         };
         updateSessionAttachmentSummary(
           next.sessionAttachmentSummaries,
@@ -199,7 +202,7 @@ export function useSessionRunActions({
           activeSession.current_agent_id,
           attachments,
           activeSessionGatewayWorkspaceId,
-          queue,
+          deliveryPolicy,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -227,6 +230,7 @@ export function useSessionRunActions({
         const next = cloneMaps(prev);
         const conversation: ConversationView = {
           conversationId: messageId,
+          displayMode: "live",
           sessionId: activeSession.session_id,
           userMessage: {
             message_id: messageId,
@@ -247,10 +251,13 @@ export function useSessionRunActions({
           status: accepted.status === "queued" ? "queued" : "running",
           jobId,
           pending: true,
+          activeJobOverlay: accepted.status !== "queued",
           pendingSubmissionId,
           source: "pending",
-          pendingKind: accepted.dispatch.pending_kind ?? undefined,
+          deliveryPolicy: accepted.dispatch.delivery_policy ?? deliveryPolicy,
+          enqueueSequence: accepted.dispatch.enqueue_sequence ?? undefined,
           pendingPosition: accepted.dispatch.queued_jobs_ahead,
+          queueSnapshotVersion: accepted.dispatch.queue_snapshot_version,
         };
         const pendingList = next.pendingConversations.get(activeSessionCacheKey) ?? [];
         next.pendingConversations.set(activeSessionCacheKey, [
@@ -282,7 +289,7 @@ export function useSessionRunActions({
     ],
   );
 
-  const compactSession = useCallback(async () => {
+  const compactSession = useCallback(async (): Promise<SessionCompactResult> => {
     const session = currentSession;
     if (!session) {
       throw new Error("当前没有可压缩上下文的会话");
@@ -337,6 +344,7 @@ export function useSessionRunActions({
       if (contentView === "agent") {
         await refreshAgentStateSnapshot(session.session_id);
       }
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setState((prev) => ({
@@ -411,6 +419,7 @@ export function useSessionRunActions({
         const next = cloneMaps(prev);
         next.pendingConversations.set(sessionCacheKey, [{
           conversationId: accepted.message_id,
+          displayMode: "live",
           sessionId: session.session_id,
           userMessage: {
             message_id: accepted.message_id,

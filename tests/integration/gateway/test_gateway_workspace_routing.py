@@ -16,7 +16,7 @@ from app.agents.tools.session_history import (
     create_search_context_tool,
 )
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.checkpoint_saver import FileSystemCheckpointSaver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
 )
@@ -25,6 +25,7 @@ from app.services.infrastructure.gateway_session_context_client import (
 )
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
+    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
     workspace_root_from_response,
@@ -61,7 +62,7 @@ async def _write_session_context_checkpoint(
     marker: str,
     checkpoint_id: str = "ckpt-cross-workspace-context",
 ) -> None:
-    saver = FileSystemCheckpointSaver(
+    saver = RolloutCheckpointSaver(
         sessions_dir=workspace_root / ".boxteam" / "sessions"
     )
     checkpoint = {
@@ -137,6 +138,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
         workspace_root=primary_workspace,
         default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
         port=port_block.port(2),
+        refresh_config=True,
     )
 
     try:
@@ -145,6 +147,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
+            await acquire_gateway_guest(client)
             default_workspace_response = await client.get("/api/v1/workspace")
             default_request_id = default_workspace_response.json()["request_id"]
             assert default_request_id
@@ -246,6 +249,64 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             assert default_session_id in primary_session_ids
             assert routed_session_id not in primary_session_ids
 
+            async def assert_tool_capability_protocol(workspace_id: str | None) -> None:
+                headers = (
+                    {"X-BoxTeam-Workspace-Id": workspace_id}
+                    if workspace_id is not None
+                    else {}
+                )
+                catalog_response = await client.get(
+                    "/api/v1/tools?agent_id=default",
+                    headers=headers,
+                )
+                assert catalog_response.status_code == 200, catalog_response.text
+                catalog_payload = catalog_response.json()
+                assert catalog_response.headers["X-Request-ID"] == catalog_payload["request_id"]
+                items = catalog_payload["data"]
+                assert items
+                assert all(
+                    "execution_enabled" in item and "model_visible" in item
+                    for item in items
+                )
+
+                patch_response = await client.patch(
+                    "/api/v1/tools/selection",
+                    headers=headers,
+                    json={
+                        "agent_id": "default",
+                        "changes": [
+                            {
+                                "tool_id": items[0]["tool_id"],
+                                "execution_enabled": items[0]["execution_enabled"],
+                                "model_visible": items[0]["model_visible"],
+                            }
+                        ],
+                    },
+                )
+                assert patch_response.status_code == 200, patch_response.text
+                patch_payload = patch_response.json()
+                assert patch_response.headers["X-Request-ID"] == patch_payload["request_id"]
+                assert patch_payload["data"][0]["tool_id"] == items[0]["tool_id"]
+
+                invalid_response = await client.patch(
+                    "/api/v1/tools/selection",
+                    headers=headers,
+                    json={
+                        "agent_id": "default",
+                        "changes": [
+                            {
+                                "tool_id": "gateway_unknown_tool",
+                                "execution_enabled": False,
+                                "model_visible": False,
+                            }
+                        ],
+                    },
+                )
+                assert invalid_response.status_code == 400, invalid_response.text
+
+            await assert_tool_capability_protocol(None)
+            await assert_tool_capability_protocol(secondary_workspace_id)
+
             delete_default_response = await client.delete(
                 f"/api/gateway/workspaces/{default_workspace_id}"
             )
@@ -302,6 +363,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
+            await acquire_gateway_guest(client)
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={
@@ -519,6 +581,7 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
+            await acquire_gateway_guest(client)
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={"root_path": str(managed_workspace), "name": "managed-local"},
@@ -536,6 +599,10 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
                 f"/api/gateway/workspaces/{managed_workspace_id}/activate"
             )
             assert activate_response.status_code == 200, activate_response.text
+            start_response = await client.post(
+                f"/api/gateway/workspaces/{managed_workspace_id}/runtime/start"
+            )
+            assert start_response.status_code == 200, start_response.text
 
         close_gateway_process(gateway)
         gateway = start_gateway_process(
@@ -548,6 +615,7 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as restarted_client:
+            await acquire_gateway_guest(restarted_client)
             restored_response = await restarted_client.get("/api/gateway/workspaces")
             assert restored_response.status_code == 200, restored_response.text
             restored_list = restored_response.json()["data"]

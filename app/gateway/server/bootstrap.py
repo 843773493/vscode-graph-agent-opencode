@@ -7,6 +7,7 @@ from pathlib import Path
 from app.core.env import get_project_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.gateway.config import GatewayConfig, load_gateway_config
+from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import build_remote_gateway_connection_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.remote_gateway import (
@@ -31,6 +32,21 @@ def _default_backend_debug_port() -> int | None:
             f"BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT 必须是 1-65535: {raw_value}"
         )
     return value
+
+
+def _external_default_backend_url() -> str | None:
+    configured_url = os.environ.get("BOXTEAM_DEFAULT_BACKEND_URL")
+    if configured_url is None or configured_url.strip() == "":
+        return None
+    normalized_url = configured_url.strip().rstrip("/")
+    if normalized_url == "managed-by-gateway":
+        return None
+    if not normalized_url.startswith(("http://", "https://")):
+        raise ValueError(
+            "BOXTEAM_DEFAULT_BACKEND_URL 必须是 http:// 或 https:// 地址: "
+            f"{configured_url}"
+        )
+    return normalized_url
 
 
 def _default_workspace_root() -> Path:
@@ -99,10 +115,14 @@ async def _restore_managed_local_runtimes(
 
 async def create_registry(
     gateway_config: GatewayConfig | None = None,
+    state_store: GatewayStateStore | None = None,
 ) -> GatewayWorkspaceRegistry:
     gateway_root = get_gateway_root()
     resolved_gateway_config = gateway_config or load_gateway_config()
-    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=gateway_root / "workspaces.json",
+        state_store=state_store,
+    )
     persisted_targets = registry.targets()
     persisted_targets_by_id = {
         target.workspace_id: target for target in persisted_targets
@@ -121,28 +141,41 @@ async def create_registry(
             ),
             None,
         )
-    default_runtime = await start_managed_local_workspace_runtime(
-        project_root=get_project_root(),
-        workspace_root=default_root_path,
-        log_dir=gateway_root / "logs",
-        backend_debug_port=_default_backend_debug_port(),
-        reusable_service_urls=(
-            persisted_default.local_service_urls
-            if persisted_default is not None
-            else None
-        ),
-        health_request_timeout_seconds=(
-            resolved_gateway_config.gateway_process_health_request_timeout_seconds
-        ),
-        health_poll_interval_seconds=(
-            resolved_gateway_config.gateway_process_health_poll_interval_seconds
-        ),
-        connection_drain_timeout_seconds=(
-            resolved_gateway_config.gateway_process_connection_drain_timeout_seconds
-        ),
-        default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
-    )
-    backend_url = default_runtime.service_urls["workspace_api"]
+    external_backend_url = _external_default_backend_url()
+    default_runtime = None
+    if external_backend_url is None:
+        default_runtime = await start_managed_local_workspace_runtime(
+            project_root=get_project_root(),
+            workspace_root=default_root_path,
+            log_dir=gateway_root / "logs",
+            backend_debug_port=_default_backend_debug_port(),
+            reusable_service_urls=(
+                persisted_default.local_service_urls
+                if persisted_default is not None
+                else None
+            ),
+            health_request_timeout_seconds=(
+                resolved_gateway_config.gateway_process_health_request_timeout_seconds
+            ),
+            health_poll_interval_seconds=(
+                resolved_gateway_config.gateway_process_health_poll_interval_seconds
+            ),
+            connection_drain_timeout_seconds=(
+                resolved_gateway_config.gateway_process_connection_drain_timeout_seconds
+            ),
+            default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
+        )
+        backend_url = default_runtime.service_urls["workspace_api"]
+        local_service_urls = {
+            "browser_manager": default_runtime.service_urls["browser_manager"]
+        }
+        managed = True
+    else:
+        # 测试和外部开发编排可以显式提供已运行的工作区后端；Gateway 不应再为
+        # 同一工作区启动第二个进程，否则会与工作区 SQLite 所有权锁冲突。
+        backend_url = external_backend_url
+        local_service_urls = {}
+        managed = False
     registry.upsert(
         WorkspaceTarget(
             workspace_id=default_workspace_id,
@@ -159,12 +192,10 @@ async def create_registry(
             root_path=root_path,
             backend_url=backend_url,
             connection_kind="local",
-            managed=True,
+            managed=managed,
             removable=False,
             system_default=True,
-            local_service_urls={
-                "browser_manager": default_runtime.service_urls["browser_manager"]
-            },
+            local_service_urls=local_service_urls,
         ),
         runtime=default_runtime,
         activate=persisted_active_workspace_id is None,

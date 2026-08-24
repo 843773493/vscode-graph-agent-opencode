@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -14,6 +13,7 @@ from app.abstractions.job_step_executor import JobStepExecutor
 from app.abstractions.session_changes import SessionChangesRecorderProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
+from app.agents.policy import DEBUGGING_TOOL_NAMES
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
@@ -45,6 +45,7 @@ from app.services.business.message_display import (
 )
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
+    persist_user_message_checkpoint,
 )
 from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
@@ -243,7 +244,7 @@ class AgentExecutionService(JobStepExecutor):
             del self._agent_cache[stale_key]
         return agent
 
-    def _extract_final_text(self, result: Dict[str, Any]) -> str:
+    def _extract_final_text(self, result: dict[str, Any]) -> str:
         messages = result.get("messages", []) if isinstance(result, dict) else []
         for message in reversed(messages):
             if not isinstance(message, AIMessage):
@@ -272,7 +273,6 @@ class AgentExecutionService(JobStepExecutor):
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
-        yield_requested: Callable[[], bool] | None = None,
     ) -> str:
         config_snapshot = self._config_service.get_snapshot()
         with self._config_service.use_snapshot(config_snapshot):
@@ -285,7 +285,6 @@ class AgentExecutionService(JobStepExecutor):
                 attachments=attachments,
                 message_created_at=message_created_at,
                 message_metadata=message_metadata,
-                yield_requested=yield_requested,
             )
 
     async def _run_step_with_snapshot(
@@ -299,7 +298,6 @@ class AgentExecutionService(JobStepExecutor):
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
-        yield_requested: Callable[[], bool] | None = None,
     ) -> str:
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
@@ -381,6 +379,15 @@ class AgentExecutionService(JobStepExecutor):
         disabled_tool_names = self._tool_selection_store.disabled_tools(
             resolved_agent_id
         )
+        default_hidden_tool_names = configured_custom_tool_names | {
+            tool.name for tool in self._dependency_provider.get_mcp_tools()
+        } | DEBUGGING_TOOL_NAMES
+        model_hidden_tool_names = frozenset(
+            self._tool_selection_store.model_hidden_tools(
+                resolved_agent_id,
+                default_hidden_tool_names=default_hidden_tool_names,
+            )
+        )
         configured_custom_tool_names -= disabled_tool_names
         requested_custom_tool_names = _custom_tools_requested_by_message(
             message,
@@ -417,6 +424,17 @@ class AgentExecutionService(JobStepExecutor):
             message_created_at=message_created_at,
             message_metadata=resolved_message_metadata,
         )
+        raw_message_metadata = human_response_metadata.get("message_metadata")
+        if raw_message_metadata is not None and not isinstance(
+            raw_message_metadata,
+            dict,
+        ):
+            raise TypeError("HumanMessage message_metadata 必须是对象")
+        human_response_metadata["message_metadata"] = {
+            **(raw_message_metadata or {}),
+            "turn_id": effective_job_id,
+            "job_id": effective_job_id,
+        }
         message_source = resolved_message_metadata.get("source")
         message_kind = resolved_message_metadata.get("kind")
         requires_delegated_report = (
@@ -485,6 +503,7 @@ class AgentExecutionService(JobStepExecutor):
                     job_event_bus=self._bus,
                     dependency_provider=self._dependency_provider,
                     tool_denylist=disabled_tool_names,
+                    model_hidden_tool_names=model_hidden_tool_names,
                     preferred_provider_id=preferred_provider_id,
                     workspace_root=self._workspace_root,
                 )
@@ -496,6 +515,17 @@ class AgentExecutionService(JobStepExecutor):
                     response_metadata=human_response_metadata,
                 )
             ]
+            checkpointer = getattr(
+                self._dependency_provider,
+                "get_checkpointer",
+                lambda: None,
+            )()
+            if checkpointer is not None:
+                persist_user_message_checkpoint(
+                    checkpointer=checkpointer,
+                    session_id=session_id,
+                    message=next_input_messages[0],
+                )
             empty_response_retries = 0
             custom_tool_response_retries = 0
             delegated_report_retries = 0
@@ -513,7 +543,6 @@ class AgentExecutionService(JobStepExecutor):
                     publish=_publish,
                     session_changes_service=self._session_changes_service,
                     workspace_root=self._workspace_root,
-                    yield_requested=yield_requested,
                 )
                 turn_token_usage_parts.append(stream_result.token_usage)
                 final_text = stream_result.final_text
@@ -540,16 +569,6 @@ class AgentExecutionService(JobStepExecutor):
                         },
                     )
                 latest_model_content_blocks = stream_result.latest_model_content_blocks
-                if stream_result.yielded:
-                    await _publish(
-                        EventType.STATUS_CHANGE,
-                        {
-                            "status": "completed",
-                            "reason": "steering_yield",
-                            "message": "当前请求已在安全边界让出执行权",
-                        },
-                    )
-                    break
                 missing_custom_tool_names = (
                     requested_custom_tool_names - completed_custom_tool_names
                 )
@@ -745,14 +764,14 @@ class AgentExecutionService(JobStepExecutor):
                 )
                 set_interruptible_phase("text")
                 set_active_tool_name(None)
-            checkpointer = getattr(self._dependency_provider, "get_checkpointer", lambda: None)()
             turn_token_usage = last_model_token_usage(turn_token_usage_parts)
             if checkpointer is not None:
                 assistant_message_id = create_prefixed_id("msg")
-                assistant_message_created_at = datetime.now(timezone.utc)
+                assistant_message_created_at = datetime.now(UTC)
                 persisted = persist_standard_assistant_checkpoint(
                     checkpointer=checkpointer,
                     session_id=session_id,
+                    turn_id=effective_job_id,
                     content_blocks=latest_model_content_blocks,
                     final_text=final_text,
                     message_id=assistant_message_id,
@@ -776,26 +795,7 @@ class AgentExecutionService(JobStepExecutor):
 
         except asyncio.CancelledError:
             state = SessionInterruptState.get(session_id)
-            if state.cancellation_reason == "pending_request_send_immediately":
-                if state.current_text:
-                    persist_standard_assistant_checkpoint(
-                        checkpointer=getattr(
-                            self._dependency_provider,
-                            "get_checkpointer",
-                            lambda: None,
-                        )(),
-                        session_id=session_id,
-                        content_blocks=(),
-                        final_text=state.current_text,
-                        message_id=create_prefixed_id("msg"),
-                        message_created_at=datetime.now(timezone.utc),
-                        token_usage=ModelTokenUsagePayload(),
-                    )
-                logger.info(
-                    "[agent_execution_service] job yielded to immediately sent pending request: job_id=%s",
-                    effective_job_id,
-                )
-            elif state.user_interrupt_reminder_injected:
+            if state.user_interrupt_reminder_injected:
                 logger.info(
                     "[agent_execution_service] job cancelled after user interrupt reminder persisted: job_id=%s",
                     effective_job_id,
@@ -811,7 +811,10 @@ class AgentExecutionService(JobStepExecutor):
             raise
         except Exception as e:
             await _publish(EventType.ERROR, {"error": str(e), "phase": "agent_execution"})
-            logger.exception("[agent_execution_service] ERROR published: job_id=%s error=%s", effective_job_id, str(e))
+            logger.exception(
+                "[agent_execution_service] ERROR published: job_id=%s",
+                effective_job_id,
+            )
             raise
         finally:
             reset_current_job_id(job_token)
@@ -826,4 +829,7 @@ class AgentExecutionService(JobStepExecutor):
     def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]:
         session_id = "tools_inspection_session"
         agent = self._get_or_create_agent(session_id, agent_id)
-        return build_agent_tool_definitions(agent)
+        return build_agent_tool_definitions(
+            agent,
+            extension_tools=self._dependency_provider.get_mcp_tools(),
+        )

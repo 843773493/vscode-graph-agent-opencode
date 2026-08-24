@@ -10,7 +10,7 @@ from croniter import croniter
 from app.core.identifier import create_prefixed_id
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
 from app.gateway.control.generators import SessionGeneratorStore
-from app.gateway.control.schemas import GeneratorDefinitionDTO
+from app.schemas.gateway_control import GeneratorDefinitionDTO
 
 
 logger = logging.getLogger(__name__)

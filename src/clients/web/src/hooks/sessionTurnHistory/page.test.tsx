@@ -48,38 +48,57 @@ afterEach(() => {
 async function runPageCase({
   port,
   response,
+  abortResponse = false,
+  reactState = false,
 }: {
   port: number;
   response: () => Response;
+  abortResponse?: boolean;
+  reactState?: boolean;
 }): Promise<AppState> {
   installWindow(port);
   let currentState = state();
   let loadOlder: (() => Promise<void>) | null = null;
+  let abortRequest: (() => void) | null = null;
   globalThis.fetch = Object.assign(
     async (...args: Parameters<typeof fetch>) => {
       const path = new URL(String(args[0]), `http://127.0.0.1:${port}`).pathname;
       if (path === "/api/gateway/auth/local-credential") {
         return Response.json({ data: { token: `token-${port}` } });
       }
-      if (path === `/api/v1/sessions/${SESSION_ID}/turns`) return response();
+      if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+        if (abortResponse) abortRequest?.();
+        return response();
+      }
       throw new Error(`测试收到未预期请求: ${path}`);
     },
     { preconnect: originalFetch.preconnect },
   );
 
   function Harness(): React.ReactNode {
+    const [, setReactState] = React.useState(currentState);
     const generationRef = React.useRef(1);
     const requestController = React.useMemo(() => new AbortController(), []);
+    abortRequest = () => requestController.abort();
     loadOlder = useOlderTurnLoader({
       apiPort: port,
       sessionId: SESSION_ID,
       workspaceId: WORKSPACE_ID,
       sessionCacheKey: SCOPE_KEY,
+      getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
       generationRef,
       requestSignal: requestController.signal,
-      setState: (update) => {
-        currentState = typeof update === "function" ? update(currentState) : update;
-      },
+      setState: reactState
+        ? (update) => {
+            setReactState((previous) => {
+              const next = typeof update === "function" ? update(previous) : update;
+              currentState = next;
+              return next;
+            });
+          }
+        : (update) => {
+            currentState = typeof update === "function" ? update(currentState) : update;
+          },
     });
     return null;
   }
@@ -156,6 +175,47 @@ describe("Turn 历史分页 epoch 协调", () => {
 
     expect(result.sessionHistoryReloadNonce).toBe(1);
     expect(result.status).toBe("Turn 历史游标已失效，正在重新校准");
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingOlder).toBe(false);
+  });
+
+  test("请求被取消时也必须清除 loadingOlder", async () => {
+    const result = await runPageCase({
+      port: 9113,
+      abortResponse: true,
+      response: () => Response.json({
+        code: 0,
+        message: "ok",
+        request_id: "request-page-aborted",
+        data: {
+          items: [],
+          next_cursor: null,
+          has_more: false,
+          projection_epoch: 2,
+        },
+      }),
+    });
+
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingOlder).toBe(false);
+  });
+
+  test("React 异步批处理 setState 时仍使用当前游标发起请求", async () => {
+    const result = await runPageCase({
+      port: 9114,
+      reactState: true,
+      response: () => Response.json({
+        code: 0,
+        message: "ok",
+        request_id: "request-page-react-state",
+        data: {
+          items: [],
+          next_cursor: null,
+          has_more: false,
+          projection_epoch: 2,
+        },
+      }),
+    });
+
+    expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.hasMore).toBe(false);
     expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.loadingOlder).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langgraph.types import Command
 
 from app.agents.cache_preserving_summarization import (
     CACHE_PRESERVING_STRATEGY,
@@ -270,6 +271,57 @@ def test_summary_tool_call_is_rejected_and_retried_without_tools() -> None:
     assert observed[0].tool_choice is None
     assert observed[1].tools == []
     assert observed[1].tool_choice is None
+
+
+def test_reasoning_only_summary_is_retried_with_minimal_request() -> None:
+    messages = _conversation(7)
+    partition = build_cache_preserving_partition(
+        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
+        messages,
+        None,
+        summarize_end=10,
+    )
+    assert partition is not None
+    middleware = object.__new__(CachePreservingSummarizationMiddleware)
+    request = ModelRequest(
+        model=None,
+        messages=[],
+        system_message=SystemMessage(content="完整工作区系统提示"),
+        tools=[{"type": "function", "function": {"name": "read_file"}}],
+    )
+    observed: list[ModelRequest] = []
+
+    def handler(next_request: ModelRequest) -> ModelResponse:
+        observed.append(next_request)
+        if len(observed) == 1:
+            return ModelResponse(
+                result=[
+                    AIMessage(
+                        content=[{
+                            "type": "reasoning",
+                            "reasoning": "只返回 reasoning，不应作为摘要正文",
+                            "id": "reasoning-1",
+                            "index": 0,
+                        }],
+                    )
+                ]
+            )
+        return ModelResponse(result=[AIMessage(content="最小请求生成的摘要")])
+
+    summary = middleware._create_cache_preserving_summary(
+        request,
+        handler,
+        partition,
+    )
+
+    assert summary == "最小请求生成的摘要"
+    assert len(observed) == 2
+    assert observed[0].tools == request.tools
+    assert observed[1].tools == []
+    assert observed[1].tool_choice is None
+    assert observed[1].system_message == SystemMessage(
+        content="Summarize the supplied conversation."
+    )
 
 
 def test_tool_call_fallback_overflow_continues_with_media_retry() -> None:
@@ -1043,6 +1095,122 @@ def test_forced_compaction_without_safe_partition_clears_one_shot_flag() -> None
     )
 
     assert isinstance(response, ExtendedModelResponse)
+    assert response.command.update["_force_cache_compaction"] is False
+
+
+def test_forced_compaction_summary_failure_falls_back_to_original_context() -> None:
+    messages = _conversation(3)
+    partition = CachePreservingPartition(
+        prefix_messages=[],
+        messages_to_summarize=messages[:2],
+        preserved_messages=messages[2:],
+        state_cutoff=2,
+    )
+    observed: list[ModelRequest] = []
+
+    class _SummaryFailureStub:
+        @staticmethod
+        def _prepare_cache_compaction(_: ModelRequest) -> tuple[list, CachePreservingPartition]:
+            return messages, partition
+
+        @staticmethod
+        def _get_backend(*_) -> object:
+            return object()
+
+        @staticmethod
+        def _offload_to_backend(*_) -> str:
+            return "session-artifacts/test/context/history.md"
+
+        @staticmethod
+        def _create_cache_preserving_summary(*_) -> str:
+            raise ValueError("摘要模型只返回 reasoning")
+
+        @staticmethod
+        def _handle_unavailable_forced_compaction(
+            request: ModelRequest,
+            handler,
+            effective: list,
+        ) -> ExtendedModelResponse:
+            return CachePreservingSummarizationMiddleware._handle_unavailable_forced_compaction(
+                _SummaryFailureStub(),  # type: ignore[arg-type]
+                request,
+                handler,
+                effective,
+            )
+
+    response = CachePreservingSummarizationMiddleware.wrap_model_call(
+        _SummaryFailureStub(),  # type: ignore[arg-type]
+        ModelRequest(
+            model=None,
+            messages=messages,
+            state={"_force_cache_compaction": True},
+        ),
+        lambda request: (
+            observed.append(request) or ModelResponse(result=[AIMessage(content="继续")])
+        ),
+    )
+
+    assert isinstance(response, ExtendedModelResponse)
+    assert observed[0].messages == messages
+    assert response.command.update["_force_cache_compaction"] is False
+
+
+@pytest.mark.asyncio
+async def test_forced_compaction_async_summary_failure_falls_back_to_original_context() -> None:
+    messages = _conversation(3)
+    partition = CachePreservingPartition(
+        prefix_messages=[],
+        messages_to_summarize=messages[:2],
+        preserved_messages=messages[2:],
+        state_cutoff=2,
+    )
+    observed: list[ModelRequest] = []
+
+    class _AsyncSummaryFailureStub:
+        @staticmethod
+        def _prepare_cache_compaction(_: ModelRequest) -> tuple[list, CachePreservingPartition]:
+            return messages, partition
+
+        @staticmethod
+        def _get_backend(*_) -> object:
+            return object()
+
+        @staticmethod
+        async def _aoffload_to_backend(*_) -> str:
+            return "session-artifacts/test/context/history.md"
+
+        @staticmethod
+        async def _acreate_cache_preserving_summary(*_) -> str:
+            raise ValueError("摘要模型只返回 reasoning")
+
+        @staticmethod
+        async def _ahandle_unavailable_forced_compaction(
+            request: ModelRequest,
+            handler,
+            effective: list,
+        ) -> ExtendedModelResponse:
+            response = await handler(request.override(messages=effective))
+            return ExtendedModelResponse(
+                model_response=response,
+                command=Command(update={"_force_cache_compaction": False}),
+            )
+
+    async def handler(request: ModelRequest) -> ModelResponse:
+        observed.append(request)
+        return ModelResponse(result=[AIMessage(content="继续")])
+
+    response = await CachePreservingSummarizationMiddleware.awrap_model_call(
+        _AsyncSummaryFailureStub(),  # type: ignore[arg-type]
+        ModelRequest(
+            model=None,
+            messages=messages,
+            state={"_force_cache_compaction": True},
+        ),
+        handler,
+    )
+
+    assert isinstance(response, ExtendedModelResponse)
+    assert observed[0].messages == messages
     assert response.command.update["_force_cache_compaction"] is False
 
 

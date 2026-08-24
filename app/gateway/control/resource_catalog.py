@@ -6,7 +6,7 @@ import httpx
 
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
-from app.gateway.control.schemas import (
+from app.schemas.gateway_control import (
     GatewayResourceDTO,
     GatewayResourceListDTO,
     GatewayResourceScopeErrorDTO,

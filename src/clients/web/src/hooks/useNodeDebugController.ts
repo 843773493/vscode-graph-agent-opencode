@@ -21,6 +21,7 @@ interface UseNodeDebugControllerOptions {
   apiPort: number;
   workspaceId: string | null;
   sessionId: string | null;
+  enabled: boolean;
   onStatusChange: (message: string) => void;
 }
 
@@ -36,6 +37,7 @@ export function useNodeDebugController({
   apiPort,
   workspaceId,
   sessionId,
+  enabled,
   onStatusChange,
 }: UseNodeDebugControllerOptions) {
   const [state, setState] = useState<NodeDebugState | null>(null);
@@ -48,7 +50,7 @@ export function useNodeDebugController({
   const syncChannelRef = useRef<ReturnType<typeof createNodeDebugSyncChannel> | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!sessionId) {
+    if (!enabled || !sessionId) {
       setState(null);
       return;
     }
@@ -60,7 +62,7 @@ export function useNodeDebugController({
     ) {
       setState(nextState);
     }
-  }, [apiPort, sessionId, workspaceId]);
+  }, [apiPort, enabled, sessionId, workspaceId]);
 
   useEffect(() => {
     const channel = createNodeDebugSyncChannel(
@@ -83,6 +85,11 @@ export function useNodeDebugController({
     const requestVersion = ++requestVersionRef.current;
     setError(null);
     setState(null);
+    if (!enabled) {
+      setCapabilities(null);
+      actionInFlightRef.current = false;
+      return;
+    }
     actionInFlightRef.current = false;
     let disposed = false;
 
@@ -133,13 +140,13 @@ export function useNodeDebugController({
       disposed = true;
       window.clearInterval(intervalId);
     };
-  }, [apiPort, sessionId, workspaceId]);
+  }, [apiPort, enabled, sessionId, workspaceId]);
 
   const runAction = useCallback(async (
     action: NodeDebugActionRequest["action"],
     params: Record<string, unknown> = {},
   ): Promise<NodeDebugState | null> => {
-    if (!sessionId) return null;
+    if (!enabled || !sessionId) return null;
     const actionVersion = ++requestVersionRef.current;
     actionInFlightRef.current = true;
     setActionBusy(true);
@@ -175,7 +182,7 @@ export function useNodeDebugController({
         requestVersionRef.current += 1;
       }
     }
-  }, [apiPort, onStatusChange, publishStateChange, sessionId, workspaceId]);
+  }, [apiPort, enabled, onStatusChange, publishStateChange, sessionId, workspaceId]);
 
   const start = useCallback(async ({
     path,

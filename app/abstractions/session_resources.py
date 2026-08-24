@@ -45,6 +45,12 @@ class BrowserRecord(TypedDict, total=False):
     title: str
     url: str
     viewport: BrowserViewport
+    device_profile: str
+    device_orientation: str
+    device_scale_factor: float
+    touch_simulation_enabled: bool
+    device_emulation: dict[str, object]
+    device_profiles: list[dict[str, object]]
     status: str
     created_at: str
     updated_at: str
@@ -132,6 +138,8 @@ class BrowserManagerClientProtocol(Protocol):
         url: str,
         title: str = "Browser Page",
         viewport: dict[str, int] | None = None,
+        device_profile: str | None = None,
+        device_orientation: str | None = None,
     ) -> BrowserRecord: ...
 
     async def read_page(self, browser_id: str) -> BrowserToolResult: ...
@@ -164,6 +172,14 @@ class BrowserManagerClientProtocol(Protocol):
     async def delete_browser(self, browser_id: str) -> BrowserToolResult: ...
 
     async def set_resource_policy(self, browser_id: str, policy: str) -> BrowserRecord: ...
+
+    async def set_device_profile(
+        self,
+        *,
+        browser_id: str,
+        device_profile: str,
+        device_orientation: str = "portrait",
+    ) -> BrowserRecord: ...
 
     async def freeze_browser(self, browser_id: str) -> BrowserRecord: ...
 

@@ -1,4 +1,6 @@
 import React from "react";
+import type { TurnHistoryInclude } from "../../api/sessionTurnHistory";
+import { isLiveConversationView } from "../../state/trace/traceAggregation";
 import type { ConversationView } from "../../types/frontend";
 import ChatTurnResponseBody from "./turn/ChatTurnResponseBody";
 import {
@@ -20,6 +22,13 @@ export interface ChatTurnProps extends ChatTurnActionCallbacks {
     sessionId: string,
     messageId: string,
   ) => Promise<string>;
+  onLoadTurnDetails?: (
+    turnIds: string[],
+    requestIdentity?: string | null,
+    refreshAfterInFlight?: boolean,
+    include?: TurnHistoryInclude[],
+  ) => Promise<void>;
+  onLoadToolDetails?: (turnId: string) => Promise<void>;
 }
 
 function ChatTurn({
@@ -30,11 +39,12 @@ function ChatTurn({
   isLastTurn,
   sessionBusy,
   onLoadAgentStateMessageRawContent,
+  onLoadTurnDetails,
+  onLoadToolDetails,
   onReplayTurn,
   onUpdatePending,
   onRemovePending,
-  onSendPendingImmediately,
-  onChangePendingKind,
+  onChangePendingPolicy,
 }: ChatTurnProps): React.ReactNode {
   const actions = useChatTurnActions({
     conversation,
@@ -42,6 +52,35 @@ function ChatTurn({
     onReplayTurn,
     onUpdatePending,
   });
+  const [toolMenuOpen, setToolMenuOpen] = React.useState(false);
+  const [toolDetailsLoading, setToolDetailsLoading] = React.useState(false);
+  const [toolDetailsError, setToolDetailsError] = React.useState<string | null>(null);
+  const canLoadToolDetails = Boolean(
+    conversation.turnId && onLoadToolDetails,
+  );
+  const toggleToolMenu = () => {
+    if (!canLoadToolDetails || toolDetailsLoading) return;
+    setToolDetailsError(null);
+    setToolMenuOpen((open) => !open);
+  };
+  const loadToolDetails = async () => {
+    if (!canLoadToolDetails || !conversation.turnId || !onLoadToolDetails) return;
+    setToolDetailsLoading(true);
+    setToolDetailsError(null);
+    try {
+      await onLoadToolDetails(conversation.turnId);
+      setToolMenuOpen(false);
+    } catch (error) {
+      setToolDetailsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setToolDetailsLoading(false);
+    }
+  };
+  const handleToolAvatarKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    toggleToolMenu();
+  };
 
   return (
     <article className="chat-turn" data-conversation-id={conversation.conversationId}>
@@ -53,12 +92,40 @@ function ChatTurn({
         actions={actions}
         onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}
         onRemovePending={onRemovePending}
-        onSendPendingImmediately={onSendPendingImmediately}
-        onChangePendingKind={onChangePendingKind}
+        onChangePendingPolicy={onChangePendingPolicy}
       />
       <div className="chat-assistant-row">
-        <div className="chat-assistant-avatar" aria-hidden="true">
-          <span className="codicon codicon-copilot" />
+        <div className="chat-assistant-avatar-menu">
+          <div
+            className={`chat-assistant-avatar${canLoadToolDetails ? " is-tool-trigger" : ""}`}
+            role={canLoadToolDetails ? "button" : undefined}
+            tabIndex={canLoadToolDetails ? 0 : undefined}
+            aria-hidden={canLoadToolDetails ? undefined : true}
+            aria-label={canLoadToolDetails ? "工具详情" : undefined}
+            aria-expanded={canLoadToolDetails ? toolMenuOpen : undefined}
+            aria-haspopup={canLoadToolDetails ? "menu" : undefined}
+            onClick={canLoadToolDetails ? toggleToolMenu : undefined}
+            onKeyDown={canLoadToolDetails ? handleToolAvatarKeyDown : undefined}
+          >
+            <span className="codicon codicon-copilot" />
+          </div>
+          {canLoadToolDetails && toolMenuOpen ? (
+            <div className="chat-tool-detail-menu-popup" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                disabled={toolDetailsLoading}
+                onClick={() => void loadToolDetails()}
+              >
+                {toolDetailsLoading ? "正在加载工具详情…" : "加载 tool_call 和 tool_result"}
+              </button>
+              {toolDetailsError ? (
+                <div className="chat-tool-detail-menu-error" role="alert">
+                  {toolDetailsError}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="chat-assistant-content">
           <ChatTurnResponseBody
@@ -67,6 +134,7 @@ function ChatTurn({
             isLastTurn={isLastTurn}
             sessionBusy={sessionBusy}
             actions={actions}
+            onLoadTurnDetails={onLoadTurnDetails}
           />
         </div>
       </div>
@@ -75,9 +143,10 @@ function ChatTurn({
 }
 
 function isActiveConversation(conversation: ConversationView): boolean {
-  return conversation.pending
-    || conversation.status === "running"
-    || conversation.status === "queued";
+  return isLiveConversationView(conversation)
+    && (conversation.pending
+      || conversation.status === "running"
+      || conversation.status === "queued");
 }
 
 function lastEventId(conversation: ConversationView): string | null {
@@ -90,6 +159,34 @@ function lastAssistantIdentity(conversation: ConversationView): string {
   return last
     ? `${messages.length}:${last.message_id}:${last.updated_at}:${last.content.length}`
     : "0";
+}
+
+function responsePartsEqual(
+  left: ConversationView["responseParts"],
+  right: ConversationView["responseParts"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((part, index) => {
+    const other = right[index];
+    return part.part_id === other.part_id
+      && part.kind === other.kind
+      && part.projection === other.projection
+      && part.status === other.status
+      && part.text === other.text
+      && part.carrier_type === other.carrier_type
+      && part.tool_call_id === other.tool_call_id
+      && part.tool_name === other.tool_name
+      && part.arguments === other.arguments
+      && part.result === other.result
+      && part.truncated === other.truncated
+      && part.final === other.final
+      && part.source.message_sequence === other.source.message_sequence
+      && part.source.content_block_index === other.source.content_block_index
+      && part.source.item_index === other.source.item_index
+      && part.source.call_index === other.source.call_index
+      && part.source.result_message_sequence === other.source.result_message_sequence;
+  });
 }
 
 /**
@@ -107,11 +204,12 @@ export function areChatTurnPropsEqual(
     || previous.isLastTurn !== next.isLastTurn
     || previous.sessionBusy !== next.sessionBusy
     || previous.onLoadAgentStateMessageRawContent !== next.onLoadAgentStateMessageRawContent
+    || previous.onLoadTurnDetails !== next.onLoadTurnDetails
+    || previous.onLoadToolDetails !== next.onLoadToolDetails
     || previous.onReplayTurn !== next.onReplayTurn
     || previous.onUpdatePending !== next.onUpdatePending
     || previous.onRemovePending !== next.onRemovePending
-    || previous.onSendPendingImmediately !== next.onSendPendingImmediately
-    || previous.onChangePendingKind !== next.onChangePendingKind
+    || previous.onChangePendingPolicy !== next.onChangePendingPolicy
   ) {
     return false;
   }
@@ -135,6 +233,7 @@ export function areChatTurnPropsEqual(
     && left.status === right.status
     && left.pending === right.pending
     && left.jobId === right.jobId
+    && responsePartsEqual(left.responseParts, right.responseParts)
     && left.events.length === right.events.length
     && lastEventId(left) === lastEventId(right)
     && lastAssistantIdentity(left) === lastAssistantIdentity(right);

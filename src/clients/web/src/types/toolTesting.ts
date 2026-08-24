@@ -14,13 +14,20 @@ export type ToolTestStatus = ToolTestRunDTO["status"];
 
 export type ToolCatalogItem = Omit<
   ToolDTO,
-  "parameters" | "group_id" | "group_name" | "kind" | "enabled" | "test_supported"
+  | "parameters"
+  | "group_id"
+  | "group_name"
+  | "kind"
+  | "execution_enabled"
+  | "model_visible"
+  | "test_supported"
 > & {
   parameters: Record<string, unknown>;
   group_id: string;
   group_name: string;
   kind: ToolKind;
-  enabled: boolean;
+  execution_enabled: boolean;
+  model_visible: boolean;
   test_supported: boolean;
 };
 
