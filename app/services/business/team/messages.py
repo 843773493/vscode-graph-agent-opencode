@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.prompting import PromptSection, internal_message_factory
-from app.schemas.public_v2.team import (
+from app.schemas.internal_v2.team import (
     TeamBoardDTO,
     TeamMemberDTO,
     TeamTaskDTO,

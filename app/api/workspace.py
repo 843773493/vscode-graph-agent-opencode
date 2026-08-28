@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from contextlib import suppress
 
@@ -15,9 +16,15 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.core.exceptions import ForbiddenError
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.sse import SseErrorDTO, sse_responses
-from app.schemas.public_v2.workspace import (
+from app.protocol.codecs.workspace_events import (
+    file_change_batch_to_json,
+    file_change_batch_to_proto,
+    sse_error_to_json,
+    sse_error_to_proto,
+)
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.sse import SseErrorDTO, sse_responses
+from app.schemas.internal_v2.workspace import (
     WorkspaceContextDTO,
     WorkspaceDTO,
     WorkspaceFileChangeBatchDTO,
@@ -92,19 +99,28 @@ async def stream_workspace_file_events(
                 except StopAsyncIteration:
                     return
                 if batch.error is not None:
-                    data = SseErrorDTO(message=batch.error).model_dump_json()
+                    data = json.dumps(
+                        sse_error_to_json(sse_error_to_proto(batch.error)),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
                     yield f"event: error\ndata: {data}\n\n"
                     return
-                data = WorkspaceFileChangeBatchDTO(
-                    overflow=batch.overflow,
-                    changes=[
-                        WorkspaceFileChangeDTO(
-                            kind=change.kind,
-                            path=change.path,
+                data = json.dumps(
+                    file_change_batch_to_json(
+                        file_change_batch_to_proto(
+                            {
+                                "overflow": batch.overflow,
+                                "changes": [
+                                    {"kind": change.kind, "path": change.path}
+                                    for change in batch.changes
+                                ],
+                            }
                         )
-                        for change in batch.changes
-                    ],
-                ).model_dump_json()
+                    ),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
                 yield f"event: changes\ndata: {data}\n\n"
                 next_batch = asyncio.create_task(anext(iterator))
         finally:

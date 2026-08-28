@@ -4,7 +4,7 @@ import re
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.job_event_bus import EventType
-from app.schemas.public_v2.session import SessionUpdateRequest
+from app.schemas.internal_v2.session import SessionUpdateRequest
 from app.services.business.session_service import SessionService
 
 DEFAULT_SESSION_TITLES = {"", "新会话", "未命名"}

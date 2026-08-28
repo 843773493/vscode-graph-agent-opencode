@@ -30,7 +30,9 @@ describe("Composer /new 命令", () => {
         },
         renameCurrentSession: () => undefined,
         switchContentView: () => undefined,
-        compactSession: async () => undefined,
+        compactSession: async () => {
+          throw new Error("/new 测试不会执行压缩");
+        },
         runGoalCommand: () => undefined,
       }));
       return null;
@@ -106,7 +108,7 @@ describe("Composer /compact 命令", () => {
       return null;
     }
 
-    let renderer;
+    let renderer: ReturnType<typeof create> | undefined;
     await act(async () => {
       renderer = create(<Harness />);
     });

@@ -14,7 +14,7 @@ from pydantic.errors import PydanticInvalidForJsonSchema
 import pytest
 
 from app.agents.tools.apply_patch import create_apply_patch_tool
-from app.schemas.public_v2.tool_test import ToolTestStartRequest
+from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 from app.tool_testing.cases.apply_patch_case import create_apply_patch_cases
 from app.tool_testing.definitions import (
     PreparedToolTest,

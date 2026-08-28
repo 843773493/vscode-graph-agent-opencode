@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package boxteam.workspace.v2;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+enum MessageRole {
+  MESSAGE_ROLE_UNSPECIFIED = 0;
+  MESSAGE_ROLE_USER = 1;
+  MESSAGE_ROLE_ASSISTANT = 2;
+  MESSAGE_ROLE_SYSTEM = 3;
+  MESSAGE_ROLE_TOOL = 4;
+}
+
+message AttachmentRef {
+  string file_id = 1;
+  optional string name = 2;
+  optional string content_type = 3;
+  optional string data_url = 4;
+}
+
+message Message {
+  string message_id = 1;
+  string session_id = 2;
+  MessageRole role = 3;
+  string content = 4;
+  repeated AttachmentRef attachments = 5;
+  google.protobuf.Struct metadata = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}

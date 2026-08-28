@@ -16,6 +16,8 @@ from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
 from app.agents.tool_identity import CUSTOM_TOOL_INVOKER_NAME
+from app.core.model_delta_context import get_current_model_delta_sink
+from app.services.orchestration.activity_runtime import ActivityRuntime
 
 _ALLOWED_DECISIONS = ["approve", "edit", "reject", "respond"]
 
@@ -87,11 +89,32 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
             )
         raise ValueError(f"不支持的扩展工具人工确认决定: {decision_type}")
 
-    def after_model(
+    @staticmethod
+    def _current_activity_runtime() -> ActivityRuntime | None:
+        sink = get_current_model_delta_sink()
+        activity_runtime = getattr(sink, "activities", None)
+        return (
+            activity_runtime
+            if isinstance(activity_runtime, ActivityRuntime)
+            else None
+        )
+
+    @staticmethod
+    def _approval_activity_id(
+        activity_runtime: ActivityRuntime,
+        requested: list[tuple[int, ToolCall, str]],
+    ) -> str:
+        call_ids = ":".join(str(tool_call["id"]) for _, tool_call, _ in requested)
+        return f"{activity_runtime.writer.turn_stream_id}:approval:{call_ids}"
+
+    def _requested_approvals(
         self,
         state: AgentState,
-        runtime: Runtime,
-    ) -> dict[str, object] | None:
+    ) -> tuple[
+        list[tuple[int, ToolCall, str]],
+        list[ActionRequest],
+        list[ReviewConfig],
+    ] | None:
         messages = state["messages"]
         if not messages:
             return None
@@ -131,23 +154,27 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
             )
         if not requested:
             return None
+        return requested, action_requests, review_configs
 
-        response = cast(
-            HITLResponse,
-            interrupt(
-                HITLRequest(
-                    action_requests=action_requests,
-                    review_configs=review_configs,
-                )
-            ),
-        )
+    def _apply_approval_response(
+        self,
+        state: AgentState,
+        requested: list[tuple[int, ToolCall, str]],
+        response: HITLResponse,
+    ) -> dict[str, object]:
         decisions = response["decisions"]
         if len(decisions) != len(requested):
             raise ValueError(
                 "扩展工具人工确认决定数量与待确认工具数量不一致: "
                 f"decisions={len(decisions)}, requests={len(requested)}"
             )
-
+        messages = state["messages"]
+        last_ai_message = next(
+            (message for message in reversed(messages) if isinstance(message, AIMessage)),
+            None,
+        )
+        if last_ai_message is None:
+            raise RuntimeError("审批返回后找不到原始 AIMessage")
         requested_by_index = {
             index: (tool_call, target_name, decisions[decision_index])
             for decision_index, (index, tool_call, target_name) in enumerate(requested)
@@ -169,13 +196,76 @@ class CustomToolConfirmationMiddleware(AgentMiddleware):
                 revised_tool_calls.append(revised_call)
             if tool_message is not None:
                 artificial_messages.append(tool_message)
-
         last_ai_message.tool_calls = revised_tool_calls
         return {"messages": [last_ai_message, *artificial_messages]}
+
+    def after_model(
+        self,
+        state: AgentState,
+        runtime: Runtime,
+    ) -> dict[str, object] | None:
+        prepared = self._requested_approvals(state)
+        if prepared is None:
+            return None
+        requested, action_requests, review_configs = prepared
+        response = cast(
+            HITLResponse,
+            interrupt(
+                HITLRequest(
+                    action_requests=action_requests,
+                    review_configs=review_configs,
+                )
+            ),
+        )
+        return self._apply_approval_response(state, requested, response)
 
     async def aafter_model(
         self,
         state: AgentState,
         runtime: Runtime,
     ) -> dict[str, object] | None:
-        return self.after_model(state, runtime)
+        prepared = self._requested_approvals(state)
+        if prepared is None:
+            return None
+        requested, action_requests, review_configs = prepared
+        activity_runtime = self._current_activity_runtime()
+        activity_id: str | None = None
+        if activity_runtime is not None:
+            activity_id = self._approval_activity_id(activity_runtime, requested)
+            await activity_runtime.started(
+                activity_id=activity_id,
+                kind="approval.wait",
+                summary="等待用户确认工具操作",
+                cancellable=True,
+                resumable=True,
+                side_effect_policy="none",
+                detail={
+                    "approval_id": activity_id,
+                    "required_action": "approve_or_reject",
+                },
+            )
+            await activity_runtime.updated(
+                activity_id=activity_id,
+                kind="approval.wait",
+                status="waiting",
+                detail={
+                    "approval_id": activity_id,
+                    "required_action": "approve_or_reject",
+                },
+            )
+        response = cast(
+            HITLResponse,
+            interrupt(
+                HITLRequest(
+                    action_requests=action_requests,
+                    review_configs=review_configs,
+                )
+            ),
+        )
+        if activity_runtime is not None and activity_id is not None:
+            await activity_runtime.completed(
+                activity_id=activity_id,
+                kind="approval.wait",
+                summary="用户已提交工具审批决定",
+            )
+        return self._apply_approval_response(state, requested, response)

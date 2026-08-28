@@ -1,0 +1,12 @@
+{
+  "expectation_id": "reasoning-tool-loop",
+  "kind": "business_semantics",
+  "protocol": "openai_chat_sse",
+  "reasoning_summary": "先读取 README，再根据工具结果作答。已读取 README，整理最终答复。",
+  "tool_name": "read_file",
+  "tool_arguments": {
+    "path": "README.md"
+  },
+  "visible_text": "工具调用完成",
+  "terminal_event": "[DONE]"
+}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -68,6 +68,7 @@ def create_custom_tool_invoker_tool(
     custom_tools: Sequence[BaseTool],
     *,
     model_visible_tool_names: Iterable[str] = (),
+    is_tool_execution_enabled: Callable[[BaseTool], bool] | None = None,
 ) -> BaseTool:
     """创建固定扩展工具入口，通过参数分发到工作区配置的自定义工具。"""
     tools_by_name: dict[str, BaseTool] = {}
@@ -90,6 +91,10 @@ def create_custom_tool_invoker_tool(
             raise ValueError(
                 f"未知扩展工具: {resolved_tool_name}。当前可用扩展工具: {available}"
             )
+        if is_tool_execution_enabled is not None and not is_tool_execution_enabled(
+            target_tool
+        ):
+            raise PermissionError(f"扩展工具 {resolved_tool_name!r} 已被策略禁用")
 
         return await _invoke_target_tool_without_nested_callbacks(
             target_tool,

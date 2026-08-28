@@ -11,7 +11,7 @@ from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.identifier import create_prefixed_id
 from app.prompting import PromptSection, internal_message_factory
-from app.schemas.public_v2.pending_request import DeliveryPolicy
+from app.schemas.internal_v2.pending_request import DeliveryPolicy
 
 
 def create_send_message_to_session_tool(

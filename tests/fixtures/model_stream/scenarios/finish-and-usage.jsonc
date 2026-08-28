@@ -1,0 +1,5 @@
+{
+  "scenario_id": "finish-and-usage",
+  "asset": "handwritten/openai_chat/finish-and-usage.json",
+  "business_assertion": "usage-and-finish"
+}

@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package boxteam.terminal.v1;
+
+import "boxteam/terminal/v1/terminal.proto";
+
+message TerminalAttach {
+  string terminal_id = 1;
+  optional uint32 cols = 2;
+  optional uint32 rows = 3;
+  optional uint32 after_sequence = 4;
+}
+
+message TerminalDetach {
+  optional string terminal_id = 1;
+}
+
+message TerminalInput {
+  string data = 1;
+  string source = 2;
+}
+
+message TerminalResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+message TerminalAcknowledge {
+  uint32 sequence = 1;
+}
+
+message TerminalClientMessage {
+  oneof payload {
+    TerminalAttach attach = 1;
+    TerminalDetach detach = 2;
+    TerminalInput input = 3;
+    TerminalInput agent_input = 4;
+    TerminalResize resize = 5;
+    TerminalAcknowledge acknowledge = 6;
+    TerminalJsonMessage json = 7;
+  }
+}

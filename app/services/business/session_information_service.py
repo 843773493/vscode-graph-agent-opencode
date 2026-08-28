@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.core.session_paths import SessionPathResolver
-from app.schemas.public_v2.session import (
+from app.schemas.internal_v2.session import (
     SessionInformationErrorDTO,
     SessionInformationExecutionDTO,
     SessionInformationResourceDTO,
@@ -11,7 +11,7 @@ from app.schemas.public_v2.session import (
     SessionInformationTraceDTO,
     SessionInformationWorkspaceDTO,
 )
-from app.schemas.public_v2.trace import TraceEventDTO
+from app.schemas.internal_v2.trace import TraceEventDTO
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.workspace_service import WorkspaceService

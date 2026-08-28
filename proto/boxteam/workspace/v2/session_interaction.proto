@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package boxteam.workspace.v2;
+
+import "boxteam/workspace/v2/job.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+message SessionExecutionEventHeader {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+}
+
+message MessageObservation {
+  string message_id = 1;
+  string session_id = 2;
+  string role = 3;
+  string content = 4;
+  repeated google.protobuf.Value attachments = 5;
+  google.protobuf.Struct metadata = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message JobStepProgress {
+  optional string agent_id = 1;
+  optional string message = 2;
+  optional string phase = 3;
+}
+
+message SessionStatus {
+  string session_id = 1;
+  string status = 2;
+  optional string message = 3;
+  optional string active_job_id = 4;
+  optional string observation_state = 5;
+  bool is_streaming = 6;
+  bool is_idle = 7;
+  google.protobuf.Struct waiting = 8;
+}
+
+message SessionError {
+  string error = 1;
+}
+
+message TraceObserved {
+  string raw_type = 1;
+}
+
+message SessionExecutionEvent {
+  string type = 1;
+  SessionExecutionEventHeader header = 2;
+  reserved 11;
+
+  oneof payload {
+    MessageObservation message_updated = 10;
+    JobProgress job_updated = 12;
+    JobStepProgress job_step_updated = 13;
+    JobProgress job_status_changed = 14;
+    SessionStatus session_status_changed = 15;
+    JobProgress session_completed = 16;
+    SessionError session_error = 17;
+    TraceObserved trace_observed = 18;
+  }
+}

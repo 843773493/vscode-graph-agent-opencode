@@ -9,9 +9,9 @@ from app.abstractions.internal_message import PreparedInternalMessage
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.prompting import PromptSection, internal_message_factory
-from app.schemas.public_v2.common import MessageRole
-from app.schemas.public_v2.session import SessionDTO
-from app.schemas.public_v2.session_navigation import (
+from app.schemas.internal_v2.common import MessageRole
+from app.schemas.internal_v2.session import SessionDTO
+from app.schemas.internal_v2.session_navigation import (
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,
     SessionGenerationOutputDTO,

@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 
 from app.abstractions.session_changes import AggregatedFileChange, StoredFileEdit
-from app.schemas.public_v2.session_changes import (
+from app.schemas.internal_v2.session_changes import (
     SessionChangesetKind,
     SessionFileChangeKind,
 )

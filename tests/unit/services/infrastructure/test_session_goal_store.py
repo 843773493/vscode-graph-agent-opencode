@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.schemas.public_v2.goal import GoalStatus, SessionGoalDTO
+from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.services.infrastructure.session_goal_store import SessionGoalStore
 
 

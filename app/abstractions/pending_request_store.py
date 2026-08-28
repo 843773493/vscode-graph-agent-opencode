@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.schemas.public_v2.pending_request import (
+from app.schemas.internal_v2.pending_request import (
     PendingRequestDTO,
     PendingRequestSummaryListDTO,
 )

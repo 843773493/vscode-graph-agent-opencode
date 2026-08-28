@@ -8,7 +8,7 @@ from typing import TypeVar
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.schemas.public_v2.session_navigation import SessionFolderUpdateRequest
+from app.schemas.internal_v2.session_navigation import SessionFolderUpdateRequest
 from app.services.business.session_navigation import SessionCatalogService
 
 

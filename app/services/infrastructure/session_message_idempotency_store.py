@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from app.core.session_paths import SessionPathResolver
-from app.schemas.public_v2.message import MessageRunAccepted
+from app.schemas.internal_v2.message import MessageRunAccepted
 
 
 class SessionMessageIdempotencyStore:

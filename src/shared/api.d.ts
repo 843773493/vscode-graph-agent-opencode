@@ -1,7 +1,7 @@
-import type {
-  SessionExecutionEventDTO,
-} from '../web/src/types/gen/session_interaction';
-import type { TraceEventDTO } from '../web/src/types/gen/trace';
+import type { SessionExecutionEvent } from '../clients/web/src/types/protocol_buf_generated/boxteam/workspace/v2/session_interaction_pb';
+import type { TraceEventDTO } from '../clients/web/src/protocol/jsonTypes';
+
+type SessionExecutionEventDTO = SessionExecutionEvent;
 
 export interface WorkspaceInfo {
   root_path: string;

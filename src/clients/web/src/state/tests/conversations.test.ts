@@ -12,6 +12,10 @@ import {
   buildPendingStatusItem,
   isLiveConversationView,
 } from "../trace/traceAggregation";
+import {
+  createMessageStreamState,
+  type MessageStreamState,
+} from "../messageStream";
 import type { AppState, ConversationView } from "../../types/frontend";
 import type { TraceEvent } from "../../types/backend";
 
@@ -339,4 +343,73 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
 
   syncActiveJobConversation(state.pendingConversations, sessionId, null);
   expect(state.pendingConversations.has(sessionId)).toBe(false);
+});
+
+test("同一 Turn 的重复消息流镜像优先使用最高序号的终态", () => {
+  const sessionId = "ses_duplicate_message_stream";
+  const turnId = "job_duplicate_message_stream";
+  const timeline = {
+    ...createSessionTurnTimeline(sessionId),
+    phase: "ready" as const,
+    orderedTurnIds: [turnId],
+    turnsById: {
+      [turnId]: {
+        turn_id: turnId,
+        job_id: turnId,
+        session_id: sessionId,
+        ordinal: 1,
+        revision: 1,
+        status: "completed" as const,
+        created_at: "2026-08-24T00:00:00Z",
+        updated_at: "2026-08-24T00:00:01Z",
+        completed_at: "2026-08-24T00:00:01Z",
+        items_view: "full" as const,
+        user_messages: [{
+          message_id: "msg_duplicate_message_stream",
+          content: "测试重复消息流镜像",
+          attachments: [],
+          metadata: {},
+          created_at: "2026-08-24T00:00:00Z",
+        }],
+        response_preview: "历史正文",
+        final_response: "历史正文",
+        items: [],
+      },
+    },
+  };
+  const stale: MessageStreamState = {
+    ...createMessageStreamState(sessionId, turnId, "strm_stale"),
+    lastEventSeq: 12,
+    connectionStatus: "gap" as const,
+  };
+  const terminal: MessageStreamState = {
+    ...createMessageStreamState(sessionId, turnId, "strm_terminal"),
+    lastEventSeq: 12,
+    streamStatus: "completed" as const,
+    connectionStatus: "terminal" as const,
+    blocks: [{
+      block_id: "block_terminal",
+      model_call_id: null,
+      block_index: 0,
+      carrier_type: "text",
+      status: "completed" as const,
+      text: "snapshot 已恢复",
+      items: [],
+      redacted: false,
+      projection: "streaming",
+    }],
+  };
+  const state = {
+    pendingConversations: new Map(),
+    turnTimelinesBySession: new Map([[sessionId, timeline]]),
+    messageStreamsByTurnStream: new Map([
+      [stale.turnStreamId, stale],
+      [terminal.turnStreamId, terminal],
+    ]),
+  } as unknown as AppState;
+
+  const [conversation] = getConversationsForSession(sessionId, state);
+
+  expect(conversation?.messageStream?.streamStatus).toBe("completed");
+  expect(conversation?.responseParts?.[0]?.text).toBe("snapshot 已恢复");
 });

@@ -162,6 +162,7 @@ def start_backend_process(
         config_root=boxteam_home / "config",
         profile="default",
         project_root=project_root,
+        force=True,
     )
     workspace_config_path = Path(workspace_root) / ".boxteam" / "workspace.jsonc"
     if not workspace_config_path.is_file():

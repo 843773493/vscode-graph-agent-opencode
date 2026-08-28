@@ -66,6 +66,52 @@ Agent runtime MUST 将 `execution_enabled=true` 的工具保留在执行注册�
 - **WHEN** 工具的执行能力为 `true` 且模型可见性为 `false`
 - **THEN** Agent runtime 可以执行该工具，但模型请求的工具定义列表不得包含该工具的名称、描述或参数 schema
 
+### Requirement: 工具默认能力必须由可验证的配置策略决定
+
+Workspace 配置 MUST 支持声明全局默认能力、按 `origin`/`kind`/`group_id`/`tool_id` 的覆盖规则，以及 Agent 局部规则。工具策略 MUST 不得继续把 Source Debugging、普通扩展或 MCP 的默认模型可见性硬编码在业务调用方中。
+
+#### Scenario: Source Debugging 默认值来自 Workspace 配置
+
+- **WHEN** `tooling.policy_rules.by_kind.debugging.model_visible` 配置为 `false`
+- **THEN** Source Debugging 工具 MUST 默认返回 `execution_enabled=true`、`model_visible=false`
+- **AND** 用户仍可以通过运行时模型可见性按钮覆盖该默认值
+
+#### Scenario: 具体工具规则覆盖工具组规则
+
+- **WHEN** 工具组规则将 `model_visible` 设置为 `false`，但 `by_tool.<tool_id>.model_visible` 设置为 `true`
+- **THEN** 该具体工具的有效状态 MUST 为 `model_visible=true`
+- **AND** 同组其它工具 MUST 继续使用工具组规则
+
+#### Scenario: 执行硬限制不能被前端覆盖
+
+- **WHEN** 静态策略的 `restrictions.execution_disabled` 命中某个工具
+- **THEN** 该工具 MUST 返回 `execution_enabled=false` 和 `model_visible=false`
+- **AND** 前端提交开启请求 MUST 被拒绝或保持关闭
+
+#### Scenario: 工具策略不依赖展示名称
+
+- **WHEN** 工具展示名称、语言或 MCP 组显示文案发生变化
+- **THEN** 策略匹配 MUST 继续使用稳定的 `origin`、`kind`、`group_id` 和 `tool_id`，不得依赖 `group_name`
+
+### Requirement: 工具目录必须返回统一来源元数据
+
+工具目录 MUST 为每个工具返回稳定的 `origin`、`kind` 和 `group_id`。MCP 工具的 `origin` MUST 为 `mcp`；普通配置扩展的 `origin` MUST 为 `custom`；内置 Agent 工具的 `origin` MUST 为 `builtin`。Gateway 代理 MUST 原样转发这些字段。
+
+#### Scenario: 目录和 Agent 使用同一套工具元数据
+
+- **WHEN** 前端获取工具目录并随后启动 Agent 请求
+- **THEN** ToolService 和 Agent runtime MUST 使用相同的来源、类型和分组字段计算有效能力，不得出现目录显示可用但 Agent 使用另一套默认值的情况
+
+### Requirement: 配置和运行时覆盖职责必须分离
+
+Workspace JSONC MUST 只保存静态默认策略与硬限制；前端按钮产生的运行时覆盖 MUST 保存在当前工作区的 ToolSelectionStore 中。本次变更 MUST NOT 实现跨电脑或 Gateway 全局同步。
+
+#### Scenario: 配置默认值和前端覆盖同时存在
+
+- **WHEN** Workspace 配置将某扩展工具默认设为 `model_visible=false`，用户在前端将其打开
+- **THEN** 后续目录和 Agent 请求 MUST 使用用户覆盖后的有效状态
+- **AND** Workspace JSONC MUST 保持不变
+
 #### Scenario: 刷新或新建 Agent runtime 使用最新状态
 
 - **WHEN** 用户更新工具状态后开始下一次 Agent 请求

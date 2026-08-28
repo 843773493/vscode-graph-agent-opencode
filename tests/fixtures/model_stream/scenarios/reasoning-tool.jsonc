@@ -1,0 +1,5 @@
+{
+  "scenario_id": "reasoning-tool",
+  "asset": "handwritten/openai_chat/reasoning-tool.json",
+  "business_assertion": "reasoning-tool-loop"
+}

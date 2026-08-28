@@ -45,6 +45,7 @@ export type TimelineItem =
       rawEnd: Record<string, unknown>;
       active: boolean;
       failed?: boolean;
+      outcomeUnknown?: boolean;
     }
   | {
       kind: "skill_summary";

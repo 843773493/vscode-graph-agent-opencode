@@ -1,5 +1,9 @@
 import type { Message, PendingRequestList, TraceEvent } from "../types/backend";
 import type { AppState, ConversationView } from "../types/frontend";
+import {
+  messageStreamToResponseParts,
+  type MessageStreamState,
+} from "./messageStream";
 import { isTurnDetail, type TurnRecord } from "./session/turnTimeline";
 import {
   dedupeTraceEvents,
@@ -635,7 +639,10 @@ export function getConversationsForSession(
   const pendingList = state.pendingConversations.get(sessionCacheKey) ?? [];
 
   if (pendingList.length === 0) {
-    return turnConversations;
+    return applyMessageStreamProjection(
+      turnConversations,
+      state.messageStreamsByTurnStream ?? new Map(),
+    );
   }
 
   const merged = [...turnConversations];
@@ -651,5 +658,61 @@ export function getConversationsForSession(
     merged[matchedIndex] = mergeConversation(merged[matchedIndex], pending);
   }
 
-  return sortConversationViews(dedupeConversationViews(merged));
+  return applyMessageStreamProjection(
+    sortConversationViews(dedupeConversationViews(merged)),
+    state.messageStreamsByTurnStream ?? new Map(),
+  );
+}
+
+function applyMessageStreamProjection(
+  conversations: ConversationView[],
+  streams: Map<string, MessageStreamState>,
+): ConversationView[] {
+  return conversations.map((conversation) => {
+    const streamCandidates = [...streams.values()].filter((candidate) =>
+      candidate.sessionId === conversation.sessionId
+      && candidate.turnId === (conversation.turnId ?? conversation.jobId),
+    );
+    const stream = streamCandidates.sort((left, right) =>
+      right.lastEventSeq - left.lastEventSeq
+      || Number(isTerminalMessageStreamStatus(right.streamStatus))
+        - Number(isTerminalMessageStreamStatus(left.streamStatus))
+      || Number(right.connectionStatus === "terminal")
+        - Number(left.connectionStatus === "terminal"),
+    )[0];
+    if (!stream) return conversation;
+    if (
+      conversation.turnId !== stream.turnId
+      && conversation.jobId !== stream.turnId
+    ) {
+      return conversation;
+    }
+    const responseParts = messageStreamToResponseParts(stream);
+    const terminalStatus = stream.streamStatus === "completed"
+      ? "done"
+      : stream.streamStatus === "interrupted" || stream.streamStatus === "failed"
+        ? "error"
+        : "running";
+    return {
+      ...conversation,
+      responseParts,
+      status: terminalStatus,
+      activeJobOverlay: !isTerminalMessageStreamStatus(stream.streamStatus),
+      messageStream: {
+        connectionStatus: stream.connectionStatus,
+        streamStatus: stream.streamStatus,
+        lastEventSeq: stream.lastEventSeq,
+        failure: stream.failure,
+        activeState: stream.activeState,
+        activities: stream.activities,
+        resumable: stream.resumable,
+      },
+    };
+  });
+}
+
+function isTerminalMessageStreamStatus(
+  status: MessageStreamState["streamStatus"],
+): boolean {
+  return status === "completed" || status === "interrupted" || status === "failed";
 }

@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package boxteam.workspace.v2;
+
+import "boxteam/workspace/v2/session_interaction.proto";
+import "google/protobuf/struct.proto";
+
+message SessionExecutionSse {
+  SessionExecutionEvent event = 1;
+  string raw_type = 2;
+  google.protobuf.Struct raw_payload = 3;
+}

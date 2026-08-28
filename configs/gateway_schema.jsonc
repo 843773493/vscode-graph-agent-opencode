@@ -105,8 +105,8 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "before_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 4 },
-                "after_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 4 },
+                "before_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 2 },
+                "after_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 2 },
                 "include": { "$ref": "#/$defs/historyInclude" }
               }
             }

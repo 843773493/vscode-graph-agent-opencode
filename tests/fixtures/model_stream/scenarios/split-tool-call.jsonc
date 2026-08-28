@@ -1,0 +1,5 @@
+{
+  "scenario_id": "split-tool-call",
+  "asset": "handwritten/openai_chat/split-tool-call.json",
+  "business_assertion": "split-tool-call-arguments-merge"
+}

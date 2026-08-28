@@ -4,11 +4,11 @@ import asyncio
 from collections.abc import Callable, Mapping, MutableMapping
 from typing import Protocol
 
-from app.schemas.public_v2.common import (
+from app.schemas.internal_v2.common import (
     ControlAction,
     JobStatus,
 )
-from app.schemas.public_v2.job import (
+from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
 )

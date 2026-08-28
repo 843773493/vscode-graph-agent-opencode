@@ -85,6 +85,25 @@ export function canAcceptUserViewStateMutation({
   );
 }
 
+export function shouldRestorePersistedWorkspace({
+  restorePersistedWorkspace,
+  userViewState,
+  activeWorkspaceId,
+  availableWorkspaceIds,
+}: {
+  restorePersistedWorkspace: boolean;
+  userViewState: Awaited<ReturnType<typeof getLatestGatewayUserViewState>>;
+  activeWorkspaceId: string | null;
+  availableWorkspaceIds: readonly string[];
+}): boolean {
+  return (
+    restorePersistedWorkspace
+    && userViewState !== null
+    && availableWorkspaceIds.includes(userViewState.workspace_id)
+    && activeWorkspaceId !== userViewState.workspace_id
+  );
+}
+
 const initialBootstrapRequests = new Map<
   number,
   Promise<WorkspaceBootstrapPayload>
@@ -92,6 +111,7 @@ const initialBootstrapRequests = new Map<
 
 async function loadWorkspaceBootstrap(
   apiPort: number,
+  options: { restorePersistedWorkspace: boolean },
 ): Promise<WorkspaceBootstrapPayload> {
   const userAccess = await ensureGatewayUserAccess(apiPort);
   const userViewState = userAccess.kind === "user"
@@ -103,14 +123,19 @@ async function loadWorkspaceBootstrap(
   }
   await loadAndApplyResolvedGatewayTheme(uiSettings.theme.resolved_theme);
   let gatewayWorkspaces = await listGatewayWorkspaces(apiPort);
+  const persistedWorkspaceId = userViewState?.workspace_id;
   if (
-    userViewState &&
-    gatewayWorkspaces.items.some(
-      (workspace) => workspace.workspace_id === userViewState.workspace_id,
-    ) &&
-    gatewayWorkspaces.active_workspace_id !== userViewState.workspace_id
+    shouldRestorePersistedWorkspace({
+      restorePersistedWorkspace: options.restorePersistedWorkspace,
+      userViewState,
+      activeWorkspaceId: gatewayWorkspaces.active_workspace_id,
+      availableWorkspaceIds: gatewayWorkspaces.items.map(
+        (workspace) => workspace.workspace_id,
+      ),
+    })
+    && persistedWorkspaceId
   ) {
-    await activateGatewayWorkspace(apiPort, userViewState.workspace_id);
+    await activateGatewayWorkspace(apiPort, persistedWorkspaceId);
     gatewayWorkspaces = await listGatewayWorkspaces(apiPort);
   }
   const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
@@ -139,7 +164,9 @@ function loadInitialWorkspaceBootstrap(apiPort: number) {
   if (existing) {
     return existing;
   }
-  const request = loadWorkspaceBootstrap(apiPort).finally(() => {
+  const request = loadWorkspaceBootstrap(apiPort, {
+    restorePersistedWorkspace: true,
+  }).finally(() => {
     if (initialBootstrapRequests.get(apiPort) === request) {
       initialBootstrapRequests.delete(apiPort);
     }
@@ -178,7 +205,9 @@ export function useWorkspaceBootstrap({
         agents,
       } = options.reuseInitialRequest
         ? await loadInitialWorkspaceBootstrap(resolvedApiPort)
-        : await loadWorkspaceBootstrap(resolvedApiPort);
+        : await loadWorkspaceBootstrap(resolvedApiPort, {
+          restorePersistedWorkspace: false,
+        });
       writeCachedUiSettings(uiSettings);
       const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
       const workspaceIds = activeWorkspaceId ? [activeWorkspaceId] : [];
@@ -232,7 +261,7 @@ export function useWorkspaceBootstrap({
           ? new Map()
           : prev.turnTimelinesBySession;
         const unreadSessionKeys = userChanged
-          ? new Set()
+          ? new Set<string>()
           : prev.unreadSessionKeys;
         if (userViewState) {
           gatewayUserViewStates.set(

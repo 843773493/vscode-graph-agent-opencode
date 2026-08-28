@@ -10,7 +10,7 @@ import pytest
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.debug_redaction import REDACTION_PLACEHOLDER
 from app.agents.tools.debugging import create_debugging_tools
-from app.schemas.public_v2.node_debug import (
+from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugEvaluationDTO,
     NodeDebugStackFrameDTO,

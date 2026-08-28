@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.abstractions.session_changes import StoredFileEdit
 from app.core.path_utils import get_session_path_resolver, safe_join
-from app.schemas.public_v2.session_changes import SessionChangesetDTO
+from app.schemas.internal_v2.session_changes import SessionChangesetDTO
 
 EDIT_INDEX_FILE = "index.jsonl"
 REVIEWED_FILE = "reviewed.json"

@@ -18,7 +18,7 @@ from app.agents.tools.debug_redaction import (
     redact_variable_value,
 )
 from app.agents.workspace_tool_paths import WorkspaceToolPathResolver
-from app.schemas.public_v2.node_debug import (
+from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugStateDTO,
 )

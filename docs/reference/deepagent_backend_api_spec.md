@@ -1045,8 +1045,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.workspace import WorkspaceContextDTO, WorkspaceDTO
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.workspace import WorkspaceContextDTO, WorkspaceDTO
 from app.services.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -1096,7 +1096,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.public_v2.common import APIResponse
+from app.schemas.internal_v2.common import APIResponse
 from app.services.runtime_service import RuntimeService
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
@@ -1128,8 +1128,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.public_v2.common import APIResponse, CursorPage
-from app.schemas.public_v2.session import SessionCreateRequest, SessionDTO, SessionUpdateRequest
+from app.schemas.internal_v2.common import APIResponse, CursorPage
+from app.schemas.internal_v2.session import SessionCreateRequest, SessionDTO, SessionUpdateRequest
 from app.services.business.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -1195,8 +1195,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.public_v2.common import APIResponse, CursorPage
-from app.schemas.public_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
+from app.schemas.internal_v2.common import APIResponse, CursorPage
+from app.schemas.internal_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
 from app.services.message_service import MessageService
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
@@ -1245,10 +1245,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.public_v2.artifact import ArtifactDTO
+from app.schemas.internal_v2.artifact import ArtifactDTO
 from app.schemas.event import Event as SSEEvent
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
 from app.services.artifact_service import ArtifactService
 from app.services.event_service import EventService
 from app.services.job_service import JobService
@@ -1329,8 +1329,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.public_v2.agent import AgentDTO
-from app.schemas.public_v2.common import APIResponse
+from app.schemas.internal_v2.agent import AgentDTO
+from app.schemas.internal_v2.common import APIResponse
 from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -1363,8 +1363,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.tool import ToolDTO
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.tool import ToolDTO
 from app.services.tool_service import ToolService
 
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -1419,8 +1419,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, verify_local_token
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.config import ConfigDTO, ConfigUpdateRequest
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.config import ConfigDTO, ConfigUpdateRequest
 from app.services.infrastructure.config_service import ConfigService
 
 router = APIRouter(prefix="/config", tags=["config"])

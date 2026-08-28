@@ -12,16 +12,16 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.schemas.event import Event
-from app.schemas.public_v2.artifact import ArtifactDTO
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.job import (
+from app.schemas.internal_v2.artifact import ArtifactDTO
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
     JobDTO,
     StepDTO,
 )
-from app.schemas.public_v2.session_interaction import SessionExecutionSseDTO
-from app.schemas.public_v2.sse import sse_responses
+from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
+from app.schemas.internal_v2.sse import sse_responses
 from app.services.event_service import EventService, JobEventCursorGoneError
 from app.services.infrastructure.artifact_service import ArtifactService
 

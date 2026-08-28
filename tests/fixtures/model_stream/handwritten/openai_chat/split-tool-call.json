@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "split-tool-call",
+    "protocol": "openai_chat_sse",
+    "provider": "openai_compatible",
+    "model": "big-pickle"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "frames": [
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-tool-call",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "index": 0,
+                        "id": "call_fixture",
+                        "type": "function",
+                        "function": {
+                          "name": "inspect_fixture",
+                          "arguments": "{\"path\":"
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-tool-call",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "tool_calls": [
+                      {
+                        "index": 0,
+                        "function": {
+                          "arguments": "\"README.md\"}"
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-tool-call",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {},
+                  "finish_reason": "tool_calls"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "done",
+            "encoding": "text",
+            "payload": "[DONE]"
+          }
+        ]
+      }
+    }
+  ]
+}

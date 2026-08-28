@@ -12,7 +12,7 @@ from app.api.node_debug import (
     get_node_debug_capabilities,
     start_node_debug,
 )
-from app.schemas.public_v2.node_debug import (
+from app.schemas.internal_v2.node_debug import (
     NodeDebugCapabilitiesDTO,
     NodeDebugConfigurationActivateRequest,
     NodeDebugConfigurationCopyRequest,

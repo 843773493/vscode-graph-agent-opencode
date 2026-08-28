@@ -1,7 +1,7 @@
 ## 1. 工具能力状态与 API
 
 - [x] 1.1 将工具 DTO、选择请求和选择响应改为 `execution_enabled`/`model_visible` 双状态，并补齐非法组合与原子更新校验。
-- [x] 1.2 重写工作区工具选择存储，保存按 Agent 的执行禁用集合和模型可见性覆盖，落实默认组策略且不读取旧单一 `enabled` 格式。
+- [x] 1.2 重写工作区工具选择存储，保存按 Agent 的执行和模型可见性显式布尔覆盖，静态默认交给策略解析器且不读取旧单一 `enabled` 格式。
 - [x] 1.3 更新工具目录服务和选择服务，返回当前工具完整状态，正确表达组内混合状态并保证未知/重复工具不会部分写入。
 - [x] 1.4 更新 Agent 执行服务和运行时缓存边界，使下一次 Agent 请求读取最新执行/模型可见状态。
 
@@ -34,3 +34,13 @@
 - [x] 5.2 运行 Python 静态检查、后端 focused tests、Gateway focused tests、生成类型检查和 `bun run --cwd src/clients/web build`。
 - [x] 5.3 使用独立审查视角检查实现与 OpenSpec 的完整性、协议一致性、架构边界和 Web 实际交互，记录所有 P1/P2/P3 findings。
 - [x] 5.4 修复审查发现的问题并重复 focused tests、Web build、OpenSpec strict validation，直到没有未处理的 P1/P2。
+
+## 6. Workspace 工具策略配置
+
+- [x] 6.1 在 Workspace schema、`workspace_inline.jsonc` 和配置解析器中增加 `tooling.policy_defaults`、`policy_rules`、Agent 局部 `tools.policy` 与硬限制结构；删除不生效的 `tools.enabled` 示例字段。
+- [x] 6.2 新增唯一 `ToolPolicyResolver`，实现默认值、origin/kind/group/tool 覆盖、Agent 局部规则、硬限制和执行关闭联动，并补充配置解析测试。
+- [x] 6.3 为工具目录、运行时定义和 Gateway 公开 DTO 补充 `origin`，统一 builtin/custom/mcp/debugging 的 `kind`、`group_id` 与策略匹配元数据。
+- [x] 6.4 让 ToolService、AgentFactory、固定扩展入口和模型可见性 middleware 统一使用 `ToolPolicyResolver`，移除 Source Debugging/MCP/普通扩展默认值的散落硬编码。
+- [x] 6.5 保留当前工作区 ToolSelectionStore 作为运行时覆盖，不实现跨电脑同步；覆盖与静态硬限制的优先级、执行/模型联动和错误响应补充测试。
+- [x] 6.6 更新 OpenAPI/前端生成类型与工具面板状态来源，补充配置默认、组级/工具级覆盖、硬限制和 MCP 目录的前后端集成测试。
+- [x] 6.7 运行配置 schema、后端 focused tests、Gateway 代理测试、Web 单元测试和 Web build，并执行 OpenSpec strict 校验。

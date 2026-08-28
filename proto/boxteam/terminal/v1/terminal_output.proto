@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package boxteam.terminal.v1;
+
+import "boxteam/common/v1/error.proto";
+import "boxteam/terminal/v1/terminal.proto";
+
+message TerminalOutputChunk {
+  uint32 sequence = 1;
+  string data = 2;
+}
+
+message TerminalStateChanged {
+  TerminalStatus status = 1;
+  uint32 sequence = 2;
+}
+
+message TerminalCompleted {
+  int32 exit_code = 1;
+  optional string signal = 2;
+}
+
+message TerminalServerMessage {
+  oneof payload {
+    TerminalSession attached = 1;
+    TerminalSession detached = 2;
+    TerminalOutputChunk output = 3;
+    TerminalStateChanged state_changed = 4;
+    TerminalCompleted completed = 5;
+    boxteam.common.v1.Error error = 6;
+    TerminalJsonMessage json = 7;
+  }
+}

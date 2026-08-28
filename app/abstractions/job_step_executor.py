@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.message import AttachmentRef
 
 
 class JobStepExecutor(Protocol):

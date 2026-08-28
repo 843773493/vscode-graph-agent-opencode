@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.callbacks import (
@@ -42,8 +42,14 @@ from app.agents.providers.litellm_content import (
     project_ai_message_content,
     reasoning_projection_rows,
 )
-from app.agents.upstream_request_trace import attach_upstream_trace_callback
+from app.agents.upstream_request_trace import (
+    attach_upstream_trace_callback,
+    record_upstream_response,
+)
+from app.core.cancelable_stream import CancelableStream
 from app.core.identifier import create_prefixed_id
+from app.core.model_delta_context import get_current_model_delta_sink
+from app.core.turn_execution_scope import get_current_turn_execution_scope
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -120,6 +126,84 @@ def _message_chunk_token(message: AIMessageChunk) -> str:
     return ""
 
 
+def _streamed_response_payload(
+    chunks: Sequence[AIMessageChunk],
+) -> dict[str, object]:
+    """从已解析的 Chat SDK chunks 构造可审查的 upstream response 摘要。"""
+
+    reasoning_parts: list[str] = []
+    text_parts: list[str] = []
+    tool_calls: dict[int, dict[str, str]] = {}
+    for message in chunks:
+        content = getattr(message, "content", "")
+        blocks = content if isinstance(content, list) else [content]
+        for block in blocks:
+            if isinstance(block, str):
+                text_parts.append(block)
+                continue
+            if not isinstance(block, Mapping):
+                continue
+            block_type = block.get("type")
+            if block_type == "reasoning_content":
+                reasoning = block.get("reasoning_content")
+                if isinstance(reasoning, str):
+                    reasoning_parts.append(reasoning)
+            elif block_type in {"text", "output_text"}:
+                text = block.get("text")
+                if isinstance(text, str):
+                    text_parts.append(text)
+
+        for fallback_index, raw_tool_call in enumerate(
+            getattr(message, "tool_call_chunks", []) or []
+        ):
+            if not isinstance(raw_tool_call, Mapping):
+                continue
+            raw_index = raw_tool_call.get("index")
+            index = raw_index if isinstance(raw_index, int) else fallback_index
+            current = tool_calls.setdefault(index, {})
+            for key in ("id", "name"):
+                value = raw_tool_call.get(key)
+                if isinstance(value, str) and value:
+                    current[key] = value
+            arguments = raw_tool_call.get("args")
+            if isinstance(arguments, str):
+                current["arguments"] = current.get("arguments", "") + arguments
+
+    message_payload: dict[str, object] = {
+        "role": "assistant",
+        "content": "".join(text_parts) or None,
+    }
+    reasoning = "".join(reasoning_parts)
+    if reasoning:
+        message_payload["reasoning_content"] = reasoning
+    if tool_calls:
+        message_payload["tool_calls"] = [
+            {
+                "id": call.get("id"),
+                "type": "function",
+                "function": {
+                    "name": call.get("name"),
+                    "arguments": call.get("arguments", ""),
+                },
+            }
+            for _index, call in sorted(tool_calls.items())
+        ]
+    return {
+        "choices": [
+            {
+                "index": 0,
+                "message": message_payload,
+            }
+        ]
+    }
+
+
+def _close_sync_stream(raw_stream: Any) -> None:
+    close = getattr(raw_stream, "close", None)
+    if close is not None:
+        close()
+
+
 def _openai_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "function",
@@ -140,12 +224,27 @@ class _StreamPartState:
     active_part_id: str | None = None
     active_index: int | None = None
     active_provider_part_id: str | None = None
+    fallback_item_ids: dict[int, str] | None = None
+    reasoning_summary_provider_ids: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        self.fallback_item_ids = {}
 
     def close(self) -> None:
         self.active_kind = None
         self.active_part_id = None
         self.active_index = None
         self.active_provider_part_id = None
+
+    def item_id(self, index: int) -> str:
+        """为缺少 provider ID 的 reasoning item 保留稳定的本地身份。"""
+        if self.fallback_item_ids is None:
+            self.fallback_item_ids = {}
+        item_id = self.fallback_item_ids.get(index)
+        if item_id is None:
+            item_id = f"reasoning-item:{index}"
+            self.fallback_item_ids[index] = item_id
+        return item_id
 
     def decorate(self, block: dict[str, Any]) -> dict[str, Any]:
         block_type = block.get("type")
@@ -155,9 +254,7 @@ class _StreamPartState:
             "reasoning_items",
             "thinking",
             "redacted_thinking",
-        }:
-            pass
-        elif block_type in {"text", "output_text", "refusal"}:
+        } or block_type in {"text", "output_text", "refusal"}:
             pass
         else:
             self.close()
@@ -181,7 +278,8 @@ class _StreamPartState:
             and self.active_provider_part_id is not None
             and provider_part_id != self.active_provider_part_id
         )
-        if self.active_kind != block_type or provider_changed:
+        part_changed = self.active_kind != block_type or provider_changed
+        if part_changed:
             self.active_kind = block_type
             self.active_part_id = create_prefixed_id("part")
             self.active_index = self.next_index
@@ -196,7 +294,10 @@ class _StreamPartState:
             raise RuntimeError("模型流 content part 状态未初始化")
 
         decorated = dict(block)
-        if isinstance(provider_part_id, str):
+        # LangChain 合并同一个 index 的 block 时，会把未知字符串字段拼接起来。
+        # provider_part_id 只在 part 首次出现时写入，避免连续 reasoning delta
+        # 变成 ``rs_1rs_1``，同时保留最终 canonicalizer 恢复 provider ID 的依据。
+        if isinstance(provider_part_id, str) and part_changed:
             decorated_extras = dict(extras) if isinstance(extras, dict) else {}
             decorated_extras.pop("id", None)
             decorated_extras["provider_part_id"] = provider_part_id
@@ -237,46 +338,8 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         return RuntimeError(
             "模型流在上游返回真实 finish_reason 前提前结束；"
             f"provider={provider}，model={model}，已尝试 {attempts} 次。"
-            "所有半截内容均已丢弃，未提交工具调用。"
+            "已经收到的半截 delta 不会静默重试，AgentLoop 必须将本次调用标记为失败。"
         )
-
-    def _collect_complete_stream(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        run_manager: CallbackManagerForLLMRun | None,
-        params: dict[str, Any],
-    ) -> list[Any]:
-        attempts = self._stream_attempt_count()
-        for _attempt in range(1, attempts + 1):
-            raw_stream = self.completion_with_retry(
-                messages=messages,
-                run_manager=run_manager,
-                **params,
-            )
-            raw_chunks = list(raw_stream)
-            if self._has_real_stream_termination(raw_stream):
-                return raw_chunks
-        raise self._incomplete_stream_error(attempts)
-
-    async def _collect_complete_astream(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        run_manager: AsyncCallbackManagerForLLMRun | None,
-        params: dict[str, Any],
-    ) -> list[Any]:
-        attempts = self._stream_attempt_count()
-        for _attempt in range(1, attempts + 1):
-            raw_stream = await self.acompletion_with_retry(
-                messages=messages,
-                run_manager=run_manager,
-                **params,
-            )
-            raw_chunks = [raw_chunk async for raw_chunk in raw_stream]
-            if self._has_real_stream_termination(raw_stream):
-                return raw_chunks
-        raise self._incomplete_stream_error(attempts)
 
     @staticmethod
     def normalize_history_content(content: Any) -> Any:
@@ -563,6 +626,8 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
     def _delta_reasoning_blocks(
         self,
         delta: Mapping[str, Any],
+        *,
+        part_state: _StreamPartState,
     ) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
         thinking_blocks = delta.get("thinking_blocks")
@@ -576,11 +641,14 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 blocks.append(block)
         reasoning_items = delta.get("reasoning_items")
         if isinstance(reasoning_items, list):
-            items = [
-                item
-                for raw_item in reasoning_items
-                if (item := _as_dict(raw_item))
-            ]
+            items: list[dict[str, Any]] = []
+            for index, raw_item in enumerate(reasoning_items):
+                item = _as_dict(raw_item)
+                if not item:
+                    continue
+                if not isinstance(item.get("id"), str) or not item["id"]:
+                    item["id"] = part_state.item_id(index)
+                items.append(item)
             if items:
                 blocks.append(
                     {
@@ -591,9 +659,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         model_extra = delta.get("model_extra")
         if isinstance(model_extra, Mapping):
             blocks.extend(
-                self._delta_reasoning_blocks(
-                    model_extra,
-                )
+                self._delta_reasoning_blocks(model_extra, part_state=part_state)
             )
         return blocks
 
@@ -654,6 +720,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
 
         structured_reasoning = self._delta_reasoning_blocks(
             delta,
+            part_state=part_state,
         )
         for index, block in enumerate(structured_reasoning):
             if index:
@@ -711,26 +778,57 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         params = attach_upstream_trace_callback(params)
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
-        first_chunk_yielded = False
-        part_state = _StreamPartState()
-        raw_chunks = self._collect_complete_stream(
-            messages=message_dicts,
-            run_manager=run_manager,
-            params=params,
-        )
-        for raw_chunk in raw_chunks:
-            for cg_chunk in self._convert_stream_response_chunk(
-                raw_chunk,
-                first_chunk_yielded=first_chunk_yielded,
-                part_state=part_state,
-            ):
-                first_chunk_yielded = True
-                if run_manager:
-                    run_manager.on_llm_new_token(
-                        _message_chunk_token(cg_chunk.message),
-                        chunk=cg_chunk,
-                    )
-                yield cg_chunk
+        delta_sink = get_current_model_delta_sink()
+        attempts = self._stream_attempt_count()
+        for attempt in range(1, attempts + 1):
+            first_chunk_yielded = False
+            part_state = _StreamPartState()
+            semantic_delta_seen = False
+            raw_stream = self.completion_with_retry(
+                messages=message_dicts,
+                run_manager=run_manager,
+                **params,
+            )
+            scope = get_current_turn_execution_scope()
+            hook_id = None
+            if scope is not None:
+                hook_id = scope.effective_cancellation_signal.add_hook(
+                    lambda _reason, stream=raw_stream: _close_sync_stream(stream)
+                )
+            try:
+                for raw_chunk in raw_stream:
+                    if scope is not None:
+                        scope.raise_if_cancelled()
+                    for cg_chunk in self._convert_stream_response_chunk(
+                        raw_chunk,
+                        first_chunk_yielded=first_chunk_yielded,
+                        part_state=part_state,
+                    ):
+                        if self._message_chunk_has_semantic_delta(cg_chunk.message):
+                            semantic_delta_seen = True
+                            if delta_sink is not None:
+                                raise RuntimeError(
+                                    "同步 LiteLLM 模型流不能承载异步消息流 delta hook；"
+                                    "AgentLoop 必须使用异步模型流"
+                                )
+                        first_chunk_yielded = True
+                        if run_manager:
+                            run_manager.on_llm_new_token(
+                                _message_chunk_token(cg_chunk.message),
+                                chunk=cg_chunk,
+                            )
+                        yield cg_chunk
+            finally:
+                if scope is not None and hook_id is not None:
+                    scope.cancellation_signal.remove_hook(hook_id)
+                _close_sync_stream(raw_stream)
+            if scope is not None:
+                scope.raise_if_cancelled()
+            if self._has_real_stream_termination(raw_stream):
+                return
+            if semantic_delta_seen:
+                raise self._incomplete_stream_error(attempt)
+        raise self._incomplete_stream_error(attempts)
 
     async def _astream(
         self,
@@ -744,26 +842,60 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
         params = attach_upstream_trace_callback(params)
         params["stream_options"] = self.stream_options or {"include_usage": True}
 
-        first_chunk_yielded = False
-        part_state = _StreamPartState()
-        raw_chunks = await self._collect_complete_astream(
-            messages=message_dicts,
-            run_manager=run_manager,
-            params=params,
-        )
-        for raw_chunk in raw_chunks:
-            for cg_chunk in self._convert_stream_response_chunk(
-                raw_chunk,
-                first_chunk_yielded=first_chunk_yielded,
-                part_state=part_state,
-            ):
-                first_chunk_yielded = True
-                if run_manager:
-                    await run_manager.on_llm_new_token(
-                        _message_chunk_token(cg_chunk.message),
-                        chunk=cg_chunk,
-                    )
-                yield cg_chunk
+        delta_sink = get_current_model_delta_sink()
+        attempts = self._stream_attempt_count()
+        for attempt in range(1, attempts + 1):
+            first_chunk_yielded = False
+            part_state = _StreamPartState()
+            semantic_delta_seen = False
+            streamed_chunks: list[AIMessageChunk] = []
+            raw_stream = await self.acompletion_with_retry(
+                messages=message_dicts,
+                run_manager=run_manager,
+                **params,
+            )
+            scope = get_current_turn_execution_scope()
+            signal = scope.effective_cancellation_signal if scope else None
+            async with CancelableStream(raw_stream, signal) as cancelable_stream:
+                async for raw_chunk in cancelable_stream:
+                    if scope is not None:
+                        scope.raise_if_cancelled()
+                    for cg_chunk in self._convert_stream_response_chunk(
+                        raw_chunk,
+                        first_chunk_yielded=first_chunk_yielded,
+                        part_state=part_state,
+                    ):
+                        streamed_chunks.append(cg_chunk.message)
+                        if self._message_chunk_has_semantic_delta(cg_chunk.message):
+                            semantic_delta_seen = True
+                            if delta_sink is not None:
+                                await delta_sink.accept_message_chunk(cg_chunk.message)
+                        first_chunk_yielded = True
+                        if run_manager:
+                            await run_manager.on_llm_new_token(
+                                _message_chunk_token(cg_chunk.message),
+                                chunk=cg_chunk,
+                            )
+                        yield cg_chunk
+            if scope is not None:
+                scope.raise_if_cancelled()
+            if self._has_real_stream_termination(raw_stream):
+                record_upstream_response(
+                    _streamed_response_payload(streamed_chunks)
+                )
+                return
+            if semantic_delta_seen:
+                raise self._incomplete_stream_error(attempt)
+        raise self._incomplete_stream_error(attempts)
+
+    @staticmethod
+    def _message_chunk_has_semantic_delta(message: AIMessageChunk) -> bool:
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content:
+            return True
+        if isinstance(content, list) and any(content):
+            return True
+        return bool(getattr(message, "tool_call_chunks", None))
 
     def _convert_stream_response_chunk(
         self,

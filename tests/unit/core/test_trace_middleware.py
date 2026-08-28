@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_request_id
 from app.core.trace_middleware import TraceMiddleware
-from app.schemas.public_v2.common import APIResponse
+from app.schemas.internal_v2.common import APIResponse
 
 
 def _build_client(*, raise_server_exceptions: bool = True) -> TestClient:

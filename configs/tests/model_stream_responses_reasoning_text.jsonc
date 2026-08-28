@@ -1,0 +1,23 @@
+{
+  "$schema": "./model_stream_schema.jsonc",
+  "config_version": 1,
+  "model_stream": {
+    "transport": {
+      "mode": "replay",
+      "scenario_id": "responses-reasoning-text",
+      "fixture_root": "tests/fixtures/model_stream",
+      "matching": {
+        "policy": "strict"
+      },
+      "replay": {
+        "policy": "request_reusable"
+      },
+      "timing": {
+        "mode": "none"
+      },
+      "recording": {
+        "artifact_root": "out/tests/temp/model_stream_responses_reasoning_text/artifacts"
+      }
+    }
+  }
+}

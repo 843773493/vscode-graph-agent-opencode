@@ -20,6 +20,13 @@ function toolStatus(item: ToolItem): {
       className: "is-active",
     };
   }
+  if (item.outcomeUnknown) {
+    return {
+      icon: "codicon-warning",
+      label: `${item.toolName} 结果未知`,
+      className: "is-unknown",
+    };
+  }
   if (item.failed) {
     return {
       icon: "codicon-error",

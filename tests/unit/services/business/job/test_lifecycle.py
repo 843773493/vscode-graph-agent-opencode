@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.schemas.public_v2.common import JobStatus
+from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.lifecycle import (
     InvalidJobStatusTransitionError,
     transition_job_status,

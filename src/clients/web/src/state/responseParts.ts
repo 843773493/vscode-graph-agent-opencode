@@ -1,19 +1,11 @@
 import type { TurnResponsePart } from "../types/backend";
 import type { TimelineItem } from "./timelineTypes";
 
-/** live 事件尚未落盘时没有 JSONL message sequence，只携带稳定的流式 part id。 */
-export interface LiveResponsePart extends Omit<TurnResponsePart, "source"> {
-  source: {
-    message_sequence: null;
-    stream_part_id: string;
-  };
-  raw_start?: Record<string, unknown>;
-  raw_end?: Record<string, unknown>;
+export interface ResponsePartsProjectionOptions {
+  terminalFailure?: boolean;
 }
 
-type ResponsePartLike = TurnResponsePart | LiveResponsePart;
-
-function toolPartKey(part: ResponsePartLike): string {
+function toolPartKey(part: TurnResponsePart): string {
   const source = part.source;
   const assistantSequence = "assistant_message_sequence" in source
     && typeof source.assistant_message_sequence === "number"
@@ -21,86 +13,28 @@ function toolPartKey(part: ResponsePartLike): string {
     : source.message_sequence;
   const streamPartId = "stream_part_id" in source ? source.stream_part_id : null;
   const owner = assistantSequence ?? streamPartId ?? part.part_id;
-  const order = source.call_index ?? part.tool_call_id ?? part.part_id;
+  const order = ("call_index" in source ? source.call_index : undefined)
+    ?? part.tool_call_id
+    ?? part.part_id;
   return `${owner}:${order}`;
 }
 
-function liveSource(partId: string): LiveResponsePart["source"] {
-  return { message_sequence: null, stream_part_id: partId };
+function recordField(
+  part: TurnResponsePart,
+  field: "raw_start" | "raw_end",
+): Record<string, unknown> {
+  const value = (part as unknown as Record<string, unknown>)[field];
+  return isRecord(value) ? value : {};
 }
 
-function liveToolStatus(item: Extract<TimelineItem, { kind: "aggregated_tool" }>) {
-  if (item.active) return "running" as const;
-  if (item.failed) return "failed" as const;
-  return "completed" as const;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function liveToolCallId(
-  item: Extract<TimelineItem, { kind: "aggregated_tool" }>,
-): string | null {
-  const value = item.rawEnd.tool_call_id ?? item.rawStart.tool_call_id;
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-/**
- * 将 live 聚合结果适配为历史也使用的 response part。
- * trace 控制事件不在这里伪造成消息部件，由调用方原样保留给错误/中断渲染。
- */
-export function liveTimelineItemsToResponseParts(
-  items: readonly TimelineItem[],
-): LiveResponsePart[] {
-  const parts: LiveResponsePart[] = [];
-  for (const item of items) {
-    if (item.kind === "aggregated_text") {
-      parts.push({
-        part_id: item.id,
-        kind: item.partKind === "reasoning" ? "reasoning" : "text",
-        projection: "streaming",
-        status: item.active ? "running" : "completed",
-        source: liveSource(item.id),
-        text: item.text,
-        final: false,
-      });
-      continue;
-    }
-    if (item.kind !== "aggregated_tool") continue;
-    const status = liveToolStatus(item);
-    const toolCallId = liveToolCallId(item);
-    parts.push({
-      part_id: item.id,
-      kind: "tool_call",
-      projection: "streaming",
-      status,
-      source: liveSource(item.id),
-      text: "",
-      tool_call_id: toolCallId,
-      tool_name: item.toolName,
-      arguments: item.inputText,
-      raw_start: item.rawStart,
-      raw_end: item.rawEnd,
-    });
-    if (item.resultText) {
-      parts.push({
-        part_id: item.id,
-        kind: "tool_result",
-        projection: "streaming",
-        status,
-        source: liveSource(item.id),
-        text: item.resultText,
-        result: item.resultText,
-        tool_call_id: toolCallId,
-        tool_name: item.toolName,
-        raw_start: item.rawStart,
-        raw_end: item.rawEnd,
-      });
-    }
-  }
-  return parts;
-}
-
-/** 将历史 response parts 转为 live 也使用的时间线部件。 */
+/** 将权威 Turn response parts 转为聊天时间线部件。 */
 export function responsePartsToTimelineItems(
-  parts: readonly ResponsePartLike[],
+  parts: readonly TurnResponsePart[],
+  options: ResponsePartsProjectionOptions = {},
 ): TimelineItem[] {
   const items: TimelineItem[] = [];
   const toolIndexes = new Map<string, number>();
@@ -114,7 +48,9 @@ export function responsePartsToTimelineItems(
     parts
       .filter((part) => part.kind === "tool_result")
       .filter((part) => {
-        const assistantSequence = part.source.assistant_message_sequence;
+        const assistantSequence = "assistant_message_sequence" in part.source
+          ? part.source.assistant_message_sequence
+          : undefined;
         return assistantSequence === undefined || assistantSequence === null;
       })
       .map((part) => part.tool_call_id)
@@ -156,8 +92,11 @@ export function responsePartsToTimelineItems(
       continue;
     }
     if (part.kind === "tool_call") {
-      const rawStart = "raw_start" in part && part.raw_start ? part.raw_start : {};
-      const rawEnd = "raw_end" in part && part.raw_end ? part.raw_end : {};
+      const rawStart = recordField(part, "raw_start");
+      const rawEnd = recordField(part, "raw_end");
+      const unresolvedTerminalTool = options.terminalFailure === true
+        && !resultKeys.has(toolPartKey(part))
+        && !resultCallIds.has(part.tool_call_id ?? "");
       const item: TimelineItem = {
         kind: "aggregated_tool",
         id: part.part_id,
@@ -169,11 +108,12 @@ export function responsePartsToTimelineItems(
         rawEnd,
         // 历史投影中 tool_call 可能保留 running 状态，但只要同一批
         // response parts 已有 tool_result，就必须按已完成工具展示。
-        active: (
+        active: !unresolvedTerminalTool && (
           part.status === "pending" || part.status === "running"
         ) && !resultKeys.has(toolPartKey(part))
           && !resultCallIds.has(part.tool_call_id ?? ""),
-        failed: part.status === "failed",
+        failed: part.status === "failed" || unresolvedTerminalTool,
+        outcomeUnknown: part.outcome_unknown === true || unresolvedTerminalTool,
       };
       const index = items.length;
       toolIndexes.set(toolPartKey(part), index);
@@ -193,9 +133,10 @@ export function responsePartsToTimelineItems(
         if (existing.kind === "aggregated_tool") {
           items[existingIndex] = {
             ...existing,
-            resultText: part.result ?? part.text,
+            resultText: part.result ?? part.text ?? "",
             active: false,
             failed: part.status === "failed",
+            outcomeUnknown: part.outcome_unknown === true,
           };
         }
       } else {
@@ -206,37 +147,14 @@ export function responsePartsToTimelineItems(
           inputText: "",
           resultText: part.result ?? text,
           timestamp: null,
-          rawStart: "raw_start" in part && part.raw_start ? part.raw_start : {},
-          rawEnd: "raw_end" in part && part.raw_end ? part.raw_end : {},
+          rawStart: recordField(part, "raw_start"),
+          rawEnd: recordField(part, "raw_end"),
           active: false,
           failed: part.status === "failed",
+          outcomeUnknown: part.outcome_unknown === true,
         });
       }
     }
   }
   return items;
-}
-
-/** 保留 live trace 的原始位置，同时让文本和工具经过统一 response-part 渲染路径。 */
-export function liveTimelineItemsToRenderItems(
-  items: readonly TimelineItem[],
-): TimelineItem[] {
-  const responseItems = responsePartsToTimelineItems(
-    liveTimelineItemsToResponseParts(items),
-  );
-  const responseById = new Map(responseItems.map((item) => [item.id, item]));
-  const rendered: TimelineItem[] = [];
-  const emitted = new Set<string>();
-  for (const item of items) {
-    if (item.kind !== "aggregated_text" && item.kind !== "aggregated_tool") {
-      rendered.push(item);
-      continue;
-    }
-    const renderedItem = responseById.get(item.id);
-    if (renderedItem && !emitted.has(renderedItem.id)) {
-      rendered.push(renderedItem);
-      emitted.add(renderedItem.id);
-    }
-  }
-  return rendered;
 }

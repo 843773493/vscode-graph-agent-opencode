@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from app.abstractions.team import TeamStoreProtocol
 from app.core.identifier import create_prefixed_id
-from app.schemas.public_v2.team import (
+from app.schemas.internal_v2.team import (
     TeamBoardDTO,
     TeamEventDTO,
     TeamListDTO,

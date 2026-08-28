@@ -8,12 +8,12 @@ from app.api.deps import (
     get_tool_test_service,
     verify_local_token,
 )
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.tool import (
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.tool import (
     ToolDTO,
     ToolSelectionPatchRequest,
 )
-from app.schemas.public_v2.tool_test import (
+from app.schemas.internal_v2.tool_test import (
     ToolTestRunDTO,
     ToolTestRunListDTO,
     ToolTestStartRequest,

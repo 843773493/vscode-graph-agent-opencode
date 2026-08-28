@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.abstractions.session_subagent import SessionSubagentAccepted
-from app.schemas.public_v2.session import SessionDTO
+from app.schemas.internal_v2.session import SessionDTO
 from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.team.store import TeamStore
 

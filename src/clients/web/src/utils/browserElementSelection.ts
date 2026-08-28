@@ -47,6 +47,21 @@ interface BrowserElementSelectedMessage {
   mode?: "basic" | "rich";
 }
 
+type BrowserElementRequiredStringField =
+  | "ref"
+  | "selector"
+  | "tag"
+  | "role"
+  | "type"
+  | "text"
+  | "title"
+  | "url"
+  | "outerHTML"
+  | "computedStyle";
+
+type BrowserElementWithRequiredStrings = Record<string, unknown>
+  & Record<BrowserElementRequiredStringField, string>;
+
 export interface BrowserElementSelectionBundle {
   browserId: string;
   workspaceId: string;
@@ -81,15 +96,10 @@ function isAncestors(value: unknown): value is BrowserElementAncestor[] {
         && ancestor.classNames.every((className) => typeof className === "string"))));
 }
 
-function parseElement(
-  rawElement: unknown,
-  browserId: string,
-  workspaceId: string,
-): BrowserElementSelection | null {
-  if (!isRecord(rawElement)) {
-    return null;
-  }
-  const requiredStringFields = [
+function hasRequiredStringFields(
+  value: Record<string, unknown>,
+): value is BrowserElementWithRequiredStrings {
+  const requiredStringFields: BrowserElementRequiredStringField[] = [
     "ref",
     "selector",
     "tag",
@@ -101,8 +111,18 @@ function parseElement(
     "outerHTML",
     "computedStyle",
   ];
-  if (requiredStringFields.some((field) => typeof rawElement[field] !== "string")
-    || !isBounds(rawElement.bounds)) {
+  return requiredStringFields.every((field) => typeof value[field] === "string");
+}
+
+function parseElement(
+  rawElement: unknown,
+  browserId: string,
+  workspaceId: string,
+): BrowserElementSelection | null {
+  if (!isRecord(rawElement)) {
+    return null;
+  }
+  if (!hasRequiredStringFields(rawElement) || !isBounds(rawElement.bounds)) {
     return null;
   }
   if (rawElement.ancestors !== undefined && !isAncestors(rawElement.ancestors)) {

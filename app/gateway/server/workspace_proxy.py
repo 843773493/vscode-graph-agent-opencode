@@ -17,6 +17,7 @@ from app.gateway.control.user_access import (
     UserAccessService,
 )
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceRouteLease,
@@ -207,6 +208,11 @@ async def _proxy_workspace_request(
         target = registry.resolve(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    proxy_target_to_proto(
+        workspace_id=target.workspace_id,
+        service="workspace_api",
+        path=f"/{path}",
+    )
     if (
         auth is not None
         and auth.kind == "federation"

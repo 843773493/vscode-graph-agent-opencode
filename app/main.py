@@ -15,6 +15,7 @@ from app.api.config import router as config_router
 from app.api.context import router as context_router
 from app.api.jobs import router as jobs_router
 from app.api.mcp import router as mcp_router
+from app.api.message_stream import router as message_stream_router
 from app.api.messages import router as messages_router
 from app.api.node_debug import router as node_debug_router
 from app.api.runtime import router as runtime_router
@@ -28,13 +29,19 @@ from app.container import build_app_container
 from app.core.env import load_boxteam_env
 from app.core.logging_config import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
-from app.schemas.public_v2.sse import install_sse_openapi_components
+from app.schemas.internal_v2.sse import install_sse_openapi_components
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
 )
+from app.testing.model_stream import install_model_stream_from_environment
 
 load_boxteam_env()
+
+# 测试 transport 必须在 LiteLLM 第一次创建 async client 前安装；未显式配置时保持生产路径。
+_model_stream_controller = install_model_stream_from_environment(
+    project_root=Path.cwd(),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +196,8 @@ async def lifespan(_: FastAPI):
             container.workspace_activity_service.close()
     finally:
         await container.mcp_runtime_manager.shutdown()
+        if _model_stream_controller is not None:
+            await _model_stream_controller.aclose()
         _.state.container = None
 
 
@@ -230,6 +239,7 @@ app.include_router(messages_router, prefix="/api/v1")
 app.include_router(context_router, prefix="/api/v1")
 app.include_router(mcp_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
+app.include_router(message_stream_router, prefix="/api/v1")
 app.include_router(node_debug_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1")
 app.include_router(tools_router, prefix="/api/v1")

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -16,11 +18,13 @@ from langgraph.types import Command
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
+from app.core.turn_execution_scope import CancellationSignal, ScopeCancelledError
 from app.schemas.event import ModelTokenUsagePayload
 from app.services.orchestration.agent_event_stream_processor import (
     last_model_token_usage,
     process_agent_event_stream,
 )
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
 class FakeAgent:
@@ -107,6 +111,42 @@ class RecordingSessionChangesService:
 
 
 @pytest.mark.asyncio
+async def test_provider_scope_cancellation_from_event_iterator_reaches_agent_loop(
+    tmp_path: Path,
+) -> None:
+    class CancelledAgent:
+        async def astream_events(
+            self,
+            _input_payload: dict[str, Any],
+            *,
+            config: dict[str, Any],
+            version: str,
+        ) -> AsyncIterator[dict[str, Any]]:
+            del config, version
+            if False:
+                yield {}
+            raise ScopeCancelledError("user_requested")
+
+    cancellation_signal = CancellationSignal()
+    await cancellation_signal.cancel("user_requested")
+
+    with pytest.raises(asyncio.CancelledError, match="user_requested"):
+        await process_agent_event_stream(
+            agent=CancelledAgent(),
+            input_payload={"messages": []},
+            config={},
+            session_id="ses_provider_cancelled",
+            turn_id="job_provider_cancelled",
+            agent_id="default",
+            custom_tool_skill_sources={},
+            publish=lambda *_args, **_kwargs: _async_noop(),
+            session_changes_service=FakeSessionChangesService(),
+            workspace_root=tmp_path,
+            cancellation_signal=cancellation_signal,
+        )
+
+
+@pytest.mark.asyncio
 async def test_tool_start_event_contains_only_model_visible_arguments(
     tmp_path: Path,
 ) -> None:
@@ -164,6 +204,76 @@ async def test_tool_start_event_contains_only_model_visible_arguments(
     start_payload = published[0][1]
     assert start_payload["args"] == {"value": "ready"}
     json.dumps(start_payload)
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_execution_keeps_provider_tool_call_identity(
+    tmp_path: Path,
+) -> None:
+    writer = SimpleNamespace(commit=AsyncMock())
+    runtime = MessageStreamRuntime(writer)
+    await runtime.start_model("model_unknown_tool", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_unknown_tool",
+                    "name": "invoke_custom_tool",
+                    "args": '{"tool_name":"totally_unknown_tool"}',
+                }
+            ],
+        )
+    )
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_unknown_tool",
+            "name": "invoke_custom_tool",
+            "data": {
+                "input": {
+                    "tool_name": "totally_unknown_tool",
+                    "arguments": {},
+                }
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_unknown_tool",
+            "name": "invoke_custom_tool",
+            "data": {
+                "output": ToolMessage(
+                    content="unknown tool",
+                    tool_call_id="call_unknown_tool",
+                    name="invoke_custom_tool",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+
+    await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_unknown_tool",
+        turn_id="job_unknown_tool",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+        message_stream_runtime=runtime,
+    )
+
+    stream_events = [call.args for call in writer.commit.await_args_list]
+    tool_started = next(payload for event_type, payload, *_ in stream_events if event_type == "tool.started")
+    tool_completed = next(payload for event_type, payload, *_ in stream_events if event_type == "tool.completed")
+    assert tool_started["tool_call_id"] == "call_unknown_tool"
+    assert tool_started["tool_name"] == "totally_unknown_tool"
+    assert tool_completed["tool_call_id"] == "call_unknown_tool"
 
 
 def test_last_model_token_usage_keeps_last_execution_request() -> None:
@@ -660,7 +770,7 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
 
 
 @pytest.mark.asyncio
-async def test_small_model_chunks_are_coalesced_before_publishing(
+async def test_small_model_chunks_only_feed_final_text_aggregation(
     tmp_path: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
@@ -703,15 +813,11 @@ async def test_small_model_chunks_are_coalesced_before_publishing(
     )
 
     assert result.final_text == "abc"
-    assert [event_type for event_type, _ in published] == [
-        EventType.TEXT_START,
-        EventType.TEXT_DELTA,
-    ]
-    assert published[1][1]["text"] == "abc"
+    assert published == []
 
 
 @pytest.mark.asyncio
-async def test_resumed_authoritative_text_part_is_started_once_and_keeps_all_text(
+async def test_resumed_authoritative_text_part_keeps_all_text_without_legacy_realtime(
     tmp_path: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
@@ -781,9 +887,7 @@ async def test_resumed_authoritative_text_part_is_started_once_and_keeps_all_tex
         for event_type, payload in published
         if payload.get("part_id") == "part_shared"
     ]
-    assert [event_type for event_type, _ in shared_events].count(EventType.TEXT_START) == 1
-    assert shared_events[-1][0] == EventType.TEXT_DELTA
-    assert shared_events[-1][1]["text"] == "后半"
+    assert shared_events == []
     assert result.final_text == "前半后半"
 
 
@@ -939,6 +1043,149 @@ async def test_empty_reasoning_done_preserves_encrypted_response_item(
     assert result.latest_model_content_blocks[0]["extras"] == {
         "response_item": response_item
     }
+
+
+@pytest.mark.asyncio
+async def test_task_tool_is_projected_as_subagent_activity(
+    tmp_path: Path,
+) -> None:
+    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_subagent")
+    message_stream_runtime = MessageStreamRuntime(writer)
+    await message_stream_runtime.start_model("model_subagent", "primary")
+    await message_stream_runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_task",
+                    "name": "task",
+                    "args": '{"description":"检查认证"}',
+                }
+            ],
+        )
+    )
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_task",
+            "name": "task",
+            "data": {"input": {"description": "检查认证"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_task",
+            "name": "task",
+            "data": {
+                "output": ToolMessage(
+                    content='{"child_session_id":"ses_child","status":"accepted"}',
+                    tool_call_id="call_task",
+                    name="task",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+
+    await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_parent",
+        turn_id="job_parent",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+        message_stream_runtime=message_stream_runtime,
+    )
+
+    activity_events = [
+        call.args
+        for call in writer.commit.await_args_list
+        if call.args[0].startswith("activity.")
+    ]
+    assert [event[0] for event in activity_events] == [
+        "activity.started",
+        "activity.updated",
+        "activity.completed",
+    ]
+    assert activity_events[0][1]["kind"] == "subagent.run"
+    assert activity_events[1][1]["detail"]["child_turn_id"] == "ses_child"
+
+
+@pytest.mark.asyncio
+async def test_resource_tool_is_projected_as_resource_activity(
+    tmp_path: Path,
+) -> None:
+    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_resource")
+    message_stream_runtime = MessageStreamRuntime(writer)
+    await message_stream_runtime.start_model("model_resource", "primary")
+    await message_stream_runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_page",
+                    "name": "readPage",
+                    "args": '{"pageId":"browser_1"}',
+                }
+            ],
+        )
+    )
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_page",
+            "name": "readPage",
+            "data": {"input": {"pageId": "browser_1"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_page",
+            "name": "readPage",
+            "data": {
+                "output": ToolMessage(
+                    content="页面已读取",
+                    tool_call_id="call_page",
+                    name="readPage",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+
+    await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_resource",
+        turn_id="job_resource",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+        message_stream_runtime=message_stream_runtime,
+    )
+
+    activity_events = [
+        call.args
+        for call in writer.commit.await_args_list
+        if call.args[0].startswith("activity.")
+    ]
+    assert [event[0] for event in activity_events] == [
+        "activity.started",
+        "activity.updated",
+        "activity.completed",
+    ]
+    assert activity_events[0][1]["kind"] == "resource.operation"
+    assert activity_events[0][1]["resource_refs"] == ["browser_1"]
+    assert activity_events[1][1]["detail"]["resource_id"] == "browser_1"
 
 
 async def _async_noop() -> None:

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
 
+from app.agents.policy import ToolPolicyResolver
 from app.api.tools import get_tool, update_tool_selection
 from app.main import app
-from app.schemas.public_v2.tool import (
+from app.schemas.internal_v2.tool import (
     ToolSelectionChange,
     ToolSelectionPatchRequest,
 )
@@ -78,9 +80,25 @@ def _service(
     *,
     tool_catalog: _ToolCatalogStub | None = None,
 ) -> ToolService:
+    config_service = MagicMock()
+    config_service.get_tool_policy_resolver.return_value = ToolPolicyResolver(
+        policy_defaults={
+            "execution_enabled": True,
+            "model_visible": True,
+            "confirmation_required": False,
+        },
+        policy_rules={
+            "by_origin": {},
+            "by_kind": {"debugging": {"model_visible": False}},
+            "by_group": {},
+            "by_tool": {},
+        },
+        restrictions={},
+    )
     return ToolService(
         tool_catalog=tool_catalog or _ToolCatalogStub(),
         selection_store=ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
+        config_service=config_service,
         test_supported_tools={"read_file"},
     )
 

@@ -14,7 +14,7 @@ from app.abstractions.session_context import (
 )
 from app.abstractions.session_target import SessionTarget
 from app.agents.custom_tools import CustomToolFactoryContext
-from app.schemas.public_v2.session_context import (
+from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
 )

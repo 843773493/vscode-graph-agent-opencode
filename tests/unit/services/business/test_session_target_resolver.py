@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
-from app.schemas.public_v2.session_context import (
+from app.schemas.internal_v2.session_context import (
     SessionContextSearchMatchDTO,
     SessionContextSearchResultDTO,
 )

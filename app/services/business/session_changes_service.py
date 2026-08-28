@@ -7,7 +7,7 @@ from app.abstractions.session_changes import (
     SessionChangesStoreProtocol,
     StoredFileEdit,
 )
-from app.schemas.public_v2.session_changes import (
+from app.schemas.internal_v2.session_changes import (
     SessionChangesSummaryDTO,
     SessionChangesetDTO,
     SessionChangesetListDTO,

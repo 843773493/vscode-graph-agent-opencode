@@ -3,7 +3,10 @@ import {
   useWorkspaceFileReferenceContext,
   type WorkspaceFileReferenceResolution,
 } from "../workspace/WorkspaceFileReferenceContext";
-import { shouldResolveWorkspaceFileReference } from "../../utils/workspaceFileReferences";
+import {
+  isLikelyWorkspaceFileReference,
+  shouldResolveWorkspaceFileReference,
+} from "../../utils/workspaceFileReferences";
 
 export default function WorkspaceFileReferenceLink({
   target,
@@ -27,7 +30,10 @@ export default function WorkspaceFileReferenceLink({
         cancelled = true;
       };
     }
-    if (!shouldResolveWorkspaceFileReference(target)) {
+    if (
+      !isLikelyWorkspaceFileReference(target)
+      || !shouldResolveWorkspaceFileReference(target)
+    ) {
       setResolution({ status: "missing" });
       return () => {
         cancelled = true;

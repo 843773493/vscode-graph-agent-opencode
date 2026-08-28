@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.api.deps import get_request_id, get_session_context_query_service
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.session_context import (
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextReadResultDTO,
     SessionContextSearchRequest,

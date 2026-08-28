@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from app.core.message_content_projection import reasoning_projection_rows
-from app.schemas.public_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
+from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
 
 Projection = Literal["summary", "detail", "streaming"]
 

@@ -47,6 +47,8 @@ for (const target of [
   "包含 空格",
   "state.counter",
   "state.counter++",
+  "<parameter=tool_name>unknown_tool</parameter>",
+  "<function=invoke_custom_tool><parameter=tool_name>unknown_tool</parameter></function>",
 ]) {
   if (isLikelyWorkspaceFileReference(target)) {
     throw new Error(`普通 inline code 不应触发文件探测: ${target}`);

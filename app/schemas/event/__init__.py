@@ -12,7 +12,7 @@ from typing import Any, Literal, Optional, Self, Union
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from app.schemas.public_v2.pending_request import DeliveryBoundary, DeliveryPolicy
+from app.schemas.internal_v2.pending_request import DeliveryBoundary, DeliveryPolicy
 
 # ============= 1. 基础事件结构（所有事件的公共字段） =============
 

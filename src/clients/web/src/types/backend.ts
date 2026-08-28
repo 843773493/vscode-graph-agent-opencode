@@ -1,44 +1,87 @@
 // 该文件是前端业务类型适配层，封装后端实际返回结构。
 // 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
+import type { SessionResource } from "./protocol";
 
-export type { AgentDTO as Agent } from "./gen/agent";
-export type { JobDTO as Job, JobStatus } from "./gen/job";
 export type {
-  NodeDebugActionRequest,
-  NodeDebugActionRecordDTO as NodeDebugActionRecord,
-  NodeDebugBreakpointDTO as NodeDebugBreakpoint,
-  NodeDebugCapabilitiesDTO as NodeDebugCapabilities,
-  NodeDebugConfigurationDTO as NodeDebugConfiguration,
-  NodeDebugConfigurationSummaryDTO as NodeDebugConfigurationSummary,
-  NodeDebugEvaluationDTO as NodeDebugEvaluation,
-  NodeDebugLaunchProfileDTO as NodeDebugLaunchProfile,
-  NodeDebugStackFrameDTO as NodeDebugStackFrame,
-  NodeDebugStartRequest,
-  NodeDebugStateDTO as NodeDebugState,
-  NodeDebugVariableDTO as NodeDebugVariable,
-} from "./gen/node_debug";
-export type {
+  Agent,
+  AgentStateMessages,
   ControlAction,
+  ControlScope,
+  DeleteSessionResult,
+  Job,
   JobControlRequest,
-  JobControlResponseDTO as JobControlResponse,
-} from "./gen/job";
-import type { LLMRequestLogRecordDTO } from "./gen/llm_request_log";
-export type { AttachmentRef } from "./gen/attachment";
-export type {
-  AgentStateMessagesDTO as AgentStateMessages,
-  MessageDTO as Message,
+  JobControlResponse,
+  JobStatus,
+  LLMRequestLogRecordDTO,
+  Message,
+  MessageCreateRequest,
   MessageReplayAccepted,
   MessageReplayRequest,
   MessageRunAccepted,
   MessageRunRequest,
-  RunOptions,
-} from "./gen/message";
-export type {
-  PendingRequestDTO as PendingRequest,
-  PendingRequestListDTO as PendingRequestList,
+  PendingRequest,
+  PendingRequestList,
   PendingRequestPolicyUpdateRequest,
   PendingRequestUpdateRequest,
-} from "./gen/pending_request";
+  RunMode,
+  RunOptions,
+  Session,
+  SessionCompactResult,
+  SessionInformationSnapshot,
+  InterruptSessionResult,
+  SessionResource,
+  SessionResourceControlResult,
+  SessionResourceList,
+  SessionUpdateRequest,
+  SessionTurnBootstrap,
+  StaleTurnCursorError,
+  StaleTurnReferenceError,
+  TurnActivityStats,
+  TurnAttachment,
+  TurnDetail,
+  TurnDetailBatch,
+  TurnDetailBatchRequest,
+  TurnHistoryLoadRequest,
+  TurnHistoryPage,
+  TurnJobSummary,
+  TurnPage,
+  TurnResponsePart,
+  TurnResponseSource,
+  TurnSummary,
+  TurnThinkingBlock,
+  TurnUserMessage,
+  TurnUserMessageSummary,
+  FileTreeShortcut,
+  FileTreeShortcutRequest,
+  SessionFileTreeSettings,
+  WorkspaceFileContent,
+  WorkspaceFileCopyRequest,
+  WorkspaceFileCreateRequest,
+  WorkspaceFileList,
+  WorkspaceFileNode,
+  WorkspaceFilePasteRequest,
+  WorkspaceFileReveal,
+  WorkspaceFileStreamBatch,
+  WorkspaceFileStreamChange,
+  WorkspaceFileUpdateRequest,
+  WorkspaceFileWatchRequest,
+  WorkspaceInfo,
+  NodeDebugActionRecord,
+  NodeDebugBreakpoint,
+  NodeDebugCapabilities,
+  NodeDebugConfiguration,
+  NodeDebugConfigurationSummary,
+  NodeDebugEvaluation,
+  NodeDebugLaunchProfile,
+  NodeDebugStackFrame,
+  NodeDebugStartRequest,
+  NodeDebugState,
+} from "./protocol";
+export type {
+  NodeDebugActionRequest,
+  NodeDebugVariableDTO as NodeDebugVariable,
+} from "./protocol_generated/boxteam/workspace/v2/public";
+export type { AttachmentRef } from "./protocol";
 export type DeliveryPolicy =
   | "after_turn"
   | "after_tool_result"
@@ -71,29 +114,31 @@ export interface SessionGoalUpdateRequest {
   replace?: boolean;
 }
 export type {
-  DeleteSessionResultDTO as DeleteSessionResult,
-  SessionCompactResultDTO as SessionCompactResult,
-  SessionInformationSnapshotDTO as SessionInformationSnapshot,
-  SessionDTO as Session,
-  SessionInterruptResultDTO as InterruptSessionResult,
-  SessionUpdateRequest,
-} from "./gen/session";
-import type {
-  SessionResourceControlResultDTO,
+  MessageDTO,
+  SessionInformationSnapshotDTO,
+  SessionDTO,
   SessionResourceDTO,
   SessionResourceListDTO,
-} from "./gen/session_resource";
+  SessionResourceControlResultDTO,
+  TurnDetailBatchDTO,
+  TurnDetailDTO,
+  TurnHistoryPageDTO,
+  TurnPageDTO,
+  TurnSummaryDTO,
+  WorkspaceFileListDTO,
+  WorkspaceFileNodeDTO,
+} from "./protocol";
+import type { TraceEventDTO } from "../protocol/jsonTypes";
 import type {
+  LLMRequestLogRecordDTO,
   SessionChangesSummaryDTO,
   SessionChangesetDTO,
   SessionChangesetListDTO,
   SessionChangesetListItemDTO,
   SessionFileChangeDTO,
   SessionFileReviewResultDTO,
-} from "./gen/session_changes";
-import type { TraceEventDTO } from "./gen/trace";
+} from "./protocol_generated/boxteam/workspace/v2/public";
 import type {
-  ActivateGatewayWorkspaceResultDTO,
   AddLocalWorkspaceRequest as GeneratedAddLocalWorkspaceRequest,
   AddRemoteGatewayRequest as GeneratedAddRemoteGatewayRequest,
   CreateFederationManagedWorkspaceRequest as GeneratedCreateFederationManagedWorkspaceRequest,
@@ -149,7 +194,8 @@ import type {
   WebUIThemeSettingsDTO,
   WebUIWorkspaceBottomPanelSettingsDTO,
   WebUIWorkspaceFileTreeSettingsDTO,
-} from "./gen/gateway";
+} from "./gatewayProtocol";
+export type { ActivateGatewayWorkspaceResultDTO } from "./gatewayProtocol";
 import type {
   GatewayResourceDTO,
   GatewayResourceListDTO,
@@ -174,43 +220,10 @@ import type {
   WorkspaceNavigationNodeUpdateRequest as GeneratedWorkspaceNavigationNodeUpdateRequest,
   WorkspaceNavigationPlacementRequest as GeneratedWorkspaceNavigationPlacementRequest,
   WorkspaceNavigationTreeDTO,
-} from "./gen/gateway_control";
-export type { TraceEventDTO as SessionStreamEvent } from "./gen/trace";
-export type {
-  SessionTurnBootstrapDTO as SessionTurnBootstrap,
-  StaleTurnCursorErrorDTO as StaleTurnCursorError,
-  StaleTurnReferenceErrorDTO as StaleTurnReferenceError,
-  TurnAttachmentDTO as TurnAttachment,
-  TurnActivityStatsDTO as TurnActivityStats,
-  TurnDetailBatchDTO as TurnDetailBatch,
-  TurnDetailBatchRequest,
-  TurnDetailDTO as TurnDetail,
-  TurnHistoryLoadRequest,
-  TurnHistoryPageDTO as TurnHistoryPage,
-  TurnJobSummaryDTO as TurnJobSummary,
-  TurnPageDTO as TurnPage,
-  TurnSummaryDTO as TurnSummary,
-  TurnResponsePartDTO as TurnResponsePart,
-  TurnResponseSourceDTO as TurnResponseSource,
-  TurnThinkingBlockDTO as TurnThinkingBlock,
-  TurnUserMessageDTO as TurnUserMessage,
-  TurnUserMessageSummaryDTO as TurnUserMessageSummary,
-} from "./gen/turn";
-export type {
-  FileTreeShortcutDTO as FileTreeShortcut,
-  FileTreeShortcutRequest,
-  SessionFileTreeSettingsDTO as SessionFileTreeSettings,
-  WorkspaceDTO as WorkspaceInfo,
-  WorkspaceFileContentDTO as WorkspaceFileContent,
-  WorkspaceFileChangeBatchDTO as WorkspaceFileStreamBatch,
-  WorkspaceFileChangeDTO as WorkspaceFileStreamChange,
-  WorkspaceFileCreateRequest,
-  WorkspaceFileListDTO as WorkspaceFileList,
-  WorkspaceFileNodeDTO as WorkspaceFileNode,
-  WorkspaceFilePasteRequest,
-  WorkspaceFileRevealDTO as WorkspaceFileReveal,
-  WorkspaceFileUpdateRequest,
-} from "./gen/workspace";
+} from "./gatewayProtocol";
+export type { TraceEventDTO as SessionStreamEvent } from "../protocol/jsonTypes";
+// Session SSE 已切换到 Protobuf adapter；旧 JSON DTO 仅作为业务兼容返回类型保留。
+export type { SessionExecutionSse } from "./protocol_buf_generated/boxteam/workspace/v2/session_stream_pb";
 
 export type LLMRequestLogRecord = Omit<
   LLMRequestLogRecordDTO,
@@ -219,25 +232,6 @@ export type LLMRequestLogRecord = Omit<
   request: Record<string, unknown>;
   response: Record<string, unknown>;
   upstream: Record<string, unknown>;
-};
-
-export type SessionResource = Omit<
-  SessionResourceDTO,
-  "available_actions" | "metadata"
-> & {
-  available_actions: NonNullable<SessionResourceDTO["available_actions"]>;
-  metadata: Record<string, unknown>;
-};
-
-export type SessionResourceList = Omit<SessionResourceListDTO, "items"> & {
-  items: SessionResource[];
-};
-
-export type SessionResourceControlResult = Omit<
-  SessionResourceControlResultDTO,
-  "resource"
-> & {
-  resource?: SessionResource | null;
 };
 
 type TraceRaw = NonNullable<TraceEventDTO["raw"]> & {
@@ -336,7 +330,7 @@ export type CreateFederationManagedWorkspaceRequest =
   GeneratedCreateFederationManagedWorkspaceRequest;
 export type CreateGatewayGuestRequest = GeneratedCreateGatewayGuestRequest;
 export type CreateGatewayUserRequest = GeneratedCreateGatewayUserRequest;
-export type AcquireGatewayUserRequest = import("./gen/gateway").AcquireGatewayUserRequest;
+export type AcquireGatewayUserRequest = import("./gatewayProtocol").AcquireGatewayUserRequest;
 export type GatewayUserViewStateUpdateRequest =
   GeneratedGatewayUserViewStateUpdateRequest;
 type GeneratorNamingRequest = Omit<
@@ -372,12 +366,13 @@ export type WorkspaceNavigationPlacementRequest =
 
 export type GatewayWorkspace = Omit<
   Required<GatewayWorkspaceDTO>,
-  "parent_workspace_id" | "runtime_action" | "config_reload" | "connection_error"
+  "parent_workspace_id" | "runtime_action" | "config_reload" | "connection_error" | "remote"
 > & {
   parent_workspace_id?: string | null;
   runtime_action?: GatewayWorkspaceDTO["runtime_action"];
   config_reload?: GatewayConfigReloadStatus;
   connection_error?: string | null;
+  remote?: GatewayRemoteConnectionSummaryDTO | null;
 };
 export type GatewayUserLease = Required<GatewayUserLeaseDTO>;
 export type GatewayUser = Omit<Required<GatewayUserDTO>, "lease"> & {
@@ -425,11 +420,11 @@ export type GatewayPortForwardProtocol = PortForwardDTO["protocol"];
 export type GatewayPortForwardStatus = PortForwardDTO["status"];
 export type GatewayPortForward = PortForwardDTO;
 export type GatewayPortForwardList = PortForwardListDTO;
-export type CreateGatewayPortForwardRequest = import("./gen/gateway").CreatePortForwardRequest;
+export type CreateGatewayPortForwardRequest = import("./gatewayProtocol").CreatePortForwardRequest;
 export type ChangeGatewayPortForwardLocalPortRequest =
-  import("./gen/gateway").ChangePortForwardLocalPortRequest;
+  import("./gatewayProtocol").ChangePortForwardLocalPortRequest;
 export type ChangeGatewayPortForwardLabelRequest =
-  import("./gen/gateway").ChangePortForwardLabelRequest;
+  import("./gatewayProtocol").ChangePortForwardLabelRequest;
 
 export type GatewayManagedWorkspace = Required<GatewayManagedWorkspaceDTO>;
 export type GatewayManagedWorkspaceList = Omit<
@@ -534,7 +529,7 @@ export type AddSshGatewayWorkspaceRequest =
 export type UpdateGatewayWorkspaceRequest = GeneratedUpdateGatewayWorkspaceRequest;
 export type ReorderGatewayWorkspacesRequest = GeneratedReorderGatewayWorkspacesRequest;
 
-export type WebUiMainAreaRatios = Required<WebUIMainAreaRatiosDTO>;
+export type WebUiMainAreaRatios = DeepRequired<WebUIMainAreaRatiosDTO>;
 
 export type WebUiBottomPanelTab = "terminal" | "output" | "ports" | "automation";
 
@@ -556,15 +551,15 @@ export type WebUiLayoutSettings = Omit<
 };
 
 export type WebUiSessionSidebarSettings =
-  Required<WebUISessionSidebarSettingsDTO>;
+  DeepRequired<WebUISessionSidebarSettingsDTO>;
 
 export type WebUiWorkspaceFileTreeSettings =
-  Required<WebUIWorkspaceFileTreeSettingsDTO>;
+  DeepRequired<WebUIWorkspaceFileTreeSettingsDTO>;
 
 export type WebUiGatewayConsoleSettings = WebUIGatewayConsoleSettingsDTO;
 
 export type GatewayThemeBackground = Omit<
-  Required<GatewayThemeBackgroundDTO>,
+  DeepRequired<GatewayThemeBackgroundDTO>,
   "url" | "asset_id"
 > & {
   url?: string | null;
@@ -577,18 +572,24 @@ export type GatewayThemeOption = GatewayThemeOptionDTO;
 
 export type GatewayThemeCatalog = GatewayThemeCatalogDTO;
 
-export type GatewayUiAsset = Required<GatewayUIAssetDTO>;
+export type GatewayUiAsset = DeepRequired<GatewayUIAssetDTO>;
 export type GatewayUiAssetList = Omit<
-  Required<GatewayUIAssetListDTO>,
+  DeepRequired<GatewayUIAssetListDTO>,
   "items"
 > & {
   items: GatewayUiAsset[];
 };
 
-export type WebUiThemeSettings = Required<WebUIThemeSettingsDTO>;
+export type WebUiThemeSettings = Omit<
+  DeepRequired<WebUIThemeSettingsDTO>,
+  "background" | "resolved_theme"
+> & {
+  background: GatewayThemeBackground | null;
+  resolved_theme: ResolvedGatewayTheme | null;
+};
 
 export type WebUiSettings = Omit<
-  Required<WebUISettingsDTO>,
+  DeepRequired<WebUISettingsDTO>,
   "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme"
 > & {
   layout: WebUiLayoutSettings;
@@ -600,13 +601,14 @@ export type WebUiSettings = Omit<
 
 export type WebUiSettingsUpdate = Omit<
   WebUISettingsUpdateDTO,
-  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme"
+  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme" | "recent_local_workspace_paths"
 > & {
   layout?: WebUiLayoutSettings | null;
   session_sidebar?: Partial<WebUiSessionSidebarSettings> | null;
   workspace_file_tree?: Partial<WebUiWorkspaceFileTreeSettings> | null;
   gateway_console?: Partial<WebUiGatewayConsoleSettings> | null;
   theme?: Partial<WebUiThemeSettings> | null;
+  recent_local_workspace_paths?: string[] | null;
 };
 
 export type GatewayDirectoryEntry = Required<GatewayDirectoryEntryDTO>;
@@ -713,5 +715,5 @@ export type SshConnectionOptionList = Omit<
   items: SshConnectionOption[];
 };
 
-export type SessionResourceKind = SessionResourceDTO["kind"];
-export type SessionResourceAction = NonNullable<SessionResourceDTO["available_actions"]>[number];
+export type SessionResourceKind = SessionResource["kind"];
+export type SessionResourceAction = SessionResource["available_actions"][number];

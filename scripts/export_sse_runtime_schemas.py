@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.schemas.public_v2.sse import SSE_EVENT_MODELS
+from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
 
 
 def main() -> None:
@@ -23,7 +23,7 @@ def main() -> None:
         / "web"
         / "src"
         / "types"
-        / "gen"
+        / "protocol_generated"
         / "sse_runtime_schemas.json"
     )
     target.parent.mkdir(parents=True, exist_ok=True)

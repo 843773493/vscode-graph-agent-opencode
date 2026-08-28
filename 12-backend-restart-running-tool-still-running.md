@@ -1,0 +1,275 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "后退" [disabled] [ref=e6]:
+        - generic [ref=e7]: 
+      - button "前进" [disabled] [ref=e8]:
+        - generic [ref=e9]: 
+      - button "新建会话" [ref=e10] [cursor=pointer]:
+        - img [ref=e12]
+      - button "工作台视图" [ref=e15] [cursor=pointer]:
+        - generic [ref=e16]: 
+        - generic [ref=e17]: 视图
+        - generic [ref=e18]: 
+    - generic "请调用 python_exec 工具，只执" [ref=e137]:
+      - generic [ref=e20]:
+        - generic [ref=e21]: ▱
+        - generic [ref=e22]: 请调用 python_exec 工具，只执
+    - generic [ref=e23]:
+      - button "用户视图" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 
+      - button "更新" [ref=e27] [cursor=pointer]
+      - button "切换左侧侧边栏" [pressed] [ref=e28] [cursor=pointer]:
+        - generic [ref=e29]: 
+      - button "切换底部面板" [ref=e30] [cursor=pointer]:
+        - generic [ref=e31]: 
+      - button "切换会话区" [pressed] [ref=e32] [cursor=pointer]:
+        - generic [ref=e33]: 
+      - button "切换右侧侧边栏" [pressed] [ref=e34] [cursor=pointer]:
+        - generic [ref=e35]: 
+  - generic [ref=e36]:
+    - complementary [ref=e37]:
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - generic [ref=e40]: 会话
+          - region "会话操作" [ref=e41]:
+            - button "新 Ctrl+N" [ref=e42] [cursor=pointer]:
+              - generic [ref=e43]: 新
+              - generic [ref=e44]: Ctrl+N
+            - button "筛选会话" [ref=e45] [cursor=pointer]:
+              - generic [ref=e46]: 
+            - button "搜索会话" [ref=e47] [cursor=pointer]:
+              - generic [ref=e48]: 
+        - generic [ref=e49]:
+          - region "会话导航" [ref=e50]:
+            - button "已固定" [ref=e51] [cursor=pointer]:
+              - generic [ref=e52]: 
+              - generic [ref=e53]: 已固定
+            - button "Chats" [ref=e54] [cursor=pointer]:
+              - generic [ref=e55]: 
+              - generic [ref=e56]: Chats
+            - generic [ref=e57]: No chats
+          - region "工作区和会话资源管理器" [ref=e138]:
+            - generic [ref=e139]:
+              - heading "工作区文件夹" [level=2] [ref=e140]:
+                - generic [ref=e141]: 
+                - text: 工作区文件夹
+              - button "刷新资源树" [ref=e142] [cursor=pointer]:
+                - generic [ref=e143]: 
+              - button "添加工作区" [ref=e144] [cursor=pointer]:
+                - generic [ref=e145]: 
+            - tree [ref=e146]:
+              - treeitem "折叠工作区 home home" [expanded] [ref=e147]:
+                - 'generic "home root_path: /data/hyf/20260629_agent/vscode-graph-agent-opencode/out/tests/temp/turn-message-stream-review/workspace" [ref=e148]':
+                  - button "折叠工作区 home" [ref=e149]:
+                    - generic [ref=e150]: 
+                  - generic [ref=e151]: 
+                  - button "home" [ref=e152] [cursor=pointer]
+                - group [ref=e153]:
+                  - treeitem "请先列出当前工作 19:27:44 会话有未读结果" [ref=e154]:
+                    - button "请先列出当前工作 19:27:44 会话有未读结果" [ref=e157] [cursor=pointer]:
+                      - generic [ref=e158]: 
+                      - generic [ref=e159]: 请先列出当前工作
+                      - time [ref=e160]: 19:27:44
+                      - status "会话有未读结果" [ref=e161]
+                  - treeitem "请先列出当前工作 19:30:04" [ref=e162]:
+                    - button "请先列出当前工作 19:30:04" [ref=e165] [cursor=pointer]:
+                      - generic [ref=e166]: 
+                      - generic [ref=e167]: 请先列出当前工作
+                      - time [ref=e168]: 19:30:04
+                  - treeitem "请先思考一个完整 19:17:24 会话有未读结果" [ref=e169]:
+                    - button "请先思考一个完整 19:17:24 会话有未读结果" [ref=e172] [cursor=pointer]:
+                      - generic [ref=e173]: 
+                      - generic [ref=e174]: 请先思考一个完整
+                      - time [ref=e175]: 19:17:24
+                      - status "会话有未读结果" [ref=e176]
+                  - treeitem "请先读取当前工作 19:15:09 会话有未读结果" [ref=e177]:
+                    - button "请先读取当前工作 19:15:09 会话有未读结果" [ref=e180] [cursor=pointer]:
+                      - generic [ref=e181]: 
+                      - generic [ref=e182]: 请先读取当前工作
+                      - time [ref=e183]: 19:15:09
+                      - status "会话有未读结果" [ref=e184]
+                  - treeitem "请写一篇不少于八 19:24:10 会话有未读结果" [ref=e185]:
+                    - button "请写一篇不少于八 19:24:10 会话有未读结果" [ref=e188] [cursor=pointer]:
+                      - generic [ref=e189]: 
+                      - generic [ref=e190]: 请写一篇不少于八
+                      - time [ref=e191]: 19:24:10
+                      - status "会话有未读结果" [ref=e192]
+                  - treeitem "请分三步完成：先列 19:16:54 会话有未读结果" [ref=e193]:
+                    - button "请分三步完成：先列 19:16:54 会话有未读结果" [ref=e196] [cursor=pointer]:
+                      - generic [ref=e197]: 
+                      - generic [ref=e198]: 请分三步完成：先列
+                      - time [ref=e199]: 19:16:54
+                      - status "会话有未读结果" [ref=e200]
+                  - treeitem "请读取当前工作区 19:18:48" [ref=e201]:
+                    - button "请读取当前工作区 19:18:48" [ref=e204] [cursor=pointer]:
+                      - generic [ref=e205]: 
+                      - generic [ref=e206]: 请读取当前工作区
+                      - time [ref=e207]: 19:18:48
+                  - treeitem "请调用 python_exec 工具，只执 19:38:10" [ref=e208]:
+                    - button "请调用 python_exec 工具，只执 19:38:10" [ref=e211] [cursor=pointer]:
+                      - generic [ref=e212]: 
+                      - generic [ref=e213]: 请调用 python_exec 工具，只执
+                      - time [ref=e214]: 19:38:10
+                  - treeitem "请调用 python_exec 工具，只执 19:36:00 会话有未读结果" [ref=e215]:
+                    - button "请调用 python_exec 工具，只执 19:36:00 会话有未读结果" [ref=e218] [cursor=pointer]:
+                      - generic [ref=e219]: 
+                      - generic [ref=e220]: 请调用 python_exec 工具，只执
+                      - time [ref=e221]: 19:36:00
+                      - status "会话有未读结果" [ref=e222]
+                  - treeitem "请调用 runPlaywrightCode 工具，在浏 19:33:06 会话有未读结果" [ref=e223]:
+                    - button "请调用 runPlaywrightCode 工具，在浏 19:33:06 会话有未读结果" [ref=e226] [cursor=pointer]:
+                      - generic [ref=e227]: 
+                      - generic [ref=e228]: 请调用 runPlaywrightCode 工具，在浏
+                      - time [ref=e229]: 19:33:06
+                      - status "会话有未读结果" [ref=e230]
+                  - treeitem "请调用名为 totally_unknown_tool_ux_probe 的工 19:23:10 会话有未读结果" [ref=e231]:
+                    - button "请调用名为 totally_unknown_tool_ux_probe 的工 19:23:10 会话有未读结果" [ref=e234] [cursor=pointer]:
+                      - generic [ref=e235]: 
+                      - generic [ref=e236]: 请调用名为 totally_unknown_tool_ux_probe 的工
+                      - time [ref=e237]: 19:23:10
+                      - status "会话有未读结果" [ref=e238]
+                  - treeitem "请调用名为 totally_unknown_tool_ux_probe_after_fix 的工 19:29:19 会话有未读结果" [ref=e239]:
+                    - button "请调用名为 totally_unknown_tool_ux_probe_after_fix 的工 19:29:19 会话有未读结果" [ref=e242] [cursor=pointer]:
+                      - generic [ref=e243]: 
+                      - generic [ref=e244]: 请调用名为 totally_unknown_tool_ux_probe_after_fix 的工
+                      - time [ref=e245]: 19:29:19
+                      - status "会话有未读结果" [ref=e246]
+        - button "调整会话列表和自定义区域大小" [ref=e60]
+        - generic [ref=e61]:
+          - button "自定义" [expanded] [ref=e62] [cursor=pointer]:
+            - generic [ref=e63]: 自定义
+          - generic [ref=e64]:
+            - button "概述" [ref=e65] [cursor=pointer]:
+              - generic [ref=e66]: 
+              - generic [ref=e67]: 概述
+            - button "智能体 1" [ref=e247] [cursor=pointer]:
+              - generic [ref=e69]: 
+              - generic [ref=e70]: 智能体
+              - generic [ref=e71]: "1"
+            - button "技能 24" [ref=e72] [cursor=pointer]:
+              - generic [ref=e73]: 
+              - generic [ref=e74]: 技能
+              - generic [ref=e75]: "24"
+            - button "指令 1" [ref=e76] [cursor=pointer]:
+              - generic [ref=e77]: 
+              - generic [ref=e78]: 指令
+              - generic [ref=e79]: "1"
+            - button "挂钩" [ref=e80] [cursor=pointer]:
+              - generic [ref=e81]: 
+              - generic [ref=e82]: 挂钩
+            - button "MCP 服务器 1" [ref=e83] [cursor=pointer]:
+              - generic [ref=e84]: 
+              - generic [ref=e85]: MCP 服务器
+              - generic [ref=e86]: "1"
+            - button "插件" [ref=e87] [cursor=pointer]:
+              - generic [ref=e88]: 
+              - generic [ref=e89]: 插件
+            - button "工具" [ref=e90] [cursor=pointer]:
+              - generic [ref=e91]: 
+              - generic [ref=e92]: 工具
+    - button "调整会话侧栏宽度" [ref=e93]
+    - generic [ref=e94]:
+      - text:              
+      - main [ref=e95]:
+        - generic [ref=e96]:
+          - generic [ref=e98]:
+            - generic [ref=e253]:
+              - status [ref=e348]: 继续向上滚动加载更早消息
+              - article [ref=e261]:
+                - generic [ref=e263]:
+                  - button "消息操作" [ref=e265] [cursor=pointer]:
+                    - generic [ref=e266]: 
+                  - generic [ref=e267]: 请调用 python_exec 工具，只执行不修改工作区的 60 秒等待（sleep）。调用后不要结束这次执行，保持工具处于执行中，直到我手动中断或后端重启。
+                - generic [ref=e268]:
+                  - button "工具详情" [ref=e270] [cursor=pointer]:
+                    - generic [ref=e271]: 
+                  - generic [ref=e272]:
+                    - generic [ref=e273]:
+                      - button "收起 Turn 中间消息" [expanded] [ref=e321] [cursor=pointer]:
+                        - generic [ref=e275]: 
+                        - generic [ref=e276]: 
+                      - generic [ref=e322]:
+                        - generic [ref=e323]:
+                          - paragraph [ref=e324]: The user is asking me to call the python_exec tool to execute a 60-second wait (sleep) without modifying the workspace, and they want me to keep it running until they manually interrupt or the backend restarts.
+                          - paragraph [ref=e325]: "Let me check the python_exec tool:"
+                          - list [ref=e326]:
+                            - listitem [ref=e327]: It uses the workspace .venv virtual environment's Python interpreter
+                            - listitem [ref=e328]: It has a timeout_seconds parameter with default of 30 seconds
+                            - listitem [ref=e329]: The user wants a 60-second sleep
+                          - paragraph [ref=e330]: Since the user wants it to run for 60 seconds, I need to set timeout_seconds to 60. The user also wants it to run indefinitely until interrupted, but the python_exec tool has a timeout parameter that will end the execution after the specified time.
+                          - paragraph [ref=e331]: Let me call the python_exec tool with a 60-second timeout and code that just sleeps for 60 seconds.
+                        - generic [ref=e332]:
+                          - button "正在运行 python_exec" [expanded] [active] [ref=e333] [cursor=pointer]:
+                            - generic [ref=e334]: 
+                            - generic [ref=e335]: 正在运行 python_exec
+                            - generic [ref=e336]: 
+                          - generic [ref=e340]:
+                            - paragraph [ref=e341]:
+                              - strong [ref=e342]: 输入
+                            - code [ref=e344]: "{\"code\": \"import time\\nprint(\\\"Starting 60-second sleep...\\\")\\ntime.sleep(60)\\nprint(\\\"60-second sleep completed!\\\")\", \"timeout_seconds\": 60}"
+                    - button "重试失败轮次" [ref=e277]:
+                      - generic [ref=e278]: 
+                      - text: 重试失败轮次
+            - generic [ref=e281]:
+              - textbox "你的路线图下一步是什么？" [ref=e283]
+              - generic [ref=e284]:
+                - generic [ref=e285]:
+                  - button "Choose File"
+                  - button "添加图片或视频附件" [ref=e286] [cursor=pointer]: +
+                  - button "打开视图菜单，当前：默认视图" [ref=e288] [cursor=pointer]:
+                    - img [ref=e289]
+                  - generic: Enter 发送 · Ctrl+Enter 换行
+                - generic [ref=e292]:
+                  - button "选择 Agent，当前：default" [ref=e294] [cursor=pointer]:
+                    - generic [ref=e295]: 
+                    - generic [ref=e296]: default
+                  - button "选择模型，当前：big-pickle" [ref=e298] [cursor=pointer]:
+                    - generic [ref=e299]: 
+                    - generic [ref=e300]: big-pickle
+                  - button "选择和测试工具" [ref=e302] [cursor=pointer]:
+                    - generic [ref=e303]: 
+                  - button "输入消息以启用发送" [disabled] [ref=e304]:
+                    - img [ref=e305]
+          - button "调整会话区与编辑器工作区宽度" [ref=e99]
+          - generic [ref=e100]:
+            - generic "右侧侧边栏组件" [ref=e101]:
+              - tablist "右侧侧边栏组件标签" [ref=e102]:
+                - tab "文件" [selected] [ref=e103]:
+                  - generic [ref=e104]: 
+                  - generic [ref=e105]: 文件
+                - tab "更改" [ref=e106]:
+                  - generic [ref=e107]: 
+                  - generic [ref=e108]: 更改
+                - tab "调试" [ref=e109]:
+                  - generic [ref=e110]: 
+                  - generic [ref=e111]: 调试
+                - tab "运行与连接" [ref=e112]:
+                  - generic [ref=e113]: 
+                  - generic [ref=e114]: 运行与连接
+            - complementary [ref=e116]:
+              - text: 
+              - generic [ref=e117]:
+                - generic "文件操作" [ref=e118]:
+                  - button "搜索文件" [ref=e119] [cursor=pointer]
+                  - button "全部折叠" [ref=e121] [cursor=pointer]:
+                    - generic [ref=e122]: 
+                - tree "工作区文件树" [ref=e124]:
+                  - button "▣ workspace" [expanded] [ref=e125] [cursor=pointer]:
+                    - generic [ref=e126]: 
+                    - generic [ref=e127]: ▣
+                    - generic [ref=e128]: workspace
+                  - button "▣ .boxteam" [ref=e308] [cursor=pointer]:
+                    - generic [ref=e309]: 
+                    - generic [ref=e310]: ▣
+                    - generic [ref=e311]: .boxteam
+                  - button "▣ debug" [ref=e313] [cursor=pointer]:
+                    - generic [ref=e314]: 
+                    - generic [ref=e315]: ▣
+                    - generic [ref=e316]: debug
+                  - button / [ref=e132] [cursor=pointer]:
+                    - generic [ref=e133]: 
+                    - generic [ref=e134]: 
+                    - generic [ref=e135]: /
+              - text:              
+  - contentinfo "状态栏" [ref=e136]

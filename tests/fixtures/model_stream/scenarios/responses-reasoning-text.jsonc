@@ -1,0 +1,5 @@
+{
+  "scenario_id": "responses-reasoning-text",
+  "asset": "handwritten/openai_responses/reasoning-text.json",
+  "business_assertion": "responses-reasoning-text-default"
+}

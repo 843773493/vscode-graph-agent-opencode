@@ -1,32 +1,36 @@
-import type { SseErrorDTO } from "./types/gen/sse";
-import type { SessionExecutionSseDTO } from "./types/gen/session_interaction";
-import type { TraceEventDTO } from "./types/gen/trace";
-import type { WorkspaceFileChangeBatchDTO } from "./types/gen/workspace";
 import {
-  validateSessionExecutionSse as validateSharedSessionExecutionSse,
-  validateSseError as validateSharedSseError,
-  validateTraceEvent as validateSharedTraceEvent,
-  validateWorkspaceFileChangeBatch as validateSharedWorkspaceFileChangeBatch,
-} from "../../../shared/sseRuntime.js";
+  parseSseError,
+  parseTraceEvent,
+  parseWorkspaceFileChangeBatch,
+} from "./protocol";
+import type {
+  SessionExecutionSseDTO,
+  SseErrorDTO,
+  TraceEventDTO,
+  WorkspaceFileChangeBatchDTO,
+} from "./protocol/jsonTypes";
+import { parseSessionExecutionSse } from "./protocol/sessionSse";
 
 export function validateTraceEvent(value: unknown): TraceEventDTO {
-  return validateSharedTraceEvent(value) as TraceEventDTO;
+  parseTraceEvent(value);
+  return value as TraceEventDTO;
 }
 
 export function validateSessionExecutionSse(
   value: unknown,
 ): SessionExecutionSseDTO {
-  return validateSharedSessionExecutionSse(value) as SessionExecutionSseDTO;
+  parseSessionExecutionSse(value);
+  return value as SessionExecutionSseDTO;
 }
 
 export function validateWorkspaceFileChangeBatch(
   value: unknown,
 ): WorkspaceFileChangeBatchDTO {
-  return validateSharedWorkspaceFileChangeBatch(
-    value,
-  ) as WorkspaceFileChangeBatchDTO;
+  parseWorkspaceFileChangeBatch(value);
+  return value as WorkspaceFileChangeBatchDTO;
 }
 
 export function validateSseError(value: unknown): SseErrorDTO {
-  return validateSharedSseError(value) as SseErrorDTO;
+  parseSseError(value);
+  return value as SseErrorDTO;
 }

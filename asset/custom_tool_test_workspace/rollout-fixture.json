@@ -1,12 +1,16 @@
 {
-  "fixture_version": 3,
-  "description": "custom_tool_test_workspace 的静态 rollout 历史 fixture",
+  "fixture_version": 4,
+  "description": "由 tests/fixtures/model_stream/handwritten 重建的 rollout 历史 fixture",
+  "source": "handwritten_sse",
+  "source_assets": [
+    "openai_chat/reasoning-stream.json",
+    "openai_chat/reasoning-tool.json"
+  ],
   "history_semantics": [
     "user_message",
-    "internal_message",
-    "reasoning",
-    "summary",
-    "encrypted_content",
+    "reasoning_content",
+    "reasoning_items",
+    "redacted_thinking",
     "tool_call",
     "tool_result",
     "final_response",
@@ -24,38 +28,38 @@
     {
       "session_id": "ses_a1b2c3d4e5f6478899aabbccddeeff00",
       "turn_count": 128,
-      "title": "自定义工具工作区：128 Turn 历史压测（mock）",
-      "kind": "deterministic_mock"
+      "title": "自定义工具工作区：128 Turn 历史压测（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
     },
     {
       "session_id": "ses_8128d7f0a4b64aa0b3f1c9e7d2a65018",
       "turn_count": 128,
-      "title": "真实模型 128 Turn checkpoint 压测",
-      "kind": "real_model_snapshot"
+      "title": "手写 SSE 128 Turn block carrier 压测",
+      "kind": "handwritten_sse_snapshot"
     },
     {
       "session_id": "ses_9f4e2c7a1b6d4830a5e8f2c1d7b90436",
       "turn_count": 128,
-      "title": "大型工具调用：128 Turn 历史投影压测",
-      "kind": "deterministic_mock"
+      "title": "大型工具调用：128 Turn 历史投影压测（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
     },
     {
       "session_id": "ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345",
       "turn_count": 24,
-      "title": "上下文压缩与摘要示例",
-      "kind": "deterministic_mock"
+      "title": "上下文压缩与摘要示例（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
     },
     {
       "session_id": "ses_7e5d3c1b9a8f4762b4d6e8f0a1c23579",
       "turn_count": 12,
-      "title": "多工具调用和大输出示例",
-      "kind": "deterministic_mock"
+      "title": "多工具调用和大输出示例（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
     },
     {
       "session_id": "ses_6b2d4f8a0c1e4937b5d9f1a3c7e24680",
       "turn_count": 7,
-      "title": "独立历史分支示例",
-      "kind": "deterministic_mock"
+      "title": "独立历史分支示例（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
     }
   ]
 }

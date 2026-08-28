@@ -13,8 +13,8 @@ from app.core.exceptions import NotFoundError
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_paths import SessionPathResolver, SessionPhysicalNode
-from app.schemas.public_v2.common import CursorPage
-from app.schemas.public_v2.session import (
+from app.schemas.internal_v2.common import CursorPage
+from app.schemas.internal_v2.session import (
     DeleteSessionResultDTO,
     SessionControlResultDTO,
     SessionCreateRequest,
@@ -26,7 +26,7 @@ from app.schemas.public_v2.session import (
     SessionUpdateRequest,
     TitleSource,
 )
-from app.schemas.public_v2.trace import TraceEventDTO
+from app.schemas.internal_v2.trace import TraceEventDTO
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.mapping.trace_event_mapper import TraceEventMapper

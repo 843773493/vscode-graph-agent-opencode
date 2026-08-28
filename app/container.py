@@ -88,9 +88,11 @@ from app.services.infrastructure.historical_terminal_record_reader import (
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpRuntimeManager
+from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore
 from app.services.infrastructure.pending_request_store import PendingRequestStore
+from app.services.infrastructure.resource_manager import ResourceManager
 from app.services.infrastructure.rollout_checkpoint_runtime import (
     RolloutCheckpointRuntime,
 )
@@ -297,6 +299,7 @@ class AppContainer:
     mcp_runtime_manager: McpRuntimeManager
     pending_request_store: PendingRequestStore
     workspace_activity_service: WorkspaceActivityService
+    message_stream_store: MessageStreamStore
 
 
 def build_app_container(
@@ -324,6 +327,10 @@ def build_app_container(
     trace_event_recorder = TraceEventRecorder(
         bus=job_event_bus,
         store=trace_event_store,
+    )
+    message_stream_store = MessageStreamStore(path_resolver=session_path_resolver)
+    resource_manager = ResourceManager(
+        state_path=resolved_boxteam_root / "resources.json"
     )
     config_service = ConfigService(
         workspace_root=resolved_workspace_root,
@@ -417,7 +424,9 @@ def build_app_container(
         dependency_provider=dependency_provider,
         session_changes_service=session_changes_service,
         tool_selection_store=tool_selection_store,
+        message_stream_store=message_stream_store,
         workspace_root=resolved_workspace_root,
+        resource_manager=resource_manager,
     )
     session_title_service = SessionTitleService(
         session_service=session_service,
@@ -509,6 +518,7 @@ def build_app_container(
         job_service=job_service,
         background_task_registry=background_task_registry,
         trace_event_store=trace_event_store,
+        message_stream_store=message_stream_store,
     )
     goal_runtime_service = GoalRuntimeService(
         goal_service=goal_service,
@@ -519,6 +529,8 @@ def build_app_container(
         job_service=job_service,
         job_event_bus=job_event_bus,
         message_service=message_service,
+        message_stream_store=message_stream_store,
+        execution_scope_registry=agent_execution_service.execution_scope_registry,
     )
     historical_terminal_reader = HistoricalTerminalRecordReader(
         sessions_dir=resolved_sessions_root,
@@ -595,6 +607,7 @@ def build_app_container(
     tool_service = ToolService(
         tool_catalog=tool_catalog_service,
         selection_store=tool_selection_store,
+        config_service=config_service,
         test_supported_tools=tool_test_service.supported_tools,
     )
     return AppContainer(
@@ -644,4 +657,5 @@ def build_app_container(
         mcp_runtime_manager=mcp_runtime_manager,
         pending_request_store=pending_request_store,
         workspace_activity_service=workspace_activity_service,
+        message_stream_store=message_stream_store,
     )

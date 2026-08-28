@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.protocol.codecs.session_sse import session_sse_to_proto
+from app.protocol.generated.boxteam.workspace.v2 import session_stream_pb2
 from app.schemas.event import Event
-from app.schemas.public_v2.session_interaction import (
+from app.schemas.internal_v2.session_interaction import (
     JobProgressDTO,
     JobStatusChangedExecutionEventDTO,
     JobStepProgressDTO,
@@ -19,7 +21,7 @@ from app.schemas.public_v2.session_interaction import (
     TraceObservedExecutionEventDTO,
     TraceObservedPayloadDTO,
 )
-from app.schemas.public_v2.session_status import (
+from app.schemas.internal_v2.session_status import (
     SessionObservationStateDTO,
     SessionStatusDTO,
 )
@@ -200,3 +202,11 @@ def map_event_to_observation_sse(event: Event) -> SessionExecutionSseDTO:
     return SessionExecutionSseDTO(
         event=mapped_event, raw_type=event.type, raw_payload=payload
     )
+
+
+def map_event_to_observation_proto(
+    event: Event,
+) -> session_stream_pb2.SessionExecutionSse:
+    """把内部事件经现有 DTO 映射后转换为公开 Workspace 协议。"""
+
+    return session_sse_to_proto(map_event_to_observation_sse(event))

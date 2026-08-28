@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package boxteam.browser.v1;
+
+import "boxteam/browser/v1/browser.proto";
+
+message BrowserAttach {
+  string browser_id = 1;
+  optional string participant_id = 2;
+}
+
+message BrowserDetach {
+  optional string browser_id = 1;
+}
+
+message BrowserPointer {
+  string action = 1;
+  double x = 2;
+  double y = 3;
+  string button = 4;
+  double delta_x = 5;
+  double delta_y = 6;
+}
+
+message BrowserKey {
+  string action = 1;
+  string key = 2;
+  string code = 3;
+  optional string text = 4;
+  bool repeat = 5;
+}
+
+message BrowserCommand {
+  string name = 1;
+  string value = 2;
+}
+
+message BrowserViewportUpdate {
+  uint32 width = 1;
+  uint32 height = 2;
+}
+
+message BrowserFrameAcknowledge {
+  uint32 frame_id = 1;
+  uint32 received_bytes = 2;
+}
+
+message BrowserClientMessage {
+  oneof payload {
+    BrowserAttach attach = 1;
+    BrowserDetach detach = 2;
+    BrowserPointer pointer = 3;
+    BrowserKey key = 4;
+    BrowserCommand command = 5;
+    BrowserViewportUpdate viewport = 6;
+    BrowserFrameAcknowledge frame_ack = 7;
+    BrowserJsonMessage json = 8;
+  }
+}

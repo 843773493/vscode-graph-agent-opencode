@@ -19,6 +19,7 @@ from app.agents.upstream_request_trace import (
     UpstreamRequestTraceCallback,
     begin_upstream_capture,
     end_upstream_capture,
+    record_upstream_response,
 )
 from app.services.orchestration.agent_stream_helpers import (
     is_tracked_chat_model_event,
@@ -683,6 +684,70 @@ def test_responses_stream_keeps_one_portable_reasoning_item() -> None:
     }
 
 
+def test_responses_summary_delta_emits_reasoning_text_block() -> None:
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-test",
+        api_key="test-key",
+        custom_llm_provider="openai",
+    )
+    part_state = _StreamPartState()
+    event = SimpleNamespace(
+        type="response.reasoning_summary_text.delta",
+        item_id="rs_summary",
+        delta="先读取 README",
+    )
+
+    _index, _output_index, _sub_index, chunk = model._convert_response_event(
+        event,
+        current_index=-1,
+        current_output_index=-1,
+        current_sub_index=-1,
+        part_state=part_state,
+        original_schema=None,
+    )
+
+    assert chunk is not None
+    block = chunk.message.content[0]
+    assert block["type"] == "reasoning"
+    assert block["content"] == [
+        {
+            "type": "reasoning_text",
+            "text": "先读取 README",
+        }
+    ]
+    assert isinstance(block["id"], str)
+    assert block["index"] == 0
+    assert block["extras"] == {"provider_part_id": "rs_summary"}
+
+
+def test_responses_empty_added_summary_does_not_emit_empty_reasoning_block() -> None:
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-test",
+        api_key="test-key",
+        custom_llm_provider="openai",
+    )
+    event = SimpleNamespace(
+        type="response.output_item.added",
+        output_index=0,
+        item={
+            "type": "reasoning",
+            "id": "rs_empty",
+            "summary": [{"type": "summary_text", "text": ""}],
+        },
+    )
+
+    _index, _output_index, _sub_index, chunk = model._convert_response_event(
+        event,
+        current_index=-1,
+        current_output_index=-1,
+        current_sub_index=-1,
+        part_state=_StreamPartState(),
+        original_schema=None,
+    )
+
+    assert chunk is None
+
+
 def test_responses_upstream_trace_uses_final_payload_when_litellm_input_is_empty():
     callback = UpstreamRequestTraceCallback(
         fallback_request={
@@ -709,3 +774,28 @@ def test_responses_upstream_trace_uses_final_payload_when_litellm_input_is_empty
     assert attempts[0]["request"]["input"][0]["role"] == "user"
     assert attempts[0]["request"]["include"] == ["reasoning.encrypted_content"]
     assert attempts[0]["request"]["api_key"] == "[REDACTED]"
+
+
+def test_responses_stream_terminal_event_records_complete_upstream_response():
+    callback = UpstreamRequestTraceCallback()
+    token = begin_upstream_capture()
+    callback.log_pre_api_call(
+        "gpt-5.6-luna",
+        None,
+        {
+            "litellm_call_id": "responses-stream-1",
+            "call_type": "aresponses",
+            "custom_llm_provider": "openai",
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "gpt-5.6-luna",
+                    "input": [{"type": "message", "role": "user"}],
+                }
+            },
+        },
+    )
+
+    record_upstream_response({"id": "resp_stream", "output": []})
+    attempts = end_upstream_capture(token)
+
+    assert attempts[0]["response"] == {"id": "resp_stream", "output": []}

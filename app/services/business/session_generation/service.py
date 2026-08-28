@@ -14,17 +14,17 @@ from jsonschema.exceptions import ValidationError
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.session_paths import validate_generator_physical_segment
 from app.runtime.session_orchestrator import SessionOrchestrator
-from app.schemas.public_v2.session import (
+from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionGenerationOriginDTO,
 )
-from app.schemas.public_v2.session_navigation import (
+from app.schemas.internal_v2.session_navigation import (
     SessionGenerationCapabilitiesDTO,
     SessionGenerationCapabilityDTO,
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,
 )
-from app.schemas.public_v2.session_navigation.models import (
+from app.schemas.internal_v2.session_navigation.models import (
     SessionGenerationTargetDTO,
 )
 from app.services.business.message_service import MessageService

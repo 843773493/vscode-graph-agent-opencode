@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package boxteam.gateway.v1;
+
+message ProxyTarget {
+  string workspace_id = 1;
+  string service = 2;
+  string path = 3;
+}
+
+message ProxyResponseMetadata {
+  uint32 status_code = 1;
+  map<string, string> headers = 2;
+}

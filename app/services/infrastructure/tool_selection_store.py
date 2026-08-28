@@ -13,43 +13,26 @@ else:
 
 
 class ToolSelectionStore:
-    """持久化每个 Agent 的执行禁用项和模型可见性覆盖。"""
+    """持久化当前工作区内每个 Agent 的工具能力运行时覆盖。"""
 
     def __init__(self, *, boxteam_root: Path) -> None:
         self._path = boxteam_root / "settings" / "tool_selection.json"
         self._lock_path = boxteam_root / "settings" / "tool_selection.lock"
 
-    def disabled_tools(self, agent_id: str) -> set[str]:
-        return set(self._agent_settings(agent_id)["execution_disabled"])
-
-    def model_hidden_tools(
-        self,
-        agent_id: str,
-        *,
-        default_hidden_tool_names: set[str],
-    ) -> set[str]:
+    def execution_overrides(self, agent_id: str) -> dict[str, bool]:
         settings = self._agent_settings(agent_id)
-        overrides = settings["model_visibility"]
-        hidden = {
-            name
-            for name in default_hidden_tool_names
-            if overrides.get(name, False) is not True
-        }
-        hidden.update(
-            name for name, visible in overrides.items() if visible is False
-        )
-        return hidden
+        return dict(settings["execution_overrides"])
 
-    def model_visible(
-        self,
-        agent_id: str,
-        *,
-        tool_id: str,
-        kind: str,
-    ) -> bool:
-        overrides = self._agent_settings(agent_id)["model_visibility"]
-        default = kind not in {"extension", "debugging"}
-        return bool(overrides.get(tool_id, default))
+    def model_visibility_overrides(self, agent_id: str) -> dict[str, bool]:
+        settings = self._agent_settings(agent_id)
+        return dict(settings["model_visibility_overrides"])
+
+    def disabled_tools(self, agent_id: str) -> set[str]:
+        return {
+            tool_id
+            for tool_id, enabled in self.execution_overrides(agent_id).items()
+            if enabled is False
+        }
 
     def apply_changes(
         self,
@@ -62,21 +45,18 @@ class ToolSelectionStore:
         with self._file_lock(shared=False):
             payload = self._read_unlocked()
             settings = self._agent_settings_from_payload(payload, agent_id)
-            disabled = set(settings["execution_disabled"])
-            visibility = dict(settings["model_visibility"])
+            execution = dict(settings["execution_overrides"])
+            visibility = dict(settings["model_visibility_overrides"])
             for tool_id, (execution_enabled, model_visible) in changes.items():
                 if not execution_enabled and model_visible:
                     raise ValueError(
                         f"工具 {tool_id!r} 未启用执行能力时不能对模型可见"
                     )
-                if execution_enabled:
-                    disabled.discard(tool_id)
-                else:
-                    disabled.add(tool_id)
+                execution[tool_id] = execution_enabled
                 visibility[tool_id] = model_visible
             payload[agent_id] = {
-                "execution_disabled": sorted(disabled),
-                "model_visibility": dict(sorted(visibility.items())),
+                "execution_overrides": dict(sorted(execution.items())),
+                "model_visibility_overrides": dict(sorted(visibility.items())),
             }
             self._write(payload)
 
@@ -92,25 +72,27 @@ class ToolSelectionStore:
         raw_settings = payload.get(agent_id, {})
         if not isinstance(raw_settings, dict):
             raise TypeError(f"工具选择配置的 Agent 项必须是对象: agent={agent_id}")
-        disabled = raw_settings.get("execution_disabled", [])
-        visibility = raw_settings.get("model_visibility", {})
-        if not isinstance(disabled, list) or not all(
-            isinstance(name, str) for name in disabled
+        execution = raw_settings.get("execution_overrides", {})
+        visibility = raw_settings.get("model_visibility_overrides", {})
+        if not isinstance(execution, dict) or not all(
+            isinstance(name, str) and isinstance(value, bool)
+            for name, value in execution.items()
         ):
-            raise TypeError(f"工具选择配置 execution_disabled 格式错误: agent={agent_id}")
+            raise TypeError(
+                f"工具选择配置 execution_overrides 格式错误: agent={agent_id}"
+            )
         if not isinstance(visibility, dict) or not all(
             isinstance(name, str) and isinstance(value, bool)
             for name, value in visibility.items()
         ):
-            raise TypeError(f"工具选择配置 model_visibility 格式错误: agent={agent_id}")
+            raise TypeError(
+                "工具选择配置 model_visibility_overrides 格式错误: "
+                f"agent={agent_id}"
+            )
         return {
-            "execution_disabled": list(dict.fromkeys(disabled)),
-            "model_visibility": dict(visibility),
+            "execution_overrides": dict(execution),
+            "model_visibility_overrides": dict(visibility),
         }
-
-    def _read(self) -> dict[str, object]:
-        with self._file_lock(shared=True):
-            return self._read_unlocked()
 
     def _read_unlocked(self) -> dict[str, object]:
         if not self._path.exists():
@@ -139,11 +121,7 @@ class ToolSelectionStore:
         with self._lock_path.open("a+", encoding="utf-8") as lock_file:
             if os.name == "nt":
                 lock_file.seek(0)
-                msvcrt.locking(
-                    lock_file.fileno(),
-                    msvcrt.LK_LOCK,
-                    1,
-                )
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
             else:
                 fcntl.flock(
                     lock_file.fileno(),

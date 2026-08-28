@@ -34,6 +34,7 @@ from app.services.infrastructure.file_tree_settings_service import (
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpRuntimeManager
+from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
@@ -42,8 +43,8 @@ from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
-from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.infrastructure.workspace_service import WorkspaceService
+from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.tool_testing.service import ToolTestService
@@ -88,6 +89,7 @@ class _AppContainerProtocol:
     session_generation_service: SessionGenerationService
     mcp_runtime_manager: McpRuntimeManager
     workspace_activity_service: WorkspaceActivityService
+    message_stream_store: MessageStreamStore
 
 
 def verify_local_token(x_local_token: str | None = Header(default=None)) -> str:
@@ -214,6 +216,13 @@ def get_session_interrupt_service(request: Request) -> SessionInterruptService:
     service = getattr(_get_container(request), "session_interrupt_service", None)
     if not isinstance(service, SessionInterruptService):
         raise RuntimeError("SessionInterruptService 尚未在应用启动阶段初始化")
+    return service
+
+
+def get_message_stream_store(request: Request) -> MessageStreamStore:
+    service = getattr(_get_container(request), "message_stream_store", None)
+    if not isinstance(service, MessageStreamStore):
+        raise RuntimeError("MessageStreamStore 尚未在应用启动阶段初始化")
     return service
 
 

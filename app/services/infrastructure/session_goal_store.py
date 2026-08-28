@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from app.core.session_paths import SessionPathResolver
-from app.schemas.public_v2.goal import SessionGoalDTO
+from app.schemas.internal_v2.goal import SessionGoalDTO
 
 
 class SessionGoalStore:

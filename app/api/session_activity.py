@@ -10,7 +10,7 @@ from app.api.deps import (
     get_workspace_activity_service,
     verify_local_token,
 )
-from app.schemas.public_v2.common import APIResponse, CursorPage
+from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.services.infrastructure.workspace_state_store import (
     WorkspaceActivityCursorGoneError,
     WorkspaceActivityRecord,

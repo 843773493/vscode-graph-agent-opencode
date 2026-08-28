@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package boxteam.browser.v1;
+
+import "boxteam/browser/v1/browser.proto";
+import "boxteam/common/v1/error.proto";
+
+message BrowserPageState {
+  BrowserPage page = 1;
+}
+
+message BrowserFrame {
+  string frame_id = 1;
+  uint32 sequence = 2;
+  bytes data = 3;
+  string content_type = 4;
+}
+
+message BrowserDownloadReady {
+  string download_id = 1;
+  string filename = 2;
+  string content_type = 3;
+}
+
+message BrowserServerMessage {
+  oneof payload {
+    BrowserPageState page_state = 1;
+    BrowserFrame frame = 2;
+    BrowserDownloadReady download_ready = 3;
+    boxteam.common.v1.Error error = 4;
+    BrowserJsonMessage json = 5;
+  }
+}

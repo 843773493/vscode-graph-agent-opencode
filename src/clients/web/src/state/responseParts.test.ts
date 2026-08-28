@@ -175,4 +175,30 @@ describe("responsePartsToTimelineItems", () => {
       resultText: "ok",
     });
   });
+
+  it("终态失败的历史工具没有结果时显示 outcome_unknown", () => {
+    const items = responsePartsToTimelineItems([
+      {
+        part_id: "tool-call:unknown",
+        kind: "tool_call",
+        projection: "detail",
+        status: "running",
+        source: {
+          message_sequence: 20,
+          assistant_message_sequence: 20,
+          call_index: 0,
+        },
+        tool_call_id: "call-unknown",
+        tool_name: "python_exec",
+        arguments: "{\"timeout_seconds\":60}",
+      },
+    ], { terminalFailure: true });
+
+    expect(items[0]).toMatchObject({
+      kind: "aggregated_tool",
+      active: false,
+      failed: true,
+      outcomeUnknown: true,
+    });
+  });
 });

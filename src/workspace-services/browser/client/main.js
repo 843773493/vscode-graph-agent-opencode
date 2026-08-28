@@ -1,4 +1,5 @@
 import { bindBrowserInputEvents } from "./browserInputEvents.js";
+import { encodeBrowserClientMessage } from "../protocol/messages.js";
 import { bindBrowserToolbarEvents } from "./browserToolbarEvents.js";
 import { createBrowserModalUi } from "./browserModalUi.js";
 import { createBrowserCollaborationUi } from "./browserCollaborationUi.js";
@@ -924,7 +925,7 @@ function send(message) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     throw new Error("WebSocket 尚未连接");
   }
-  socket.send(JSON.stringify(message));
+  socket.send(encodeBrowserClientMessage(message));
 }
 
 function sendIfAttached(message) {
@@ -1793,7 +1794,7 @@ window.addEventListener("beforeunload", () => {
     window.clearInterval(agentLockHeartbeatTimer);
   }
   if (attached && socket?.readyState === WebSocket.OPEN && browserId) {
-    socket.send(JSON.stringify({ type: "detach", browserId }));
+    socket.send(encodeBrowserClientMessage({ type: "detach", browserId }));
   }
 });
 

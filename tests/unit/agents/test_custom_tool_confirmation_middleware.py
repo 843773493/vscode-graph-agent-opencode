@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -9,6 +10,11 @@ from app.agents import custom_tool_confirmation_middleware as confirmation_modul
 from app.agents.custom_tool_confirmation_middleware import (
     CustomToolConfirmationMiddleware,
 )
+from app.core.model_delta_context import (
+    reset_current_model_delta_sink,
+    set_current_model_delta_sink,
+)
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
 def _state(*tool_calls: dict[str, object]) -> dict[str, object]:
@@ -160,3 +166,46 @@ def test_custom_tool_confirmation_edit_keeps_fixed_model_entry(
             "type": "tool_call",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_approval_wait_is_projected_as_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_approval")
+    writer.commit.side_effect = lambda event_type, payload, **_: {
+        "type": event_type,
+        "payload": payload,
+    }
+    message_stream_runtime = MessageStreamRuntime(writer)
+    token = set_current_model_delta_sink(message_stream_runtime)
+    monkeypatch.setattr(
+        confirmation_module,
+        "interrupt",
+        lambda _request: {"decisions": [{"type": "approve"}]},
+    )
+    try:
+        result = await CustomToolConfirmationMiddleware(
+            frozenset({"evaluate_expression"})
+        ).aafter_model(
+            _state(
+                _custom_call(
+                    call_id="call-approval",
+                    target_name="evaluate_expression",
+                    arguments={"expression": "safe"},
+                )
+            ),
+            MagicMock(),
+        )
+    finally:
+        reset_current_model_delta_sink(token)
+
+    assert result is not None
+    assert [call.args[0] for call in writer.commit.await_args_list] == [
+        "activity.started",
+        "activity.updated",
+        "activity.completed",
+    ]
+    waiting_payload = writer.commit.await_args_list[1].args[1]
+    assert waiting_payload["kind"] == "approval.wait"
+    assert waiting_payload["status"] == "waiting"

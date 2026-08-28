@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.schemas.public_v2.artifact import ArtifactDTO
+from app.schemas.internal_v2.artifact import ArtifactDTO
 from app.core.path_utils import get_artifacts_dir, safe_join
 
 

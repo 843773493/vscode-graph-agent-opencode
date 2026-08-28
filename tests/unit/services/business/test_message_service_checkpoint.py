@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.prompting import PromptSection, internal_message_factory
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
 
 
@@ -258,8 +258,8 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
 
 @pytest.mark.asyncio
 async def test_message_service_rejects_non_user_new_turn():
-    from app.schemas.public_v2.common import MessageRole
-    from app.schemas.public_v2.message import MessageCreateRequest
+    from app.schemas.internal_v2.common import MessageRole
+    from app.schemas.internal_v2.message import MessageCreateRequest
 
     service = MessageService()
     with pytest.raises(ValueError, match="role 必须为 user"):

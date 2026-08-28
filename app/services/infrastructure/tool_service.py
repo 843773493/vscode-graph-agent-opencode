@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from app.agents.policy import DEFAULT_TOOL_GROUP, validate_tool_dependencies
-from app.schemas.public_v2.tool import (
+from app.agents.policy import (
+    DEFAULT_TOOL_GROUP,
+    ToolMetadata,
+    ToolPolicyResolver,
+    validate_tool_dependencies,
+)
+from app.schemas.internal_v2.tool import (
     ToolDTO,
     ToolSelectionPatchRequest,
 )
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 
 
@@ -29,17 +35,28 @@ class ToolService:
         *,
         tool_catalog: ToolCatalog,
         selection_store: ToolSelectionStore,
+        config_service: ConfigService,
         test_supported_tools: set[str],
     ):
         self._tool_catalog = tool_catalog
         self._selection_store = selection_store
+        self._config_service = config_service
         self._test_supported_tools = set(test_supported_tools)
 
     async def list(self, agent_id: str = "default") -> list[ToolDTO]:
         tools = self._tool_catalog.get_available_tools(agent_id)
-        disabled = self._selection_store.disabled_tools(agent_id)
+        resolver = self._config_service.get_tool_policy_resolver(agent_id)
+        execution_overrides = self._selection_store.execution_overrides(agent_id)
+        visibility_overrides = self._selection_store.model_visibility_overrides(
+            agent_id
+        )
         return [
-            self._build_tool_dto(tool, agent_id=agent_id, disabled=disabled)
+            self._build_tool_dto(
+                tool,
+                resolver=resolver,
+                execution_overrides=execution_overrides,
+                visibility_overrides=visibility_overrides,
+            )
             for tool in tools
         ]
 
@@ -47,29 +64,35 @@ class ToolService:
         self,
         tool: dict,
         *,
-        agent_id: str,
-        disabled: set[str],
+        resolver: ToolPolicyResolver,
+        execution_overrides: dict[str, bool],
+        visibility_overrides: dict[str, bool],
     ) -> ToolDTO:
         tool_id = tool["id"]
         kind = tool.get("kind", DEFAULT_TOOL_GROUP.kind)
+        group_id = tool.get("group_id", DEFAULT_TOOL_GROUP.group_id)
+        policy = resolver.resolve(
+            ToolMetadata(
+                tool_id=tool_id,
+                origin=tool.get("origin", "builtin"),
+                kind=kind,
+                group_id=group_id,
+            ),
+            execution_override=execution_overrides.get(tool_id),
+            model_visibility_override=visibility_overrides.get(tool_id),
+        )
         return ToolDTO(
             tool_id=tool_id,
             name=tool["name"],
+            origin=tool.get("origin", "builtin"),
             description=tool["description"],
             parameters=tool["parameters"],
             category=tool.get("category", "general"),
-            group_id=tool.get("group_id", DEFAULT_TOOL_GROUP.group_id),
+            group_id=group_id,
             group_name=tool.get("group_name", DEFAULT_TOOL_GROUP.group_name),
             kind=kind,
-            execution_enabled=tool_id not in disabled,
-            model_visible=(
-                tool_id not in disabled
-                and self._selection_store.model_visible(
-                    agent_id,
-                    tool_id=tool_id,
-                    kind=kind,
-                )
-            ),
+            execution_enabled=policy.execution_enabled,
+            model_visible=policy.model_visible,
             test_supported=tool_id in self._test_supported_tools,
         )
 
@@ -97,6 +120,28 @@ class ToolService:
             raise ToolSelectionError(
                 f"包含后端不支持的工具: {', '.join(sorted(unknown))}"
             )
+        resolver = self._config_service.get_tool_policy_resolver(request.agent_id)
+        execution_overrides = self._selection_store.execution_overrides(
+            request.agent_id
+        )
+        catalog_tools = {
+            tool["id"]: tool
+            for tool in self._tool_catalog.get_available_tools(request.agent_id)
+        }
+        for tool_id, (execution_enabled, model_visible) in changes.items():
+            tool = catalog_tools[tool_id]
+            metadata = ToolMetadata(
+                tool_id=tool_id,
+                origin=tool.get("origin", "builtin"),
+                kind=tool.get("kind", DEFAULT_TOOL_GROUP.kind),
+                group_id=tool.get("group_id", DEFAULT_TOOL_GROUP.group_id),
+            )
+            static_policy = resolver.resolve(metadata)
+            if static_policy.execution_locked:
+                raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止执行")
+            if model_visible and static_policy.model_visibility_locked:
+                raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止对模型可见")
+            execution_overrides[tool_id] = execution_enabled
         candidate_enabled = {
             tool.tool_id for tool in tools if tool.execution_enabled
         }

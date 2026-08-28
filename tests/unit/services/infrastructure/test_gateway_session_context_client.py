@@ -7,7 +7,7 @@ from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
-from app.schemas.public_v2.session_context import (
+from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
 )
 

@@ -7,8 +7,8 @@ from app.abstractions.session_message import (
 )
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
-from app.schemas.public_v2.message import MessageRunAccepted
-from app.schemas.public_v2.pending_request import DeliveryPolicy
+from app.schemas.internal_v2.message import MessageRunAccepted
+from app.schemas.internal_v2.pending_request import DeliveryPolicy
 
 
 class SessionMessageDeliveryService(SessionMessageDeliveryProtocol):

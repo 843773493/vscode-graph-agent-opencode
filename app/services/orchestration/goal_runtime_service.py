@@ -11,7 +11,7 @@ from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.job_event_bus import EventType
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import Event
-from app.schemas.public_v2.goal import GoalStatus, SessionGoalDTO
+from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.services.business.session_goal_service import SessionGoalService
 
 logger = logging.getLogger(__name__)

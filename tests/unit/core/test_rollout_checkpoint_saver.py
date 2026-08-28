@@ -17,7 +17,7 @@ from app.core.rollout_append_writer import RolloutAppendWriter
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.rollout_context_reader import RolloutContextReader
 from app.core.rollout_storage import RolloutStorage
-from app.schemas.public_v2.turn import TurnHistoryLoadRequest
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
 

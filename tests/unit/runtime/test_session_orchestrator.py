@@ -8,8 +8,8 @@ import pytest
 from app.core.job_event_bus import JobEventBus
 from app.prompting import PromptSection, internal_message_factory
 from app.runtime.session_orchestrator import SessionOrchestrator
-from app.schemas.public_v2.common import MessageRole
-from app.schemas.public_v2.job import JobDispatchSnapshotDTO
+from app.schemas.internal_v2.common import MessageRole
+from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 
 
 def _running_dispatch(session_id: str, job_id: str) -> JobDispatchSnapshotDTO:
@@ -54,7 +54,7 @@ class _FakeMessageService:
         self.created_messages = []
 
     async def create(self, session_id: str, message_create):
-        from app.schemas.public_v2.message import MessageDTO
+        from app.schemas.internal_v2.message import MessageDTO
 
         self.created_messages.append(message_create)
 
@@ -329,7 +329,7 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
         job_event_bus=JobEventBus(),
     )
 
-    from app.schemas.public_v2.message import (
+    from app.schemas.internal_v2.message import (
         MessageCreateRequest,
         MessageRunRequest,
         RunOptions,

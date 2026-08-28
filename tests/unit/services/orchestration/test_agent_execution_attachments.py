@@ -8,7 +8,7 @@ import pytest
 from app.agents.provider_capabilities import (
     detect_required_capabilities,
 )
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_content_service import build_human_content
 
 

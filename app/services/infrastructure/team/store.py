@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from app.core.exceptions import NotFoundError
-from app.schemas.public_v2.team import TeamBoardDTO, TeamEventDTO
+from app.schemas.internal_v2.team import TeamBoardDTO, TeamEventDTO
 
 
 TEAM_ID_PATTERN = re.compile(r"^team_[0-9a-f]{32}$")

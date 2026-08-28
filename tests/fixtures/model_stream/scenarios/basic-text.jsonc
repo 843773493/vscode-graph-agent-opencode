@@ -1,0 +1,5 @@
+{
+  "scenario_id": "basic-text",
+  "asset": "handwritten/openai_chat/basic-text.json",
+  "business_assertion": "basic-text-visible-output"
+}

@@ -1,4 +1,5 @@
 import { installTerminalUserActions } from "./terminalUserActions.js";
+import { encodeTerminalClientMessage } from "../protocol/messages.js";
 
 const params = new URLSearchParams(window.location.search);
 const terminalId = params.get("terminalId");
@@ -235,7 +236,7 @@ function send(message) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     throw new Error("WebSocket 尚未连接");
   }
-  socket.send(JSON.stringify(message));
+  socket.send(encodeTerminalClientMessage(message));
 }
 
 function resizeRemote() {

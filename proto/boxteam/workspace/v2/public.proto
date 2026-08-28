@@ -1,0 +1,1676 @@
+syntax = "proto3";
+
+package boxteam.workspace.v2;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "boxteam/workspace/v2/message.proto";
+
+// 这是公开业务 DTO 的 Protobuf 初始版本；后续以本文件为协议源维护。
+// Python Pydantic 模型保留为后端内部校验和业务组装模型，不再生成 TypeScript。
+
+message APIResponse {
+  optional int64 code = 1;
+  optional string message = 2;
+  optional google.protobuf.Struct data = 3;
+  string request_id = 4;
+}
+
+message AgentDTO {
+  string agent_id = 1;
+  string name = 2;
+  optional string description = 3;
+  string model = 4;
+  repeated string tools = 5;
+  repeated string capabilities = 6;
+  repeated AgentProviderDTO providers = 7;
+  optional bool workspace_default = 8;
+}
+
+message AgentProviderDTO {
+  string provider_id = 1;
+  string model = 2;
+  string custom_llm_provider = 3;
+  optional bool workspace_default = 4;
+}
+
+message AgentStateMessagesDTO {
+  string session_id = 1;
+  int64 message_count = 2;
+  string jsonl = 3;
+}
+
+message ArtifactDTO {
+  string artifact_id = 1;
+  string job_id = 2;
+  string type = 3;
+  string name = 4;
+  string path = 5;
+  optional google.protobuf.Struct metadata = 6;
+}
+
+message ConfigDTO {
+  string default_model = 1;
+  string default_orchestration = 2;
+  optional int64 max_concurrent_agents = 3;
+  optional bool allow_shell_tools = 4;
+  repeated string ignored_paths = 5;
+  optional bool auto_summarize = 6;
+  optional google.protobuf.Struct metadata = 7;
+}
+
+message ConfigReloadStatusDTO {
+  bool healthy = 1;
+  string revision = 2;
+  optional bool restart_required = 3;
+  optional string reason = 4;
+  repeated string changed_sections = 5;
+  string last_success_at = 6;
+  string last_attempt_at = 7;
+  optional string last_error = 8;
+}
+
+message ConfigSourceDTO {
+  string path = 1;
+  string layer = 2;
+  int64 precedence = 3;
+  bool loaded = 4;
+}
+
+message ConfigSourcesDTO {
+  string revision = 1;
+  string schema_path = 2;
+  repeated ConfigSourceDTO sources = 3;
+  repeated string runtime_overrides = 4;
+}
+
+message ConfigUpdateRequest {
+  optional string default_model = 1;
+  optional string default_orchestration = 2;
+  optional int64 max_concurrent_agents = 3;
+  optional bool allow_shell_tools = 4;
+  repeated string ignored_paths = 5;
+  optional bool auto_summarize = 6;
+}
+
+message CursorPage {
+  repeated google.protobuf.Struct items = 1;
+  optional string next_cursor = 2;
+  optional bool has_more = 3;
+}
+
+message DeleteSessionResultDTO {
+  string session_id = 1;
+  string status = 2;
+  optional int64 cleaned_execution_runs = 3;
+  optional int64 cleaned_background_tasks = 4;
+  optional int64 cleaned_terminals = 5;
+}
+
+message EntityRef {
+  string id = 1;
+  optional string name = 2;
+}
+
+message FileTreeShortcutDTO {
+  string path = 1;
+  string label = 2;
+  string source = 3;
+}
+
+message FileTreeShortcutRequest {
+  string path = 1;
+  optional string label = 2;
+}
+
+message GoalJobAccountingDTO {
+  optional int64 tokens = 1;
+  optional int64 elapsed_seconds = 2;
+  optional bool time_closed = 3;
+}
+
+message JobControlRequest {
+  optional string scope = 1;
+  string action = 2;
+  optional string agent_id = 3;
+  optional string step_id = 4;
+  optional string message = 5;
+  optional google.protobuf.Struct params = 6;
+}
+
+message JobControlResponseDTO {
+  string job_id = 1;
+  string status = 2;
+  string control_state = 3;
+}
+
+message JobDTO {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+  string job_id = 3;
+  string message_id = 4;
+  string session_id = 5;
+  string mode = 6;
+  string status = 7;
+  string entry_agent = 8;
+  optional int64 progress = 9;
+  optional string current_step = 10;
+  optional string error_message = 11;
+  optional google.protobuf.Struct metadata = 12;
+  optional google.protobuf.Timestamp ended_at = 13;
+}
+
+message JobDispatchSnapshotDTO {
+  string session_id = 1;
+  string job_id = 2;
+  string job_status = 3;
+  optional string active_job_id = 4;
+  optional string blocked_by_job_id = 5;
+  int64 queued_jobs_ahead = 6;
+  int64 queued_job_count = 7;
+  int64 pending_job_count = 8;
+  optional string delivery_policy = 9;
+  optional int64 enqueue_sequence = 10;
+  optional int64 queue_snapshot_version = 11;
+}
+
+message JobProgressDTO {
+  string job_id = 1;
+  string status = 2;
+  optional string current_step_id = 3;
+  optional int64 progress = 4;
+  optional string message = 5;
+}
+
+message JobStatusChangedExecutionEventDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+  string type = 5;
+  JobProgressDTO payload = 6;
+}
+
+message JobStepProgressDTO {
+  optional string agent_id = 1;
+  optional string message = 2;
+  optional string phase = 3;
+}
+
+message JobStepUpdatedExecutionEventDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+  string type = 5;
+  JobStepProgressDTO payload = 6;
+}
+
+message JobUpdatedExecutionEventDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+  string type = 5;
+  JobProgressDTO payload = 6;
+}
+
+message LLMRequestLogRecordDTO {
+  string session_id = 1;
+  optional string job_id = 2;
+  int64 timestamp = 3;
+  string file_name = 4;
+  string file_path = 5;
+  optional google.protobuf.Struct request = 6;
+  optional google.protobuf.Struct response = 7;
+  optional google.protobuf.Struct upstream = 8;
+}
+
+message LogSnapshotResultDTO {
+  string html_path = 1;
+  string meta_path = 2;
+}
+
+message McpServerDTO {
+  string server_id = 1;
+  string transport = 2;
+  bool enabled = 3;
+  string status = 4;
+  repeated McpToolDTO tools = 5;
+}
+
+message McpToolDTO {
+  string tool_id = 1;
+  string server_id = 2;
+  string remote_name = 3;
+  string description = 4;
+}
+
+message MessageCreateRequest {
+  optional string role = 1;
+  string content = 2;
+  repeated AttachmentRef attachments = 3;
+  optional google.protobuf.Struct metadata = 4;
+}
+
+message MessageDTO {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+  string message_id = 3;
+  string session_id = 4;
+  string role = 5;
+  string content = 6;
+  repeated AttachmentRef attachments = 7;
+  optional google.protobuf.Struct metadata = 8;
+}
+
+message MessageObservationDTO {
+  string message_id = 1;
+  string session_id = 2;
+  string role = 3;
+  string content = 4;
+  repeated google.protobuf.Struct attachments = 5;
+  optional google.protobuf.Struct metadata = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message MessageReplayAccepted {
+  string message_id = 1;
+  string job_id = 2;
+  string status = 3;
+  JobDispatchSnapshotDTO dispatch = 4;
+  string session_id = 5;
+  string action = 6;
+  string replaced_message_id = 7;
+  int64 removed_message_count = 8;
+  optional bool workspace_changes_reverted = 9;
+  string notice = 10;
+}
+
+message MessageReplayRequest {
+  string action = 1;
+  optional string content = 2;
+  optional bool acknowledge_context_only = 3;
+}
+
+message MessageRunAccepted {
+  string message_id = 1;
+  string job_id = 2;
+  string status = 3;
+  JobDispatchSnapshotDTO dispatch = 4;
+}
+
+message MessageRunRequest {
+  MessageCreateRequest message = 1;
+  RunOptions run = 2;
+}
+
+message MessageUpdatedExecutionEventDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+  string type = 5;
+  MessageObservationDTO payload = 6;
+}
+
+message NodeDebugActionRecordDTO {
+  string action_id = 1;
+  string session_id = 2;
+  string action = 3;
+  string message = 4;
+  optional string actor = 5;
+  optional string tool_name = 6;
+  optional string tool_call_id = 7;
+  optional string result = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message NodeDebugActionRequest {
+  string session_id = 1;
+  string action = 2;
+  optional google.protobuf.Struct params = 3;
+}
+
+message NodeDebugBreakpointDTO {
+  string breakpoint_id = 1;
+  string path = 2;
+  int64 line = 3;
+  optional int64 column = 4;
+  optional string condition = 5;
+  optional int64 hit_condition = 6;
+  optional string log_message = 7;
+  optional bool verified = 8;
+  optional int64 actual_line = 9;
+  optional string inspector_id = 10;
+  optional int64 original_line = 11;
+  optional string source_line = 12;
+  optional string previous_line = 13;
+  optional string next_line = 14;
+  optional string source_digest = 15;
+  optional string relocation_status = 16;
+  optional string relocation_message = 17;
+  google.protobuf.Timestamp created_at = 18;
+}
+
+message NodeDebugBreakpointRequest {
+  string path = 1;
+  int64 line = 2;
+  optional int64 column = 3;
+  optional string condition = 4;
+  optional int64 hit_condition = 5;
+  optional string log_message = 6;
+}
+
+message NodeDebugCapabilitiesDTO {
+  bool enabled = 1;
+  string default_adapter = 2;
+  repeated string supported_adapters = 3;
+  repeated NodeDebugLaunchProfileDTO launch_profiles = 4;
+}
+
+message NodeDebugConfigurationActivateRequest {
+  string session_id = 1;
+}
+
+message NodeDebugConfigurationBreakpointDTO {
+  string breakpoint_id = 1;
+  string path = 2;
+  int64 line = 3;
+  optional int64 column = 4;
+  optional string condition = 5;
+  optional int64 hit_condition = 6;
+  optional string log_message = 7;
+  optional int64 original_line = 8;
+  optional string source_line = 9;
+  optional string previous_line = 10;
+  optional string next_line = 11;
+  optional string source_digest = 12;
+  optional string relocation_status = 13;
+  optional string relocation_message = 14;
+  google.protobuf.Timestamp created_at = 15;
+}
+
+message NodeDebugConfigurationCopyRequest {
+  string source_session_id = 1;
+  string target_session_id = 2;
+  optional string name = 3;
+  optional bool activate = 4;
+}
+
+message NodeDebugConfigurationCreateRequest {
+  string session_id = 1;
+  string name = 2;
+  optional string script_path = 3;
+  optional string working_directory = 4;
+  optional string launch_profile_name = 5;
+  repeated string args = 6;
+  repeated NodeDebugBreakpointRequest breakpoints = 7;
+  optional bool activate = 8;
+}
+
+message NodeDebugConfigurationDTO {
+  optional int64 schema_version = 1;
+  string configuration_id = 2;
+  string name = 3;
+  optional int64 revision = 4;
+  optional string script_path = 5;
+  optional string working_directory = 6;
+  optional string launch_profile_name = 7;
+  repeated string args = 8;
+  repeated NodeDebugConfigurationBreakpointDTO breakpoints = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message NodeDebugConfigurationImportRequest {
+  string session_id = 1;
+  NodeDebugConfigurationDTO configuration = 2;
+  optional bool activate = 3;
+}
+
+message NodeDebugConfigurationSummaryDTO {
+  string configuration_id = 1;
+  string name = 2;
+  optional string script_path = 3;
+  optional string launch_profile_name = 4;
+  optional int64 breakpoint_count = 5;
+  optional int64 revision = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message NodeDebugConfigurationUpdateRequest {
+  string session_id = 1;
+  string name = 2;
+  optional string script_path = 3;
+  optional string working_directory = 4;
+  optional string launch_profile_name = 5;
+  repeated string args = 6;
+  repeated NodeDebugBreakpointRequest breakpoints = 7;
+}
+
+message NodeDebugEvaluationDTO {
+  string expression = 1;
+  optional string value = 2;
+  optional string type = 3;
+  optional string description = 4;
+  optional string error = 5;
+  google.protobuf.Timestamp evaluated_at = 6;
+}
+
+message NodeDebugLaunchProfileDTO {
+  string name = 1;
+  string adapter = 2;
+  string runtime = 3;
+  bool supported = 4;
+  optional string program = 5;
+  optional string working_directory = 6;
+  repeated string args = 7;
+}
+
+message NodeDebugSessionManifestDTO {
+  optional int64 schema_version = 1;
+  string session_id = 2;
+  optional string active_configuration_id = 3;
+  repeated NodeDebugActionRecordDTO actions = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message NodeDebugStackFrameDTO {
+  string call_frame_id = 1;
+  string function_name = 2;
+  string url = 3;
+  optional string path = 4;
+  int64 line = 5;
+  int64 column = 6;
+  repeated string scope_names = 7;
+  repeated NodeDebugVariableDTO variables = 8;
+}
+
+message NodeDebugStartRequest {
+  string session_id = 1;
+  optional string configuration_id = 2;
+  string path = 3;
+  optional string working_directory = 4;
+  optional string launch_profile_name = 5;
+  repeated string args = 6;
+  repeated NodeDebugBreakpointRequest breakpoints = 7;
+}
+
+message NodeDebugStateDTO {
+  string session_id = 1;
+  string status = 2;
+  optional string active_configuration_id = 3;
+  optional string active_configuration_name = 4;
+  repeated NodeDebugConfigurationSummaryDTO configurations = 5;
+  optional string script_path = 6;
+  optional string working_directory = 7;
+  optional string launch_profile_name = 8;
+  repeated string args = 9;
+  optional int64 pid = 10;
+  optional string paused_reason = 11;
+  optional string error_message = 12;
+  repeated NodeDebugStackFrameDTO call_stack = 13;
+  optional NodeDebugStackFrameDTO last_stopped_frame = 14;
+  repeated NodeDebugBreakpointDTO breakpoints = 15;
+  repeated string output = 16;
+  optional NodeDebugEvaluationDTO last_evaluation = 17;
+  repeated NodeDebugEvaluationDTO evaluations = 18;
+  repeated NodeDebugActionRecordDTO actions = 19;
+  optional int64 configuration_revision = 20;
+  optional bool requires_restart = 21;
+  repeated string source_changed_paths = 22;
+}
+
+message NodeDebugVariableDTO {
+  string name = 1;
+  string value = 2;
+  optional string type = 3;
+  optional string object_id = 4;
+  optional string scope = 5;
+}
+
+message PendingRequestDTO {
+  string job_id = 1;
+  string message_id = 2;
+  string session_id = 3;
+  string content = 4;
+  repeated AttachmentRef attachments = 5;
+  string delivery_policy = 6;
+  int64 enqueue_sequence = 7;
+  int64 position = 8;
+  optional string status = 9;
+  optional string waiting_reason = 10;
+  optional string last_boundary = 11;
+  string agent_id = 12;
+  string message_created_at = 13;
+  optional google.protobuf.Struct message_metadata = 14;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp updated_at = 16;
+  int64 snapshot_version = 17;
+}
+
+message PendingRequestListDTO {
+  string session_id = 1;
+  optional string active_job_id = 2;
+  repeated PendingRequestDTO requests = 3;
+  optional int64 snapshot_version = 4;
+}
+
+message PendingRequestPolicyUpdateRequest {
+  string delivery_policy = 1;
+  optional int64 expected_snapshot_version = 2;
+}
+
+message PendingRequestSummaryDTO {
+  string job_id = 1;
+  string message_id = 2;
+  int64 enqueue_sequence = 3;
+  string delivery_policy = 4;
+  string status = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message PendingRequestSummaryListDTO {
+  string session_id = 1;
+  optional string active_job_id = 2;
+  repeated PendingRequestSummaryDTO requests = 3;
+  int64 request_count = 4;
+  optional int64 snapshot_version = 5;
+  optional bool truncated = 6;
+}
+
+message PendingRequestUpdateRequest {
+  string content = 1;
+  repeated AttachmentRef attachments = 2;
+}
+
+message PermissionRequestDTO {
+  string id = 1;
+  string session_id = 2;
+  string permission = 3;
+  repeated string patterns = 4;
+  optional google.protobuf.Struct metadata = 5;
+  repeated string always = 6;
+  optional google.protobuf.Struct tool = 7;
+}
+
+message QuestionInfoDTO {
+  string question = 1;
+  string header = 2;
+  repeated QuestionOptionDTO options = 3;
+  optional bool multiple = 4;
+  optional string question_key = 5;
+  optional string header_key = 6;
+  optional bool custom = 7;
+}
+
+message QuestionOptionDTO {
+  string label = 1;
+  string description = 2;
+  optional string label_key = 3;
+  optional string description_key = 4;
+  optional string mode = 5;
+}
+
+message QuestionRequestDTO {
+  string id = 1;
+  string session_id = 2;
+  repeated QuestionInfoDTO questions = 3;
+  optional bool blocking = 4;
+  optional google.protobuf.Struct tool = 5;
+}
+
+message RunOptions {
+  optional string mode = 1;
+  optional string agent_id = 2;
+  optional string response_mode = 3;
+  optional bool async = 4;
+  optional int64 max_steps = 5;
+  optional int64 timeout_seconds = 6;
+  optional google.protobuf.Struct context = 7;
+  optional string delivery_policy = 8;
+}
+
+message RuntimeDrainBlockerDTO {
+  string kind = 1;
+  string resource_id = 2;
+  string session_id = 3;
+  string status = 4;
+  optional string detail = 5;
+}
+
+message RuntimeDrainResultDTO {
+  string lifecycle_state = 1;
+  bool accepting_jobs = 2;
+  repeated RuntimeDrainBlockerDTO blockers = 3;
+  optional int64 interrupted_resources = 4;
+}
+
+message RuntimeInfoDTO {
+  int64 pid = 1;
+  int64 uptime_seconds = 2;
+  string workspace_id = 3;
+  int64 active_jobs = 4;
+  string lifecycle_state = 5;
+  bool accepting_jobs = 6;
+  repeated RuntimeDrainBlockerDTO blockers = 7;
+  repeated string loaded_agents = 8;
+  RuntimeStorageDTO storage = 9;
+}
+
+message RuntimeShutdownDTO {
+  string status = 1;
+  int64 delay_seconds = 2;
+}
+
+message RuntimeShutdownResultDTO {
+  string status = 1;
+  int64 delay_seconds = 2;
+}
+
+message RuntimeStatusDTO {
+  int64 pid = 1;
+  int64 uptime_seconds = 2;
+  string workspace_id = 3;
+  int64 active_jobs = 4;
+  string lifecycle_state = 5;
+  bool accepting_jobs = 6;
+  repeated RuntimeDrainBlockerDTO blockers = 7;
+  repeated string loaded_agents = 8;
+  RuntimeStorageDTO storage = 9;
+}
+
+message RuntimeStorageDTO {
+  string root = 1;
+  string artifact_dir = 2;
+  string log_dir = 3;
+  string cache_dir = 4;
+}
+
+message SessionChangesSummaryDTO {
+  optional int64 files = 1;
+  optional int64 additions = 2;
+  optional int64 deletions = 3;
+}
+
+message SessionChangesetDTO {
+  string session_id = 1;
+  string changeset_id = 2;
+  string label = 3;
+  optional string description = 4;
+  string change_kind = 5;
+  optional string turn_id = 6;
+  optional string status = 7;
+  optional SessionChangesSummaryDTO summary = 8;
+  repeated SessionFileChangeDTO files = 9;
+  google.protobuf.Timestamp generated_at = 10;
+}
+
+message SessionChangesetListDTO {
+  string session_id = 1;
+  repeated SessionChangesetListItemDTO items = 2;
+}
+
+message SessionChangesetListItemDTO {
+  string changeset_id = 1;
+  string label = 2;
+  optional string description = 3;
+  string change_kind = 4;
+  optional bool is_default = 5;
+  optional string turn_id = 6;
+  optional SessionChangesSummaryDTO summary = 7;
+}
+
+message SessionCompactResultDTO {
+  string session_id = 1;
+  string status = 2;
+  string message = 3;
+  int64 before_message_count = 4;
+  int64 effective_message_count_before = 5;
+  int64 effective_message_count_after = 6;
+  int64 summarized_message_count = 7;
+  int64 retained_message_count = 8;
+  optional string summary = 9;
+  optional string history_file_path = 10;
+  optional string strategy = 11;
+  optional google.protobuf.Timestamp compacted_at = 12;
+}
+
+message SessionCompletedExecutionEventDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+  string type = 5;
+  JobProgressDTO payload = 6;
+}
+
+message SessionContextItemDTO {
+  string kind = 1;
+  string locator = 2;
+  optional string role = 3;
+  optional int64 record_index = 4;
+  optional string text = 5;
+  optional string reasoning = 6;
+  repeated string tool_summary = 7;
+  repeated google.protobuf.Struct tool_calls = 8;
+  repeated google.protobuf.Struct tool_results = 9;
+  optional google.protobuf.Struct data = 10;
+  optional google.protobuf.Struct raw_record = 11;
+  optional bool truncated = 12;
+}
+
+message SessionContextPartialErrorDTO {
+  string resource = 1;
+  string error = 2;
+}
+
+message SessionContextReadRequest {
+  string resource = 1;
+  optional string view = 2;
+  repeated string include = 3;
+  optional int64 recent_rounds = 4;
+  optional bool include_initial_goal = 5;
+  optional string cursor = 6;
+  optional int64 limit = 7;
+  optional int64 max_chars = 8;
+  optional string expected_revision = 9;
+}
+
+message SessionContextReadResultDTO {
+  string resource = 1;
+  string view = 2;
+  string revision = 3;
+  optional bool compacted = 4;
+  optional int64 compaction_cutoff = 5;
+  optional int64 raw_message_count = 6;
+  optional int64 effective_record_count = 7;
+  optional int64 returned_chars = 8;
+  optional bool truncated = 9;
+  optional bool has_more = 10;
+  optional string next_cursor = 11;
+  repeated SessionContextItemDTO items = 12;
+  repeated SessionContextPartialErrorDTO partial_errors = 13;
+  optional int64 omitted_partial_error_count = 14;
+}
+
+message SessionContextSearchMatchDTO {
+  string locator = 1;
+  string preview = 2;
+  string source = 3;
+  string revision = 4;
+  optional int64 record_index = 5;
+  int64 match_start = 6;
+  int64 match_end = 7;
+}
+
+message SessionContextSearchRequest {
+  string resource = 1;
+  string query = 2;
+  repeated string sources = 3;
+  optional string match_mode = 4;
+  optional bool case_sensitive = 5;
+  optional int64 max_results = 6;
+  optional int64 max_chars = 7;
+  optional string cursor = 8;
+  optional string expected_revision = 9;
+}
+
+message SessionContextSearchResultDTO {
+  string resource = 1;
+  string query = 2;
+  string match_mode = 3;
+  string revision = 4;
+  optional int64 returned_chars = 5;
+  optional bool truncated = 6;
+  optional bool has_more = 7;
+  optional string next_cursor = 8;
+  optional int64 total_matches = 9;
+  repeated SessionContextSearchMatchDTO matches = 10;
+  repeated SessionContextPartialErrorDTO partial_errors = 11;
+  optional int64 omitted_partial_error_count = 12;
+}
+
+message SessionControlResultDTO {
+  string session_id = 1;
+  string action = 2;
+  string status = 3;
+}
+
+message SessionCreateRequest {
+  optional string title = 1;
+  optional string agent_id = 2;
+  optional string title_source = 3;
+  optional string folder_id = 4;
+}
+
+message SessionDTO {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+  string session_id = 3;
+  string workspace_id = 4;
+  string title = 5;
+  optional string title_source = 6;
+  string current_agent_id = 7;
+  optional string current_provider_id = 8;
+  optional string parent_session_id = 9;
+  optional string context_source_session_id = 10;
+  optional string kind = 11;
+  optional SessionDelegationDTO delegation = 12;
+  optional SessionGenerationOriginDTO generation_origin = 13;
+}
+
+message SessionDelegationDTO {
+  string parent_session_id = 1;
+  string parent_job_id = 2;
+  string parent_tool_call_id = 3;
+  string subagent_type = 4;
+  optional string start_status = 5;
+  optional string start_error = 6;
+}
+
+message SessionErrorExecutionEventDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+  string type = 5;
+  SessionErrorPayloadDTO payload = 6;
+}
+
+message SessionErrorPayloadDTO {
+  string error = 1;
+}
+
+message SessionExecutionEventBaseDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+}
+
+message SessionExecutionSnapshotDTO {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+  SessionDTO session = 3;
+  MessageDTO message = 4;
+  optional JobDTO job = 5;
+  repeated StepDTO steps = 6;
+  optional string status = 7;
+  optional string active_step_status = 8;
+  optional string last_event_id = 9;
+}
+
+message SessionExecutionSseDTO {
+  google.protobuf.Struct event = 1;
+  string raw_type = 2;
+  optional google.protobuf.Struct raw_payload = 3;
+}
+
+message SessionFileChangeDTO {
+  string file_path = 1;
+  string kind = 2;
+  optional int64 additions = 3;
+  optional int64 deletions = 4;
+  optional bool reviewed = 5;
+  string latest_edit_id = 6;
+  repeated string tool_call_ids = 7;
+  repeated string execution_ids = 8;
+  repeated string turn_ids = 9;
+  optional string before_file = 10;
+  optional string after_file = 11;
+  string diff_file = 12;
+  string diff_text = 13;
+  optional string before_preview = 14;
+  optional string after_preview = 15;
+}
+
+message SessionFileReviewRequest {
+  string file_path = 1;
+  bool reviewed = 2;
+}
+
+message SessionFileReviewResultDTO {
+  string session_id = 1;
+  string file_path = 2;
+  bool reviewed = 3;
+}
+
+message SessionFileTreeSettingsDTO {
+  string session_id = 1;
+  repeated FileTreeShortcutDTO session_shortcuts = 2;
+  repeated FileTreeShortcutDTO workspace_shortcuts = 3;
+  repeated FileTreeShortcutDTO default_shortcuts = 4;
+  repeated FileTreeShortcutDTO effective_shortcuts = 5;
+}
+
+message SessionForkRequest {
+  optional string mode = 1;
+  optional string turn_id = 2;
+  optional string anchor_mode = 3;
+  optional bool pinned = 4;
+}
+
+message SessionGenerationOriginDTO {
+  string generator_id = 1;
+  string run_id = 2;
+  string idempotency_key = 3;
+  string generator_type_id = 4;
+  string generator_type_version = 5;
+}
+
+message SessionGoalClearResultDTO {
+  string session_id = 1;
+  bool cleared = 2;
+}
+
+message SessionGoalDTO {
+  string goal_id = 1;
+  string session_id = 2;
+  string objective = 3;
+  string status = 4;
+  optional int64 token_budget = 5;
+  optional int64 tokens_used = 6;
+  optional int64 time_used_seconds = 7;
+  optional int64 revision = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  optional string last_accounted_job_id = 11;
+  optional string last_continued_job_id = 12;
+  optional google.protobuf.Struct accounted_jobs = 13;
+}
+
+message SessionGoalSetRequest {
+  optional string objective = 1;
+  optional string status = 2;
+  optional int64 token_budget = 3;
+  optional bool replace = 4;
+}
+
+message SessionInformationErrorDTO {
+  string event_id = 1;
+  string job_id = 2;
+  string type = 3;
+  string message = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message SessionInformationExecutionDTO {
+  optional string job_id = 1;
+  optional string status = 2;
+  optional string current_tool = 3;
+  optional string last_error = 4;
+}
+
+message SessionInformationResourceDTO {
+  string resource_id = 1;
+  string kind = 2;
+  string name = 3;
+  string status = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message SessionInformationSnapshotDTO {
+  optional string kind = 1;
+  optional int64 schema_version = 2;
+  google.protobuf.Timestamp generated_at = 3;
+  SessionDTO session = 4;
+  repeated string child_session_ids = 5;
+  SessionInformationWorkspaceDTO workspace = 6;
+  string storage_path = 7;
+  SessionInformationExecutionDTO execution = 8;
+  SessionInformationTraceDTO trace = 9;
+  repeated SessionInformationResourceDTO resources = 10;
+  repeated SessionInformationErrorDTO recent_errors = 11;
+}
+
+message SessionInformationTraceDTO {
+  optional int64 event_count = 1;
+  optional string last_event_id = 2;
+  optional string last_event_type = 3;
+  optional google.protobuf.Timestamp last_event_at = 4;
+}
+
+message SessionInformationWorkspaceDTO {
+  string workspace_id = 1;
+  string name = 2;
+  string root_path = 3;
+}
+
+message SessionInterruptResultDTO {
+  string session_id = 1;
+  string job_id = 2;
+  string status = 3;
+  string phase = 4;
+  optional string tool_name = 5;
+  optional google.protobuf.Timestamp interrupted_at = 6;
+  string interrupt_request_id = 7;
+}
+
+message SessionListResultDTO {
+  repeated SessionDTO items = 1;
+  int64 total = 2;
+  optional string cursor = 3;
+}
+
+message SessionMessageDispatchRequest {
+  string content = 1;
+  optional google.protobuf.Struct metadata = 2;
+  optional bool simulate_user = 3;
+  optional string delivery_policy = 4;
+  optional string idempotency_key = 5;
+}
+
+message SessionNetworkWaitDTO {
+  string id = 1;
+  string session_id = 2;
+  string message = 3;
+  bool restored = 4;
+  google.protobuf.Timestamp created_at = 5;
+  optional google.protobuf.Timestamp restored_at = 6;
+}
+
+message SessionObservationStateDTO {
+  string session_id = 1;
+  optional string active_job_id = 2;
+  optional bool is_streaming = 3;
+  optional bool is_idle = 4;
+}
+
+message SessionResourceControlRequest {
+  string action = 1;
+  optional google.protobuf.Struct params = 2;
+}
+
+message SessionResourceControlResultDTO {
+  string session_id = 1;
+  string resource_id = 2;
+  string kind = 3;
+  string action = 4;
+  string status = 5;
+  optional SessionResourceDTO resource = 6;
+}
+
+message SessionResourceDTO {
+  string resource_id = 1;
+  string session_id = 2;
+  string kind = 3;
+  string name = 4;
+  string status = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  optional google.protobuf.Timestamp started_at = 8;
+  optional google.protobuf.Timestamp ended_at = 9;
+  repeated string available_actions = 10;
+  optional google.protobuf.Struct metadata = 11;
+}
+
+message SessionResourceListDTO {
+  string session_id = 1;
+  repeated SessionResourceDTO items = 2;
+}
+
+message SessionStatusChangedExecutionEventDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+  string type = 5;
+  google.protobuf.Struct payload = 6;
+}
+
+message SessionStatusDTO {
+  string session_id = 1;
+  string status = 2;
+  optional string message = 3;
+  optional string active_job_id = 4;
+  optional SessionNetworkWaitDTO waiting = 5;
+}
+
+message SessionTurnBootstrapDTO {
+  SessionDTO session = 1;
+  optional TurnSummaryDTO latest_turn = 2;
+  optional string active_job_id = 3;
+  repeated TurnJobSummaryDTO active_jobs = 4;
+  optional int64 active_job_count = 5;
+  optional bool active_jobs_truncated = 6;
+  optional string projection_state = 7;
+  optional string older_cursor = 8;
+  optional string event_cursor = 9;
+  int64 projection_epoch = 10;
+}
+
+message SessionUpdateRequest {
+  optional string title = 1;
+  optional string agent_id = 2;
+  optional string provider_id = 3;
+  optional string title_source = 4;
+}
+
+message StaleTurnCursorErrorDTO {
+  optional string code = 1;
+  string session_id = 2;
+  int64 cursor_epoch = 3;
+  int64 current_epoch = 4;
+  string message = 5;
+}
+
+message StaleTurnReferenceErrorDTO {
+  optional string code = 1;
+  string session_id = 2;
+  repeated string turn_ids = 3;
+  string message = 4;
+}
+
+message StepDTO {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+  string step_id = 3;
+  string job_id = 4;
+  optional string parent_step_id = 5;
+  optional string agent_id = 6;
+  string step_type = 7;
+  string status = 8;
+  optional google.protobuf.Struct input_payload = 9;
+  optional google.protobuf.Struct output_payload = 10;
+  optional google.protobuf.Timestamp started_at = 11;
+  optional google.protobuf.Timestamp ended_at = 12;
+}
+
+message TeamBoardDTO {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+  string team_id = 3;
+  string name = 4;
+  string coordinator_session_id = 5;
+  int64 version = 6;
+  repeated TeamMemberDTO members = 7;
+  repeated TeamTaskDTO tasks = 8;
+  repeated TeamEventDTO recent_events = 9;
+}
+
+message TeamEventDTO {
+  string event_id = 1;
+  string team_id = 2;
+  string type = 3;
+  string actor_session_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  optional google.protobuf.Struct payload = 6;
+}
+
+message TeamListDTO {
+  repeated TeamBoardDTO items = 1;
+}
+
+message TeamMemberDTO {
+  string session_id = 1;
+  string role = 2;
+  string source = 3;
+  string work_mode = 4;
+  optional string instructions = 5;
+  optional string status = 6;
+  optional string activation_job_id = 7;
+  optional string activation_error = 8;
+  google.protobuf.Timestamp joined_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message TeamMemberOperationDTO {
+  TeamBoardDTO board = 1;
+  TeamMemberDTO member = 2;
+  optional string child_session_id = 3;
+  optional string child_message_id = 4;
+  optional string child_job_id = 5;
+}
+
+message TeamTaskDTO {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+  string task_id = 3;
+  string title = 4;
+  string description = 5;
+  string phase = 6;
+  int64 cycle = 7;
+  string assignee_session_id = 8;
+  string status = 9;
+  repeated string depends_on_task_ids = 10;
+  optional string assigned_job_id = 11;
+  optional string summary = 12;
+  optional string error = 13;
+  string updated_by_session_id = 14;
+}
+
+message TeamTaskOperationDTO {
+  TeamBoardDTO board = 1;
+  TeamTaskDTO task = 2;
+  optional string dispatched_job_id = 3;
+}
+
+message TimestampedDTO {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+}
+
+message ToolDTO {
+  string tool_id = 1;
+  string name = 2;
+  optional string origin = 3;
+  optional string description = 4;
+  optional google.protobuf.Struct parameters = 5;
+  optional string category = 6;
+  optional string group_id = 7;
+  optional string group_name = 8;
+  optional string kind = 9;
+  bool execution_enabled = 10;
+  bool model_visible = 11;
+  optional bool test_supported = 12;
+}
+
+message ToolSelectionChange {
+  string tool_id = 1;
+  bool execution_enabled = 2;
+  bool model_visible = 3;
+}
+
+message ToolSelectionPatchRequest {
+  optional string agent_id = 1;
+  repeated ToolSelectionChange changes = 2;
+}
+
+message ToolTestAttemptDTO {
+  string attempt_id = 1;
+  string case_id = 2;
+  string provider_id = 3;
+  string model = 4;
+  string status = 5;
+  bool passed = 6;
+  bool tool_called = 7;
+  bool execution_succeeded = 8;
+  int64 duration_ms = 9;
+  string detail = 10;
+  optional int64 model_calls = 11;
+  optional int64 reasoning_only_calls = 12;
+  optional int64 transient_retries = 13;
+  optional string error = 14;
+}
+
+message ToolTestProviderResultDTO {
+  string provider_id = 1;
+  string model = 2;
+  string status = 3;
+  optional int64 completed = 4;
+  optional int64 total = 5;
+  optional int64 passed = 6;
+  optional int64 failed = 7;
+  optional int64 model_calls = 8;
+  optional int64 reasoning_only_calls = 9;
+  optional int64 transient_retries = 10;
+  optional double success_rate = 11;
+}
+
+message ToolTestRunDTO {
+  string run_id = 1;
+  string tool_name = 2;
+  string status = 3;
+  optional int64 progress = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  int64 repetitions = 7;
+  repeated ToolTestProviderResultDTO providers = 8;
+  repeated ToolTestAttemptDTO attempts = 9;
+  optional string error = 10;
+}
+
+message ToolTestRunListDTO {
+  repeated ToolTestRunDTO items = 1;
+}
+
+message ToolTestStartRequest {
+  optional string agent_id = 1;
+  repeated string provider_ids = 2;
+  optional int64 repetitions = 3;
+}
+
+message TraceEventDTO {
+  string event_id = 1;
+  optional string part_id = 2;
+  string session_id = 3;
+  string job_id = 4;
+  string type = 5;
+  string phase = 6;
+  string title = 7;
+  string content = 8;
+  optional string status = 9;
+  optional string tool_name = 10;
+  repeated string skill_names = 11;
+  optional string step_id = 12;
+  google.protobuf.Timestamp timestamp = 13;
+  optional google.protobuf.Struct raw = 14;
+}
+
+message TraceObservedExecutionEventDTO {
+  string event_id = 1;
+  string session_id = 2;
+  optional string job_id = 3;
+  google.protobuf.Timestamp time = 4;
+  string type = 5;
+  TraceObservedPayloadDTO payload = 6;
+}
+
+message TraceObservedPayloadDTO {
+  string raw_type = 1;
+}
+
+message TurnActivityStatsDTO {
+  optional int64 duration_ms = 1;
+  optional int64 message_count = 2;
+}
+
+message TurnAttachmentDTO {
+  string file_id = 1;
+  optional string name = 2;
+  optional string content_type = 3;
+}
+
+message TurnBaseDTO {
+  string turn_id = 1;
+  string job_id = 2;
+  string session_id = 3;
+  int64 ordinal = 4;
+  int64 revision = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  optional google.protobuf.Timestamp completed_at = 9;
+}
+
+message TurnCursorDTO {
+  optional int64 version = 1;
+  string session_id = 2;
+  int64 projection_epoch = 3;
+  string anchor_turn_id = 4;
+  optional bool include_anchor = 5;
+  optional string direction = 6;
+  optional int64 stage = 7;
+}
+
+message TurnDetailBatchDTO {
+  repeated TurnDetailDTO items = 1;
+  int64 projection_epoch = 2;
+  optional string next_cursor = 3;
+  optional bool has_more = 4;
+}
+
+message TurnDetailBatchRequest {
+  repeated string turn_ids = 1;
+  repeated string include = 2;
+}
+
+message TurnDetailCursorDTO {
+  optional int64 version = 1;
+  string session_id = 2;
+  int64 projection_epoch = 3;
+  string turn_id = 4;
+  int64 event_index = 5;
+  string include_hash = 6;
+}
+
+message TurnDetailDTO {
+  string turn_id = 1;
+  string job_id = 2;
+  string session_id = 3;
+  int64 ordinal = 4;
+  int64 revision = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  optional google.protobuf.Timestamp completed_at = 9;
+  optional string items_view = 10;
+  repeated string source_message_ids = 11;
+  repeated string merged_job_ids = 12;
+  repeated TurnUserMessageDTO user_messages = 13;
+  optional string response_preview = 14;
+  optional bool preview_truncated = 15;
+  repeated string assistant_text = 16;
+  repeated TurnThinkingBlockDTO thinking_blocks = 17;
+  repeated TurnToolSummaryDTO tool_summary = 18;
+  repeated TurnResponsePartDTO response_parts = 19;
+  optional string final_response = 20;
+  repeated TraceEventDTO items = 21;
+  optional bool detail_truncated = 22;
+  optional string detail_next_cursor = 23;
+  optional TurnActivityStatsDTO activity_stats = 24;
+}
+
+message TurnHistoryLoadRequest {
+  optional string direction = 1;
+  optional string cursor = 2;
+  optional string anchor_turn_id = 3;
+  repeated string turn_ids = 4;
+  optional int64 turns = 5;
+  optional int64 before_turns = 6;
+  optional int64 after_turns = 7;
+  repeated string include = 8;
+}
+
+message TurnHistoryPageDTO {
+  repeated TurnDetailDTO items = 1;
+  optional string next_cursor = 2;
+  optional bool has_more = 3;
+  optional string before_cursor = 4;
+  optional string after_cursor = 5;
+  optional bool has_before = 6;
+  optional bool has_after = 7;
+  int64 projection_epoch = 8;
+}
+
+message TurnJobSummaryDTO {
+  string job_id = 1;
+  string message_id = 2;
+  string status = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+message TurnPageDTO {
+  repeated TurnSummaryDTO items = 1;
+  optional string next_cursor = 2;
+  optional bool has_more = 3;
+  int64 projection_epoch = 4;
+}
+
+message TurnProjectionCorruptedErrorDTO {
+  optional string code = 1;
+  string session_id = 2;
+  string message = 3;
+}
+
+message TurnResponsePartDTO {
+  string part_id = 1;
+  string kind = 2;
+  string projection = 3;
+  optional string status = 4;
+  TurnResponseSourceDTO source = 5;
+  optional string text = 6;
+  optional string carrier_type = 7;
+  optional string tool_call_id = 8;
+  optional string tool_name = 9;
+  optional string arguments = 10;
+  optional string result = 11;
+  optional bool truncated = 12;
+  optional bool final = 13;
+}
+
+message TurnResponseSourceDTO {
+  int64 message_sequence = 1;
+  optional int64 assistant_message_sequence = 2;
+  optional int64 content_block_index = 3;
+  optional int64 item_index = 4;
+  optional int64 call_index = 5;
+  optional int64 result_message_sequence = 6;
+}
+
+message TurnSummaryDTO {
+  string turn_id = 1;
+  string job_id = 2;
+  string session_id = 3;
+  int64 ordinal = 4;
+  int64 revision = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  optional google.protobuf.Timestamp completed_at = 9;
+  optional string items_view = 10;
+  repeated string source_message_ids = 11;
+  optional int64 source_message_count = 12;
+  repeated string merged_job_ids = 13;
+  optional int64 merged_job_count = 14;
+  optional bool sources_truncated = 15;
+  repeated TurnUserMessageSummaryDTO user_messages = 16;
+  optional int64 user_message_count = 17;
+  optional bool user_messages_truncated = 18;
+  optional string response_preview = 19;
+  optional bool preview_truncated = 20;
+  optional int64 item_count = 21;
+  repeated TurnThinkingBlockDTO thinking_blocks = 22;
+  repeated TurnToolSummaryDTO tool_summary = 23;
+  repeated TurnResponsePartDTO response_parts = 24;
+  optional TurnActivityStatsDTO activity_stats = 25;
+}
+
+message TurnThinkingBlockDTO {
+  string kind = 1;
+  optional string text = 2;
+}
+
+message TurnToolSummaryDTO {
+  string tool_name = 1;
+  string status = 2;
+  optional string tool_call_id = 3;
+}
+
+message TurnUserMessageDTO {
+  string message_id = 1;
+  string content = 2;
+  optional bool content_truncated = 3;
+  repeated TurnAttachmentDTO attachments = 4;
+  optional google.protobuf.Struct metadata = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message TurnUserMessageSummaryDTO {
+  string message_id = 1;
+  optional string preview = 2;
+  optional bool content_truncated = 3;
+  optional int64 attachment_count = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message UiSnapshotResultDTO {
+  string html_path = 1;
+  optional string status = 2;
+}
+
+message WorkspaceContextDTO {
+  string workspace_id = 1;
+  string root_path = 2;
+  optional string project_type = 3;
+  repeated string languages = 4;
+  optional google.protobuf.Struct git = 5;
+  optional google.protobuf.Struct index_status = 6;
+  optional google.protobuf.Struct config = 7;
+}
+
+message WorkspaceDTO {
+  string workspace_id = 1;
+  string root_path = 2;
+  string name = 3;
+  optional string project_type = 4;
+  optional google.protobuf.Struct git = 5;
+  optional google.protobuf.Struct runtime = 6;
+}
+
+message WorkspaceDefaultAgentUpdateRequest {
+  string agent_id = 1;
+}
+
+message WorkspaceDefaultProviderUpdateRequest {
+  string provider_id = 1;
+}
+
+message WorkspaceFileChangeBatchDTO {
+  repeated WorkspaceFileChangeDTO changes = 1;
+  bool overflow = 2;
+}
+
+message WorkspaceFileChangeDTO {
+  string kind = 1;
+  string path = 2;
+}
+
+message WorkspaceFileContentDTO {
+  string root_path = 1;
+  string path = 2;
+  string name = 3;
+  string content = 4;
+  string language = 5;
+  int64 size = 6;
+  optional string modified_at = 7;
+  string revision = 8;
+}
+
+message WorkspaceFileCopyRequest {
+  string source_path = 1;
+  optional string source_scope = 2;
+}
+
+message WorkspaceFileCreateRequest {
+  string name = 1;
+  string kind = 2;
+}
+
+message WorkspaceFileListDTO {
+  string root_path = 1;
+  string path = 2;
+  repeated WorkspaceFileNodeDTO items = 3;
+  optional bool truncated = 4;
+  optional int64 limit = 5;
+  optional string next_cursor = 6;
+}
+
+message WorkspaceFileNodeDTO {
+  string name = 1;
+  string path = 2;
+  string kind = 3;
+  optional bool has_children = 4;
+  optional int64 size = 5;
+  optional string modified_at = 6;
+}
+
+message WorkspaceFilePasteRequest {
+  repeated string source_paths = 1;
+}
+
+message WorkspaceFileRevealDTO {
+  string path = 1;
+}
+
+message WorkspaceFileUpdateRequest {
+  string content = 1;
+  string expected_revision = 2;
+}
+
+message WorkspaceFileWatchRequest {
+  repeated string paths = 1;
+}
+
+message WorkspaceIndexRebuildDTO {
+  string status = 1;
+  string job_id = 2;
+}
+
+message WorkspaceIndexStatusDTO {
+  string status = 1;
+  optional int64 indexed_files = 2;
+  optional string last_updated = 3;
+}

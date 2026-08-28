@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
-from app.schemas.public_v2.session import SessionDTO
+from app.schemas.internal_v2.session import SessionDTO
 
 
 GENERAL_PURPOSE_SUBAGENT = "general-purpose"

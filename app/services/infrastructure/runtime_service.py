@@ -6,9 +6,14 @@ from datetime import datetime, timezone
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
-from app.core.path_utils import get_cache_dir, get_artifacts_dir, get_logs_dir, get_workspace_root
+from app.core.path_utils import (
+    get_artifacts_dir,
+    get_cache_dir,
+    get_logs_dir,
+    get_workspace_root,
+)
 from app.schemas.event import SessionInterruptedEvent, SessionInterruptedPayload
-from app.schemas.public_v2.runtime import (
+from app.schemas.internal_v2.runtime import (
     RuntimeDrainBlockerDTO,
     RuntimeDrainResultDTO,
     RuntimeInfoDTO,
@@ -16,6 +21,7 @@ from app.schemas.public_v2.runtime import (
     RuntimeStorageDTO,
 )
 from app.services.business.job.service import JobService
+from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
@@ -28,10 +34,12 @@ class RuntimeService:
         job_service: JobService,
         background_task_registry: BackgroundTaskRegistry,
         trace_event_store: TraceEventStore,
+        message_stream_store: MessageStreamStore,
     ) -> None:
         self._job_service = job_service
         self._background_task_registry = background_task_registry
         self._trace_event_store = trace_event_store
+        self._message_stream_store = message_stream_store
         self._lifecycle_state: RuntimeLifecycleState = "ready"
 
     def get_log_dir(self):
@@ -92,7 +100,7 @@ class RuntimeService:
 
     async def reconcile_stale_executions(self) -> int:
         """把上次进程未写终态的已启动 Job 标为进程中断。"""
-        reconciled = 0
+        reconciled = await self._message_stream_store.reconcile_unfinished_streams()
         terminal_types = {
             "job_completed",
             "job_cancelled",

@@ -29,6 +29,7 @@ const TOOL_GROUP_KIND_ORDER: Record<ToolKind, number> = {
   default: 0,
   collaboration: 1,
   extension: 2,
+  debugging: 3,
 };
 
 function latestRunsByTool(runs: ToolTestRun[]): Map<string, ToolTestRun> {

@@ -6,7 +6,17 @@ import copy
 from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
+import anthropic
 from langchain_anthropic import ChatAnthropic
+
+# TODO: langchain-anthropic 暂未公开 raw stream 转换所需的 helper；升级到公开 API 后移除这些私有导入。
+from langchain_anthropic.chat_models import (
+    _compact_in_params,
+    _documents_in_params,
+    _handle_anthropic_bad_request,
+    _thinking_in_params,
+    _tools_in_params,
+)
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
@@ -19,6 +29,9 @@ from app.agents.providers.litellm_content import (
     canonicalize_ai_message,
     project_ai_message_content,
 )
+from app.core.cancelable_stream import CancelableStream
+from app.core.model_delta_context import get_current_model_delta_sink
+from app.core.turn_execution_scope import get_current_turn_execution_scope
 
 
 def _text_blocks(content: Any) -> list[dict[str, Any]]:
@@ -152,6 +165,11 @@ class BoxteamAnthropicMessagesModel(ChatAnthropic):
             message = chunk.message
             if not isinstance(message, AIMessageChunk):
                 raise TypeError("Anthropic Messages 流必须返回 AIMessageChunk")
+            if self._message_chunk_has_semantic_delta(message) and get_current_model_delta_sink() is not None:
+                raise RuntimeError(
+                    "同步 Anthropic 模型流不能承载异步消息流 delta hook；"
+                    "AgentLoop 必须使用异步模型流"
+                )
             yield chunk
 
     async def _astream(
@@ -159,18 +177,64 @@ class BoxteamAnthropicMessagesModel(ChatAnthropic):
         messages: list[BaseMessage],
         stop: list[str] | None = None,
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        *,
+        stream_usage: bool | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
-        async for chunk in super()._astream(
+        if stream_usage is None:
+            stream_usage = self.stream_usage
+        if stream_usage is None:
+            stream_usage = True
+        kwargs["stream"] = True
+        payload = self._get_request_payload(
             self._project_messages(messages),
             stop=stop,
-            run_manager=run_manager,
             **kwargs,
-        ):
-            message = chunk.message
-            if not isinstance(message, AIMessageChunk):
-                raise TypeError("Anthropic Messages 流必须返回 AIMessageChunk")
-            yield chunk
+        )
+        try:
+            stream = await self._acreate(payload)
+            coerce_content_to_string = (
+                not _tools_in_params(payload)
+                and not _documents_in_params(payload)
+                and not _thinking_in_params(payload)
+                and not _compact_in_params(payload)
+            )
+            block_start_event = None
+            scope = get_current_turn_execution_scope()
+            signal = scope.effective_cancellation_signal if scope else None
+            async with CancelableStream(stream, signal) as cancelable_stream:
+                async for event in cancelable_stream:
+                    if scope is not None:
+                        scope.raise_if_cancelled()
+                    msg, block_start_event = self._make_message_chunk_from_anthropic_event(
+                        event,
+                        stream_usage=stream_usage,
+                        coerce_content_to_string=coerce_content_to_string,
+                        block_start_event=block_start_event,
+                    )
+                    if msg is None:
+                        continue
+                    chunk = ChatGenerationChunk(message=msg)
+                    delta_sink = get_current_model_delta_sink()
+                    if (
+                        self._message_chunk_has_semantic_delta(msg)
+                        and delta_sink is not None
+                    ):
+                        await delta_sink.accept_message_chunk(msg)
+                    if run_manager and isinstance(msg.content, str):
+                        await run_manager.on_llm_new_token(msg.content, chunk=chunk)
+                    yield chunk
+        except anthropic.BadRequestError as error:
+            _handle_anthropic_bad_request(error)
+
+    @staticmethod
+    def _message_chunk_has_semantic_delta(message: AIMessageChunk) -> bool:
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content:
+            return True
+        if isinstance(content, list) and any(content):
+            return True
+        return bool(getattr(message, "tool_call_chunks", None))
 
 
 def build_anthropic_messages_model(

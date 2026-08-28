@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_file, get_session_path, get_sessions_dir
-from app.schemas.public_v2.session import (
+from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionUpdateRequest,
 )

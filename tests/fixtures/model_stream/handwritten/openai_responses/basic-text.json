@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "responses-basic-text",
+    "protocol": "openai_responses_sse",
+    "provider": "openai_compatible",
+    "model": "gpt-5.6-luna"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://www.cctq.ai/v1/responses",
+        "match": {
+          "model": "gpt-5.6-luna",
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "frames": [
+          {
+            "kind": "data",
+            "event": "response.created",
+            "encoding": "json",
+            "payload": {
+              "type": "response.created",
+              "sequence_number": 0,
+              "response": {
+                "id": "resp_basic_text",
+                "object": "response",
+                "created_at": 1,
+                "status": "in_progress",
+                "model": "gpt-5.6-luna",
+                "output": [],
+                "parallel_tool_calls": true,
+                "tool_choice": "auto",
+                "tools": []
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.output_item.added",
+            "encoding": "json",
+            "payload": {
+              "type": "response.output_item.added",
+              "sequence_number": 1,
+              "output_index": 0,
+              "item": {
+                "id": "msg_basic_text",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": []
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.content_part.added",
+            "encoding": "json",
+            "payload": {
+              "type": "response.content_part.added",
+              "sequence_number": 2,
+              "item_id": "msg_basic_text",
+              "output_index": 0,
+              "content_index": 0,
+              "part": {
+                "type": "output_text",
+                "text": "",
+                "annotations": []
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.output_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.output_text.delta",
+              "sequence_number": 3,
+              "item_id": "msg_basic_text",
+              "output_index": 0,
+              "content_index": 0,
+              "delta": "响应文本"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.output_text.done",
+            "encoding": "json",
+            "payload": {
+              "type": "response.output_text.done",
+              "sequence_number": 4,
+              "item_id": "msg_basic_text",
+              "output_index": 0,
+              "content_index": 0,
+              "text": "响应文本"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.content_part.done",
+            "encoding": "json",
+            "payload": {
+              "type": "response.content_part.done",
+              "sequence_number": 5,
+              "item_id": "msg_basic_text",
+              "output_index": 0,
+              "content_index": 0,
+              "part": {
+                "type": "output_text",
+                "text": "响应文本",
+                "annotations": []
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.output_item.done",
+            "encoding": "json",
+            "payload": {
+              "type": "response.output_item.done",
+              "sequence_number": 6,
+              "output_index": 0,
+              "item": {
+                "id": "msg_basic_text",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "响应文本",
+                    "annotations": []
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": "done",
+            "event": "response.completed",
+            "encoding": "json",
+            "payload": {
+              "type": "response.completed",
+              "sequence_number": 7,
+              "response": {
+                "id": "resp_basic_text",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-5.6-luna",
+                "output": [
+                  {
+                    "id": "msg_basic_text",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                      {
+                        "type": "output_text",
+                        "text": "响应文本",
+                        "annotations": []
+                      }
+                    ]
+                  }
+                ],
+                "parallel_tool_calls": true,
+                "tool_choice": "auto",
+                "tools": [],
+                "usage": {
+                  "input_tokens": 3,
+                  "output_tokens": 2,
+                  "total_tokens": 5,
+                  "input_tokens_details": {
+                    "cached_tokens": 0
+                  },
+                  "output_tokens_details": {
+                    "reasoning_tokens": 0
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.schemas.public_v2.message import MessageRunAccepted
-from app.schemas.public_v2.job import JobDispatchSnapshotDTO
-from app.schemas.public_v2.session import SessionDTO, SessionDelegationDTO
+from app.schemas.internal_v2.message import MessageRunAccepted
+from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
+from app.schemas.internal_v2.session import SessionDTO, SessionDelegationDTO
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )

@@ -7,8 +7,8 @@ import pytest
 from langchain_core.runnables import RunnableLambda
 
 from app.core.job_event_bus import JobEventBus
-from app.schemas.public_v2.common import ControlAction, JobStatus
-from app.schemas.public_v2.job import JobControlRequest
+from app.schemas.internal_v2.common import ControlAction, JobStatus
+from app.schemas.internal_v2.job import JobControlRequest
 from app.services.business.job.service import JobDrainBlocker, JobService, JobState
 
 

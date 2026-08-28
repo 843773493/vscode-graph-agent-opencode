@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncGenerator, Mapping
 
@@ -8,8 +9,9 @@ from app.abstractions.job_event_bus import (
     EventSubscriberOverflowError,
     JobEventBusProtocol,
 )
+from app.protocol.codecs.session_sse import session_sse_to_json
 from app.schemas.event import Event
-from app.services.mapping.observation_event_mapper import map_event_to_observation_sse
+from app.services.mapping.observation_event_mapper import map_event_to_observation_proto
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +96,11 @@ class EventService:
                 )
                 for event in replay_events:
                     replayed_event_ids.add(event.event_id)
-                    observation = map_event_to_observation_sse(event)
+                    observation = map_event_to_observation_proto(event)
                     yield (
-                        f"id: {observation.event.event_id}\n"
+                        f"id: {observation.event.header.event_id}\n"
                         f"event: {observation.event.type}\n"
-                        f"data: {observation.model_dump_json()}\n\n"
+                        f"data: {json.dumps(session_sse_to_json(observation), ensure_ascii=False, separators=(',', ':'))}\n\n"
                     )
             while True:
                 try:
@@ -106,11 +108,11 @@ class EventService:
                     if event.event_id in replayed_event_ids:
                         replayed_event_ids.remove(event.event_id)
                         continue
-                    observation = map_event_to_observation_sse(event)
+                    observation = map_event_to_observation_proto(event)
                     yield (
-                        f"id: {observation.event.event_id}\n"
+                        f"id: {observation.event.header.event_id}\n"
                         f"event: {observation.event.type}\n"
-                        f"data: {observation.model_dump_json()}\n\n"
+                        f"data: {json.dumps(session_sse_to_json(observation), ensure_ascii=False, separators=(',', ':'))}\n\n"
                     )
                 except TimeoutError:
                     yield ": ping\n\n"

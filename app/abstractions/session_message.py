@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.abstractions.internal_message import PreparedInternalMessage
-from app.schemas.public_v2.message import MessageRunAccepted
-from app.schemas.public_v2.pending_request import DeliveryPolicy
+from app.schemas.internal_v2.message import MessageRunAccepted
+from app.schemas.internal_v2.pending_request import DeliveryPolicy
 
 
 class SessionMessageTransportProtocol(Protocol):

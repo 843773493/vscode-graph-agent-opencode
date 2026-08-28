@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.public_v2.session_resource import SessionResourceDTO
+from app.schemas.internal_v2.session_resource import SessionResourceDTO
 
 WorkspaceNavigationNodeKind = Literal["workspace_folder", "workspace_ref"]
 WorkspaceNavigationPlacementMode = Literal["before", "after", "last"]

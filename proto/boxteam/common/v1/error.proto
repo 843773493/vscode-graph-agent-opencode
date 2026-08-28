@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package boxteam.common.v1;
+
+import "google/protobuf/struct.proto";
+
+message Error {
+  string code = 1;
+  string message = 2;
+  google.protobuf.Struct details = 3;
+}
+
+message RequestContext {
+  string request_id = 1;
+  string actor = 2;
+}

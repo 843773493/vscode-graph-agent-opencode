@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.schemas.public_v2.agent import AgentDTO, AgentProviderDTO
+from app.schemas.internal_v2.agent import AgentDTO, AgentProviderDTO
 from app.services.infrastructure.config_service import ConfigService
 
 

@@ -97,6 +97,9 @@
         "pattern": "^[a-zA-Z0-9._-]{2,64}$"
       }
     },
+    "tooling": {
+      "$ref": "#/$defs/toolingConfig"
+    },
     "ui": {
       "$ref": "#/$defs/uiConfig"
     },
@@ -111,6 +114,92 @@
     }
   },
   "$defs": {
+    "toolingConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy_defaults": {
+          "$ref": "#/$defs/toolPolicyPatch"
+        },
+        "policy_rules": {
+          "$ref": "#/$defs/toolPolicyRules"
+        },
+        "restrictions": {
+          "$ref": "#/$defs/toolPolicyRestrictions"
+        }
+      }
+    },
+
+    "toolPolicyPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "execution_enabled": { "type": "boolean" },
+        "model_visible": { "type": "boolean" },
+        "confirmation_required": { "type": "boolean" },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 300000
+            },
+            "max_result_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 104857600
+            }
+          }
+        }
+      }
+    },
+
+    "toolPolicyRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "by_origin": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/toolPolicyPatch" }
+        },
+        "by_kind": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/toolPolicyPatch" }
+        },
+        "by_group": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/toolPolicyPatch" }
+        },
+        "by_tool": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/toolPolicyPatch" }
+        }
+      }
+    },
+
+    "toolPolicyRestrictions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "execution_disabled": { "$ref": "#/$defs/toolPolicySelectors" },
+        "model_hidden": { "$ref": "#/$defs/toolPolicySelectors" },
+        "confirmation_required": { "$ref": "#/$defs/toolPolicySelectors" }
+      }
+    },
+
+    "toolPolicySelectors": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 200,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z][a-zA-Z0-9._:-]{0,127}$"
+      },
+      "default": []
+    },
+
     "runtimeConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -1021,9 +1110,13 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rules": { "$ref": "#/$defs/toolPolicyRules" },
+            "restrictions": { "$ref": "#/$defs/toolPolicyRestrictions" }
+          }
         },
         "tool_choice": {
           "type": "string",

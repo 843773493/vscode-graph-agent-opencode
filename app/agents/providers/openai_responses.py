@@ -26,7 +26,14 @@ from app.agents.providers.litellm_chat import (
 from app.agents.providers.litellm_content import (
     project_ai_message_content,
 )
-from app.agents.upstream_request_trace import attach_upstream_trace_callback
+from app.agents.upstream_request_trace import (
+    attach_upstream_trace_callback,
+    record_upstream_response,
+)
+from app.core.cancelable_stream import CancelableStream, close_async_stream
+from app.core.model_delta_context import get_current_model_delta_sink
+from app.core.turn_execution_scope import get_current_turn_execution_scope
+from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
 
 def _without_server_state(item: dict[str, Any]) -> dict[str, Any]:
@@ -62,6 +69,22 @@ def _responses_usage_metadata(usage: Any) -> UsageMetadata:
     if input_details:
         metadata["input_token_details"] = input_details
     return metadata
+
+
+def _reasoning_summary_content(block: dict[str, Any]) -> dict[str, Any]:
+    """把 Responses summary 转成可流式聚合的 reasoning content。"""
+
+    if block.get("content"):
+        return block
+    summary_text = extract_reasoning_summary(block.get("summary"))
+    if summary_text:
+        block["content"] = [
+            {
+                "type": "reasoning_text",
+                "text": summary_text,
+            }
+        ]
+    return block
 
 
 class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
@@ -290,17 +313,27 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             event_type == "response.output_item.added"
             and event_item_dict.get("type") == "reasoning"
         ):
+            provider_item_id = event_item_dict.get("id")
+            if isinstance(provider_item_id, str) and event_item_dict.get("summary"):
+                part_state.reasoning_summary_provider_ids.add(provider_item_id)
             output_index = int(event.output_index)
             if current_output_index != output_index:
                 current_index += 1
             current_output_index = output_index
             current_sub_index = 0
-            block = self._normalize_response_block(event_item_dict)
+            block = self._normalize_response_block(
+                {
+                    key: value
+                    for key, value in event_item_dict.items()
+                    if key not in {"status", "encrypted_content"}
+                }
+            )
             if block is None:
                 raise RuntimeError("Responses reasoning item 转换失败")
+            block = _reasoning_summary_content(block)
             has_body = bool(
                 block.get("content")
-                or block.get("summary")
+                or extract_reasoning_summary(block.get("summary"))
                 or block.get("encrypted_content")
             )
             if not has_body:
@@ -313,7 +346,18 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             event_type == "response.output_item.done"
             and event_item_dict.get("type") == "reasoning"
         ):
-            block = self._normalize_response_block(event_item_dict)
+            provider_item_id = event_item_dict.get("id")
+            has_summary = (
+                isinstance(provider_item_id, str)
+                and provider_item_id in part_state.reasoning_summary_provider_ids
+            )
+            block = self._normalize_response_block(
+                {
+                    key: value
+                    for key, value in event_item_dict.items()
+                    if key != "summary" or not has_summary
+                }
+            )
             if block is None:
                 raise RuntimeError("Responses reasoning item 转换失败")
             chunk = ChatGenerationChunk(
@@ -322,6 +366,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             return current_index, current_output_index, current_sub_index, chunk
         if event_type in {"response.completed", "response.incomplete"}:
             response = getattr(event, "response", None)
+            record_upstream_response(response)
             usage = getattr(response, "usage", None)
             metadata = {
                 "model_provider": "litellm",
@@ -341,6 +386,46 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             return current_index, current_output_index, current_sub_index, chunk
         if event_type in {"response.failed", "error"}:
             raise RuntimeError(f"LiteLLM Responses 请求失败: {event!r}")
+
+        if event_type in {
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_part.done",
+        }:
+            provider_item_id = getattr(event, "item_id", None)
+            if isinstance(provider_item_id, str):
+                part_state.reasoning_summary_provider_ids.add(provider_item_id)
+            if event_type == "response.reasoning_summary_text.delta":
+                delta = getattr(event, "delta", None)
+                if not isinstance(delta, str) or not delta:
+                    return (
+                        current_index,
+                        current_output_index,
+                        current_sub_index,
+                        None,
+                    )
+                block: dict[str, Any] = {
+                    "type": "reasoning",
+                    "content": [
+                        {
+                            "type": "reasoning_text",
+                            "text": delta,
+                        }
+                    ],
+                }
+                if isinstance(provider_item_id, str):
+                    block["id"] = provider_item_id
+                chunk = ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content=[part_state.decorate(block)]
+                    )
+                )
+                return (
+                    current_index,
+                    current_output_index,
+                    current_sub_index,
+                    chunk,
+                )
 
         # TODO: langchain-openai 暴露 Responses 事件转换公共 API 后移除私有 helper。
         (
@@ -385,6 +470,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         current_index = current_output_index = current_sub_index = -1
         part_state = _StreamPartState()
         original_schema = kwargs.get("response_format")
+        delta_sink = get_current_model_delta_sink()
         for event in stream:
             (
                 current_index,
@@ -401,6 +487,11 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             )
             if generation_chunk is None:
                 continue
+            if self._message_chunk_has_semantic_delta(generation_chunk.message) and delta_sink is not None:
+                raise RuntimeError(
+                    "同步 Responses 模型流不能承载异步消息流 delta hook；"
+                    "AgentLoop 必须使用异步模型流"
+                )
             if run_manager:
                 run_manager.on_llm_new_token(
                     _message_chunk_token(generation_chunk.message),
@@ -425,28 +516,47 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         original_schema = kwargs.get("response_format")
         current_index = current_output_index = current_sub_index = -1
         part_state = _StreamPartState()
-        async for event in stream:
-            (
-                current_index,
-                current_output_index,
-                current_sub_index,
-                generation_chunk,
-            ) = self._convert_response_event(
-                event,
-                current_index=current_index,
-                current_output_index=current_output_index,
-                current_sub_index=current_sub_index,
-                part_state=part_state,
-                original_schema=original_schema,
-            )
-            if generation_chunk is None:
-                continue
-            if run_manager:
-                await run_manager.on_llm_new_token(
-                    _message_chunk_token(generation_chunk.message),
-                    chunk=generation_chunk,
+        delta_sink = get_current_model_delta_sink()
+        scope = get_current_turn_execution_scope()
+        signal = scope.effective_cancellation_signal if scope else None
+
+        async def close_response_stream() -> None:
+            await close_async_stream(stream)
+            response = getattr(stream, "response", None)
+            if response is not None and response is not stream:
+                await close_async_stream(response)
+
+        async with CancelableStream(
+            stream,
+            signal,
+            close_upstream_stream=close_response_stream,
+        ) as cancelable_stream:
+            async for event in cancelable_stream:
+                if scope is not None:
+                    scope.raise_if_cancelled()
+                (
+                    current_index,
+                    current_output_index,
+                    current_sub_index,
+                    generation_chunk,
+                ) = self._convert_response_event(
+                    event,
+                    current_index=current_index,
+                    current_output_index=current_output_index,
+                    current_sub_index=current_sub_index,
+                    part_state=part_state,
+                    original_schema=original_schema,
                 )
-            yield generation_chunk
+                if generation_chunk is None:
+                    continue
+                if self._message_chunk_has_semantic_delta(generation_chunk.message) and delta_sink is not None:
+                    await delta_sink.accept_message_chunk(generation_chunk.message)
+                if run_manager:
+                    await run_manager.on_llm_new_token(
+                        _message_chunk_token(generation_chunk.message),
+                        chunk=generation_chunk,
+                    )
+                yield generation_chunk
 
 
 def build_openai_responses_model(

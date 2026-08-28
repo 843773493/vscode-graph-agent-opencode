@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
-from app.schemas.public_v2.session import SessionDTO, SessionGenerationOriginDTO
+from app.schemas.internal_v2.session import SessionDTO, SessionGenerationOriginDTO
 from app.services.business.session_service import SessionService
 
 

@@ -4,6 +4,7 @@ import {
   selectBootstrapToolDetailsExpanded,
   canAcceptUserViewStateResponse,
   canAcceptUserViewStateMutation,
+  shouldRestorePersistedWorkspace,
 } from "./useWorkspaceBootstrap";
 
 describe("selectBootstrapSessionId", () => {
@@ -77,5 +78,52 @@ describe("canAcceptUserViewStateMutation", () => {
       currentLeaseGeneration: 2,
       requestLeaseGeneration: 2,
     })).toBe(true);
+  });
+});
+
+describe("shouldRestorePersistedWorkspace", () => {
+  const userViewState = {
+    user_id: "alice",
+    workspace_id: "workspace-b",
+    session_id: "session-b",
+    turn_anchor: "turn-b",
+    scroll_offset: 0,
+    follow_latest: true,
+    projection_version: 1,
+    tool_details_expanded: false,
+    updated_at: "2026-08-27T00:00:00Z",
+  };
+
+  test("首次 bootstrap 且持久化工作区可用时才恢复", () => {
+    expect(shouldRestorePersistedWorkspace({
+      restorePersistedWorkspace: true,
+      userViewState,
+      activeWorkspaceId: "workspace-a",
+      availableWorkspaceIds: ["workspace-a", "workspace-b"],
+    })).toBe(true);
+  });
+
+  test("显式切换后的刷新不能把工作区切回持久化位置", () => {
+    expect(shouldRestorePersistedWorkspace({
+      restorePersistedWorkspace: false,
+      userViewState,
+      activeWorkspaceId: "workspace-b",
+      availableWorkspaceIds: ["workspace-a", "workspace-b"],
+    })).toBe(false);
+  });
+
+  test("持久化工作区已是当前工作区或不可用时不执行恢复", () => {
+    expect(shouldRestorePersistedWorkspace({
+      restorePersistedWorkspace: true,
+      userViewState,
+      activeWorkspaceId: "workspace-b",
+      availableWorkspaceIds: ["workspace-a", "workspace-b"],
+    })).toBe(false);
+    expect(shouldRestorePersistedWorkspace({
+      restorePersistedWorkspace: true,
+      userViewState,
+      activeWorkspaceId: "workspace-a",
+      availableWorkspaceIds: ["workspace-a"],
+    })).toBe(false);
   });
 });

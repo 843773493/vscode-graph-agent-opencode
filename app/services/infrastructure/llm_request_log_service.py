@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.session_paths import SessionPathResolver
-from app.schemas.public_v2.llm_request_log import LLMRequestLogRecordDTO
+from app.schemas.internal_v2.llm_request_log import LLMRequestLogRecordDTO
 
 
 class LLMRequestLogService:

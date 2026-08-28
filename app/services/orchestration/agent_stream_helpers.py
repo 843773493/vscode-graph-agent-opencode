@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from app.agents.tool_result_text import serialize_tool_value
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.message import AttachmentRef
 
 CHAT_MODEL_EVENT_NAMES = {
     "ChatOpenAI",

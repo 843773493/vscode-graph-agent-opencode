@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package boxteam.workspace.v2;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+message TraceEvent {
+  string event_id = 1;
+  optional string part_id = 2;
+  string session_id = 3;
+  string job_id = 4;
+  string type = 5;
+  string phase = 6;
+  string title = 7;
+  string content = 8;
+  optional string status = 9;
+  optional string tool_name = 10;
+  repeated string skill_names = 11;
+  optional string step_id = 12;
+  google.protobuf.Timestamp timestamp = 13;
+  google.protobuf.Struct raw = 14;
+}

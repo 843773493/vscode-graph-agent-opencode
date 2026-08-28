@@ -20,9 +20,9 @@ from app.gateway.auth import (
     verify_gateway_access,
 )
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.service_types import GatewayServiceName
-
 
 router = APIRouter()
 
@@ -128,6 +128,11 @@ async def proxy_auxiliary_http(
     auth: GatewayAuthContext = Depends(verify_gateway_access),
 ):
     service = _service_name(service_path)
+    proxy_target_to_proto(
+        workspace_id=workspace_id,
+        service=service,
+        path=f"/{path}",
+    )
     registry = _registry(request.app)
     try:
         target = registry.resolve(workspace_id)

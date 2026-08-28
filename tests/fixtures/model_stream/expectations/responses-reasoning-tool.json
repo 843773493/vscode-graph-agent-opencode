@@ -1,0 +1,11 @@
+{
+  "expectation_id": "responses-reasoning-tool-loop",
+  "protocol": "openai_responses_sse",
+  "reasoning_summary": "先读取 README，再根据工具结果作答。",
+  "tool_name": "read_file",
+  "tool_arguments": {
+    "path": "README.md"
+  },
+  "visible_text": "工具调用完成",
+  "terminal_event": "response.completed"
+}

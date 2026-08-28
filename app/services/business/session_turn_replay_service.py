@@ -13,8 +13,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.checkpoint_config import build_checkpoint_config
-from app.schemas.public_v2.common import JobStatus, MessageRole
-from app.schemas.public_v2.message import (
+from app.schemas.internal_v2.common import JobStatus, MessageRole
+from app.schemas.internal_v2.message import (
     MessageCreateRequest,
     MessageDTO,
     MessageReplayAccepted,

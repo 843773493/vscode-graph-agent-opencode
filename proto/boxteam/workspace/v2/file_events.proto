@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package boxteam.workspace.v2;
+
+message WorkspaceFileChange {
+  string kind = 1;
+  string path = 2;
+}
+
+message WorkspaceFileChangeBatch {
+  repeated WorkspaceFileChange changes = 1;
+  bool overflow = 2;
+}
+
+message SseError {
+  string message = 1;
+}

@@ -8,11 +8,11 @@ from pydantic import BaseModel
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.gateway.auth import get_gateway_local_token
-from app.schemas.public_v2.message import (
+from app.schemas.internal_v2.message import (
     MessageRunAccepted,
     SessionMessageDispatchRequest,
 )
-from app.schemas.public_v2.pending_request import DeliveryPolicy
+from app.schemas.internal_v2.pending_request import DeliveryPolicy
 from app.services.infrastructure.config_service import ConfigService
 
 ResponseDTO = TypeVar("ResponseDTO", bound=BaseModel)

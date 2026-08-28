@@ -15,6 +15,7 @@ import jsonschema
 from app.agents.custom_tools import load_custom_tool_factory
 from app.agents.policy import (
     ResolvedToolPolicy,
+    ToolPolicyResolver,
     build_agent_tool_universe,
     custom_tool_spec_names,
     parse_custom_tool_specs,
@@ -28,7 +29,7 @@ from app.core.path_utils import (
     get_user_workspace_schema_path,
     get_workspace_config_path,
 )
-from app.schemas.public_v2.config import ConfigDTO, ConfigUpdateRequest
+from app.schemas.internal_v2.config import ConfigDTO, ConfigUpdateRequest
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
     ConfigReloadStatus,
@@ -1197,6 +1198,95 @@ class ConfigService:
         return self._agent_tool_config_from_loaded(
             config,
             agent_id=resolved_agent_id,
+        )
+
+    def get_tool_policy_resolver(
+        self,
+        agent_id: str | None = None,
+    ) -> ToolPolicyResolver:
+        """返回当前 Workspace 和 Agent 合并后的唯一工具策略解析器。"""
+
+        config = self._get_effective_config()
+        resolved_agent_id = self._normalize_agent_id(agent_id)
+        tooling = config.get("tooling", {})
+        if tooling is None:
+            tooling = {}
+        if not isinstance(tooling, dict):
+            raise TypeError("tooling 配置必须是对象")
+
+        agents = config.get("agents", {})
+        if not isinstance(agents, dict):
+            raise TypeError("agents 配置必须是对象")
+        agent_config = agents.get(resolved_agent_id, {})
+        if not isinstance(agent_config, dict):
+            raise TypeError(f"agent {resolved_agent_id} 配置必须是对象")
+        agent_tools = agent_config.get("tools", {})
+        if agent_tools is None:
+            agent_tools = {}
+        if not isinstance(agent_tools, dict):
+            raise TypeError(f"agent {resolved_agent_id} 的 tools 配置必须是对象")
+        agent_policy = agent_tools.get("policy", {})
+        if agent_policy is None:
+            agent_policy = {}
+        if not isinstance(agent_policy, dict):
+            raise TypeError(f"agent {resolved_agent_id} 的 tools.policy 必须是对象")
+
+        defaults = tooling.get("policy_defaults", {})
+        if not isinstance(defaults, dict):
+            raise TypeError("tooling.policy_defaults 必须是对象")
+        global_rules = tooling.get("policy_rules", {})
+        if not isinstance(global_rules, dict):
+            raise TypeError("tooling.policy_rules 必须是对象")
+        agent_rules = agent_policy.get("rules", {})
+        if not isinstance(agent_rules, dict):
+            raise TypeError(f"agent {resolved_agent_id} 的 tools.policy.rules 必须是对象")
+        rules = merge_json_objects(global_rules, agent_rules)
+
+        global_restrictions = tooling.get("restrictions", {})
+        if not isinstance(global_restrictions, dict):
+            raise TypeError("tooling.restrictions 必须是对象")
+        agent_restrictions = agent_policy.get("restrictions", {})
+        if not isinstance(agent_restrictions, dict):
+            raise TypeError(
+                f"agent {resolved_agent_id} 的 tools.policy.restrictions 必须是对象"
+            )
+        restrictions = dict(global_restrictions)
+        for name in (
+            "execution_disabled",
+            "model_hidden",
+            "confirmation_required",
+        ):
+            merged = list(global_restrictions.get(name, []))
+            merged.extend(agent_restrictions.get(name, []))
+            restrictions[name] = list(dict.fromkeys(merged))
+
+        # 现有 allowlist/denylist 和 confirmation_required 继续作为静态限制，
+        # 但统一转换到 ToolPolicyResolver，不再由各个运行时调用方分别解释。
+        legacy_policy = self.resolve_agent_tool_policy(resolved_agent_id)
+        restrictions["execution_disabled"] = list(
+            dict.fromkeys(
+                [
+                    *restrictions.get("execution_disabled", []),
+                    *legacy_policy.disabled_names,
+                ]
+            )
+        )
+        legacy_tool_config = self._agent_tool_config_from_loaded(
+            config,
+            agent_id=resolved_agent_id,
+        )
+        restrictions["confirmation_required"] = list(
+            dict.fromkeys(
+                [
+                    *restrictions.get("confirmation_required", []),
+                    *legacy_tool_config["confirmation_required"],
+                ]
+            )
+        )
+        return ToolPolicyResolver(
+            policy_defaults=defaults,
+            policy_rules=rules,
+            restrictions=restrictions,
         )
 
     def get_mcp_config(self) -> dict[str, Any]:

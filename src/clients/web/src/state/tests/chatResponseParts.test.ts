@@ -1,9 +1,5 @@
 import type { TraceEvent } from "../../types/backend";
 import { compactWorkMarkdown } from "../../components/chat/ThinkingSection";
-import {
-  liveTimelineItemsToRenderItems,
-  liveTimelineItemsToResponseParts,
-} from "../responseParts";
 import { aggregateConversationEvents } from "../trace/traceAggregation";
 import { buildTraceEvent } from "../traceEvents";
 
@@ -76,44 +72,6 @@ const completedParts = aggregateConversationEvents(
 const completedTool = completedParts.find((item) => item.kind === "aggregated_tool");
 assert(completedTool?.active === false, "完成工具刷新恢复后不得继续显示 spinner");
 assert(completedTool?.resultText === "# README", "刷新恢复应保留工具输出");
-const liveResponseParts = liveTimelineItemsToResponseParts(completedParts);
-assert(
-  liveResponseParts.map((part) => part.kind).join(",") ===
-    "reasoning,tool_call,tool_result,text",
-  "live 文本和工具必须先进入统一 response part 顺序",
-);
-assert(
-  liveResponseParts.find((part) => part.kind === "tool_call")?.tool_call_id === null,
-  "live 不得把流式 part_id 冒充 tool_call_id",
-);
-const identifiedLiveParts = liveTimelineItemsToResponseParts(
-  aggregateConversationEvents(
-    [
-      event(30, "tool_call_start", {
-        tool_name: "read_file",
-        tool_call_id: "call-actual",
-        args: {},
-      }, "tool_identified"),
-      event(31, "tool_call_end", {
-        tool_call_id: "call-actual",
-        result: "ok",
-      }, "tool_identified"),
-    ],
-    "conversation_identified_tool",
-    false,
-  ),
-);
-assert(
-  identifiedLiveParts.find((part) => part.kind === "tool_call")?.tool_call_id ===
-    "call-actual",
-  "live 应保留事件中真实的 tool_call_id",
-);
-const normalizedLiveItems = liveTimelineItemsToRenderItems(completedParts);
-assert(
-  normalizedLiveItems.filter((item) => item.kind !== "trace").map((item) => item.id).join(",") ===
-    "reasoning_1,tool_1,markdown_1",
-  "live 经过统一 response part renderer 后不得改变工作部件顺序",
-);
 
 const failedResultParts = aggregateConversationEvents(
   [

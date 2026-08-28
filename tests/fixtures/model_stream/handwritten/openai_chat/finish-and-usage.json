@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "finish-and-usage",
+    "protocol": "openai_chat_sse",
+    "provider": "openai_compatible",
+    "model": "big-pickle"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "frames": [
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-usage",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "role": "assistant",
+                    "content": "完成"
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-usage",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [],
+              "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 3,
+                "total_tokens": 13
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-usage",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {},
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "done",
+            "encoding": "text",
+            "payload": "[DONE]"
+          }
+        ]
+      }
+    }
+  ]
+}

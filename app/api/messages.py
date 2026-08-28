@@ -16,8 +16,8 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.runtime.session_orchestrator import SessionOrchestrator
-from app.schemas.public_v2.common import APIResponse, CursorPage
-from app.schemas.public_v2.message import (
+from app.schemas.internal_v2.common import APIResponse, CursorPage
+from app.schemas.internal_v2.message import (
     AgentStateMessagesDTO,
     MessageDTO,
     MessageReplayAccepted,
@@ -26,7 +26,7 @@ from app.schemas.public_v2.message import (
     MessageRunRequest,
     SessionMessageDispatchRequest,
 )
-from app.schemas.public_v2.pending_request import (
+from app.schemas.internal_v2.pending_request import (
     PendingRequestListDTO,
     PendingRequestPolicyUpdateRequest,
     PendingRequestUpdateRequest,

@@ -11,6 +11,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from app.core.path_utils import get_boxteam_root
+from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
 from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_BROWSER_BACKEND_URL = "http://127.0.0.1:8015"
@@ -87,7 +88,7 @@ class BrowserManagerClient:
         for browser in data:
             if not isinstance(browser, dict):
                 raise RuntimeError(f"浏览器管理器列表包含非对象记录: {browser!r}")
-            normalized = dict(browser)
+            normalized = browser_page_to_json(browser_page_to_proto(browser))
             browser_id = normalized.get("browser_id")
             if not isinstance(browser_id, str) or not browser_id:
                 raise RuntimeError(f"浏览器记录缺少 browser_id: {normalized}")
@@ -226,9 +227,16 @@ class BrowserManagerClient:
         data = response.get("data")
         if not isinstance(data, dict):
             raise RuntimeError(f"浏览器管理器返回格式错误: {response}")
-        normalized = dict(data)
+        normalized = self._normalize_data(data)
         normalized.pop("attach_url", None)
         return normalized
+
+    @staticmethod
+    def _normalize_data(data: dict[str, Any]) -> dict[str, Any]:
+        required_fields = {"browser_id", "page_id", "session_id", "status"}
+        if required_fields.issubset(data):
+            return browser_page_to_json(browser_page_to_proto(data))
+        return dict(data)
 
     async def _json_request(
         self,

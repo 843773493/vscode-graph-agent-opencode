@@ -1,0 +1,5 @@
+{
+  "scenario_id": "reasoning-stream",
+  "asset": "handwritten/openai_chat/reasoning-stream.json",
+  "business_assertion": "reasoning-and-visible-output"
+}

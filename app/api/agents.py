@@ -3,12 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_agent_service, get_request_id, verify_local_token
-from app.schemas.public_v2.agent import (
+from app.schemas.internal_v2.agent import (
     AgentDTO,
     WorkspaceDefaultAgentUpdateRequest,
     WorkspaceDefaultProviderUpdateRequest,
 )
-from app.schemas.public_v2.common import APIResponse
+from app.schemas.internal_v2.common import APIResponse
 from app.services.business.agent_service import AgentService
 
 router = APIRouter(prefix="/agents", tags=["agents"])

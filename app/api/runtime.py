@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_log_service, get_request_id, get_runtime_service, verify_local_token
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.runtime import (
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.runtime import (
     RuntimeDrainResultDTO,
     RuntimeStatusDTO,
     UiSnapshotResultDTO,

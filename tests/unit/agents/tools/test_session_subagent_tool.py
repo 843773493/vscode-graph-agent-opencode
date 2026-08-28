@@ -8,7 +8,7 @@ from app.agents.tools.session_subagent import create_session_subagent_tool
 from app.abstractions.session_subagent import SessionSubagentAccepted
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.core.job_context import reset_current_job_id, set_current_job_id
-from app.schemas.public_v2.session import SessionDTO, SessionDelegationDTO
+from app.schemas.internal_v2.session import SessionDTO, SessionDelegationDTO
 
 
 class _SessionSubagentService:

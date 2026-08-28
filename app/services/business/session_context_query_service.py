@@ -10,8 +10,8 @@ from app.abstractions.session_context import (
     SessionInformationSourceProtocol,
     SessionLookupProtocol,
 )
-from app.schemas.public_v2.session import SessionDTO
-from app.schemas.public_v2.session_context import (
+from app.schemas.internal_v2.session import SessionDTO
+from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
     SessionContextReadRequest,
     SessionContextReadResultDTO,

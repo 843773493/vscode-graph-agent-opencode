@@ -23,7 +23,7 @@ from app.core.path_utils import (
     get_user_workspace_root,
     safe_join,
 )
-from app.schemas.public_v2.workspace import (
+from app.schemas.internal_v2.workspace import (
     WorkspaceContextDTO,
     WorkspaceDTO,
     WorkspaceFileContentDTO,

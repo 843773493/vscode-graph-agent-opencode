@@ -53,6 +53,13 @@ def e2e_config_path() -> str:
     return str(Path.cwd().resolve() / "configs" / "tests" / "default.jsonc")
 
 
+@pytest.fixture(scope="module")
+def e2e_model_stream_config_path() -> str | None:
+    """允许单个 E2E 模块显式注入 model stream JSONC；默认不启用。"""
+
+    return None
+
+
 @pytest.fixture(scope="module", autouse=True)
 def e2e_workspace_config_path(
     e2e_workspace_root_path: str,
@@ -77,15 +84,22 @@ def e2e_backend_process(
     e2e_workspace_config_path: str,
     e2e_backend_port: int,
     is_debug: bool,
+    e2e_model_stream_config_path: str | None,
 ) -> Generator[subprocess.Popen[str], None, None]:
     if not Path(e2e_workspace_config_path).is_file():
         raise FileNotFoundError(f"E2E 工作区配置不存在: {e2e_workspace_config_path}")
     debugpy_port = int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT")) if is_debug else None
+    env_overrides = (
+        {"BOXTEAM_TEST_MODEL_STREAM_CONFIG": e2e_model_stream_config_path}
+        if e2e_model_stream_config_path is not None
+        else None
+    )
     handle = start_backend_process(
         workspace_root=e2e_workspace_root_path,
         port=e2e_backend_port,
         log_name="e2e-backend",
         debugpy_port=debugpy_port,
+        env_overrides=env_overrides,
     )
     if debugpy_port is not None:
         print(

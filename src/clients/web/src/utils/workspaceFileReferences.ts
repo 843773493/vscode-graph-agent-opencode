@@ -27,7 +27,7 @@ const COMMON_FILE_EXTENSIONS = new Set([
 
 export function isLikelyWorkspaceFileReference(target: string): boolean {
   const normalized = target.trim().replace(/\\/g, "/");
-  if (!normalized || /\s/u.test(normalized)) {
+  if (!normalized || /\s/u.test(normalized) || /[<>]/u.test(normalized)) {
     return false;
   }
   if (

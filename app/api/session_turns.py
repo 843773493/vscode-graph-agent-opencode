@@ -11,8 +11,8 @@ from app.api.deps import (
 )
 from app.core.exceptions import NotFoundError
 from app.core.history_loading import parse_history_loading_header
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.turn import (
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.turn import (
     SessionTurnBootstrapDTO,
     TurnHistoryLoadRequest,
     TurnHistoryPageDTO,

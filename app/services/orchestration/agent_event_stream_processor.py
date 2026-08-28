@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import copy
+import json
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,7 +29,15 @@ from app.agents.tools.apply_patch import (
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
+from app.core.turn_execution_scope import (
+    CancellationSignal,
+    ScopeCancelledError,
+    TurnExecutionScope,
+    reset_current_turn_execution_scope,
+    set_current_turn_execution_scope,
+)
 from app.schemas.event import ModelTokenUsagePayload
+from app.services.infrastructure.resource_manager import resource_refs_from_tool_payload
 from app.services.infrastructure.tool_output_store import (
     ToolOutputStore,
     extract_tool_output_reference,
@@ -41,12 +51,12 @@ from app.services.orchestration.agent_stream_helpers import (
     is_tracked_chat_model_event,
     normalize_tool_args,
 )
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", APPLY_PATCH_TOOL_NAME}
-TEXT_DELTA_FLUSH_CHARS = 128
-TEXT_DELTA_FLUSH_SECONDS = 0.04
 STREAM_SESSION_ID_METADATA_KEY = "boxteam_session_id"
 STREAM_JOB_ID_METADATA_KEY = "boxteam_job_id"
+SUBAGENT_TOOL_NAMES = frozenset({"task"})
 
 
 def _model_end_contains_tool_calls(value: object) -> bool:
@@ -105,7 +115,6 @@ class SuccessfulToolCall:
 @dataclass(frozen=True, slots=True)
 class AgentEventStreamResult:
     final_text: str
-    final_text_part_id: str | None
     latest_model_content_blocks: tuple[dict[str, object], ...]
     last_tool_result_text: str
     successful_tool_calls: tuple[SuccessfulToolCall, ...] = ()
@@ -331,6 +340,28 @@ def _build_tool_display_context(
     )
 
 
+def _activity_result_detail(
+    result_text: str,
+    *,
+    tool_name: str,
+    agent_id: str,
+) -> dict[str, object]:
+    """从工具结果提取已允许进入 Activity detail 的最小事实。"""
+    detail: dict[str, object] = {
+        "phase": "completed",
+        "agent_id": agent_id,
+    }
+    try:
+        parsed = json.loads(result_text)
+    except json.JSONDecodeError:
+        parsed = None
+    if tool_name in SUBAGENT_TOOL_NAMES and isinstance(parsed, Mapping):
+        child_session_id = parsed.get("child_session_id")
+        if isinstance(child_session_id, str) and child_session_id:
+            detail["child_turn_id"] = child_session_id
+    return detail
+
+
 async def process_agent_event_stream(
     *,
     agent: Any,
@@ -343,26 +374,29 @@ async def process_agent_event_stream(
     publish: Callable[[str, dict[str, Any]], Awaitable[None]],
     session_changes_service: SessionChangesRecorderProtocol,
     workspace_root: Path,
+    message_stream_runtime: MessageStreamRuntime | None = None,
+    cancellation_signal: CancellationSignal | None = None,
+    execution_scope: TurnExecutionScope | None = None,
+    model_timeout_seconds: float | None = None,
 ) -> AgentEventStreamResult:
     """消费 DeepAgent 事件流，并发布前端可观察的 trace 事件。"""
     collected_text_parts: list[str] = []
     latest_model_part_order: list[str] = []
     latest_model_parts: dict[str, dict[str, object]] = {}
-    current_text_part_id: str | None = None
-    current_text_part_kind: str | None = None
-    current_text_part_source: dict[str, object] = {}
-    text_part_chunks: dict[str, list[str]] = {}
-    text_part_kinds: dict[str, str] = {}
-    started_text_part_ids: set[str] = set()
-    pending_text_delta_chunks: list[str] = []
-    last_text_delta_flush_at = time.monotonic()
     tool_contexts_by_run_id: dict[str, ToolEventDisplayContext] = {}
+    activity_bindings_by_run_id: dict[
+        str, tuple[tuple[str, str, str | None], ...]
+    ] = {}
+    tool_scopes_by_run_id: dict[str, TurnExecutionScope] = {}
+    message_stream_tool_call_ids_by_run_id: dict[str, str] = {}
     file_edit_snapshots_by_run_id: dict[str, list[FileEditSnapshot]] = {}
     last_tool_result_text = ""
     successful_tool_calls: list[SuccessfulToolCall] = []
     completed_custom_tool_names: list[str] = []
     tracked_model_run_ids: set[str] = set()
     tracked_model_run_order: list[str] = []
+    model_scopes_by_run_id: dict[str, TurnExecutionScope] = {}
+    model_scope_tokens_by_run_id: dict[str, object] = {}
     model_usage_by_run_id: dict[str, ModelTokenUsagePayload] = {}
     tool_output_store = ToolOutputStore(workspace_root=workspace_root)
     agent_has_tool_registry = callable(getattr(agent, "get_graph", None))
@@ -380,45 +414,6 @@ async def process_agent_event_stream(
             return
         tracked_model_run_ids.add(run_id)
         tracked_model_run_order.append(run_id)
-
-    async def flush_text_delta() -> None:
-        nonlocal pending_text_delta_chunks, last_text_delta_flush_at
-        if current_text_part_id is None or current_text_part_kind is None:
-            return
-        text = "".join(pending_text_delta_chunks)
-        if not text:
-            return
-        await publish(
-            EventType.TEXT_DELTA,
-            {
-                "part_id": current_text_part_id,
-                "kind": current_text_part_kind,
-                "text": text,
-                **current_text_part_source,
-            },
-        )
-        pending_text_delta_chunks = []
-        last_text_delta_flush_at = time.monotonic()
-
-    async def close_current_text_part() -> None:
-        nonlocal current_text_part_id, current_text_part_kind, current_text_part_source
-        nonlocal pending_text_delta_chunks
-        if current_text_part_id is None or current_text_part_kind is None:
-            return
-        await flush_text_delta()
-        await publish(
-            EventType.TEXT_END,
-            {
-                "part_id": current_text_part_id,
-                "kind": current_text_part_kind,
-                "text": "".join(text_part_chunks[current_text_part_id]),
-                **current_text_part_source,
-            },
-        )
-        current_text_part_id = None
-        current_text_part_kind = None
-        current_text_part_source = {}
-        pending_text_delta_chunks = []
 
     def record_latest_model_part(part: AgentStreamContentPart) -> None:
         existing = latest_model_parts.get(part.part_id)
@@ -493,66 +488,25 @@ async def process_agent_event_stream(
             merged_extras.update(part.extras)
             existing["extras"] = merged_extras
 
-    async def publish_text_delta(part: AgentStreamContentPart) -> None:
-        nonlocal current_text_part_id, current_text_part_kind, last_text_delta_flush_at
-        nonlocal current_text_part_source
-        if current_text_part_id != part.part_id:
-            await close_current_text_part()
-        if current_text_part_id is None:
-            current_text_part_id = part.part_id
-            current_text_part_kind = part.kind
-            current_text_part_source = {
-                "carrier_type": part.block_type,
-                "content_block_index": part.index,
-                **(
-                    {"item_index": part.extras["item_index"]}
-                    if part.extras is not None
-                    and isinstance(part.extras.get("item_index"), int)
-                    else {}
-                ),
-            }
-            known_kind = text_part_kinds.get(part.part_id)
-            if known_kind is not None and known_kind != part.kind:
-                raise RuntimeError(
-                    f"模型流 part kind 发生变化: part_id={part.part_id} "
-                    f"{known_kind} -> {part.kind}"
-                )
-            text_part_kinds[part.part_id] = part.kind
-            text_part_chunks.setdefault(part.part_id, [])
-            interrupt_state = SessionInterruptState.get(session_id)
-            if not interrupt_state.active_tools_by_run_id:
-                SessionInterruptState.set(session_id, phase="text", tool_name=None)
-                set_interruptible_phase("text")
-            if part.part_id not in started_text_part_ids:
-                await publish(
-                    EventType.TEXT_START,
-                    {
-                        "part_id": current_text_part_id,
-                        "kind": part.kind,
-                        **current_text_part_source,
-                    },
-                )
-                started_text_part_ids.add(part.part_id)
-        elif current_text_part_kind != part.kind:
-            raise RuntimeError(
-                f"模型流 part kind 发生变化: part_id={part.part_id} "
-                f"{current_text_part_kind} -> {part.kind}"
-            )
-        record_latest_model_part(part)
-        text_part_chunks[part.part_id].append(part.text)
-        pending_text_delta_chunks.append(part.text)
-        pending_length = sum(len(chunk) for chunk in pending_text_delta_chunks)
-        if (
-            pending_length >= TEXT_DELTA_FLUSH_CHARS
-            or time.monotonic() - last_text_delta_flush_at >= TEXT_DELTA_FLUSH_SECONDS
-        ):
-            await flush_text_delta()
+    async def _iter_agent_events() -> AsyncIterator[dict[str, Any]]:
+        try:
+            async for event in agent.astream_events(
+                input_payload,
+                config=stream_config,
+                version="v2",
+            ):
+                yield event
+        except ScopeCancelledError as error:
+            if cancellation_signal is None or not cancellation_signal.is_cancelled:
+                raise
+            raise asyncio.CancelledError(str(error)) from error
 
-    async for event in agent.astream_events(
-        input_payload,
-        config=stream_config,
-        version="v2",
-    ):
+    async for event in _iter_agent_events():
+        if cancellation_signal is not None:
+            try:
+                cancellation_signal.raise_if_cancelled()
+            except ScopeCancelledError as error:
+                raise asyncio.CancelledError(str(error)) from error
         event_type = event.get("event")
         name = event.get("name", "")
         data = event.get("data", {})
@@ -585,13 +539,31 @@ async def process_agent_event_stream(
             continue
 
         if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
-            await close_current_text_part()
             latest_model_part_order.clear()
             latest_model_parts.clear()
             model_run_id = _event_run_id(event)
             if model_run_id:
                 track_model_run(model_run_id)
             model_name = metadata.get("ls_model_name") or "unknown_model"
+            if execution_scope is not None:
+                previous_model_scope = model_scopes_by_run_id.get(model_run_id)
+                if previous_model_scope is not None:
+                    execution_scope.clear_active_operation(previous_model_scope)
+                    await previous_model_scope.close()
+                model_scope = execution_scope.child(
+                    f"model-{model_run_id or len(model_scopes_by_run_id)}",
+                    timeout_seconds=model_timeout_seconds,
+                )
+                model_scopes_by_run_id[model_run_id] = model_scope
+                model_scope_tokens_by_run_id[model_run_id] = (
+                    set_current_turn_execution_scope(model_scope)
+                )
+                execution_scope.set_active_operation(model_scope)
+            if message_stream_runtime is not None:
+                await message_stream_runtime.start_model(
+                    model_run_id or f"model_{int(time.time() * 1000)}",
+                    str(model_name),
+                )
             await publish(
                 EventType.LLM_REQUEST,
                 {
@@ -624,27 +596,38 @@ async def process_agent_event_stream(
                         if part.extras:
                             record_latest_model_part(part)
                         continue
+                    record_latest_model_part(part)
                     SessionInterruptState.set(
                         session_id,
                         current_text="".join(collected_text_parts),
                     )
-                    await publish_text_delta(part)
                     continue
                 if part.text and (part.text.strip() or collected_text_parts):
+                    record_latest_model_part(part)
                     collected_text_parts.append(part.text)
                     SessionInterruptState.set(
                         session_id,
                         current_text="".join(collected_text_parts),
                     )
-                    await publish_text_delta(part)
 
             continue
 
         if event_type == "on_chat_model_end" and is_tracked_chat_model_event(name):
+            if message_stream_runtime is not None:
+                await message_stream_runtime.finish_model()
+            model_scope = model_scopes_by_run_id.pop(_event_run_id(event), None)
+            if execution_scope is not None and model_scope is not None:
+                execution_scope.clear_active_operation(model_scope)
+                scope_token = model_scope_tokens_by_run_id.pop(
+                    _event_run_id(event),
+                    None,
+                )
+                if scope_token is not None:
+                    reset_current_turn_execution_scope(scope_token)
+                await model_scope.close()
             continue
 
         if event_type == "on_tool_start":
-            await close_current_text_part()
             if collected_text_parts:
                 collected_text_parts.clear()
                 SessionInterruptState.set(session_id, current_text="")
@@ -681,6 +664,10 @@ async def process_agent_event_stream(
                     f"工具开始事件使用了重复的 run_id: run_id={run_id} "
                     f"tool={display_context.tool_name}"
                 )
+            if execution_scope is not None:
+                tool_scopes_by_run_id[run_id] = execution_scope.child(
+                    f"tool-{run_id}"
+                )
             tool_contexts_by_run_id[run_id] = display_context
             file_paths = _file_paths_from_tool_args(
                 display_context.tool_name,
@@ -714,6 +701,77 @@ async def process_agent_event_stream(
                 EventType.TOOL_CALL_START,
                 payload,
             )
+            if message_stream_runtime is not None:
+                provider_tool_name = (
+                    display_context.invocation_tool_name
+                    or display_context.tool_name
+                )
+                message_stream_tool_call_id = (
+                    message_stream_runtime.claim_tool_call_id(
+                        provider_tool_name,
+                        display_context.tool_args,
+                    )
+                )
+                if message_stream_tool_call_id is None:
+                    raise RuntimeError(
+                        "工具开始事件无法关联已提交的 provider tool_call: "
+                        f"tool={display_context.tool_name} run_id={run_id}"
+                    )
+                message_stream_tool_call_ids_by_run_id[run_id] = (
+                    message_stream_tool_call_id
+                )
+                await message_stream_runtime.start_tool(
+                    tool_execution_id=run_id,
+                    tool_call_id=message_stream_tool_call_id,
+                    tool_name=display_context.tool_name,
+                )
+                activity_bindings: list[tuple[str, str, str | None]] = []
+                if display_context.tool_name in SUBAGENT_TOOL_NAMES:
+                    activity_id = (
+                        f"{message_stream_runtime.writer.turn_stream_id}:"
+                        f"subagent:{run_id}"
+                    )
+                    await message_stream_runtime.activities.started(
+                        activity_id=activity_id,
+                        kind="subagent.run",
+                        summary="子 Agent 启动中",
+                        cancellable=False,
+                        resumable=True,
+                        side_effect_policy="external",
+                        detail={
+                            "phase": "starting",
+                            "agent_id": agent_id,
+                        },
+                    )
+                    activity_bindings.append((activity_id, "subagent.run", None))
+                resource_refs = resource_refs_from_tool_payload(
+                    display_context.tool_name,
+                    display_context.tool_args,
+                )
+                for resource_id, _resource_kind in resource_refs:
+                    activity_id = (
+                        f"{message_stream_runtime.writer.turn_stream_id}:"
+                        f"resource:{run_id}:{resource_id}"
+                    )
+                    await message_stream_runtime.activities.started(
+                        activity_id=activity_id,
+                        kind="resource.operation",
+                        summary=f"资源操作：{display_context.tool_name}",
+                        cancellable=True,
+                        resumable=False,
+                        side_effect_policy="external",
+                        resource_refs=(resource_id,),
+                        detail={
+                            "resource_id": resource_id,
+                            "operation": display_context.tool_name,
+                            "phase": "started",
+                        },
+                    )
+                    activity_bindings.append(
+                        (activity_id, "resource.operation", resource_id)
+                    )
+                if activity_bindings:
+                    activity_bindings_by_run_id[run_id] = tuple(activity_bindings)
             continue
 
         if event_type == "on_tool_end":
@@ -819,14 +877,66 @@ async def process_agent_event_stream(
                 EventType.TOOL_CALL_END,
                 payload,
             )
-
-    final_text_part_id = (
-        current_text_part_id if current_text_part_kind == "markdown" else None
-    )
-    if current_text_part_kind == "reasoning":
-        await close_current_text_part()
-    else:
-        await flush_text_delta()
+            if message_stream_runtime is not None:
+                message_stream_tool_call_id = message_stream_tool_call_ids_by_run_id.pop(
+                    run_id,
+                    None,
+                )
+                if message_stream_tool_call_id is None:
+                    raise RuntimeError(
+                        "工具结束事件缺少已关联的 provider tool_call: "
+                        f"tool={display_context.tool_name} run_id={run_id}"
+                    )
+                await message_stream_runtime.complete_tool(
+                    tool_execution_id=run_id,
+                    tool_call_id=message_stream_tool_call_id,
+                    tool_name=display_context.tool_name,
+                    status=(
+                        "failed"
+                        if raw_output.status == "error"
+                        else "succeeded"
+                    ),
+                    result=result_text,
+                    error=result_text if raw_output.status == "error" else None,
+                )
+                activity_bindings = activity_bindings_by_run_id.pop(run_id, ())
+                for activity_id, activity_kind, resource_id in activity_bindings:
+                    detail = _activity_result_detail(
+                        result_text,
+                        tool_name=display_context.tool_name,
+                        agent_id=agent_id,
+                    )
+                    if activity_kind == "resource.operation":
+                        detail["operation"] = display_context.tool_name
+                        if resource_id is not None:
+                            detail["resource_id"] = resource_id
+                    await message_stream_runtime.activities.updated(
+                        activity_id=activity_id,
+                        kind=activity_kind,
+                        status="stopping",
+                        detail=detail,
+                    )
+                    if raw_output.status == "error":
+                        await message_stream_runtime.activities.failed(
+                            activity_id=activity_id,
+                            kind=activity_kind,
+                            outcome="outcome_unknown",
+                            summary=result_text,
+                            detail=detail,
+                        )
+                    else:
+                        await message_stream_runtime.activities.completed(
+                            activity_id=activity_id,
+                            kind=activity_kind,
+                            summary=(
+                                "子 Agent 已接受并独立运行"
+                                if activity_kind == "subagent.run"
+                                else f"资源操作已完成：{display_context.tool_name}"
+                            ),
+                        )
+            tool_scope = tool_scopes_by_run_id.pop(run_id, None)
+            if tool_scope is not None:
+                await tool_scope.close()
 
     if tracked_model_run_order:
         last_model_run_id = tracked_model_run_order[-1]
@@ -839,9 +949,10 @@ async def process_agent_event_stream(
 
     return AgentEventStreamResult(
         final_text="".join(collected_text_parts).strip(),
-        final_text_part_id=final_text_part_id,
         latest_model_content_blocks=tuple(
-            latest_model_parts[part_id] for part_id in latest_model_part_order
+            part
+            for part_id in latest_model_part_order
+            if (part := latest_model_parts.get(part_id)) is not None
         ),
         last_tool_result_text=last_tool_result_text,
         successful_tool_calls=tuple(successful_tool_calls),

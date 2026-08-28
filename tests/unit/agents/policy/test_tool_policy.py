@@ -18,6 +18,7 @@ from app.agents.policy import (
     resolve_tool_policy,
     validate_tool_dependencies,
 )
+from app.agents.policy.tool_capability import ToolMetadata, ToolPolicyResolver
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
@@ -91,6 +92,53 @@ def test_unknown_tool_name_fails_instead_of_silently_ignoring_typo() -> None:
             universe_names=DEFAULT_AGENT_TOOL_NAMES,
             denylist={"reed_file"},
         )
+
+
+def test_capability_policy_uses_tool_over_group_and_origin_precedence() -> None:
+    resolver = ToolPolicyResolver(
+        policy_defaults={"execution_enabled": True, "model_visible": True},
+        policy_rules={
+            "by_origin": {"mcp": {"model_visible": False}},
+            "by_kind": {"extension": {"model_visible": True}},
+            "by_group": {"mcp:tui": {"model_visible": False}},
+            "by_tool": {"mcp__tui__status": {"model_visible": True}},
+        },
+        restrictions={},
+    )
+
+    policy = resolver.resolve(
+        ToolMetadata(
+            tool_id="mcp__tui__status",
+            origin="mcp",
+            kind="extension",
+            group_id="mcp:tui",
+        )
+    )
+
+    assert policy.model_visible is True
+
+
+def test_capability_restriction_cannot_be_overridden_by_runtime_state() -> None:
+    resolver = ToolPolicyResolver(
+        policy_defaults={"execution_enabled": True, "model_visible": True},
+        policy_rules={},
+        restrictions={"execution_disabled": ["group:debugging"]},
+    )
+
+    policy = resolver.resolve(
+        ToolMetadata(
+            tool_id="start_debugging",
+            origin="builtin",
+            kind="debugging",
+            group_id="debugging",
+        ),
+        execution_override=True,
+        model_visibility_override=True,
+    )
+
+    assert policy.execution_enabled is False
+    assert policy.model_visible is False
+    assert policy.execution_locked is True
 
 
 def test_policy_default_names_match_actual_agent_graph_tools(

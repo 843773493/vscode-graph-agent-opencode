@@ -1,0 +1,6 @@
+{
+  "expectation_id": "split-tool-call-arguments-merge",
+  "kind": "business_semantics",
+  "tool_name": "inspect_fixture",
+  "tool_arguments": {"path": "README.md"}
+}

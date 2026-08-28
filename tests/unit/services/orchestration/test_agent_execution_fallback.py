@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.core.model_delta_context import get_current_model_delta_sink
+from app.core.session_interrupt_state import SessionInterruptState
+from app.services.infrastructure.message_stream_store import MessageStreamTerminalError
 from app.services.orchestration.agent_event_stream_processor import (
     STREAM_JOB_ID_METADATA_KEY,
     STREAM_SESSION_ID_METADATA_KEY,
@@ -50,13 +53,26 @@ def mock_dependencies():
     job_event_bus.publish = AsyncMock()
     session_changes_service = MagicMock()
     tool_selection_store = MagicMock()
-    tool_selection_store.disabled_tools.return_value = set()
+    tool_selection_store.execution_overrides.return_value = {}
+    tool_selection_store.model_visibility_overrides.return_value = {}
 
     dependency_provider = MagicMock()
     dependency_provider.get_message_service.return_value = MagicMock()
     dependency_provider.get_session_service.return_value = MagicMock()
     dependency_provider.get_session_orchestrator.return_value = MagicMock()
     dependency_provider.get_checkpointer.return_value = None
+
+    message_stream_writer = MagicMock()
+    message_stream_writer.turn_stream_id = "strm_test"
+    message_stream_writer.commit = AsyncMock()
+    message_stream_writer.close_completed = AsyncMock()
+    message_stream_writer.close_interrupted = AsyncMock()
+    message_stream_writer.close_failed = AsyncMock()
+    message_stream_store = MagicMock()
+    message_stream_store.open = AsyncMock(return_value=message_stream_writer)
+    message_stream_store.get_state = AsyncMock(
+        return_value={"stream_status": "open", "interrupt_state": None}
+    )
 
     return {
         "config_service": config_service,
@@ -66,6 +82,7 @@ def mock_dependencies():
         "session_changes_service": session_changes_service,
         "tool_selection_store": tool_selection_store,
         "dependency_provider": dependency_provider,
+        "message_stream_store": message_stream_store,
     }
 
 
@@ -85,6 +102,15 @@ def create_chunk(
     chunk.content = content
     chunk.message = None
     chunk.tool_calls = tool_calls or []
+    chunk.tool_call_chunks = [
+        {
+            "index": index,
+            "id": tool_call["id"],
+            "name": tool_call["name"],
+            "args": tool_call.get("args", {}),
+        }
+        for index, tool_call in enumerate(tool_calls or [])
+    ]
     chunk.additional_kwargs = {}
     chunk.usage_metadata = None
     chunk.id = "test-id"
@@ -113,6 +139,7 @@ def _make_service(deps):
         dependency_provider=deps["dependency_provider"],
         session_changes_service=deps["session_changes_service"],
         tool_selection_store=deps["tool_selection_store"],
+        message_stream_store=deps["message_stream_store"],
         workspace_root=Path.cwd(),
     )
 
@@ -139,7 +166,7 @@ def test_agent_cache_rebuilds_after_config_revision_changes(
 
     assert build_runtime.call_count == 2
     assert list(service._agent_cache) == [
-        ("ses_test", "test_agent", "revision-b"),
+        ("ses_test", "test_agent", "revision-b", (), ()),
     ]
 
 
@@ -254,7 +281,6 @@ async def test_delegated_report_is_not_enforced_by_default(mock_dependencies):
     service = _make_service(mock_dependencies)
     stream_result = AgentEventStreamResult(
         final_text="普通文本结果",
-        final_text_part_id="part_default_optional",
         latest_model_content_blocks=(),
         last_tool_result_text="",
     )
@@ -297,7 +323,6 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
     stream_results = [
         AgentEventStreamResult(
             final_text=f"普通文本 {index}",
-            final_text_part_id=f"part_{index}",
             latest_model_content_blocks=(),
             last_tool_result_text="",
         )
@@ -354,7 +379,6 @@ async def test_delegated_progress_only_cannot_replace_final_result(
     stream_results = [
         AgentEventStreamResult(
             final_text=f"普通结论 {index}",
-            final_text_part_id=f"part_progress_{index}",
             latest_model_content_blocks=(),
             last_tool_result_text="accepted",
             successful_tool_calls=(progress_call,),
@@ -396,13 +420,11 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
     stream_results = [
         AgentEventStreamResult(
             final_text="普通回答",
-            final_text_part_id="part_plain",
             latest_model_content_blocks=(),
             last_tool_result_text="",
         ),
         AgentEventStreamResult(
             final_text="已通过会话工具回复",
-            final_text_part_id="part_tool_reply",
             latest_model_content_blocks=(),
             last_tool_result_text="accepted",
             successful_tool_calls=(
@@ -476,7 +498,6 @@ async def test_delegated_child_relays_cross_session_updates_to_its_parent(
     outgoing_kind = "progress" if incoming_kind == "progress" else "result"
     stream_result = AgentEventStreamResult(
         final_text="继续执行并完成",
-        final_text_part_id="part_result",
         latest_model_content_blocks=(),
         last_tool_result_text="accepted",
         successful_tool_calls=(
@@ -525,9 +546,9 @@ async def test_delegated_child_relays_cross_session_updates_to_its_parent(
 async def test_primary_success_no_fallback(mock_dependencies):
     """测试：主模型成功时，不使用 fallback。"""
     deps = mock_dependencies
-    deps["tool_selection_store"].disabled_tools.return_value = {
-        "apply_patch",
-        "test_tool_2",
+    deps["tool_selection_store"].execution_overrides.return_value = {
+        "apply_patch": False,
+        "test_tool_2": False,
     }
     service = _make_service(deps)
 
@@ -563,15 +584,15 @@ async def test_primary_success_no_fallback(mock_dependencies):
 
         assert result == "主模型成功"
         assert mock_build.call_count == 1
-        assert mock_build.call_args.kwargs["tool_denylist"] == {
-            "apply_patch",
-            "test_tool_2",
+        assert mock_build.call_args.kwargs["execution_overrides"] == {
+            "apply_patch": False,
+            "test_tool_2": False,
         }
 
 
 @pytest.mark.asyncio
 async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
-    """reasoning 流应只作为 reasoning 事件，不应污染正式回复。"""
+    """reasoning 流只参与最终聚合，不应污染正式回复或旧实时事件。"""
     deps = mock_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
@@ -642,24 +663,16 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
         )
 
     assert result == "OK"
-    text_delta_payloads = [
-        call.kwargs["payload"]
+    assert not [
+        call
         for call in deps["job_event_bus"].publish.call_args_list
         if call.kwargs.get("event_type") == "text_delta"
     ]
-    assert [
-        (payload["text"], payload["kind"])
-        for payload in text_delta_payloads
-    ] == [
-        ("先判断用户只要 OK。", "reasoning"),
-        ("OK", "markdown"),
-    ]
-    assert text_delta_payloads[0]["part_id"] != text_delta_payloads[1]["part_id"]
 
 
 @pytest.mark.asyncio
-async def test_text_deltas_share_stable_part_id(mock_dependencies):
-    """同一个 Markdown part 的多个增量必须共享稳定 part_id。"""
+async def test_model_event_stream_does_not_recreate_legacy_text_events(mock_dependencies):
+    """模型事件流不应重新创建消息流已经替代的旧文本事件。"""
     deps = mock_dependencies
     service = _make_service(deps)
 
@@ -706,19 +719,11 @@ async def test_text_deltas_share_stable_part_id(mock_dependencies):
         )
 
     assert result == "第一段\n\n第二段"
-    part_events = [
+    assert not [
         call
         for call in deps["job_event_bus"].publish.call_args_list
         if call.kwargs.get("event_type") in {"text_start", "text_delta", "text_end"}
     ]
-    assert [call.kwargs["event_type"] for call in part_events] == [
-        "text_start",
-        "text_delta",
-        "text_end",
-    ]
-    assert len({call.kwargs["payload"]["part_id"] for call in part_events}) == 1
-    assert part_events[1].kwargs["payload"]["text"] == "第一段\n\n第二段"
-    assert part_events[-1].kwargs["payload"]["text"] == "第一段\n\n第二段"
 
 
 @pytest.mark.asyncio
@@ -837,7 +842,6 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
     stream_results = [
         AgentEventStreamResult(
             final_text="根据 AG",
-            final_text_part_id="part_first",
             latest_model_content_blocks=(
                 {
                     "type": "text",
@@ -851,7 +855,6 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
         ),
         AgentEventStreamResult(
             final_text="4568",
-            final_text_part_id="part_second",
             latest_model_content_blocks=(
                 {
                     "type": "text",
@@ -951,20 +954,11 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(mock_depe
         )
 
     assert result == "OK"
-    text_delta_payloads = [
-        call.kwargs["payload"]
+    assert not [
+        call
         for call in deps["job_event_bus"].publish.call_args_list
         if call.kwargs.get("event_type") == "text_delta"
     ]
-    assert [
-        (payload["text"], payload["kind"])
-        for payload in text_delta_payloads
-    ] == [
-        ("先判断用户只要 OK。", "reasoning"),
-        ("OK", "markdown"),
-    ]
-    assert text_delta_payloads[0]["part_id"] != text_delta_payloads[1]["part_id"]
-    assert all("type" not in payload["text"] for payload in text_delta_payloads)
 
 
 @pytest.mark.asyncio
@@ -991,20 +985,25 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(mock_de
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
     ) as mock_build:
         async def mock_events(*args, **kwargs):
+            tool_chunk = create_chunk(
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "python_exec",
+                        "args": {},
+                    }
+                ],
+            )
+            delta_sink = get_current_model_delta_sink()
+            if delta_sink is None:
+                raise AssertionError("测试模型流缺少消息 delta sink")
+            await delta_sink.accept_message_chunk(tool_chunk)
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
                 "data": {
-                    "chunk": create_chunk(
-                        "",
-                        tool_calls=[
-                            {
-                                "id": "call_1",
-                                "name": "python_exec",
-                                "args": {},
-                            }
-                        ],
-                    )
+                    "chunk": tool_chunk,
                 },
                 "metadata": stream_metadata(),
             }
@@ -1227,3 +1226,240 @@ async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
         if c.kwargs.get("event_type") == "agent_start"
     ]
     assert len(publish_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_retry_keeps_model_attempt_boundaries(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+    stream_results = [
+        AgentEventStreamResult(
+            final_text="",
+            latest_model_content_blocks=(),
+            last_tool_result_text="",
+        ),
+        AgentEventStreamResult(
+            final_text="最终答案",
+            latest_model_content_blocks=(),
+            last_tool_result_text="",
+        ),
+    ]
+    attempt = 0
+
+    async def process_with_retry(*, message_stream_runtime, **_kwargs):
+        nonlocal attempt
+        attempt += 1
+        model_call_id = f"model_{attempt}"
+        await message_stream_runtime.start_model(model_call_id, "primary")
+        await message_stream_runtime.accept_message_chunk(
+            create_chunk(
+                "中间内容" if attempt == 1 else "最终答案",
+                part_id=f"part_{attempt}",
+                index=0,
+            )
+        )
+        await message_stream_runtime.finish_model()
+        return stream_results.pop(0)
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_with_retry,
+        ),
+    ):
+        result = await service.run_step(
+            session_id="ses_retry",
+            message="重试",
+            agent_id="test_agent",
+            job_id="job_retry",
+            message_id="msg_retry",
+            message_created_at="2026-07-20T00:00:00+00:00",
+        )
+
+    assert result == "最终答案"
+    committed_types = [
+        call.args[0]
+        for call in mock_dependencies["message_stream_store"].open.return_value.commit.await_args_list
+    ]
+    assert committed_types.count("model.started") == 2
+    assert committed_types.count("model.completed") == 2
+    assert committed_types.count("model.retrying") == 1
+    mock_dependencies["message_stream_store"].open.return_value.close_completed.assert_awaited_once()
+    completed_outcomes = [
+        call.args[1]["outcome"]
+        for call in mock_dependencies["message_stream_store"].open.return_value.commit.await_args_list
+        if call.args[0] == "model.completed"
+    ]
+    assert completed_outcomes == ["validation_failed", "accepted"]
+
+
+@pytest.mark.asyncio
+async def test_interrupt_wins_when_completion_races_with_persisted_request(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer.close_completed.side_effect = MessageStreamTerminalError("已进入中断闸门")
+    mock_dependencies["message_stream_store"].get_state.return_value = {
+        "stream_status": "interrupting",
+        "interrupt_state": {
+            "request_id": "intr_race",
+            "status": "requested",
+        },
+    }
+
+    async def process_success(*, message_stream_runtime, **_kwargs):
+        await message_stream_runtime.start_model("model_race", "primary")
+        await message_stream_runtime.finish_model()
+        return AgentEventStreamResult(
+            final_text="竞态结果",
+            latest_model_content_blocks=(),
+            last_tool_result_text="",
+        )
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_success,
+        ),
+    ):
+        result = await service.run_step(
+            session_id="ses_race",
+            message="竞态",
+            agent_id="test_agent",
+            job_id="job_race",
+            message_id="msg_race",
+            message_created_at="2026-07-20T00:00:00+00:00",
+        )
+
+    assert result == "竞态结果"
+    writer.close_interrupted.assert_awaited_once_with("intr_race")
+    writer.close_failed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_without_user_interrupt_closes_as_execution_cancelled(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+
+    async def process_cancelled(**_kwargs):
+        raise asyncio.CancelledError()
+
+    with (  # noqa: SIM117 - 取消异常需要单独断言原始 CancelledError。
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_cancelled,
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.persist_interrupt_checkpoint",
+        ) as persist_checkpoint,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await service.run_step(
+                session_id="ses_cancelled",
+                message="取消",
+                agent_id="test_agent",
+                job_id="job_cancelled",
+                message_id="msg_cancelled",
+                message_created_at="2026-07-20T00:00:00+00:00",
+            )
+
+    persist_checkpoint.assert_called_once()
+    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer.close_failed.assert_awaited_once_with(
+        code="execution_cancelled",
+        message="AgentLoop 在没有用户中断请求的情况下被取消",
+        resumable=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_after_user_interrupt_closes_as_interrupted(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+
+    async def process_user_cancelled(**_kwargs):
+        SessionInterruptState.set(
+            "ses_user_cancelled",
+            interrupt_request_id="intr_user_cancelled",
+            cancellation_reason="user_requested",
+            user_interrupt_reminder_injected=True,
+        )
+        raise asyncio.CancelledError()
+
+    with (  # noqa: SIM117 - 取消异常需要单独断言原始 CancelledError。
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_user_cancelled,
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await service.run_step(
+                session_id="ses_user_cancelled",
+                message="用户打断",
+                agent_id="test_agent",
+                job_id="job_user_cancelled",
+                message_id="msg_user_cancelled",
+                message_created_at="2026-07-20T00:00:00+00:00",
+            )
+
+    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer.close_interrupted.assert_awaited_once_with("intr_user_cancelled")
+    writer.close_failed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_exception_persists_stream_failure_before_rethrow(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+
+    async def process_failed(**_kwargs):
+        raise RuntimeError("上游异常")
+
+    with (  # noqa: SIM117 - 异常路径需要单独断言原始执行异常。
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_failed,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="上游异常"):
+            await service.run_step(
+                session_id="ses_execution_error",
+                message="异常",
+                agent_id="test_agent",
+                job_id="job_execution_error",
+                message_id="msg_execution_error",
+                message_created_at="2026-07-20T00:00:00+00:00",
+            )
+
+    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer.close_failed.assert_awaited_once_with(
+        code="execution_error",
+        message="上游异常",
+        after_interrupt_requested=False,
+        resumable=False,
+    )

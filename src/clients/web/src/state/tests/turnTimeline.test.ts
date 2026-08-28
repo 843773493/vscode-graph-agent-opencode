@@ -369,7 +369,7 @@ describe("Turn timeline revision 合并", () => {
 
     expect(timeline.orderedTurnIds).toHaveLength(64);
     expect(timeline.orderedTurnIds[0]).toBe("job_1");
-    expect(timeline.orderedTurnIds.at(-1)).toBe("job_64");
+    expect(timeline.orderedTurnIds[timeline.orderedTurnIds.length - 1]).toBe("job_64");
   });
 
   test("执行 Turn 水合后隐藏已合并 Job，旧分页也不能重新加入", () => {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -24,13 +24,18 @@ from app.agents.agent_factory import (
 )
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_tool_schema import export_model_tool_json_schema
-from app.agents.policy import catalog_group_for_tool, custom_tool_spec_names
+from app.agents.policy import (
+    ToolMetadata,
+    catalog_group_for_tool,
+    parse_custom_tool_specs,
+)
 from app.agents.skill_runtime import discover_workspace_custom_tool_skill_map
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.resource_manager import ResourceManager
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 if TYPE_CHECKING:
@@ -89,8 +94,11 @@ def build_session_agent_runtime(
     override_model: Any = None,
     model_routing_enabled: bool = True,
     tool_denylist: set[str] | None = None,
-    model_hidden_tool_names: frozenset[str] = frozenset(),
+    execution_overrides: Mapping[str, bool] | None = None,
+    model_visibility_overrides: Mapping[str, bool] | None = None,
     preferred_provider_id: str | None = None,
+    tool_timeout_seconds: float | None = None,
+    resource_manager: ResourceManager | None = None,
     workspace_root: Path,
 ) -> Any:
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
@@ -135,8 +143,11 @@ def build_session_agent_runtime(
         override_model=override_model,
         model_routing_enabled=model_routing_enabled,
         tool_denylist=tool_denylist,
-        model_hidden_tool_names=model_hidden_tool_names,
+        execution_overrides=execution_overrides,
+        model_visibility_overrides=model_visibility_overrides,
         preferred_provider_id=preferred_provider_id,
+        tool_timeout_seconds=tool_timeout_seconds,
+        resource_manager=resource_manager,
         workspace_root=workspace_root,
     )
 
@@ -160,12 +171,31 @@ def get_configured_custom_tool_names(
 ) -> set[str]:
     """返回当前 agent 策略最终启用的自定义扩展工具名。"""
     tool_config = config_service.get_agent_tool_config(agent_id)
-    custom_tool_names = custom_tool_spec_names(
+    resolver = config_service.get_tool_policy_resolver(agent_id)
+    names: set[str] = set()
+    for spec in parse_custom_tool_specs(
         tool_config.get("custom", []),
         context=f"agent {agent_id} 的 tools.custom",
-    )
-    policy = config_service.resolve_agent_tool_policy(agent_id)
-    return set(custom_tool_names & policy.enabled_names)
+    ):
+        known_group = catalog_group_for_tool(spec.name)
+        module_name = spec.factory_path.split(":", 1)[0].rsplit(".", 1)[-1]
+        metadata = ToolMetadata(
+            tool_id=spec.name,
+            origin="custom",
+            kind=(
+                known_group.kind
+                if known_group.kind != "default"
+                else "extension"
+            ),
+            group_id=(
+                known_group.group_id
+                if known_group.kind != "default"
+                else f"extension:{module_name}"
+            ),
+        )
+        if resolver.resolve(metadata).execution_enabled:
+            names.add(spec.name)
+    return names
 
 
 def build_agent_tool_definitions(
@@ -208,6 +238,11 @@ def build_agent_tool_definitions(
             {
                 "id": tool_name,
                 "name": tool_name,
+                "origin": (
+                    "mcp"
+                    if isinstance(mcp_server_id, str) and mcp_server_id
+                    else "builtin"
+                ),
                 "description": getattr(tool, "description", ""),
                 "parameters": parameters,
                 "category": group_fields["kind"],

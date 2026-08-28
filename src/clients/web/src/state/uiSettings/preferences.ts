@@ -1,6 +1,7 @@
 import type {
   WebUiSessionSidebarSettings,
   WebUiSettings,
+  WebUiSettingsUpdate,
 } from "../../types/backend";
 
 export function createDefaultWebUiSettings(): WebUiSettings {
@@ -24,7 +25,7 @@ export function createDefaultWebUiSettings(): WebUiSettings {
 }
 
 export function normalizeWebUiSettings(
-  value: Partial<WebUiSettings>,
+  value: WebUiSettingsUpdate,
 ): WebUiSettings {
   const defaults = createDefaultWebUiSettings();
   return {

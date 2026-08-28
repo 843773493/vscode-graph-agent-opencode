@@ -27,14 +27,15 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.core.exceptions import NotFoundError
-from app.schemas.public_v2.common import APIResponse, CursorPage
-from app.schemas.public_v2.goal import (
+from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
+from app.schemas.internal_v2.common import APIResponse, CursorPage
+from app.schemas.internal_v2.goal import (
     SessionGoalClearResultDTO,
     SessionGoalDTO,
     SessionGoalSetRequest,
 )
-from app.schemas.public_v2.llm_request_log import LLMRequestLogRecordDTO
-from app.schemas.public_v2.session import (
+from app.schemas.internal_v2.llm_request_log import LLMRequestLogRecordDTO
+from app.schemas.internal_v2.session import (
     DeleteSessionResultDTO,
     SessionCompactResultDTO,
     SessionCreateRequest,
@@ -44,21 +45,21 @@ from app.schemas.public_v2.session import (
     SessionForkRequest,
     SessionUpdateRequest,
 )
-from app.schemas.public_v2.session_changes import (
+from app.schemas.internal_v2.session_changes import (
     SessionChangesetDTO,
     SessionChangesetListDTO,
     SessionFileReviewRequest,
     SessionFileReviewResultDTO,
 )
-from app.schemas.public_v2.session_resource import (
+from app.schemas.internal_v2.session_resource import (
     SessionResourceControlRequest,
     SessionResourceControlResultDTO,
     SessionResourceKind,
     SessionResourceListDTO,
 )
-from app.schemas.public_v2.sse import sse_responses
-from app.schemas.public_v2.trace import TraceEventDTO
-from app.schemas.public_v2.workspace import (
+from app.schemas.internal_v2.sse import sse_responses
+from app.schemas.internal_v2.trace import TraceEventDTO
+from app.schemas.internal_v2.workspace import (
     FileTreeShortcutRequest,
     SessionFileTreeSettingsDTO,
 )
@@ -484,10 +485,11 @@ async def _stream_trace_sse(
             except StopAsyncIteration:
                 return
 
-            data = (
-                event.model_dump_json()
-                if hasattr(event, "model_dump_json")
-                else json.dumps(event, ensure_ascii=False, default=str)
+            event_payload = event.model_dump(mode="json")
+            data = json.dumps(
+                trace_to_json(trace_to_proto(event_payload)),
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
             yield f"id: {cursor}\nevent: trace\ndata: {data}\n\n"
             next_event = asyncio.create_task(anext(iterator))

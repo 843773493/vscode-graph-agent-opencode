@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from app.schemas.public_v2.session_changes import (
+from app.schemas.internal_v2.session_changes import (
     SessionChangesetDTO,
     SessionFileChangeKind,
 )

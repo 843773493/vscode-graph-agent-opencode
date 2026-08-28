@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Protocol
 
-from app.schemas.public_v2.common import JobStatus
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.common import JobStatus
+from app.schemas.internal_v2.message import AttachmentRef
 
 
 class JobRuntimeStateProtocol(Protocol):

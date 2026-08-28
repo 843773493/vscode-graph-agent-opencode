@@ -1,0 +1,5 @@
+{
+  "scenario_id": "responses-basic-text",
+  "asset": "handwritten/openai_responses/basic-text.json",
+  "business_assertion": "responses-basic-text-visible-output"
+}

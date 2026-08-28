@@ -1,15 +1,21 @@
 {
-  "created_at": "2026-08-01T00:00:00+00:00",
-  "updated_at": "2026-08-01T00:00:00+00:00",
+  "created_at": "2026-08-27T00:00:00+00:00",
+  "updated_at": "2026-08-27T00:00:00+00:00",
   "session_id": "ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345",
   "workspace_id": "ws_custom_tool_fixture",
-  "title": "上下文压缩与摘要示例",
+  "title": "上下文压缩与摘要示例（handwritten SSE）",
   "title_source": "user",
   "current_agent_id": "default",
-  "current_provider_id": "primary",
+  "current_provider_id": "handwritten_sse_tool",
   "parent_session_id": null,
   "context_source_session_id": null,
   "kind": "normal",
   "delegation": null,
-  "generation_origin": null
+  "generation_origin": {
+    "generator_id": "handwritten-sse-rollout-fixture",
+    "run_id": "handwritten-rollout-history",
+    "idempotency_key": "handwritten-sse:ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345",
+    "generator_type_id": "handwritten_sse",
+    "generator_type_version": "1"
+  }
 }

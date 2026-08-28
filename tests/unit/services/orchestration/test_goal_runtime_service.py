@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import HumanMessage
 
-from app.schemas.public_v2.goal import GoalStatus
+from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.message_service import MessageService
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService

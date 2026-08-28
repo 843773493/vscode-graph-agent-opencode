@@ -1,15 +1,21 @@
 {
-  "created_at": "2026-08-01T00:00:00+00:00",
-  "updated_at": "2026-08-01T00:00:00+00:00",
+  "created_at": "2026-08-27T00:00:00+00:00",
+  "updated_at": "2026-08-27T00:00:00+00:00",
   "session_id": "ses_7e5d3c1b9a8f4762b4d6e8f0a1c23579",
   "workspace_id": "ws_custom_tool_fixture",
-  "title": "多工具调用和大输出示例",
+  "title": "多工具调用和大输出示例（handwritten SSE）",
   "title_source": "user",
   "current_agent_id": "default",
-  "current_provider_id": "primary",
+  "current_provider_id": "handwritten_sse_tool",
   "parent_session_id": null,
   "context_source_session_id": null,
   "kind": "normal",
   "delegation": null,
-  "generation_origin": null
+  "generation_origin": {
+    "generator_id": "handwritten-sse-rollout-fixture",
+    "run_id": "handwritten-rollout-history",
+    "idempotency_key": "handwritten-sse:ses_7e5d3c1b9a8f4762b4d6e8f0a1c23579",
+    "generator_type_id": "handwritten_sse",
+    "generator_type_version": "1"
+  }
 }

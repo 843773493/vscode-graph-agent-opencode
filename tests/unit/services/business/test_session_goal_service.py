@@ -1,6 +1,6 @@
 import pytest
 
-from app.schemas.public_v2.goal import GoalStatus
+from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.session_goal_service import SessionGoalService
 
 

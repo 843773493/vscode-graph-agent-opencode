@@ -1,0 +1,26 @@
+version: v2
+
+plugins:
+  - remote: buf.build/protocolbuffers/python
+    out: app/protocol/generated
+  - remote: buf.build/bufbuild/es
+    out: src/workspace-services/protocol/generated
+    opt:
+      - target=js+dts
+      - import_extension=.js
+  - remote: buf.build/bufbuild/es
+    out: src/clients/web/src/types/protocol_buf_generated
+    opt:
+      - target=js+dts
+      - import_extension=.js
+  - remote: buf.build/community/stephenh-ts-proto
+    out: src/clients/web/src/types/protocol_generated
+    opt:
+      - snakeToCamel=false
+      - esModuleInterop=true
+      - importSuffix=.js
+      - outputJsonMethods=true
+      - outputEncodeMethods=false
+      - oneof=unions
+      - protoJsonFormat=false
+      - useDate=string

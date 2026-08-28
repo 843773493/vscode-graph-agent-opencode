@@ -12,6 +12,7 @@ function tool(
   return {
     tool_id: toolId,
     name: toolId,
+    origin: "builtin",
     description: `${toolId} description`,
     parameters: {},
     category: "general",

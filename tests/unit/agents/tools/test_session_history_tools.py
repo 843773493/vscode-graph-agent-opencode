@@ -13,7 +13,7 @@ from app.agents.tools.session_history import (
     create_read_context_tool,
     create_search_context_tool,
 )
-from app.schemas.public_v2.session_context import (
+from app.schemas.internal_v2.session_context import (
     SessionContextReadResultDTO,
     SessionContextSearchResultDTO,
 )

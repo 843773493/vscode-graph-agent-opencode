@@ -1,0 +1,7 @@
+{
+  "expectation_id": "responses-reasoning-text-default",
+  "protocol": "openai_responses_sse",
+  "reasoning_summary": "先检查请求，再生成默认响应。",
+  "visible_text": "默认响应",
+  "terminal_event": "response.completed"
+}

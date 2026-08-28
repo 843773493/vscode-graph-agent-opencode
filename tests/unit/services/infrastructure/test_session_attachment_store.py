@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 
 from app.core.session_paths import SessionPathResolver, physical_segment
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 
 

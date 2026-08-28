@@ -10,9 +10,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
-from app.schemas.public_v2.common import JobStatus, RunMode
-from app.schemas.public_v2.job import JobDispatchSnapshotDTO, JobDTO
-from app.schemas.public_v2.message import MessageReplayRequest, MessageRunAccepted
+from app.schemas.internal_v2.common import JobStatus, RunMode
+from app.schemas.internal_v2.job import JobDispatchSnapshotDTO, JobDTO
+from app.schemas.internal_v2.message import MessageReplayRequest, MessageRunAccepted
 from app.services.business.message_service import MessageService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 

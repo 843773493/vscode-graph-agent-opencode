@@ -1,54 +1,38 @@
 from pathlib import Path
 
+import pytest
+
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 
 
-def test_tool_selection_persists_execution_and_model_visibility(
-    tmp_path: Path,
-) -> None:
+def test_tool_selection_persists_explicit_runtime_overrides(tmp_path: Path) -> None:
     store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
     store.apply_changes(
         agent_id="default",
-        changes={"apply_patch": (False, False)},
+        changes={"apply_patch": (False, False), "source_debug": (True, True)},
     )
 
+    assert store.execution_overrides("default") == {
+        "apply_patch": False,
+        "source_debug": True,
+    }
+    assert store.model_visibility_overrides("default") == {
+        "apply_patch": False,
+        "source_debug": True,
+    }
     assert store.disabled_tools("default") == {"apply_patch"}
-    assert store.model_hidden_tools(
-        "default", default_hidden_tool_names={"extension_tool"}
-    ) == {"apply_patch", "extension_tool"}
-    assert "future_tool" not in store.disabled_tools("default")
-
-    store.apply_changes(
-        agent_id="default",
-        changes={
-            "read_file": (False, False),
-            "apply_patch": (True, True),
-        },
-    )
-
-    assert store.disabled_tools("default") == {"read_file"}
-    assert store.model_hidden_tools(
-        "default", default_hidden_tool_names={"extension_tool"}
-    ) == {"read_file", "extension_tool"}
 
 
-def test_source_debugging_is_hidden_by_default_but_can_be_enabled(
-    tmp_path: Path,
-) -> None:
+def test_runtime_override_can_enable_a_config_hidden_tool(tmp_path: Path) -> None:
     store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
-
-    assert store.model_hidden_tools(
-        "default", default_hidden_tool_names={"start_debugging"}
-    ) == {"start_debugging"}
 
     store.apply_changes(
         agent_id="default",
         changes={"start_debugging": (True, True)},
     )
 
-    assert store.model_hidden_tools(
-        "default", default_hidden_tool_names={"start_debugging"}
-    ) == set()
+    assert store.execution_overrides("default")["start_debugging"] is True
+    assert store.model_visibility_overrides("default")["start_debugging"] is True
 
 
 def test_tool_selection_keeps_agent_settings_independent(tmp_path: Path) -> None:
@@ -65,3 +49,13 @@ def test_tool_selection_keeps_agent_settings_independent(tmp_path: Path) -> None
 
     assert store.disabled_tools("default") == {"read_file"}
     assert store.disabled_tools("reviewer") == {"apply_patch"}
+
+
+def test_execution_disabled_tool_cannot_be_model_visible(tmp_path: Path) -> None:
+    store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
+
+    with pytest.raises(ValueError, match="不能对模型可见"):
+        store.apply_changes(
+            agent_id="default",
+            changes={"read_file": (False, True)},
+        )

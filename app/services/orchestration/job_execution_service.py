@@ -4,7 +4,7 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
 from app.core.job_event_bus import EventType
-from app.schemas.public_v2.common import JobStatus
+from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.message_service import MessageService
 from app.services.orchestration.session_title_service import SessionTitleService

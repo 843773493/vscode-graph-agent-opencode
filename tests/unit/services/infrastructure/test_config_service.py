@@ -7,7 +7,8 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from app.schemas.public_v2.config import ConfigUpdateRequest
+from app.agents.policy import ToolMetadata
+from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
@@ -99,6 +100,62 @@ def test_config_rejects_provider_without_api_key_or_oauth(tmp_path: Path):
             config_dir=Path.cwd() / "configs",
             config_path=config_path,
         ).validate_workspace_config()
+
+
+def test_tool_policy_resolver_merges_workspace_and_agent_rules(tmp_path: Path):
+    config = _base_config()
+    config["tooling"] = {
+        "policy_defaults": {
+            "execution_enabled": True,
+            "model_visible": True,
+        },
+        "policy_rules": {
+            "by_kind": {"debugging": {"model_visible": False}},
+            "by_group": {},
+            "by_origin": {},
+            "by_tool": {},
+        },
+        "restrictions": {
+            "execution_disabled": [],
+            "model_hidden": [],
+            "confirmation_required": [],
+        },
+    }
+    config["agents"]["default"]["tools"] = {
+        "policy": {
+            "rules": {
+                "by_tool": {"start_debugging": {"model_visible": True}}
+            },
+            "restrictions": {"execution_disabled": ["tool:blocked_tool"]},
+        }
+    }
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=_write_workspace_config(tmp_path, config),
+    )
+
+    resolver = service.get_tool_policy_resolver()
+
+    debugging = resolver.resolve(
+        ToolMetadata(
+            tool_id="start_debugging",
+            origin="builtin",
+            kind="debugging",
+            group_id="debugging",
+        )
+    )
+    blocked = resolver.resolve(
+        ToolMetadata(
+            tool_id="blocked_tool",
+            origin="builtin",
+            kind="default",
+            group_id="default",
+        ),
+        execution_override=True,
+    )
+
+    assert debugging.model_visible is True
+    assert blocked.execution_enabled is False
 
 
 @pytest.mark.asyncio
@@ -916,7 +973,7 @@ async def test_invalid_reload_retains_last_valid_snapshot_and_exposes_error(
     original_revision = service.get_revision()
     config_path.write_text("{ invalid", encoding="utf-8")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         await service.reload()
 
     assert service.get_revision() == original_revision

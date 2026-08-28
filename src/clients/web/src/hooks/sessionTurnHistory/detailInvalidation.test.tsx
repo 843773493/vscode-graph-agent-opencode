@@ -67,6 +67,9 @@ describe("useSessionTurnHistory detail invalidation", () => {
             },
           });
         }
+        if (path.endsWith("/message-stream/snapshot")) {
+          return Response.json({ detail: "message stream not found" }, { status: 404 });
+        }
         throw new Error(`测试收到未预期请求: ${path}`);
       },
       { preconnect: originalFetch.preconnect },
@@ -150,6 +153,9 @@ describe("useSessionTurnHistory detail invalidation", () => {
             request_id: "req_details_future",
             data: { items: [turnDetail(2)], projection_epoch: 2 },
           });
+        }
+        if (path.endsWith("/message-stream/snapshot")) {
+          return Response.json({ detail: "message stream not found" }, { status: 404 });
         }
         throw new Error(`测试收到未预期请求: ${path}`);
       },

@@ -140,6 +140,9 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             },
           });
         }
+        if (path.endsWith("/message-stream/snapshot")) {
+          return Response.json({ detail: "message stream not found" }, { status: 404 });
+        }
         throw new Error(`测试收到未预期请求: ${path}`);
       },
       { preconnect: originalFetch.preconnect },

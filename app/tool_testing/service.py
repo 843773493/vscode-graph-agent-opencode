@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.agent_factory import build_model_from_provider
 from app.core.identifier import create_prefixed_id
-from app.schemas.public_v2.tool_test import (
+from app.schemas.internal_v2.tool_test import (
     ToolTestAttemptDTO,
     ToolTestProviderResultDTO,
     ToolTestRunDTO,

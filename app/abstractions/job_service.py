@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Protocol, TypeVar, runtime_checkable
 
-from app.schemas.public_v2.job import (
+from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
     JobDispatchSnapshotDTO,
@@ -12,8 +12,8 @@ from app.schemas.public_v2.job import (
 )
 
 T = TypeVar("T")
-from app.schemas.public_v2.message import AttachmentRef
-from app.schemas.public_v2.pending_request import (
+from app.schemas.internal_v2.message import AttachmentRef
+from app.schemas.internal_v2.pending_request import (
     DeliveryBoundary,
     DeliveryPolicy,
     PendingRequestListDTO,

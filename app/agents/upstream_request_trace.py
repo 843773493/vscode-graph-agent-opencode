@@ -9,7 +9,6 @@ from typing import Any
 from litellm.integrations.custom_logger import CustomLogger
 from pydantic import SecretStr
 
-
 _REDACTED_KEYS = {
     "api_key",
     "apikey",
@@ -70,6 +69,17 @@ def end_upstream_capture(
     result = [_safe_value(attempt) for attempt in attempts]
     _UPSTREAM_ATTEMPTS.reset(token)
     return result
+
+
+def record_upstream_response(response: Any) -> None:
+    """记录流式 Responses 在 terminal event 中携带的完整响应。"""
+    attempts = _UPSTREAM_ATTEMPTS.get()
+    if attempts is None or response is None:
+        return
+    for attempt in reversed(attempts):
+        if attempt.get("response") is None and attempt.get("error") is None:
+            attempt["response"] = _safe_value(response)
+            return
 
 
 def _request_payload(

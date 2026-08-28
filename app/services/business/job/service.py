@@ -14,16 +14,16 @@ from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
-from app.schemas.public_v2.common import JobStatus, RunMode
-from app.schemas.public_v2.job import (
+from app.schemas.internal_v2.common import JobStatus, RunMode
+from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
     JobDispatchSnapshotDTO,
     JobDTO,
     StepDTO,
 )
-from app.schemas.public_v2.message import AttachmentRef
-from app.schemas.public_v2.pending_request import (
+from app.schemas.internal_v2.message import AttachmentRef
+from app.schemas.internal_v2.pending_request import (
     DeliveryBoundary,
     DeliveryPolicy,
     PendingRequestListDTO,

@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package boxteam.common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+enum ServiceStatus {
+  SERVICE_STATUS_UNSPECIFIED = 0;
+  SERVICE_STATUS_READY = 1;
+  SERVICE_STATUS_DEGRADED = 2;
+  SERVICE_STATUS_OFFLINE = 3;
+  SERVICE_STATUS_UNAVAILABLE = 4;
+}
+
+message ServiceHealth {
+  string service_id = 1;
+  ServiceStatus status = 2;
+  string health_path = 3;
+  string error = 4;
+  google.protobuf.Timestamp checked_at = 5;
+}

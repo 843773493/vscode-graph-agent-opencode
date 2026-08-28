@@ -9,7 +9,8 @@ function makeTool(toolId: string, executionEnabled: boolean): ToolCatalogItem {
   return {
     tool_id: toolId,
     name: toolId,
-    description: null,
+    origin: "builtin",
+    description: "工具描述",
     parameters: {},
     category: "general",
     group_id: "default",

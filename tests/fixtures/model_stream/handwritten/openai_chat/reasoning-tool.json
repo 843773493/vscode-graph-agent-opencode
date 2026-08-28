@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "chat-reasoning-tool",
+    "protocol": "openai_chat_sse",
+    "provider": "openai_compatible",
+    "model": "big-pickle"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "frames": [
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-1",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "role": "assistant",
+                    "reasoning_content": "先读取 "
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-1",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "reasoning_content": "README，再根据工具结果作答。"
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-1",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "tool_calls": [
+                      {
+                        "index": 0,
+                        "id": "call_chat_reasoning_tool",
+                        "type": "function",
+                        "function": {
+                          "name": "read_file",
+                          "arguments": "{\"path\":"
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-1",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "tool_calls": [
+                      {
+                        "index": 0,
+                        "function": {
+                          "arguments": "\"README.md\"}"
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-1",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {},
+                  "finish_reason": "tool_calls"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "done",
+            "encoding": "text",
+            "payload": "[DONE]"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "tool"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "frames": [
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-2",
+              "object": "chat.completion.chunk",
+              "created": 2,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "role": "assistant",
+                    "reasoning_content": "已读取 README，"
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-2",
+              "object": "chat.completion.chunk",
+              "created": 2,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "reasoning_content": "整理最终答复。"
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-2",
+              "object": "chat.completion.chunk",
+              "created": 2,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "content": "工具调用"
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-2",
+              "object": "chat.completion.chunk",
+              "created": 2,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "content": "完成"
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-2",
+              "object": "chat.completion.chunk",
+              "created": 2,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {},
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "done",
+            "encoding": "text",
+            "payload": "[DONE]"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.public_v2.turn import (
+from app.schemas.internal_v2.turn import (
     StaleTurnCursorErrorDTO,
     StaleTurnReferenceErrorDTO,
     TurnDetailDTO,

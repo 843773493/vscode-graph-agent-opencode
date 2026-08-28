@@ -155,10 +155,8 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     ]
     assert assistant.content == [
         {
-            "type": "reasoning",
-            "content": [
-                {"type": "reasoning_text", "text": reasoning_text}
-            ],
+            "type": "reasoning_content",
+            "reasoning_content": reasoning_text,
         },
         {"type": "text", "text": final_text},
     ]
@@ -180,16 +178,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     state_assistant = records[-1]
     assert state_assistant["role"] == "assistant"
     assert state_assistant["response_metadata"]["phase"] == "final_answer"
-    assert state_assistant["content"] == [
-        {
-            "type": "reasoning",
-            "reasoning": reasoning_text,
-        },
-        {
-            "type": "text",
-            "text": final_text,
-        },
-    ]
+    assert state_assistant["content"] == [{"type": "text", "text": final_text}]
 
 
 @pytest.mark.asyncio
@@ -237,7 +226,10 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
     latest = await saver.aget_tuple(config)
     assert latest is not None
     assistant = latest.checkpoint["channel_values"]["messages"][-1]
-    assert assistant.content[0] == reasoning_item
+    assert assistant.content[0] == {
+        "type": "reasoning_items",
+        "reasoning_items": [reasoning_item],
+    }
     assert assistant.content[1] == {"type": "text", "text": "回答"}
     assert assistant.additional_kwargs == {}
 
@@ -354,14 +346,8 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     assert records[3]["role"] == "user"
     assert "<system_reminder>" in records[3]["content"]
     assert reminder in records[3]["content"]
-    assert records[-1]["content"] == [
-        {
-            "type": "reasoning",
-            "reasoning": final_reasoning,
-        },
-        {"type": "text", "text": final_text},
-    ]
-    assert first_reasoning not in records[-1]["content"][0]["reasoning"]
+    assert records[-1]["content"] == [{"type": "text", "text": final_text}]
+    assert first_reasoning not in json.dumps(records[-1], ensure_ascii=False)
 
     visible_messages = await MessageService(checkpointer=saver).list(
         session_id,

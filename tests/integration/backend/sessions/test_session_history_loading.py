@@ -14,7 +14,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.rollout_context_reader import RolloutContextReader
 from app.core.rollout_storage import RolloutStorage
-from app.schemas.public_v2.turn import TurnHistoryLoadRequest
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
 
@@ -375,7 +375,7 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
         },
     )
 
-    assert [item["ordinal"] for item in around["items"]] == list(range(16, 25))
+    assert [item["ordinal"] for item in around["items"]] == list(range(18, 23))
     assert isinstance(around["before_cursor"], str)
     assert isinstance(around["after_cursor"], str)
     assert around["has_before"] is True
@@ -398,8 +398,22 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
         session_id,
         {"direction": "after", "cursor": around["after_cursor"]},
     )
-    assert [item["ordinal"] for item in before["items"]] == [12, 13, 14, 15]
-    assert [item["ordinal"] for item in after["items"]] == [25, 26, 27, 28]
+    assert [item["ordinal"] for item in before["items"]] == [16, 17]
+    assert [item["ordinal"] for item in after["items"]] == [23, 24]
+
+    anchor_only = await _load_history(
+        integration_client,
+        session_id,
+        {
+            "direction": "around",
+            "anchor_turn_id": "job-0020",
+            "before_turns": 0,
+            "after_turns": 0,
+        },
+    )
+    assert [item["ordinal"] for item in anchor_only["items"]] == [20]
+    assert anchor_only["has_before"] is True
+    assert anchor_only["has_after"] is True
 
 
 @pytest.mark.asyncio

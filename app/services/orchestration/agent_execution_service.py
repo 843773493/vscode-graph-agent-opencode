@@ -13,7 +13,6 @@ from app.abstractions.job_step_executor import JobStepExecutor
 from app.abstractions.session_changes import SessionChangesRecorderProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
-from app.agents.policy import DEBUGGING_TOOL_NAMES
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
@@ -28,7 +27,18 @@ from app.core.job_context import (
     set_interruptible_phase,
 )
 from app.core.job_event_bus import EventType
+from app.core.model_delta_context import (
+    reset_current_model_delta_sink,
+    set_current_model_delta_sink,
+)
 from app.core.session_interrupt_state import SessionInterruptState
+from app.core.turn_execution_scope import (
+    AgentControlInbox,
+    AgentLoopControlCoordinator,
+    TurnExecutionScopeRegistry,
+    reset_current_turn_execution_scope,
+    set_current_turn_execution_scope,
+)
 from app.prompting import PromptSection, internal_message_factory
 from app.runtime.agent_runtime import (
     AgentRuntimeDependencyProvider,
@@ -38,7 +48,7 @@ from app.runtime.agent_runtime import (
     get_workspace_custom_tool_skill_sources,
 )
 from app.schemas.event import ModelTokenUsagePayload
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_display import (
     DISPLAY_CONTENT_METADATA_KEY,
     project_message_for_display,
@@ -52,6 +62,11 @@ from app.services.business.system_reminder_checkpoint_service import (
 )
 from app.services.infrastructure.attachment_content_service import build_human_content
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.message_stream_store import (
+    MessageStreamStore,
+    MessageStreamTerminalError,
+)
+from app.services.infrastructure.resource_manager import ResourceManager
 from app.services.mapping.agent_content_mapper import split_agent_content
 from app.services.orchestration.agent_event_stream_processor import (
     SuccessfulToolCall,
@@ -61,6 +76,10 @@ from app.services.orchestration.agent_event_stream_processor import (
 from app.services.orchestration.agent_stream_helpers import (
     build_human_response_metadata,
     unwrap_json_string_tool_result,
+)
+from app.services.orchestration.message_stream_runtime import (
+    MessageStreamRuntime,
+    MessageStreamTraceObserver,
 )
 
 EMPTY_RESPONSE_RETRY_LIMIT = 2
@@ -198,7 +217,11 @@ class AgentExecutionService(JobStepExecutor):
         dependency_provider: AgentRuntimeDependencyProvider,
         session_changes_service: SessionChangesRecorderProtocol,
         tool_selection_store: ToolSelectionReader,
+        message_stream_store: MessageStreamStore,
         workspace_root: Path,
+        resource_manager: ResourceManager | None = None,
+        model_timeout_seconds: float | None = None,
+        tool_timeout_seconds: float | None = None,
     ):
         self._agent_cache = {}
         self._config_service = config_service
@@ -208,7 +231,12 @@ class AgentExecutionService(JobStepExecutor):
         self._dependency_provider = dependency_provider
         self._session_changes_service = session_changes_service
         self._tool_selection_store = tool_selection_store
+        self._message_stream_store = message_stream_store
         self._workspace_root = workspace_root
+        self._resource_manager = resource_manager
+        self._model_timeout_seconds = model_timeout_seconds
+        self._tool_timeout_seconds = tool_timeout_seconds
+        self.execution_scope_registry = TurnExecutionScopeRegistry()
 
     def _get_or_create_agent(self, session_id: str, agent_id: str | None = None):
         if self._config_service is None:
@@ -218,7 +246,21 @@ class AgentExecutionService(JobStepExecutor):
         with self._config_service.use_snapshot(config_snapshot):
             resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
             config_revision = self._config_service.get_revision()
-            cache_key = (session_id, resolved_agent_id, config_revision)
+            execution_overrides = self._tool_selection_store.execution_overrides(
+                resolved_agent_id
+            )
+            model_visibility_overrides = (
+                self._tool_selection_store.model_visibility_overrides(
+                    resolved_agent_id
+                )
+            )
+            cache_key = (
+                session_id,
+                resolved_agent_id,
+                config_revision,
+                tuple(sorted(execution_overrides.items())),
+                tuple(sorted(model_visibility_overrides.items())),
+            )
             if cache_key in self._agent_cache:
                 return self._agent_cache[cache_key]
 
@@ -230,6 +272,10 @@ class AgentExecutionService(JobStepExecutor):
                 background_message_bus=self._background_message_bus,
                 job_event_bus=self._bus,
                 dependency_provider=self._dependency_provider,
+                execution_overrides=execution_overrides,
+                model_visibility_overrides=model_visibility_overrides,
+                tool_timeout_seconds=self._tool_timeout_seconds,
+                resource_manager=self._resource_manager,
                 workspace_root=self._workspace_root,
             )
 
@@ -364,6 +410,49 @@ class AgentExecutionService(JobStepExecutor):
                 agent_id=resolved_agent_id,
             )
 
+        message_stream_writer = await self._message_stream_store.open(
+            session_id=session_id,
+            turn_id=effective_job_id,
+            job_id=effective_job_id,
+        )
+        message_stream_trace_observer = MessageStreamTraceObserver(_publish)
+        message_stream_runtime = MessageStreamRuntime(
+            message_stream_writer,
+            normalized_block_observer=message_stream_trace_observer.observe,
+        )
+        turn_scope = self.execution_scope_registry.create(
+            message_stream_writer.turn_stream_id
+        )
+        control_inbox = AgentControlInbox(
+            message_stream_writer.turn_stream_id,
+            state_path=(
+                self._workspace_root
+                / ".boxteam"
+                / "control"
+                / f"{message_stream_writer.turn_stream_id}.json"
+            ),
+        )
+        self.execution_scope_registry.register_inbox(
+            message_stream_writer.turn_stream_id,
+            control_inbox,
+        )
+        control_loop_stop_event = asyncio.Event()
+        control_loop_task = asyncio.create_task(
+            AgentLoopControlCoordinator(
+                scope=turn_scope,
+                inbox=control_inbox,
+                writer=message_stream_writer,
+            ).run(control_loop_stop_event)
+        )
+        if self._resource_manager is not None:
+            turn_scope.register_cleanup(
+                lambda: self._resource_manager.cancel_turn(
+                    message_stream_writer.turn_stream_id
+                )
+            )
+        turn_scope_token = set_current_turn_execution_scope(turn_scope)
+        message_delta_token = set_current_model_delta_sink(message_stream_runtime)
+
         final_text = ""
         latest_model_content_blocks: tuple[dict[str, object], ...] = ()
         turn_token_usage_parts: list[ModelTokenUsagePayload] = []
@@ -376,19 +465,17 @@ class AgentExecutionService(JobStepExecutor):
                 agent_id=resolved_agent_id,
                 config_service=self._config_service,
             )
-        disabled_tool_names = self._tool_selection_store.disabled_tools(
+        execution_overrides = self._tool_selection_store.execution_overrides(
             resolved_agent_id
         )
-        default_hidden_tool_names = configured_custom_tool_names | {
-            tool.name for tool in self._dependency_provider.get_mcp_tools()
-        } | DEBUGGING_TOOL_NAMES
-        model_hidden_tool_names = frozenset(
-            self._tool_selection_store.model_hidden_tools(
-                resolved_agent_id,
-                default_hidden_tool_names=default_hidden_tool_names,
-            )
+        model_visibility_overrides = (
+            self._tool_selection_store.model_visibility_overrides(resolved_agent_id)
         )
-        configured_custom_tool_names -= disabled_tool_names
+        configured_custom_tool_names = {
+            tool_name
+            for tool_name in configured_custom_tool_names
+            if execution_overrides.get(tool_name) is not False
+        }
         requested_custom_tool_names = _custom_tools_requested_by_message(
             message,
             configured_custom_tool_names,
@@ -502,9 +589,11 @@ class AgentExecutionService(JobStepExecutor):
                     background_message_bus=self._background_message_bus,
                     job_event_bus=self._bus,
                     dependency_provider=self._dependency_provider,
-                    tool_denylist=disabled_tool_names,
-                    model_hidden_tool_names=model_hidden_tool_names,
+                    execution_overrides=execution_overrides,
+                    model_visibility_overrides=model_visibility_overrides,
                     preferred_provider_id=preferred_provider_id,
+                    tool_timeout_seconds=self._tool_timeout_seconds,
+                    resource_manager=self._resource_manager,
                     workspace_root=self._workspace_root,
                 )
 
@@ -543,6 +632,10 @@ class AgentExecutionService(JobStepExecutor):
                     publish=_publish,
                     session_changes_service=self._session_changes_service,
                     workspace_root=self._workspace_root,
+                    message_stream_runtime=message_stream_runtime,
+                    cancellation_signal=turn_scope.cancellation_signal,
+                    execution_scope=turn_scope,
+                    model_timeout_seconds=self._model_timeout_seconds,
                 )
                 turn_token_usage_parts.append(stream_result.token_usage)
                 final_text = stream_result.final_text
@@ -554,19 +647,20 @@ class AgentExecutionService(JobStepExecutor):
                     final_text,
                     stream_result.last_tool_result_text,
                 )
-                if final_text:
-                    final_text_part_id = stream_result.final_text_part_id
-                    if final_text_part_id is None:
-                        raise RuntimeError(
-                            "模型返回了最终文本，但模型流没有提供 markdown part_id"
-                        )
-                    await _publish(
-                        EventType.TEXT_END,
-                        {
-                            "part_id": final_text_part_id,
-                            "kind": "markdown",
-                            "text": final_text,
-                        },
+                normalized_final_text = message_stream_runtime.normalized_final_text()
+                if (
+                    normalized_final_text.strip()
+                    and stream_result.final_text.strip()
+                    and normalized_final_text.strip() != stream_result.final_text.strip()
+                ):
+                    logger.warning(
+                        "消息流规范化文本与 AgentLoop 最终聚合文本不一致: "
+                        "job_id=%s model_call_id=%s normalized_length=%s "
+                        "aggregated_length=%s",
+                        effective_job_id,
+                        message_stream_runtime.current_model_call_id,
+                        len(normalized_final_text),
+                        len(stream_result.final_text),
                     )
                 latest_model_content_blocks = stream_result.latest_model_content_blocks
                 missing_custom_tool_names = (
@@ -588,13 +682,27 @@ class AgentExecutionService(JobStepExecutor):
                         communication_id=question_communication_id,
                     )
                 )
-                if (
+                validation_succeeded = bool(
                     final_text
                     and not missing_custom_tool_names
                     and not missing_delegated_report
                     and not missing_session_question_reply
+                )
+                await message_stream_runtime.complete_model(
+                    outcome=(
+                        "accepted" if validation_succeeded else "validation_failed"
+                    ),
+                    reason=(
+                        None
+                        if validation_succeeded
+                        else "AgentLoop 最终业务校验未通过"
+                    ),
+                )
+                if (
+                    validation_succeeded
                 ):
                     break
+                await message_stream_runtime.retrying("AgentLoop 最终业务校验未通过")
                 if final_text and missing_custom_tool_names:
                     custom_tool_response_retries += 1
                     if custom_tool_response_retries > CUSTOM_TOOL_RESPONSE_RETRY_LIMIT:
@@ -784,6 +892,27 @@ class AgentExecutionService(JobStepExecutor):
                         f"session_id={session_id} job_id={effective_job_id}"
                     )
 
+            try:
+                await message_stream_writer.close_completed()
+            except MessageStreamTerminalError:
+                # 中断请求可能在最终业务校验与 stream.completed 之间线性化。
+                # 此时执行已经停止，必须确认中断事实，不能把用户请求覆盖为完成。
+                stream_state = await self._message_stream_store.get_state(
+                    message_stream_writer.turn_stream_id
+                )
+                interrupt_state = stream_state.get("interrupt_state")
+                interrupt_request_id = (
+                    interrupt_state.get("request_id")
+                    if isinstance(interrupt_state, dict)
+                    and interrupt_state.get("status") == "requested"
+                    else None
+                )
+                if stream_state.get("stream_status") != "interrupting" or not isinstance(
+                    interrupt_request_id, str
+                ):
+                    raise
+                await message_stream_writer.close_interrupted(interrupt_request_id)
+
             await _publish(EventType.AGENT_END, {
                 "final_text": final_text,
                 "agent_id": resolved_agent_id,
@@ -795,21 +924,54 @@ class AgentExecutionService(JobStepExecutor):
 
         except asyncio.CancelledError:
             state = SessionInterruptState.get(session_id)
-            if state.user_interrupt_reminder_injected:
-                logger.info(
-                    "[agent_execution_service] job cancelled after user interrupt reminder persisted: job_id=%s",
+            try:
+                if state.user_interrupt_reminder_injected:
+                    logger.info(
+                        "[agent_execution_service] job cancelled after user interrupt reminder persisted: job_id=%s",
+                        effective_job_id,
+                    )
+                else:
+                    persist_interrupt_checkpoint(
+                        checkpointer=getattr(self._dependency_provider, "get_checkpointer", lambda: None)(),
+                        session_id=session_id,
+                        current_text=state.current_text,
+                        active_tool_name=state.tool_name,
+                    )
+                    logger.info("[agent_execution_service] job cancelled and checkpoint persisted: job_id=%s", effective_job_id)
+            except Exception:
+                # checkpoint 失败不能掩盖取消事实；消息流终态仍必须提交，
+                # 否则重启后的 snapshot 会永久停在 running。
+                logger.exception(
+                    "[agent_execution_service] cancellation checkpoint persistence failed: job_id=%s",
                     effective_job_id,
                 )
+            if state.interrupt_request_id is not None:
+                await message_stream_runtime.finalize_interruption_facts()
+                await message_stream_writer.close_interrupted(state.interrupt_request_id)
             else:
-                persist_interrupt_checkpoint(
-                    checkpointer=getattr(self._dependency_provider, "get_checkpointer", lambda: None)(),
-                    session_id=session_id,
-                    current_text=state.current_text,
-                    active_tool_name=state.tool_name,
+                await message_stream_writer.close_failed(
+                    code="execution_cancelled",
+                    message="AgentLoop 在没有用户中断请求的情况下被取消",
+                    resumable=False,
                 )
-                logger.info("[agent_execution_service] job cancelled and checkpoint persisted: job_id=%s", effective_job_id)
             raise
         except Exception as e:
+            interrupt_state = SessionInterruptState.get(session_id)
+            if interrupt_state.interrupt_request_id is not None:
+                await message_stream_runtime.finalize_interruption_facts()
+            else:
+                await message_stream_runtime.fail_model(
+                    code="execution_error",
+                    message=str(e),
+                )
+            await message_stream_writer.close_failed(
+                code="execution_error",
+                message=str(e),
+                after_interrupt_requested=bool(
+                    interrupt_state.cancellation_reason
+                ),
+                resumable=False,
+            )
             await _publish(EventType.ERROR, {"error": str(e), "phase": "agent_execution"})
             logger.exception(
                 "[agent_execution_service] ERROR published: job_id=%s",
@@ -817,6 +979,15 @@ class AgentExecutionService(JobStepExecutor):
             )
             raise
         finally:
+            control_loop_stop_event.set()
+            if not control_loop_task.done():
+                control_loop_task.cancel()
+            await asyncio.gather(control_loop_task, return_exceptions=True)
+            reset_current_model_delta_sink(message_delta_token)
+            reset_current_turn_execution_scope(turn_scope_token)
+            await self.execution_scope_registry.close(
+                message_stream_writer.turn_stream_id
+            )
             reset_current_job_id(job_token)
             reset_current_agent_id(agent_token)
             reset_interruptible_phase(interruptible_phase_token)

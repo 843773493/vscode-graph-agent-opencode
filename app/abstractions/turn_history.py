@@ -7,7 +7,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, Field
 
 from app.schemas.event import Event
-from app.schemas.public_v2.session import SessionDTO
+from app.schemas.internal_v2.session import SessionDTO
 
 
 class TurnIndexedEvent(BaseModel):

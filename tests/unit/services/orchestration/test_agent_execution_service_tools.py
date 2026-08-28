@@ -22,7 +22,7 @@ from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.job_event_bus import EventType
 from app.runtime.agent_runtime import build_agent_tool_definitions
 from app.schemas.event import AgentEndEvent, AgentEndPayload
-from app.schemas.public_v2.job import JobDispatchSnapshotDTO
+from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
 )

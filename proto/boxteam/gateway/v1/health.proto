@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package boxteam.gateway.v1;
+
+import "boxteam/common/v1/service_lifecycle.proto";
+
+message GatewayHealth {
+  string gateway_id = 1;
+  boxteam.common.v1.ServiceStatus status = 2;
+  string active_workspace_id = 3;
+  repeated boxteam.common.v1.ServiceHealth services = 4;
+  uint64 process_id = 5;
+  bool development_restart_available = 6;
+}

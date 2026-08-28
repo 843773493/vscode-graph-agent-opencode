@@ -385,6 +385,7 @@ export default function AppShell() {
       activeSessionCacheKey,
       state.pendingConversations,
       state.turnTimelinesBySession,
+      state.messageStreamsByTurnStream,
     ],
   );
   const activeTraceHistory = activeSession

@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package boxteam.browser.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+enum BrowserStatus {
+  BROWSER_STATUS_UNSPECIFIED = 0;
+  BROWSER_STATUS_CREATED = 1;
+  BROWSER_STATUS_RUNNING = 2;
+  BROWSER_STATUS_FROZEN = 3;
+  BROWSER_STATUS_DISCARDED = 4;
+  BROWSER_STATUS_LOST = 5;
+  BROWSER_STATUS_CLOSED = 6;
+  BROWSER_STATUS_DELETED = 7;
+  BROWSER_STATUS_FAILED = 8;
+}
+
+message BrowserViewport {
+  uint32 width = 1;
+  uint32 height = 2;
+}
+
+message BrowserPage {
+  string browser_id = 1;
+  string page_id = 2;
+  string session_id = 3;
+  string title = 4;
+  string url = 5;
+  BrowserViewport viewport = 6;
+  BrowserStatus status = 7;
+  uint32 sequence = 8;
+  google.protobuf.Struct metadata = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message BrowserJsonMessage {
+  string type = 1;
+  google.protobuf.Struct payload = 2;
+}

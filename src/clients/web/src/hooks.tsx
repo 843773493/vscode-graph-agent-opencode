@@ -59,6 +59,7 @@ import { useContentViewLoader } from "./hooks/useContentViewLoader";
 import { useContentViewEffects } from "./hooks/useContentViewEffects";
 import { useSessionTurnHistory } from "./hooks/sessionTurnHistory/useSessionTurnHistory";
 import { useSessionEventStream } from "./hooks/useSessionEventStream";
+import { useSessionMessageStream } from "./hooks/useSessionMessageStream";
 import { useBackgroundSessionActivity } from "./hooks/useBackgroundSessionActivity";
 import { useWorkspaceSessionActivity } from "./hooks/useWorkspaceSessionActivity";
 import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
@@ -120,6 +121,7 @@ const INITIAL_STATE: AppState = {
   currentSessionWorkspaceId: null,
   turnTimelinesBySession: new Map(),
   traceEvents: [],
+  messageStreamsByTurnStream: new Map(),
   llmRequestLogs: [],
   llmRequestLogsLoadedAt: null,
   llmRequestLogsLoading: false,
@@ -440,6 +442,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     initialEventCursor: currentTurnTimeline?.eventCursor ?? null,
     refreshTurnDetails: loadTurnDetails,
     refreshTurnHistory,
+    setState,
+  });
+  useSessionMessageStream({
+    apiPort: state.apiPort,
+    sessionId: currentSessionId,
+    turnId: currentActiveJobId,
+    workspaceId: currentSessionGatewayWorkspaceId,
+    sessionCacheKey: currentSessionCacheKey,
     setState,
   });
   useBackgroundSessionActivity({

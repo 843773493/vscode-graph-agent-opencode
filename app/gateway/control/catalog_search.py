@@ -21,7 +21,7 @@ from app.schemas.gateway_control import (
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.schemas.public_v2.session_navigation import SessionCatalogNodeDTO
+from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 
 logger = logging.getLogger(__name__)
 

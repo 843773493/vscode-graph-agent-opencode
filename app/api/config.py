@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_config_service, get_request_id, verify_local_token
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.config import (
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.config import (
     ConfigDTO,
     ConfigReloadStatusDTO,
     ConfigSourceDTO,

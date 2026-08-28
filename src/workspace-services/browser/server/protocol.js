@@ -1,3 +1,8 @@
+import {
+  encodeBrowserServerMessage,
+  parseBrowserClientMessage as parseBrowserProtocolMessage,
+} from "../protocol/messages.js";
+
 export const CLIENT_MESSAGE_TYPES = new Set([
   "attach",
   "detach",
@@ -305,7 +310,7 @@ export function parseClientMessage(raw) {
       throw new Error("find command 必须提供 query");
     }
   }
-  return message;
+  return parseBrowserProtocolMessage(JSON.stringify(message));
 }
 
 export function encodeServerMessage(message) {
@@ -313,5 +318,5 @@ export function encodeServerMessage(message) {
   if (typeof message.type !== "string" || !SERVER_MESSAGE_TYPES.has(message.type)) {
     throw new Error(`非法服务端消息类型: ${message.type}`);
   }
-  return JSON.stringify(message);
+  return encodeBrowserServerMessage(message);
 }

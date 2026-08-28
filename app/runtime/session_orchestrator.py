@@ -5,14 +5,14 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.job_event_bus import EventType
 from app.prompting.validation import validate_internal_message
-from app.schemas.public_v2.common import MessageRole
-from app.schemas.public_v2.message import (
+from app.schemas.internal_v2.common import MessageRole
+from app.schemas.internal_v2.message import (
     MessageCreateRequest,
     MessageDTO,
     MessageRunAccepted,
     MessageRunRequest,
 )
-from app.schemas.public_v2.pending_request import DeliveryPolicy
+from app.schemas.internal_v2.pending_request import DeliveryPolicy
 from app.services.business.message_display import project_message_for_display
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService

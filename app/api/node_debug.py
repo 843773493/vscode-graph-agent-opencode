@@ -5,8 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_node_debug_service, get_request_id, verify_local_token
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.node_debug import (
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRequest,
     NodeDebugCapabilitiesDTO,
     NodeDebugConfigurationActivateRequest,

@@ -59,3 +59,19 @@ Workspace Gateway MUST 对工具目录和工具状态更新 API 透明代理完�
 
 - **WHEN** 当前 Gateway 代理一个由远程 Gateway 管理的工作区工具目录
 - **THEN** 返回结果 MUST 保留 `扩展工具 · MCP · {server_id}` 分组和双状态字段，且不得把本地 Gateway 的工具状态混入远程工作区
+
+### Requirement: 扩展工具调用必须遵守统一有效策略
+
+固定扩展入口 MUST 使用与工具目录相同的 `ToolPolicyResolver` 结果。策略关闭目标工具执行能力时，入口不得继续路由到该工具；策略仅隐藏模型定义时，入口仍可在 Skill 或其它明确上下文提供目标工具名后执行。
+
+#### Scenario: 隐藏 schema 不影响扩展工具执行
+
+- **WHEN** 扩展工具 `execution_enabled=true` 且 `model_visible=false`
+- **THEN** 固定入口 MUST 保留该工具的真实参数校验和执行能力
+- **AND** 模型请求不得附带该工具的详细 schema
+
+#### Scenario: 静态执行限制阻止固定入口
+
+- **WHEN** 静态策略命中扩展工具的 `restrictions.execution_disabled`
+- **THEN** 固定入口 MUST 在调用目标工具前返回明确的工具被禁用错误
+- **AND** 不得触发目标扩展工具或 MCP session

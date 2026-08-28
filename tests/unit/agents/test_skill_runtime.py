@@ -328,6 +328,20 @@ async def test_custom_tool_invoker_dispatches_configured_tool_without_skill_acti
     assert result == "4568"
 
 
+@pytest.mark.asyncio
+async def test_custom_tool_invoker_rechecks_effective_execution_policy(tmp_path):
+    custom_tool = create_test_tool_2(_custom_tool_context(tmp_path))
+    invoker = create_custom_tool_invoker_tool(
+        [custom_tool],
+        is_tool_execution_enabled=lambda _tool: False,
+    )
+
+    with pytest.raises(PermissionError, match="已被策略禁用"):
+        await invoker.ainvoke(
+            {"tool_name": "test_tool_2", "arguments": {}},
+        )
+
+
 def test_custom_tool_invoker_description_contains_only_visible_extension_schemas():
     from langchain_core.tools import tool
 

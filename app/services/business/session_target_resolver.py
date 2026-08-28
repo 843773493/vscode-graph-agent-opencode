@@ -9,7 +9,7 @@ from app.abstractions.session_target import (
     SessionTargetResolverProtocol,
 )
 from app.core.exceptions import NotFoundError
-from app.schemas.public_v2.session_context import SessionContextSearchRequest
+from app.schemas.internal_v2.session_context import SessionContextSearchRequest
 from app.services.business.session_context_resource import (
     parse_session_context_resource,
 )

@@ -111,6 +111,33 @@
   "logger": {
     "level": "info"
   },
+  "tooling": {
+    "policy_defaults": {
+      "execution_enabled": true,
+      "model_visible": true,
+      "confirmation_required": false,
+      "limits": {
+        "timeout_ms": 10000,
+        "max_result_bytes": 1048576
+      }
+    },
+    "policy_rules": {
+      "by_origin": {
+        "custom": { "model_visible": false },
+        "mcp": { "model_visible": false }
+      },
+      "by_kind": {
+        "debugging": { "model_visible": false }
+      },
+      "by_group": {},
+      "by_tool": {}
+    },
+    "restrictions": {
+      "execution_disabled": [],
+      "model_hidden": [],
+      "confirmation_required": []
+    }
+  },
   "default_agent": "default",
   "agents": {
     "default": {

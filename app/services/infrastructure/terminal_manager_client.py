@@ -11,6 +11,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from app.core.path_utils import get_boxteam_root, get_workspace_root
+from app.protocol.codecs.terminal import terminal_session_to_json, terminal_session_to_proto
 from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_TERMINAL_BACKEND_URL = "http://127.0.0.1:8012"
@@ -196,7 +197,7 @@ class TerminalManagerClient:
 
     @staticmethod
     def _normalize_terminal(data: dict[str, Any]) -> dict[str, Any]:
-        normalized = dict(data)
+        normalized = terminal_session_to_json(terminal_session_to_proto(data))
         normalized.pop("attach_url", None)
         return normalized
 

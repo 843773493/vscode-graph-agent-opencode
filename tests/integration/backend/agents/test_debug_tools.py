@@ -9,7 +9,7 @@ import pytest
 
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.debugging import create_debugging_tools
-from app.schemas.public_v2.node_debug import NodeDebugConfigurationCreateRequest
+from app.schemas.internal_v2.node_debug import NodeDebugConfigurationCreateRequest
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.node_debug_service import NodeDebugService
 from app.services.infrastructure.node_debug_session_store import NodeDebugSessionStore

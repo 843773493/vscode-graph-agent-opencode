@@ -38,15 +38,18 @@ model_visible      是否向模型请求提供工具说明和参数 schema
 
 备选方案是用 `registered`、`executable`、`prompt_visible` 三个字段，信息更细但当前没有第三种独立运行时状态；不采用，避免制造无法验证的状态组合。
 
-### 2. 持久化使用显式执行禁用集合和模型可见性覆盖
+### 2. 持久化使用显式执行和模型可见性覆盖
 
 继续使用工作区 `.boxteam/settings/tool_selection.json` 作为本地 Agent 选择存储，但新结构按 Agent 保存：
 
 ```json
 {
   "default": {
-    "execution_disabled": ["write_file"],
-    "model_visibility": {
+    "execution_overrides": {
+      "write_file": false,
+      "read_file": true
+    },
+    "model_visibility_overrides": {
       "mcp__tui_mcp__status": true,
       "read_file": false
     }
@@ -54,7 +57,7 @@ model_visible      是否向模型请求提供工具说明和参数 schema
 }
 ```
 
-未出现的工具按目录组类型计算默认值：普通默认/协作工具的 `model_visible=true`，普通扩展、MCP 扩展和 Source Debugging 扩展组的 `model_visible=false`；所有工具的 `execution_enabled=true`。显式 `model_visibility` 覆盖默认值。执行被关闭时解析结果强制不可见，并保留显式覆盖值，重新打开执行能力后仍需用户明确打开模型可见性。
+未出现的工具由 `ToolPolicyResolver` 按 Workspace JSONC 的静态策略计算默认值；前端按钮只写入显式布尔覆盖，因此静态默认值为 false 的扩展工具也可以被用户打开。执行被关闭时解析结果强制不可见，并保留显式覆盖值，重新打开执行能力后仍需用户明确打开模型可见性。`restrictions` 属于硬限制，运行时覆盖不能解除。
 
 备选方案是为每个新工具写入完整状态初始化记录，会让发现工具变成有副作用的读取操作，并且难以处理 MCP 工具动态变化；不采用。
 
@@ -96,7 +99,101 @@ MCP 工具 ID 继续由现有长度限制和冲突检测函数生成。`AgentRun
 
 扩展工具的 `tool_call_schema` 有两种合法形态：普通 LangChain 工具通常提供 Pydantic 模型，MCP 适配器可能直接提供 JSON Schema 字典。固定入口必须对两者都执行公开 schema 校验，并只把 schema 的公开 properties 转发给目标工具；不能因 MCP 没有 Pydantic 类就把参数校验整体跳过。无 schema 的工具继续快速失败并报告工具名和类型。
 
-### 7. Web 使用两个 icon button 表达组级和工具级状态
+### 8. 静态工具策略使用 Workspace JSONC，运行时选择作为覆盖
+
+工具配置拆成三个职责边界：
+
+```text
+Workspace JSONC
+  ├── 工具默认策略和按元数据匹配的规则
+  └── 不可被用户按钮覆盖的硬限制
+
+ToolSelectionStore
+  └── 当前工作区、当前 Agent 的用户运行时覆盖
+
+ToolPolicyResolver
+  └── 合并静态策略与运行时覆盖，输出唯一有效状态
+```
+
+`workspace_inline.jsonc` 是发行包默认基线；用户级 `workspace.jsonc`、`workspace_local.jsonc` 和工作区 `.boxteam/workspace.jsonc` 按现有 Workspace 配置层级覆盖它。配置中不保存前端某次点击产生的临时状态。跨电脑同步不属于本次变更。
+
+推荐的 Workspace 配置结构为：
+
+```jsonc
+{
+  "tooling": {
+    "policy_defaults": {
+      "execution_enabled": true,
+      "model_visible": true,
+      "confirmation_required": false,
+      "limits": {
+        "timeout_ms": 10000,
+        "max_result_bytes": 1048576
+      }
+    },
+    "policy_rules": {
+      "by_origin": {
+        "custom": { "model_visible": false },
+        "mcp": { "model_visible": false }
+      },
+      "by_kind": {
+        "debugging": { "model_visible": false }
+      },
+      "by_group": {},
+      "by_tool": {}
+    }
+  },
+  "agents": {
+    "default": {
+      "tools": {
+        "policy": {
+          "rules": {
+            "by_group": {},
+            "by_tool": {}
+          },
+          "restrictions": {
+            "execution_disabled": [],
+            "model_hidden": [],
+            "confirmation_required": []
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`agents.<agent>.tools.custom` 仍负责声明该 Agent 的扩展工具；策略字段只负责能力状态，不重复声明工具 factory。MCP Server 的连接开关仍位于根级 `mcp.servers.<server_id>.enabled`，不与 Agent 工具策略混合。
+
+### 9. 策略匹配和有效状态优先级
+
+工具目录必须为每项工具保留稳定的：
+
+```text
+origin    builtin | custom | mcp
+kind      default | collaboration | extension | debugging
+group_id  稳定逻辑 ID，例如 debugging 或 mcp:tui-mcp
+```
+
+`group_name` 仅用于展示，不能作为配置匹配键。策略字段按以下顺序应用，后者覆盖前者：
+
+```text
+policy_defaults
+  → by_origin
+  → by_kind
+  → by_group
+  → by_tool
+```
+
+Agent 局部规则覆盖 Workspace 全局规则；运行时用户覆盖可以覆盖非硬限制的有效能力，但不得解除 `restrictions`。`execution_enabled=false` 始终强制 `model_visible=false`。`confirmation_required` 采用更严格结果，用户覆盖不能关闭硬性确认。
+
+`ToolPolicyResolver` 是唯一实现这些合并规则的组件。`ToolService`、`AgentFactory`、固定扩展入口和模型可见性 middleware 不得各自解释 JSONC 字段；固定扩展入口只接收已经由解析器筛选的可执行目标，并在目标调用前再次使用该有效集合拒绝被禁用目标。
+
+### 10. 清理模糊的旧字段
+
+`agents.<agent>.tools.enabled` 不再作为工具总开关；它当前没有被解析器使用，应从示例和 schema 中删除，避免产生“配置为 false 但工具仍存在”的误导。现有 `allowlist`、`denylist` 和 `confirmation_required` 在策略解析器统一后分别归入执行限制和确认规则，业务代码不再维护第二套独立语义。
+
+### 11. Web 使用两个 icon button 表达组级和工具级状态
 
 工具组和工具项各显示两个图标按钮：
 
@@ -114,6 +211,8 @@ MCP 工具 ID 继续由现有长度限制和冲突检测函数生成。`AgentRun
 - [MCP 工具在扩展入口 fallback 调用时缺少自定义 coroutine 属性] → 优先使用目标工具公开的 `coroutine/func`，否则调用 `ainvoke`，并用真实 MCP stub 覆盖该分支。
 - [动态 MCP 工具目录改变后选择状态残留] → 未出现在当前目录的持久化 ID 不参与运行时，目录读取只返回当前发现工具；重新发现同一 ID 时按保存状态恢复。
 - [Gateway 远程路由继续持有长请求] → 工具目录和 PATCH 都是短请求，仍复用现有共享 HTTP client；只增加代理字段/错误测试，不复制连接管理逻辑。
+- [配置默认值与前端覆盖互相覆盖] → 由 `ToolPolicyResolver` 固定优先级，并在 DTO 中返回合并后的有效状态；硬限制单独保留，前端不能伪造解除。
+- [不同工具来源缺少统一匹配字段] → 后端目录统一补充 `origin`，使用 `group_id` 而不是展示名称进行规则匹配，并为 MCP/Source Debugging 增加覆盖测试。
 
 ## Migration Plan
 
@@ -121,3 +220,4 @@ MCP 工具 ID 继续由现有长度限制和冲突检测函数生成。`AgentRun
 2. 更新 Agent runtime 和 MCP manager 后，先运行后端 focused tests，再刷新 OpenAPI/前端生成类型。
 3. 更新 Web 工具面板并运行 Web build、组件测试和 Gateway 代理测试。
 4. 若需要回滚，回滚整个变更版本；不提供新旧双格式并行读取，避免两套状态互相覆盖。
+5. 本次不迁移运行时覆盖到跨设备存储；`ToolSelectionStore` 仍只负责当前工作区的运行时覆盖。

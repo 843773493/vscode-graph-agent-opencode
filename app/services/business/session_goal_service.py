@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
-from app.schemas.public_v2.goal import (
+from app.schemas.internal_v2.goal import (
     MAX_GOAL_OBJECTIVE_CHARS,
     GoalJobAccountingDTO,
     GoalStatus,

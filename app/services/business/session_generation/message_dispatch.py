@@ -5,9 +5,9 @@ from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
-from app.schemas.public_v2.common import MessageRole
-from app.schemas.public_v2.message import MessageDTO
-from app.schemas.public_v2.session_navigation import SessionGenerationExecuteRequest
+from app.schemas.internal_v2.common import MessageRole
+from app.schemas.internal_v2.message import MessageDTO
+from app.schemas.internal_v2.session_navigation import SessionGenerationExecuteRequest
 from app.services.business.session_generation.reporting import (
     SessionGenerationReportingSupport,
 )

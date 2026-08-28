@@ -1,20 +1,20 @@
 import type {
   ToolDTO,
   ToolSelectionChange as ToolSelectionChangeDTO,
-} from "./gen/tool";
-import type {
   ToolTestAttemptDTO,
   ToolTestProviderResultDTO,
   ToolTestRunDTO,
   ToolTestRunListDTO,
-} from "./gen/tool_test";
+} from "./protocol_generated/boxteam/workspace/v2/public";
 
-export type ToolKind = "default" | "collaboration" | "extension";
+export type ToolKind = "default" | "collaboration" | "extension" | "debugging";
+export type ToolOrigin = "builtin" | "custom" | "mcp";
 export type ToolTestStatus = ToolTestRunDTO["status"];
 
 export type ToolCatalogItem = Omit<
   ToolDTO,
   | "parameters"
+  | "origin"
   | "group_id"
   | "group_name"
   | "kind"
@@ -23,6 +23,7 @@ export type ToolCatalogItem = Omit<
   | "test_supported"
 > & {
   parameters: Record<string, unknown>;
+  origin: ToolOrigin;
   group_id: string;
   group_name: string;
   kind: ToolKind;

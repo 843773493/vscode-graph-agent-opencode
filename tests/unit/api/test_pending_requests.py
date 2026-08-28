@@ -5,9 +5,9 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api.messages import create_message_and_run, update_pending_request_policy
-from app.schemas.public_v2.common import JobStatus
-from app.schemas.public_v2.message import MessageRunRequest
-from app.schemas.public_v2.pending_request import (
+from app.schemas.internal_v2.common import JobStatus
+from app.schemas.internal_v2.message import MessageRunRequest
+from app.schemas.internal_v2.pending_request import (
     PendingRequestListDTO,
     PendingRequestPolicyUpdateRequest,
 )

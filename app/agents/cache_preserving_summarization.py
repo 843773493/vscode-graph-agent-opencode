@@ -31,7 +31,10 @@ from langchain_core.messages import (
 from langgraph.types import Command
 
 from app.agents.workspace_tool_paths import backend_virtual_to_workspace_relative
+from app.core.identifier import create_uuid_hex
+from app.core.model_delta_context import get_current_model_delta_sink
 from app.prompting import internal_message_factory
+from app.services.orchestration.activity_runtime import ActivityRuntime
 
 CACHE_PRESERVING_STRATEGY = "cache_preserving"
 CACHE_REPLACEMENT_STRATEGY = "cache_replacement"
@@ -856,6 +859,23 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                 f"before_tokens={before_tokens}, after_tokens={after_tokens}"
             )
 
+    @staticmethod
+    def _current_activity_runtime() -> ActivityRuntime | None:
+        sink = get_current_model_delta_sink()
+        activity_runtime = getattr(sink, "activities", None)
+        return (
+            activity_runtime
+            if isinstance(activity_runtime, ActivityRuntime)
+            else None
+        )
+
+    @staticmethod
+    def _compaction_activity_id(activity_runtime: ActivityRuntime) -> str:
+        return (
+            f"{activity_runtime.writer.turn_stream_id}:context-compaction:"
+            f"{create_uuid_hex()}"
+        )
+
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -934,6 +954,70 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         )
 
     async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse | ExtendedModelResponse:
+        prepared = self._prepare_cache_compaction(request)
+        if prepared is None:
+            return await handler(
+                request.override(messages=self._get_effective_messages(request))
+            )
+        activity_runtime = (
+            CachePreservingSummarizationMiddleware._current_activity_runtime()
+        )
+        if activity_runtime is None:
+            return await CachePreservingSummarizationMiddleware._awrap_model_call_impl(
+                self,
+                request,
+                handler,
+            )
+        activity_id = CachePreservingSummarizationMiddleware._compaction_activity_id(
+            activity_runtime
+        )
+        await activity_runtime.started(
+            activity_id=activity_id,
+            kind="context.compaction",
+            summary="正在压缩会话上下文",
+            cancellable=True,
+            resumable=False,
+            side_effect_policy="none",
+            detail={
+                "phase": "preparing",
+                "summarized_message_count": len(prepared[1].messages_to_summarize)
+                if prepared[1] is not None
+                else 0,
+            },
+        )
+        try:
+            result = await CachePreservingSummarizationMiddleware._awrap_model_call_impl(
+                self,
+                request,
+                handler,
+            )
+        except Exception as error:
+            await activity_runtime.failed(
+                activity_id=activity_id,
+                kind="context.compaction",
+                outcome="outcome_unknown",
+                summary=str(error),
+                detail={"phase": "failed"},
+            )
+            raise
+        await activity_runtime.updated(
+            activity_id=activity_id,
+            kind="context.compaction",
+            status="stopping",
+            detail={"phase": "completed"},
+        )
+        await activity_runtime.completed(
+            activity_id=activity_id,
+            kind="context.compaction",
+            summary="会话上下文压缩完成",
+        )
+        return result
+
+    async def _awrap_model_call_impl(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],

@@ -223,10 +223,10 @@ async def test_litellm_fixture_stream_uses_standard_blocks():
     assert chunks[0].message.additional_kwargs == {}
     reasoning = chunks[0].message.content[0]
     answer = chunks[-1].message.content[0]
-    assert reasoning == {
-        "type": "reasoning_content",
-        "reasoning_content": "思考",
-    }
+    assert reasoning["type"] == "reasoning_content"
+    assert reasoning["reasoning_content"] == "思考"
+    assert reasoning["id"].startswith("part_")
+    assert reasoning["index"] == 0
     assert answer["type"] == "text"
     assert answer["text"] == "回答"
     assert answer["id"].startswith("part_")

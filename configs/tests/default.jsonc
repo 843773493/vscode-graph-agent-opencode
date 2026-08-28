@@ -449,7 +449,6 @@
         ]
       },
       "tools": {
-        "enabled": true,
         "tool_choice": "auto",
         "timeout_ms": 15000,
         "allowlist": [
@@ -534,7 +533,6 @@
         ]
       },
       "tools": {
-        "enabled": true,
         "tool_choice": "auto",
         "timeout_ms": 15000,
         "allowlist": [

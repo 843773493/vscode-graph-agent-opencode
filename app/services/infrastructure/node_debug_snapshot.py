@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from app.core.identifier import create_prefixed_id
-from app.schemas.public_v2.node_debug import (
+from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRecordDTO,
     NodeDebugBreakpointDTO,
     NodeDebugEvaluationDTO,

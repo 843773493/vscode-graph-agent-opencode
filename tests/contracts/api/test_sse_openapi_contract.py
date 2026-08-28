@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from app.main import app
-from app.schemas.public_v2.sse import SSE_EVENT_MODELS
+from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
 
 
 def test_sse_endpoints_publish_event_contracts() -> None:
@@ -14,8 +14,14 @@ def test_sse_endpoints_publish_event_contracts() -> None:
         "200"
     ]
     assert workspace_response["x-sse-events"] == {
-        "changes": {"$ref": "#/components/schemas/WorkspaceFileChangeBatchDTO"},
-        "error": {"$ref": "#/components/schemas/SseErrorDTO"},
+        "changes": {
+            "$ref": "#/components/schemas/WorkspaceFileChangeBatchDTO",
+            "x-protobuf-message": "boxteam.workspace.v2.WorkspaceFileChangeBatch",
+        },
+        "error": {
+            "$ref": "#/components/schemas/SseErrorDTO",
+            "x-protobuf-message": "boxteam.workspace.v2.SseError",
+        },
     }
     assert "text/event-stream" in workspace_response["content"]
     assert "application/json" not in workspace_response["content"]
@@ -24,7 +30,10 @@ def test_sse_endpoints_publish_event_contracts() -> None:
         "responses"
     ]["200"]
     assert trace_response["x-sse-events"] == {
-        "trace": {"$ref": "#/components/schemas/TraceEventDTO"}
+        "trace": {
+            "$ref": "#/components/schemas/TraceEventDTO",
+            "x-protobuf-message": "boxteam.workspace.v2.TraceEvent",
+        }
     }
     assert set(trace_response["content"]) == {"text/event-stream"}
 
@@ -32,7 +41,10 @@ def test_sse_endpoints_publish_event_contracts() -> None:
         "200"
     ]
     assert job_response["x-sse-events"] == {
-        "*": {"$ref": "#/components/schemas/SessionExecutionSseDTO"}
+        "*": {
+            "$ref": "#/components/schemas/SessionExecutionSseDTO",
+            "x-protobuf-message": "boxteam.workspace.v2.SessionExecutionSse",
+        }
     }
     assert set(job_response["content"]) == {"text/event-stream"}
 
@@ -70,7 +82,7 @@ def test_every_sse_event_model_is_resolvable_and_generated() -> None:
         / "web"
         / "src"
         / "types"
-        / "gen"
+        / "protocol_generated"
         / "sse_runtime_schemas.json"
     )
     runtime_schemas = json.loads(runtime_schema_path.read_text(encoding="utf-8"))[
@@ -78,10 +90,17 @@ def test_every_sse_event_model_is_resolvable_and_generated() -> None:
     ]
     assert set(runtime_schemas) == set(SSE_EVENT_MODELS)
 
-    generated_types = runtime_schema_path.with_name("session_interaction.ts").read_text(
+    generated_types = (
+        runtime_schema_path.parent
+        / "boxteam"
+        / "workspace"
+        / "v2"
+        / "session_stream.ts"
+    ).read_text(
         encoding="utf-8"
     )
     assert (
-        'export type SessionExecutionEventDTO = SessionExecutionSseDTO["event"];'
+        'import { SessionExecutionEvent } from "./session_interaction.js";'
         in generated_types
     )
+    assert "event: SessionExecutionEvent | undefined;" in generated_types

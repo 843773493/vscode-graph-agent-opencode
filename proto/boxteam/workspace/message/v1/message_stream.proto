@@ -1,0 +1,372 @@
+syntax = "proto3";
+
+package boxteam.workspace.message.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+enum BlockDeltaOperation {
+  BLOCK_DELTA_OPERATION_UNSPECIFIED = 0;
+  BLOCK_DELTA_OPERATION_APPEND = 1;
+  BLOCK_DELTA_OPERATION_ITEM_UPSERT = 2;
+  BLOCK_DELTA_OPERATION_ITEM_PATCH = 3;
+  BLOCK_DELTA_OPERATION_REDACTED = 4;
+}
+
+enum StreamStatus {
+  STREAM_STATUS_UNSPECIFIED = 0;
+  STREAM_STATUS_OPEN = 1;
+  STREAM_STATUS_INTERRUPTING = 2;
+  STREAM_STATUS_COMPLETED = 3;
+  STREAM_STATUS_INTERRUPTED = 4;
+  STREAM_STATUS_FAILED = 5;
+}
+
+enum ModelCallOutcome {
+  MODEL_CALL_OUTCOME_UNSPECIFIED = 0;
+  MODEL_CALL_OUTCOME_ACCEPTED = 1;
+  MODEL_CALL_OUTCOME_VALIDATION_FAILED = 2;
+  MODEL_CALL_OUTCOME_UPSTREAM_ERROR = 3;
+  MODEL_CALL_OUTCOME_EXECUTION_LOST = 4;
+  MODEL_CALL_OUTCOME_USER_INTERRUPT = 5;
+}
+
+enum ToolExecutionStatus {
+  TOOL_EXECUTION_STATUS_UNSPECIFIED = 0;
+  TOOL_EXECUTION_STATUS_RUNNING = 1;
+  TOOL_EXECUTION_STATUS_COMPLETED = 2;
+  TOOL_EXECUTION_STATUS_FAILED = 3;
+}
+
+enum ToolExecutionOutcome {
+  TOOL_EXECUTION_OUTCOME_UNSPECIFIED = 0;
+  TOOL_EXECUTION_OUTCOME_SUCCESS = 1;
+  TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR = 2;
+  TOOL_EXECUTION_OUTCOME_EXECUTION_LOST = 3;
+  TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN = 4;
+}
+
+enum ActivityStatus {
+  ACTIVITY_STATUS_UNSPECIFIED = 0;
+  ACTIVITY_STATUS_RUNNING = 1;
+  ACTIVITY_STATUS_WAITING = 2;
+  ACTIVITY_STATUS_STOPPING = 3;
+  ACTIVITY_STATUS_COMPLETED = 4;
+  ACTIVITY_STATUS_FAILED = 5;
+  ACTIVITY_STATUS_UNKNOWN = 6;
+}
+
+enum ActivityOutcome {
+  ACTIVITY_OUTCOME_UNSPECIFIED = 0;
+  ACTIVITY_OUTCOME_SUCCESS = 1;
+  ACTIVITY_OUTCOME_USER_INTERRUPT = 2;
+  ACTIVITY_OUTCOME_PROVIDER_ERROR = 3;
+  ACTIVITY_OUTCOME_EXECUTION_LOST = 4;
+  ACTIVITY_OUTCOME_OUTCOME_UNKNOWN = 5;
+}
+
+message StreamOpened {
+  StreamStatus status = 1;
+}
+
+message ModelStarted {
+  string model_call_id = 1;
+  int32 attempt = 2;
+  string model = 3;
+}
+
+message ModelCompleted {
+  string model_call_id = 1;
+  int32 attempt = 2;
+  ModelCallOutcome outcome = 3;
+  optional string reason = 4;
+}
+
+message ModelRetrying {
+  string model_call_id = 1;
+  int32 attempt = 2;
+  string reason = 3;
+}
+
+message ModelFailed {
+  string model_call_id = 1;
+  int32 attempt = 2;
+  ModelCallOutcome outcome = 3;
+  string error_code = 4;
+  string message = 5;
+  optional bool retryable = 6;
+}
+
+message BlockStarted {
+  string block_id = 1;
+  int32 block_index = 2;
+  string carrier_type = 3;
+  string projection = 4;
+}
+
+message BlockDelta {
+  string block_id = 1;
+  int32 block_index = 2;
+  int32 local_seq = 3;
+  string carrier_type = 4;
+  BlockDeltaOperation operation = 5;
+  optional string text = 6;
+  google.protobuf.Struct item = 7;
+  bool redacted = 8;
+  string projection = 9;
+}
+
+message BlockCompleted {
+  string block_id = 1;
+  int32 block_index = 2;
+  string carrier_type = 3;
+  string status = 4;
+  string completion_reason = 5;
+  optional bool partial = 6;
+}
+
+message ToolCall {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Struct arguments = 3;
+  string status = 4;
+  optional bool arguments_complete = 5;
+  string completion_reason = 6;
+  int64 started_seq = 7;
+  int64 last_event_seq = 8;
+  optional int64 completed_seq = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  google.protobuf.Timestamp completed_at = 12;
+}
+
+message ToolCallDelta {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  optional string arguments_delta = 3;
+  google.protobuf.Struct arguments = 4;
+  optional bool arguments_complete = 5;
+}
+
+message ToolCallCompleted {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  string status = 3;
+  string completion_reason = 4;
+  optional bool arguments_complete = 5;
+}
+
+message ToolStarted {
+  string tool_execution_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+}
+
+message ToolCompleted {
+  string tool_execution_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  ToolExecutionStatus status = 4;
+  optional string result = 5;
+  optional string error = 6;
+  ToolExecutionOutcome outcome = 7;
+  string completion_reason = 8;
+}
+
+message InterruptRequested {
+  string interrupt_request_id = 1;
+  string reason = 2;
+}
+
+message InterruptRejected {
+  string interrupt_request_id = 1;
+  string reason = 2;
+}
+
+message StreamCompleted {
+  StreamStatus status = 1;
+}
+
+message StreamInterrupted {
+  string interrupt_request_id = 1;
+  StreamStatus status = 2;
+}
+
+message StreamFailure {
+  string code = 1;
+  string message = 2;
+  optional bool after_interrupt_requested = 3;
+  optional bool resumable = 4;
+}
+
+message MessageBlockSnapshot {
+  string block_id = 1;
+  int32 block_index = 2;
+  string carrier_type = 3;
+  string status = 4;
+  optional string text = 5;
+  repeated google.protobuf.Struct items = 6;
+  bool redacted = 7;
+  string projection = 8;
+  optional string model_call_id = 9;
+  string completion_reason = 10;
+  optional bool partial = 11;
+  int64 started_seq = 12;
+  int64 last_event_seq = 13;
+  optional int64 completed_seq = 14;
+  google.protobuf.Timestamp started_at = 15;
+  google.protobuf.Timestamp updated_at = 16;
+  google.protobuf.Timestamp completed_at = 17;
+}
+
+message ToolExecutionSnapshot {
+  string tool_execution_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  ToolExecutionStatus status = 4;
+  optional string result = 5;
+  optional string error = 6;
+  ToolExecutionOutcome outcome = 7;
+  string completion_reason = 8;
+  int64 started_seq = 9;
+  int64 last_event_seq = 10;
+  optional int64 completed_seq = 11;
+  google.protobuf.Timestamp started_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  google.protobuf.Timestamp completed_at = 14;
+}
+
+message ModelCallSnapshot {
+  string model_call_id = 1;
+  int32 attempt = 2;
+  string status = 3;
+  string outcome = 4;
+  string completion_reason = 5;
+  optional bool retryable = 6;
+  optional string model = 7;
+  int64 started_seq = 8;
+  int64 last_event_seq = 9;
+  optional int64 completed_seq = 10;
+  google.protobuf.Timestamp started_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  google.protobuf.Timestamp completed_at = 13;
+}
+
+message Activity {
+  string activity_id = 1;
+  string kind = 2;
+  optional string parent_activity_id = 3;
+  string scope_ref = 4;
+  ActivityStatus status = 5;
+  ActivityOutcome outcome = 6;
+  optional string summary = 7;
+  optional bool cancellable = 8;
+  optional bool resumable = 9;
+  string side_effect_policy = 10;
+  repeated string resource_refs = 11;
+  google.protobuf.Struct detail = 12;
+  optional string detail_ref = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  optional bool detail_available = 15;
+  optional string detail_error = 16;
+  int64 started_seq = 17;
+  int64 last_event_seq = 18;
+  optional int64 completed_seq = 19;
+  google.protobuf.Timestamp started_at = 20;
+  google.protobuf.Timestamp completed_at = 21;
+}
+
+message ResourceRef {
+  string resource_id = 1;
+  optional string lease_id = 2;
+  optional string operation_id = 3;
+  string status = 4;
+}
+
+message ActiveState {
+  string kind = 1;
+  string phase = 2;
+  string entity_id = 3;
+  optional string carrier_type = 4;
+  optional string block_id = 5;
+  optional string tool_call_id = 6;
+  optional string tool_execution_id = 7;
+  optional string activity_id = 8;
+  optional string activity_kind = 9;
+  string status = 10;
+  optional string last_kind = 11;
+  optional string last_phase = 12;
+  optional string reason = 13;
+  optional string detail_ref = 14;
+}
+
+message InterruptState {
+  string request_id = 1;
+  string status = 2;
+  optional string reason = 3;
+  optional bool fact_confirmed = 4;
+}
+
+message RecoveryState {
+  string status = 1;
+  optional string code = 2;
+  optional string message = 3;
+  optional bool resumable = 4;
+}
+
+message StreamSnapshot {
+  int64 snapshot_seq = 1;
+  StreamStatus stream_status = 2;
+  string agent_loop_status = 3;
+  optional string current_model_call_id = 4;
+  int32 current_attempt = 5;
+  repeated MessageBlockSnapshot blocks = 6;
+  repeated ToolExecutionSnapshot tool_executions = 7;
+  optional string interrupt_request_id = 8;
+  optional string interrupt_status = 9;
+  optional StreamFailure failure = 10;
+  bool resumable = 11;
+  repeated ToolCall tool_calls = 12;
+  repeated ModelCallSnapshot model_calls = 13;
+  repeated Activity activities = 14;
+  repeated ResourceRef resource_refs = 15;
+  optional ActiveState active_state = 16;
+  optional InterruptState interrupt_state = 17;
+  optional RecoveryState recovery = 18;
+}
+
+message MessageStreamEvent {
+  string event_id = 1;
+  string session_id = 2;
+  string turn_id = 3;
+  string turn_stream_id = 4;
+  int64 event_seq = 5;
+  google.protobuf.Timestamp emitted_at = 6;
+  string type = 7;
+  optional string model_call_id = 8;
+  optional string block_id = 9;
+  optional string tool_execution_id = 10;
+  optional string job_id = 11;
+  oneof payload {
+    StreamOpened stream_opened = 20;
+    ModelStarted model_started = 21;
+    ModelCompleted model_completed = 22;
+    ModelRetrying model_retrying = 23;
+    ModelFailed model_failed = 24;
+    BlockStarted block_started = 25;
+    BlockDelta block_delta = 26;
+    BlockCompleted block_completed = 27;
+    ToolCall tool_call = 28;
+    ToolCallDelta tool_call_delta = 37;
+    ToolCallCompleted tool_call_completed = 38;
+    ToolStarted tool_started = 29;
+    ToolCompleted tool_completed = 30;
+    InterruptRequested interrupt_requested = 31;
+    InterruptRejected interrupt_rejected = 32;
+    StreamCompleted stream_completed = 33;
+    StreamInterrupted stream_interrupted = 34;
+    StreamFailure stream_failed = 35;
+    StreamSnapshot stream_snapshot = 36;
+    Activity activity = 39;
+  }
+}

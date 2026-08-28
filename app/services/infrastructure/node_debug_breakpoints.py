@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from app.schemas.public_v2.node_debug import (
+from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugConfigurationBreakpointDTO,
 )

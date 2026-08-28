@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from app.core.path_utils import get_session_path_resolver
-from app.schemas.public_v2.pending_request import (
+from app.schemas.internal_v2.pending_request import (
     PendingRequestDTO,
     PendingRequestSummaryDTO,
     PendingRequestSummaryListDTO,

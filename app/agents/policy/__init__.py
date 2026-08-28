@@ -4,6 +4,11 @@ from app.agents.policy.custom_tool_spec import (
     parse_custom_tool_spec,
     parse_custom_tool_specs,
 )
+from app.agents.policy.tool_capability import (
+    ToolCapabilityPolicy,
+    ToolMetadata,
+    ToolPolicyResolver,
+)
 from app.agents.policy.tool_groups import (
     AGENT_COLLABORATION_EXTENSION_TOOL_NAMES,
     AGENT_COLLABORATION_TOOL_GROUP,
@@ -39,7 +44,10 @@ __all__ = [
     "TOOL_POLICY_EXTENSIONS",
     "ParsedCustomToolSpec",
     "ResolvedToolPolicy",
+    "ToolCapabilityPolicy",
     "ToolGroupDefinition",
+    "ToolMetadata",
+    "ToolPolicyResolver",
     "build_agent_tool_universe",
     "catalog_group_for_tool",
     "custom_tool_spec_names",

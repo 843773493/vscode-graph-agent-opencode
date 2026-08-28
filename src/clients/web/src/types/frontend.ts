@@ -18,6 +18,7 @@ import type {
   GatewayUserViewState,
 } from "./backend";
 import type { SessionTurnTimeline } from "../state/session/turnTimeline";
+import type { MessageStreamState } from "../state/messageStream";
 
 export type ConversationContentView =
   | "default"
@@ -99,7 +100,15 @@ export interface ConversationView {
     tool_call_id?: string | null;
   }>;
   responseParts?: TurnResponsePart[];
-  // 助手消息内容由 ChatPanel 从 traceEvents 聚合得到，不再在 hooks 中维护。
+  messageStream?: {
+    connectionStatus: MessageStreamState["connectionStatus"];
+    streamStatus: MessageStreamState["streamStatus"];
+    lastEventSeq: number;
+    failure: MessageStreamState["failure"];
+    activeState?: MessageStreamState["activeState"];
+    activities?: MessageStreamState["activities"];
+    resumable: boolean;
+  };
   events: TraceEvent[];
   status: "queued" | "running" | "done" | "error";
   jobId: string | null;
@@ -156,6 +165,7 @@ export interface AppState {
   currentSessionWorkspaceId: string | null;
   turnTimelinesBySession: Map<string, SessionTurnTimeline>;
   traceEvents: TraceEvent[];
+  messageStreamsByTurnStream?: Map<string, MessageStreamState>;
   llmRequestLogs: LLMRequestLogRecord[];
   llmRequestLogsLoadedAt: string | null;
   llmRequestLogsLoading: boolean;

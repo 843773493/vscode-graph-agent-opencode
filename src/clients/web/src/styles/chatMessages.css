@@ -905,6 +905,10 @@
   color: var(--bt-status-danger);
 }
 
+.chat-tool-row.is-unknown {
+  color: var(--bt-status-warning);
+}
+
 .chat-tool-summary:disabled {
   cursor: default;
   opacity: 1;

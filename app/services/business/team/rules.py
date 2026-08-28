@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.schemas.public_v2.team import (
+from app.schemas.internal_v2.team import (
     TeamBoardDTO,
     TeamMemberDTO,
     TeamTaskDTO,

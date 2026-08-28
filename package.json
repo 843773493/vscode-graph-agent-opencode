@@ -15,11 +15,13 @@
     "dev:web": "bun run scripts/dev.mjs --service=web",
     "build:web": "bun run --cwd=src/clients/web build",
     "install:config": "uv run python -m configs.boxteam --project-root .",
+    "check:protocol": "bun run ./scripts/generate_protocol.mjs --check",
+    "check:protocol:breaking": "bun run ./scripts/generate_protocol.mjs --check --breaking-against proto",
+    "gen:protocol": "bun run ./scripts/generate_protocol.mjs",
     "package:linux-x64": "bun run packaging/runtime/package-linux-x64.mjs",
     "package:windows-x64": "bun run packaging/runtime/package-windows-x64.mjs",
     "package:windows-x64-cross": "bun run packaging/runtime/package-windows-x64-cross.mjs",
     "build:webview-ui": "bun --cwd=src/webview-ui run build",
-    "gen:public-types": "bun run ./scripts/generate_public_types.mjs",
     "gen:openapi": "uv run python -m scripts.export_openapi_snapshot"
   },
   "engines": {
@@ -290,6 +292,9 @@
     "@vscode/webview-ui-toolkit": "^1.4.0"
   },
   "devDependencies": {
+    "@bufbuild/buf": "^1.72.0",
+    "@bufbuild/protobuf": "^2.14.0",
+    "@bufbuild/protoc-gen-es": "^2.14.0",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.6.2",

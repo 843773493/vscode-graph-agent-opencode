@@ -19,8 +19,8 @@ from app.agents.cache_preserving_summarization import apply_summarization_event
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
 from app.prompting.validation import internal_prompt_metadata, validate_internal_message
-from app.schemas.public_v2.common import CursorPage, MessageRole
-from app.schemas.public_v2.message import (
+from app.schemas.internal_v2.common import CursorPage, MessageRole
+from app.schemas.internal_v2.message import (
     AgentStateMessagesDTO,
     AttachmentRef,
     MessageCreateRequest,

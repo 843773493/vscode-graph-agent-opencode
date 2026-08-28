@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.core.job_event_bus import JobEventBus
-from app.schemas.public_v2.pending_request import PendingRequestDTO
+from app.schemas.internal_v2.pending_request import PendingRequestDTO
 from app.services.business.job.service import JobService
 from app.services.infrastructure.pending_request_store import PendingRequestStore
 

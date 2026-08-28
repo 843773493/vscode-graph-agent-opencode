@@ -11,7 +11,7 @@ from app.schemas.gateway import (
     CreatePortForwardRequest,
     PortForwardListDTO,
 )
-from app.schemas.public_v2.common import APIResponse
+from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter(tags=["gateway-port-forwards"])
 

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.schemas.public_v2.session import SessionUpdateRequest
+from app.schemas.internal_v2.session import SessionUpdateRequest
 from app.services.orchestration.job_execution_service import session_title_message
 from app.services.orchestration.session_title_service import SessionTitleService
 

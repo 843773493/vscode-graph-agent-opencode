@@ -218,7 +218,7 @@ async def interrupt_session(
 
 1. `app/core/job_context.py`：新增 `interruptible_phase` / `active_tool_name` context var。
 2. `app/services/orchestration/agent_execution_service.py`：在事件流中设置阶段与工具名。
-3. `app/schemas/public_v2/session.py`：新增 `SessionInterruptResultDTO`。
+3. `app/schemas/internal_v2/session.py`：新增 `SessionInterruptResultDTO`。
 4. `app/schemas/event/__init__.py`：新增 `SessionInterruptedEvent` / `SessionInterruptedPayload`。
 5. `app/services/business/message_service.py`：新增 `append_system_reminder_to_last_message`。
 6. `app/services/business/session_interrupt_service.py`：新增打断服务。

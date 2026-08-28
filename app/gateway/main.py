@@ -147,7 +147,7 @@ from app.gateway.ui_settings import (
     merge_web_ui_settings_values,
 )
 from app.gateway.workspace_ids import build_workspace_id
-from app.schemas.public_v2.common import APIResponse
+from app.schemas.internal_v2.common import APIResponse
 
 logger = logging.getLogger(__name__)
 

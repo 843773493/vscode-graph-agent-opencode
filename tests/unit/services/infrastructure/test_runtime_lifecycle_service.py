@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
+from app.core.session_paths import SessionPathResolver
 from app.schemas.event import JobStartedEvent, JobStartedPayload
-from app.schemas.public_v2.common import JobStatus
+from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import (
     JobAdmissionClosedError,
     JobService,
@@ -18,6 +19,7 @@ from app.services.business.job.service import (
 from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
 )
+from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
@@ -49,6 +51,9 @@ def build_runtime(tmp_path: Path) -> tuple[RuntimeService, JobService]:
             history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
         ),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
+        message_stream_store=MessageStreamStore(
+            path_resolver=SessionPathResolver(sessions_dir)
+        ),
     )
     return runtime, jobs
 
@@ -80,7 +85,7 @@ async def test_force_interrupt_persists_event_and_cancels_job(tmp_path: Path) ->
         session_id="ses_runtime",
         message="运行中",
         message_id="msg_runtime",
-        message_created_at=datetime.now(timezone.utc).isoformat(),
+        message_created_at=datetime.now(UTC).isoformat(),
         agent_id="default",
         status=JobStatus.running,
         task=task,
@@ -107,7 +112,7 @@ async def test_startup_reconciles_job_without_terminal_event(
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_stale")
     runtime, _ = build_runtime(tmp_path)
     store = runtime._trace_event_store
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await store.append(
         "ses_stale",
         JobStartedEvent(

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
-from app.schemas.public_v2.session import (
+from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionInformationExecutionDTO,
     SessionInformationSnapshotDTO,
@@ -13,7 +13,7 @@ from app.schemas.public_v2.session import (
     SessionInformationWorkspaceDTO,
     SessionListResultDTO,
 )
-from app.schemas.public_v2.session_context import (
+from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
 )

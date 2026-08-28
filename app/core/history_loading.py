@@ -29,6 +29,8 @@ DEFAULT_INITIAL_INCLUDE: tuple[str, ...] = (
     "final_response",
 )
 DEFAULT_ANCHOR_INCLUDE: tuple[str, ...] = ("user", "final_response")
+DEFAULT_ANCHOR_BEFORE_TURNS = 2
+DEFAULT_ANCHOR_AFTER_TURNS = 2
 _VALID_INCLUDES = frozenset(
     {
         "user",
@@ -55,8 +57,8 @@ class HistoryLoadingConfig:
 
     initial_turns: int = 1
     initial_include: tuple[str, ...] = DEFAULT_INITIAL_INCLUDE
-    anchor_before_turns: int = 4
-    anchor_after_turns: int = 4
+    anchor_before_turns: int = DEFAULT_ANCHOR_BEFORE_TURNS
+    anchor_after_turns: int = DEFAULT_ANCHOR_AFTER_TURNS
     anchor_include: tuple[str, ...] = DEFAULT_ANCHOR_INCLUDE
 
     def __post_init__(self) -> None:
@@ -91,8 +93,12 @@ class HistoryLoadingConfig:
         if not isinstance(value, dict):
             raise TypeError("历史加载策略必须是对象")
         initial_turns = value.get("initial_turns", 1)
-        anchor_before_turns = value.get("anchor_before_turns", 4)
-        anchor_after_turns = value.get("anchor_after_turns", 4)
+        anchor_before_turns = value.get(
+            "anchor_before_turns", DEFAULT_ANCHOR_BEFORE_TURNS
+        )
+        anchor_after_turns = value.get(
+            "anchor_after_turns", DEFAULT_ANCHOR_AFTER_TURNS
+        )
         initial_include = value.get("initial_include", list(DEFAULT_INITIAL_INCLUDE))
         anchor_include = value.get("anchor_include", list(DEFAULT_ANCHOR_INCLUDE))
         if (

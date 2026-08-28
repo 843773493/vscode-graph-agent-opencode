@@ -22,9 +22,9 @@ from app.core.history_loading import (
 )
 from app.core.rollout_context_reader import ContextChain, RolloutContextReader
 from app.core.rollout_storage import RolloutReadSnapshot
-from app.schemas.public_v2.common import JobStatus
-from app.schemas.public_v2.trace import TraceEventDTO
-from app.schemas.public_v2.turn import (
+from app.schemas.internal_v2.common import JobStatus
+from app.schemas.internal_v2.trace import TraceEventDTO
+from app.schemas.internal_v2.turn import (
     TurnActivityStatsDTO,
     TurnCursorDTO,
     TurnDetailDTO,
@@ -511,11 +511,15 @@ class RolloutHistoryReader:
             else:
                 anchor = self._anchor_ordinal(decoded_cursor, 0)
             before = min(
-                request.before_turns or configured.anchor_before_turns,
+                request.before_turns
+                if request.before_turns is not None
+                else configured.anchor_before_turns,
                 64,
             )
             after = min(
-                request.after_turns or configured.anchor_after_turns,
+                request.after_turns
+                if request.after_turns is not None
+                else configured.anchor_after_turns,
                 64,
             )
             rows = self._context_reader.read_context_turn_window(
@@ -625,7 +629,7 @@ class RolloutHistoryReader:
             )
             message_sequence = record.get("_indexed_sequence")
             if not isinstance(message_sequence, int) or isinstance(message_sequence, bool):
-                raise RuntimeError("rollout message 缺少有效 message_sequence")
+                raise TypeError("rollout message 缺少有效 message_sequence")
             message_sequences.append(message_sequence)
         if not messages:
             raise RuntimeError(f"rollout Turn 没有可读取的消息: {span.turn_id}")

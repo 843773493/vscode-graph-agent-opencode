@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boxteam.dev/schemas/model-stream-test-config-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "config_version", "model_stream"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "config_version": {"const": 1},
+    "model_stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transport"],
+      "properties": {
+        "transport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": {"enum": ["off", "record", "replay"]},
+            "scenario_id": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+            },
+            "fixture_root": {"type": "string", "minLength": 1},
+            "matching": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "policy": {"const": "strict"}
+              }
+            },
+            "replay": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "policy": {
+                  "enum": ["request_reusable", "session_sequence"]
+                }
+              }
+            },
+            "timing": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": {"const": "none"}
+              }
+            },
+            "recording": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "artifact_root": {"type": "string", "minLength": 1}
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"mode": {"enum": ["record", "replay"]}}},
+              "then": {
+                "required": ["scenario_id", "fixture_root"]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

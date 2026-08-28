@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain.agents.middleware import (
@@ -33,6 +34,11 @@ from app.agents.cache_preserving_summarization import (
     validate_summary_text,
 )
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
+from app.core.model_delta_context import (
+    reset_current_model_delta_sink,
+    set_current_model_delta_sink,
+)
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
 class _SummarizationBoundaryStub:
@@ -1256,6 +1262,77 @@ def test_prepare_preserves_complete_api_round_without_new_human_boundary() -> No
     ]
     assert projected[3] is event["summary_message"]
     assert projected[4:] == messages[5:]
+
+
+@pytest.mark.asyncio
+async def test_async_compaction_uses_context_activity_handler() -> None:
+    messages = _conversation(3)
+    partition = CachePreservingPartition(
+        prefix_messages=[],
+        messages_to_summarize=messages[:2],
+        preserved_messages=messages[2:],
+        state_cutoff=2,
+    )
+
+    class _CompactionStub:
+        @staticmethod
+        def _prepare_cache_compaction(
+            _: ModelRequest,
+        ) -> tuple[list, CachePreservingPartition]:
+            return messages, partition
+
+        @staticmethod
+        def _get_effective_messages(_: ModelRequest) -> list:
+            return messages
+
+        @staticmethod
+        def _get_backend(*_: object) -> object:
+            return object()
+
+        @staticmethod
+        async def _aoffload_to_backend(*_: object) -> str:
+            return "session-artifacts/test/context/history.md"
+
+        @staticmethod
+        async def _acreate_cache_preserving_summary(*_: object) -> str:
+            return "历史摘要"
+
+        @staticmethod
+        def _build_new_messages_with_path(*_: object) -> list[AIMessage]:
+            return [AIMessage(content="历史摘要")]
+
+        @staticmethod
+        def _ensure_compaction_reduces_tokens(*_: object) -> None:
+            return None
+
+    async def handler(_: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="继续")])
+
+    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_compaction")
+    writer.commit.side_effect = lambda event_type, payload, **_: {
+        "type": event_type,
+        "payload": payload,
+    }
+    message_stream_runtime = MessageStreamRuntime(writer)
+    token = set_current_model_delta_sink(message_stream_runtime)
+    try:
+        response = await CachePreservingSummarizationMiddleware.awrap_model_call(
+            _CompactionStub(),  # type: ignore[arg-type]
+            ModelRequest(model=None, messages=messages),
+            handler,
+        )
+    finally:
+        reset_current_model_delta_sink(token)
+
+    assert isinstance(response, ExtendedModelResponse)
+    assert [call.args[0] for call in writer.commit.await_args_list] == [
+        "activity.started",
+        "activity.updated",
+        "activity.completed",
+    ]
+    started_payload = writer.commit.await_args_list[0].args[1]
+    assert started_payload["kind"] == "context.compaction"
+    assert started_payload["detail"]["summarized_message_count"] == 2
 
 
 def _emergency_replacement_partition() -> tuple[

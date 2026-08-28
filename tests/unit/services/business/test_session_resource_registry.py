@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from app.schemas.public_v2.session_resource import (
+from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
     SessionResourceDTO,

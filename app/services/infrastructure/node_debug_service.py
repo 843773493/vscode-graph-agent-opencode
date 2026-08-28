@@ -17,7 +17,7 @@ from websockets.exceptions import ConnectionClosed
 
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import safe_join
-from app.schemas.public_v2.node_debug import (
+from app.schemas.internal_v2.node_debug import (
     NodeDebugAction,
     NodeDebugActionRecordDTO,
     NodeDebugBreakpointDTO,

@@ -40,7 +40,7 @@ from app.gateway.diagnostics import collect_gateway_diagnostics
 from app.gateway.federation import request_remote_gateway_management
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.schemas.gateway import GatewayDiagnosticsDTO
-from app.schemas.public_v2.common import APIResponse
+from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter(prefix="/api/gateway", tags=["gateway-control"])
 

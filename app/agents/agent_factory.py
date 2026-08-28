@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +28,6 @@ from app.agents.agent_tools import build_default_tools
 from app.agents.custom_tools import build_custom_tool_bundle
 from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
-    filter_tools_by_name,
 )
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
@@ -36,7 +35,14 @@ from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
     build_provider_model_candidate,
 )
-from app.agents.policy import custom_tool_spec_names, validate_tool_dependencies
+from app.agents.policy import (
+    ToolMetadata,
+    ToolPolicyResolver,
+    catalog_group_for_tool,
+    custom_tool_spec_names,
+    parse_custom_tool_specs,
+    validate_tool_dependencies,
+)
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.skill_runtime import (
     append_skill_middlewares,
@@ -55,6 +61,7 @@ from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.node_debug_service import NodeDebugService
+from app.services.infrastructure.resource_manager import ResourceManager
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 
@@ -66,6 +73,53 @@ if TYPE_CHECKING:
 
 AGENT_GRAPH_RECURSION_LIMIT = 9999
 PROVIDER_REQUEST_OPTION_KEYS = {"overrides", "default_headers"}
+
+
+def _tool_metadata(
+    tool: BaseTool,
+    *,
+    origin: str,
+    group_id: str | None = None,
+) -> ToolMetadata:
+    """把运行时工具映射到策略使用的稳定元数据。"""
+
+    tool_name = tool.name
+    metadata = dict(getattr(tool, "metadata", None) or {})
+    mcp_server_id = metadata.get("mcp_server_id")
+    if origin == "mcp" and isinstance(mcp_server_id, str) and mcp_server_id:
+        return ToolMetadata(
+            tool_id=tool_name,
+            origin="mcp",
+            kind="extension",
+            group_id=f"mcp:{mcp_server_id}",
+        )
+    group = catalog_group_for_tool(tool_name)
+    return ToolMetadata(
+        tool_id=tool_name,
+        origin=origin,
+        kind=(
+            group.kind
+            if group.kind != "default"
+            else ("default" if origin == "builtin" else "extension")
+        ),
+        group_id=group_id or group.group_id,
+    )
+
+
+def _resolve_tool_policy(
+    resolver: ToolPolicyResolver,
+    tool: BaseTool,
+    *,
+    origin: str,
+    execution_overrides: Mapping[str, bool],
+    model_visibility_overrides: Mapping[str, bool],
+    group_id: str | None = None,
+):
+    return resolver.resolve(
+        _tool_metadata(tool, origin=origin, group_id=group_id),
+        execution_override=execution_overrides.get(tool.name),
+        model_visibility_override=model_visibility_overrides.get(tool.name),
+    )
 
 
 def _team_aware_system_prompt(
@@ -243,7 +297,8 @@ def create_my_deep_agent(
     permissions: list[FilesystemPermission] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     custom_tool_confirmation_names: frozenset[str] = frozenset(),
-    model_hidden_tool_names: frozenset[str] = frozenset(),
+    execution_overrides: Mapping[str, bool] | None = None,
+    model_visibility_overrides: Mapping[str, bool] | None = None,
     debug: bool = False,
     name: str | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
@@ -265,14 +320,24 @@ def create_my_deep_agent(
     session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
+    tool_timeout_seconds: float | None = None,
+    resource_manager: ResourceManager | None = None,
     workspace_root: Path,
 ) -> Any:
     if checkpointer is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
+    if config_service is None:
+        raise RuntimeError("create_my_deep_agent 需要显式传入 ConfigService")
 
     resolved_sender_agent_id = sender_agent_id or agent_id
     resolved_tool_denylist = set(tool_denylist or set())
-    tool_invocation_context = ToolInvocationContext()
+    resolved_execution_overrides = dict(execution_overrides or {})
+    resolved_model_visibility_overrides = dict(model_visibility_overrides or {})
+    policy_resolver = config_service.get_tool_policy_resolver(agent_id)
+    tool_invocation_context = ToolInvocationContext(
+        tool_timeout_seconds=tool_timeout_seconds,
+        resource_manager=resource_manager,
+    )
 
     if background_task_registry is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundTaskRegistry")
@@ -292,8 +357,6 @@ def create_my_deep_agent(
         raise RuntimeError("create_my_deep_agent 需要显式传入 TeamCoordinationService")
     if job_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 JobService")
-    if config_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 ConfigService")
     if session_context_query_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 SessionContextQueryService")
     if workspace_session_context_client is None:
@@ -301,8 +364,30 @@ def create_my_deep_agent(
 
     workspace_root = workspace_root.resolve()
 
+    hidden_direct_tool_names: set[str] = set()
+    extension_confirmation_names: set[str] = set()
+    direct_confirmation_names: set[str] = set()
+    extension_policies: dict[str, object] = {}
     if tools is not None:
-        resolved_tools = list(tools)
+        resolved_tools = []
+        for tool in tools:
+            if not isinstance(tool, BaseTool):
+                resolved_tools.append(tool)
+                continue
+            policy = _resolve_tool_policy(
+                policy_resolver,
+                tool,
+                origin="builtin",
+                execution_overrides=resolved_execution_overrides,
+                model_visibility_overrides=resolved_model_visibility_overrides,
+            )
+            if not policy.execution_enabled:
+                continue
+            resolved_tools.append(tool)
+            if not policy.model_visible:
+                hidden_direct_tool_names.add(tool.name)
+            if policy.confirmation_required:
+                direct_confirmation_names.add(tool.name)
     else:
         if browser_manager_client is None:
             raise RuntimeError("create_my_deep_agent 构建默认工具集时需要显式传入 BrowserManagerClient")
@@ -347,15 +432,79 @@ def create_my_deep_agent(
             invocation_context=tool_invocation_context,
             node_debug_service=node_debug_service,
         )
-        custom_tools = filter_tools_by_name(
-            custom_tool_bundle.tools,
-            resolved_tool_denylist,
-        )
+        custom_specs_by_name = {
+            spec.name: spec
+            for spec in parse_custom_tool_specs(
+                custom_tool_specs or [],
+                context=f"agent {agent_id} 的 tools.custom",
+            )
+        }
+        custom_tools = []
+        for tool in custom_tool_bundle.tools:
+            if tool.name in resolved_tool_denylist:
+                continue
+            spec = custom_specs_by_name.get(tool.name)
+            group_id = None
+            if spec is not None:
+                module_name = spec.factory_path.split(":", 1)[0].rsplit(".", 1)[-1]
+                known_group = catalog_group_for_tool(tool.name)
+                group_id = (
+                    known_group.group_id
+                    if known_group.kind != "default"
+                    else f"extension:{module_name}"
+                )
+            policy = _resolve_tool_policy(
+                policy_resolver,
+                tool,
+                origin="custom",
+                group_id=group_id,
+                execution_overrides=resolved_execution_overrides,
+                model_visibility_overrides=resolved_model_visibility_overrides,
+            )
+            extension_policies[tool.name] = policy
+            if policy.execution_enabled:
+                custom_tools.append(tool)
+                if policy.confirmation_required:
+                    extension_confirmation_names.add(tool.name)
+        mcp_tools_for_agent = []
+        for tool in mcp_tools or []:
+            if tool.name in resolved_tool_denylist:
+                continue
+            policy = _resolve_tool_policy(
+                policy_resolver,
+                tool,
+                origin="mcp",
+                execution_overrides=resolved_execution_overrides,
+                model_visibility_overrides=resolved_model_visibility_overrides,
+            )
+            extension_policies[tool.name] = policy
+            if policy.execution_enabled:
+                mcp_tools_for_agent.append(tool)
+                if policy.confirmation_required:
+                    extension_confirmation_names.add(tool.name)
         extension_tools = [
             *custom_tools,
-            *filter_tools_by_name(list(mcp_tools or []), resolved_tool_denylist),
+            *mcp_tools_for_agent,
         ]
-        resolved_tools = [*visible_tools]
+        resolved_tools = []
+        hidden_direct_tool_names: set[str] = set()
+        for tool in visible_tools:
+            if tool.name in resolved_tool_denylist:
+                continue
+            policy = _resolve_tool_policy(
+                policy_resolver,
+                tool,
+                origin="builtin",
+                execution_overrides=resolved_execution_overrides,
+                model_visibility_overrides=resolved_model_visibility_overrides,
+            )
+            if not policy.execution_enabled:
+                continue
+            resolved_tools.append(tool)
+            if not policy.model_visible:
+                hidden_direct_tool_names.add(tool.name)
+            if policy.confirmation_required:
+                direct_confirmation_names.add(tool.name)
         if extension_tools:
             resolved_tools.append(
                 create_custom_tool_invoker_tool(
@@ -363,13 +512,35 @@ def create_my_deep_agent(
                     model_visible_tool_names={
                         tool.name
                         for tool in extension_tools
-                        if tool.name not in model_hidden_tool_names
+                        if _resolve_tool_policy(
+                            policy_resolver,
+                            tool,
+                            origin=(
+                                "mcp"
+                                if dict(getattr(tool, "metadata", None) or {}).get(
+                                    "mcp_server_id"
+                                )
+                                else "custom"
+                            ),
+                            execution_overrides=resolved_execution_overrides,
+                            model_visibility_overrides=resolved_model_visibility_overrides,
+                        ).model_visible
                     },
+                    is_tool_execution_enabled=lambda target: bool(
+                        getattr(
+                            extension_policies.get(target.name),
+                            "execution_enabled",
+                            False,
+                        )
+                    ),
                 )
             )
-    resolved_tools = filter_tools_by_name(resolved_tools, resolved_tool_denylist)
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
+    resolved_interrupt_on = dict(interrupt_on or {})
+    resolved_interrupt_on.update(
+        {tool_name: True for tool_name in direct_confirmation_names}
+    )
     resolved_tool_names = {
         getattr(tool, "name", "")
         for tool in resolved_tools
@@ -423,14 +594,16 @@ def create_my_deep_agent(
         permissions=permissions,
         resolved_skills=resolved_skills,
         resolved_tool_denylist=resolved_tool_denylist,
-        interrupt_on=interrupt_on,
+        interrupt_on=resolved_interrupt_on,
         runtime_middleware=runtime_middleware,
         model_routing_middleware=model_routing_middleware,
         tool_invocation_context_middleware=tool_invocation_context_middleware,
         tool_output_middleware=tool_output_middleware,
         memory=memory,
-        custom_tool_confirmation_names=custom_tool_confirmation_names,
-        model_hidden_tool_names=model_hidden_tool_names,
+        custom_tool_confirmation_names=frozenset(
+            set(custom_tool_confirmation_names) | extension_confirmation_names
+        ),
+        model_hidden_tool_names=frozenset(hidden_direct_tool_names),
     )
 
     agent = create_agent(
@@ -481,7 +654,8 @@ def create_runtime_deep_agent_for_session(
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
-    model_hidden_tool_names: frozenset[str] = frozenset(),
+    execution_overrides: Mapping[str, bool] | None = None,
+    model_visibility_overrides: Mapping[str, bool] | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     terminal_manager_client: TerminalManagerClient | None = None,
     browser_manager_client: BrowserManagerClient | None = None,
@@ -495,6 +669,8 @@ def create_runtime_deep_agent_for_session(
     override_model: Any = None,
     model_routing_enabled: bool = True,
     preferred_provider_id: str | None = None,
+    tool_timeout_seconds: float | None = None,
+    resource_manager: ResourceManager | None = None,
     workspace_root: Path,
 ):
     if config_service is None:
@@ -538,8 +714,9 @@ def create_runtime_deep_agent_for_session(
         sender_agent_id=sender_agent_id,
         enabled_tool_names=enabled_tool_names,
         enabled_runtime_middleware_names=enabled_runtime_middleware_names,
-        tool_denylist=set(tool_policy.disabled_names) | set(tool_denylist or set()),
-        model_hidden_tool_names=model_hidden_tool_names,
+        tool_denylist=set(tool_denylist or set()),
+        execution_overrides=execution_overrides,
+        model_visibility_overrides=model_visibility_overrides,
         custom_tool_specs=custom_tool_specs,
         name=name or agent_id,
         background_task_registry=background_task_registry,
@@ -560,6 +737,8 @@ def create_runtime_deep_agent_for_session(
         session_target_resolver=session_target_resolver,
         session_message_delivery_service=session_message_delivery_service,
         mcp_tools=mcp_tools,
+        tool_timeout_seconds=tool_timeout_seconds,
+        resource_manager=resource_manager,
         interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
         custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=service,

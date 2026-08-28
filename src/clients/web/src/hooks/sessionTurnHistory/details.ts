@@ -5,11 +5,17 @@ import {
   type MutableRefObject,
 } from "react";
 import { HttpRequestError } from "../../api/http";
+import { getSessionMessageStreamSnapshot } from "../../api/sessionMessageStream";
 import {
   loadSessionHistory,
   StaleTurnReferenceHttpError,
   type TurnHistoryInclude,
 } from "../../api/sessionTurnHistory";
+import { cloneMaps } from "../../state/appStateMaps";
+import {
+  applyMessageStreamEvent,
+  type MessageStreamEvent,
+} from "../../state/messageStream";
 import {
   applyTurnDetails,
   createSessionTurnTimeline,
@@ -23,6 +29,73 @@ import type { TurnDetailBatchRequest } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 
 const TURN_DETAIL_COMMIT_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const;
+
+async function hydrateMessageStreamSnapshots(
+  apiPort: number,
+  sessionId: string,
+  workspaceId: string | null,
+  turnIds: string[],
+  signal: AbortSignal,
+  setState: SetAppState,
+): Promise<void> {
+  const snapshots = await Promise.all(turnIds.map(async (turnId) => {
+    try {
+      return await getSessionMessageStreamSnapshot(
+        apiPort,
+        sessionId,
+        turnId,
+        { workspaceId, signal },
+      );
+    } catch (error) {
+      // 历史上没有 message.v1 的 Turn 没有 snapshot；这是明确的存量归档路径，
+      // 不能把它误报成详情加载失败。
+      if (error instanceof HttpRequestError && error.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }));
+
+  if (signal.aborted) return;
+  setState((previous) => {
+    const next = cloneMaps(previous);
+    const messageStreams = next.messageStreamsByTurnStream ?? new Map();
+    next.messageStreamsByTurnStream = messageStreams;
+    for (const snapshot of snapshots) {
+      if (!snapshot) continue;
+      const event: MessageStreamEvent = {
+        event_id: `snapshot:${snapshot.turn_id}:${snapshot.snapshot_seq}`,
+        session_id: snapshot.session_id,
+        turn_id: snapshot.turn_id,
+        turn_stream_id: snapshot.turn_stream_id,
+        event_seq: snapshot.snapshot_seq,
+        type: "stream.snapshot",
+        payload: snapshot as unknown as Record<string, unknown>,
+      };
+      const currentEntry = [...messageStreams.entries()].find(
+        ([, stream]) =>
+          stream.sessionId === snapshot.session_id
+          && stream.turnId === snapshot.turn_id,
+      );
+      const current = currentEntry?.[1] ?? null;
+      if (current && current.lastEventSeq > snapshot.snapshot_seq) {
+        continue;
+      }
+      const updated = applyMessageStreamEvent(current, event);
+      for (const [key, stream] of messageStreams.entries()) {
+        if (
+          key !== snapshot.turn_stream_id
+          && stream.sessionId === snapshot.session_id
+          && stream.turnId === snapshot.turn_id
+        ) {
+          messageStreams.delete(key);
+        }
+      }
+      messageStreams.set(snapshot.turn_stream_id, updated);
+    }
+    return next;
+  });
+}
 
 async function waitForTurnCommit(
   delayMs: number,
@@ -182,6 +255,23 @@ export function useTurnDetailLoader({
             ),
           };
         });
+      });
+      // Turn 详情负责历史入口；一旦该 Turn 存在 message.v1 持久化流，
+      // snapshot 必须覆盖旧 response_parts，保证刷新/重新选中后仍使用同一语义。
+      void hydrateMessageStreamSnapshots(
+        apiPort,
+        sessionId,
+        workspaceId,
+        requestIds,
+        requestSignal,
+        setState,
+      ).catch((error: unknown) => {
+        if (requestSignal.aborted) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setState((previous) => ({
+          ...previous,
+          status: `恢复 Turn 消息流 snapshot 失败: ${message}`,
+        }));
       });
     } catch (error) {
       if (requestSignal.aborted) return;

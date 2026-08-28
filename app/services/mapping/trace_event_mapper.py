@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from app.schemas.public_v2.trace import TraceEventDTO
+from app.schemas.internal_v2.trace import TraceEventDTO
 
 
 class TraceEventMapper:

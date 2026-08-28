@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.path_utils import get_session_path_resolver
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.session_interrupt_state import SessionInterruptState
-from app.schemas.public_v2.common import ControlAction, JobStatus, RunMode
-from app.schemas.public_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO
+from app.schemas.internal_v2.common import ControlAction, JobStatus, RunMode
+from app.schemas.internal_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO
 from app.services.business.message_service import MessageService
 from app.services.business.session_interrupt_service import SessionInterruptService
+from app.services.infrastructure.message_stream_store import MessageStreamStore
 
 
 class FakeJobService:
@@ -98,6 +100,9 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     message_service = MessageService(checkpointer=saver)
+    message_stream_store = MessageStreamStore(
+        path_resolver=get_session_path_resolver(tmp_path),
+    )
     config = build_checkpoint_config(session_id)
     await saver.aput(
         config,
@@ -128,8 +133,8 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
         mode=RunMode.single_agent,
         status=JobStatus.streaming,
         entry_agent="default",
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     job_service = FakeJobService(job)
     event_bus = FakeJobEventBus()
@@ -137,6 +142,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
         job_service=job_service,
         job_event_bus=event_bus,
         message_service=message_service,
+        message_stream_store=message_stream_store,
     )
 
     result = await service.interrupt(session_id=session_id)
@@ -190,6 +196,9 @@ async def test_user_interrupt_fails_when_system_reminder_checkpoint_missing(
 
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     message_service = MessageService(checkpointer=saver)
+    message_stream_store = MessageStreamStore(
+        path_resolver=get_session_path_resolver(tmp_path),
+    )
     SessionInterruptState.set(
         session_id,
         phase="text",
@@ -203,14 +212,15 @@ async def test_user_interrupt_fails_when_system_reminder_checkpoint_missing(
         mode=RunMode.single_agent,
         status=JobStatus.streaming,
         entry_agent="default",
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     job_service = FakeJobService(job)
     service = SessionInterruptService(
         job_service=job_service,
         job_event_bus=FakeJobEventBus(),
         message_service=message_service,
+        message_stream_store=message_stream_store,
     )
 
     with pytest.raises(RuntimeError, match="system_reminder"):

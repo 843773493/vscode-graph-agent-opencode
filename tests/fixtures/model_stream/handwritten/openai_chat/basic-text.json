@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "basic-text",
+    "protocol": "openai_chat_sse",
+    "provider": "openai_compatible",
+    "model": "big-pickle"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "frames": [
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-basic-text",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "role": "assistant",
+                    "content": "基础"
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-basic-text",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "content": "回放"
+                  },
+                  "finish_reason": null
+                }
+              ],
+              "provider_extension": {
+                "fixture_marker": "preserved"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-basic-text",
+              "object": "chat.completion.chunk",
+              "created": 1,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {},
+                  "finish_reason": "stop"
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 2,
+                "completion_tokens": 2,
+                "total_tokens": 4
+              }
+            }
+          },
+          {
+            "kind": "done",
+            "encoding": "text",
+            "payload": "[DONE]"
+          }
+        ]
+      }
+    }
+  ]
+}

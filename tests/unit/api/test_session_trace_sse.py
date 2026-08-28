@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.api.sessions import _stream_trace_sse
-from app.schemas.public_v2.trace import TraceEventDTO
+from app.schemas.internal_v2.trace import TraceEventDTO
 
 
 async def _idle_trace_events() -> AsyncIterator[tuple[TraceEventDTO, str]]:

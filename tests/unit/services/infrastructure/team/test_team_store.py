@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.schemas.public_v2.team import TeamBoardDTO, TeamEventDTO
+from app.schemas.internal_v2.team import TeamBoardDTO, TeamEventDTO
 from app.services.infrastructure.team.store import TeamStore
 
 

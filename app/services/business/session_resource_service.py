@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.abstractions.job_service import JobServiceProtocol
-from app.schemas.public_v2.session_resource import (
+from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
     SessionResourceKind,

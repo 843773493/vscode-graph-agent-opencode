@@ -127,7 +127,7 @@ describe("ChatTurn 轮次动作", () => {
   });
 
   test("活动 Turn 同 revision 的 streaming 更新不会被 memo 阻挡", () => {
-    const previous = conversation("running", "text_delta");
+    const previous = conversation("running", "job_started");
     previous.turnId = "job_1";
     previous.turnRevision = 2;
     previous.turnItemsView = "full";
@@ -173,19 +173,28 @@ describe("ChatTurn 轮次动作", () => {
     )).toBe(false);
   });
 
-  test("bounded detail 只有 text_end 时直接展示完整正文", () => {
+  test("消息流终态只有完整正文时直接展示正文", () => {
     const value = conversation("done");
-    value.displayMode = "live";
-    value.source = "pending";
-    value.responseParts = [];
-    value.assistantMessages = [];
-    value.events = [{
-      ...value.events[0],
-      event_id: "evt_bounded_end",
-      part_id: "part_bounded_end",
-      type: "text_end",
-      payload: { kind: "markdown", text: "Turn detail 最终正文" },
-    }];
+  value.displayMode = "live";
+  value.source = "pending";
+  value.responseParts = [];
+  value.messageStream = {
+    connectionStatus: "terminal",
+    streamStatus: "completed",
+    lastEventSeq: 3,
+    failure: null,
+    resumable: false,
+  };
+  value.assistantMessages = [];
+  value.responseParts = [{
+    part_id: "part_bounded_end",
+    kind: "text",
+    projection: "streaming",
+    status: "completed",
+    source: { message_sequence: 0 },
+    text: "Turn detail 最终正文",
+    final: false,
+  }];
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
@@ -193,22 +202,48 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("尚未开始");
   });
 
-  test("live 事件优先于同一视图残留的历史 response parts", () => {
+  test("消息流已完成时不显示残留的 snapshot 缺口提示", () => {
+    const value = conversation("done");
+    value.displayMode = "live";
+    value.source = "pending";
+    value.messageStream = {
+      connectionStatus: "gap",
+      streamStatus: "completed",
+      lastEventSeq: 1290,
+      failure: null,
+      resumable: false,
+    };
+
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).not.toContain("实时消息流出现缺口");
+  });
+
+  test("消息流正文优先于同一视图残留的历史 response parts", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [{
-      ...value.responseParts![0],
-      text: "旧历史正文",
-    }];
-    value.assistantMessages = [];
-    value.events = [{
-      ...value.events[0],
-      event_id: "evt_live_text",
-      part_id: "live_text",
-      type: "text_delta",
-      payload: { kind: "markdown", text: "实时正文" },
-    }];
+  value.responseParts = [{
+    ...value.responseParts![0],
+    text: "旧历史正文",
+  }];
+  value.messageStream = {
+    connectionStatus: "connected",
+    streamStatus: "open",
+    lastEventSeq: 3,
+    failure: null,
+    resumable: true,
+  };
+  value.responseParts = [{
+    part_id: "live_text",
+    kind: "text",
+    projection: "streaming",
+    status: "running",
+    source: { message_sequence: 0 },
+    text: "实时正文",
+    final: false,
+  }];
+  value.assistantMessages = [];
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
@@ -218,10 +253,17 @@ describe("ChatTurn 轮次动作", () => {
 
   test("用户中断显示为中性状态且不重复渲染取消事件", () => {
     const value = conversation("error", "session_interrupted");
-    value.displayMode = "live";
-    value.source = "pending";
-    value.responseParts = [];
-    value.assistantMessages = [];
+  value.displayMode = "live";
+  value.source = "pending";
+  value.responseParts = [];
+  value.messageStream = {
+    connectionStatus: "terminal",
+    streamStatus: "interrupted",
+    lastEventSeq: 4,
+    failure: null,
+    resumable: false,
+  };
+  value.assistantMessages = [];
     value.events.push({
       ...value.events[0],
       event_id: "evt_cancelled",
@@ -237,10 +279,22 @@ describe("ChatTurn 轮次动作", () => {
 
   test("非用户中断的取消事件使用通用取消文案", () => {
     const value = conversation("error", "job_cancelled");
-    value.displayMode = "live";
-    value.source = "pending";
-    value.responseParts = [];
-    value.assistantMessages = [];
+  value.displayMode = "live";
+  value.source = "pending";
+  value.responseParts = [];
+  value.messageStream = {
+    connectionStatus: "terminal",
+    streamStatus: "failed",
+    lastEventSeq: 3,
+    failure: {
+      code: "execution_cancelled",
+      message: "AgentLoop 在没有用户中断请求的情况下被取消",
+      afterInterruptRequested: false,
+      resumable: false,
+    },
+    resumable: false,
+  };
+  value.assistantMessages = [];
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
@@ -248,19 +302,28 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("运行失败");
   });
 
-  test("晚加入 SSE 的 startless delta 先作为活动正文展示", () => {
+  test("消息流晚加入时已提交正文先作为活动正文展示", () => {
     const value = conversation("running");
-    value.displayMode = "live";
-    value.source = "pending";
-    value.responseParts = [];
-    value.assistantMessages = [];
-    value.events = [{
-      ...value.events[0],
-      event_id: "evt_joined_delta",
-      part_id: "part_joined_delta",
-      type: "text_delta",
-      payload: { kind: "markdown", text: "已接入的流式片段" },
-    }];
+  value.displayMode = "live";
+  value.source = "pending";
+  value.responseParts = [];
+  value.messageStream = {
+    connectionStatus: "connected",
+    streamStatus: "open",
+    lastEventSeq: 3,
+    failure: null,
+    resumable: true,
+  };
+  value.assistantMessages = [];
+  value.responseParts = [{
+    part_id: "part_joined_delta",
+    kind: "text",
+    projection: "streaming",
+    status: "running",
+    source: { message_sequence: 0 },
+    text: "已接入的流式片段",
+    final: false,
+  }];
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
@@ -390,7 +453,7 @@ describe("ChatTurn 轮次动作", () => {
         result: "工具输出",
       },
       {
-        ...value.responseParts[0],
+        ...value.responseParts![0],
         part_id: "final-1",
         text: "最终响应",
         final: true,

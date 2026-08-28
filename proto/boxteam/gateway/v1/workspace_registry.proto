@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package boxteam.gateway.v1;
+
+enum WorkspaceStatus {
+  WORKSPACE_STATUS_UNSPECIFIED = 0;
+  WORKSPACE_STATUS_READY = 1;
+  WORKSPACE_STATUS_OFFLINE = 2;
+}
+
+message WorkspaceSummary {
+  string workspace_id = 1;
+  string name = 2;
+  string root_path = 3;
+  string backend_url = 4;
+  WorkspaceStatus status = 5;
+  bool active = 6;
+  string connection_kind = 7;
+}
+
+message WorkspaceRegistry {
+  string active_workspace_id = 1;
+  repeated WorkspaceSummary items = 2;
+}

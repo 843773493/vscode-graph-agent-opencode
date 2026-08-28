@@ -32,7 +32,7 @@
 - API 函数统一通过 `requestJson` 封装，自动处理 headers、错误和 JSON 解析
 - SSE 字节流统一由 `consumeSseResponse` 消费，帧统一由 `parseSseFrameBlock` 解析；业务 API 不得再维护第二套分帧逻辑
 - SSE JSON 必须通过 `sseRuntime.js` 中由后端 Pydantic schema 生成的 validator 校验，不能只靠 TypeScript 类型断言
-- 生成文件 `sseRuntimeValidators.js` 与 `sseRuntimeValidators.d.ts` 只能由 `bun run gen:public-types` 覆盖
+- 生成文件 `sseRuntimeValidators.js` 与 `sseRuntimeValidators.d.ts` 只能由 `bun run gen:protocol` 覆盖
 - 协议类型分为 `HostToWebviewMessageType` 和 `WebviewToHostMessageType` 两组
 - 新增 API 或消息类型时，必须同步更新此目录
 - 这里不放 UI，不放扩展生命周期管理，只放“共享定义”

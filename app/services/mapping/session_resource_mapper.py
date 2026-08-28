@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.core.background_task_registry import BackgroundTaskHandle
-from app.schemas.public_v2.session_resource import (
+from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceDTO,
 )

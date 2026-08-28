@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
-from app.schemas.public_v2.pending_request import (
+from app.schemas.internal_v2.pending_request import (
     DeliveryBoundary,
     DeliveryPolicy,
 )

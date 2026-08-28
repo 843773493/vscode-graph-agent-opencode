@@ -3,8 +3,8 @@ from __future__ import annotations
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionStoreProtocol, SessionSubagentProtocol
 from app.abstractions.team import TeamStoreProtocol
-from app.schemas.public_v2.session import SessionDTO
-from app.schemas.public_v2.team import (
+from app.schemas.internal_v2.session import SessionDTO
+from app.schemas.internal_v2.team import (
     TeamBoardDTO,
     TeamListDTO,
     TeamMemberOperationDTO,

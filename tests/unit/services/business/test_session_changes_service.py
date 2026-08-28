@@ -10,7 +10,7 @@ from app.core.path_utils import (
     get_sessions_dir,
     initialize_directories,
 )
-from app.schemas.public_v2.session import SessionCreateRequest
+from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService

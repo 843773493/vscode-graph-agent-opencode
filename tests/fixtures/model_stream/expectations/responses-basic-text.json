@@ -1,0 +1,6 @@
+{
+  "expectation_id": "responses-basic-text-visible-output",
+  "protocol": "openai_responses_sse",
+  "visible_text": "响应文本",
+  "terminal_event": "response.completed"
+}

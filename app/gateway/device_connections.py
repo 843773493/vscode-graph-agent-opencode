@@ -14,7 +14,7 @@ from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
-from app.schemas.public_v2.common import APIResponse
+from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter(prefix="/api/gateway/device-connections", tags=["gateway-devices"])
 

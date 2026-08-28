@@ -33,6 +33,7 @@ class ToolCatalogService:
         definitions = [
             {
                 **item,
+                "origin": item.get("origin", "builtin"),
                 "group_id": item.get("group_id", DEFAULT_TOOL_GROUP.group_id),
                 "group_name": item.get(
                     "group_name",
@@ -44,18 +45,12 @@ class ToolCatalogService:
             if item["id"] != "invoke_custom_tool"
         ]
         tool_config = self._config_service.get_agent_tool_config(agent_id)
-        enabled_extension_names = (
-            self._config_service.resolve_agent_tool_policy(
-                agent_id
-            ).enabled_extension_names
-        )
         for spec in parse_custom_tool_specs(
             tool_config.get("custom", []),
             context=f"agent {agent_id} 的 tools.custom",
         ):
             definition = self._custom_definition(spec)
-            if definition["id"] in enabled_extension_names:
-                definitions.append(definition)
+            definitions.append(definition)
         return definitions
 
     @staticmethod
@@ -76,6 +71,7 @@ class ToolCatalogService:
         return {
             "id": spec.name,
             "name": spec.name,
+            "origin": "custom",
             "description": spec.description or f"工作区扩展工具 {spec.name}",
             "parameters": {},
             "category": group_fields["kind"],

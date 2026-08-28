@@ -36,7 +36,7 @@ from app.core.rollout_storage import (
     RolloutStorage,
     RolloutTurnAnchor,
 )
-from app.schemas.public_v2.turn import (
+from app.schemas.internal_v2.turn import (
     TurnHistoryLoadRequest,
     TurnHistoryPageDTO,
     TurnSummaryDTO,

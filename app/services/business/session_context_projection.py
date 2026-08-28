@@ -8,8 +8,8 @@ from app.agents.providers.litellm_content import (
     reasoning_projection_rows,
     visible_text as litellm_visible_text,
 )
-from app.schemas.public_v2.session import SessionDTO
-from app.schemas.public_v2.session_context import (
+from app.schemas.internal_v2.session import SessionDTO
+from app.schemas.internal_v2.session_context import (
     SessionContextInclude,
     SessionContextItemDTO,
     SessionContextReadRequest,

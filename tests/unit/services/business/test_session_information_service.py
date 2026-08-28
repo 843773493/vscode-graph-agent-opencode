@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.schemas.public_v2.common import CursorPage
-from app.schemas.public_v2.session import SessionDTO, SessionListResultDTO
-from app.schemas.public_v2.session_resource import SessionResourceListDTO
-from app.schemas.public_v2.trace import TraceEventDTO
-from app.schemas.public_v2.workspace import WorkspaceDTO
+from app.schemas.internal_v2.common import CursorPage
+from app.schemas.internal_v2.session import SessionDTO, SessionListResultDTO
+from app.schemas.internal_v2.session_resource import SessionResourceListDTO
+from app.schemas.internal_v2.trace import TraceEventDTO
+from app.schemas.internal_v2.workspace import WorkspaceDTO
 from app.services.business.session_information_service import SessionInformationService
 
 

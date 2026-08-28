@@ -4,14 +4,9 @@ import {
   conversationModelUsage,
   conversationTokenUsage,
 } from "../../../state/tokenUsage";
-import {
-  aggregateConversationEvents,
-  buildPendingStatusItem,
-  isLiveConversationView,
-} from "../../../state/trace/traceAggregation";
+import { buildPendingStatusItem, isLiveConversationView } from "../../../state/trace/traceAggregation";
 import type { TimelineItem } from "../../../state/timelineTypes";
 import {
-  liveTimelineItemsToRenderItems,
   responsePartsToTimelineItems,
 } from "../../../state/responseParts";
 import type { ConversationView } from "../../../types/frontend";
@@ -19,6 +14,7 @@ import MarkdownContent from "../MarkdownContent";
 import ResponseActionToolbar from "../ResponseActionToolbar";
 import ThinkingSection from "../ThinkingSection";
 import ToolRow from "../ToolRow";
+import { activityRendererRegistry } from "./activityRenderers";
 import type { ChatTurnActions } from "./useChatTurnActions";
 
 function ErrorPart({ item }: { item: Extract<TimelineItem, { kind: "trace" }> }) {
@@ -39,6 +35,74 @@ function CancelledPart({ userInitiated }: { userInitiated: boolean }) {
       <span>{userInitiated ? "已由用户中断" : "任务已取消"}</span>
     </div>
   );
+}
+
+function MessageStreamStatusPart({ conversation }: { conversation: ConversationView }) {
+  const stream = conversation.messageStream;
+  if (!stream) {
+    if (
+      conversation.displayMode === "live"
+      && (conversation.status === "running" || conversation.status === "queued")
+    ) {
+      return (
+        <div className="chat-working" role="status">
+          <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
+          <span>正在连接实时消息流</span>
+        </div>
+      );
+    }
+    return null;
+  }
+  if (stream.streamStatus === "interrupted") {
+    return <CancelledPart userInitiated />;
+  }
+  if (stream.streamStatus === "failed" && stream.failure) {
+    if (stream.failure.code === "execution_cancelled") {
+      return <CancelledPart userInitiated={false} />;
+    }
+    return (
+      <div className="chat-inline-error" role="alert">
+        <span className="codicon codicon-error" aria-hidden="true" />
+        <span>{stream.failure.message}</span>
+      </div>
+    );
+  }
+  // 终态是后端权威事实；即使旧的连接镜像残留 gap，也不能继续向用户
+  // 展示“正在恢复”，否则完整结果会被误报为未完成。
+  if (stream.streamStatus === "completed" || stream.streamStatus === "failed") {
+    return null;
+  }
+  if (stream.connectionStatus === "disconnected") {
+    return (
+      <div className="chat-working" role="status">
+        <span className="codicon codicon-cloud-offline" aria-hidden="true" />
+        <span>实时消息流已断开，正在重连</span>
+        <span className="chat-working-detail">已提交的内容仍保留，重连后将从 event_seq {stream.lastEventSeq} 继续</span>
+      </div>
+    );
+  }
+  if (stream.connectionStatus === "gap") {
+    return (
+      <div className="chat-inline-error" role="alert">
+        <span className="codicon codicon-warning" aria-hidden="true" />
+        <span>实时消息流出现缺口，正在请求 snapshot 恢复</span>
+      </div>
+    );
+  }
+  if (stream.activeState?.kind === "activity") {
+    const activity = (stream.activities ?? []).find(
+      (item) => item.activity_id === stream.activeState?.activity_id,
+    );
+    if (activity && activity.status !== "completed" && activity.status !== "failed") {
+      return (
+        <div className="chat-working" role="status">
+          <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
+          <span>{activityRendererRegistry.render(activity)}</span>
+        </div>
+      );
+    }
+  }
+  return null;
 }
 
 function ResponsePart({
@@ -95,6 +159,7 @@ function persistedWorkItems(conversation: ConversationView): WorkItem[] {
 function responseItemsForConversation(conversation: ConversationView): TimelineItem[] {
   const items = responsePartsToTimelineItems(
     (conversation.responseParts ?? []).filter((part) => part.kind !== "final_text"),
+    { terminalFailure: conversation.status === "error" },
   );
   const assistantMessages = conversation.assistantMessages ?? [];
   const finalAssistantMessage = assistantMessages.reduce<NonNullable<ConversationView["assistantMessages"]>[number] | undefined>(
@@ -310,17 +375,11 @@ export default function ChatTurnResponseBody({
   const hasPersistedResponse = (conversation.responseParts?.length ?? 0) > 0
     || (conversation.assistantMessages?.length ?? 0) > 0;
   const hasUnifiedParts = !running && hasPersistedResponse;
-  const parts = hasUnifiedParts
+  // 实时回答只来自 message.v1；旧 Trace 仍可在事件/请求视图查看，
+  // 但不能在聊天主线作为静默兼容回退，避免两套语义互相覆盖。
+  const parts = hasUnifiedParts || Boolean(conversation.messageStream)
     ? responseItemsForConversation(conversation)
-    : isLiveConversationView(conversation)
-      ? liveTimelineItemsToRenderItems(
-        aggregateConversationEvents(
-          conversation.events,
-          conversation.conversationId,
-          running,
-        ),
-      )
-      : [];
+    : [];
   const hasSessionInterrupted = parts.some((item) =>
     item.kind === "trace" && item.eventType === "session_interrupted"
   );
@@ -355,7 +414,10 @@ export default function ChatTurnResponseBody({
   const hasStreamingMarkdown = visibleParts.some((item) =>
     item.kind === "aggregated_text" && item.partKind === "markdown" && item.active
   );
-  const status = running && !hasActiveWork && !hasStreamingMarkdown
+  const status = running
+    && Boolean(conversation.messageStream)
+    && !hasActiveWork
+    && !hasStreamingMarkdown
     ? buildPendingStatusItem(conversation)
     : null;
   const showResponseActions = !summaryOnly
@@ -408,6 +470,7 @@ export default function ChatTurnResponseBody({
           <span className="chat-working-detail">{status.detail}</span>
         </div>
       ) : null}
+      <MessageStreamStatusPart conversation={conversation} />
       {showResponseActions ? (
         <ResponseActionToolbar
           responseText={finalTextPart?.text ?? ""}

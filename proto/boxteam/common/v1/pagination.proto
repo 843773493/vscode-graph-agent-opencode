@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package boxteam.common.v1;
+
+message PageCursor {
+  string cursor = 1;
+  uint32 limit = 2;
+}
+
+message PageInfo {
+  string next_cursor = 1;
+  bool has_more = 2;
+}

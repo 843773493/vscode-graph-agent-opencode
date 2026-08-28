@@ -36,7 +36,7 @@ class _RuntimeCatalog:
         ]
 
 
-def test_catalog_only_exposes_extensions_enabled_by_resolved_policy(
+def test_catalog_exposes_declared_extensions_with_static_policy_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -92,12 +92,18 @@ def test_catalog_only_exposes_extensions_enabled_by_resolved_policy(
     assert [item["id"] for item in definitions] == [
         "read_file",
         "send_message_to_session",
+        "read_context",
         "web_search",
+        "fetch_webpage",
     ]
     assert definitions[1]["group_id"] == "agent-collaboration"
     assert definitions[1]["group_name"] == "默认工具 · Agent Collaboration"
     assert definitions[1]["kind"] == "collaboration"
-    assert definitions[2]["description"] == "网络搜索"
+    assert definitions[3]["description"] == "网络搜索"
+    assert all(
+        item["origin"] == "custom"
+        for item in definitions[2:]
+    )
 
 
 def test_catalog_groups_default_session_context_extensions_as_collaboration(

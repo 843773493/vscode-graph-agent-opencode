@@ -318,6 +318,27 @@ def test_stream_parses_litellm_thinking_blocks_and_reasoning_items(
     assert item["index"] == 1
 
 
+def test_reasoning_item_without_provider_id_gets_stable_local_key(
+    model: BoxteamLiteLLMChatModel,
+):
+    part_state = _StreamPartState()
+    first = model._delta_to_message_chunks(
+        {
+            "reasoning_items": [{"type": "reasoning", "summary": [{"text": "A"}]}]
+        },
+        part_state=part_state,
+    )[0].content[0]
+    second = model._delta_to_message_chunks(
+        {
+            "reasoning_items": [{"type": "reasoning", "summary": [{"text": "B"}]}]
+        },
+        part_state=part_state,
+    )[0].content[0]
+
+    assert first["reasoning_items"][0]["id"] == second["reasoning_items"][0]["id"]
+    assert first["reasoning_items"][0]["id"] == "reasoning-item:0"
+
+
 def test_split_tool_arguments_merge_into_one_structured_call(
     model: BoxteamLiteLLMChatModel,
 ):

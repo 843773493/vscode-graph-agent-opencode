@@ -8,8 +8,8 @@ from app.api.deps import (
     get_session_generation_service,
     verify_local_token,
 )
-from app.schemas.public_v2.common import APIResponse
-from app.schemas.public_v2.session_navigation import (
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
     SessionCatalogExportDTO,
     SessionCatalogNodeMoveRequest,

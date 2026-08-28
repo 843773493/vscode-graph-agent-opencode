@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
-from app.schemas.public_v2.session import SessionCreateRequest
+from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_context_fork_service import (
     SessionContextForkService,
 )

@@ -139,6 +139,39 @@
     "level": "info", // ConfigService.get_logger_level 与 configure_application_logging 使用。
     "pretty": true // ConfigService.get_logger_pretty 使用。
   },
+  "tooling": {
+    "policy_defaults": {
+      "execution_enabled": true,
+      "model_visible": true,
+      "confirmation_required": false,
+      "limits": {
+        "timeout_ms": 10000,
+        "max_result_bytes": 1048576
+      }
+    },
+    "policy_rules": {
+      "by_origin": {
+        "custom": {
+          "model_visible": false
+        },
+        "mcp": {
+          "model_visible": false
+        }
+      },
+      "by_kind": {
+        "debugging": {
+          "model_visible": false
+        }
+      },
+      "by_group": {},
+      "by_tool": {}
+    },
+    "restrictions": {
+      "execution_disabled": [],
+      "model_hidden": [],
+      "confirmation_required": []
+    }
+  },
   "default_agent": "default", // ConfigService.get_default_agent_id 选择默认 Agent。
   "agents": {
     "default": {
@@ -167,7 +200,6 @@
         ] // AgentFactory 按顺序尝试 fallback Provider。
       },
       "tools": {
-        "enabled": false, // Agent tool policy 总开关；当前工具集由配置项存在性控制。
         "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
         "timeout_ms": 10000, // Agent tools 默认调用超时。
         "allowlist": [], // Tool policy 恢复工具集合。
@@ -403,7 +435,6 @@
         ] // AgentFactory 按顺序选择 fallback Provider。
       },
       "tools": {
-        "enabled": false, // Agent tool policy 总开关。
         "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
         "timeout_ms": 10000, // Agent tools 默认调用超时。
         "allowlist": [], // Tool policy 恢复工具集合。
@@ -440,7 +471,6 @@
         ] // AgentFactory 按顺序选择 fallback Provider。
       },
       "tools": {
-        "enabled": false, // Agent tool policy 总开关默认关闭。
         "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
         "timeout_ms": 10000, // Agent tools 默认调用超时。
         "allowlist": [], // Tool policy 恢复工具集合默认为空。
@@ -475,7 +505,6 @@
         ] // AgentFactory 按顺序选择 fallback Provider。
       },
       "tools": {
-        "enabled": false, // Agent tool policy 总开关默认关闭。
         "tool_choice": "auto", // AgentFactory 传给模型的工具选择策略。
         "timeout_ms": 10000, // Agent tools 默认调用超时。
         "allowlist": [], // Tool policy 恢复工具集合默认为空。

@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package boxteam.terminal.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+enum TerminalStatus {
+  TERMINAL_STATUS_UNSPECIFIED = 0;
+  TERMINAL_STATUS_CREATED = 1;
+  TERMINAL_STATUS_RUNNING = 2;
+  TERMINAL_STATUS_EXITED = 3;
+  TERMINAL_STATUS_TERMINATED = 4;
+  TERMINAL_STATUS_DELETED = 5;
+}
+
+message TerminalSession {
+  string terminal_id = 1;
+  string session_id = 2;
+  string title = 3;
+  string cwd = 4;
+  uint32 cols = 5;
+  uint32 rows = 6;
+  TerminalStatus status = 7;
+  uint32 sequence = 8;
+  google.protobuf.Struct metadata = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message TerminalJsonMessage {
+  string type = 1;
+  google.protobuf.Struct payload = 2;
+}

@@ -1,9 +1,7 @@
 ## Purpose
 
 定义经已认证 SSH 会话建立的 Gateway 联邦，包括单一控制端口隧道、远程工作区投影和代理、后端生命周期委托、独立凭据认证、协议兼容检查，以及禁止循环和嵌套导出的有界拓扑。
-
 ## Requirements
-
 ### Requirement: SSH 连接远程 Gateway
 SSH 远程连接 SHALL（必须）只转发远程 Gateway 控制端点，MUST NOT（不得）直接转发远程 Workspace API、Terminal Manager 或 Browser Manager 端点。
 
@@ -57,3 +55,18 @@ Gateway 之间 MUST（必须）交换协议版本，并 SHALL（必须）拒绝�
 #### Scenario: 重启后远程 Gateway 不可用
 - **WHEN** Gateway 无法恢复已持久化的远程连接
 - **THEN** Gateway 保留连接记录并写入明确错误，同时保持工作区激活状态不变
+
+### Requirement: 联邦工作区可参与本地目录与生成器配置
+本地 Gateway SHALL 允许工作区文件夹、目录搜索和 GeneratorDefinition 引用其直接导入的远程工作区投影，并 MUST 使用本地稳定 workspace ID 路由到远程 Gateway。
+
+#### Scenario: 生成器挂载远程会话
+- **WHEN** 用户把生成器挂载到直接导入的远程工作区会话
+- **THEN** 本地 Gateway 通过远程 Gateway 代理校验和执行，并在远程离线时保留配置且标记 blocked/offline
+
+### Requirement: 禁止嵌套联邦生成路由
+本地 Gateway MUST NOT 通过远程 Gateway 继续引用其导入的嵌套远程工作区作为生成或目录目标。
+
+#### Scenario: 远程目录快照包含嵌套工作区
+- **WHEN** 远程 Gateway 返回非其直接拥有的工作区目录能力
+- **THEN** 本地 Gateway 排除该目标并报告有界联邦错误
+

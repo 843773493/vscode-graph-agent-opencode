@@ -3,6 +3,10 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { WebSocket, WebSocketServer } from "ws";
+import {
+  encodeTerminalServerMessage,
+  parseTerminalClientMessage,
+} from "../protocol/messages.js";
 import { TerminalManager, resolveWorkspaceRoot } from "./terminalManager.js";
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -138,7 +142,7 @@ function wsClient(socket) {
       return true;
     },
     sendJson(message) {
-      return this.sendRaw(JSON.stringify(message));
+      return this.sendRaw(encodeTerminalServerMessage(message));
     },
     close(code, reason) {
       socket.close(code, reason);
@@ -346,10 +350,7 @@ async function main() {
     };
 
     const processMessage = async (raw) => {
-      const message = JSON.parse(raw.toString("utf8"));
-      if (!message || typeof message !== "object") {
-        throw new Error("WebSocket 消息必须是 JSON object");
-      }
+      const message = parseTerminalClientMessage(raw);
 
       if (message.type === "attach") {
         await detachCurrent();

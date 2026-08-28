@@ -1,0 +1,122 @@
+{
+  "description": "协议迁移前的最小公开边界快照，字段来自当前运行时 JSON/SSE/WS 代码。",
+  "http_json": {
+    "request": {
+      "method": "POST",
+      "path": "/api/terminals",
+      "json": {
+        "session_id": "session_123",
+        "title": "shell",
+        "cwd": "/workspace",
+        "cols": 120,
+        "rows": 32
+      }
+    },
+    "response": {
+      "status": 200,
+      "json": {
+        "data": {
+          "terminal_id": "terminal_123",
+          "session_id": "session_123",
+          "status": "running",
+          "cols": 120,
+          "rows": 32
+        }
+      }
+    },
+    "error": {
+      "status": 500,
+      "json": {
+        "error": "终端未运行: terminal_id=terminal_123, status=exited"
+      }
+    }
+  },
+  "sse": {
+    "job_updated": {
+      "id": "event_123",
+      "event": "job.updated",
+      "data": {
+        "event": {
+          "event_id": "event_123",
+          "session_id": "session_123",
+          "job_id": "job_123",
+          "type": "job.updated",
+          "time": "2026-08-24T00:00:00Z",
+          "payload": {
+            "job_id": "job_123",
+            "status": "accepted",
+            "progress": 0,
+            "message": "job created"
+          }
+        },
+        "raw_type": "job_created",
+        "raw_payload": {
+          "job_id": "job_123",
+          "type": "job_created"
+        }
+      }
+    },
+    "error": {
+      "event": "error",
+      "data": {
+        "message": "SSE 订阅失败"
+      }
+    }
+  },
+  "terminal_websocket": {
+    "client": {
+      "type": "attach",
+      "terminalId": "terminal_123",
+      "afterSequence": 4
+    },
+    "server": {
+      "type": "attached",
+      "terminalId": "terminal_123",
+      "replayMode": "incremental",
+      "resumeFromSequence": 4,
+      "snapshot": {
+        "terminal_id": "terminal_123",
+        "status": "running",
+        "buffer": "hello\\n"
+      }
+    },
+    "output": {
+      "type": "output",
+      "terminalId": "terminal_123",
+      "sequence": 5,
+      "data": "world\\n"
+    },
+    "ack": {
+      "type": "ack",
+      "sequence": 5
+    }
+  },
+  "browser_websocket": {
+    "client": {
+      "type": "attach",
+      "browserId": "browser_123",
+      "participantId": "user_12345678"
+    },
+    "server": {
+      "type": "attached",
+      "browserId": "browser_123",
+      "state": {
+        "browser_id": "browser_123",
+        "status": "running",
+        "url": "https://example.com"
+      }
+    },
+    "state": {
+      "type": "state",
+      "browserId": "browser_123",
+      "state": {
+        "status": "running",
+        "url": "https://example.com"
+      }
+    },
+    "error": {
+      "type": "error",
+      "message": "未知消息类型: unknown"
+    }
+  }
+}

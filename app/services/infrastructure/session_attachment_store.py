@@ -12,7 +12,7 @@ from urllib.parse import unquote_to_bytes
 from PIL import Image, ImageOps
 
 from app.core.path_utils import get_session_path_resolver, safe_join
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.message import AttachmentRef
 
 MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
 SUPPORTED_MEDIA_PREFIXES = ("image/", "audio/", "video/")

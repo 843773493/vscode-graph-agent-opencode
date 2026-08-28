@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from app.schemas.public_v2.common import JobStatus
+from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import JobService, JobState
 
 

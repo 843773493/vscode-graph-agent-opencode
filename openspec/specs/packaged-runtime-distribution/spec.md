@@ -5,11 +5,11 @@
 ## Requirements
 
 ### Requirement: 自包含 Linux Python runtime
-`@boxteam/runtime-linux-x64` SHALL（必须）包含可重定位的 Python 3.12 runtime、锁定的 Python 依赖和 BoxTeam 应用代码；安装后启动 MUST NOT（不得）调用系统 Python、uv 或在线下载 Python。
+`@boxteam/runtime-linux-x64` SHALL（必须）包含可重定位的 Python 3.12 runtime、锁定的 Python 依赖、BoxTeam 应用代码、Gateway/Workspace 普通 JSONC 模板和对应 schema；安装后启动 MUST NOT（不得）调用系统 Python、uv 或在线下载 Python。
 
 #### Scenario: 隐藏系统 Python
 - **WHEN** 把打包后的 npm 产物安装到 PATH 中没有 Python 或 uv 的隔离环境
-- **THEN** `boxteam` 使用 manifest 声明的 Python 初始化配置并启动 Gateway
+- **THEN** `boxteam` 使用 manifest 声明的 Python 和静态配置资源初始化双配置并启动 Gateway
 
 ### Requirement: 打包 Chromium
 Linux 平台 runtime SHALL（必须）包含 Browser Manager 所需且与 Playwright 兼容的 Chromium 可执行文件，并 MUST NOT（不得）在应用启动时下载浏览器。
@@ -41,11 +41,11 @@ Linux 平台 runtime SHALL（必须）包含 Browser Manager 所需且与 Playwr
 - **THEN** Gateway 返回 API 错误，而不是 SPA index
 
 ### Requirement: 可重定位且经过验证的产物
-构建流程 SHALL（必须）在不复制仓库 `.venv` 的情况下创建 runtime staging，并 MUST（必须）在把打包产物移动到不同绝对路径后进行验证。
+构建流程 SHALL（必须）在不复制仓库 `.venv` 的情况下创建 runtime staging，并 MUST（必须）在把打包产物移动到不同绝对路径后验证双配置初始化、加载和迁移。
 
 #### Scenario: 重定位 smoke test
 - **WHEN** 把构建后的 runtime 解压到不同于构建路径的位置
-- **THEN** 配置初始化、Gateway 健康检查、工作区路由、安全重启后端和关闭全部成功
+- **THEN** Gateway/Workspace 配置初始化、Gateway 健康检查、工作区路由、安全重启后端和关闭全部成功，且运行时不访问源码配置
 
 ### Requirement: 可复现的本地与 CI 打包
 本地打包和 CI 打包 SHALL（必须）调用同一构建入口、以 Linux x64 GNU 为目标，并生成版本匹配的主包和平台包 tarball，默认不发布。

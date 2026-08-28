@@ -16,7 +16,7 @@ from app.core.path_utils import (
 from app.services.infrastructure.session_attachment_store import (
     SESSION_ATTACHMENT_SCHEME,
 )
-from app.schemas.public_v2.message import AttachmentRef
+from app.schemas.internal_v2.message import AttachmentRef
 
 SUPPORTED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 SUPPORTED_VIDEO_MIME_TYPES = {

@@ -29,8 +29,8 @@
             "include": ["user", "thinking", "tool_summary", "final_response"]
           },
           "anchor": {
-            "before_turns": 4,
-            "after_turns": 4,
+            "before_turns": 2,
+            "after_turns": 2,
             "include": ["user", "final_response"]
           }
         }

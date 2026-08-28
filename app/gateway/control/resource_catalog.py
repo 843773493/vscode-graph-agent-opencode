@@ -13,9 +13,9 @@ from app.schemas.gateway_control import (
 )
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.schemas.public_v2.common import CursorPage
-from app.schemas.public_v2.session import SessionDTO
-from app.schemas.public_v2.session_resource import SessionResourceListDTO
+from app.schemas.internal_v2.common import CursorPage
+from app.schemas.internal_v2.session import SessionDTO
+from app.schemas.internal_v2.session_resource import SessionResourceListDTO
 
 
 class GatewayResourceCatalogService:

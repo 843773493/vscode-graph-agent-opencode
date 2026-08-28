@@ -4,8 +4,8 @@ import asyncio
 from collections.abc import Callable
 
 from app.abstractions.pending_request_store import PendingRequestStoreProtocol
-from app.schemas.public_v2.message import AttachmentRef
-from app.schemas.public_v2.pending_request import (
+from app.schemas.internal_v2.message import AttachmentRef
+from app.schemas.internal_v2.pending_request import (
     DeliveryPolicy,
     PendingRequestDTO,
     PendingRequestListDTO,
