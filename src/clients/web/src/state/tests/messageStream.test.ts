@@ -445,7 +445,10 @@ describe("message stream reducer", () => {
       partial: true,
       completion_reason: "user_interrupt",
     }));
-    expect(messageStreamToResponseParts(state)[0]?.final).toBe(false);
+    const parts = messageStreamToResponseParts(state);
+    expect(parts[0]?.final).toBe(false);
+    expect(parts[0]?.partial).toBe(true);
+    expect(parts[0]?.completion_reason).toBe("user_interrupt");
   });
 
   test("四个阶段的 snapshot hydration 都保留完整活动实体投影", () => {

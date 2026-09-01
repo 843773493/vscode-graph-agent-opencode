@@ -19,6 +19,7 @@ let shellProcessMetadata = null;
 let shuttingDown = false;
 let readySent = false;
 let exitCleanupPromise = null;
+let spawnContext = null;
 const pendingOutputBytes = new Map();
 
 function send(message) {
@@ -84,7 +85,7 @@ async function handlePtyExit(activePty, { exitCode, signal }) {
   if (!readySent) {
     send({
       type: "startupError",
-      message: `PTY 启动后立即退出: exit_code=${exitCode}, signal=${signal}, cleanup_result=${cleanupResult}`,
+      message: `PTY 启动后立即退出: command=${spawnContext?.command || "unknown"}, cwd=${spawnContext?.cwd || "unknown"}, exit_code=${exitCode}, signal=${signal}, cleanup=${cleanupResult === "missing" ? "already_exited" : cleanupResult}`,
     });
     setImmediate(() => process.exit(cleanupResult === "still_running" ? 1 : 0));
     return;
@@ -97,6 +98,10 @@ function handleStart(message) {
   if (ptyProcess) {
     throw new Error("PTY Worker 不允许重复启动终端");
   }
+  spawnContext = {
+    command: message.command,
+    cwd: message.options?.cwd,
+  };
   ptyProcess = pty.spawn(message.command, message.args, message.options);
   shellProcessMetadata = readProcessStat(ptyProcess.pid);
   ptyProcess.onData((data) => {

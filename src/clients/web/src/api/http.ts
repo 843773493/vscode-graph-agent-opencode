@@ -8,6 +8,8 @@ export const DEFAULT_API_REQUEST_TIMEOUT_MS = 15_000;
 type RequestJsonInit = RequestInit & {
   timeoutMs?: number;
   parseInWorkerAboveBytes?: number;
+  /** 认证初始化内部请求使用；业务请求不应绕过 Gateway 用户会话屏障。 */
+  skipGatewayUserSession?: boolean;
 };
 
 export class HttpRequestError extends Error {
@@ -20,6 +22,26 @@ export class HttpRequestError extends Error {
     super(`请求失败 ${status} ${statusText}: ${httpErrorDetailMessage(detail, path)}`);
     this.name = "HttpRequestError";
   }
+}
+
+/**
+ * 浏览器在 Gateway/前端热切换或本地服务重连的窗口内，会把尚未完成的
+ * fetch 统一报告为 TypeError，而不会提供可供业务层判断的 HTTP 状态码。
+ * 这类错误只能在有界重试后保留已有状态，不能把一次瞬态断连伪装成历史
+ * 内容损坏。
+ */
+export function isTransientNetworkError(error: unknown): boolean {
+  if (error instanceof HttpRequestError) return false;
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; message?: unknown };
+  const name = typeof candidate.name === "string" ? candidate.name : "";
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  if (name === "TimeoutError" || /请求超时/.test(message)) return false;
+  return name === "AbortError"
+    || name === "NetworkError"
+    || /Failed to fetch|NetworkError|ERR_NETWORK_CHANGED|network changed|connection reset|连接被拒绝/i.test(
+      message,
+    );
 }
 
 function httpErrorDetailMessage(detail: unknown, fallback: string): string {
@@ -40,6 +62,16 @@ function normalizeHeaders(headers: HeadersInit | undefined): Record<string, stri
   if (headers instanceof Headers) return Object.fromEntries(headers.entries());
   if (Array.isArray(headers)) return Object.fromEntries(headers);
   return headers;
+}
+
+async function shouldRefreshGatewayToken(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
+  const body = await response.clone().json().catch(() => null) as {
+    detail?: unknown;
+    message?: unknown;
+  } | null;
+  const detail = body?.detail ?? body?.message;
+  return typeof detail === "string" && detail.includes("invalid local token");
 }
 
 function abortReason(signal: AbortSignal): unknown {
@@ -133,11 +165,69 @@ export function getApiBaseUrl(port: number): string {
 }
 
 const gatewayTokenByPort = new Map<number, Promise<string>>();
+type GatewayUserSessionInitializer = (
+  port: number,
+  signal?: AbortSignal,
+) => Promise<unknown>;
+let gatewayUserSessionInitializer: GatewayUserSessionInitializer | null = null;
+const gatewayUserSessionReadyByPort = new Map<number, Promise<void>>();
+
+export function registerGatewayUserSessionInitializer(
+  initializer: GatewayUserSessionInitializer,
+): void {
+  gatewayUserSessionInitializer = initializer;
+}
+
+export function invalidateGatewayUserSession(port: number): void {
+  gatewayUserSessionReadyByPort.delete(port);
+}
+
+async function initializeGatewayUserSessionFallback(
+  port: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  try {
+    await requestJson<unknown>(port, "/api/gateway/users/current", {
+      signal,
+      skipGatewayUserSession: true,
+    });
+  } catch (error: unknown) {
+    if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
+    await requestJson<unknown>(port, "/api/gateway/users/guest", {
+      method: "POST",
+      body: JSON.stringify({}),
+      signal,
+      skipGatewayUserSession: true,
+    });
+  }
+}
+
+async function ensureGatewayUserSession(
+  port: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const existing = gatewayUserSessionReadyByPort.get(port);
+  if (existing) {
+    await awaitWithAbort(existing, signal);
+    return;
+  }
+  const initializer = gatewayUserSessionInitializer ?? initializeGatewayUserSessionFallback;
+  const initialization = initializer(port, signal).then(() => undefined);
+  gatewayUserSessionReadyByPort.set(port, initialization);
+  initialization.catch(() => {
+    if (gatewayUserSessionReadyByPort.get(port) === initialization) {
+      gatewayUserSessionReadyByPort.delete(port);
+    }
+  });
+  await awaitWithAbort(initialization, signal);
+}
 
 export function getGatewayToken(port: number): Promise<string> {
   const existing = gatewayTokenByPort.get(port);
   if (existing) return existing;
-  const pending = fetch(`${getApiBaseUrl(port)}/api/gateway/auth/local-credential`)
+  const pending = fetch(`${getApiBaseUrl(port)}/api/gateway/auth/local-credential`, {
+    credentials: "include",
+  })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(`获取 Gateway 本地凭据失败: HTTP ${response.status}`);
@@ -163,6 +253,7 @@ export async function requestJson<T>(
   const {
     timeoutMs,
     parseInWorkerAboveBytes = null,
+    skipGatewayUserSession = false,
     signal,
     headers,
     ...fetchInit
@@ -171,20 +262,44 @@ export async function requestJson<T>(
   const abortState = createRequestAbortState(signal, timeoutMs, timeoutErrorMessage);
 
   try {
-    const localToken = await awaitWithAbort(getGatewayToken(port), abortState.signal);
+    if (!skipGatewayUserSession && path.startsWith("/api/v1/")) {
+      await ensureGatewayUserSession(port, abortState.signal);
+    }
+    // Gateway 重启会轮换本地凭据；同一个 SPA 进程不能永久复用旧 token。
+    // 401 只自动刷新一次，真实的鉴权失败仍然向调用方抛出。
+    let tokenPromise = getGatewayToken(port);
     const requestHeaders = new Headers(normalizeHeaders(headers));
-    requestHeaders.set("X-Local-Token", localToken);
     if (!(fetchInit.body instanceof FormData)) {
       requestHeaders.set("Content-Type", "application/json");
     }
-    const response = await awaitWithAbort(
-      fetch(`${getApiBaseUrl(port)}${path}`, {
-        ...fetchInit,
-        headers: requestHeaders,
-        signal: abortState.signal,
-      }),
-      abortState.signal,
-    );
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const localToken = await awaitWithAbort(tokenPromise, abortState.signal);
+      requestHeaders.set("X-Local-Token", localToken);
+      response = await awaitWithAbort(
+        fetch(`${getApiBaseUrl(port)}${path}`, {
+          ...fetchInit,
+          headers: requestHeaders,
+          credentials: "include",
+          signal: abortState.signal,
+        }),
+        abortState.signal,
+      );
+      if (
+        response.status !== 401
+        || attempt === 1
+        || !(await shouldRefreshGatewayToken(response))
+      ) {
+        break;
+      }
+      if (gatewayTokenByPort.get(port) === tokenPromise) {
+        gatewayTokenByPort.delete(port);
+      }
+      tokenPromise = getGatewayToken(port);
+    }
+    if (response === null) {
+      throw new Error(`请求未获得响应: ${path}`);
+    }
     if (!response.ok) {
       const errorBody = await response.clone().json().catch(() => null) as {
         detail?: unknown;

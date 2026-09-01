@@ -81,6 +81,8 @@ class GatewayWorkspaceRuntimeController:
                 project_root=self._project_root,
                 workspace_root=workspace_root,
                 log_dir=self._log_dir,
+                reusable_backend_url=target.backend_url or None,
+                adopt_existing_backend=False,
                 reusable_service_urls=target.local_service_urls,
                 health_request_timeout_seconds=self._health_request_timeout_seconds,
                 health_poll_interval_seconds=self._health_poll_interval_seconds,
@@ -91,6 +93,7 @@ class GatewayWorkspaceRuntimeController:
             )
             target.backend_url = runtime.service_urls["workspace_api"]
             target.local_service_urls = {
+                "terminal_manager": runtime.service_urls["terminal_manager"],
                 "browser_manager": runtime.service_urls["browser_manager"]
             }
             target.connection_error = None
@@ -304,7 +307,7 @@ class GatewayWorkspaceRuntimeController:
         payload = response.json()
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
-            raise RuntimeError(
+            raise TypeError(
                 f"Workspace API 生命周期响应缺少 data: {response.text[:300]}"
             )
         return data
@@ -312,7 +315,7 @@ class GatewayWorkspaceRuntimeController:
     @staticmethod
     def _parse_blockers(value: object) -> list[GatewayRuntimeBlockerDTO]:
         if not isinstance(value, list):
-            raise RuntimeError("Workspace API 生命周期响应缺少 blockers 数组")
+            raise TypeError("Workspace API 生命周期响应缺少 blockers 数组")
         return [GatewayRuntimeBlockerDTO.model_validate(item) for item in value]
 
     async def _restart_result(
@@ -540,6 +543,8 @@ async def reconnect_gateway_workspace(
             project_root=project_root,
             workspace_root=Path(target.root_path),
             log_dir=log_dir,
+            reusable_backend_url=target.backend_url or None,
+            adopt_existing_backend=False,
             reusable_service_urls=target.local_service_urls,
             health_request_timeout_seconds=health_request_timeout_seconds,
             health_poll_interval_seconds=health_poll_interval_seconds,
@@ -548,6 +553,7 @@ async def reconnect_gateway_workspace(
         )
         target.backend_url = runtime.service_urls["workspace_api"]
         target.local_service_urls = {
+            "terminal_manager": runtime.service_urls["terminal_manager"],
             "browser_manager": runtime.service_urls["browser_manager"]
         }
     else:

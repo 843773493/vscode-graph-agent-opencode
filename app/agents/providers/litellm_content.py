@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.messages import AIMessage
 
 from app.agents.providers.message_content_schema import validate_content_blocks
+from app.core.message_content_projection import (
+    reasoning_projection_rows as _canonical_reasoning_projection_rows,
+)
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
 MISSING = object()
@@ -188,14 +190,6 @@ def _summary_text(value: Any) -> str:
     return extract_reasoning_summary(value).strip()
 
 
-def _encrypted_row(value: str) -> dict[str, object]:
-    return {
-        "kind": "encrypted",
-        "encrypted_length": len(value),
-        "encrypted_hash": hashlib.sha256(value.encode("utf-8")).hexdigest(),
-    }
-
-
 def _reasoning_content_text(block: Mapping[str, Any]) -> str:
     direct = block.get("reasoning")
     if isinstance(direct, str):
@@ -213,123 +207,8 @@ def _reasoning_content_text(block: Mapping[str, Any]) -> str:
 
 
 def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
-    """返回带 source 坐标的 reasoning 投影，不返回 encrypted 正文。"""
-    rows: list[dict[str, object]] = []
-
-    def append_row(
-        *,
-        block_index: int,
-        item_index: int,
-        carrier_type: str,
-        item_id: str | None = None,
-        reasoning_text: str | None = None,
-        summary_text: str | None = None,
-        encrypted: str | None = None,
-        signature_present: bool = False,
-    ) -> None:
-        clean_reasoning = reasoning_text.strip() if reasoning_text else ""
-        clean_summary = summary_text.strip() if summary_text else ""
-        has_encrypted = bool(encrypted)
-        if not clean_reasoning and not clean_summary and not has_encrypted:
-            return
-        kind = (
-            "encrypted"
-            if has_encrypted and not (clean_reasoning or clean_summary)
-            else "reasoning"
-            if clean_reasoning
-            else "summary"
-        )
-        row: dict[str, object] = {
-            "kind": kind,
-            "text": clean_reasoning or clean_summary,
-            "reasoning_text": clean_reasoning or None,
-            "summary_text": clean_summary or None,
-            "content_block_index": block_index,
-            "item_index": item_index,
-            "carrier_type": carrier_type,
-            "signature_present": signature_present,
-        }
-        if item_id:
-            row["item_id"] = item_id
-        if has_encrypted and encrypted is not None:
-            row["encrypted_length"] = len(encrypted)
-            row["encrypted_hash"] = hashlib.sha256(
-                encrypted.encode("utf-8")
-            ).hexdigest()
-        rows.append(row)
-
-    for block_index, block in enumerate(_direct_blocks(content)):
-        block_type = block.get("type")
-        if block_type == "reasoning_content":
-            text = block.get("reasoning_content")
-            append_row(
-                block_index=block_index,
-                item_index=0,
-                carrier_type="reasoning_content",
-                reasoning_text=text if isinstance(text, str) else None,
-            )
-            continue
-        if block_type == "reasoning_items":
-            items = block.get("reasoning_items")
-            if isinstance(items, list):
-                for item_index, item in enumerate(items):
-                    if not isinstance(item, Mapping):
-                        continue
-                    append_row(
-                        block_index=block_index,
-                        item_index=item_index,
-                        carrier_type="reasoning_items",
-                        item_id=(
-                            item.get("id")
-                            if isinstance(item.get("id"), str)
-                            else None
-                        ),
-                        reasoning_text=_reasoning_content_text(item),
-                        summary_text=_summary_text(item.get("summary")),
-                        encrypted=(
-                            item.get("encrypted_content")
-                            if isinstance(item.get("encrypted_content"), str)
-                            else None
-                        ),
-                    )
-            continue
-        if block_type == "reasoning":
-            append_row(
-                block_index=block_index,
-                item_index=0,
-                carrier_type="reasoning_items",
-                item_id=block.get("id") if isinstance(block.get("id"), str) else None,
-                reasoning_text=_reasoning_content_text(block),
-                summary_text=_summary_text(block.get("summary")),
-                encrypted=(
-                    block.get("encrypted_content")
-                    if isinstance(block.get("encrypted_content"), str)
-                    else None
-                ),
-            )
-            continue
-        if block_type == "thinking":
-            text = block.get("thinking") or block.get("text")
-            append_row(
-                block_index=block_index,
-                item_index=0,
-                carrier_type="thinking",
-                reasoning_text=text if isinstance(text, str) else None,
-                signature_present=(
-                    isinstance(block.get("signature"), str)
-                    and bool(block.get("signature"))
-                ),
-            )
-            continue
-        if block_type == "redacted_thinking":
-            encrypted = block.get("data")
-            append_row(
-                block_index=block_index,
-                item_index=0,
-                carrier_type="redacted_thinking",
-                encrypted=encrypted if isinstance(encrypted, str) else None,
-            )
-    return rows
+    """调用全局 canonical 投影，避免 provider 回放再生成另一套语义。"""
+    return _canonical_reasoning_projection_rows(content)
 
 
 def _is_generated_part_id(value: Any) -> bool:
@@ -408,6 +287,10 @@ def _reasoning_item_for_replay(
     can_replay_encrypted: bool,
 ) -> dict[str, Any]:
     projected = _without_server_state(block)
+    # TODO: 等上游 Responses provider 明确支持 reasoning.content 后再恢复该字段。
+    # Responses reasoning 的 content 是输出态字段；CCTQ 等兼容端会拒绝把它
+    # 作为历史输入发送（要求 reasoning.content 数组长度为 0）。
+    projected.pop("content", None)
     encrypted = projected.get("encrypted_content")
     if isinstance(encrypted, str) and not can_replay_encrypted:
         projected.pop("encrypted_content", None)

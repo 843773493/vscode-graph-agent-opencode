@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,
+    ScopeCancelledError,
     TurnExecutionScopeRegistry,
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
@@ -69,6 +71,7 @@ from app.services.infrastructure.message_stream_store import (
 from app.services.infrastructure.resource_manager import ResourceManager
 from app.services.mapping.agent_content_mapper import split_agent_content
 from app.services.orchestration.agent_event_stream_processor import (
+    AgentEventStreamTimeoutError,
     SuccessfulToolCall,
     last_model_token_usage,
     process_agent_event_stream,
@@ -85,6 +88,23 @@ from app.services.orchestration.message_stream_runtime import (
 EMPTY_RESPONSE_RETRY_LIMIT = 2
 CUSTOM_TOOL_RESPONSE_RETRY_LIMIT = 2
 DELEGATED_REPORT_RETRY_LIMIT = 2
+_STRUCTURED_CANCELLATION_REASONS = frozenset(
+    {
+        "job_startup_timeout",
+        "job_timeout",
+        "scope_deadline_exceeded",
+        "tool_dispatch_timeout",
+    }
+)
+
+
+def _cancelled_error_reason(error: asyncio.CancelledError) -> str | None:
+    """从任务取消异常中恢复结构化 scope reason。"""
+    message = str(error)
+    scope_prefix = "运行时 scope 已取消: reason="
+    if message.startswith(scope_prefix):
+        return message.removeprefix(scope_prefix) or None
+    return message or None
 
 
 def _build_empty_response_retry_reminder(attempt: int) -> str:
@@ -254,6 +274,11 @@ class AgentExecutionService(JobStepExecutor):
                     resolved_agent_id
                 )
             )
+            mode_getter = getattr(self._config_service, "get_agent_run_mode", None)
+            run_mode = mode_getter() if callable(mode_getter) else None
+            include_team_tools = (
+                run_mode == "team" if isinstance(run_mode, str) else False
+            )
             cache_key = (
                 session_id,
                 resolved_agent_id,
@@ -277,6 +302,7 @@ class AgentExecutionService(JobStepExecutor):
                 tool_timeout_seconds=self._tool_timeout_seconds,
                 resource_manager=self._resource_manager,
                 workspace_root=self._workspace_root,
+                include_team_tools=include_team_tools,
             )
 
         self._agent_cache[cache_key] = agent
@@ -319,6 +345,7 @@ class AgentExecutionService(JobStepExecutor):
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
+        progress_reporter: Callable[[str], None] | None = None,
     ) -> str:
         config_snapshot = self._config_service.get_snapshot()
         with self._config_service.use_snapshot(config_snapshot):
@@ -331,6 +358,7 @@ class AgentExecutionService(JobStepExecutor):
                 attachments=attachments,
                 message_created_at=message_created_at,
                 message_metadata=message_metadata,
+                progress_reporter=progress_reporter,
             )
 
     async def _run_step_with_snapshot(
@@ -344,6 +372,7 @@ class AgentExecutionService(JobStepExecutor):
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
+        progress_reporter: Callable[[str], None] | None = None,
     ) -> str:
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
@@ -365,6 +394,11 @@ class AgentExecutionService(JobStepExecutor):
                 raise TypeError(
                     "Agent 运行时配置 require_delegated_report 必须是布尔值"
                 )
+            mode_getter = getattr(self._config_service, "get_agent_run_mode", None)
+            run_mode = mode_getter() if callable(mode_getter) else None
+            include_team_tools = (
+                run_mode == "team" if isinstance(run_mode, str) else False
+            )
         if self._bus is None:
             raise RuntimeError("AgentExecutionService 未绑定 JobEventBus")
         bus = self._bus
@@ -573,15 +607,21 @@ class AgentExecutionService(JobStepExecutor):
             )
 
         try:
+            if progress_reporter is not None:
+                progress_reporter("agent_start")
             await _publish(EventType.AGENT_START, {
                 "message": "agent 启动，准备处理用户请求",
                 "agent_id": resolved_agent_id,
             })
 
-            logger.info("[agent_execution_service] agent.astream_events begin: job_id=%s", effective_job_id)
+            logger.info(
+                "[agent_execution_service] agent runtime build begin: job_id=%s",
+                effective_job_id,
+            )
 
             with self._config_service.use_snapshot(config_snapshot):
-                agent = build_session_agent_runtime(
+                agent = await asyncio.to_thread(
+                    build_session_agent_runtime,
                     session_id=session_id,
                     agent_id=resolved_agent_id,
                     config_service=self._config_service,
@@ -595,7 +635,15 @@ class AgentExecutionService(JobStepExecutor):
                     tool_timeout_seconds=self._tool_timeout_seconds,
                     resource_manager=self._resource_manager,
                     workspace_root=self._workspace_root,
+                    include_team_tools=include_team_tools,
                 )
+
+            logger.info(
+                "[agent_execution_service] agent runtime ready: job_id=%s",
+                effective_job_id,
+            )
+            if progress_reporter is not None:
+                progress_reporter("agent_runtime_ready")
 
             next_input_messages = [
                 HumanMessage(
@@ -610,11 +658,18 @@ class AgentExecutionService(JobStepExecutor):
                 lambda: None,
             )()
             if checkpointer is not None:
-                persist_user_message_checkpoint(
+                await asyncio.to_thread(
+                    persist_user_message_checkpoint,
                     checkpointer=checkpointer,
                     session_id=session_id,
                     message=next_input_messages[0],
                 )
+            logger.info(
+                "[agent_execution_service] agent loop ready: job_id=%s",
+                effective_job_id,
+            )
+            if progress_reporter is not None:
+                progress_reporter("agent_loop_ready")
             empty_response_retries = 0
             custom_tool_response_retries = 0
             delegated_report_retries = 0
@@ -636,6 +691,7 @@ class AgentExecutionService(JobStepExecutor):
                     cancellation_signal=turn_scope.cancellation_signal,
                     execution_scope=turn_scope,
                     model_timeout_seconds=self._model_timeout_seconds,
+                    progress_reporter=progress_reporter,
                 )
                 turn_token_usage_parts.append(stream_result.token_usage)
                 final_text = stream_result.final_text
@@ -876,7 +932,8 @@ class AgentExecutionService(JobStepExecutor):
             if checkpointer is not None:
                 assistant_message_id = create_prefixed_id("msg")
                 assistant_message_created_at = datetime.now(UTC)
-                persisted = persist_standard_assistant_checkpoint(
+                persisted = await asyncio.to_thread(
+                    persist_standard_assistant_checkpoint,
                     checkpointer=checkpointer,
                     session_id=session_id,
                     turn_id=effective_job_id,
@@ -922,36 +979,87 @@ class AgentExecutionService(JobStepExecutor):
             logger.info("[agent_execution_service] response ready: job_id=%s response_length=%s", effective_job_id, len(final_text))
             return final_text
 
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation_error:
             state = SessionInterruptState.get(session_id)
-            try:
+            user_interrupt = state.interrupt_request_id is not None
+            cancellation_reason = _cancelled_error_reason(cancellation_error)
+            pending_tool_calls = message_stream_runtime.pending_tool_calls()
+            complete_pending_tool_call_ids = [
+                tool_call_id
+                for tool_call_id, _tool_name, arguments_complete in pending_tool_calls
+                if arguments_complete
+            ]
+            failure_code = (
+                "user_interrupt"
+                if user_interrupt
+                else "job_startup_timeout"
+                if cancellation_reason == "job_startup_timeout"
+                else "job_timeout"
+                if cancellation_reason == "job_timeout"
+                else "scope_deadline_exceeded"
+                if cancellation_reason == "scope_deadline_exceeded"
+                else "tool_dispatch_timeout"
+                if complete_pending_tool_call_ids
+                else "execution_lost"
+            )
+            failure_message = (
+                "用户中断后的 AgentLoop 失败"
+                if user_interrupt
+                else "Job 启动超过等待首个模型/工具事件的上限"
+                if failure_code == "job_startup_timeout"
+                else "Job 执行超过总超时上限"
+                if failure_code == "job_timeout"
+                else (
+                    "模型工具调用参数已完整，但工具执行分派在取消前没有启动: "
+                    f"tool_calls={complete_pending_tool_call_ids}"
+                )
+                if failure_code == "tool_dispatch_timeout"
+                else "AgentLoop 因内部取消而结束，未收到用户中断请求"
+            )
+            if not (user_interrupt and state.user_interrupt_reminder_injected):
+                try:
+                    await asyncio.to_thread(
+                        persist_interrupt_checkpoint,
+                        checkpointer=getattr(
+                            self._dependency_provider,
+                            "get_checkpointer",
+                            lambda: None,
+                        )(),
+                        session_id=session_id,
+                        current_text=state.current_text,
+                        active_tool_name=state.tool_name,
+                        checkpoint_source=(
+                            "interrupt" if user_interrupt else failure_code
+                        ),
+                    )
+                    logger.info(
+                        "[agent_execution_service] cancellation checkpoint persisted: "
+                        "job_id=%s code=%s",
+                        effective_job_id,
+                        failure_code,
+                    )
+                except Exception:
+                    # checkpoint 失败不能掩盖取消事实；消息流终态仍必须提交。
+                    logger.exception(
+                        "[agent_execution_service] cancellation checkpoint persistence failed: job_id=%s",
+                        effective_job_id,
+                    )
+            if user_interrupt:
                 if state.user_interrupt_reminder_injected:
                     logger.info(
                         "[agent_execution_service] job cancelled after user interrupt reminder persisted: job_id=%s",
                         effective_job_id,
                     )
-                else:
-                    persist_interrupt_checkpoint(
-                        checkpointer=getattr(self._dependency_provider, "get_checkpointer", lambda: None)(),
-                        session_id=session_id,
-                        current_text=state.current_text,
-                        active_tool_name=state.tool_name,
-                    )
-                    logger.info("[agent_execution_service] job cancelled and checkpoint persisted: job_id=%s", effective_job_id)
-            except Exception:
-                # checkpoint 失败不能掩盖取消事实；消息流终态仍必须提交，
-                # 否则重启后的 snapshot 会永久停在 running。
-                logger.exception(
-                    "[agent_execution_service] cancellation checkpoint persistence failed: job_id=%s",
-                    effective_job_id,
-                )
-            if state.interrupt_request_id is not None:
                 await message_stream_runtime.finalize_interruption_facts()
                 await message_stream_writer.close_interrupted(state.interrupt_request_id)
             else:
+                await message_stream_runtime.fail_pending_tool_calls(
+                    completion_reason=failure_code,
+                    error=failure_message,
+                )
                 await message_stream_writer.close_failed(
-                    code="execution_cancelled",
-                    message="AgentLoop 在没有用户中断请求的情况下被取消",
+                    code=failure_code,
+                    message=failure_message,
                     resumable=False,
                 )
             raise
@@ -960,13 +1068,56 @@ class AgentExecutionService(JobStepExecutor):
             if interrupt_state.interrupt_request_id is not None:
                 await message_stream_runtime.finalize_interruption_facts()
             else:
+                failure_code = (
+                    e.code
+                    if isinstance(e, AgentEventStreamTimeoutError)
+                    else e.reason
+                    if isinstance(e, ScopeCancelledError)
+                    and e.reason in _STRUCTURED_CANCELLATION_REASONS
+                    else "execution_lost"
+                    if isinstance(e, ScopeCancelledError)
+                    else "execution_error"
+                )
+                failure_message = str(e)
+                if isinstance(e, ScopeCancelledError):
+                    try:
+                        await asyncio.to_thread(
+                            persist_interrupt_checkpoint,
+                            checkpointer=getattr(
+                                self._dependency_provider,
+                                "get_checkpointer",
+                                lambda: None,
+                            )(),
+                            session_id=session_id,
+                            current_text=interrupt_state.current_text,
+                            active_tool_name=interrupt_state.tool_name,
+                            checkpoint_source=failure_code,
+                        )
+                    except Exception:
+                        # 失败 checkpoint 不能覆盖 scope 终态；消息流仍须保留
+                        # 可诊断的 failure 原因。
+                        logger.exception(
+                            "[agent_execution_service] scope failure checkpoint persistence failed: job_id=%s",
+                            effective_job_id,
+                        )
+                await message_stream_runtime.fail_pending_tool_calls(
+                    completion_reason=failure_code,
+                    error=failure_message,
+                )
                 await message_stream_runtime.fail_model(
-                    code="execution_error",
-                    message=str(e),
+                    code=failure_code,
+                    message=failure_message,
                 )
             await message_stream_writer.close_failed(
-                code="execution_error",
-                message=str(e),
+                code=(
+                    "user_interrupt"
+                    if interrupt_state.interrupt_request_id is not None else failure_code
+                ),
+                message=(
+                    "用户中断后的 AgentLoop 失败"
+                    if interrupt_state.interrupt_request_id is not None
+                    else failure_message
+                ),
                 after_interrupt_requested=bool(
                     interrupt_state.cancellation_reason
                 ),

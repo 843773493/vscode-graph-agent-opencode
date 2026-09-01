@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Protocol
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
@@ -12,7 +13,7 @@ from app.core.path_utils import (
     get_logs_dir,
     get_workspace_root,
 )
-from app.schemas.event import SessionInterruptedEvent, SessionInterruptedPayload
+from app.schemas.event import Event, SessionInterruptedEvent, SessionInterruptedPayload
 from app.schemas.internal_v2.runtime import (
     RuntimeDrainBlockerDTO,
     RuntimeDrainResultDTO,
@@ -25,6 +26,27 @@ from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
+class TurnTerminalStatusWriter(Protocol):
+    """启动恢复时把仍处于 running 的持久化 Turn 收束为失败。"""
+
+    def mark_turn_terminal_status(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        status: str,
+    ) -> bool: ...
+
+
+def is_job_timeout_event(event: Event) -> bool:
+    """兼容带 code 与旧版仅保存超时错误文本的 JOB_FAILED 事件。"""
+    payload = event.payload
+    if getattr(payload, "code", None) == "job_timeout":
+        return True
+    error = getattr(payload, "error", None)
+    return isinstance(error, str) and "超过总超时上限" in error
+
+
 class RuntimeService:
     _start_time = None
 
@@ -35,11 +57,13 @@ class RuntimeService:
         background_task_registry: BackgroundTaskRegistry,
         trace_event_store: TraceEventStore,
         message_stream_store: MessageStreamStore,
+        terminal_status_writer: TurnTerminalStatusWriter | None = None,
     ) -> None:
         self._job_service = job_service
         self._background_task_registry = background_task_registry
         self._trace_event_store = trace_event_store
         self._message_stream_store = message_stream_store
+        self._terminal_status_writer = terminal_status_writer
         self._lifecycle_state: RuntimeLifecycleState = "ready"
 
     def get_log_dir(self):
@@ -109,14 +133,47 @@ class RuntimeService:
         }
         for session_id in self._trace_event_store.list_session_ids():
             events = self._trace_event_store.read_events(session_id)
-            lifecycle_by_job: dict[str, str] = {}
+            lifecycle_by_job: dict[str, Event] = {}
             for event in events:
                 if event.type == "job_started" or event.type in terminal_types:
-                    lifecycle_by_job[event.job_id] = event.type
-            for job_id, event_type in lifecycle_by_job.items():
+                    lifecycle_by_job[event.job_id] = event
+            for job_id, event in lifecycle_by_job.items():
+                event_type = event.type
+                if event_type == "job_failed":
+                    if self._terminal_status_writer is not None:
+                        status = (
+                            "timed_out"
+                            if is_job_timeout_event(event)
+                            else "failed"
+                        )
+                        self._terminal_status_writer.mark_turn_terminal_status(
+                            session_id=session_id,
+                            turn_id=job_id,
+                            status=status,
+                        )
+                    continue
+                if event_type == "session_interrupted":
+                    payload = event.payload
+                    is_process_exit = (
+                        payload.code == "execution_lost"
+                        or payload.phase == "process_exit"
+                    )
+                    if is_process_exit and self._terminal_status_writer is not None:
+                        self._terminal_status_writer.mark_turn_terminal_status(
+                            session_id=session_id,
+                            turn_id=job_id,
+                            status="failed",
+                        )
+                    continue
                 if event_type != "job_started":
                     continue
-                now = datetime.now(timezone.utc)
+                if self._terminal_status_writer is not None:
+                    self._terminal_status_writer.mark_turn_terminal_status(
+                        session_id=session_id,
+                        turn_id=job_id,
+                        status="failed",
+                    )
+                now = datetime.now(UTC)
                 await self._trace_event_store.append(
                     session_id,
                     SessionInterruptedEvent(
@@ -128,6 +185,9 @@ class RuntimeService:
                             session_id=session_id,
                             phase="process_exit",
                             interrupted_at=now,
+                            code="execution_lost",
+                            message="工作区后端重启，无法安全续接原 AgentLoop 执行",
+                            resumable=False,
                         ),
                     ),
                 )

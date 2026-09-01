@@ -1,5 +1,41 @@
 import { TOOL_TIMEOUT_MS, normalizeToolResult, withTimeout } from "./browserRuntime.js";
 
+const PLAYWRIGHT_ACTION_TIMEOUT_RESERVE_MS = 250;
+const STALE_SELECTOR_WAIT_TIMEOUT_MS = 1_500;
+
+function configurePlaywrightTimeoutBudget(page, timeoutMs) {
+  const actionTimeoutMs = Math.max(1, timeoutMs - PLAYWRIGHT_ACTION_TIMEOUT_RESERVE_MS);
+  if (typeof page.setDefaultTimeout === "function") {
+    page.setDefaultTimeout(actionTimeoutMs);
+  }
+  if (typeof page.setDefaultNavigationTimeout === "function") {
+    page.setDefaultNavigationTimeout(actionTimeoutMs);
+  }
+}
+
+function isPlaywrightStaleElementError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /detached from the DOM|not attached to the DOM|element is not attached|frame was detached/i.test(message);
+}
+
+function staleElementError(label, cause) {
+  const error = new Error(`页面已变化或目标元素已移除: ${label}。请重新调用 readPage。`);
+  error.code = "browser_stale_element_ref";
+  error.cause = cause;
+  return error;
+}
+
+async function withLocatorAction(label, action) {
+  try {
+    return await action();
+  } catch (error) {
+    if (isPlaywrightStaleElementError(error)) {
+      throw staleElementError(label, error);
+    }
+    throw error;
+  }
+}
+
 export function selectorFor(refSelectors, { ref, selector, fieldPrefix = "" }) {
   if (selector) {
     return selector;
@@ -20,15 +56,62 @@ async function locatorFor(page, refSelectors, target) {
   const targetSelector = selectorFor(refSelectors, target);
   const locator = page.locator(targetSelector).first();
   if (await locator.count() === 0) {
+    // 导航完成后，应用可能还在用脚本挂载画布或替换根节点。对显式
+    // selector 等待一次短暂的 DOM 稳定窗口，避免把可恢复的导航竞态
+    // 误报成永久失效的元素引用。ref 不在这里自动复用，防止旧 ref
+    // 被重新分配给另一个按钮。
+    if (target.selector && typeof page.waitForSelector === "function") {
+      try {
+        await page.waitForSelector(targetSelector, {
+          state: "attached",
+          timeout: STALE_SELECTOR_WAIT_TIMEOUT_MS,
+        });
+        if (await locator.count() > 0) {
+          return locator;
+        }
+      } catch {
+        // 下方统一返回可诊断的 stale 错误；不吞掉真实失败。
+      }
+    }
     if (target.ref) {
       refSelectors.delete(target.ref);
     }
     const label = target.ref || target.selector;
-    const error = new Error(`页面已变化或目标元素已移除: ${label}。请重新调用 readPage。`);
-    error.code = "browser_stale_element_ref";
-    throw error;
+    throw staleElementError(label);
   }
   return locator;
+}
+
+function isStaleElementError(error) {
+  return error?.code === "browser_stale_element_ref";
+}
+
+export async function runWithStaleSelectorRecovery(
+  page,
+  refSelectors,
+  target,
+  action,
+  refreshPage,
+) {
+  try {
+    return await action();
+  } catch (error) {
+    if (!isStaleElementError(error) || !target?.selector || !refreshPage) {
+      throw error;
+    }
+    // selector 是稳定的调用意图；readPage 只刷新 ref 索引和文档状态，
+    // 不重放用户动作。动作本身最多执行两次，避免点击等副作用无限重试。
+    await refreshPage();
+    try {
+      return await action();
+    } catch (recoveredError) {
+      if (isStaleElementError(recoveredError)) {
+        recoveredError.message = `${recoveredError.message} 页面已重新读取但 selector 仍不存在，请使用最新页面摘要中的实际元素，不要继续重放旧 selector。`;
+        recoveredError.recovery = "read_page";
+      }
+      throw recoveredError;
+    }
+  }
 }
 
 export async function readBrowserSummary(page, refSelectors, documentRevision = 0) {
@@ -409,16 +492,17 @@ export async function clickElement(page, refSelectors, {
   button = "left",
 }) {
   const locator = await locatorFor(page, refSelectors, { ref, selector });
+  const label = ref || selector;
   if (dblClick) {
-    await locator.dblclick({ button, timeout: TOOL_TIMEOUT_MS });
+    await withLocatorAction(label, () => locator.dblclick({ button, timeout: TOOL_TIMEOUT_MS }));
   } else {
-    await locator.click({ button, timeout: TOOL_TIMEOUT_MS });
+    await withLocatorAction(label, () => locator.click({ button, timeout: TOOL_TIMEOUT_MS }));
   }
 }
 
 export async function hoverElement(page, refSelectors, { ref = null, selector = null }) {
   const locator = await locatorFor(page, refSelectors, { ref, selector });
-  await locator.hover({ timeout: TOOL_TIMEOUT_MS });
+  await withLocatorAction(ref || selector, () => locator.hover({ timeout: TOOL_TIMEOUT_MS }));
 }
 
 export async function typeInPage(page, refSelectors, {
@@ -435,16 +519,16 @@ export async function typeInPage(page, refSelectors, {
   const locator = hasTarget ? await locatorFor(page, refSelectors, { ref, selector }) : null;
   if (key) {
     if (locator) {
-      await locator.press(key, { timeout: TOOL_TIMEOUT_MS });
+      await withLocatorAction(ref || selector, () => locator.press(key, { timeout: TOOL_TIMEOUT_MS }));
     } else {
       await page.keyboard.press(key);
     }
     return;
   }
   if (locator) {
-    await locator.fill(text, { timeout: TOOL_TIMEOUT_MS });
+    await withLocatorAction(ref || selector, () => locator.fill(text, { timeout: TOOL_TIMEOUT_MS }));
     if (submit) {
-      await locator.press("Enter", { timeout: TOOL_TIMEOUT_MS });
+      await withLocatorAction(ref || selector, () => locator.press("Enter", { timeout: TOOL_TIMEOUT_MS }));
     }
   } else {
     await page.keyboard.type(text);
@@ -470,7 +554,7 @@ export async function dragElement(page, refSelectors, {
     selector: toSelector,
     fieldPrefix: "to",
   });
-  await sourceLocator.dragTo(targetLocator, { timeout: TOOL_TIMEOUT_MS });
+  await withLocatorAction(fromRef || fromSelector, () => sourceLocator.dragTo(targetLocator, { timeout: TOOL_TIMEOUT_MS }));
 }
 
 export async function handleDialog(session, {
@@ -533,25 +617,37 @@ export async function screenshotPage(page, refSelectors, {
     return await page.screenshot({ type: "png" });
   }
   const locator = await locatorFor(page, refSelectors, { ref, selector });
-  if (scrollIntoViewIfNeeded) {
-    await locator.scrollIntoViewIfNeeded();
-  }
-  return await locator.screenshot({ type: "png" });
+  return await withLocatorAction(ref || selector, async () => {
+    if (scrollIntoViewIfNeeded) {
+      await locator.scrollIntoViewIfNeeded();
+    }
+    return await locator.screenshot({ type: "png" });
+  });
 }
 
 export async function runPlaywrightCode({ page, context, browser }, {
   code,
   timeoutMs = TOOL_TIMEOUT_MS,
-}) {
+}, { onTimeout } = {}) {
   if (typeof code !== "string" || !code.trim()) {
     throw new Error("runPlaywrightCode 需要 code");
   }
+  // 用户脚本中的 page.click/page.goto 默认可能等待 30 秒；必须给外层工具
+  // 超时留出收尾余量，避免无效 selector 被误报成 page reset。
+  configurePlaywrightTimeoutBudget(page, timeoutMs);
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const fn = new AsyncFunction("page", "context", "browser", code);
+  const cancellationController = new AbortController();
+  const fn = new AsyncFunction("page", "context", "browser", "signal", code);
   const result = await withTimeout(
-    Promise.resolve(fn(page, context, browser)),
+    Promise.resolve(fn(page, context, browser, cancellationController.signal)),
     timeoutMs,
     "Playwright 代码执行",
+    {
+      onTimeout: async (error) => {
+        cancellationController.abort(error);
+        await onTimeout?.(error);
+      },
+    },
   );
   return {
     result: normalizeToolResult(result),

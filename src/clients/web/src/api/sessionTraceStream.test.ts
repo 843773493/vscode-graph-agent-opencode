@@ -186,6 +186,12 @@ describe("会话 SSE 客户端", () => {
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return localCredentialResponse(port);
       }
+      if (url.pathname === "/api/gateway/users/current") {
+        return Response.json({
+          data: { user_id: "test-user" },
+          request_id: "req_test_user",
+        });
+      }
       requestedUrls.push(`${url.pathname}${url.search}`);
       return Response.json({
         request_id: "req_trace_page",

@@ -38,7 +38,7 @@
                   "index": 0,
                   "delta": {
                     "role": "assistant",
-                    "reasoning_content": "先读取 "
+              "reasoning_content": "Chat Completions 先确认要读取的文件，"
                   },
                   "finish_reason": null
                 }
@@ -57,90 +57,154 @@
                 {
                   "index": 0,
                   "delta": {
-                    "reasoning_content": "README，再根据工具结果作答。"
-                  },
-                  "finish_reason": null
-                }
-              ]
-            }
+            "reasoning_content": "再检查工具返回的证据，"
           },
-          {
-            "kind": "data",
-            "encoding": "json",
-            "payload": {
-              "id": "chatcmpl-reasoning-tool-1",
-              "object": "chat.completion.chunk",
-              "created": 1,
-              "model": "big-pickle",
-              "choices": [
-                {
-                  "index": 0,
-                  "delta": {
-                    "tool_calls": [
-                      {
-                        "index": 0,
-                        "id": "call_chat_reasoning_tool",
-                        "type": "function",
-                        "function": {
-                          "name": "read_file",
-                          "arguments": "{\"path\":"
-                        }
-                      }
-                    ]
-                  },
-                  "finish_reason": null
-                }
-              ]
-            }
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning-tool-1",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "reasoning_content": "确认内容和当前问题一致后，"
           },
-          {
-            "kind": "data",
-            "encoding": "json",
-            "payload": {
-              "id": "chatcmpl-reasoning-tool-1",
-              "object": "chat.completion.chunk",
-              "created": 1,
-              "model": "big-pickle",
-              "choices": [
-                {
-                  "index": 0,
-                  "delta": {
-                    "tool_calls": [
-                      {
-                        "index": 0,
-                        "function": {
-                          "arguments": "\"README.md\"}"
-                        }
-                      }
-                    ]
-                  },
-                  "finish_reason": null
-                }
-              ]
-            }
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning-tool-1",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "reasoning_content": "再发起一次明确的 Chat Completions 工具调用。"
           },
-          {
-            "kind": "data",
-            "encoding": "json",
-            "payload": {
-              "id": "chatcmpl-reasoning-tool-1",
-              "object": "chat.completion.chunk",
-              "created": 1,
-              "model": "big-pickle",
-              "choices": [
-                {
-                  "index": 0,
-                  "delta": {},
-                  "finish_reason": "tool_calls"
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning-tool-1",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "id": "call_chat_reasoning_tool",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":"
                 }
-              ]
-            }
+              }
+            ]
           },
-          {
-            "kind": "done",
-            "encoding": "text",
-            "payload": "[DONE]"
-          }
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning-tool-1",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "function": {
+                  "arguments": "\"README"
+                }
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning-tool-1",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "function": {
+                  "arguments": ".md\"}"
+                }
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning-tool-1",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "tool_calls"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "done",
+    "encoding": "text",
+    "payload": "[DONE]"
+  }
         ]
       }
     },
@@ -173,7 +237,7 @@
                   "index": 0,
                   "delta": {
                     "role": "assistant",
-                    "reasoning_content": "已读取 README，"
+                    "reasoning_content": "Chat Completions 工具已经返回，我先核对文件内容，"
                   },
                   "finish_reason": null
                 }
@@ -192,7 +256,7 @@
                 {
                   "index": 0,
                   "delta": {
-                    "reasoning_content": "整理最终答复。"
+                    "reasoning_content": "确认结果和请求目标相符，"
                   },
                   "finish_reason": null
                 }
@@ -211,7 +275,7 @@
                 {
                   "index": 0,
                   "delta": {
-                    "content": "工具调用"
+                    "reasoning_content": "再整理一份 Chat Completions 可复查的最终答复。"
                   },
                   "finish_reason": null
                 }
@@ -230,7 +294,26 @@
                 {
                   "index": 0,
                   "delta": {
-                    "content": "完成"
+                    "content": "Chat Completions 会说明检查结果，"
+                  },
+                  "finish_reason": null
+                }
+              ]
+            }
+          },
+          {
+            "kind": "data",
+            "encoding": "json",
+            "payload": {
+              "id": "chatcmpl-reasoning-tool-2",
+              "object": "chat.completion.chunk",
+              "created": 2,
+              "model": "big-pickle",
+              "choices": [
+                {
+                  "index": 0,
+                  "delta": {
+                    "content": "再给出 Chat Completions 可复查结论。"
                   },
                   "finish_reason": null
                 }

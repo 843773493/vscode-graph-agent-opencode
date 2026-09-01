@@ -12,6 +12,7 @@ from app.agents.model_capability_routing import (
     ProviderModelCandidate,
 )
 from app.agents.provider_capabilities import parse_provider_capabilities
+from app.core.turn_execution_scope import ScopeCancelledError
 
 
 def _model() -> BaseChatModel:
@@ -287,6 +288,33 @@ async def test_reasoning_only_response_falls_back_to_next_provider(
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_scope_cancellation_is_not_retried_on_fallback_provider() -> None:
+    primary_model = _model()
+    fallback_model = _model()
+    middleware = CapabilityRoutingMiddleware(
+        [
+            _candidate("backup_3", primary_model),
+            _candidate("backup_4", fallback_model),
+        ]
+    )
+    requested_models: list[BaseChatModel] = []
+
+    async def handler(request: ModelRequest) -> AIMessage:
+        requested_models.append(request.model)
+        raise ScopeCancelledError("scope_deadline_exceeded")
+
+    request = ModelRequest(
+        model=primary_model,
+        messages=[HumanMessage(content="在预算内完成")],
+    )
+
+    with pytest.raises(ScopeCancelledError, match="scope_deadline_exceeded"):
+        await middleware.awrap_model_call(request, handler)
+
+    assert requested_models == [primary_model]
 
 
 @pytest.mark.asyncio

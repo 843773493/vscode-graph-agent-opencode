@@ -1,4 +1,9 @@
-import type { Message, PendingRequestList, TraceEvent } from "../types/backend";
+import type {
+  JobStatus,
+  Message,
+  PendingRequestList,
+  TraceEvent,
+} from "../types/backend";
 import type { AppState, ConversationView } from "../types/frontend";
 import {
   messageStreamToResponseParts,
@@ -150,6 +155,7 @@ function conversationFromTurn(turn: TurnRecord): ConversationView {
     turnId: turn.turn_id,
     turnRevision: turn.revision,
     turnItemsView: isTurnDetail(turn) ? "full" : "summary",
+    turnStatus: turn.status as ConversationView["turnStatus"],
     activityStats: turn.activity_stats
       ? {
           duration_ms: turn.activity_stats.duration_ms ?? null,
@@ -266,7 +272,18 @@ function mergeConversation(
     ...persisted,
     ...pending,
     displayMode: pending.displayMode,
-    userMessage: persisted.userMessage ?? pending.userMessage,
+    userMessage: persisted.userMessage && pending.userMessage
+      ? {
+          ...persisted.userMessage,
+          ...pending.userMessage,
+          // Turn 详情/摘要可能先于 live 状态到达；保留乐观 replay
+          // 的操作元数据，否则回退提示会在新 Job 运行期间消失。
+          metadata: {
+            ...persisted.userMessage.metadata,
+            ...pending.userMessage.metadata,
+          },
+        }
+      : persisted.userMessage ?? pending.userMessage,
     assistantMessages,
     events: dedupeTraceEvents([...persisted.events, ...pending.events]),
     source: pending.source === "pending" ? "pending" : persisted.source,
@@ -382,7 +399,12 @@ export function statusForConversationEvents(
   fallback: ConversationView["status"],
 ): ConversationView["status"] {
   let status = fallback;
+  let terminalStatus: ConversationView["status"] | null = null;
   for (const event of dedupeTraceEvents(events)) {
+    if (terminalStatus !== null) {
+      // 终态一旦落入本地镜像，迟到的旧 SSE 不能把它重新改成 running。
+      continue;
+    }
     if (event.type === "status_change") {
       status =
         tracePayloadString(event, "status") === "queued"
@@ -392,11 +414,11 @@ export function statusForConversationEvents(
     }
 
     if (event.type === "job_completed") {
-      status = "done";
+      terminalStatus = "done";
       continue;
     }
     if (event.type === "job_failed" || event.type === "job_cancelled") {
-      status = "error";
+      terminalStatus = "error";
       continue;
     }
     if (
@@ -416,10 +438,10 @@ export function statusForConversationEvents(
     }
 
     if (isTerminalTraceType(event.type)) {
-      status = terminalStatusForEvent(event.type);
+      terminalStatus = terminalStatusForEvent(event.type);
     }
   }
-  return status;
+  return terminalStatus ?? status;
 }
 
 export function hasJobTerminalTraceEvent(events: TraceEvent[]): boolean {
@@ -445,9 +467,10 @@ export function writePendingSnapshot(
   snapshot: PendingRequestList,
   mapKey: string = snapshot.session_id,
 ) {
+  const existingPending = pendingMap.get(mapKey) ?? [];
   const existingSnapshotVersion = Math.max(
     0,
-    ...(pendingMap.get(mapKey) ?? []).map(
+    ...existingPending.map(
       (conversation) => conversation.queueSnapshotVersion ?? 0,
     ),
   );
@@ -455,7 +478,7 @@ export function writePendingSnapshot(
     return;
   }
   const existingActiveConversation = snapshot.active_job_id
-    ? (pendingMap.get(mapKey) ?? []).find(
+    ? existingPending.find(
         (conversation) => conversation.jobId === snapshot.active_job_id,
       )
     : undefined;
@@ -477,6 +500,32 @@ export function writePendingSnapshot(
           }
         : createActiveJobOverlay(snapshot.session_id, snapshot.active_job_id),
     );
+  }
+  // replay 的新 Job 可能尚未进入 bootstrap/pending-requests 快照，但后端已经
+  // 移除了旧上下文。保留乐观 replay，避免历史投影切换期间出现空聊天区；终态
+  // SSE 或 Job reconciliation 会在任务结束时移除它。
+  const optimisticReplayConversations = existingPending.filter(
+    (conversation) =>
+      conversation.pending
+      && conversation.source === "pending"
+      && Boolean(conversation.jobId)
+      && conversation.userMessage?.metadata?.source === "optimistic_replay",
+  );
+  // 终态 SSE 可能早于 rollout 投影提交到达。此时历史详情返回 409，
+  // 仍需保留实时回合，直到详情成功回填；否则下一次 pending 快照会把新回合删掉。
+  const terminalConversations = existingPending.filter(
+    (conversation) =>
+      conversation.source === "pending"
+      && Boolean(conversation.jobId)
+      && hasJobTerminalTraceEvent(conversation.events),
+  );
+  for (const conversation of [
+    ...optimisticReplayConversations,
+    ...terminalConversations,
+  ]) {
+    if (!snapshotConversations.some((candidate) => conversationsMatch(candidate, conversation))) {
+      snapshotConversations.push(conversation);
+    }
   }
   writePendingList(
     pendingMap,
@@ -601,6 +650,36 @@ export function removePendingForTraceEvent(
   );
 }
 
+export function preservePendingTerminalConversation(
+  map: Map<string, ConversationView[]>,
+  sessionId: string,
+  event: TraceEvent,
+  turnStatus: Extract<JobStatus, "completed" | "failed" | "cancelled" | "timed_out">,
+  mapKey: string = sessionId,
+): void {
+  const pendingList = map.get(mapKey) ?? [];
+  const pendingIndex = pendingList.findIndex((conversation) =>
+    conversationMatchesTraceEvent(conversation, event),
+  );
+  if (pendingIndex === -1) return;
+
+  const pending = pendingList[pendingIndex];
+  const events = compactPendingConversationEvents(
+    dedupeTraceEvents([...pending.events, event]),
+  );
+  const updatedPending: ConversationView = {
+    ...pending,
+    events,
+    status: turnStatus === "completed" ? "done" : "error",
+    turnStatus,
+    pending: false,
+    activeJobOverlay: false,
+  };
+  const next = [...pendingList];
+  next[pendingIndex] = updatedPending;
+  writePendingList(map, sessionId, next, mapKey);
+}
+
 /**
  * 在无法收到终止 SSE（例如浏览器恢复、连接重连或页面切换）时，按 Job
  * 身份立即移除实时 Turn。后续由历史 projection 重新建立 history 视图。
@@ -674,9 +753,9 @@ function applyMessageStreamProjection(
       && candidate.turnId === (conversation.turnId ?? conversation.jobId),
     );
     const stream = streamCandidates.sort((left, right) =>
-      right.lastEventSeq - left.lastEventSeq
-      || Number(isTerminalMessageStreamStatus(right.streamStatus))
+      Number(isTerminalMessageStreamStatus(right.streamStatus))
         - Number(isTerminalMessageStreamStatus(left.streamStatus))
+      || right.lastEventSeq - left.lastEventSeq
       || Number(right.connectionStatus === "terminal")
         - Number(left.connectionStatus === "terminal"),
     )[0];
@@ -686,6 +765,36 @@ function applyMessageStreamProjection(
       && conversation.jobId !== stream.turnId
     ) {
       return conversation;
+    }
+    const terminalTurn = conversation.turnStatus
+      && TERMINAL_TURN_STATUSES.has(conversation.turnStatus);
+    if (terminalTurn) {
+      // Job API/Turn projection 已经确认终态时，任何旧 stream（包括错误的
+      // completed）只能作为诊断镜像保留，不能重新驱动聊天状态或活动遮罩。
+      const terminalConversationStatus =
+        conversation.turnStatus === "completed"
+        || conversation.turnStatus === "succeeded"
+          ? "done"
+          : "error";
+      return {
+        ...conversation,
+        ...(isTerminalMessageStreamStatus(stream.streamStatus)
+          ? { responseParts: messageStreamToResponseParts(stream) }
+          : {}),
+        status: terminalConversationStatus,
+        activeJobOverlay: false,
+        pending: false,
+        messageStream: {
+          connectionStatus: stream.connectionStatus,
+          streamStatus: stream.streamStatus,
+          lastEventSeq: stream.lastEventSeq,
+          failure: stream.failure,
+          protocolError: stream.protocolError,
+          activeState: stream.activeState,
+          activities: stream.activities,
+          resumable: stream.resumable,
+        },
+      };
     }
     const responseParts = messageStreamToResponseParts(stream);
     const terminalStatus = stream.streamStatus === "completed"
@@ -703,6 +812,7 @@ function applyMessageStreamProjection(
         streamStatus: stream.streamStatus,
         lastEventSeq: stream.lastEventSeq,
         failure: stream.failure,
+        protocolError: stream.protocolError,
         activeState: stream.activeState,
         activities: stream.activities,
         resumable: stream.resumable,
@@ -710,6 +820,14 @@ function applyMessageStreamProjection(
     };
   });
 }
+
+const TERMINAL_TURN_STATUSES = new Set([
+  "completed",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+]);
 
 function isTerminalMessageStreamStatus(
   status: MessageStreamState["streamStatus"],

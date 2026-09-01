@@ -106,6 +106,13 @@ class SessionInformationService:
                 status = "queued"
             elif event.type in _TERMINAL_STATUS_BY_EVENT_TYPE:
                 status = _TERMINAL_STATUS_BY_EVENT_TYPE[event.type]
+                if event.type == "session_interrupted":
+                    raw_payload = event.raw.get("payload") if event.raw else None
+                    if isinstance(raw_payload, dict) and (
+                        raw_payload.get("code") == "execution_lost"
+                        or raw_payload.get("phase") == "process_exit"
+                    ):
+                        status = "failed"
             elif event.type == "status_change":
                 raw_payload = event.raw.get("payload")
                 raw_status = raw_payload.get("status") if isinstance(raw_payload, dict) else None
@@ -119,7 +126,9 @@ class SessionInformationService:
             elif event.type == "tool_call_end":
                 current_tool = None
 
-            if event.type in {"error", "job_failed"}:
+            if event.type in {"error", "job_failed"} or (
+                event.type == "session_interrupted" and status == "failed"
+            ):
                 last_error = event.content
 
         return SessionInformationExecutionDTO(

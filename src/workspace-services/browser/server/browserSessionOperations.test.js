@@ -48,6 +48,39 @@ function liveSession() {
 }
 
 describe("浏览器统一操作队列", () => {
+  test("同一新标签页并发注册只生成一个稳定 pageId", async () => {
+    const browser = session();
+    let cdpSessionCount = 0;
+    const page = {
+      url: () => "about:blank",
+      mainFrame: () => page,
+      on: () => undefined,
+      isClosed: () => false,
+      title: async () => "Blank",
+    };
+    browser.browser = {};
+    browser.context = {
+      newCDPSession: async () => {
+        cdpSessionCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return {
+          send: async () => undefined,
+          on: () => undefined,
+        };
+      },
+    };
+    browser.syncAndEmitState = async () => browser.snapshot();
+
+    const first = browser.registerPage(page, { pageId: "page_first" });
+    const second = browser.registerPage(page, { pageId: "page_second" });
+    const [firstEntry, secondEntry] = await Promise.all([first, second]);
+
+    expect(firstEntry).toBe(secondEntry);
+    expect(firstEntry.pageId).toBe("page_first");
+    expect(cdpSessionCount).toBe(1);
+    expect(browser.pageEntries.size).toBe(1);
+  });
+
   test("设备型号切换更新设备参数并重新应用页面布局", async () => {
     const { browser, cdpCalls, getNavigationCount } = liveSession();
 
@@ -222,6 +255,270 @@ describe("浏览器统一操作队列", () => {
     const modal = await browser.runPageActionWithModalDetection(() => neverSettles);
     expect(modal).toBe("dialog");
     expect(browser.listenerCount("browser-modal")).toBe(0);
+  });
+
+  test("Playwright 代码超时后隔离页面并允许键盘、读取和截图重试", async () => {
+    const browser = session();
+    let oldPageClosed = false;
+    let pressedKey = null;
+    const oldPage = {
+      close: async () => {
+        oldPageClosed = true;
+        await browser.handlePageClosed("page_timeout", oldPage);
+      },
+      goto: async () => undefined,
+      isClosed: () => false,
+    };
+    const replacementPage = {
+      close: async () => undefined,
+      goto: async () => undefined,
+      isClosed: () => false,
+      keyboard: {
+        press: async (key) => {
+          pressedKey = key;
+        },
+      },
+      evaluate: async () => ({
+        title: "Recovered page",
+        url: "about:blank",
+        documentRevision: 0,
+        refs: [],
+        text: "recovered",
+      }),
+      screenshot: async () => Buffer.from("recovered-png"),
+      title: async () => "Recovered page",
+      url: () => "about:blank",
+    };
+    const oldEntry = {
+      pageId: "page_timeout",
+      page: oldPage,
+      requestedUrl: "http://127.0.0.1:8011/",
+    };
+    const replacementEntry = {
+      pageId: "page_timeout_replacement",
+      page: replacementPage,
+      requestedUrl: "about:blank",
+    };
+    browser.browser = {};
+    browser.context = {
+      newPage: async () => {
+        browser.pendingDialog = { pageId: oldEntry.pageId };
+        browser.pendingFileChooser = {};
+        return replacementPage;
+      },
+    };
+    browser.page = oldPage;
+    browser.cdpSession = {};
+    browser.activePageId = oldEntry.pageId;
+    browser.pageEntries.set(oldEntry.pageId, oldEntry);
+    browser.pageEntries.set(replacementEntry.pageId, replacementEntry);
+    browser.pageRegistrationPromises.set(
+      replacementPage,
+      Promise.resolve(replacementEntry),
+    );
+    browser.activatePage = async (pageId) => {
+      browser.activePageId = pageId;
+      browser.page = browser.pageEntries.get(pageId).page;
+      browser.cdpSession = {};
+    };
+    browser.goto = async (url) => {
+      browser.record.url = url;
+    };
+    browser.syncAndEmitState = async () => browser.snapshot();
+    browser.manager.writeScreenshot = async () => "/tmp/browser-timeout-recovery.png";
+
+    await expect(browser.runPlaywrightCode({
+      code: "await new Promise(() => undefined);",
+      timeoutMs: 10,
+    })).rejects.toMatchObject({
+      code: "browser_tool_timeout",
+      timeout_ms: 10,
+      retryable: true,
+      recovery: "page_reset",
+    });
+
+    // 超时错误先返回给调用方；直接调用 BrowserSession 的测试需要等待
+    // 同一恢复屏障，真实 HTTP 入队操作会在下一次操作前自动等待它。
+    await browser.timeoutRecovery;
+
+    expect(oldPageClosed).toBe(true);
+    expect(browser.activePageId).toBe(replacementEntry.pageId);
+    expect(browser.page).toBe(replacementPage);
+    expect(browser.pageEntries.has(oldEntry.pageId)).toBe(false);
+    expect(browser.record.url).toBe("http://127.0.0.1:8011/");
+    expect(browser.pendingDialog).toBeNull();
+    expect(browser.pendingFileChooser).toBeNull();
+
+    const keyboardResult = await browser.runPlaywrightCode({
+      code: "await page.keyboard.press('r'); return 'keyboard-ok';",
+      timeoutMs: 100,
+    });
+    expect(keyboardResult.result).toBe("keyboard-ok");
+    expect(pressedKey).toBe("r");
+
+    const summary = await browser.readSummary();
+    expect(summary.title).toBe("Recovered page");
+
+    const screenshot = await browser.screenshot({});
+    expect(screenshot).toMatchObject({
+      image_path: "/tmp/browser-timeout-recovery.png",
+      mime_type: "image/png",
+    });
+  });
+
+  test("readSummary 超时立即返回可重试错误并在下一次操作前恢复页面", async () => {
+    const browser = session();
+    let oldPageClosed = false;
+    const oldPage = {
+      close: async () => {
+        oldPageClosed = true;
+        await browser.handlePageClosed("page_read_timeout", oldPage);
+      },
+      evaluate: async () => new Promise(() => undefined),
+      isClosed: () => false,
+      title: async () => "旧页面",
+      url: () => "http://127.0.0.1:8765/",
+    };
+    const replacementPage = {
+      close: async () => undefined,
+      evaluate: async () => ({
+        title: "Recovered read page",
+        url: "http://127.0.0.1:8765/",
+        documentRevision: 0,
+        refs: [],
+        text: "read-recovered",
+      }),
+      goto: async () => undefined,
+      isClosed: () => false,
+      title: async () => "Recovered read page",
+      url: () => "http://127.0.0.1:8765/",
+    };
+    const oldEntry = {
+      pageId: "page_read_timeout",
+      page: oldPage,
+      requestedUrl: "http://127.0.0.1:8765/",
+    };
+    const replacementEntry = {
+      pageId: "page_read_timeout_replacement",
+      page: replacementPage,
+      requestedUrl: "about:blank",
+    };
+    browser.browser = {};
+    browser.context = {
+      newPage: async () => replacementPage,
+    };
+    browser.page = oldPage;
+    browser.cdpSession = {};
+    browser.activePageId = oldEntry.pageId;
+    browser.pageEntries.set(oldEntry.pageId, oldEntry);
+    browser.pageEntries.set(replacementEntry.pageId, replacementEntry);
+    browser.pageRegistrationPromises.set(
+      replacementPage,
+      Promise.resolve(replacementEntry),
+    );
+    browser.activatePage = async (pageId) => {
+      browser.activePageId = pageId;
+      browser.page = browser.pageEntries.get(pageId).page;
+      browser.cdpSession = {};
+    };
+    browser.goto = async (url) => {
+      browser.record.url = url;
+    };
+    browser.syncAndEmitState = async () => browser.snapshot();
+
+    await expect(browser.readSummary({ timeoutMs: 10 })).rejects.toMatchObject({
+      code: "browser_tool_timeout",
+      timeout_ms: 10,
+      retryable: true,
+      recovery: "page_reset",
+    });
+
+    await browser.timeoutRecovery;
+
+    expect(oldPageClosed).toBe(true);
+    expect(browser.activePageId).toBe(replacementEntry.pageId);
+    expect(browser.page).toBe(replacementPage);
+    expect(browser.pageEntries.has(oldEntry.pageId)).toBe(false);
+
+    const summary = await browser.readSummary({ timeoutMs: 100 });
+    expect(summary.summary).toContain("read-recovered");
+  });
+
+  test("截图超时返回可重试错误并复用读取超时的页面恢复机制", async () => {
+    const browser = session();
+    const oldPage = {
+      close: async () => {
+        await browser.handlePageClosed("page_screenshot_timeout", oldPage);
+      },
+      isClosed: () => false,
+      screenshot: async () => new Promise(() => undefined),
+    };
+    const replacementPage = {
+      close: async () => undefined,
+      goto: async () => undefined,
+      isClosed: () => false,
+      screenshot: async () => Buffer.from("recovered-png"),
+      title: async () => "Recovered screenshot page",
+      url: () => "about:blank",
+    };
+    const oldEntry = {
+      pageId: "page_screenshot_timeout",
+      page: oldPage,
+      requestedUrl: "about:blank",
+    };
+    const replacementEntry = {
+      pageId: "page_screenshot_timeout_replacement",
+      page: replacementPage,
+      requestedUrl: "about:blank",
+    };
+    browser.browser = {};
+    browser.context = {
+      newPage: async () => replacementPage,
+    };
+    browser.page = oldPage;
+    browser.cdpSession = {};
+    browser.activePageId = oldEntry.pageId;
+    browser.pageEntries.set(oldEntry.pageId, oldEntry);
+    browser.pageEntries.set(replacementEntry.pageId, replacementEntry);
+    browser.pageRegistrationPromises.set(
+      replacementPage,
+      Promise.resolve(replacementEntry),
+    );
+    browser.activatePage = async (pageId) => {
+      browser.activePageId = pageId;
+      browser.page = browser.pageEntries.get(pageId).page;
+      browser.cdpSession = {};
+    };
+    browser.goto = async () => undefined;
+    browser.syncAndEmitState = async () => browser.snapshot();
+    browser.manager.writeScreenshot = async () => "/tmp/browser-screenshot-recovery.png";
+
+    await expect(browser.screenshot({}, { timeoutMs: 10 })).rejects.toMatchObject({
+      code: "browser_tool_timeout",
+      retryable: true,
+      recovery: "page_reset",
+    });
+
+    await browser.timeoutRecovery;
+
+    const screenshot = await browser.screenshot({});
+    expect(screenshot).toMatchObject({
+      image_path: "/tmp/browser-screenshot-recovery.png",
+      mime_type: "image/png",
+    });
+  });
+
+  test("替换页面后旧标签页的关闭事件不会删除新标签页记录", async () => {
+    const browser = session();
+    const replacementPage = {};
+    browser.pageEntries.set("page_replacement", {
+      pageId: "page_replacement",
+      page: replacementPage,
+    });
+
+    await browser.handlePageClosed("page_replacement", {});
+
+    expect(browser.pageEntries.has("page_replacement")).toBe(true);
   });
 
   test("导航失败保留用户请求地址并暴露详细错误", async () => {

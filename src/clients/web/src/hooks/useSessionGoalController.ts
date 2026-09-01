@@ -1,4 +1,10 @@
-import { useCallback, useEffect, type Dispatch, type SetStateAction } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   clearSessionGoal as apiClearSessionGoal,
   getSessionGoal as apiGetSessionGoal,
@@ -11,6 +17,8 @@ interface GoalTarget {
   sessionId: string;
   workspaceId: string | null;
 }
+
+const SESSION_AUXILIARY_LOAD_DELAY_MS = 200;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -139,6 +147,12 @@ export function useSessionGoalController({
     }
   }, [apiPort, currentSessionId, currentWorkspaceId, reconcileAfterFailure, setState]);
 
+  const previousGoalScopeRef = useRef<{
+    sessionId: string | null;
+    workspaceId: string | null;
+    activeJobId: string | null;
+  } | null>(null);
+
   const clearGoal = useCallback(async (
     target: GoalTarget = {
       sessionId: currentSessionId ?? "",
@@ -179,9 +193,12 @@ export function useSessionGoalController({
     if (!currentSessionId) {
       return;
     }
-    void refreshGoal().catch(() => {
-      // 请求错误已写入 AppState，界面必须直接呈现。
-    });
+    const timerId = window.setTimeout(() => {
+      void refreshGoal().catch(() => {
+        // 请求错误已写入 AppState，界面必须直接呈现。
+      });
+    }, SESSION_AUXILIARY_LOAD_DELAY_MS);
+    return () => window.clearTimeout(timerId);
   }, [currentSessionId, currentWorkspaceId, refreshGoal, setState]);
 
   useEffect(() => {
@@ -204,13 +221,32 @@ export function useSessionGoalController({
   }, [currentSessionId, refreshGoal]);
 
   useEffect(() => {
-    if (!currentSessionId) {
+    const previousScope = previousGoalScopeRef.current;
+    const sessionChanged = previousScope !== null
+      && (
+        previousScope.sessionId !== currentSessionId
+        || previousScope.workspaceId !== currentWorkspaceId
+      );
+    const activeJobChanged = previousScope !== null
+      && previousScope.activeJobId !== currentActiveJobId;
+    previousGoalScopeRef.current = {
+      sessionId: currentSessionId,
+      workspaceId: currentWorkspaceId,
+      activeJobId: currentActiveJobId,
+    };
+    if (
+      !currentSessionId
+      || !currentActiveJobId
+      || previousScope === null
+      || sessionChanged
+      || !activeJobChanged
+    ) {
       return;
     }
     void refreshGoal(undefined, { silent: true }).catch(() => {
       // Job 状态由 SSE 推动；Goal 校准失败会显示在卡片中。
     });
-  }, [currentActiveJobId, currentSessionId, refreshGoal]);
+  }, [currentActiveJobId, currentSessionId, currentWorkspaceId, refreshGoal]);
 
   return { refreshGoal, updateGoal, clearGoal };
 }

@@ -1,4 +1,4 @@
-"""用手写 Chat Completions SSE cassette 重建 rollout 历史 fixture。"""
+"""用手写多 Provider SSE cassette 重建 rollout 历史 fixture。"""
 
 from __future__ import annotations
 
@@ -7,12 +7,15 @@ import copy
 import json
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import anthropic
 import httpx
 import litellm
 import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -29,7 +32,9 @@ PROJECT_ROOT = Path.cwd().resolve()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.agents.providers.anthropic_messages import BoxteamAnthropicMessagesModel
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.session_paths import SessionPathResolver
@@ -40,7 +45,13 @@ from app.testing.model_stream import (
     load_scenario,
 )
 
-TARGET_WORKSPACE = PROJECT_ROOT / "asset" / "custom_tool_test_workspace"
+TARGET_WORKSPACE = (
+    PROJECT_ROOT
+    / "tests"
+    / "fixtures"
+    / "workspaces"
+    / "custom_tool_test_workspace"
+)
 FIXTURE_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "model_stream"
 BASE_TIME = datetime(2026, 8, 27, tzinfo=UTC)
 LARGE_PAYLOAD_BYTES = 64 * 1024
@@ -62,6 +73,23 @@ TOPICS = (
     "测试隔离工作区",
     "上下文压缩",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class HandwrittenProvider:
+    """一个真实 ModelCall 的 provider 配置和对应模型实例。"""
+
+    provider_id: str
+    model_provider: str
+    api_mode: str
+    model: BaseChatModel
+    tool_model: BaseChatModel
+    large_model: BaseChatModel
+
+    def model_for_call(self, *, use_tool: bool, large_tools: bool) -> BaseChatModel:
+        if large_tools:
+            return self.large_model
+        return self.tool_model if use_tool else self.model
 
 
 def _stamp(turn: int) -> str:
@@ -87,50 +115,6 @@ def _set_model(interaction: dict[str, object], model: str) -> None:
     if not isinstance(match, dict):
         raise TypeError("手写 SSE interaction 缺少 request.match")
     match["model"] = model
-
-
-def _reasoning_frame(frame: dict[str, object], *, marker: str) -> None:
-    payload = frame.get("payload")
-    if not isinstance(payload, dict):
-        return
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return
-    choice = choices[0]
-    if not isinstance(choice, dict):
-        return
-    delta = choice.get("delta")
-    if not isinstance(delta, dict) or not delta.get("reasoning_content"):
-        return
-    delta["thinking_blocks"] = [
-        {"type": "redacted_thinking", "data": f"redacted-{marker}"}
-    ]
-    delta["model_extra"] = {
-        "reasoning_items": [
-            {
-                "type": "reasoning",
-                "summary": [
-                    {"type": "summary_text", "text": f"summary-{marker}"}
-                ],
-            }
-        ]
-    }
-
-
-def _enhance_reasoning_interaction(
-    interaction: dict[str, object],
-    *,
-    marker: str,
-) -> None:
-    response = interaction.get("response")
-    if not isinstance(response, dict):
-        raise TypeError("手写 SSE interaction 缺少 response")
-    frames = response.get("frames")
-    if not isinstance(frames, list):
-        raise TypeError("手写 SSE interaction 缺少 response.frames")
-    for frame in frames:
-        if isinstance(frame, dict):
-            _reasoning_frame(frame, marker=marker)
 
 
 def _large_tool_interaction(
@@ -212,35 +196,65 @@ def _large_tool_interaction(
 
 
 def _cassette() -> StreamScenario:
-    simple = copy.deepcopy(
-        load_scenario(FIXTURE_ROOT, "reasoning-stream").cassette.raw
-    )
-    tool = copy.deepcopy(
-        load_scenario(FIXTURE_ROOT, "reasoning-tool").cassette.raw
-    )
-    large = copy.deepcopy(tool)
+    """合并三种 provider 的原始 cassette，但保持 interaction 协议隔离。"""
 
-    simple_interaction = simple["interactions"][0]
-    tool_interactions = tool["interactions"]
-    large_interactions = large["interactions"]
-    if not isinstance(simple_interaction, dict) or not isinstance(tool_interactions, list):
-        raise TypeError("手写 SSE cassette 结构非法")
-    if not isinstance(large_interactions, list):
-        raise TypeError("手写 SSE large cassette 结构非法")
+    def interactions_from(
+        scenario_id: str,
+        *,
+        model: str | None = None,
+    ) -> list[dict[str, object]]:
+        source = load_scenario(FIXTURE_ROOT, scenario_id).cassette
+        protocol = source.metadata.get("protocol")
+        if not isinstance(protocol, str) or protocol == "mixed":
+            raise TypeError(f"手写 SSE scenario 缺少单一 protocol: {scenario_id}")
+        raw_interactions = source.raw.get("interactions")
+        if not isinstance(raw_interactions, list):
+            raise TypeError(f"手写 SSE scenario interactions 结构非法: {scenario_id}")
+        result: list[dict[str, object]] = []
+        for raw_interaction in raw_interactions:
+            if not isinstance(raw_interaction, dict):
+                raise TypeError(f"手写 SSE interaction 结构非法: {scenario_id}")
+            interaction = copy.deepcopy(raw_interaction)
+            interaction["protocol"] = protocol
+            if protocol == "openai_responses_sse":
+                request = interaction.get("request")
+                if isinstance(request, dict):
+                    match = request.get("match")
+                    if isinstance(match, dict):
+                        # LiteLLM 是否把 stream 写入 Responses 请求体取决于
+                        # provider/model capability；SSE 读取本身由 HTTPX
+                        # 的 stream 参数控制，因此不能把它作为身份匹配键。
+                        match.pop("stream", None)
+            if model is not None:
+                _set_model(interaction, model)
+            result.append(interaction)
+        return result
 
-    _set_model(simple_interaction, "handwritten-stream")
-    _enhance_reasoning_interaction(simple_interaction, marker="stream")
-    for interaction in tool_interactions:
-        if not isinstance(interaction, dict):
-            raise TypeError("手写 SSE tool interaction 结构非法")
-        _set_model(interaction, "handwritten-tool")
-        _enhance_reasoning_interaction(interaction, marker="tool")
-    for interaction in large_interactions:
-        if not isinstance(interaction, dict):
-            raise TypeError("手写 SSE large interaction 结构非法")
-        _set_model(interaction, "handwritten-large")
-        _enhance_reasoning_interaction(interaction, marker="large")
-    _large_tool_interaction(large_interactions[0], marker="turn-0000")
+    chat_simple = interactions_from("reasoning-stream", model="handwritten-stream")
+    chat_tool = interactions_from("reasoning-tool", model="handwritten-tool")
+    chat_large = interactions_from("reasoning-tool", model="handwritten-large")
+    _large_tool_interaction(chat_large[0], marker="turn-0000")
+
+    responses_simple = interactions_from("responses-reasoning-text")
+    responses_tool = interactions_from(
+        "responses-reasoning-tool",
+        model="gpt-4o",
+    )
+    responses_tool[0]["request"]["match"]["input_types"] = [
+        "message",
+        "message",
+    ]
+    responses_tool[1]["request"]["match"]["input_types"] = [
+        "message",
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+    anthropic_simple = interactions_from("anthropic-reasoning-stream")
+    anthropic_tool = interactions_from(
+        "anthropic-reasoning-tool",
+        model="claude-handwritten-tool",
+    )
 
     combined = {
         "schema_version": 1,
@@ -248,14 +262,18 @@ def _cassette() -> StreamScenario:
         "metadata": {
             "source": "handwritten",
             "asset_id": "handwritten-rollout-history",
-            "protocol": "openai_chat_sse",
-            "provider": "openai_compatible",
+            "protocol": "mixed",
+            "provider": "provider_specific",
             "model": "handwritten-rollout",
         },
         "interactions": [
-            simple_interaction,
-            *tool_interactions,
-            *large_interactions,
+            *chat_simple,
+            *chat_tool,
+            *chat_large,
+            *responses_simple,
+            *responses_tool,
+            *anthropic_simple,
+            *anthropic_tool,
         ],
     }
     cassette = load_cassette_from_object(combined)
@@ -307,7 +325,7 @@ def _restore_transport(
 
 
 async def _invoke(
-    model: BoxteamLiteLLMChatModel,
+    model: BaseChatModel,
     messages: Sequence[BaseMessage],
 ) -> AIMessage:
     combined: AIMessageChunk | None = None
@@ -323,6 +341,13 @@ async def _invoke(
     return message
 
 
+def _model_name(model: BaseChatModel) -> str:
+    value = getattr(model, "model_name", None) or getattr(model, "model", None)
+    if not isinstance(value, str) or not value:
+        raise TypeError(f"手写 SSE provider 缺少模型名: {type(model).__name__}")
+    return value
+
+
 def _stamp_message(
     message: AIMessage,
     *,
@@ -331,6 +356,9 @@ def _stamp_message(
     turn_id: str,
     provider_id: str,
     phase: str,
+    model_provider: str,
+    api_mode: str,
+    model_name: str,
 ) -> AIMessage:
     metadata = dict(message.response_metadata or {})
     stamp = _stamp(turn)
@@ -340,9 +368,9 @@ def _stamp_message(
             "updated_at": stamp,
             "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
             "provider_id": provider_id,
-            "model_provider": "handwritten_sse",
-            "model": "handwritten-stream",
-            "api_mode": "chat_completions",
+            "model_provider": model_provider,
+            "model": model_name,
+            "api_mode": api_mode,
             "phase": phase,
             "stream_source": "tests/fixtures/model_stream/handwritten",
         }
@@ -358,6 +386,8 @@ def _tool_message(
     content: str,
     name: str,
     provider_id: str,
+    model_provider: str,
+    api_mode: str,
 ) -> ToolMessage:
     stamp = _stamp(turn)
     return ToolMessage(
@@ -370,7 +400,8 @@ def _tool_message(
             "updated_at": stamp,
             "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
             "provider_id": provider_id,
-            "model_provider": "handwritten_sse",
+            "model_provider": model_provider,
+            "api_mode": api_mode,
             "phase": "tool_result",
             "stream_source": "tests/fixtures/model_stream/handwritten",
         },
@@ -454,15 +485,13 @@ async def _generate_session(
     *,
     resolver: SessionPathResolver,
     saver: RolloutCheckpointSaver,
-    model: BoxteamLiteLLMChatModel,
-    tool_model: BoxteamLiteLLMChatModel,
+    providers: tuple[HandwrittenProvider, ...],
     session_id: str,
     title: str,
     turn_count: int,
     tool_every: int,
     large_tools: bool,
     compaction_points: tuple[int, ...],
-    provider_ids: tuple[str, ...],
     checkpoint_prefix: str = "checkpoint",
     turn_id_prefix: str = "job",
     fork_source: tuple[str, str] | None = None,
@@ -472,7 +501,7 @@ async def _generate_session(
         session_dir,
         session_id=session_id,
         title=title,
-        provider_id=provider_ids[0],
+        provider_id=providers[0].provider_id,
     )
     resolver.register_session(session_id, session_dir)
     if fork_source is not None:
@@ -485,9 +514,15 @@ async def _generate_session(
             relationship="detached",
         )
 
-    system = SystemMessage(content="你是用于历史回放的本地测试模型。只输出简短结论。")
+    system = SystemMessage(
+        content=(
+            "你是用于历史回放的本地测试模型。请按流式阶段输出完整的可复查思考摘要、"
+            "工具调用和最终结论。"
+        )
+    )
     history: list[BaseMessage] = []
     config: RunnableConfig = build_checkpoint_config(session_id)
+    model_call_index = 0
     segment_start = 0
     boundaries = set(compaction_points) | {turn_count}
     for turn in range(1, turn_count + 1):
@@ -504,18 +539,26 @@ async def _generate_session(
             },
         )
         history.append(user)
-        provider_id = provider_ids[(turn - 1) % len(provider_ids)]
         use_tool = tool_every > 0 and turn % tool_every == 0
         if use_tool:
-            first = await _invoke(tool_model, [system, user])
+            first_provider = providers[model_call_index % len(providers)]
+            model_call_index += 1
+            first_model = first_provider.model_for_call(
+                use_tool=True,
+                large_tools=large_tools,
+            )
+            first = await _invoke(first_model, [system, user])
             first_id = f"assistant-tool-{turn:04d}"
             first = _stamp_message(
                 first,
                 message_id=first_id,
                 turn=turn,
                 turn_id=turn_id,
-                provider_id=provider_id,
+                provider_id=first_provider.provider_id,
                 phase="tool_call",
+                model_provider=first_provider.model_provider,
+                api_mode=first_provider.api_mode,
+                model_name=_model_name(first_model),
             )
             if not first.tool_calls:
                 raise RuntimeError(f"手写 SSE tool fixture 没有生成 tool_call: turn={turn}")
@@ -547,29 +590,49 @@ async def _generate_session(
                 tool_call_id=call_id,
                 content=tool_result,
                 name=tool_name,
-                provider_id=provider_id,
+                provider_id=first_provider.provider_id,
+                model_provider=first_provider.model_provider,
+                api_mode=first_provider.api_mode,
             )
             history.append(tool)
-            final = await _invoke(tool_model, [system, user, first, tool])
+            final_provider = providers[model_call_index % len(providers)]
+            model_call_index += 1
+            final_model = final_provider.model_for_call(
+                use_tool=True,
+                large_tools=large_tools,
+            )
+            final = await _invoke(final_model, [system, user, first, tool])
             final = _stamp_message(
                 final,
                 message_id=f"assistant-final-{turn:04d}",
                 turn=turn,
                 turn_id=turn_id,
-                provider_id=provider_id,
+                provider_id=final_provider.provider_id,
                 phase="final_answer",
+                model_provider=final_provider.model_provider,
+                api_mode=final_provider.api_mode,
+                model_name=_model_name(final_model),
             )
             history.append(final)
             final_message_id = str(final.id)
         else:
-            final = await _invoke(model, [system, user])
+            final_provider = providers[model_call_index % len(providers)]
+            model_call_index += 1
+            final_model = final_provider.model_for_call(
+                use_tool=False,
+                large_tools=large_tools,
+            )
+            final = await _invoke(final_model, [system, user])
             final = _stamp_message(
                 final,
                 message_id=f"assistant-final-{turn:04d}",
                 turn=turn,
                 turn_id=turn_id,
-                provider_id=provider_id,
+                provider_id=final_provider.provider_id,
                 phase="final_answer",
+                model_provider=final_provider.model_provider,
+                api_mode=final_provider.api_mode,
+                model_name=_model_name(final_model),
             )
             history.append(final)
             final_message_id = str(final.id)
@@ -595,14 +658,14 @@ async def _generate_session(
                 f"{checkpoint_prefix}-{turn:04d}",
                 history,
                 turn,
-                provider_id,
+                final_provider.provider_id,
                 event,
             ),
             {
                 "source": "handwritten-sse-rollout-fixture",
                 "turn": turn,
-                "provider_id": provider_id,
-                "api_mode": "chat_completions",
+                "provider_id": final_provider.provider_id,
+                "api_mode": final_provider.api_mode,
                 "stream_source": "tests/fixtures/model_stream/handwritten",
                 "semantic_boundary": "compaction" if event else "turn",
             },
@@ -639,18 +702,25 @@ def _write_fixture_manifest(workspace_root: Path) -> None:
     (workspace_root / "rollout-fixture.json").write_text(
         json.dumps(
             {
-                "fixture_version": 4,
+                "fixture_version": 5,
                 "description": "由 tests/fixtures/model_stream/handwritten 重建的 rollout 历史 fixture",
                 "source": "handwritten_sse",
                 "source_assets": [
                     "openai_chat/reasoning-stream.json",
                     "openai_chat/reasoning-tool.json",
+                    "openai_responses/reasoning-text.json",
+                    "openai_responses/reasoning-tool.json",
+                    "anthropic_messages/reasoning-stream.json",
+                    "anthropic_messages/reasoning-tool.json",
+                ],
+                "provider_message_cycle": [
+                    "chat_completions",
+                    "responses",
+                    "anthropic_messages",
                 ],
                 "history_semantics": [
                     "user_message",
-                    "reasoning_content",
-                    "reasoning_items",
-                    "redacted_thinking",
+                    "provider_scoped_reasoning_block",
                     "tool_call",
                     "tool_result",
                     "final_response",
@@ -692,111 +762,167 @@ async def _generate(workspace_root: Path) -> None:
     scenario = _cassette()
     client, previous_session, previous_factory = _install_transport(scenario)
     try:
-        simple_model = BoxteamLiteLLMChatModel(
+        chat_model = BoxteamLiteLLMChatModel(
             model="openai/handwritten-stream",
             api_key="handwritten-sse-key",
             api_base="https://opencode.ai/zen/v1",
             custom_llm_provider="openai",
             streaming=True,
         )
-        tool_model = BoxteamLiteLLMChatModel(
+        chat_tool_model = BoxteamLiteLLMChatModel(
             model="openai/handwritten-tool",
             api_key="handwritten-sse-key",
             api_base="https://opencode.ai/zen/v1",
             custom_llm_provider="openai",
             streaming=True,
         )
-        large_model = BoxteamLiteLLMChatModel(
+        chat_large_model = BoxteamLiteLLMChatModel(
             model="openai/handwritten-large",
             api_key="handwritten-sse-key",
             api_base="https://opencode.ai/zen/v1",
             custom_llm_provider="openai",
             streaming=True,
         )
+        responses_model = BoxteamOpenAIResponsesModel(
+            model="gpt-5.6-luna",
+            api_key="handwritten-sse-key",
+            api_base="https://www.cctq.ai/v1",
+            custom_llm_provider="openai",
+            streaming=True,
+            provider_id="handwritten_responses",
+            responses_include=["reasoning.encrypted_content"],
+            responses_store=False,
+        )
+        responses_tool_model = BoxteamOpenAIResponsesModel(
+            model="gpt-4o",
+            api_key="handwritten-sse-key",
+            api_base="https://www.cctq.ai/v1",
+            custom_llm_provider="openai",
+            streaming=True,
+            provider_id="handwritten_responses",
+            responses_include=["reasoning.encrypted_content"],
+            responses_store=False,
+        )
+        anthropic_model = BoxteamAnthropicMessagesModel(
+            model_name="claude-handwritten",
+            api_key="handwritten-sse-key",
+            base_url="https://anthropic.handwritten",
+            streaming=True,
+            thinking={"type": "enabled", "budget_tokens": 128},
+            provider_id="handwritten_anthropic",
+        )
+        anthropic_tool_model = BoxteamAnthropicMessagesModel(
+            model_name="claude-handwritten-tool",
+            api_key="handwritten-sse-key",
+            base_url="https://anthropic.handwritten",
+            streaming=True,
+            thinking={"type": "enabled", "budget_tokens": 128},
+            provider_id="handwritten_anthropic",
+        )
+        for model in (anthropic_model, anthropic_tool_model):
+            model.__dict__["_async_client"] = anthropic.AsyncAnthropic(
+                api_key="handwritten-sse-key",
+                base_url="https://anthropic.handwritten",
+                http_client=client,
+            )
+        providers = (
+            HandwrittenProvider(
+                provider_id="handwritten_chat",
+                model_provider="openai",
+                api_mode="chat_completions",
+                model=chat_model,
+                tool_model=chat_tool_model,
+                large_model=chat_large_model,
+            ),
+            HandwrittenProvider(
+                provider_id="handwritten_responses",
+                model_provider="openai",
+                api_mode="responses",
+                model=responses_model,
+                tool_model=responses_tool_model,
+                large_model=responses_tool_model,
+            ),
+            HandwrittenProvider(
+                provider_id="handwritten_anthropic",
+                model_provider="anthropic",
+                api_mode="anthropic_messages",
+                model=anthropic_model,
+                tool_model=anthropic_tool_model,
+                large_model=anthropic_tool_model,
+            ),
+        )
         saver = RolloutCheckpointSaver(sessions_dir)
         await _generate_session(
             resolver=resolver,
             saver=saver,
-            model=simple_model,
-            tool_model=tool_model,
+            providers=providers,
             session_id=STATIC_SESSION_ID,
             title="自定义工具工作区：128 Turn 历史压测（handwritten SSE）",
             turn_count=128,
             tool_every=8,
             large_tools=False,
             compaction_points=(32, 64, 96),
-            provider_ids=("handwritten_sse_primary", "handwritten_sse_backup"),
             checkpoint_prefix="checkpoint",
         )
         await _generate_session(
             resolver=resolver,
             saver=saver,
-            model=simple_model,
-            tool_model=tool_model,
+            providers=providers,
             session_id=REAL_SESSION_ID,
             title="手写 SSE 128 Turn block carrier 压测",
             turn_count=128,
             tool_every=8,
             large_tools=False,
             compaction_points=(32, 64, 96),
-            provider_ids=("handwritten_sse_chat_a", "handwritten_sse_chat_b"),
             checkpoint_prefix="real-checkpoint",
             turn_id_prefix="real-turn",
         )
         await _generate_session(
             resolver=resolver,
             saver=saver,
-            model=large_model,
-            tool_model=large_model,
+            providers=providers,
             session_id=LARGE_SESSION_ID,
             title="大型工具调用：128 Turn 历史投影压测（handwritten SSE）",
             turn_count=128,
             tool_every=8,
             large_tools=True,
             compaction_points=(32, 64, 96),
-            provider_ids=("handwritten_sse_large",),
             checkpoint_prefix="checkpoint",
         )
         await _generate_session(
             resolver=resolver,
             saver=saver,
-            model=tool_model,
-            tool_model=tool_model,
+            providers=providers,
             session_id=COMPACTION_SESSION_ID,
             title="上下文压缩与摘要示例（handwritten SSE）",
             turn_count=24,
             tool_every=1,
             large_tools=False,
             compaction_points=(8, 16),
-            provider_ids=("handwritten_sse_tool",),
             checkpoint_prefix="checkpoint",
         )
         await _generate_session(
             resolver=resolver,
             saver=saver,
-            model=tool_model,
-            tool_model=tool_model,
+            providers=providers,
             session_id=TOOL_SESSION_ID,
             title="多工具调用和大输出示例（handwritten SSE）",
             turn_count=12,
             tool_every=4,
             large_tools=True,
             compaction_points=(6,),
-            provider_ids=("handwritten_sse_tool",),
             checkpoint_prefix="checkpoint",
         )
         await _generate_session(
             resolver=resolver,
             saver=saver,
-            model=simple_model,
-            tool_model=tool_model,
+            providers=providers,
             session_id=FORK_SESSION_ID,
             title="独立历史分支示例（handwritten SSE）",
             turn_count=7,
             tool_every=0,
             large_tools=False,
             compaction_points=(),
-            provider_ids=("handwritten_sse_fork",),
             checkpoint_prefix="checkpoint",
             fork_source=(STATIC_SESSION_ID, "checkpoint-0064"),
         )

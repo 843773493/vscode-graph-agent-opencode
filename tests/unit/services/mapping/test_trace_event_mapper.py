@@ -86,3 +86,21 @@ def test_mapper_preserves_model_failure_details() -> None:
     assert mapped.content == (
         "primary/big-pickle：RateLimitError: Rate limit exceeded"
     )
+
+
+def test_mapper_exposes_process_exit_as_execution_lost() -> None:
+    event = _event()
+    event["type"] = "session_interrupted"
+    event["payload"] = {
+        "phase": "process_exit",
+        "code": "execution_lost",
+        "message": "工作区后端重启，无法安全续接原 AgentLoop 执行",
+    }
+
+    mapped = TraceEventMapper().map_one(event, session_id="ses_1")
+
+    assert mapped is not None
+    assert mapped.phase == "session"
+    assert mapped.title == "执行丢失"
+    assert mapped.status == "failed"
+    assert mapped.content == "工作区后端重启，无法安全续接原 AgentLoop 执行"

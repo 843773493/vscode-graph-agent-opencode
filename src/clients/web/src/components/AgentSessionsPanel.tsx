@@ -511,7 +511,9 @@ export default function AgentSessionsPanel({
               <span className="codicon codicon-comment-discussion agent-sessions-nav-icon" aria-hidden="true" />
               <span>Chats</span>
             </button>
-            <div className="agent-sessions-no-chats">No chats</div>
+            {gatewayWorkspaces.length === 0 && matchingSessionCount === 0 ? (
+              <div className="agent-sessions-no-chats">No chats</div>
+            ) : null}
           </section>
 
           {gatewayWorkspaces.length > 0 ? (

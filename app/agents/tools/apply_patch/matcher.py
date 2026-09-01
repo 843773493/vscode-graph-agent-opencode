@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import unicodedata
+from dataclasses import dataclass
 
 from app.agents.tools.apply_patch.models import Fuzz
-
 
 EDIT_DISTANCE_ALLOWANCE_PER_LINE = 0.34
 _PUNCTUATION_EQUIVALENTS = str.maketrans(

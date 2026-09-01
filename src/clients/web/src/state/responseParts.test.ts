@@ -201,4 +201,75 @@ describe("responsePartsToTimelineItems", () => {
       outcomeUnknown: true,
     });
   });
+
+  it("取消终态的未完成工具显示为调用未完成而不是结果未知", () => {
+    const items = responsePartsToTimelineItems([
+      {
+        part_id: "tool-call:cancelled",
+        kind: "tool_call",
+        projection: "summary",
+        status: "failed",
+        source: {
+          message_sequence: 2,
+          assistant_message_sequence: 2,
+          call_index: 0,
+        },
+        tool_call_id: "call-cancelled",
+        tool_name: "read_file",
+        text: "pending",
+        outcome_unknown: true,
+      },
+    ], { terminalCancellation: true });
+
+    expect(items[0]).toMatchObject({
+      kind: "aggregated_tool",
+      active: false,
+      incomplete: true,
+      failed: false,
+      outcomeUnknown: false,
+    });
+  });
+
+  it("保留详细思考、summary 和加密思考的语义边界，同时使用统一文本展示模型", () => {
+    const items = responsePartsToTimelineItems([
+      {
+        part_id: "reasoning:detail",
+        kind: "reasoning",
+        projection: "streaming",
+        source: { message_sequence: 1, content_block_index: 0 },
+        text: "明文思考",
+        carrier_type: "thinking",
+      },
+      {
+        part_id: "reasoning:summary",
+        kind: "reasoning_summary",
+        projection: "streaming",
+        source: { message_sequence: 2, content_block_index: 0 },
+        text: "摘要思考",
+        carrier_type: "reasoning_items",
+      },
+      {
+        part_id: "reasoning:encrypted",
+        kind: "reasoning_encrypted",
+        projection: "summary",
+        source: { message_sequence: 3, content_block_index: 0 },
+        text: "",
+        carrier_type: "redacted_thinking",
+      },
+    ]);
+
+    expect(items).toHaveLength(3);
+    expect(items.every((item) => item.kind === "aggregated_text")).toBe(true);
+    expect(items.map((item) => item.kind === "aggregated_text" && item.partKind)).toEqual([
+      "reasoning",
+      "reasoning",
+      "reasoning",
+    ]);
+    expect(items.map((item) => item.kind === "aggregated_text" && item.reasoningKind)).toEqual([
+      "reasoning",
+      "reasoning_summary",
+      "reasoning_encrypted",
+    ]);
+    expect(items[2]).toMatchObject({ redacted: true });
+  });
 });

@@ -9,12 +9,12 @@ from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.core.job_context import get_current_job_id
 
-
 TEAM_COORDINATION_NOTICE = (
     "团队任务采用事件驱动协作：成员完成、阻塞或失败后会更新团队面板，并自动为协调者启动通知 Job。"
     "不要对团队成员调用 monitor_session_agent_end 或 collect_background_messages；当前 Job 应在分派后结束，"
     "收到团队更新通知时再调用 get_team_board 汇总最新状态。"
 )
+TEAM_ID_PATTERN = r"^team_[0-9a-f]{32}$"
 
 
 def _operation_payload(result: BaseModel) -> dict[str, object]:
@@ -28,7 +28,10 @@ class CreateTeamInput(BaseModel):
 
 
 class TeamIdInput(BaseModel):
-    team_id: str = Field(description="目标团队 ID")
+    team_id: str = Field(
+        pattern=TEAM_ID_PATTERN,
+        description="目标团队 ID，格式为 team_ 加 32 位小写十六进制字符",
+    )
 
 
 class AttachTeamSessionInput(TeamIdInput):
@@ -118,7 +121,13 @@ def create_team_tools(
 
     @tool("create_team_member")
     async def create_team_member(
-        team_id: Annotated[str, Field(description="目标团队 ID")],
+        team_id: Annotated[
+            str,
+            Field(
+                pattern=TEAM_ID_PATTERN,
+                description="目标团队 ID，格式为 team_ 加 32 位小写十六进制字符",
+            ),
+        ],
         role: Annotated[str, Field(description="成员角色，例如 reviewer 或 tester")],
         startup_prompt: Annotated[
             str,

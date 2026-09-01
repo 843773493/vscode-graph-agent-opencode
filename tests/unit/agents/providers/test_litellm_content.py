@@ -255,19 +255,14 @@ def test_projection_removes_stream_runtime_fields_from_visible_blocks():
 
 def test_reasoning_projection_contains_summary_and_encrypted_metadata_only():
     rows = reasoning_projection_rows(_content())
-    assert [row["kind"] for row in rows] == [
-        "reasoning",
-        "reasoning",
-        "encrypted",
-        "summary",
-    ]
-    assert rows[0]["carrier_type"] == "reasoning_content"
+    assert [row["kind"] for row in rows] == ["reasoning"]
     assert rows[0]["content_block_index"] == 0
-    assert rows[3]["carrier_type"] == "reasoning_items"
-    assert rows[3]["item_index"] == 0
-    assert rows[3]["summary_text"] == "安全摘要"
-    assert rows[3]["encrypted_length"] == len("encrypted")
-    assert "encrypted_content" not in rows[3]
+    assert rows[0]["carrier_type"] == (
+        "reasoning_content+thinking+redacted_thinking+reasoning_items"
+    )
+    assert rows[0]["summary_text"] == "安全摘要"
+    assert rows[0]["encrypted_length"] == len("sealed") + len("encrypted")
+    assert "encrypted_content" not in rows[0]
 
 
 def test_stream_runtime_fields_are_removed_and_provider_item_is_restored():

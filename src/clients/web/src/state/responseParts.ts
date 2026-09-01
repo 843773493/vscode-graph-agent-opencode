@@ -3,6 +3,7 @@ import type { TimelineItem } from "./timelineTypes";
 
 export interface ResponsePartsProjectionOptions {
   terminalFailure?: boolean;
+  terminalCancellation?: boolean;
 }
 
 function toolPartKey(part: TurnResponsePart): string {
@@ -78,12 +79,17 @@ export function responsePartsToTimelineItems(
       || part.kind === "reasoning_summary"
       || part.kind === "reasoning_encrypted"
     ) {
-      if (!text) continue;
+      // redacted/encrypted reasoning 可能只有存在性和元数据，没有可读正文；
+      // 不能因 text 为空丢掉该时间线项，否则前端无法显示隐藏提示。
+      if (!text && part.kind !== "reasoning_encrypted") continue;
+      const encrypted = part.kind === "reasoning_encrypted";
       items.push({
         kind: "aggregated_text",
         id: part.part_id,
         text,
         partKind: "reasoning",
+        reasoningKind: part.kind,
+        redacted: encrypted || part.carrier_type?.includes("redacted_thinking") === true,
         active: part.projection === "streaming" && part.status !== "completed",
         timestamp: null,
         eventCount: 1,
@@ -95,12 +101,20 @@ export function responsePartsToTimelineItems(
       const rawStart = recordField(part, "raw_start");
       const rawEnd = recordField(part, "raw_end");
       const unresolvedTerminalTool = options.terminalFailure === true
+        && part.status !== "failed"
         && !resultKeys.has(toolPartKey(part))
         && !resultCallIds.has(part.tool_call_id ?? "");
+      const incomplete = part.partial === true
+        || part.status === "cancelled"
+        || (options.terminalCancellation === true
+          && part.outcome_unknown === true
+          && !resultKeys.has(toolPartKey(part))
+          && !resultCallIds.has(part.tool_call_id ?? ""));
       const item: TimelineItem = {
         kind: "aggregated_tool",
         id: part.part_id,
         toolName: part.tool_name ?? "tool",
+        toolCallId: part.tool_call_id ?? undefined,
         inputText: part.arguments ?? "",
         resultText: text,
         timestamp: null,
@@ -112,8 +126,10 @@ export function responsePartsToTimelineItems(
           part.status === "pending" || part.status === "running"
         ) && !resultKeys.has(toolPartKey(part))
           && !resultCallIds.has(part.tool_call_id ?? ""),
-        failed: part.status === "failed" || unresolvedTerminalTool,
-        outcomeUnknown: part.outcome_unknown === true || unresolvedTerminalTool,
+        detailsLoaded: part.projection === "detail",
+        failed: !incomplete && (part.status === "failed" || unresolvedTerminalTool),
+        incomplete,
+        outcomeUnknown: !incomplete && (part.outcome_unknown === true || unresolvedTerminalTool),
       };
       const index = items.length;
       toolIndexes.set(toolPartKey(part), index);
@@ -135,7 +151,9 @@ export function responsePartsToTimelineItems(
             ...existing,
             resultText: part.result ?? part.text ?? "",
             active: false,
+            detailsLoaded: existing.detailsLoaded || part.projection === "detail",
             failed: part.status === "failed",
+            incomplete: part.status === "cancelled",
             outcomeUnknown: part.outcome_unknown === true,
           };
         }
@@ -144,13 +162,16 @@ export function responsePartsToTimelineItems(
           kind: "aggregated_tool",
           id: part.part_id,
           toolName: part.tool_name ?? "tool",
+          toolCallId: part.tool_call_id ?? undefined,
           inputText: "",
           resultText: part.result ?? text,
           timestamp: null,
           rawStart: recordField(part, "raw_start"),
           rawEnd: recordField(part, "raw_end"),
           active: false,
+          detailsLoaded: part.projection === "detail",
           failed: part.status === "failed",
+          incomplete: part.status === "cancelled",
           outcomeUnknown: part.outcome_unknown === true,
         });
       }

@@ -4,10 +4,14 @@ import {
   useRef,
   type MutableRefObject,
 } from "react";
-import { HttpRequestError } from "../../api/http";
-import { getSessionMessageStreamSnapshot } from "../../api/sessionMessageStream";
+import { HttpRequestError, isTransientNetworkError } from "../../api/http";
+import {
+  getSessionMessageStreamAvailability,
+  getSessionMessageStreamSnapshot,
+} from "../../api/sessionMessageStream";
 import {
   loadSessionHistory,
+  StaleTurnCursorHttpError,
   StaleTurnReferenceHttpError,
   type TurnHistoryInclude,
 } from "../../api/sessionTurnHistory";
@@ -30,6 +34,11 @@ import type { SetAppState } from "../contentViewLoaderTypes";
 
 const TURN_DETAIL_COMMIT_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const;
 
+function isTurnProjectionCommitConflict(error: unknown): boolean {
+  return error instanceof StaleTurnCursorHttpError
+    || (error instanceof HttpRequestError && error.status === 409);
+}
+
 async function hydrateMessageStreamSnapshots(
   apiPort: number,
   sessionId: string,
@@ -38,23 +47,33 @@ async function hydrateMessageStreamSnapshots(
   signal: AbortSignal,
   setState: SetAppState,
 ): Promise<void> {
-  const snapshots = await Promise.all(turnIds.map(async (turnId) => {
-    try {
-      return await getSessionMessageStreamSnapshot(
-        apiPort,
-        sessionId,
-        turnId,
-        { workspaceId, signal },
-      );
-    } catch (error) {
-      // 历史上没有 message.v1 的 Turn 没有 snapshot；这是明确的存量归档路径，
-      // 不能把它误报成详情加载失败。
-      if (error instanceof HttpRequestError && error.status === 404) {
-        return null;
-      }
-      throw error;
-    }
-  }));
+  const streamIds = await getSessionMessageStreamAvailability(
+    apiPort,
+    sessionId,
+    turnIds,
+    { workspaceId, signal },
+  );
+  const snapshots = await Promise.all(
+    turnIds
+      .filter((turnId) => Boolean(streamIds[turnId]))
+      .map(async (turnId) => {
+        try {
+          return await getSessionMessageStreamSnapshot(
+            apiPort,
+            sessionId,
+            turnId,
+            { workspaceId, signal, turnStreamId: streamIds[turnId] },
+          );
+        } catch (error) {
+          // 索引查询与 snapshot 之间允许流被清理；保留这个竞态的显式回退，
+          // 但正常的存量 Turn 不再通过一次必然的 404 进入这里。
+          if (error instanceof HttpRequestError && error.status === 404) {
+            return null;
+          }
+          throw error;
+        }
+      }),
+  );
 
   if (signal.aborted) return;
   setState((previous) => {
@@ -154,6 +173,7 @@ export function useTurnDetailLoader({
   requestIdentity?: string | null,
   refreshAfterInFlight?: boolean,
   include?: TurnHistoryInclude[],
+  toolCallIds?: string[],
 ) => Promise<void> {
   const inFlightByTurnId = useRef(new Map<string, {
     requestIdentity: string | null;
@@ -173,6 +193,7 @@ export function useTurnDetailLoader({
   const requestNewDetails = useCallback(async (
     requestIds: TurnDetailBatchRequest["turn_ids"],
     include?: TurnHistoryInclude[],
+    toolCallIds?: string[],
   ) => {
     if (!apiPort || !sessionId || !sessionCacheKey) return;
     const targetGeneration = generationRef.current;
@@ -204,17 +225,25 @@ export function useTurnDetailLoader({
               direction: "around",
               turn_ids: requestIds,
               ...(include ? { include } : {}),
+              ...(toolCallIds ? { tool_call_ids: toolCallIds } : {}),
             },
             workspaceId,
             requestSignal,
           );
           break;
         } catch (error) {
+          // stale_turn_reference 表示请求携带的旧 Turn 已不属于当前上下文，
+          // 不是投影写锁。继续重试同一个旧 ID 只会制造持续的 409 风暴。
+          if (error instanceof StaleTurnReferenceHttpError) {
+            throw error;
+          }
           if (
-            !(error instanceof HttpRequestError)
-            || error.status !== 404
-            || attempt >= TURN_DETAIL_COMMIT_RETRY_DELAYS_MS.length
+            (!(error instanceof HttpRequestError) || error.status !== 404)
+            && !isTurnProjectionCommitConflict(error)
           ) {
+            throw error;
+          }
+          if (attempt >= TURN_DETAIL_COMMIT_RETRY_DELAYS_MS.length) {
             throw error;
           }
           const shouldContinue = await waitForTurnCommit(
@@ -267,20 +296,53 @@ export function useTurnDetailLoader({
         setState,
       ).catch((error: unknown) => {
         if (requestSignal.aborted) return;
-        const message = error instanceof Error ? error.message : String(error);
         setState((previous) => ({
           ...previous,
-          status: `恢复 Turn 消息流 snapshot 失败: ${message}`,
+          status: isTransientNetworkError(error)
+            ? "消息流连接暂时变化，已保留当前回合并等待重连"
+            : `恢复 Turn 消息流 snapshot 失败: ${error instanceof Error ? error.message : String(error)}`,
         }));
       });
     } catch (error) {
       if (requestSignal.aborted) return;
       if (error instanceof StaleTurnReferenceHttpError) {
-        onMissingTurn(error.detail.turn_ids);
+        // 旧 Turn 由 bootstrap 重新校准；必须登记为失效引用，避免
+        // SSE/详情回放再次携带同一批旧 ID，持续制造 409 风暴。
+        // refreshTurnHistory 只移除时间线中的旧 Turn，不会清空会话树或实时 pending conversation。
+        onMissingTurn(requestIds);
         return;
+      }
+      if (isTurnProjectionCommitConflict(error)) {
+        setState((previous) => ({
+          ...previous,
+          status: "Turn 历史正在提交，已保留当前回合，稍后重试",
+        }));
+        throw error;
       }
       if (error instanceof HttpRequestError && error.status === 404) {
         onMissingTurn(requestIds);
+        return;
+      }
+      if (isTransientNetworkError(error)) {
+        setState((previous) => {
+          const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
+          if (timeline.generation !== targetGeneration) return previous;
+          return {
+            ...previous,
+            turnTimelinesBySession: writeTurnTimelineCache(
+              previous.turnTimelinesBySession,
+              sessionCacheKey,
+              {
+                ...timeline,
+                loadingDetailIds: timeline.loadingDetailIds.filter(
+                  (turnId) => !requestIds.includes(turnId),
+                ),
+                error: null,
+              },
+            ),
+            status: "历史连接暂时变化，已保留当前回合，可继续重试",
+          };
+        });
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -313,6 +375,7 @@ export function useTurnDetailLoader({
     requestIdentity: string | null = null,
     refreshAfterInFlight: boolean = false,
     include?: TurnHistoryInclude[],
+    toolCallIds?: string[],
   ) => {
     if (!apiPort || !sessionId || !sessionCacheKey || turnIds.length === 0) return;
     const requestIds = detailRequestIds(turnIds);
@@ -393,6 +456,7 @@ export function useTurnDetailLoader({
       request = requestNewDetails(
         newIds as TurnDetailBatchRequest["turn_ids"],
         include,
+        toolCallIds,
       ).finally(() => {
         for (const turnId of newIds) {
           if (inFlightByTurnId.current.get(turnId)?.request === request) {

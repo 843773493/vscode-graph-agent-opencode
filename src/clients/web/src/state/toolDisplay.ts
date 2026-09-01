@@ -224,6 +224,9 @@ export function toolCollapsedText(item: AggregatedToolItem): string {
   if (terminalText) {
     return terminalText;
   }
+  if (item.outcomeUnknown) {
+    return "未确认返回结果";
+  }
 
   const inputRecord = parseJsonRecord(item.rawStart.args) ?? {};
   const resultRecord = parseJsonRecord(item.rawEnd.result);

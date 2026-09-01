@@ -84,7 +84,46 @@
               "item_id": "rs_reasoning_tool",
               "output_index": 0,
               "summary_index": 0,
-              "delta": "先读取 README，再根据工具结果作答。"
+              "delta": "OpenAI Responses 先确认待读取的文件，"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.reasoning_summary_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.reasoning_summary_text.delta",
+              "sequence_number": 4,
+              "item_id": "rs_reasoning_tool",
+              "output_index": 0,
+              "summary_index": 0,
+              "delta": "再检查工具返回的证据，"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.reasoning_summary_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.reasoning_summary_text.delta",
+              "sequence_number": 5,
+              "item_id": "rs_reasoning_tool",
+              "output_index": 0,
+              "summary_index": 0,
+              "delta": "确认内容和当前问题一致后，"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.reasoning_summary_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.reasoning_summary_text.delta",
+              "sequence_number": 6,
+              "item_id": "rs_reasoning_tool",
+              "output_index": 0,
+              "summary_index": 0,
+              "delta": "再发起一次明确的 OpenAI Responses 工具调用。"
             }
           },
           {
@@ -92,14 +131,14 @@
             "event": "response.reasoning_summary_part.done",
             "encoding": "json",
             "payload": {
-              "type": "response.reasoning_summary_part.done",
-              "sequence_number": 4,
+            "type": "response.reasoning_summary_part.done",
+              "sequence_number": 7,
               "item_id": "rs_reasoning_tool",
               "output_index": 0,
               "summary_index": 0,
               "part": {
                 "type": "summary_text",
-                "text": "先读取 README，再根据工具结果作答。"
+                "text": "OpenAI Responses 先确认待读取的文件，再检查工具返回的证据，确认内容和当前问题一致后，再发起一次明确的 OpenAI Responses 工具调用。"
               }
             }
           },
@@ -108,8 +147,8 @@
             "event": "response.output_item.done",
             "encoding": "json",
             "payload": {
-              "type": "response.output_item.done",
-              "sequence_number": 5,
+            "type": "response.output_item.done",
+              "sequence_number": 8,
               "output_index": 0,
               "item": {
                 "id": "rs_reasoning_tool",
@@ -118,7 +157,7 @@
                 "summary": [
                   {
                     "type": "summary_text",
-                    "text": "先读取 README，再根据工具结果作答。"
+                    "text": "OpenAI Responses 先确认待读取的文件，再检查工具返回的证据，确认内容和当前问题一致后，再发起一次明确的 OpenAI Responses 工具调用。"
                   }
                 ],
                 "encrypted_content": "encrypted-reasoning-tool"
@@ -130,8 +169,8 @@
             "event": "response.output_item.added",
             "encoding": "json",
             "payload": {
-              "type": "response.output_item.added",
-              "sequence_number": 6,
+            "type": "response.output_item.added",
+              "sequence_number": 9,
               "output_index": 1,
               "item": {
                 "id": "fc_reasoning_tool",
@@ -148,8 +187,8 @@
             "event": "response.function_call_arguments.delta",
             "encoding": "json",
             "payload": {
-              "type": "response.function_call_arguments.delta",
-              "sequence_number": 7,
+            "type": "response.function_call_arguments.delta",
+              "sequence_number": 10,
               "item_id": "fc_reasoning_tool",
               "output_index": 1,
               "call_id": "call_reasoning_tool",
@@ -161,12 +200,25 @@
             "event": "response.function_call_arguments.delta",
             "encoding": "json",
             "payload": {
-              "type": "response.function_call_arguments.delta",
-              "sequence_number": 8,
+            "type": "response.function_call_arguments.delta",
+              "sequence_number": 11,
               "item_id": "fc_reasoning_tool",
               "output_index": 1,
               "call_id": "call_reasoning_tool",
-              "delta": "\"README.md\"}"
+              "delta": "\"README"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.function_call_arguments.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.function_call_arguments.delta",
+              "sequence_number": 12,
+              "item_id": "fc_reasoning_tool",
+              "output_index": 1,
+              "call_id": "call_reasoning_tool",
+              "delta": ".md\"}"
             }
           },
           {
@@ -174,8 +226,8 @@
             "event": "response.function_call_arguments.done",
             "encoding": "json",
             "payload": {
-              "type": "response.function_call_arguments.done",
-              "sequence_number": 9,
+            "type": "response.function_call_arguments.done",
+              "sequence_number": 13,
               "item_id": "fc_reasoning_tool",
               "output_index": 1,
               "call_id": "call_reasoning_tool",
@@ -187,8 +239,8 @@
             "event": "response.output_item.done",
             "encoding": "json",
             "payload": {
-              "type": "response.output_item.done",
-              "sequence_number": 10,
+            "type": "response.output_item.done",
+              "sequence_number": 14,
               "output_index": 1,
               "item": {
                 "id": "fc_reasoning_tool",
@@ -205,8 +257,8 @@
             "event": "response.completed",
             "encoding": "json",
             "payload": {
-              "type": "response.completed",
-              "sequence_number": 11,
+            "type": "response.completed",
+              "sequence_number": 15,
               "response": {
                 "id": "resp_reasoning_tool_1",
                 "object": "response",
@@ -221,7 +273,7 @@
                     "summary": [
                       {
                         "type": "summary_text",
-                        "text": "先读取 README，再根据工具结果作答。"
+                        "text": "OpenAI Responses 先确认待读取的文件，再检查工具返回的证据，确认内容和当前问题一致后，再发起一次明确的 OpenAI Responses 工具调用。"
                       }
                     ],
                     "encrypted_content": "encrypted-reasoning-tool"
@@ -297,13 +349,78 @@
                 "id": "rs_reasoning_tool_2",
                 "type": "reasoning",
                 "status": "in_progress",
-                "summary": [
-                  {
-                    "type": "summary_text",
-                    "text": "已读取 README，整理最终答复。"
-                  }
-                ],
-                "encrypted_content": "encrypted-reasoning-tool-2"
+                "summary": []
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.reasoning_summary_part.added",
+            "encoding": "json",
+            "payload": {
+              "type": "response.reasoning_summary_part.added",
+              "sequence_number": 2,
+              "item_id": "rs_reasoning_tool_2",
+              "output_index": 0,
+              "summary_index": 0,
+              "part": {
+                "type": "summary_text",
+                "text": ""
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.reasoning_summary_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.reasoning_summary_text.delta",
+              "sequence_number": 3,
+              "item_id": "rs_reasoning_tool_2",
+              "output_index": 0,
+              "summary_index": 0,
+              "delta": "OpenAI Responses 先核对工具结果，"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.reasoning_summary_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.reasoning_summary_text.delta",
+              "sequence_number": 4,
+              "item_id": "rs_reasoning_tool_2",
+              "output_index": 0,
+              "summary_index": 0,
+              "delta": "确认它和请求目标相符，"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.reasoning_summary_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.reasoning_summary_text.delta",
+              "sequence_number": 5,
+              "item_id": "rs_reasoning_tool_2",
+              "output_index": 0,
+              "summary_index": 0,
+              "delta": "再整理一份 OpenAI Responses 最终答复。"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.reasoning_summary_part.done",
+            "encoding": "json",
+            "payload": {
+              "type": "response.reasoning_summary_part.done",
+              "sequence_number": 6,
+              "item_id": "rs_reasoning_tool_2",
+              "output_index": 0,
+              "summary_index": 0,
+              "part": {
+                "type": "summary_text",
+                "text": "OpenAI Responses 先核对工具结果，确认它和请求目标相符，再整理一份 OpenAI Responses 最终答复。"
               }
             }
           },
@@ -313,7 +430,7 @@
             "encoding": "json",
             "payload": {
               "type": "response.output_item.done",
-              "sequence_number": 2,
+              "sequence_number": 7,
               "output_index": 0,
               "item": {
                 "id": "rs_reasoning_tool_2",
@@ -322,7 +439,7 @@
                 "summary": [
                   {
                     "type": "summary_text",
-                    "text": "已读取 README，整理最终答复。"
+                    "text": "OpenAI Responses 先核对工具结果，确认它和请求目标相符，再整理一份 OpenAI Responses 最终答复。"
                   }
                 ],
                 "encrypted_content": "encrypted-reasoning-tool-2"
@@ -373,7 +490,33 @@
               "item_id": "msg_reasoning_tool",
               "output_index": 1,
               "content_index": 0,
-              "delta": "工具调用完成"
+              "delta": "OpenAI Responses 工具已经返回，"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.output_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.output_text.delta",
+              "sequence_number": 6,
+              "item_id": "msg_reasoning_tool",
+              "output_index": 1,
+              "content_index": 0,
+              "delta": "我核对了 OpenAI Responses 文件内容，"
+            }
+          },
+          {
+            "kind": "data",
+            "event": "response.output_text.delta",
+            "encoding": "json",
+            "payload": {
+              "type": "response.output_text.delta",
+              "sequence_number": 7,
+              "item_id": "msg_reasoning_tool",
+              "output_index": 1,
+              "content_index": 0,
+              "delta": "现在给出 OpenAI Responses 可复查的结论。"
             }
           },
           {
@@ -382,11 +525,11 @@
             "encoding": "json",
             "payload": {
               "type": "response.output_text.done",
-              "sequence_number": 6,
+              "sequence_number": 8,
               "item_id": "msg_reasoning_tool",
               "output_index": 1,
               "content_index": 0,
-              "text": "工具调用完成"
+              "text": "OpenAI Responses 工具已经返回，我核对了 OpenAI Responses 文件内容，现在给出 OpenAI Responses 可复查的结论。"
             }
           },
           {
@@ -395,13 +538,13 @@
             "encoding": "json",
             "payload": {
               "type": "response.content_part.done",
-              "sequence_number": 7,
+              "sequence_number": 9,
               "item_id": "msg_reasoning_tool",
               "output_index": 1,
               "content_index": 0,
               "part": {
                 "type": "output_text",
-                "text": "工具调用完成",
+                "text": "OpenAI Responses 工具已经返回，我核对了 OpenAI Responses 文件内容，现在给出 OpenAI Responses 可复查的结论。",
                 "annotations": []
               }
             }
@@ -412,18 +555,18 @@
             "encoding": "json",
             "payload": {
               "type": "response.output_item.done",
-              "sequence_number": 8,
+              "sequence_number": 10,
               "output_index": 1,
               "item": {
                 "id": "msg_reasoning_tool",
                 "type": "message",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                  {
-                    "type": "output_text",
-                    "text": "工具调用完成",
-                    "annotations": []
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "OpenAI Responses 工具已经返回，我核对了 OpenAI Responses 文件内容，现在给出 OpenAI Responses 可复查的结论。",
+                  "annotations": []
                   }
                 ]
               }
@@ -435,7 +578,7 @@
             "encoding": "json",
             "payload": {
               "type": "response.completed",
-              "sequence_number": 9,
+              "sequence_number": 11,
               "response": {
                 "id": "resp_reasoning_tool_2",
                 "object": "response",
@@ -450,7 +593,7 @@
                     "summary": [
                       {
                         "type": "summary_text",
-                        "text": "已读取 README，整理最终答复。"
+                        "text": "OpenAI Responses 工具已经返回，我核对了 OpenAI Responses 文件内容，现在整理一份 OpenAI Responses 可复查的最终答复。"
                       }
                     ],
                     "encrypted_content": "encrypted-reasoning-tool-2"
@@ -463,7 +606,7 @@
                     "content": [
                       {
                         "type": "output_text",
-                        "text": "工具调用完成",
+                        "text": "OpenAI Responses 工具已经返回，我核对了 OpenAI Responses 文件内容，现在给出 OpenAI Responses 可复查的结论。",
                         "annotations": []
                       }
                     ]

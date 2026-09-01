@@ -130,6 +130,14 @@ class FakeMessageService:
         return []
 
 
+class FailingHistoryMessageService(FakeMessageService):
+    async def list_agent_state_records(
+        self,
+        session_id: str,
+    ) -> list[dict[str, object]]:
+        raise AssertionError("工作区资源快速列表不应读取 Agent 历史状态")
+
+
 class FakeSessionService:
     async def get(self, session_id: str) -> object:
         return {"session_id": session_id}
@@ -241,6 +249,28 @@ async def test_cold_recycled_browser_exposes_resume_action():
 
     assert resource.available_actions == ["resume", "delete"]
     assert "可以重新打开" in str(resource.metadata["status_note"])
+
+
+@pytest.mark.asyncio
+async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
+    terminal = {
+        "terminal_id": "term_live",
+        "session_id": "ses_test",
+        "status": "running",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+    }
+    provider = TerminalResourceProvider(
+        terminal_manager=FakeTerminalManagerClient(terminals=[terminal]),
+        historical_reader=FakeHistoricalTerminalRecordReader(),
+        message_service=FailingHistoryMessageService(),
+        resource_mapper=_resource_mapper(),
+    )
+
+    resources = await provider.list_resources("ses_test", include_history=False)
+
+    assert [resource.resource_id for resource in resources] == ["term_live"]
+    assert resources[0].status == "running"
 
 
 @pytest.mark.asyncio

@@ -11,12 +11,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.core.bounded_json import bound_json_value
 from app.core.identifier import create_prefixed_id
 from app.core.session_paths import SessionPathResolver
 
 logger = logging.getLogger(__name__)
 
 TERMINAL_STREAM_STATUSES = frozenset({"completed", "interrupted", "failed"})
+_LAST_RECORD_READ_CHUNK_BYTES = 1024 * 1024
+MESSAGE_STREAM_EVENT_MAX_PAYLOAD_BYTES = 256 * 1024
+MESSAGE_STREAM_MAX_BYTES = 64 * 1024 * 1024
+MESSAGE_STREAM_RETAINED_BYTES = 8 * 1024 * 1024
 INTERRUPTING_ALLOWED_EVENT_TYPES = frozenset(
     {
         "block.completed",
@@ -172,6 +177,7 @@ class MessageStreamStore:
         self._states: dict[str, dict[str, Any]] = {}
         self._subscriptions: dict[str, set[MessageStreamSubscription]] = {}
         self._event_ids: dict[str, dict[str, dict[str, Any]]] = {}
+        self._event_ids_loaded: set[str] = set()
 
     def _lock_for(self, turn_stream_id: str) -> asyncio.Lock:
         return self._locks.setdefault(turn_stream_id, asyncio.Lock())
@@ -184,6 +190,9 @@ class MessageStreamStore:
 
     def _stream_path(self, session_id: str, turn_stream_id: str) -> Path:
         return self._stream_dir(session_id) / f"{turn_stream_id}.jsonl"
+
+    def _state_path(self, session_id: str, turn_stream_id: str) -> Path:
+        return self._stream_dir(session_id) / f"{turn_stream_id}.state.json"
 
     def _index_path(self, session_id: str) -> Path:
         return self._stream_dir(session_id) / "index.json"
@@ -258,6 +267,71 @@ class MessageStreamStore:
                 valid_offset = next_offset
         return records
 
+    def _read_state_snapshot(
+        self,
+        session_id: str,
+        turn_stream_id: str,
+    ) -> dict[str, Any] | None:
+        path = self._state_path(session_id, turn_stream_id)
+        if not path.is_file():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise MessageStreamError(f"消息流状态快照必须是对象: path={path}")
+        return raw
+
+    def _write_state_snapshot(
+        self,
+        session_id: str,
+        turn_stream_id: str,
+        state: Mapping[str, Any],
+    ) -> None:
+        path = self._state_path(session_id, turn_stream_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix(".state.tmp")
+        with temp_path.open("w", encoding="utf-8") as stream:
+            json.dump(dict(state), stream, ensure_ascii=False, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temp_path.replace(path)
+
+    def _read_last_record(self, path: Path) -> MessageStreamRecord | None:
+        """只读取 JSONL 尾部记录，避免启动恢复扫描整个长消息流。"""
+        with path.open("rb") as stream:
+            end = stream.seek(0, os.SEEK_END)
+            pending = b""
+            while end > 0:
+                start = max(0, end - _LAST_RECORD_READ_CHUNK_BYTES)
+                stream.seek(start)
+                pending = stream.read(end - start) + pending
+                candidate_end = len(pending)
+                while candidate_end > 0 and pending[candidate_end - 1] in b"\r\n":
+                    candidate_end -= 1
+                if candidate_end == 0:
+                    end = start
+                    continue
+                candidate_start = pending.rfind(b"\n", 0, candidate_end) + 1
+                if candidate_start == 0 and start > 0:
+                    end = start
+                    continue
+                raw_line = pending[candidate_start:candidate_end]
+                try:
+                    raw = json.loads(raw_line)
+                except json.JSONDecodeError as error:
+                    raise MessageStreamError(
+                        f"消息流日志尾部记录损坏: path={path}"
+                    ) from error
+                if not isinstance(raw, dict):
+                    raise MessageStreamError(f"消息流记录必须是对象: path={path}")
+                event = raw.get("event")
+                checkpoint = raw.get("checkpoint")
+                if not isinstance(event, dict) or not isinstance(checkpoint, dict):
+                    raise MessageStreamError(
+                        f"消息流记录缺少 event/checkpoint: path={path}"
+                    )
+                return MessageStreamRecord(event=event, checkpoint=checkpoint)
+        return None
+
     def _write_index(self, session_id: str, mapping: Mapping[str, str]) -> None:
         index_path = self._index_path(session_id)
         index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -267,6 +341,53 @@ class MessageStreamStore:
             stream.flush()
             os.fsync(stream.fileno())
         temp_path.replace(index_path)
+
+    @staticmethod
+    def _encode_event(event: Mapping[str, Any]) -> bytes:
+        bounded_event = {
+            **dict(event),
+            "payload": bound_json_value(
+                event.get("payload", {}),
+                max_bytes=MESSAGE_STREAM_EVENT_MAX_PAYLOAD_BYTES,
+            ),
+        }
+        return json.dumps(
+            {"event": bounded_event, "checkpoint": {}},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+
+    def _compact_stream_log(self, path: Path, turn_stream_id: str) -> None:
+        """保留最近事件，使用最新 state snapshot 继续完整恢复。"""
+        records = self._read_records(path)
+        retained: list[MessageStreamRecord] = []
+        retained_bytes = 0
+        for record in reversed(records):
+            encoded = self._encode_event(record.event)
+            if retained and retained_bytes + len(encoded) > MESSAGE_STREAM_RETAINED_BYTES:
+                break
+            retained.append(record)
+            retained_bytes += len(encoded)
+        retained.reverse()
+        temp_path = path.with_name(f".{path.name}.compact.tmp")
+        with temp_path.open("wb") as stream:
+            for record in retained:
+                stream.write(self._encode_event(record.event))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temp_path.replace(path)
+        self._event_ids[turn_stream_id] = {
+            str(record.event["event_id"]): record.event for record in retained
+        }
+        self._event_ids_loaded.add(turn_stream_id)
+        logger.warning(
+            "消息流超过保留上限，已保留尾部事件并依赖 snapshot 恢复: "
+            "turn_stream_id=%s records_before=%d records_after=%d bytes_after=%d",
+            turn_stream_id,
+            len(records),
+            len(retained),
+            retained_bytes,
+        )
 
     def _read_index(self, session_id: str) -> dict[str, str]:
         path = self._index_path(session_id)
@@ -297,13 +418,33 @@ class MessageStreamStore:
             raise MessageStreamNotFoundError(
                 f"消息流不存在: session_id={session_id} turn_stream_id={turn_stream_id}"
             )
-        state = copy.deepcopy(records[-1].checkpoint)
+        state = self._read_state_snapshot(session_id, turn_stream_id)
+        if state is None:
+            # 兼容旧版每条记录都内嵌完整 checkpoint 的 JSONL。
+            state = copy.deepcopy(records[-1].checkpoint)
+        else:
+            snapshot_seq = int(state.get("snapshot_seq", 0))
+            for record in records:
+                event_seq = int(record.event.get("event_seq", 0))
+                if event_seq > snapshot_seq:
+                    state = self._apply_event(state, record.event)
+                    state["snapshot_seq"] = event_seq
         self._backfill_lifecycle_metadata(state, records)
         self._states[turn_stream_id] = state
         self._event_ids[turn_stream_id] = {
             str(record.event["event_id"]): record.event for record in records
         }
+        self._event_ids_loaded.add(turn_stream_id)
         return copy.deepcopy(state)
+
+    def _load_event_ids_from_disk(self, session_id: str, turn_stream_id: str) -> None:
+        if turn_stream_id in self._event_ids_loaded:
+            return
+        records = self._read_records(self._stream_path(session_id, turn_stream_id))
+        self._event_ids[turn_stream_id] = {
+            str(record.event["event_id"]): record.event for record in records
+        }
+        self._event_ids_loaded.add(turn_stream_id)
 
     async def open(
         self,
@@ -381,6 +522,25 @@ class MessageStreamStore:
             job_id=state.get("job_id"),
         )
 
+    async def existing_stream_ids(
+        self,
+        *,
+        session_id: str,
+        turn_ids: list[str],
+    ) -> dict[str, str]:
+        """返回已持久化的 TurnStream，不为缺少 message.v1 的历史创建空流。"""
+        result: dict[str, str] = {}
+        for turn_id in turn_ids:
+            try:
+                writer = await self.open_existing(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                )
+            except MessageStreamNotFoundError:
+                continue
+            result[turn_id] = writer.turn_stream_id
+        return result
+
     async def commit(
         self,
         turn_stream_id: str,
@@ -405,6 +565,10 @@ class MessageStreamStore:
         async with self._lock_for(turn_stream_id):
             state = copy.deepcopy(cached)
             if event_id is not None:
+                self._load_event_ids_from_disk(
+                    str(state["session_id"]),
+                    turn_stream_id,
+                )
                 previous = self._event_ids.get(turn_stream_id, {}).get(event_id)
                 if previous is not None:
                     if (
@@ -456,6 +620,8 @@ class MessageStreamStore:
                         "turn_stream_id="
                         f"{turn_stream_id} status={current_status} type={event_type}"
                     )
+            if event_type == "stream.completed":
+                self._validate_completed_state(state)
             next_seq = int(state["snapshot_seq"]) + 1
             event: dict[str, Any] = {
                 "event_id": event_id or create_prefixed_id("evt"),
@@ -480,30 +646,40 @@ class MessageStreamStore:
             if resolved_job_id is not None:
                 next_state["job_id"] = resolved_job_id
             next_state["snapshot_seq"] = next_seq
+            # checkpoint 只供进程内订阅者使用；磁盘只追加 event，并把最新状态
+            # 原子写入单独快照，避免每个事件重复复制整个 blocks/tool_executions。
             record = MessageStreamRecord(event=event, checkpoint=next_state)
             path = self._stream_path(str(state["session_id"]), turn_stream_id)
             path.parent.mkdir(parents=True, exist_ok=True)
-            encoded = json.dumps(
-                {"event": event, "checkpoint": next_state},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8") + b"\n"
+            encoded = self._encode_event(event)
             try:
+                if (
+                    path.is_file()
+                    and path.stat().st_size + len(encoded) > MESSAGE_STREAM_MAX_BYTES
+                ):
+                    self._compact_stream_log(path, turn_stream_id)
                 with path.open("ab") as stream:
                     stream.write(encoded)
                     stream.flush()
                     # 本地工作区没有消息队列，fsync 是 event/checkpoint 的提交边界。
                     os.fsync(stream.fileno())
+                self._write_state_snapshot(
+                    str(state["session_id"]),
+                    turn_stream_id,
+                    next_state,
+                )
             except Exception:
                 # append/fsync 失败后，磁盘可能已经包含完整记录，也可能只包含
                 # 半条记录。重新扫描并截断未完成尾部，避免进程内继续沿用旧
                 # checkpoint，下一次提交复用已经写过的 event_seq。
                 self._states.pop(turn_stream_id, None)
                 self._event_ids.pop(turn_stream_id, None)
+                self._event_ids_loaded.discard(turn_stream_id)
                 self._load_state_from_disk(str(state["session_id"]), turn_stream_id)
                 raise
             self._states[turn_stream_id] = next_state
             self._event_ids.setdefault(turn_stream_id, {})[event["event_id"]] = event
+            self._event_ids_loaded.add(turn_stream_id)
             subscribers = self._subscriptions.get(turn_stream_id, set())
             overflowed: list[MessageStreamSubscription] = []
             for subscription in tuple(subscribers):
@@ -541,6 +717,49 @@ class MessageStreamStore:
             "payload": copy.deepcopy(state),
             **({"job_id": state["job_id"]} if state.get("job_id") else {}),
         }
+
+    @staticmethod
+    def _validate_completed_state(state: Mapping[str, Any]) -> None:
+        active_entities = {
+            "model_calls": {
+                str(item.get("model_call_id"))
+                for item in state.get("model_calls", [])
+                if isinstance(item, Mapping) and item.get("status") == "running"
+            },
+            "blocks": {
+                str(item.get("block_id"))
+                for item in state.get("blocks", [])
+                if isinstance(item, Mapping) and item.get("status") == "running"
+            },
+            "tool_calls": {
+                str(item.get("tool_call_id"))
+                for item in state.get("tool_calls", [])
+                if isinstance(item, Mapping)
+                and item.get("status") in {"accumulating", "streaming", "running"}
+            },
+            "tool_executions": {
+                str(item.get("tool_execution_id"))
+                for item in state.get("tool_executions", [])
+                if isinstance(item, Mapping)
+                and item.get("status") in {"running", "waiting", "stopping"}
+            },
+            "activities": {
+                str(item.get("activity_id"))
+                for item in state.get("activities", [])
+                if isinstance(item, Mapping)
+                and item.get("status") in {"running", "waiting", "stopping"}
+            },
+        }
+        unfinished = {
+            entity_type: sorted(entity_ids)
+            for entity_type, entity_ids in active_entities.items()
+            if entity_ids
+        }
+        if unfinished:
+            raise MessageStreamError(
+                "stream.completed 前仍存在未闭合消息流实体: "
+                f"{unfinished}"
+            )
 
     def _apply_event(
         self,
@@ -1242,15 +1461,19 @@ class MessageStreamStore:
             if not stream_dir.is_dir():
                 continue
             for path in sorted(stream_dir.glob("*.jsonl")):
-                records = self._read_records(path)
-                if not records:
+                record = self._read_last_record(path)
+                if record is None:
                     continue
-                state = copy.deepcopy(records[-1].checkpoint)
+                state = self._read_state_snapshot(
+                    str(node.node_id),
+                    str(record.event["turn_stream_id"]),
+                ) or copy.deepcopy(record.checkpoint)
                 turn_stream_id = str(state["turn_stream_id"])
                 self._states[turn_stream_id] = state
                 self._event_ids[turn_stream_id] = {
-                    str(record.event["event_id"]): record.event for record in records
+                    str(record.event["event_id"]): record.event
                 }
+                self._event_ids_loaded.discard(turn_stream_id)
                 if state["stream_status"] in TERMINAL_STREAM_STATUSES:
                     continue
                 interrupt_state = state.get("interrupt_state")

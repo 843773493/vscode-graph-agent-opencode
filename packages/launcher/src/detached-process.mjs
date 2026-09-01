@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";
+import { rotateServiceLog } from "./service-log.mjs";
 
 export function spawnDetachedProcess({
   command,
@@ -10,6 +11,7 @@ export function spawnDetachedProcess({
   logPath,
 }) {
   mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
+  rotateServiceLog(logPath);
   const logFd = openSync(logPath, "a", 0o600);
   try {
     // TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。

@@ -545,6 +545,8 @@ export function messageStreamToResponseParts(
           },
           text,
           carrier_type: block.carrier_type,
+          completion_reason: block.completion_reason,
+          partial: block.partial ?? false,
           final: block.status === "completed" && !block.partial,
         });
       }
@@ -569,6 +571,7 @@ export function messageStreamToResponseParts(
           ? argumentsValue
           : argumentsValue ? JSON.stringify(argumentsValue) : "",
         outcome_unknown: outcomeUnknown,
+        completion_reason: execution.completion_reason,
         final: status === "completed",
       });
       if (execution.result || execution.error) {
@@ -583,6 +586,7 @@ export function messageStreamToResponseParts(
           tool_call_id: execution.tool_call_id,
           tool_name: execution.tool_name,
           outcome_unknown: outcomeUnknown,
+          completion_reason: execution.completion_reason,
           final: status === "completed",
         });
       }

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getGatewayDiagnostics } from "../../gatewayApi";
 import type {
-  GatewayDiagnosticLog,
   GatewayDiagnostics,
   GatewayWorkspace,
 } from "../../types/backend";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
+import {
+  diagnosticLogStatusLabel,
+  diagnosticLogUnavailableHint,
+} from "../gatewayLogPresentation";
 
 interface GatewayDiagnosticsPanelProps {
   apiPort: number;
@@ -22,12 +25,6 @@ function formatTime(value: string | null): string {
   if (!value) return "暂无时间";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function logStatusLabel(log: GatewayDiagnosticLog): string {
-  if (log.status === "available") return "可读";
-  if (log.status === "empty") return "空日志";
-  return "不可用";
 }
 
 function diagnosticsStatusLabel(status: GatewayDiagnostics["status"]): string {
@@ -227,7 +224,7 @@ export default function GatewayDiagnosticsPanel({
                   >
                     <span className={`codicon ${log.source === "gateway" ? "codicon-server-process" : "codicon-folder"}`} aria-hidden="true" />
                     <span className="gateway-diagnostics-log-copy"><strong>{log.label}</strong><small>{log.source === "gateway" ? "Gateway 控制面" : "工作区运行时"}</small></span>
-                    <span className={`gateway-diagnostics-log-status ${log.status}`}>{logStatusLabel(log)}</span>
+                    <span className={`gateway-diagnostics-log-status ${log.status}`}>{diagnosticLogStatusLabel(log)}</span>
                   </button>
                 ))}
               </div>
@@ -240,7 +237,7 @@ export default function GatewayDiagnosticsPanel({
                     <button type="button" className="gateway-compact-button" disabled={!selectedLog.tail} onClick={() => void copySelectedLog()}><span className="codicon codicon-copy" aria-hidden="true" />复制</button>
                   </header>
                   {selectedLog.status === "unavailable" ? (
-                    <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-warning" aria-hidden="true" /><strong>当前无法读取这份日志</strong><p>{selectedLog.error ?? "Gateway 没有返回日志内容。"}</p></div>
+                    <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-warning" aria-hidden="true" /><strong>诊断日志暂不可用</strong><p>{diagnosticLogUnavailableHint(selectedLog)}</p></div>
                   ) : selectedLog.status === "empty" ? (
                     <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>日志文件为空</strong><p>服务可能尚未输出内容，刷新后会重新读取。</p></div>
                   ) : (

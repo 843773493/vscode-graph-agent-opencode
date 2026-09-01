@@ -37,7 +37,7 @@
                   "index": 0,
                   "delta": {
                     "role": "assistant",
-                    "reasoning_content": "先"
+              "reasoning_content": "Chat Completions 先拆分当前问题，"
                   },
                   "finish_reason": null
                 }
@@ -56,7 +56,7 @@
                 {
                   "index": 0,
                   "delta": {
-                    "reasoning_content": "分析"
+            "reasoning_content": "确认需要检查的历史边界，"
                   },
                   "finish_reason": null
                 }
@@ -75,35 +75,111 @@
                 {
                   "index": 0,
                   "delta": {
-                    "content": "结论"
-                  },
-                  "finish_reason": null
-                }
-              ]
-            }
+            "reasoning_content": "再结合 tool-call 和消息顺序，"
           },
-          {
-            "kind": "data",
-            "encoding": "json",
-            "payload": {
-              "id": "chatcmpl-reasoning",
-              "object": "chat.completion.chunk",
-              "created": 1,
-              "model": "big-pickle",
-              "choices": [
-                {
-                  "index": 0,
-                  "delta": {},
-                  "finish_reason": "stop"
-                }
-              ]
-            }
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "reasoning_content": "最后给出 Chat Completions 的可复查结论。"
           },
-          {
-            "kind": "done",
-            "encoding": "text",
-            "payload": "[DONE]"
-          }
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "Chat Completions 会先说明观察结果，"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "再指出消息边界和展示关系，"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "最后给出 Chat Completions 验证结论。"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "kind": "data",
+    "encoding": "json",
+    "payload": {
+      "id": "chatcmpl-reasoning",
+      "object": "chat.completion.chunk",
+      "created": 1,
+      "model": "big-pickle",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "stop"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "done",
+    "encoding": "text",
+    "payload": "[DONE]"
+  }
         ]
       }
     }

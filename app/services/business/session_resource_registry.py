@@ -37,10 +37,21 @@ class SessionResourceProviderRegistry:
             raise ValueError(f"后台资源类型没有注册 provider: kind={kind}")
         return provider
 
-    async def list_resources(self, session_id: str) -> list[SessionResourceDTO]:
+    async def list_resources(
+        self,
+        session_id: str,
+        *,
+        include_history: bool = True,
+    ) -> list[SessionResourceDTO]:
         providers = self.providers()
         provider_results = await asyncio.gather(
-            *(provider.list_resources(session_id) for provider in providers)
+            *(
+                provider.list_resources(
+                    session_id,
+                    include_history=include_history,
+                )
+                for provider in providers
+            )
         )
         resources: list[SessionResourceDTO] = []
         for provider, provided_resources in zip(providers, provider_results, strict=True):

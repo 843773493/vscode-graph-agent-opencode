@@ -15,16 +15,20 @@ SKILLS_SYSTEM_PROMPT = """Available skills:
 {skills_locations}{skills_load_warnings}
 {skills_list}
 
-When the user's request matches a skill, read that skill's `SKILL.md` with `read_file` before acting. Follow the loaded instructions and do not infer omitted tool names or arguments."""
+When the user's request matches a skill, read that skill's `SKILL.md` with `read_file` before acting. This is system-provided skill content, not a project file: do not list, glob, grep, write, or edit `.boxteam`, and do not treat its contents as workspace source. If the user's task explicitly forbids `.boxteam`, do not make even this Skill read. Follow the loaded instructions and do not infer omitted tool names or arguments."""
 
 FILESYSTEM_SYSTEM_PROMPT = (
     "Use the available filesystem tools according to their schemas. Read existing files before "
     "editing them, preserve the repository's conventions, and inspect large results in bounded chunks. "
+    "Do not grep or glob the .boxteam runtime directory; it contains session logs, streams, and traces. "
     "All model-facing filesystem paths are standard workspace-relative paths. Use `.` for the workspace "
     "root and paths such as `src/main.js` for files; never start them with `/` and never pass host "
     "absolute paths. Paths returned by ls, glob, and grep can be passed unchanged to read_file, "
-    "write_file, edit_file, and workspace source-debugging tools. read_file uses a 1-indexed "
-    "`line_offset`."
+    "write_file, edit_file, and workspace source-debugging tools. The only `.boxteam` exception is "
+    "reading an explicitly injected Skill's exact `SKILL.md`; that path is system metadata, not "
+    "workspace source, and its event is marked `system_skill`. Never list, glob, grep, or read any "
+    "other `.boxteam` path. If the user explicitly forbids `.boxteam` for the current task, do not "
+    "make even the Skill read. read_file uses a 1-indexed `line_offset`."
 )
 
 FILESYSTEM_TOOL_DESCRIPTIONS = {
@@ -33,7 +37,8 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "Read a workspace-relative file; never start the path with `/`. Paths returned by ls, glob, "
         "and grep are reusable unchanged. Use the 1-indexed `line_offset` and "
         "optional `max_lines` for large text files. "
-        "Images, audio, video, and PDFs return multimodal content; do not paginate those files."
+        "Images, audio, video, and PDFs return multimodal content; do not paginate those files. "
+        "Do not read `.boxteam` runtime data; only read an explicitly injected Skill's exact `SKILL.md`."
     ),
     "write_file": "Create a text file at a workspace-relative path.",
     "edit_file": (
@@ -41,7 +46,10 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "and use replace_all only when every occurrence should change."
     ),
     "glob": "Find files below a workspace-relative base path using a glob pattern.",
-    "grep": "Search below a workspace-relative path, optionally filtered by glob.",
+    "grep": (
+        "Search source files below a workspace-relative path with a bounded timeout and result limit; "
+        "do not search `.boxteam` runtime logs or use an unscoped workspace-root recursive search."
+    ),
 }
 
 COMPACT_CONVERSATION_SYSTEM_PROMPT = (

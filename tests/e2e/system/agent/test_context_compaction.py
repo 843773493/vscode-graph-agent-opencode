@@ -677,7 +677,9 @@ async def test_cache_preserving_middleware_forked_summary_hits_main_prompt_cache
 def _luna_test_image_data_url() -> str:
     image_path = (
         Path.cwd()
-        / "asset"
+        / "tests"
+        / "fixtures"
+        / "workspaces"
         / "default_test_workspace"
         / "assets"
         / "test.jpg"

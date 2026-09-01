@@ -34,6 +34,84 @@ afterEach(() => {
 });
 
 describe("requestJson 请求取消", () => {
+  test("初始化注册尚未完成时也先建立 Gateway 用户会话", async () => {
+    const port = 49_302;
+    installWindow(port);
+    const requestedPaths: string[] = [];
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = new URL(String(input)).pathname;
+        requestedPaths.push(path);
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            data: { token: "fallback-session-token" },
+            request_id: "req_fallback_token",
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "req_fallback_current",
+          });
+        }
+        if (path === "/api/v1/workspace") {
+          return Response.json({
+            data: { workspace_id: "ws_fallback" },
+            request_id: "req_fallback_workspace",
+          });
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    await expect(requestJson<{ data: { workspace_id: string } }>(
+      port,
+      "/api/v1/workspace",
+    )).resolves.toMatchObject({ data: { workspace_id: "ws_fallback" } });
+    expect(requestedPaths).toEqual([
+      "/api/gateway/auth/local-credential",
+      "/api/gateway/users/current",
+      "/api/v1/workspace",
+    ]);
+  });
+
+  test("Gateway 重启轮换本地凭据后会刷新 token 并重试一次", async () => {
+    const port = 49_300;
+    installWindow(port);
+    let credentialCalls = 0;
+    const apiTokens: string[] = [];
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const path = new URL(String(input)).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          credentialCalls += 1;
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: `request-http-token-${credentialCalls}`,
+            data: { token: credentialCalls === 1 ? "stale-token" : "fresh-token" },
+          });
+        }
+        apiTokens.push(new Headers(init?.headers).get("X-Local-Token") ?? "");
+        if (apiTokens.length === 1) {
+          return Response.json({ detail: "invalid local token" }, { status: 401 });
+        }
+        return Response.json({ value: "ok" });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    await expect(requestJson<{ value: string }>(port, "/api/v1/retry-after-gateway-restart", {
+      skipGatewayUserSession: true,
+    }))
+      .resolves.toEqual({ value: "ok" });
+    expect(credentialCalls).toBe(2);
+    expect(apiTokens).toEqual(["stale-token", "fresh-token"]);
+  });
+
   test("响应体下载中超时会 abort fetch 并返回超时错误", async () => {
     const port = 49_301;
     installWindow(port);
@@ -65,6 +143,7 @@ describe("requestJson 请求取消", () => {
     const pending = requestJson(port, "/api/v1/slow-download", {
       timeoutMs: 20,
       parseInWorkerAboveBytes: 1,
+      skipGatewayUserSession: true,
     });
     await downloadStarted;
 
@@ -105,6 +184,7 @@ describe("requestJson 请求取消", () => {
     const pending = requestJson(port, "/api/v1/external-abort", {
       timeoutMs: 1_000,
       signal: externalController.signal,
+      skipGatewayUserSession: true,
     });
     await fetchStarted;
     externalController.abort();

@@ -1,6 +1,10 @@
-from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
-from app.protocol.codecs.terminal import terminal_session_to_json, terminal_session_to_proto
 from app.gateway.protocol.control import gateway_health_to_proto
+from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
+from app.protocol.codecs.terminal import (
+    terminal_session_to_json,
+    terminal_session_to_proto,
+)
+from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 from app.schemas.gateway import GatewayHealthDTO
 
 
@@ -17,6 +21,21 @@ def test_terminal_snapshot_round_trip_preserves_extended_json_fields() -> None:
 
     encoded = terminal_session_to_proto(value)
 
+    assert terminal_session_to_json(encoded) == value
+
+
+def test_terminal_completed_snapshot_is_accepted_during_command_release() -> None:
+    value = {
+        "terminal_id": "terminal_completed",
+        "session_id": "session_123",
+        "status": "completed",
+        "last_command_status": "completed",
+        "last_command_exit_code": 0,
+    }
+
+    encoded = terminal_session_to_proto(value)
+
+    assert encoded.status == terminal_pb2.TERMINAL_STATUS_EXITED
     assert terminal_session_to_json(encoded) == value
 
 

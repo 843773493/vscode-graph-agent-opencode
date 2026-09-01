@@ -29,7 +29,10 @@ from app.agents.tools.browser import (
     create_screenshot_page_tool,
     create_type_in_page_tool,
 )
-from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.services.infrastructure.browser_manager_client import (
+    BrowserManagerClient,
+    BrowserManagerRequestError,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.processes import (
@@ -151,7 +154,7 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
     workspace_root = (
         project_root / "out" / "tests" / "integration" / relative_test_path / "workspace"
     )
-    template_root = project_root / "asset" / "custom_tool_test_workspace"
+    template_root = project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace"
     prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
@@ -594,6 +597,154 @@ async def test_agent_lists_current_browser_website_through_documented_tool(
         await create_list_browser_page_tool(context).ainvoke({})
     )
     assert any(page["pageId"] == page_id for page in listed["pages"])
+
+
+@pytest.mark.asyncio
+async def test_playwright_timeout_recovery_allows_immediate_page_actions(
+    browser_manager_processes: tuple[int, int],
+    integration_client: httpx.AsyncClient,
+):
+    create_session_response = await integration_client.post(
+        "/api/v1/sessions",
+        json={"title": "Browser Timeout Recovery E2E"},
+    )
+    assert create_session_response.status_code == 200
+    session_id = create_session_response.json()["data"]["session_id"]
+    context = _tool_context(session_id)
+    open_page = create_open_browser_page_tool(context)
+    run_playwright_code = create_run_playwright_code_tool(context)
+    read_page = create_read_page_tool(context)
+    screenshot_page = create_screenshot_page_tool(context)
+
+    opened = _json_tool_result(
+        await open_page.ainvoke({"url": _browser_test_data_url(), "forceNew": True})
+    )
+    page_id = str(opened["pageId"])
+
+    timeout_result = _json_tool_result(
+        await run_playwright_code.ainvoke(
+            {
+                "pageId": page_id,
+                "code": "await new Promise(() => undefined);",
+                "timeoutMs": 25,
+            }
+        )
+    )
+    assert timeout_result["status"] == "error"
+    assert timeout_result["code"] == "browser_tool_timeout"
+    assert timeout_result["retryable"] is True
+    assert timeout_result["recovery"] == "page_reset"
+
+    keyboard_result = _json_tool_result(
+        await run_playwright_code.ainvoke(
+            {
+                "pageId": page_id,
+                "code": "await page.keyboard.press('r'); return await page.title();",
+                "timeoutMs": 3000,
+            }
+        )
+    )
+    assert keyboard_result["result"] == "BoxTeam Browser Tool Test"
+
+    summary = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
+    assert "BoxTeam Browser Tool Test" in str(summary["summary"])
+
+    screenshot = _json_tool_result(
+        await screenshot_page.ainvoke({"pageId": page_id})
+    )
+    assert str(screenshot["mime_type"]) == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
+    browser_manager_processes: tuple[int, int],
+    integration_client: httpx.AsyncClient,
+):
+    create_session_response = await integration_client.post(
+        "/api/v1/sessions",
+        json={"title": "Browser New Page Minimal Actions E2E"},
+    )
+    assert create_session_response.status_code == 200
+    session_id = create_session_response.json()["data"]["session_id"]
+    context = _tool_context(session_id)
+    open_page = create_open_browser_page_tool(context)
+    navigate_page = create_navigate_page_tool(context)
+    run_playwright_code = create_run_playwright_code_tool(context)
+    read_page = create_read_page_tool(context)
+    screenshot_page = create_screenshot_page_tool(context)
+
+    opened = _json_tool_result(
+        await open_page.ainvoke({"url": _browser_test_data_url(), "forceNew": True})
+    )
+    page_id = str(opened["pageId"])
+
+    navigated = _json_tool_result(
+        await navigate_page.ainvoke(
+            {
+                "pageId": page_id,
+                "type": "url",
+                "url": _browser_test_data_url(),
+            }
+        )
+    )
+    assert navigated["pageId"] == page_id
+    assert isinstance(navigated["activePageId"], str)
+    assert "page_id" not in navigated
+
+    title = _json_tool_result(
+        await run_playwright_code.ainvoke(
+            {"pageId": page_id, "code": "return await page.title();"}
+        )
+    )
+    assert title["result"] == "BoxTeam Browser Tool Test"
+
+    keyboard = _json_tool_result(
+        await run_playwright_code.ainvoke(
+            {
+                "pageId": page_id,
+                "code": "await page.keyboard.press('r'); return 'keyboard-ok';",
+            }
+        )
+    )
+    assert keyboard["result"] == "keyboard-ok"
+
+    summary = _json_tool_result(await read_page.ainvoke({"pageId": page_id}))
+    assert "BoxTeam Browser Tool Test" in str(summary["summary"])
+
+    screenshot = _json_tool_result(
+        await screenshot_page.ainvoke({"pageId": page_id})
+    )
+    assert screenshot["mime_type"] == "image/png"
+
+    with pytest.raises(BrowserManagerRequestError) as selector_info:
+        await run_playwright_code.ainvoke(
+            {
+                "pageId": page_id,
+                "code": "await page.click('#focus');",
+                "timeoutMs": 1000,
+            }
+        )
+    assert selector_info.value.status == 500
+    assert selector_info.value.code is None
+    assert "Timeout 750ms exceeded" in str(selector_info.value)
+
+    recovered_keyboard = _json_tool_result(
+        await run_playwright_code.ainvoke(
+            {
+                "pageId": page_id,
+                "code": "await page.keyboard.press('r'); return 'recovered';",
+            }
+        )
+    )
+    assert recovered_keyboard["result"] == "recovered"
+    recovered_summary = _json_tool_result(
+        await read_page.ainvoke({"pageId": page_id})
+    )
+    assert "BoxTeam Browser Tool Test" in str(recovered_summary["summary"])
+    recovered_screenshot = _json_tool_result(
+        await screenshot_page.ainvoke({"pageId": page_id})
+    )
+    assert recovered_screenshot["mime_type"] == "image/png"
 
 
 @pytest.mark.asyncio

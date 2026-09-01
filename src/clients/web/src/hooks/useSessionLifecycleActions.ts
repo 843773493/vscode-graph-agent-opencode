@@ -57,6 +57,23 @@ export function useSessionLifecycleActions({
 }) {
   const selectSession = useCallback(
     (sessionId: string) => {
+      if (
+        currentSession?.session_id === sessionId
+        && currentSessionGatewayWorkspaceId === activeGatewayWorkspaceId
+      ) {
+        const cacheKey = currentSessionGatewayWorkspaceId
+          ? sessionScopeKey(currentSessionGatewayWorkspaceId, sessionId)
+          : sessionId;
+        setState((prev) => {
+          if (!prev.unreadSessionKeys.has(cacheKey)) {
+            return prev;
+          }
+          const next = cloneMaps(prev);
+          next.unreadSessionKeys.delete(cacheKey);
+          return next;
+        });
+        return;
+      }
       abortCurrentStream();
       invalidateAgentState();
       setState((prev) => {
@@ -90,7 +107,6 @@ export function useSessionLifecycleActions({
         next.pendingConversations.delete(cacheKey);
         next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
         next.status = "正在加载会话历史";
-        next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
         Object.assign(next, resetAgentStateFields(next));
         if (selected) {
           writeLastSessionId(selected.session_id);
@@ -110,16 +126,43 @@ export function useSessionLifecycleActions({
         return next;
       });
     },
-    [abortCurrentStream, invalidateAgentState, setState],
+    [
+      abortCurrentStream,
+      activeGatewayWorkspaceId,
+      currentSession?.session_id,
+      currentSessionGatewayWorkspaceId,
+      invalidateAgentState,
+      setState,
+    ],
   );
 
   const selectWorkspaceSession = useCallback(
-    (workspaceId: string, sessionId: string) => {
+    (
+      workspaceId: string,
+      sessionId: string,
+      sessionOverride?: Session,
+    ) => {
+      if (
+        currentSession?.session_id === sessionId
+        && currentSessionGatewayWorkspaceId === workspaceId
+        && activeGatewayWorkspaceId === workspaceId
+      ) {
+        const cacheKey = sessionScopeKey(workspaceId, sessionId);
+        setState((prev) => {
+          if (!prev.unreadSessionKeys.has(cacheKey)) {
+            return prev;
+          }
+          const next = cloneMaps(prev);
+          next.unreadSessionKeys.delete(cacheKey);
+          return next;
+        });
+        return;
+      }
       abortCurrentStream();
       invalidateAgentState();
       setState((prev) => {
         const workspaceSessions = prev.sessionsByWorkspace.get(workspaceId) ?? [];
-        const selected = workspaceSessions.find(
+        const selected = sessionOverride ?? workspaceSessions.find(
           (session) => session.session_id === sessionId,
         );
         if (!selected) {
@@ -133,10 +176,17 @@ export function useSessionLifecycleActions({
           (item) => item.workspace_id === workspaceId,
         );
         const next = cloneMaps(prev);
+        const nextWorkspaceSessions = [
+          selected,
+          ...workspaceSessions.filter(
+            (session) => session.session_id !== selected.session_id,
+          ),
+        ];
         next.activeGatewayWorkspaceId = workspaceId;
         next.workspaceRoot = workspace?.root_path ?? prev.workspaceRoot;
         next.workspaceName = workspace?.name ?? prev.workspaceName;
-        next.sessions = workspaceSessions;
+        next.sessions = nextWorkspaceSessions;
+        next.sessionsByWorkspace.set(workspaceId, nextWorkspaceSessions);
         next.currentSession = selected;
         next.currentSessionWorkspaceId = workspaceId;
         const cacheKey = sessionScopeKey(workspaceId, selected.session_id);
@@ -154,7 +204,8 @@ export function useSessionLifecycleActions({
         next.pendingConversations.delete(cacheKey);
         next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
         next.status = "正在加载会话历史";
-        next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+        next.workspaceSwitching = false;
+        next.error = null;
         Object.assign(next, resetAgentStateFields(next));
         writeLastSessionId(selected.session_id);
         appendFrontendEvent(
@@ -173,7 +224,14 @@ export function useSessionLifecycleActions({
         return next;
       });
     },
-    [abortCurrentStream, invalidateAgentState, setState],
+    [
+      abortCurrentStream,
+      activeGatewayWorkspaceId,
+      currentSession?.session_id,
+      currentSessionGatewayWorkspaceId,
+      invalidateAgentState,
+      setState,
+    ],
   );
 
   const createSession = useCallback(

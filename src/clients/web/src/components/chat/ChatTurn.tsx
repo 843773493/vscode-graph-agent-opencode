@@ -27,8 +27,9 @@ export interface ChatTurnProps extends ChatTurnActionCallbacks {
     requestIdentity?: string | null,
     refreshAfterInFlight?: boolean,
     include?: TurnHistoryInclude[],
+    toolCallIds?: string[],
   ) => Promise<void>;
-  onLoadToolDetails?: (turnId: string) => Promise<void>;
+  onLoadToolDetails?: (turnId: string, toolCallId: string) => Promise<void>;
 }
 
 function ChatTurn({
@@ -36,7 +37,6 @@ function ChatTurn({
   workspaceId,
   conversation,
   showRawDetails,
-  isLastTurn,
   sessionBusy,
   onLoadAgentStateMessageRawContent,
   onLoadTurnDetails,
@@ -52,36 +52,6 @@ function ChatTurn({
     onReplayTurn,
     onUpdatePending,
   });
-  const [toolMenuOpen, setToolMenuOpen] = React.useState(false);
-  const [toolDetailsLoading, setToolDetailsLoading] = React.useState(false);
-  const [toolDetailsError, setToolDetailsError] = React.useState<string | null>(null);
-  const canLoadToolDetails = Boolean(
-    conversation.turnId && onLoadToolDetails,
-  );
-  const toggleToolMenu = () => {
-    if (!canLoadToolDetails || toolDetailsLoading) return;
-    setToolDetailsError(null);
-    setToolMenuOpen((open) => !open);
-  };
-  const loadToolDetails = async () => {
-    if (!canLoadToolDetails || !conversation.turnId || !onLoadToolDetails) return;
-    setToolDetailsLoading(true);
-    setToolDetailsError(null);
-    try {
-      await onLoadToolDetails(conversation.turnId);
-      setToolMenuOpen(false);
-    } catch (error) {
-      setToolDetailsError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setToolDetailsLoading(false);
-    }
-  };
-  const handleToolAvatarKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    toggleToolMenu();
-  };
-
   return (
     <article className="chat-turn" data-conversation-id={conversation.conversationId}>
       <ChatTurnUserSection
@@ -96,45 +66,17 @@ function ChatTurn({
       />
       <div className="chat-assistant-row">
         <div className="chat-assistant-avatar-menu">
-          <div
-            className={`chat-assistant-avatar${canLoadToolDetails ? " is-tool-trigger" : ""}`}
-            role={canLoadToolDetails ? "button" : undefined}
-            tabIndex={canLoadToolDetails ? 0 : undefined}
-            aria-hidden={canLoadToolDetails ? undefined : true}
-            aria-label={canLoadToolDetails ? "工具详情" : undefined}
-            aria-expanded={canLoadToolDetails ? toolMenuOpen : undefined}
-            aria-haspopup={canLoadToolDetails ? "menu" : undefined}
-            onClick={canLoadToolDetails ? toggleToolMenu : undefined}
-            onKeyDown={canLoadToolDetails ? handleToolAvatarKeyDown : undefined}
-          >
+          <div className="chat-assistant-avatar" aria-hidden="true">
             <span className="codicon codicon-copilot" />
           </div>
-          {canLoadToolDetails && toolMenuOpen ? (
-            <div className="chat-tool-detail-menu-popup" role="menu">
-              <button
-                type="button"
-                role="menuitem"
-                disabled={toolDetailsLoading}
-                onClick={() => void loadToolDetails()}
-              >
-                {toolDetailsLoading ? "正在加载工具详情…" : "加载 tool_call 和 tool_result"}
-              </button>
-              {toolDetailsError ? (
-                <div className="chat-tool-detail-menu-error" role="alert">
-                  {toolDetailsError}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
         </div>
         <div className="chat-assistant-content">
           <ChatTurnResponseBody
             conversation={conversation}
             showRawDetails={showRawDetails}
-            isLastTurn={isLastTurn}
-            sessionBusy={sessionBusy}
             actions={actions}
             onLoadTurnDetails={onLoadTurnDetails}
+            onLoadToolDetails={onLoadToolDetails}
           />
         </div>
       </div>
@@ -181,6 +123,9 @@ function responsePartsEqual(
       && part.result === other.result
       && part.truncated === other.truncated
       && part.final === other.final
+      && part.outcome_unknown === other.outcome_unknown
+      && part.completion_reason === other.completion_reason
+      && part.partial === other.partial
       && part.source.message_sequence === other.source.message_sequence
       && part.source.content_block_index === other.source.content_block_index
       && part.source.item_index === other.source.item_index

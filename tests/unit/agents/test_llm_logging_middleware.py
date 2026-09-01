@@ -8,6 +8,7 @@ from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.runtime import ExecutionInfo, Runtime
 
+from app.agents import llm_logging_middleware
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.request_replay_middleware import (
     PromptReplayCaptureMiddleware,
@@ -185,6 +186,60 @@ def test_llm_log_merges_redacted_upstream_request_and_response(
     assert attempts[0]["request"]["messages"][0]["role"] == "user"
     assert attempts[0]["request"]["api_key"] == "[REDACTED]"
     assert attempts[0]["response"]["choices"][0]["message"]["content"] == "done"
+
+
+def test_llm_log_bounds_large_payload_and_keeps_valid_json(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_id = "ses_bounded_log"
+    session_dir = session_bundle_factory(tmp_path, session_id)
+    runtime = Runtime(
+        execution_info=ExecutionInfo(
+            checkpoint_id="checkpoint",
+            checkpoint_ns="",
+            task_id="task",
+            thread_id=session_id,
+        )
+    )
+    request = ModelRequest(
+        model=None,
+        messages=[HumanMessage(content="payload-" + "x" * (1024 * 1024))],
+        runtime=runtime,
+    )
+    middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
+
+    middleware._save_log(
+        session_id,
+        request,
+        ModelResponse(result=[AIMessage(content="done")]),
+        [{"request": "y" * (1024 * 1024)}],
+    )
+
+    log_file = next((session_dir / "logs" / "llm_requests").glob("*.json"))
+    assert log_file.stat().st_size <= 3 * 256 * 1024 + 1024
+    json.loads(log_file.read_text(encoding="utf-8"))
+    assert "BoxTeam 已截断" in log_file.read_text(encoding="utf-8")
+
+
+def test_llm_log_pruning_enforces_file_count_and_total_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_dir = tmp_path / "logs" / "llm_requests"
+    log_dir.mkdir(parents=True)
+    monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_FILES", 3)
+    monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_TOTAL_BYTES", 10)
+    for name, size in (("001.json", 6), ("002.json", 5), ("003.json", 4), ("004.json", 3)):
+        (log_dir / name).write_bytes(b"x" * size)
+
+    LLMLoggingMiddleware._prune_session_logs(log_dir)
+
+    assert sorted(path.name for path in log_dir.glob("*.json")) == [
+        "003.json",
+        "004.json",
+    ]
+    assert sum(path.stat().st_size for path in log_dir.glob("*.json")) <= 10
 
 
 def test_llm_log_persists_failed_upstream_attempt(

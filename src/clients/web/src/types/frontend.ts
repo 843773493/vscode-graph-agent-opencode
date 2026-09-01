@@ -16,6 +16,7 @@ import type {
   DeliveryPolicy,
   GatewayUserAccess,
   GatewayUserViewState,
+  JobStatus,
 } from "./backend";
 import type { SessionTurnTimeline } from "../state/session/turnTimeline";
 import type { MessageStreamState } from "../state/messageStream";
@@ -82,6 +83,8 @@ export interface ConversationView {
   turnId?: string;
   turnRevision?: number;
   turnItemsView?: "summary" | "full";
+  /** 后端 Turn 原始状态；status 是前端为展示折叠后的状态。 */
+  turnStatus?: JobStatus;
   activityStats?: {
     duration_ms: number | null;
     message_count: number;
@@ -105,6 +108,7 @@ export interface ConversationView {
     streamStatus: MessageStreamState["streamStatus"];
     lastEventSeq: number;
     failure: MessageStreamState["failure"];
+    protocolError?: MessageStreamState["protocolError"];
     activeState?: MessageStreamState["activeState"];
     activities?: MessageStreamState["activities"];
     resumable: boolean;

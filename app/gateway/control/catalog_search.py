@@ -13,14 +13,14 @@ from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.control.navigation import WorkspaceNavigationStore
+from app.gateway.control.storage import atomic_write_json, read_json_object
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.gateway_control import (
     GatewaySessionSearchMatchDTO,
     GatewaySessionSearchResultsDTO,
     GatewaySessionSearchWorkspaceStatusDTO,
 )
-from app.gateway.control.storage import atomic_write_json, read_json_object
-from app.gateway.credentials import FederationCredentialStore
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 
 logger = logging.getLogger(__name__)
@@ -191,11 +191,26 @@ class GatewaySessionCatalogSearchService:
                 )
 
         targets = self._registry.targets()
+        for target in targets:
+            if target.connection_kind != "remote_gateway" and not target.backend_url.strip():
+                message = f"工作区后端尚未连接: {target.workspace_id}"
+                self._workspace_errors[target.workspace_id] = message
+                self._fresh_workspace_ids.discard(target.workspace_id)
+                logger.info(
+                    "跳过尚未连接工作区的会话目录同步: workspace_id=%s",
+                    target.workspace_id,
+                )
+        synced_targets = tuple(
+            target
+            for target in targets
+            if target.connection_kind == "remote_gateway"
+            or target.backend_url.strip()
+        )
         results = await asyncio.gather(
-            *(sync(target) for target in targets),
+            *(sync(target) for target in synced_targets),
             return_exceptions=True,
         )
-        for target, result in zip(targets, results, strict=True):
+        for target, result in zip(synced_targets, results, strict=True):
             if isinstance(result, BaseException):
                 message = f"{type(result).__name__}: {result}"
                 self._workspace_errors[target.workspace_id] = message
@@ -444,6 +459,8 @@ class GatewaySessionCatalogSearchService:
                     "X-Request-ID": request_id,
                 },
             )
+        if not target.backend_url.strip():
+            raise RuntimeError(f"工作区后端尚未连接: {target.workspace_id}")
         return (
             f"{target.backend_url.rstrip('/')}/api/v1/session-catalog/export",
             {"X-Local-Token": LOCAL_TOKEN, "X-Request-ID": request_id},

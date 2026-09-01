@@ -246,12 +246,17 @@ class SessionTurnReplayService:
                 created_message_id = getattr(payload, "message_id", None)
                 if isinstance(created_message_id, str):
                     job_message_ids[job_id] = created_message_id
-            elif event_type in {"job_completed", "job_cancelled", "job_failed"}:
+            elif event_type in {
+                "job_completed",
+                "job_cancelled",
+                "job_failed",
+                "session_interrupted",
+            }:
                 terminal_statuses[job_id] = event_type
 
         return any(
             job_message_id == message_id
-            and terminal_statuses.get(job_id) == "job_failed"
+            and terminal_statuses.get(job_id) in {"job_failed", "session_interrupted"}
             for job_id, job_message_id in job_message_ids.items()
         )
 

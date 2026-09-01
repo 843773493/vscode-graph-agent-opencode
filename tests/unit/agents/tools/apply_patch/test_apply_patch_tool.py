@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -354,5 +355,156 @@ def test_apply_patch_tool_returns_json_result(
 
     result = json.loads(result_text)
     assert result["status"] == "success"
+    journal_id = result["journal_id"]
+    assert isinstance(journal_id, str)
+    assert journal_id.startswith("patch_")
+    assert (tmp_path / ".boxteam" / "cache" / "apply_patch" / f"{journal_id}.json").is_file()
     assert result["files"] == [{"path": "tool.txt", "operation": "add"}]
     assert (tmp_path / "tool.txt").read_text(encoding="utf-8") == "created by tool"
+    assert result["verification"] == [{
+        "path": "/tool.txt",
+        "exists": True,
+        "size_bytes": len("created by tool"),
+        "sha256": sha256(b"created by tool").hexdigest(),
+    }]
+    journal = json.loads(
+        (tmp_path / ".boxteam" / "cache" / "apply_patch" / f"{journal_id}.json")
+        .read_text(encoding="utf-8")
+    )
+    assert journal["verification"] == result["verification"]
+
+
+def test_apply_patch_tool_rejects_success_when_write_does_not_change_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    (tmp_path / "same.txt").write_text("same\n", encoding="utf-8")
+    tool = create_apply_patch_tool()
+
+    result_text = tool.invoke(
+        {
+            "input": """*** Begin Patch
+*** Update File: same.txt
+@@
+-same
++same
+*** End Patch""",
+            "explanation": "不应报告无变化补丁成功",
+        }
+    )
+
+    result = json.loads(result_text)
+    assert result["status"] == "error"
+    assert "字节未发生变化" in result["error"]
+    assert (tmp_path / "same.txt").read_text(encoding="utf-8") == "same\n"
+
+
+def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    target = tmp_path / "target.txt"
+    target.write_text("before\n", encoding="utf-8")
+
+    def write_wrong_content(commit, snapshots, workspace_root):
+        del commit, snapshots
+        (workspace_root / "target.txt").write_text("wrong\n", encoding="utf-8")
+        return []
+
+    monkeypatch.setattr(
+        apply_patch_executor,
+        "_apply_commit_transactionally",
+        write_wrong_content,
+    )
+    tool = create_apply_patch_tool()
+
+    result = json.loads(
+        tool.invoke(
+            {
+                "input": """*** Begin Patch
+*** Update File: target.txt
+@@
+-before
++after
+*** End Patch""",
+                "explanation": "拒绝错位写入结果",
+            }
+        )
+    )
+
+    assert result["status"] == "error"
+    assert "写入校验失败" in result["error"]
+    assert target.read_text(encoding="utf-8") == "before\n"
+    journal_root = tmp_path / ".boxteam" / "cache" / "apply_patch"
+    assert not list(journal_root.glob("*.json"))
+
+
+def test_apply_patch_uses_explicit_workspace_for_write_and_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured_root = tmp_path / "configured"
+    explicit_root = tmp_path / "explicit"
+    configured_root.mkdir()
+    explicit_root.mkdir()
+    monkeypatch.setenv("WORKSPACE_ROOT", str(configured_root))
+    tool = create_apply_patch_tool(workspace_root=explicit_root)
+
+    result = json.loads(
+        tool.invoke(
+            {
+                "input": """*** Begin Patch
+*** Add File: target.txt
++written to explicit workspace
+*** End Patch""",
+                "explanation": "验证显式工作区路径",
+            }
+        )
+    )
+
+    assert result["status"] == "success"
+    assert (explicit_root / "target.txt").read_text(encoding="utf-8") == (
+        "written to explicit workspace"
+    )
+    assert not (configured_root / "target.txt").exists()
+    assert (
+        explicit_root
+        / ".boxteam"
+        / "cache"
+        / "apply_patch"
+        / f"{result['journal_id']}.json"
+    ).is_file()
+
+
+def test_apply_patch_tool_returns_retryable_error_for_invalid_patch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    (tmp_path / "same.txt").write_text("same\n", encoding="utf-8")
+    tool = create_apply_patch_tool()
+
+    result_text = tool.invoke(
+        {
+            "input": """*** Begin Patch
+*** Update File: same.txt
+@@
+-same
++one
+*** Update File: same.txt
+@@
+-same
++two
+*** End Patch""",
+            "explanation": "重复路径重试 smoke",
+        }
+    )
+
+    result = json.loads(result_text)
+    assert result["status"] == "error"
+    assert result["error_type"] == "DiffError"
+    assert result["retryable"] is True
+    assert "Duplicate Path" in result["error"]
+    assert (tmp_path / "same.txt").read_text(encoding="utf-8") == "same\n"

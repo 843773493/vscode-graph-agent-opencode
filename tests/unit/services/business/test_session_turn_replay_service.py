@@ -399,6 +399,35 @@ async def test_retry_failed_uses_persisted_trace_after_job_service_restart(
 
 
 @pytest.mark.asyncio
+async def test_retry_failed_accepts_execution_lost_session_interrupted_trace(
+    tmp_path,
+    session_bundle_factory,
+):
+    service, _, _ = await _build_service(
+        tmp_path,
+        session_bundle_factory,
+        [],
+        trace_events=[
+            SimpleNamespace(
+                type="job_created",
+                job_id="job_lost",
+                payload=SimpleNamespace(message_id="msg_2"),
+            ),
+            SimpleNamespace(
+                type="session_interrupted",
+                job_id="job_lost",
+                payload=SimpleNamespace(
+                    phase="process_exit",
+                    code="execution_lost",
+                ),
+            ),
+        ],
+    )
+
+    assert await service._turn_has_failed("ses_replay", "msg_2") is True
+
+
+@pytest.mark.asyncio
 async def test_retry_requires_failed_or_timed_out_job(
     tmp_path,
     session_bundle_factory,

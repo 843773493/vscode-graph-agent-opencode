@@ -1,0 +1,428 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "anthropic-reasoning-tool",
+    "protocol": "anthropic_messages_sse",
+    "provider": "anthropic",
+    "model": "claude-handwritten"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://anthropic.handwritten/v1/messages",
+        "match": {
+          "model": "claude-handwritten",
+          "stream": true,
+          "message_roles": ["user"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "frames": [
+          {
+            "kind": "data",
+            "event": "message_start",
+            "encoding": "json",
+            "payload": {
+              "type": "message_start",
+              "message": {
+                "id": "msg_anthropic_tool",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-handwritten",
+                "content": [],
+                "stop_reason": null,
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 2,
+                  "output_tokens": 0
+                }
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_start",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_start",
+              "index": 0,
+              "content_block": {
+                "type": "thinking",
+                "thinking": "",
+                "signature": ""
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "thinking_delta",
+                "thinking": "Anthropic Messages 先确认待读取的文件，"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "thinking_delta",
+                "thinking": "再检查工具返回的证据，"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "thinking_delta",
+                "thinking": "确认内容和当前问题一致后，"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "thinking_delta",
+                "thinking": "再发起一次明确的 Anthropic Messages 工具调用。"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "signature_delta",
+                "signature": "anthropic-tool-signature"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_stop",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_stop",
+              "index": 0
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_start",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_start",
+              "index": 1,
+              "content_block": {
+                "type": "tool_use",
+                "id": "call_anthropic_read_file",
+                "name": "read_file",
+                "input": {}
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 1,
+              "delta": {
+                "type": "input_json_delta",
+                "partial_json": "{\"path\":"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 1,
+              "delta": {
+                "type": "input_json_delta",
+                "partial_json": "\"README"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 1,
+              "delta": {
+                "type": "input_json_delta",
+                "partial_json": ".md\"}"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_stop",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_stop",
+              "index": 1
+            }
+          },
+          {
+            "kind": "data",
+            "event": "message_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "message_delta",
+              "delta": {
+                "stop_reason": "tool_use",
+                "stop_sequence": null
+              },
+              "usage": {
+                "input_tokens": 2,
+                "output_tokens": 18
+              }
+            }
+          },
+          {
+            "kind": "done",
+            "event": "message_stop",
+            "encoding": "json",
+            "payload": {
+              "type": "message_stop"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://anthropic.handwritten/v1/messages",
+        "match": {
+          "model": "claude-handwritten",
+          "stream": true,
+          "message_roles": ["user", "assistant", "user"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "frames": [
+          {
+            "kind": "data",
+            "event": "message_start",
+            "encoding": "json",
+            "payload": {
+              "type": "message_start",
+              "message": {
+                "id": "msg_anthropic_tool_final",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-handwritten",
+                "content": [],
+                "stop_reason": null,
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 20,
+                  "output_tokens": 0
+                }
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_start",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_start",
+              "index": 0,
+              "content_block": {
+                "type": "thinking",
+                "thinking": "",
+                "signature": ""
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "thinking_delta",
+                "thinking": "Anthropic Messages 先核对工具结果，"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "thinking_delta",
+                "thinking": "确认它和请求目标相符，"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "thinking_delta",
+                "thinking": "再整理一份 Anthropic Messages 最终答复。"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "signature_delta",
+                "signature": "anthropic-final-signature"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_stop",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_stop",
+              "index": 0
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_start",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_start",
+              "index": 1,
+              "content_block": {
+                "type": "text",
+                "text": ""
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 1,
+              "delta": {
+                "type": "text_delta",
+                "text": "Anthropic Messages 工具已经返回，"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 1,
+              "delta": {
+                "type": "text_delta",
+                "text": "我核对了文件内容，"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 1,
+              "delta": {
+                "type": "text_delta",
+                "text": "现在给出 Anthropic Messages 可复查的结论。"
+              }
+            }
+          },
+          {
+            "kind": "data",
+            "event": "content_block_stop",
+            "encoding": "json",
+            "payload": {
+              "type": "content_block_stop",
+              "index": 1
+            }
+          },
+          {
+            "kind": "data",
+            "event": "message_delta",
+            "encoding": "json",
+            "payload": {
+              "type": "message_delta",
+              "delta": {
+                "stop_reason": "end_turn",
+                "stop_sequence": null
+              },
+              "usage": {
+                "input_tokens": 20,
+                "output_tokens": 6
+              }
+            }
+          },
+          {
+            "kind": "done",
+            "event": "message_stop",
+            "encoding": "json",
+            "payload": {
+              "type": "message_stop"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

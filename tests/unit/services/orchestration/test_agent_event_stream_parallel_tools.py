@@ -18,9 +18,16 @@ from langgraph.types import Command
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
-from app.core.turn_execution_scope import CancellationSignal, ScopeCancelledError
+from app.core.turn_execution_scope import (
+    CancellationSignal,
+    ScopeCancelledError,
+    TurnExecutionScope,
+    get_current_turn_execution_scope,
+)
 from app.schemas.event import ModelTokenUsagePayload
 from app.services.orchestration.agent_event_stream_processor import (
+    AgentEventStreamTimeoutError,
+    _activity_result_detail,
     last_model_token_usage,
     process_agent_event_stream,
 )
@@ -91,6 +98,129 @@ class ResolvingConfigAgent(FakeAgent):
             yield {}
 
 
+class HangingBeforeProgressAgent:
+    async def astream_events(
+        self,
+        _input_payload: dict[str, Any],
+        *,
+        config: dict[str, Any],
+        version: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        del config, version
+        await asyncio.Future()
+        if False:
+            yield {}
+
+
+class LifecycleEventsBeforeModelAgent:
+    async def astream_events(
+        self,
+        _input_payload: dict[str, Any],
+        *,
+        config: dict[str, Any],
+        version: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        del version
+        metadata = config.get("metadata")
+        if not isinstance(metadata, dict):
+            raise TypeError("测试 Agent 必须收到 dict 类型 metadata")
+        event_base = {
+            "name": "agent",
+            "metadata": metadata,
+        }
+        yield {"event": "on_chain_start", "data": {}, **event_base}
+        await asyncio.sleep(0.02)
+        yield {"event": "on_prompt_start", "data": {}, **event_base}
+        await asyncio.sleep(0.02)
+        yield {
+            "event": "on_chat_model_start",
+            "name": "BoxteamOpenAIResponsesModel",
+            "data": {},
+            "metadata": metadata,
+        }
+        yield {
+            "event": "on_chat_model_stream",
+            "name": "BoxteamOpenAIResponsesModel",
+            "data": {
+                "chunk": AIMessageChunk(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": "lifecycle-progress",
+                            "id": "lifecycle-progress",
+                            "index": 0,
+                        }
+                    ]
+                )
+            },
+            "metadata": metadata,
+        }
+        yield {
+            "event": "on_chat_model_end",
+            "name": "BoxteamOpenAIResponsesModel",
+            "data": {},
+            "metadata": metadata,
+        }
+
+
+class CancellationSensitiveAgent:
+    async def astream_events(
+        self,
+        _input_payload: dict[str, Any],
+        *,
+        config: dict[str, Any],
+        version: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        del config, version
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError as error:
+            # 旧的 wait_for 实现会把自己的超时取消直接暴露成这个结果，
+            # 让上层错误地把工具分派超时记录成 execution_cancelled。
+            raise asyncio.CancelledError("execution_cancelled") from error
+        if False:
+            yield {}
+
+
+class SlowlyStreamingModelAgent:
+    async def astream_events(
+        self,
+        _input_payload: dict[str, Any],
+        *,
+        config: dict[str, Any],
+        version: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        del version
+        config_metadata = config.get("metadata")
+        if not isinstance(config_metadata, dict):
+            raise TypeError("测试 Agent 必须收到 dict 类型 metadata")
+        event_base = {
+            "name": "BoxteamOpenAIResponsesModel",
+            "metadata": config_metadata,
+        }
+        yield {"event": "on_chat_model_start", "data": {}, **event_base}
+        for index in range(2):
+            await asyncio.sleep(0.025)
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {
+                    "chunk": AIMessageChunk(
+                        content=[
+                            {
+                                "type": "text",
+                                "text": f"part-{index}",
+                                "id": f"part-{index}",
+                                "index": 0,
+                            }
+                        ]
+                    )
+                },
+                **event_base,
+            }
+        await asyncio.sleep(0.025)
+        yield {"event": "on_chat_model_end", "data": {}, **event_base}
+
+
 class FakeSessionChangesService:
     def capture_before(self, file_path: str) -> object:
         raise AssertionError(f"本测试不应捕获文件快照: {file_path}")
@@ -108,6 +238,256 @@ class RecordingSessionChangesService:
 
     async def record_tool_file_edit(self, **kwargs: Any) -> None:
         self.recorded.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_agent_stream_fails_when_no_model_or_tool_event_arrives(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AgentEventStreamTimeoutError, match="首个模型/工具事件"):
+        await process_agent_event_stream(
+            agent=HangingBeforeProgressAgent(),
+            input_payload={"messages": []},
+            config={},
+            session_id="ses_first_event_timeout",
+            turn_id="job_first_event_timeout",
+            agent_id="default",
+            custom_tool_skill_sources={},
+            publish=lambda *_args, **_kwargs: _async_noop(),
+            session_changes_service=FakeSessionChangesService(),
+            workspace_root=tmp_path,
+            model_timeout_seconds=0.01,
+        )
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_events_extend_initial_model_event_watchdog(
+    tmp_path: Path,
+) -> None:
+    result = await process_agent_event_stream(
+        agent=LifecycleEventsBeforeModelAgent(),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_lifecycle_event_watchdog",
+        turn_id="job_lifecycle_event_watchdog",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+        model_timeout_seconds=0.03,
+    )
+
+    assert result.final_text == "lifecycle-progress"
+
+
+@pytest.mark.asyncio
+async def test_active_model_events_refresh_idle_watchdog_for_long_response(
+    tmp_path: Path,
+) -> None:
+    result = await process_agent_event_stream(
+        agent=SlowlyStreamingModelAgent(),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_model_idle_watchdog",
+        turn_id="job_model_idle_watchdog",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+        model_timeout_seconds=0.04,
+    )
+
+    assert result.final_text == "part-0part-1"
+
+
+@pytest.mark.asyncio
+async def test_default_model_wait_after_start_uses_job_budget_not_idle_watchdog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ModelStartsThenWaitsAgent:
+        async def astream_events(
+            self,
+            _input_payload: dict[str, Any],
+            *,
+            config: dict[str, Any],
+            version: str,
+        ) -> AsyncIterator[dict[str, Any]]:
+            del version
+            metadata = config.get("metadata")
+            if not isinstance(metadata, dict):
+                raise TypeError("测试 Agent 必须收到 dict 类型 metadata")
+            event_base = {
+                "name": "BoxteamOpenAIResponsesModel",
+                "metadata": metadata,
+            }
+            yield {"event": "on_chat_model_start", "data": {}, **event_base}
+            await asyncio.sleep(0.03)
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {
+                    "chunk": AIMessageChunk(
+                        content=[
+                            {
+                                "type": "text",
+                                "text": "after-wait",
+                                "id": "after-wait",
+                                "index": 0,
+                            }
+                        ]
+                    )
+                },
+                **event_base,
+            }
+            yield {"event": "on_chat_model_end", "data": {}, **event_base}
+
+    monkeypatch.setattr(
+        "app.services.orchestration.agent_event_stream_processor.DEFAULT_INITIAL_EVENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    result = await process_agent_event_stream(
+        agent=ModelStartsThenWaitsAgent(),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_model_wait_after_start",
+        turn_id="job_model_wait_after_start",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+    )
+
+    assert result.final_text == "after-wait"
+
+
+@pytest.mark.asyncio
+async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadline(
+    tmp_path: Path,
+) -> None:
+    class ActiveStreamingAgent:
+        async def astream_events(
+            self,
+            _input_payload: dict[str, Any],
+            *,
+            config: dict[str, Any],
+            version: str,
+        ) -> AsyncIterator[dict[str, Any]]:
+            del version
+            metadata = config.get("metadata")
+            if not isinstance(metadata, dict):
+                raise TypeError("测试 Agent 必须收到 dict 类型 metadata")
+            event_base = {
+                "name": "BoxteamOpenAIResponsesModel",
+                "metadata": metadata,
+            }
+            yield {"event": "on_chat_model_start", "data": {}, **event_base}
+            for index in range(2):
+                await asyncio.sleep(0.03)
+                scope = get_current_turn_execution_scope()
+                if scope is not None:
+                    scope.raise_if_cancelled()
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {
+                        "chunk": AIMessageChunk(
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": f"part-{index}",
+                                    "id": f"active-part-{index}",
+                                    "index": 0,
+                                }
+                            ]
+                        )
+                    },
+                    **event_base,
+                }
+            await asyncio.sleep(0.03)
+            scope = get_current_turn_execution_scope()
+            if scope is not None:
+                scope.raise_if_cancelled()
+            yield {"event": "on_chat_model_end", "data": {}, **event_base}
+
+    execution_scope = TurnExecutionScope("stream_active_model_scope")
+    try:
+        result = await process_agent_event_stream(
+            agent=ActiveStreamingAgent(),
+            input_payload={"messages": []},
+            config={},
+            session_id="ses_active_model_scope",
+            turn_id="job_active_model_scope",
+            agent_id="default",
+            custom_tool_skill_sources={},
+            publish=lambda *_args, **_kwargs: _async_noop(),
+            session_changes_service=FakeSessionChangesService(),
+            workspace_root=tmp_path,
+            execution_scope=execution_scope,
+            model_timeout_seconds=0.05,
+        )
+    finally:
+        await execution_scope.close()
+
+    assert result.final_text == "part-0part-1"
+
+
+@pytest.mark.asyncio
+async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
+    tmp_path: Path,
+) -> None:
+    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_dispatch_timeout")
+    runtime = MessageStreamRuntime(writer)
+    await runtime.start_model("model_dispatch_timeout", "backup_3")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_dispatch_timeout",
+                    "name": "exec_command",
+                    "args": '{"cmd":"pwd"}',
+                }
+            ],
+        )
+    )
+
+    with pytest.raises(AgentEventStreamTimeoutError) as raised:
+        await process_agent_event_stream(
+            agent=CancellationSensitiveAgent(),
+            input_payload={"messages": []},
+            config={},
+            session_id="ses_dispatch_timeout",
+            turn_id="job_dispatch_timeout",
+            agent_id="default",
+            custom_tool_skill_sources={},
+            publish=lambda *_args, **_kwargs: _async_noop(),
+            session_changes_service=FakeSessionChangesService(),
+            workspace_root=tmp_path,
+            message_stream_runtime=runtime,
+            tool_dispatch_timeout_seconds=0.01,
+            model_timeout_seconds=1,
+        )
+
+    assert raised.value.code == "tool_dispatch_timeout"
+    completed = [
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.completed"
+    ]
+    assert completed[-1] == {
+        "tool_call_id": "call_dispatch_timeout",
+        "tool_name": "exec_command",
+        "status": "incomplete",
+        "completion_reason": "tool_dispatch_timeout",
+        "arguments_complete": True,
+        "error": (
+            "模型工具调用参数已完整，但在有限时间内没有收到工具执行分派事件: "
+            "tool_calls=['call_dispatch_timeout']"
+        ),
+    }
 
 
 @pytest.mark.asyncio
@@ -301,6 +681,12 @@ def test_last_model_token_usage_keeps_last_execution_request() -> None:
 async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -> None:
     events = [
         {
+            "event": "on_chat_model_start",
+            "name": "BoxteamOpenAIResponsesModel",
+            "data": {},
+            "metadata": {},
+        },
+        {
             "event": "on_custom_event",
             "name": "boxteam_model_failed",
             "data": {
@@ -317,6 +703,8 @@ async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -
     async def publish(event_type: str, payload: dict[str, Any]) -> None:
         published.append((event_type, payload))
 
+    writer = SimpleNamespace(commit=AsyncMock())
+    runtime = MessageStreamRuntime(writer)
     await process_agent_event_stream(
         agent=FakeAgent(events),
         input_payload={"messages": []},
@@ -328,9 +716,17 @@ async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -
         publish=publish,
         session_changes_service=FakeSessionChangesService(),
         workspace_root=tmp_path,
+        message_stream_runtime=runtime,
     )
 
     assert published == [
+        (
+            EventType.LLM_REQUEST,
+            {
+                "model": "unknown_model",
+                "timestamp": published[0][1]["timestamp"],
+            },
+        ),
         (
             EventType.MODEL_FAILED,
             {
@@ -341,6 +737,12 @@ async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -
             },
         )
     ]
+    stream_events = [call.args for call in writer.commit.await_args_list]
+    assert [event_type for event_type, _payload, *_rest in stream_events] == [
+        "model.started",
+        "model.failed",
+    ]
+    assert stream_events[1][1]["outcome"] == "upstream_error"
 
 
 @pytest.fixture
@@ -488,6 +890,64 @@ async def test_agent_stream_rejects_model_event_from_another_job(
 
 
 @pytest.mark.asyncio
+async def test_agent_stream_reports_model_and_tool_progress(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    @tool
+    def read_file(path: str) -> str:
+        """读取测试文件。"""
+        return path
+
+    events = [
+        {
+            "event": "on_chat_model_start",
+            "run_id": "model_progress",
+            "name": "ChatOpenAI",
+            "data": {},
+            "metadata": {"ls_model_name": "backup_3"},
+        },
+        {
+            "event": "on_tool_start",
+            "run_id": "tool_progress",
+            "name": "read_file",
+            "data": {"input": {"path": "README.md"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "tool_progress",
+            "name": "read_file",
+            "data": {
+                "output": ToolMessage(
+                    content="README.md",
+                    tool_call_id="call_progress",
+                    name="read_file",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+    progress: list[str] = []
+
+    await process_agent_event_stream(
+        agent=GraphFakeAgent(events, [read_file]),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_progress_report",
+        turn_id="job_progress_report",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+        progress_reporter=progress.append,
+    )
+
+    assert progress == ["model", "tool:read_file", "tool:read_file"]
+
+
+@pytest.mark.asyncio
 async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
     tmp_path: Path,
     parallel_tool_events: list[dict[str, Any]],
@@ -595,6 +1055,132 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
     assert end_payload["result"] == result.last_tool_result_text
     assert "修正 workspace_id" in end_payload["result"]
     assert result.successful_tool_calls == ()
+
+
+@pytest.mark.asyncio
+async def test_structured_tool_error_is_not_treated_as_successful_apply_patch(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    """工具函数返回 status=error 时，不应再尝试读取 apply_patch journal。"""
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_apply_patch_error",
+            "name": "apply_patch",
+            "data": {
+                "input": {
+                    "input": "*** Begin Patch\n*** Update File: missing.txt\n*** End Patch",
+                    "explanation": "无效补丁",
+                }
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_apply_patch_error",
+            "name": "apply_patch",
+            "data": {
+                "output": ToolMessage(
+                    content=json.dumps(
+                        {
+                            "status": "error",
+                            "error_type": "DiffError",
+                            "error": "补丁上下文无效",
+                            "retryable": True,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    tool_call_id="call_apply_patch_error",
+                    name="apply_patch",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_apply_patch_error",
+        turn_id="job_apply_patch_error",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+    )
+
+    assert published[1][1]["status"] == "error"
+    assert published[1][1]["failed"] is True
+    assert result.successful_tool_calls == ()
+
+
+@pytest.mark.asyncio
+async def test_system_skill_read_is_marked_as_metadata_not_workspace_source(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_skill_read",
+            "name": "read_file",
+            "data": {
+                "input": {
+                    "path": ".boxteam/bundled-skills/browser-control/SKILL.md",
+                    "line_offset": 1,
+                }
+            },
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_skill_read",
+            "name": "read_file",
+            "data": {
+                "output": ToolMessage(
+                    content="# browser-control system skill",
+                    tool_call_id="call_skill_read",
+                    name="read_file",
+                    additional_kwargs={
+                        "workspace_path_scope": "system_skill",
+                        "workspace_file_kind": "skill_definition",
+                        "skill_source": "bundled",
+                        "skill_name": "browser-control",
+                    },
+                )
+            },
+            "metadata": {},
+        },
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_system_skill",
+        turn_id="job_system_skill",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+    )
+
+    assert published[1][1]["workspace_path_scope"] == "system_skill"
+    assert published[1][1]["workspace_file_kind"] == "skill_definition"
+    assert published[1][1]["skill_source"] == "bundled"
+    assert published[1][1]["skill_name"] == "browser-control"
 
 
 @pytest.mark.asyncio
@@ -1186,6 +1772,117 @@ async def test_resource_tool_is_projected_as_resource_activity(
     assert activity_events[0][1]["kind"] == "resource.operation"
     assert activity_events[0][1]["resource_refs"] == ["browser_1"]
     assert activity_events[1][1]["detail"]["resource_id"] == "browser_1"
+
+
+def test_retryable_resource_failure_projects_recovery_metadata() -> None:
+    detail = _activity_result_detail(
+        json.dumps(
+            {
+                "status": "error",
+                "code": "browser_tool_timeout",
+                "retryable": True,
+                "recovery": "page_reset",
+                "timeoutMs": 10000,
+                "error": "页面已重置，可重试",
+            }
+        ),
+        tool_name="runPlaywrightCode",
+        agent_id="default",
+    )
+
+    assert detail == {
+        "phase": "failed",
+        "agent_id": "default",
+        "code": "browser_tool_timeout",
+        "retryable": True,
+        "recovery": "page_reset",
+        "timeout_ms": 10000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_retryable_resource_failure_does_not_abort_event_stream(
+    tmp_path: Path,
+) -> None:
+    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_resource_error")
+    message_stream_runtime = MessageStreamRuntime(writer)
+    await message_stream_runtime.start_model("model_resource_error", "primary")
+    await message_stream_runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_page_error",
+                    "name": "readPage",
+                    "args": '{"pageId":"browser_1"}',
+                }
+            ],
+        )
+    )
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_page_error",
+            "name": "readPage",
+            "data": {"input": {"pageId": "browser_1"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_page_error",
+            "name": "readPage",
+            "data": {
+                "output": ToolMessage(
+                    content=json.dumps(
+                        {
+                            "status": "error",
+                            "code": "browser_tool_timeout",
+                            "retryable": True,
+                            "recovery": "page_reset",
+                            "timeoutMs": 10000,
+                            "error": "页面已重置，可重试",
+                        }
+                    ),
+                    tool_call_id="call_page_error",
+                    name="readPage",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_resource_error",
+        turn_id="job_resource_error",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=FakeSessionChangesService(),
+        workspace_root=tmp_path,
+        message_stream_runtime=message_stream_runtime,
+    )
+
+    activity_events = [
+        call.args
+        for call in writer.commit.await_args_list
+        if call.args[0].startswith("activity.")
+    ]
+    assert result.final_text == ""
+    assert activity_events[-1][0] == "activity.failed"
+    assert activity_events[-1][1]["outcome"] == "outcome_unknown"
+    assert activity_events[-1][1]["detail"] == {
+        "resource_id": "browser_1",
+        "operation": "readPage",
+        "phase": "failed",
+        "code": "browser_tool_timeout",
+        "retryable": True,
+        "recovery": "page_reset",
+        "timeout_ms": 10000,
+    }
 
 
 async def _async_noop() -> None:

@@ -37,6 +37,9 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
+MESSAGE_STREAM_AVAILABILITY_RETRY_DELAYS_SECONDS = (0.05,)
+MESSAGE_STREAM_RETRY_DELAYS_SECONDS = (0.05, 0.25, 0.75)
+WORKSPACE_RUNTIME_READY_WAIT_SECONDS = 120.0
 
 
 def _registry(request: Request) -> GatewayWorkspaceRegistry:
@@ -62,7 +65,25 @@ def _is_streaming_workspace_path(path: str) -> bool:
         path.endswith("/traces/stream")
         or path.endswith("/events/stream")
         or path.endswith("/files/events")
+        or path.endswith("/message-stream")
     )
+
+
+def _is_retryable_message_stream_availability(
+    method: str,
+    path: str,
+) -> bool:
+    return method in {"GET", "HEAD"} and path.endswith(
+        "/message-streams/availability"
+    )
+
+
+def _is_retryable_message_stream(
+    method: str,
+    path: str,
+) -> bool:
+    """在 Turn 的流资源刚创建时，隐藏一次短暂的上游 404。"""
+    return method == "GET" and path.endswith("/message-stream")
 
 
 def _user_access_service(request: Request) -> UserAccessService:
@@ -194,6 +215,58 @@ async def _stream_proxy_body(response: httpx.Response) -> AsyncIterator[bytes]:
         await response.aclose()
 
 
+async def _wait_for_workspace_runtime(
+    request: Request,
+    target: WorkspaceTarget,
+) -> None:
+    """等待启动恢复任务的有界结果，再解析本地工作区路由。"""
+    application = request.scope.get("app")
+    if application is None:
+        return
+    restore_tasks = getattr(
+        getattr(application, "state", None),
+        "managed_runtime_restore_tasks",
+        {},
+    )
+    if not isinstance(restore_tasks, dict):
+        return
+    restore_task = restore_tasks.get(target.workspace_id)
+    if not isinstance(restore_task, asyncio.Task) or restore_task.done():
+        if isinstance(restore_task, asyncio.Task) and restore_task.done():
+            error = restore_task.exception()
+            if error is not None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "工作区后端启动失败: "
+                        f"workspace_id={target.workspace_id}: {error}"
+                    ),
+                ) from error
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(restore_task),
+            timeout=WORKSPACE_RUNTIME_READY_WAIT_SECONDS,
+        )
+    except TimeoutError as error:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "工作区后端在有限等待时间内未就绪，请稍后重试: "
+                f"workspace_id={target.workspace_id}, "
+                f"timeout_seconds={WORKSPACE_RUNTIME_READY_WAIT_SECONDS:g}"
+            ),
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "工作区后端启动失败: "
+                f"workspace_id={target.workspace_id}: {error}"
+            ),
+        ) from error
+
+
 async def _proxy_workspace_request(
     path: str,
     request: Request,
@@ -222,16 +295,6 @@ async def _proxy_workspace_request(
             status_code=400,
             detail="bounded federation 禁止通过远程 Gateway 继续代理嵌套工作区",
         )
-    route_lease = registry.route_lease(target.workspace_id)
-
-    target_url = (
-        f"{registry.remote_gateway_url(target.remote_gateway_connection_id)}/api/v1/{path}"
-        if (
-            target.connection_kind == "remote_gateway"
-            and target.remote_gateway_connection_id is not None
-        )
-        else f"{target.backend_url.rstrip('/')}/api/v1/{path}"
-    )
     client = _http_client(
         request,
         streaming=_is_streaming_workspace_path(path),
@@ -241,24 +304,95 @@ async def _proxy_workspace_request(
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}
         else None
     )
-    forwarded = client.build_request(
+    retry_availability = _is_retryable_message_stream_availability(
         request.method,
-        target_url,
-        params=request.query_params,
-        content=request_content,
-        headers=_proxy_headers(
-            request,
-            target,
-            include_credentials=include_credentials,
-        ),
+        path,
     )
-    try:
-        response = await client.send(forwarded, stream=True)
-    except httpx.RequestError as error:
+    retry_message_stream = _is_retryable_message_stream(request.method, path)
+    retry_upstream = retry_availability or retry_message_stream
+    retry_delays = (
+        MESSAGE_STREAM_RETRY_DELAYS_SECONDS
+        if retry_message_stream
+        else MESSAGE_STREAM_AVAILABILITY_RETRY_DELAYS_SECONDS
+        if retry_availability
+        else ()
+    )
+    response: httpx.Response | None = None
+    target_url = ""
+    route_lease = registry.route_lease(target.workspace_id)
+    for attempt in range(len(retry_delays) + 1):
+        if attempt > 0:
+            await asyncio.sleep(retry_delays[attempt - 1])
+            target = registry.resolve(target.workspace_id)
+            route_lease = registry.route_lease(target.workspace_id)
+        if (
+            target.connection_kind == "remote_gateway"
+            and target.remote_gateway_connection_id is not None
+        ):
+            target_url = (
+                f"{registry.remote_gateway_url(target.remote_gateway_connection_id)}"
+                f"/api/v1/{path}"
+            )
+        else:
+            await _wait_for_workspace_runtime(request, target)
+            try:
+                backend_url = registry.resolve_service_url(
+                    target.workspace_id,
+                    "workspace_api",
+                )
+            except LookupError as error:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "工作区后端正在启动或尚未连接，请稍后重试: "
+                        f"workspace_id={target.workspace_id}"
+                    ),
+                ) from error
+            target_url = f"{backend_url.rstrip('/')}/api/v1/{path}"
+        forwarded = client.build_request(
+            request.method,
+            target_url,
+            params=request.query_params,
+            content=request_content,
+            headers=_proxy_headers(
+                request,
+                target,
+                include_credentials=include_credentials,
+            ),
+        )
+        try:
+            response = await client.send(forwarded, stream=True)
+            if retry_availability:
+                # availability 是小型 JSON。提前消费响应体，才能在连接于响应头
+                # 之后断开时仍在 Gateway 内重试，而不是把网络错误暴露给浏览器。
+                await response.aread()
+            if (
+                retry_message_stream
+                and response.status_code == 404
+                and attempt < len(retry_delays)
+            ):
+                # 首次订阅可能早于 AgentExecutionService 的 store.open()。
+                # 关闭并在 Gateway 内重试，避免把可恢复的创建窗口作为浏览器
+                # 控制台 404 暴露出来。
+                await response.aclose()
+                response = None
+                continue
+            break
+        except httpx.RequestError as error:
+            if response is not None:
+                await response.aclose()
+                response = None
+            if retry_upstream and attempt < len(retry_delays):
+                continue
+            raise HTTPException(
+                status_code=502,
+                detail=f"无法连接工作区后端 {target_url}: {error}",
+            ) from error
+    if response is None:
         raise HTTPException(
             status_code=502,
-            detail=f"无法连接工作区后端 {target.backend_url}: {error}",
-        ) from error
+            detail=f"工作区 availability 请求未获得响应: {target_url}",
+        )
     media_type = response.headers.get("content-type")
     if media_type and "text/event-stream" in media_type:
         headers = _response_headers(response)
@@ -268,6 +402,16 @@ async def _proxy_workspace_request(
             status_code=response.status_code,
             media_type=media_type,
             headers=headers,
+        )
+    if retry_availability:
+        body = response.content
+        headers = _response_headers(response)
+        await response.aclose()
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=media_type,
         )
     headers = _response_headers(response)
     return StreamingResponse(

@@ -5,6 +5,7 @@ from app.agents.tools.apply_patch.executor import (
 from app.agents.tools.apply_patch.journal import (
     APPLY_PATCH_JOURNAL_DIR,
     load_apply_patch_journal_from_result,
+    update_apply_patch_journal,
 )
 from app.agents.tools.apply_patch.models import (
     ActionType,
@@ -27,7 +28,6 @@ from app.agents.tools.apply_patch.tool import (
     create_apply_patch_tool,
 )
 
-
 __all__ = [
     "APPLY_PATCH_JOURNAL_DIR",
     "APPLY_PATCH_TOOL_NAME",
@@ -47,4 +47,5 @@ __all__ = [
     "identify_files_needed",
     "load_apply_patch_journal_from_result",
     "parse_patch",
+    "update_apply_patch_journal",
 ]

@@ -58,6 +58,10 @@ class ConfigFileWatcher:
             step=50,
             rust_timeout=50,
             yield_on_timeout=True,
+            # 配置候选文件都位于监听目录的直接子项。工作区配置目录同时
+            # 承载 sessions、message_streams 等运行时状态，不能递归监听，
+            # 否则每次 Agent 写状态都会触发 watchfiles 自身的事件风暴。
+            recursive=False,
         ):
             if first_iteration:
                 self._ready.set()

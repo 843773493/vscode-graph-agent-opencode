@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 from collections.abc import Awaitable, Callable
 
 from langchain.agents.middleware import AgentMiddleware
@@ -117,14 +118,17 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
             except TimeoutError as error:
                 if tool_scope is not None:
                     await tool_scope.cancel("scope_deadline_exceeded")
-                tool_call_id = request.tool_call.get("id")
-                if not isinstance(tool_call_id, str) or not tool_call_id:
-                    raise RuntimeError("工具局部超时缺少 tool_call_id") from error
-                return ToolMessage(
-                    content="工具执行超过局部超时，结果未确认",
-                    tool_call_id=tool_call_id,
-                    status="error",
+                return _timeout_tool_message(
+                    request,
+                    error,
+                    timeout_ms=int(self._context.tool_timeout_seconds * 1000),
                 )
+        except TimeoutError as error:
+            # 终端/浏览器客户端的传输超时可能发生在工具自己的局部等待之外。
+            # 这类异常没有对应的 on_tool_end 时，LangGraph 会直接结束 AgentLoop，
+            # 前端只能看到笼统的 execution_error。转换成带 tool_call_id 的失败
+            # ToolMessage，模型可以检查状态后重试，且不会把整轮误报为用户中断。
+            return _timeout_tool_message(request, error)
         except asyncio.CancelledError:
             if tool_scope is not None:
                 tool_scope.raise_if_cancelled()
@@ -208,6 +212,37 @@ def _resource_refs_from_tool_call(
     return resource_refs_from_tool_payload(
         request.tool_call.get("name"),
         request.tool_call.get("args"),
+    )
+
+
+def _timeout_tool_message(
+    request: ToolCallRequest,
+    error: TimeoutError,
+    *,
+    timeout_ms: int | None = None,
+) -> ToolMessage:
+    """把工具下游超时投影成可配对、可恢复的工具结果。"""
+    tool_call_id = request.tool_call.get("id")
+    if not isinstance(tool_call_id, str) or not tool_call_id:
+        raise RuntimeError("工具超时缺少 tool_call_id") from error
+    tool_name = request.tool_call.get("name") or "unknown_tool"
+    timeout_label = "工具执行超过局部超时" if timeout_ms is not None else "工具执行超时"
+    payload: dict[str, object] = {
+        "status": "error",
+        "code": "tool_execution_timeout",
+        "error": (
+            f"{timeout_label}: tool={tool_name}, call_id={tool_call_id}；"
+            f"下游操作结果未确认: {error}"
+        ),
+        "retryable": True,
+        "recovery": "check_tool_state_before_retry",
+    }
+    if timeout_ms is not None and timeout_ms > 0:
+        payload["timeoutMs"] = timeout_ms
+    return ToolMessage(
+        content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        tool_call_id=tool_call_id,
+        status="error",
     )
 
 

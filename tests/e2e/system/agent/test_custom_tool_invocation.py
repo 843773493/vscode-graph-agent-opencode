@@ -16,8 +16,8 @@ from app.agents.tools.testing import (
     LARGE_TEST_TARGET_VALUE,
 )
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.path_utils import get_session_path_resolver
+from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
@@ -38,7 +38,7 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
     workspace_root = (
         project_root / "out" / "tests" / "e2e" / relative_test_path / "workspace"
     )
-    template_root = project_root / "asset" / "custom_tool_test_workspace"
+    template_root = project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace"
     prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
@@ -234,7 +234,7 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
     logs = logs_response.json()["data"]
     assert len(logs) >= 2
     assert any(
-        "asset/custom_tool_test_workspace/` 是扩展工具 e2e 测试使用的工作区模板"
+        "tests/fixtures/workspaces/custom_tool_test_workspace/` 是扩展工具 e2e 测试使用的工作区 fixture"
         in _system_message_text_from_llm_log(log)
         for log in logs
     )

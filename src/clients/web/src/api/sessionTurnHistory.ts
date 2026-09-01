@@ -32,7 +32,7 @@ export type TurnHistoryInclude =
   | "metadata"
   | "final_response";
 
-type TurnHistoryLoadRequestPayload = Omit<TurnHistoryLoadRequest, "include"> & {
+export type TurnHistoryLoadRequestPayload = Omit<TurnHistoryLoadRequest, "include"> & {
   include?: TurnHistoryInclude[];
 };
 

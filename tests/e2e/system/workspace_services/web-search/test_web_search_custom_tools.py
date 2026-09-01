@@ -30,7 +30,7 @@ def e2e_workspace_root_path(
     workspace_root = (
         project_root / "out" / "tests" / "e2e" / relative_test_path / "workspace"
     )
-    template_root = project_root / "asset" / "custom_tool_test_workspace"
+    template_root = project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace"
     prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,

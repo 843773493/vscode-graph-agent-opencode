@@ -74,7 +74,12 @@ def _reasoning_content_text(block: Mapping[str, Any]) -> str:
 
 
 def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
-    """返回带 content 坐标的 reasoning 投影，不返回 encrypted 正文。"""
+    """返回按逻辑 reasoning item 合并的投影，不返回 encrypted 正文。
+
+    provider 可能会同时通过 reasoning_content、reasoning_items 和
+    redacted_thinking 表达同一次思考。这里先保留最早来源坐标，再按 provider
+    item id 合并，避免历史详情把同一个思考渲染成三段正文。
+    """
     rows: list[dict[str, object]] = []
 
     def append_row(
@@ -185,4 +190,92 @@ def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
                 carrier_type="redacted_thinking",
                 encrypted=encrypted if isinstance(encrypted, str) else None,
             )
-    return rows
+    identified_keys = {
+        row["item_id"]
+        for row in rows
+        if isinstance(row.get("item_id"), str) and row["item_id"]
+    }
+    single_item_key = next(iter(identified_keys), None) if len(identified_keys) == 1 else None
+    merged: list[dict[str, object]] = []
+    merged_indexes: dict[tuple[str, object], int] = {}
+
+    def merge_text(previous: object, current: object) -> str:
+        previous_text = previous if isinstance(previous, str) else ""
+        current_text = current if isinstance(current, str) else ""
+        if not previous_text:
+            return current_text
+        if not current_text or current_text == previous_text:
+            return previous_text
+        if current_text.startswith(previous_text):
+            return current_text
+        if previous_text.startswith(current_text):
+            return previous_text
+        return previous_text + current_text
+
+    for row in rows:
+        item_id = row.get("item_id")
+        block_index = row.get("content_block_index")
+        if isinstance(item_id, str) and item_id:
+            key: tuple[str, object] = ("provider_item", item_id)
+        elif single_item_key is not None:
+            key = ("provider_item", single_item_key)
+        else:
+            key = ("message_reasoning", "anonymous")
+
+        existing_index = merged_indexes.get(key)
+        if existing_index is None:
+            merged_indexes[key] = len(merged)
+            merged.append(dict(row))
+            continue
+
+        target = merged[existing_index]
+        if "item_id" not in target and isinstance(item_id, str) and item_id:
+            target["item_id"] = item_id
+        previous_carriers = target.get("carrier_type")
+        current_carrier = row.get("carrier_type")
+        if (
+            isinstance(previous_carriers, str)
+            and isinstance(current_carrier, str)
+            and current_carrier
+            and current_carrier not in previous_carriers.split("+")
+        ):
+            target["carrier_type"] = f"{previous_carriers}+{current_carrier}"[:64]
+        target["reasoning_text"] = merge_text(
+            target.get("reasoning_text"),
+            row.get("reasoning_text"),
+        ) or None
+        target["summary_text"] = merge_text(
+            target.get("summary_text"),
+            row.get("summary_text"),
+        ) or None
+        if row.get("encrypted_length") is not None:
+            previous_length = target.get("encrypted_length")
+            current_length = row.get("encrypted_length")
+            if isinstance(current_length, int):
+                target["encrypted_length"] = (
+                    (previous_length if isinstance(previous_length, int) else 0)
+                    + current_length
+                )
+            if "encrypted_hash" not in target and row.get("encrypted_hash") is not None:
+                target["encrypted_hash"] = row["encrypted_hash"]
+        target["signature_present"] = bool(
+            target.get("signature_present") or row.get("signature_present")
+        )
+        reasoning_text = target.get("reasoning_text")
+        summary_text = target.get("summary_text")
+        target["kind"] = (
+            "reasoning"
+            if isinstance(reasoning_text, str) and reasoning_text
+            else "summary"
+            if isinstance(summary_text, str) and summary_text
+            else "encrypted"
+        )
+        target["text"] = (
+            reasoning_text
+            if isinstance(reasoning_text, str) and reasoning_text
+            else summary_text
+            if isinstance(summary_text, str) and summary_text
+            else ""
+        )
+
+    return merged

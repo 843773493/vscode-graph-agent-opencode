@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -11,6 +12,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
+from app.agents import workspace_filesystem_tools
 from app.agents.workspace_backend import build_workspace_backend
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
 from app.services.infrastructure.tool_output_store import (
@@ -276,6 +278,154 @@ async def test_deepagents_filesystem_tools_share_relative_path_contract(
 
 
 @pytest.mark.asyncio
+async def test_grep_rejects_boxteam_runtime_and_unscoped_root_search(
+    tmp_path: Path,
+) -> None:
+    middleware = FilesystemMiddleware(
+        backend=build_workspace_backend(tmp_path),
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    tool = next(item for item in middleware.tools if item.name == "grep")
+    runtime = cast(
+        "ToolRuntime[None, FilesystemState]",
+        SimpleNamespace(tool_call_id="call_bounded_grep_scope"),
+    )
+
+    runtime_result = await tool.coroutine(
+        pattern="screenshotPage",
+        path=".boxteam",
+        glob="**/*",
+        output_mode="content",
+        runtime=runtime,
+    )
+    root_result = await tool.coroutine(
+        pattern="screenshotPage",
+        path=".",
+        glob="**/*",
+        runtime=runtime,
+    )
+
+    for result in (runtime_result, root_result):
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        assert ".boxteam" in result.content
+        assert "缩小 path 或 glob" in result.content or "限定到源码目录" in result.content
+
+
+@pytest.mark.asyncio
+async def test_listing_tools_hide_and_reject_boxteam_runtime(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("main", encoding="utf-8")
+    (tmp_path / ".boxteam" / "sessions").mkdir(parents=True)
+    (tmp_path / ".boxteam" / "sessions" / "trace.jsonl").write_text(
+        "runtime", encoding="utf-8"
+    )
+    middleware = FilesystemMiddleware(
+        backend=build_workspace_backend(tmp_path),
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    tools = {item.name: item for item in middleware.tools}
+    runtime = cast(
+        "ToolRuntime[None, FilesystemState]",
+        SimpleNamespace(tool_call_id="call_runtime_boundary"),
+    )
+
+    listing = await tools["ls"].coroutine(path=".", runtime=runtime)
+    glob_result = await tools["glob"].coroutine(
+        pattern="**/*",
+        path=".",
+        runtime=runtime,
+    )
+    assert ".boxteam" not in listing.content
+    assert ".boxteam" not in glob_result.content
+
+    for tool_name, kwargs in (
+        ("ls", {"path": ".boxteam"}),
+        ("glob", {"pattern": "**/*", "path": ".boxteam"}),
+        ("read_file", {"path": ".boxteam/sessions/trace.jsonl"}),
+        (
+            "write_file",
+            {"file_path": ".boxteam/sessions/new.txt", "content": "blocked"},
+        ),
+        (
+            "edit_file",
+            {
+                "file_path": ".boxteam/sessions/trace.jsonl",
+                "old_string": "runtime",
+                "new_string": "changed",
+            },
+        ),
+    ):
+        result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        assert "运行时目录" in result.content
+
+
+@pytest.mark.asyncio
+async def test_glob_rejects_runtime_pattern_before_backend_scan(tmp_path: Path) -> None:
+    middleware = FilesystemMiddleware(
+        backend=build_workspace_backend(tmp_path),
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    tool = next(item for item in middleware.tools if item.name == "glob")
+    runtime = cast(
+        "ToolRuntime[None, FilesystemState]",
+        SimpleNamespace(tool_call_id="call_runtime_pattern"),
+    )
+
+    result = await tool.coroutine(
+        pattern="**/.boxteam/**/*",
+        path=".",
+        runtime=runtime,
+    )
+
+    assert result.status == "error"
+    assert "运行时目录" in result.content
+
+
+@pytest.mark.asyncio
+async def test_grep_returns_bounded_timeout_without_python_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    middleware = FilesystemMiddleware(
+        backend=build_workspace_backend(tmp_path),
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    tool = next(item for item in middleware.tools if item.name == "grep")
+    runtime = cast(
+        "ToolRuntime[None, FilesystemState]",
+        SimpleNamespace(tool_call_id="call_bounded_grep_timeout"),
+    )
+
+    def raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd="rg",
+            timeout=workspace_filesystem_tools.DEFAULT_GREP_TIMEOUT_SECONDS,
+        )
+
+    monkeypatch.setattr(workspace_filesystem_tools.subprocess, "run", raise_timeout)
+    result = await tool.coroutine(
+        pattern="needle",
+        path="src",
+        glob="**/*.py",
+        runtime=runtime,
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "10 秒内未完成" in result.content
+    assert "path='src'" in result.content
+
+
+@pytest.mark.asyncio
 async def test_all_filesystem_tools_reject_backend_virtual_paths(
     tmp_path: Path,
 ) -> None:
@@ -341,6 +491,41 @@ async def test_read_file_resolves_agent_visible_bundled_skill_path(
     assert isinstance(result, ToolMessage)
     assert result.status == "success"
     assert "# 源码调试工具" in result.content
+    assert result.additional_kwargs == {
+        "workspace_path_scope": "system_skill",
+        "workspace_file_kind": "skill_definition",
+        "skill_source": "bundled",
+        "skill_name": "debugging",
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_file_rejects_non_definition_system_skill_paths(
+    tmp_path: Path,
+) -> None:
+    middleware = FilesystemMiddleware(
+        backend=build_workspace_backend(
+            tmp_path,
+            bundled_skill_groups=("debugging",),
+            project_root=Path.cwd(),
+        ),
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    tool = next(item for item in middleware.tools if item.name == "read_file")
+    runtime = cast(
+        "ToolRuntime[None, FilesystemState]",
+        SimpleNamespace(tool_call_id="call_system_skill_boundary"),
+    )
+
+    result = await tool.coroutine(
+        path=".boxteam/bundled-skills/debugging/README.md",
+        runtime=runtime,
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "精确 SKILL.md" in result.content
 
 
 @pytest.mark.asyncio

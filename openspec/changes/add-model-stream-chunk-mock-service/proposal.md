@@ -8,15 +8,16 @@
 
 - 将模型 stream cassette 的 frame 改为协议中立结构，保留 `event`、`encoding` 和完整 payload；不再由通用 loader 假定所有协议都使用 `[DONE]`。
 - 新增协议 codec 注册表，并实现 `openai_chat_sse` 与 `openai_responses_sse`；Responses 事件按原始 SSE 事件名和 JSON object 保存，`response.completed` 作为协议终止事件。
-- 注册 `anthropic_messages_sse` 的接口和明确的未实现错误，但暂不添加 Anthropic 手写资源、录制资源或真实上游测试。
+- 实现 `anthropic_messages_sse` 的 codec 和完整手写 reasoning/tool cassette；本变更不包含真实 Anthropic 网络请求或 Anthropic adapter 的完整业务集成测试。
 - 让 record/replay transport 根据 cassette metadata 的协议选择 codec；record 继续把原始字节转发给 LiteLLM，replay 为每个请求创建独立的 wire stream。
 - 保留显式 `request_reusable` 和 `session_sequence` 两种回放策略，协议扩展不改变其并发隔离语义。
 - 增加 Responses 的手写基础文本资源、场景、配置和 LiteLLM 真实异步调用测试；现有 Chat 资源和测试继续作为回归基线。
 - 补齐 Chat Completions 与 Responses 各自的稳定语义基线：两者默认都覆盖 reasoning、tool call、工具结果后的再次 reasoning 和最终文本；Responses 另保留显式 reasoning + text 场景作为轻量协议测试基线。
 - 将 Chat Completions 默认测试基线固定为 `reasoning-tool`，将 Responses 默认测试基线固定为 `responses-reasoning-tool`；基础文本、仅 reasoning + text、特定工具和其它协议变体只能通过 `configs/tests/` 中的显式配置切换。
 - 为 Chat 多 interaction 回放增加不暴露消息正文的安全结构匹配字段，使首轮请求和携带工具结果的后续请求可被 cassette 唯一选择。
+- 增加 Responses 双 `read_file` 并发工具调用场景，手写 cassette 刻意交错两个 function call 的参数 delta，并要求解析和业务关联按 `item_id`/`call_id` 保持独立。
 - 继续使用 `configs/tests/` 中的 JSONC 控制测试 transport。协议由所选 cassette 的 metadata 决定，不在 scenario 中重复配置，避免 provider 配置、测试运行配置和上游协议出现三处真相。
-- 对未知协议、已注册但暂未实现的协议、非法事件、缺少协议终止事件、请求不匹配和不完整录制明确失败；不联网兜底、不返回默认数据。
+- 对未知协议、非法事件、缺少协议终止事件、请求不匹配和不完整录制明确失败；不联网兜底、不返回默认数据。
 
 ## Capabilities
 
@@ -31,8 +32,8 @@
 ## Impact
 
 - 测试基础设施：扩展 `app/testing/model_stream/` 的 frame、asset loader、SSE parser、codec registry 和 transport。
-- 测试资产：保留现有 `handwritten/openai_chat`，新增 Chat 完整 reasoning/tool loop cassette，并保留 `handwritten/openai_responses` 的完整 reasoning/tool loop cassette；Anthropic 只保留协议注册接口，不新增资源。
+- 测试资产：保留现有 `handwritten/openai_chat`，新增 Chat 完整 reasoning/tool loop cassette、Responses 完整 reasoning/tool loop cassette，以及 Anthropic Messages reasoning/tool cassette。
 - 测试配置：新增 Responses 场景配置，原有 Chat 配置保持可用；不把 API key 或 provider endpoint 写入测试控制配置。
-- 测试覆盖：Chat Completions 和 Responses 均覆盖真实 LiteLLM 异步 HTTP 路径，以及 reasoning、tool call、工具结果和最终文本的 E2E 结果；Anthropic 只验证接口可发现且会清晰报告“暂未实现”。
+- 测试覆盖：Chat Completions 和 Responses 均覆盖真实 LiteLLM 异步 HTTP 路径，以及 reasoning、tool call、工具结果和最终文本的 E2E 结果；Anthropic 覆盖 codec、asset、wire round-trip，完整 adapter 业务集成另行建设。
 - 生产边界：只在显式设置 `BOXTEAM_TEST_MODEL_STREAM_CONFIG` 时安装测试 transport；生产请求、业务事件、前端和工作区数据目录不变。
 - 录制产物：完整 cassette、incomplete 诊断和临时输出继续写入测试输出目录，不自动提升为长期 fixture。

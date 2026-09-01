@@ -9,8 +9,10 @@ from pathlib import Path
 
 import pytest
 
+import app.services.infrastructure.message_stream_store as message_stream_store_module
 from app.core.session_paths import SessionPathResolver
 from app.services.infrastructure.message_stream_store import (
+    MessageStreamCursorGoneError,
     MessageStreamError,
     MessageStreamStore,
     MessageStreamTerminalError,
@@ -83,6 +85,17 @@ async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
     assert duplicate == first
     assert (await subscription.get()).event["event_id"] == "evt_idempotent"
 
+    await writer.commit(
+        "block.completed",
+        {
+            "block_id": "block_1",
+            "block_index": 0,
+            "carrier_type": "reasoning",
+            "status": "completed",
+            "completion_reason": "upstream_completed",
+        },
+        block_id="block_1",
+    )
     await writer.close_completed()
     with pytest.raises(MessageStreamTerminalError):
         await writer.commit(
@@ -108,6 +121,164 @@ async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
     )
     assert "stream.completed" in [event["type"] for event in events]
     assert events[-1]["type"] == "interrupt.rejected"
+
+
+@pytest.mark.asyncio
+async def test_stream_events_do_not_duplicate_full_checkpoint_on_disk(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_compact_checkpoint")
+    for _ in range(32):
+        await writer.commit(
+            "block.delta",
+            {
+                "block_id": "block_1",
+                "carrier_type": "text",
+                "operation": "append",
+                "text": "x" * 256,
+            },
+            block_id="block_1",
+        )
+
+    stream_path = (
+        resolver.resolve_session_node(session_id)
+        / "message_streams"
+        / f"{writer.turn_stream_id}.jsonl"
+    )
+    state_path = stream_path.with_suffix(".state.json")
+    records = [json.loads(line) for line in stream_path.read_text().splitlines()]
+    assert all(record["checkpoint"] == {} for record in records)
+    assert state_path.is_file()
+    assert stream_path.stat().st_size < 100_000
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    restarted_writer = await restarted.open(
+        session_id=session_id,
+        turn_id="job_compact_checkpoint",
+    )
+    state = await restarted.get_state(restarted_writer.turn_stream_id)
+    assert state["snapshot_seq"] == 33
+    assert state["blocks"][0]["text"] == "x" * (256 * 32)
+
+
+@pytest.mark.asyncio
+async def test_oversized_stream_retains_tail_and_recovers_from_snapshot(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, resolver, session_id = message_stream_store
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1_000)
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 260)
+    writer = await store.open(session_id=session_id, turn_id="job_stream_retention")
+
+    for index in range(12):
+        await writer.commit(
+            "block.delta",
+            {
+                "block_id": "block_1",
+                "operation": "append",
+                "text": f"event-{index}",
+            },
+            block_id="block_1",
+        )
+
+    stream_path = (
+        resolver.resolve_session_node(session_id)
+        / "message_streams"
+        / f"{writer.turn_stream_id}.jsonl"
+    )
+    assert stream_path.stat().st_size < 1_000
+    with pytest.raises(MessageStreamCursorGoneError):
+        await store.list_events(
+            session_id=session_id,
+            turn_stream_id=writer.turn_stream_id,
+            after_seq=0,
+        )
+
+    snapshot = await store.snapshot_event(writer.turn_stream_id)
+    assert snapshot["payload"]["snapshot_seq"] == 13
+    assert snapshot["payload"]["blocks"][0]["text"].endswith("event-11")
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    restarted_writer = await restarted.open(
+        session_id=session_id,
+        turn_id="job_stream_retention",
+    )
+    restarted_state = await restarted.get_state(restarted_writer.turn_stream_id)
+    assert restarted_state["snapshot_seq"] == 13
+    assert restarted_state["blocks"][0]["text"].endswith("event-11")
+
+
+@pytest.mark.asyncio
+async def test_completed_stream_rejects_unfinished_entities(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, _, session_id = message_stream_store
+
+    model_writer = await store.open(
+        session_id=session_id,
+        turn_id="job_completed_with_model_running",
+    )
+    await model_writer.commit(
+        "model.started",
+        {"model_call_id": "model_1", "attempt": 1, "model": "test"},
+        model_call_id="model_1",
+    )
+    with pytest.raises(MessageStreamError, match="model_calls"):
+        await model_writer.close_completed()
+    assert (await store.get_state(model_writer.turn_stream_id))["stream_status"] == "open"
+
+    tool_writer = await store.open(
+        session_id=session_id,
+        turn_id="job_completed_with_tool_running",
+    )
+    await tool_writer.commit(
+        "tool.started",
+        {
+            "tool_execution_id": "exec_1",
+            "tool_call_id": "call_1",
+            "tool_name": "shell",
+        },
+        tool_execution_id="exec_1",
+    )
+    with pytest.raises(MessageStreamError, match="tool_executions"):
+        await tool_writer.close_completed()
+
+    activity_writer = await store.open(
+        session_id=session_id,
+        turn_id="job_completed_with_activity_running",
+    )
+    await activity_writer.commit(
+        "activity.started",
+        {
+            "activity_id": "activity_1",
+            "kind": "context.compaction",
+            "status": "running",
+        },
+    )
+    with pytest.raises(MessageStreamError, match="activities"):
+        await activity_writer.close_completed()
+
+
+@pytest.mark.asyncio
+async def test_existing_stream_ids_skip_legacy_turns_without_creating_streams(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_with_stream")
+
+    streams = await store.existing_stream_ids(
+        session_id=session_id,
+        turn_ids=["job_with_stream", "job_legacy"],
+    )
+
+    assert streams == {"job_with_stream": writer.turn_stream_id}
+    assert not (
+        resolver.resolve_session_node(session_id)
+        / "message_streams"
+        / "job_legacy.jsonl"
+    ).exists()
 
 
 @pytest.mark.asyncio

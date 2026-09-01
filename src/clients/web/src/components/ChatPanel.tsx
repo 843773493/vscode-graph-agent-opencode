@@ -84,8 +84,9 @@ export default function ChatPanel({
     requestIdentity?: string | null,
     refreshAfterInFlight?: boolean,
     include?: TurnHistoryInclude[],
+    toolCallIds?: string[],
   ) => Promise<void>;
-  onLoadToolDetails?: (turnId: string) => Promise<void>;
+  onLoadToolDetails?: (turnId: string, toolCallId: string) => Promise<void>;
   onLoadAgentStateMessageRawContent: (
     sessionId: string,
     messageId: string,

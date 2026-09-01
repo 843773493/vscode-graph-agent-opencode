@@ -8,7 +8,9 @@ from app.schemas.internal_v2.turn import (
     TurnBaseDTO,
     TurnCursorDTO,
     TurnDetailBatchRequest,
+    TurnDetailDTO,
     TurnSummaryDTO,
+    TurnThinkingBlockDTO,
     TurnUserMessageSummaryDTO,
 )
 
@@ -73,6 +75,20 @@ def test_turn_summary_rejects_unbounded_preview_and_lists() -> None:
 
     with pytest.raises(ValidationError):
         TurnSummaryDTO.model_validate(fields)
+
+
+def test_turn_details_preserve_more_than_32_thinking_blocks() -> None:
+    fields = _turn_fields()
+    blocks = [
+        TurnThinkingBlockDTO(kind="summary", text=f"block-{index}")
+        for index in range(33)
+    ]
+
+    summary = TurnSummaryDTO.model_validate({**fields, "thinking_blocks": blocks})
+    detail = TurnDetailDTO.model_validate({**fields, "thinking_blocks": blocks})
+
+    assert len(summary.thinking_blocks) == 33
+    assert len(detail.thinking_blocks) == 33
 
 
 def test_user_message_summary_has_no_content_metadata_or_data_url() -> None:

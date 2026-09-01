@@ -1,5 +1,5 @@
 import { installTerminalUserActions } from "./terminalUserActions.js";
-import { encodeTerminalClientMessage } from "../protocol/messages.js";
+import { encodeTerminalClientMessage } from "./protocol/messages.js";
 
 const params = new URLSearchParams(window.location.search);
 const terminalId = params.get("terminalId");

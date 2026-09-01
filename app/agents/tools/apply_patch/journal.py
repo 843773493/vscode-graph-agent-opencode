@@ -6,7 +6,6 @@ from pathlib import Path
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_workspace_root
 
-
 APPLY_PATCH_JOURNAL_DIR = "apply_patch"
 
 
@@ -40,6 +39,29 @@ def delete_apply_patch_journal(
         journal_path.unlink()
 
 
+def update_apply_patch_journal(
+    journal_id: str,
+    verification: list[dict[str, object]],
+    *,
+    workspace_root: Path | None = None,
+) -> None:
+    """把补丁写入后的实际文件校验结果追加到 journal。"""
+    journal_path = _journal_root(workspace_root) / f"{journal_id}.json"
+    if not journal_path.is_file():
+        raise RuntimeError(f"apply_patch journal 缺失: {journal_path}")
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"apply_patch journal 损坏: {journal_path}") from exc
+    if not isinstance(journal, dict):
+        raise TypeError(f"apply_patch journal 格式错误: {journal_path}")
+    journal["verification"] = verification
+    journal_path.write_text(
+        json.dumps(journal, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def load_apply_patch_journal_from_result(
     result_text: str,
     *,
@@ -50,7 +72,7 @@ def load_apply_patch_journal_from_result(
     except json.JSONDecodeError as exc:
         raise RuntimeError("apply_patch 工具结果不是合法 JSON，无法读取变更 journal") from exc
     if not isinstance(result, dict):
-        raise RuntimeError("apply_patch 工具结果格式错误，无法读取变更 journal")
+        raise TypeError("apply_patch 工具结果格式错误，无法读取变更 journal")
     journal_id = result.get("journal_id")
     if not isinstance(journal_id, str) or not journal_id.strip():
         raise RuntimeError("apply_patch 工具结果缺少 journal_id，无法记录文件变更")
@@ -63,7 +85,7 @@ def load_apply_patch_journal_from_result(
         raise RuntimeError(f"apply_patch journal 损坏: {journal_path}") from exc
     snapshots = journal.get("snapshots") if isinstance(journal, dict) else None
     if not isinstance(snapshots, list):
-        raise RuntimeError(f"apply_patch journal 格式错误: {journal_path}")
+        raise TypeError(f"apply_patch journal 格式错误: {journal_path}")
     return [snapshot for snapshot in snapshots if isinstance(snapshot, dict)]
 
 

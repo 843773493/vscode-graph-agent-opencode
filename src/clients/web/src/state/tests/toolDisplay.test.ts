@@ -67,3 +67,19 @@ test("write_stdin 使用模型熟悉的 session_id 展示持续终端", () => {
   expect(formatToolCardContent(item)).toContain("term_running");
   expect(formatToolCardContent(item)).toContain("yes");
 });
+
+test("未知工具结果不使用会误导为成功的折叠文案", () => {
+  const item = toolItem("read_file");
+  item.outcomeUnknown = true;
+
+  expect(toolCollapsedText(item)).toBe("未确认返回结果");
+});
+
+test("bundled Skill 的读取明确显示为 Skill 而不是项目文件", () => {
+  const item = toolItem("read_file");
+  item.rawStart.args = {
+    path: ".boxteam/bundled-skills/browser-control/SKILL.md",
+  };
+
+  expect(toolCollapsedText(item)).toBe("已读取 skill：browser-control");
+});

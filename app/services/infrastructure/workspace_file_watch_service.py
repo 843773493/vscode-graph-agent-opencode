@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import Literal
 
 from watchfiles import Change, awatch
+from watchfiles.filters import DefaultFilter
 
 logger = logging.getLogger(__name__)
 
 FILE_WATCH_DEBOUNCE_MS = 200
 FILE_WATCH_STEP_MS = 50
 FILE_WATCH_QUEUE_SIZE = 32
+WORKSPACE_FILE_WATCH_FILTER = DefaultFilter(
+    ignore_dirs=[*DefaultFilter.ignore_dirs, ".boxteam"],
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +173,7 @@ class WorkspaceFileWatchService:
             first_iteration = True
             async for raw_changes in awatch(
                 root,
+                watch_filter=WORKSPACE_FILE_WATCH_FILTER,
                 debounce=FILE_WATCH_DEBOUNCE_MS,
                 step=FILE_WATCH_STEP_MS,
                 rust_timeout=FILE_WATCH_STEP_MS,

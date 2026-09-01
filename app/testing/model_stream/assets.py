@@ -20,6 +20,7 @@ ProtocolId = Literal[
     "openai_responses_sse",
     "anthropic_messages_sse",
 ]
+CassetteProtocol = ProtocolId | Literal["mixed"]
 
 _SCENARIO_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -75,6 +76,7 @@ class ReplaySpec:
 class Interaction:
     request: RequestSpec
     response: ResponseSpec
+    protocol: ProtocolId
     replay: ReplaySpec | None
     index: int
 
@@ -142,7 +144,12 @@ def _frame(value: object, *, label: str) -> StreamFrame:
     )
 
 
-def _interaction(value: object, *, index: int) -> Interaction:
+def _interaction(
+    value: object,
+    *,
+    index: int,
+    default_protocol: ProtocolId | None,
+) -> Interaction:
     label = f"interactions[{index}]"
     raw = _object(value, label=label)
     request = _object(raw.get("request"), label=f"{label}.request")
@@ -191,9 +198,18 @@ def _interaction(value: object, *, index: int) -> Interaction:
             )
         replay = ReplaySpec(sequence_id=sequence_id, step=step)
 
+    raw_protocol = raw.get("protocol", default_protocol)
+    if not isinstance(raw_protocol, str) or not raw_protocol:
+        raise ModelStreamAssetError(
+            f"{label}.protocol 必须是非空 provider stream protocol"
+        )
+    from .protocols import get_protocol_codec
+
+    protocol = get_protocol_codec(raw_protocol).protocol_id
     return Interaction(
         request=RequestSpec(method=method.upper(), url=url, match=copy.deepcopy(match)),
         response=ResponseSpec(status=status, headers=headers, frames=frames),
+        protocol=protocol,
         replay=replay,
         index=index,
     )
@@ -232,7 +248,7 @@ def load_cassette(path: Path | str) -> ModelStreamCassette:
         )
     from .protocols import get_protocol_codec
 
-    codec = get_protocol_codec(protocol)
+    default_protocol = None if protocol == "mixed" else get_protocol_codec(protocol).protocol_id
     _required_str(metadata.get("asset_id"), label=f"{resolved_path}.metadata.asset_id")
     raw_interactions = raw.get("interactions")
     if not isinstance(raw_interactions, list) or not raw_interactions:
@@ -240,14 +256,21 @@ def load_cassette(path: Path | str) -> ModelStreamCassette:
             f"模型 stream asset interactions 必须是非空数组: path={resolved_path}"
         )
     interactions = tuple(
-        _interaction(interaction, index=index)
+        _interaction(
+            interaction,
+            index=index,
+            default_protocol=default_protocol,
+        )
         for index, interaction in enumerate(raw_interactions)
     )
     _validate_sequence_steps(interactions, resolved_path)
     for interaction in interactions:
-        codec.validate_stream(
+        get_protocol_codec(interaction.protocol).validate_stream(
             interaction.response.frames,
-            label=f"{resolved_path}.interactions[{interaction.index}].response",
+            label=(
+                f"{resolved_path}.interactions[{interaction.index}]"
+                f".response protocol={interaction.protocol!r}"
+            ),
         )
     return ModelStreamCassette(
         schema_version=1,
@@ -437,20 +460,27 @@ def load_cassette_from_object(raw: dict[str, object]) -> ModelStreamCassette:
         raise ModelStreamAssetError("内存 cassette metadata.protocol 必须是字符串")
     from .protocols import get_protocol_codec
 
-    codec = get_protocol_codec(protocol)
+    default_protocol = None if protocol == "mixed" else get_protocol_codec(protocol).protocol_id
     _required_str(metadata.get("asset_id"), label="cassette.metadata.asset_id")
     interactions = raw.get("interactions")
     if not isinstance(interactions, list):
         raise ModelStreamAssetError("cassette.interactions 必须是数组")
     parsed_interactions = tuple(
-        _interaction(interaction, index=index)
+        _interaction(
+            interaction,
+            index=index,
+            default_protocol=default_protocol,
+        )
         for index, interaction in enumerate(interactions)
     )
     _validate_sequence_steps(parsed_interactions, Path("<memory>"))
     for interaction in parsed_interactions:
-        codec.validate_stream(
+        get_protocol_codec(interaction.protocol).validate_stream(
             interaction.response.frames,
-            label=f"cassette.interactions[{interaction.index}].response",
+            label=(
+                f"cassette.interactions[{interaction.index}].response "
+                f"protocol={interaction.protocol!r}"
+            ),
         )
     return ModelStreamCassette(
         schema_version=1,

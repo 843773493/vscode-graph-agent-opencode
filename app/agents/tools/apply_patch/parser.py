@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
-import re
 
 from app.agents.tools.apply_patch.matcher import (
     IndentStyle,
@@ -27,7 +27,6 @@ from app.agents.tools.apply_patch.models import (
     Patch,
     PatchAction,
 )
-
 
 PATCH_PREFIX = "*** Begin Patch"
 PATCH_SUFFIX = "*** End Patch"

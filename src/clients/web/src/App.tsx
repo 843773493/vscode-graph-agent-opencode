@@ -97,7 +97,6 @@ type ExtensionWindowRequest = {
 };
 
 const EXTENSION_WINDOW_NAME = "boxteam-extension";
-
 function resolveExtensionWindowRequest(): ExtensionWindowRequest | null {
   if (typeof window === "undefined") {
     return null;
@@ -197,12 +196,13 @@ export default function AppShell() {
     loadOlderTraceHistory,
     refreshTraceHistory,
   } = useAppState();
-  const loadCurrentTurnToolDetails = useCallback(
-    (turnId: string) => loadTurnDetails(
+  const loadToolDetails = useCallback(
+    (turnId: string, toolCallId: string) => loadTurnDetails(
       [turnId],
-      `tool-details:${turnId}`,
+      `tool-details:${turnId}:${toolCallId}`,
       false,
-      ["user", "tool_call", "tool_result", "final_response"],
+      ["tool_call", "tool_result"],
+      [toolCallId],
     ),
     [loadTurnDetails],
   );
@@ -263,6 +263,7 @@ export default function AppShell() {
   } | null>(null);
   const [defaultViewChangesLoading, setDefaultViewChangesLoading] = useState(false);
   const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
+  const defaultViewChangesRequestScopeRef = useRef<string | null>(null);
   const cleanupLayoutResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
@@ -523,7 +524,10 @@ export default function AppShell() {
   const extensionResources = useGatewayExtensionResources({
     apiPort: resolvedApiPort,
     initialResourceKey: extensionResourceKey,
-    enabled: true,
+    enabled:
+      extensionWindowRequested
+      || extensionWindowFallback
+      || (panelVisible && bottomPanelState.tab === "terminal"),
   });
   const workspaceTerminalEntries = useMemo(
     () => extensionResources.entries.filter(
@@ -591,7 +595,10 @@ export default function AppShell() {
   )
     ? previewError
     : null;
-  const resourcePanelActive = auxiliaryVisible && auxiliaryTab === "resources";
+  const resourcePanelActive =
+    auxiliaryVisible
+    && auxiliaryTab === "resources"
+    && state.gatewayUserAccess !== null;
 
   const sharedPreviewTab = auxiliaryTab === "files" || auxiliaryTab === "changes" || (
     auxiliaryTab === "debug" && (extensionWindowRequested || extensionWindowFallback)
@@ -640,7 +647,11 @@ export default function AppShell() {
     let disposed = false;
     let pollInFlight = false;
     const poll = async (silent: boolean) => {
-      if (disposed || pollInFlight || document.visibilityState !== "visible") {
+      if (
+        disposed
+        || pollInFlight
+        || (silent && document.visibilityState !== "visible")
+      ) {
         return;
       }
       pollInFlight = true;
@@ -658,7 +669,12 @@ export default function AppShell() {
       window.clearTimeout(initialTimerId);
       window.clearInterval(timerId);
     };
-  }, [activeSession, refreshSessionResources, resourcePanelActive]);
+  }, [
+    activeSession,
+    activeSessionCacheKey,
+    refreshSessionResources,
+    resourcePanelActive,
+  ]);
 
   const openSessionChangeInPreview = (file: SessionFileChange) => {
     if (!state.activeChangeset) {
@@ -690,41 +706,56 @@ export default function AppShell() {
     }
 
     let cancelled = false;
+    const requestScope =
+      (activeSessionWorkspaceId ?? "") + ":" + activeSession.session_id;
+    if (defaultViewChangesRequestScopeRef.current === requestScope) {
+      return;
+    }
+    defaultViewChangesRequestScopeRef.current = requestScope;
     setDefaultViewChangesLoading(true);
-    void getSessionChangesets(
-      resolvedApiPort,
-      activeSession.session_id,
-      activeSessionWorkspaceId,
-    )
-      .then((list) => {
-        if (cancelled) {
-          return;
-        }
-        const summary =
-          list.items.find((item) => item.is_default)?.summary ??
-          list.items[0]?.summary ??
-          { files: 0, additions: 0, deletions: 0 };
-        setDefaultViewChangesHint({
-          sessionId: activeSession.session_id,
-          summary,
+    let requestStarted = false;
+    const timerId = window.setTimeout(() => {
+      requestStarted = true;
+      void getSessionChangesets(
+        resolvedApiPort,
+        activeSession.session_id,
+        activeSessionWorkspaceId,
+      )
+        .then((list) => {
+          if (cancelled) {
+            return;
+          }
+          const summary =
+            list.items.find((item) => item.is_default)?.summary ??
+            list.items[0]?.summary ??
+            { files: 0, additions: 0, deletions: 0 };
+          setDefaultViewChangesHint({
+            sessionId: activeSession.session_id,
+            summary,
+          });
+        })
+        .catch((error: unknown) => {
+          if (cancelled) {
+            return;
+          }
+          defaultViewChangesRequestScopeRef.current = null;
+          const message = error instanceof Error ? error.message : String(error);
+          setDefaultViewChangesHint(null);
+          setStatus(`会话文件变更提示加载失败: ${message}`);
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setDefaultViewChangesLoading(false);
+          }
         });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        setDefaultViewChangesHint(null);
-        setStatus(`会话文件变更提示加载失败: ${message}`);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setDefaultViewChangesLoading(false);
-        }
-      });
+    }, 120);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timerId);
+      if (!requestStarted && defaultViewChangesRequestScopeRef.current === requestScope) {
+        defaultViewChangesRequestScopeRef.current = null;
+      }
     };
   }, [
     activeSession,
@@ -974,9 +1005,20 @@ export default function AppShell() {
   const extensionDebugSplitActive = extensionWindowVisible &&
     auxiliaryTab === "debug" &&
     sharedPreviewVisible;
+  const activeRuntimePreviewResource = activeRuntimePreview
+    ? state.sessionResources.find((resource) =>
+        resource.resource_id === (
+          activeRuntimePreview.previewType === "browser"
+            ? activeRuntimePreview.browserId
+            : activeRuntimePreview.terminalId
+        )
+        && resource.kind === activeRuntimePreview.previewType
+        && resource.status === "running",
+      ) ?? null
+    : null;
   const runtimePreviewTab = extensionWindowRequested
     ? extensionPreviewTab
-    : extensionWindowFallback
+    : extensionWindowFallback && activeRuntimePreviewResource
       ? activeRuntimePreview
       : null;
   const handleOpenChangesView = () => {
@@ -1457,7 +1499,7 @@ export default function AppShell() {
             onLoadAroundTurn={loadAroundTurn}
             loadingDetailTurnIds={activeTurnTimeline?.loadingDetailIds ?? []}
             onLoadTurnDetails={loadTurnDetails}
-            onLoadToolDetails={loadCurrentTurnToolDetails}
+            onLoadToolDetails={loadToolDetails}
             onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
             onRetryHistory={refreshTurnHistory}
             sessionChangeSummary={activeSessionChangeHint}
@@ -1690,7 +1732,9 @@ export default function AppShell() {
                   onSelectAuxiliaryTab={openAuxiliaryTab}
                   onReorderAuxiliaryTabs={handleAuxiliaryTabReorder}
                 />
-                <div className={`workspace-editor-body workspace-editor-body-${auxiliaryTab}`}>
+                <div className={`workspace-editor-body workspace-editor-body-${auxiliaryTab}${
+                  sharedPreviewVisible ? " has-shared-preview" : ""
+                }`}>
                   {sharedPreviewTab ? (
                     sharedPreviewVisible ? (
                       <WorkspaceFilePreviewArea
@@ -1772,6 +1816,11 @@ export default function AppShell() {
                     tab={auxiliaryTab}
                     apiPort={resolvedApiPort}
                     workspaceId={activeSessionWorkspaceId}
+                    workspaceFileTreeReady={
+                      !state.isBootstrapping
+                      && state.gatewayUserAccess !== null
+                      && activeSessionWorkspaceId !== null
+                    }
                     workspaceName={state.workspaceName ?? ""}
                     workspaceRoot={state.workspaceRoot ?? ""}
                     sessionId={activeSession?.session_id ?? ""}
@@ -1817,7 +1866,7 @@ export default function AppShell() {
                       ) : (
                         <ResourcePanel
                           resources={state.sessionResources}
-                          loading={state.sessionResourcesLoading}
+                          loading={state.sessionResourcesLoading || state.gatewayUserAccess === null}
                           error={state.sessionResourcesError}
                           loadedAt={state.sessionResourcesLoadedAt}
                           sessionId={activeSession?.session_id ?? ""}
@@ -1927,7 +1976,7 @@ export default function AppShell() {
           {bottomPanelState.tab === "terminal" ? (
             <TerminalPanel
               entries={workspaceTerminalEntries}
-              workspaceId={activeSessionWorkspaceId}
+              workspaceId={bottomPanelWorkspaceId}
               workspaceName={state.workspaceName ?? ""}
               selectedTerminalId={bottomPanelState.terminalId}
               height={bottomPanelState.height}
@@ -1973,7 +2022,7 @@ export default function AppShell() {
           ) : (
             <GatewayLogPanel
               apiPort={resolvedApiPort}
-              workspaceId={activeSessionWorkspaceId}
+              workspaceId={bottomPanelWorkspaceId}
               height={bottomPanelState.height}
               onOpenTerminal={() => updateBottomPanelState({ tab: "terminal" })}
               onOpenPorts={() => updateBottomPanelState({ tab: "ports" })}

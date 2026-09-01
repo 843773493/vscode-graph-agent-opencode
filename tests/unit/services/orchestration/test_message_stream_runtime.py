@@ -40,6 +40,30 @@ async def test_next_model_attempt_does_not_duplicate_completed_model_call() -> N
 
 
 @pytest.mark.asyncio
+async def test_provider_fallback_marks_previous_model_attempt_failed() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    await runtime.start_model("model_1", "backup_3")
+    await runtime.fail_model(
+        code="BadRequestError",
+        message="tool call/result 不匹配",
+    )
+    await runtime.start_model("model_2", "backup_4")
+
+    events = [call.args for call in writer.commit.await_args_list]
+    assert [event[0] for event in events] == [
+        "model.started",
+        "model.failed",
+        "model.started",
+    ]
+    assert events[1][1]["model_call_id"] == "model_1"
+    assert events[1][1]["outcome"] == "upstream_error"
+    assert events[2][1]["model_call_id"] == "model_2"
+
+
+@pytest.mark.asyncio
 async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_execution() -> None:
     writer = MagicMock()
     writer.commit = AsyncMock()
@@ -266,14 +290,15 @@ async def test_interruption_finalizes_partial_blocks_calls_and_unknown_tool_resu
         "block.delta",
         "block.completed",
         "tool_call.delta",
-        "tool.started",
         "tool_call.completed",
+        "tool.started",
         "tool.completed",
         "model.failed",
     ]
     # tool_call 到来会先闭合 reasoning block，属于 carrier 切换而非中断收尾。
     assert calls[3][1]["partial"] is False
-    assert calls[6][1]["status"] == "incomplete"
+    assert calls[5][1]["status"] == "completed"
+    assert calls[5][1]["completion_reason"] == "tool_started"
     assert calls[7][1]["status"] == "completed"
     assert calls[7][1]["outcome"] == "outcome_unknown"
     assert calls[8][1]["outcome"] == "user_interrupt"

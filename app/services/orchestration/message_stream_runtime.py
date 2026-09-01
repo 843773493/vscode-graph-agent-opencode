@@ -143,6 +143,7 @@ class MessageStreamRuntime:
         self._tool_call_arguments_by_id: dict[str, dict[str, object]] = {}
         self._tool_call_arguments_complete: dict[str, bool] = {}
         self._claimed_tool_call_ids: set[str] = set()
+        self._completed_tool_call_ids: set[str] = set()
         self._started_tool_execution_ids: set[str] = set()
         self._active_tool_executions: dict[str, tuple[str, str]] = {}
         self._model_completed = False
@@ -172,6 +173,7 @@ class MessageStreamRuntime:
         self._tool_call_arguments_by_id.clear()
         self._tool_call_arguments_complete.clear()
         self._claimed_tool_call_ids.clear()
+        self._completed_tool_call_ids.clear()
         self._started_tool_execution_ids.clear()
         self._active_tool_executions.clear()
         await self.writer.commit(
@@ -214,7 +216,7 @@ class MessageStreamRuntime:
             raw_block_id
             if isinstance(raw_block_id, str) and raw_block_id
             else self._fallback_block_id(carrier_type, block_index)
-        ) 
+        )
         if block_id not in self._active_blocks:
             for previous_block_id in tuple(self._active_block_order):
                 if previous_block_id != block_id and previous_block_id in self._active_blocks:
@@ -461,6 +463,7 @@ class MessageStreamRuntime:
             },
             model_call_id=self.current_model_call_id,
         )
+        self._model_completed = True
 
     async def start_tool(
         self,
@@ -469,6 +472,22 @@ class MessageStreamRuntime:
         tool_call_id: str,
         tool_name: str,
     ) -> None:
+        if tool_call_id not in self._completed_tool_call_ids:
+            await self.writer.commit(
+                "tool_call.completed",
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "status": "completed",
+                    "completion_reason": "tool_started",
+                    "arguments_complete": self._tool_call_arguments_complete.get(
+                        tool_call_id,
+                        False,
+                    ),
+                },
+                model_call_id=self.current_model_call_id,
+            )
+            self._completed_tool_call_ids.add(tool_call_id)
         self._started_tool_execution_ids.add(tool_execution_id)
         self._active_tool_executions[tool_execution_id] = (tool_call_id, tool_name)
         await self.writer.commit(
@@ -521,6 +540,46 @@ class MessageStreamRuntime:
             return tool_call_id
         return None
 
+    def pending_tool_calls(self) -> tuple[tuple[str, str, bool], ...]:
+        """返回已经收到但尚未进入 Agent 工具执行器的调用。"""
+        pending: list[tuple[str, str, bool]] = []
+        for tool_call_id in self._tool_call_ids_by_index.values():
+            if (
+                tool_call_id in self._claimed_tool_call_ids
+                or tool_call_id in self._completed_tool_call_ids
+            ):
+                continue
+            pending.append(
+                (
+                    tool_call_id,
+                    self._tool_call_names_by_id.get(tool_call_id, ""),
+                    self._tool_call_arguments_complete.get(tool_call_id, False),
+                )
+            )
+        return tuple(pending)
+
+    async def fail_pending_tool_calls(
+        self,
+        *,
+        completion_reason: str,
+        error: str,
+    ) -> None:
+        """在分派丢失时闭合工具调用，避免 snapshot 永远停在 accumulating。"""
+        for tool_call_id, tool_name, arguments_complete in self.pending_tool_calls():
+            await self.writer.commit(
+                "tool_call.completed",
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "status": "incomplete",
+                    "completion_reason": completion_reason,
+                    "arguments_complete": arguments_complete,
+                    "error": error,
+                },
+                model_call_id=self.current_model_call_id,
+            )
+            self._completed_tool_call_ids.add(tool_call_id)
+
     async def complete_tool(
         self,
         *,
@@ -569,7 +628,7 @@ class MessageStreamRuntime:
             partial=True,
         )
         for tool_call_id in tuple(self._tool_call_ids_by_index.values()):
-            if tool_call_id in self._started_tool_execution_ids:
+            if tool_call_id in self._completed_tool_call_ids:
                 continue
             arguments_complete = self._tool_call_arguments_complete.get(
                 tool_call_id,
@@ -586,6 +645,7 @@ class MessageStreamRuntime:
                 },
                 model_call_id=self.current_model_call_id,
             )
+            self._completed_tool_call_ids.add(tool_call_id)
         for tool_execution_id, (tool_call_id, tool_name) in tuple(
             self._active_tool_executions.items()
         ):

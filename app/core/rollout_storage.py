@@ -13,11 +13,12 @@ import os
 import shutil
 import sqlite3
 import threading
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Self
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -42,6 +43,16 @@ ROLLOUT_SCHEMA_VERSION = 1
 MESSAGE_FORMAT_VERSION = 1
 _DEFAULT_NAMESPACE = ""
 _VISIBLE_TEXT_LIMIT = 64 * 1024
+_ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS = 10.0
+_ROLLOUT_FILE_LOCK_POLL_INTERVAL_SECONDS = 0.05
+# 旧版本曾把隐藏 system_reminder 建成 normal Turn。读取上下文时只把含有
+# 可见用户消息的 normal Turn 作为聊天轮次，避免历史中出现空的 assistant Turn。
+_VISIBLE_NORMAL_TURN_PREDICATE = (
+    "EXISTS (SELECT 1 FROM messages AS visible_user_message "
+    "WHERE visible_user_message.turn_id = t.turn_id "
+    "AND visible_user_message.role = 'user' "
+    "AND visible_user_message.visibility = 'visible')"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,9 +87,18 @@ class RolloutTurnAnchor:
 class _RolloutFileLock:
     """为 JSONL 与 SQLite 的跨文件读取/写入提供进程间文件锁。"""
 
-    def __init__(self, path: Path, *, exclusive: bool) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        exclusive: bool,
+        timeout_seconds: float = _ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS,
+    ) -> None:
+        if isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            raise ValueError("rollout 文件锁 timeout_seconds 必须大于 0")
         self._path = path
         self._exclusive = exclusive
+        self._timeout_seconds = timeout_seconds
         self._handle: BinaryIO | None = None
 
     def acquire(self) -> None:
@@ -99,7 +119,25 @@ class _RolloutFileLock:
                 import fcntl
 
                 mode = fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH
-                fcntl.flock(handle.fileno(), mode)
+                deadline = time.monotonic() + self._timeout_seconds
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
+                    except BlockingIOError as error:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError(
+                                "rollout 文件锁获取超时: "
+                                f"path={self._path} timeout_seconds={self._timeout_seconds:g}"
+                            ) from error
+                        time.sleep(
+                            min(_ROLLOUT_FILE_LOCK_POLL_INTERVAL_SECONDS, remaining)
+                        )
+                    else:
+                        break
+        except TimeoutError:
+            handle.close()
+            raise
         except (BlockingIOError, OSError) as error:
             handle.close()
             raise RuntimeError(f"rollout 文件锁获取失败: {self._path}") from error
@@ -133,7 +171,7 @@ class _RolloutOperationLock:
         self._depth = 0
         self._file_lock: _RolloutFileLock | None = None
 
-    def __enter__(self) -> _RolloutOperationLock:
+    def __enter__(self) -> Self:
         self._thread_lock.acquire()
         if self._depth == 0:
             file_lock = _RolloutFileLock(self._path, exclusive=True)
@@ -196,7 +234,7 @@ class RolloutReadSnapshot:
             self.connection.close()
             self.file_lock.release()
 
-    def __enter__(self) -> RolloutReadSnapshot:
+    def __enter__(self) -> Self:
         if self._closed:
             raise RuntimeError("rollout read snapshot 已关闭")
         return self
@@ -322,6 +360,11 @@ def _turn_id(message: BaseMessage, current: str | None, message_id: str) -> str:
     ):
         if isinstance(value, str) and value:
             return value
+    # 隐藏的 system_reminder 是 checkpoint 的控制记录，不是用户发起的
+    # 新 Turn。若沿用 current 会把它挂到旧 Turn，若按 HumanMessage 的
+    # 默认规则则会生成一个空的可见 Turn；两者都会破坏历史与重试关联。
+    if _is_internal(message):
+        return f"internal-{hashlib.sha256(message_id.encode()).hexdigest()[:24]}"
     if isinstance(message, HumanMessage):
         return f"turn-{hashlib.sha256(message_id.encode()).hexdigest()[:24]}"
     return current or f"internal-{hashlib.sha256(message_id.encode()).hexdigest()[:24]}"
@@ -544,13 +587,108 @@ class RolloutStorage:
                         "UPDATE database_meta SET database_state = 'recovery_required', updated_at = ? WHERE singleton_id = 1",
                         (_now(),),
                     )
-                    raise RuntimeError(
+                    raise TypeError(
                         "rollout.jsonl 小于 SQLite 已提交偏移，无法安全恢复"
                     )
                 if file_size > committed_offset:
                     with path.open("r+b") as stream:
                         stream.truncate(committed_offset)
                 return self._manifest_from_connection(connection, checkpoint_ns)
+
+    def repair_active_context_view(
+        self,
+        thread_id: str,
+        checkpoint_ns: str = "",
+    ) -> bool:
+        """修复 active view 的 Turn 索引，不重写 canonical 消息文件。
+
+        旧版本按全局消息序号连续性判断 Turn 完整性。并发执行时不同 Turn
+        的消息会交错，导致 view 的消息范围存在但 ``context_view_turns`` 被
+        错误删空。这里依据每个 Turn 自身的消息集合重新计算索引；只有索引
+        与规范结果不一致时才写 SQLite，避免普通只读请求产生文件监听噪声。
+        """
+        with self._lock(thread_id, checkpoint_ns):
+            self.initialize(thread_id, checkpoint_ns)
+            with self._connect(thread_id, checkpoint_ns) as connection:
+                namespace = self._namespace_state(connection, checkpoint_ns)
+                branch_row = connection.execute(
+                    "SELECT head_view_id FROM branches WHERE branch_id = ? AND status = 'active'",
+                    (namespace[0],),
+                ).fetchone()
+                if branch_row is None or branch_row[0] is None:
+                    return False
+                view_id = str(branch_row[0])
+                visible_sequences = set(
+                    self._view_message_sequences_from_connection(connection, view_id)
+                )
+                expected: list[tuple[str, int, int | None, int | None]] = []
+                turn_rows = connection.execute(
+                    f"SELECT turn_id, first_message_sequence, last_message_sequence, user_message_sequence, final_message_sequence FROM turns AS t WHERE t.turn_kind = 'normal' AND t.user_message_sequence IS NOT NULL AND {_VISIBLE_NORMAL_TURN_PREDICATE} ORDER BY t.turn_ordinal"
+                ).fetchall()
+                for row in turn_rows:
+                    turn_id = str(row[0])
+                    turn_sequences = {
+                        int(message_row[0])
+                        for message_row in connection.execute(
+                            "SELECT message_sequence FROM messages WHERE turn_id = ?",
+                            (turn_id,),
+                        ).fetchall()
+                    }
+                    if turn_sequences and turn_sequences.issubset(visible_sequences):
+                        expected.append(
+                            (
+                                turn_id,
+                                int(row[1]),
+                                int(row[3]) if row[3] is not None else None,
+                                int(row[4]) if row[4] is not None else None,
+                            )
+                        )
+                current = [
+                    (str(row[0]), int(row[1]), row[2], row[3])
+                    for row in connection.execute(
+                        "SELECT turn_id, logical_turn_ordinal, user_message_sequence, final_message_sequence FROM context_view_turns WHERE view_id = ? ORDER BY logical_turn_ordinal",
+                        (view_id,),
+                    ).fetchall()
+                ]
+                normalized_expected = [
+                    (turn_id, ordinal, user_sequence, final_sequence)
+                    for ordinal, (turn_id, _first, user_sequence, final_sequence) in enumerate(
+                        expected, start=1
+                    )
+                ]
+                view_header = connection.execute(
+                    "SELECT head_turn_id, head_message_sequence, logical_turn_count FROM context_views WHERE view_id = ?",
+                    (view_id,),
+                ).fetchone()
+                expected_head = normalized_expected[-1][0] if normalized_expected else None
+                expected_sequence = max(visible_sequences, default=0)
+                if (
+                    current == normalized_expected
+                    and view_header is not None
+                    and view_header[0] == expected_head
+                    and int(view_header[1]) == expected_sequence
+                    and int(view_header[2]) == len(normalized_expected)
+                ):
+                    return False
+                connection.execute(
+                    "DELETE FROM context_view_turns WHERE view_id = ?",
+                    (view_id,),
+                )
+                connection.executemany(
+                    "INSERT INTO context_view_turns(view_id, turn_id, logical_turn_ordinal, user_message_sequence, final_message_sequence) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        (view_id, turn_id, ordinal, user_sequence, final_sequence)
+                        for ordinal, (turn_id, _first, user_sequence, final_sequence) in enumerate(
+                            expected, start=1
+                        )
+                    ),
+                )
+                connection.execute(
+                    "UPDATE context_views SET head_turn_id = ?, head_message_sequence = ?, logical_turn_count = ? WHERE view_id = ?",
+                    (expected_head, expected_sequence, len(normalized_expected), view_id),
+                )
+                connection.commit()
+                return True
 
     @staticmethod
     def _is_removed_rollout_layout(root: Path) -> bool:
@@ -753,7 +891,7 @@ class RolloutStorage:
                         (_now(),),
                     )
                     connection.commit()
-                    raise RuntimeError(
+                    raise TypeError(
                         "rollout compaction 缺少旧 JSONL 或 SQLite 备份，无法安全恢复"
                     )
                 self._copy_file_fsync(old_backup, current_path)
@@ -855,8 +993,9 @@ class RolloutStorage:
                 file_lock.release()
                 # 只读快照不能写入 recovery 标记；释放共享锁后再通过统一
                 # 写锁更新权威状态，避免维护按钮得到一个二次 readonly 错误。
-                with self._lock(thread_id, checkpoint_ns):
-                    with self._connect(thread_id, checkpoint_ns) as writable:
+                with self._lock(thread_id, checkpoint_ns), self._connect(
+                    thread_id, checkpoint_ns
+                ) as writable:
                         writable.execute(
                             "UPDATE database_meta SET database_state = 'recovery_required', updated_at = ? WHERE singleton_id = 1",
                             (_now(),),
@@ -1373,6 +1512,8 @@ class RolloutStorage:
                 CREATE INDEX IF NOT EXISTS turns_ordinal_index ON turns(turn_ordinal);
                 CREATE INDEX IF NOT EXISTS context_view_turns_ordinal_index ON context_view_turns(view_id, logical_turn_ordinal);
                 CREATE INDEX IF NOT EXISTS context_view_turns_turn_index ON context_view_turns(turn_id, view_id);
+                CREATE INDEX IF NOT EXISTS tool_calls_id_index ON tool_calls(tool_call_id, assistant_message_sequence);
+                CREATE INDEX IF NOT EXISTS tool_calls_result_sequence_index ON tool_calls(result_message_sequence);
                 CREATE INDEX IF NOT EXISTS checkpoint_commit_index ON checkpoints(commit_id DESC);
                 CREATE INDEX IF NOT EXISTS checkpoint_channels_view_index ON checkpoint_channels(context_view_id);
                 CREATE INDEX IF NOT EXISTS pending_writes_checkpoint_index ON pending_writes(checkpoint_id, task_path, write_index);
@@ -1426,7 +1567,7 @@ class RolloutStorage:
             serializer = value.get("serializer_name")
             blob = value.get("value_blob")
         if not isinstance(serializer, str) or not isinstance(blob, (bytes, bytearray)):
-            raise RuntimeError("SQLite serialized value 结构非法")
+            raise TypeError("SQLite serialized value 结构非法")
         return self._serde.loads_typed((serializer, bytes(blob)))
 
     def append_checkpoint(
@@ -1629,7 +1770,7 @@ class RolloutStorage:
                         timestamp,
                     )
                 active_view_row = connection.execute(
-                    "SELECT head_view_id FROM branches WHERE branch_id = ? AND status = 'active'",
+                    "SELECT head_view_id, head_checkpoint_id FROM branches WHERE branch_id = ? AND status = 'active'",
                     (active_branch,),
                 ).fetchone()
                 parent_view_id = (
@@ -1639,6 +1780,36 @@ class RolloutStorage:
                     if parent
                     else None
                 )
+                if active_view_row is not None and active_view_row[0] is not None:
+                    active_view_sequences = set(
+                        self._view_message_sequences_from_connection(
+                            connection,
+                            str(active_view_row[0]),
+                        )
+                    )
+                    # rewind 创建的 view 是一次上下文边界。重放 checkpoint
+                    # 通常同时携带边界内的旧前缀和新的 assistant 消息；此时
+                    # 父 view 中被替换的 canonical suffix 不能再次继承。只在
+                    # 已有前缀与新消息同时出现时切换为 replacement，避免
+                    # 增量 ToolMessage/新用户消息丢失 rewind 前缀。
+                    active_view_kind = connection.execute(
+                        "SELECT view_kind FROM context_views WHERE view_id = ?",
+                        (str(active_view_row[0]),),
+                    ).fetchone()
+                    is_rewind_replacement = (
+                        active_view_kind is not None
+                        and active_view_kind[0] == "rewind"
+                        and any(
+                            sequence in active_view_sequences
+                            for sequence in visible_sequences
+                        )
+                        and any(
+                            sequence not in active_view_sequences
+                            for sequence in visible_sequences
+                        )
+                    )
+                    if is_rewind_replacement:
+                        parent_view_id = None
                 channel_values = checkpoint.get("channel_values")
                 has_compaction_event = isinstance(channel_values, Mapping) and (
                     "_summarization_event" in channel_values
@@ -1803,22 +1974,38 @@ class RolloutStorage:
         sequence_values = tuple(
             dict.fromkeys(int(value) for value in visible_sequences)
         )
+        materialized_sequences = sequence_values
+        if parent_view_id and view_kind == "checkpoint":
+            # 新 checkpoint 的 visible_sequences 可能只是本次 delta；Turn
+            # 索引也必须基于完整的父链，否则最新 view 会只有 ToolMessage，
+            # 历史分页会暂时看不到这条正在执行的 Turn。
+            materialized_sequences = tuple(
+                dict.fromkeys(
+                    [
+                        *self._view_message_sequences_from_connection(
+                            connection,
+                            parent_view_id,
+                        ),
+                        *sequence_values,
+                    ]
+                )
+            )
         message_rows = (
             connection.execute(
                 "SELECT message_sequence, turn_id FROM messages WHERE message_sequence IN ("
-                + ",".join("?" for _ in sequence_values)
+                + ",".join("?" for _ in materialized_sequences)
                 + ")",
-                sequence_values,
+                materialized_sequences,
             ).fetchall()
-            if sequence_values
+            if materialized_sequences
             else []
         )
         turn_by_sequence = {
             int(sequence): str(turn_id) for sequence, turn_id in message_rows
         }
         turn_ids: list[str] = []
-        sequence_set = set(sequence_values)
-        for sequence in sequence_values:
+        sequence_set = set(materialized_sequences)
+        for sequence in materialized_sequences:
             value = turn_by_sequence.get(sequence)
             if value is None:
                 continue
@@ -1828,15 +2015,20 @@ class RolloutStorage:
                 "SELECT turn_kind, first_message_sequence, last_message_sequence, user_message_sequence, final_message_sequence FROM turns WHERE turn_id = ?",
                 (value,),
             ).fetchone()
-            if (
-                row is not None
-                and row[0] == "normal"
-                and row[3] is not None
-                and all(
-                    sequence_number in sequence_set
-                    for sequence_number in range(int(row[1]), int(row[2]) + 1)
-                )
-            ):
+            if row is None or row[0] != "normal" or row[3] is None:
+                continue
+            # 不同并发 Turn 的 canonical message sequence 可能交错。不能用
+            # first..last 的连续整数判断完整性，否则后来完成的 Turn 会因为
+            # 中间插入了其它 Turn 的消息而从 active view 消失，历史读取随后
+            # 被错误识别成 stale reference。
+            turn_sequences = {
+                int(message_row[0])
+                for message_row in connection.execute(
+                    "SELECT message_sequence FROM messages WHERE turn_id = ?",
+                    (value,),
+                ).fetchall()
+            }
+            if turn_sequences and turn_sequences.issubset(sequence_set):
                 turn_ids.append(value)
         rows: list[tuple[str, int, object, object]] = []
         for ordinal, turn_id in enumerate(turn_ids, start=1):
@@ -1847,7 +2039,9 @@ class RolloutStorage:
             if row is not None:
                 rows.append((turn_id, ordinal, row[0], row[1]))
         head_turn = str(rows[-1][0]) if rows else None
-        head_message_sequence = max(sequence_values) if sequence_values else 0
+        head_message_sequence = (
+            max(materialized_sequences) if materialized_sequences else 0
+        )
         connection.execute(
             "INSERT INTO context_views(view_id, branch_id, parent_view_id, view_kind, head_turn_id, head_message_sequence, logical_turn_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -1867,7 +2061,18 @@ class RolloutStorage:
                 ranges.append((sequence, sequence))
             else:
                 ranges[-1] = (ranges[-1][0], sequence)
-        for range_index, (start_sequence, end_sequence) in enumerate(ranges):
+        range_index = 0
+        if parent_view_id and view_kind == "checkpoint":
+            # 普通 checkpoint 可能只携带本次 LangGraph delta（例如单独的
+            # ToolMessage），而不是完整 messages 快照。parent_view_id 仅用于
+            # 跳转索引并不能参与消息物化；显式保留父 view，才能让对应的
+            # assistant tool call 与后续 ToolMessage 一起进入下一次模型请求。
+            connection.execute(
+                "INSERT INTO context_view_ranges(view_id, range_index, source_kind, source_view_id, start_message_sequence, end_message_sequence, message_start_sequence, message_end_sequence, range_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal) VALUES (?, ?, 'view', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL)",
+                (view_id, range_index, parent_view_id, range_index),
+            )
+            range_index += 1
+        for start_sequence, end_sequence in ranges:
             connection.execute(
                 "INSERT INTO context_view_ranges(view_id, range_index, source_kind, start_message_sequence, end_message_sequence, message_start_sequence, message_end_sequence, range_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal) VALUES (?, ?, 'messages', ?, ?, ?, ?, ?, NULL, NULL)",
                 (
@@ -1880,6 +2085,7 @@ class RolloutStorage:
                     range_index,
                 ),
             )
+            range_index += 1
         if parent_view_id:
             connection.execute(
                 "INSERT INTO context_view_jumps(view_id, jump_level, ancestor_view_id, ancestor_depth) VALUES (?, 0, ?, 1)",
@@ -1959,7 +2165,7 @@ class RolloutStorage:
         ).fetchone()
         if active is None or active[0] is None:
             has_turn = connection.execute(
-                "SELECT 1 FROM turns WHERE turn_kind = 'normal' AND user_message_sequence IS NOT NULL LIMIT 1"
+                f"SELECT 1 FROM turns AS t WHERE t.turn_kind = 'normal' AND t.user_message_sequence IS NOT NULL AND {_VISIBLE_NORMAL_TURN_PREDICATE} LIMIT 1"
             ).fetchone()
             if has_turn is None:
                 return None
@@ -1972,7 +2178,7 @@ class RolloutStorage:
                 raise RuntimeError(f"context view 父链成环: {current_view_id}")
             visited.add(current_view_id)
             row = connection.execute(
-                "SELECT cvt.turn_id FROM context_view_turns cvt JOIN turns t ON t.turn_id = cvt.turn_id WHERE cvt.view_id = ? AND t.turn_kind = 'normal' AND t.user_message_sequence IS NOT NULL AND t.final_message_sequence IS NOT NULL AND t.status IN ('completed', 'succeeded') ORDER BY cvt.logical_turn_ordinal DESC LIMIT 1",
+                f"SELECT cvt.turn_id FROM context_view_turns cvt JOIN turns t ON t.turn_id = cvt.turn_id WHERE cvt.view_id = ? AND t.turn_kind = 'normal' AND t.user_message_sequence IS NOT NULL AND t.final_message_sequence IS NOT NULL AND t.status IN ('completed', 'succeeded') AND {_VISIBLE_NORMAL_TURN_PREDICATE} ORDER BY cvt.logical_turn_ordinal DESC LIMIT 1",
                 (current_view_id,),
             ).fetchone()
             if row is not None:
@@ -1992,7 +2198,7 @@ class RolloutStorage:
             current_view_id = str(parent[0]) if parent[0] is not None else ""
 
         running = connection.execute(
-            "SELECT 1 FROM turns WHERE turn_kind = 'normal' AND user_message_sequence IS NOT NULL AND (final_message_sequence IS NULL OR status NOT IN ('completed', 'succeeded')) LIMIT 1"
+            f"SELECT 1 FROM turns AS t WHERE t.turn_kind = 'normal' AND t.user_message_sequence IS NOT NULL AND (t.final_message_sequence IS NULL OR t.status NOT IN ('completed', 'succeeded')) AND {_VISIBLE_NORMAL_TURN_PREDICATE} LIMIT 1"
         ).fetchone()
         if running is not None:
             raise ValueError("当前会话没有已完成的 Turn，无法创建 fork")
@@ -2620,7 +2826,7 @@ class RolloutStorage:
     ) -> Checkpoint:
         checkpoint = json.loads(index.checkpoint_json)
         if not isinstance(checkpoint, dict):
-            raise RuntimeError("checkpoint core JSON 必须是对象")
+            raise TypeError("checkpoint core JSON 必须是对象")
         checkpoint["channel_values"] = self.checkpoint_values(
             thread_id,
             checkpoint_ns,
@@ -2658,7 +2864,7 @@ class RolloutStorage:
     def metadata(self, index: RolloutCheckpointIndex) -> CheckpointMetadata:
         value = json.loads(index.metadata_json)
         if not isinstance(value, dict):
-            raise RuntimeError("checkpoint metadata JSON 必须是对象")
+            raise TypeError("checkpoint metadata JSON 必须是对象")
         return value
 
     def _messages_for_view(
@@ -2711,11 +2917,16 @@ class RolloutStorage:
             "SELECT source_kind, source_view_id, start_message_sequence, end_message_sequence FROM context_view_ranges WHERE view_id = ? ORDER BY range_index",
             (view_id,),
         ).fetchall()
+        view_row = connection.execute(
+            "SELECT view_kind, parent_view_id FROM context_views WHERE view_id = ?",
+            (view_id,),
+        ).fetchone()
         result: list[int] = []
+        has_parent_range = False
         for source_kind, source_view, start, end in ranges:
             if source_kind == "view":
                 if not isinstance(source_view, str):
-                    raise RuntimeError(
+                    raise TypeError(
                         f"context view range 缺少 source_view_id: {view_id}"
                     )
                 result.extend(
@@ -2727,6 +2938,12 @@ class RolloutStorage:
                         connection=connection,
                     )
                 )
+                if (
+                    view_row is not None
+                    and view_row[1] is not None
+                    and source_view == str(view_row[1])
+                ):
+                    has_parent_range = True
             elif (
                 source_kind == "messages"
                 and isinstance(start, int)
@@ -2737,7 +2954,62 @@ class RolloutStorage:
                     (start, end),
                 ).fetchall()
                 result.extend(int(row[0]) for row in rows)
-        return list(dict.fromkeys(result))
+        if (
+            view_row is not None
+            and view_row[0] == "checkpoint"
+            and isinstance(view_row[1], str)
+            and not has_parent_range
+        ):
+            # 兼容旧版本已落盘的普通 view：旧数据只有 parent_view_id 和
+            # context_view_jumps，没有可物化的父 view range。读取时补入父链，
+            # 避免旧 ToolMessage 在恢复后失去对应的 assistant tool call。
+            parent_sequences = self._view_message_sequences(
+                thread_id,
+                checkpoint_ns,
+                str(view_row[1]),
+                visited.copy(),
+                connection=connection,
+            )
+            result = [*parent_sequences, *result]
+        return self._include_tool_call_declarations(connection, result)
+
+    @staticmethod
+    def _include_tool_call_declarations(
+        connection: sqlite3.Connection,
+        sequences: Sequence[int],
+    ) -> list[int]:
+        """确保 view 中的工具结果始终带有对应的 assistant 工具声明。
+
+        旧版本在增量 checkpoint 只携带 ToolMessage，或在并行工具组被拆成
+        多段 delta 时，可能把结果范围写入 view，却漏掉父 view 中的
+        AIMessage。Responses provider 会把这种状态编码为孤立
+        ``function_call_output`` 并直接拒绝请求。tool_calls projection 是
+        canonical 消息之外的配对索引；读取时补回声明序号不会修改 JSONL，
+        也不会把缺少配对索引的损坏结果伪装成成功。
+        """
+        ordered = list(dict.fromkeys(int(sequence) for sequence in sequences))
+        if not ordered:
+            return []
+        rows: list[sqlite3.Row | tuple[object, ...]] = []
+        for offset in range(0, len(ordered), 500):
+            chunk = ordered[offset : offset + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(
+                connection.execute(
+                    "SELECT assistant_message_sequence FROM tool_calls "
+                    f"WHERE result_message_sequence IN ({placeholders})",
+                    tuple(chunk),
+                ).fetchall()
+            )
+        present = set(ordered)
+        missing = {
+            int(row[0])
+            for row in rows
+            if row[0] is not None and int(row[0]) not in present
+        }
+        if not missing:
+            return ordered
+        return sorted((*present, *missing))
 
     def _view_message_sequences_from_connection(
         self,
@@ -2754,11 +3026,16 @@ class RolloutStorage:
             "SELECT source_kind, source_view_id, start_message_sequence, end_message_sequence FROM context_view_ranges WHERE view_id = ? ORDER BY range_index",
             (view_id,),
         ).fetchall()
+        view_row = connection.execute(
+            "SELECT view_kind, parent_view_id FROM context_views WHERE view_id = ?",
+            (view_id,),
+        ).fetchone()
         result: list[int] = []
+        has_parent_range = False
         for source_kind, source_view, start, end in ranges:
             if source_kind == "view":
                 if not isinstance(source_view, str):
-                    raise RuntimeError(
+                    raise TypeError(
                         f"context view range 缺少 source_view_id: {view_id}"
                     )
                 result.extend(
@@ -2766,13 +3043,30 @@ class RolloutStorage:
                         connection, source_view, seen
                     )
                 )
+                if (
+                    view_row is not None
+                    and view_row[1] is not None
+                    and source_view == str(view_row[1])
+                ):
+                    has_parent_range = True
             elif source_kind == "messages" and start is not None and end is not None:
                 rows = connection.execute(
                     "SELECT message_sequence FROM messages WHERE message_sequence BETWEEN ? AND ? ORDER BY message_sequence",
                     (int(start), int(end)),
                 ).fetchall()
                 result.extend(int(row[0]) for row in rows)
-        return list(dict.fromkeys(result))
+        if (
+            view_row is not None
+            and view_row[0] == "checkpoint"
+            and isinstance(view_row[1], str)
+            and not has_parent_range
+        ):
+            # 兼容旧版本的普通 view，详见上面的在线读取路径。
+            parent_sequences = self._view_message_sequences_from_connection(
+                connection, str(view_row[1]), seen
+            )
+            result = [*parent_sequences, *result]
+        return self._include_tool_call_declarations(connection, result)
 
     def _read_messages(
         self,
@@ -2815,7 +3109,7 @@ class RolloutStorage:
                     )
                 message = envelope.get("message")
                 if not isinstance(message, dict):
-                    raise RuntimeError(
+                    raise TypeError(
                         f"rollout.jsonl message 非对象: sequence={sequence}"
                     )
                 values.append(
@@ -3018,6 +3312,7 @@ class RolloutStorage:
         message_roles: Iterable[str] | None = None,
         sequences: Iterable[int] | None = None,
         tool_kinds: Iterable[str] | None = None,
+        tool_call_ids: Iterable[str] | None = None,
         view_id: str | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> list[tuple[int, str, int, int]]:
@@ -3033,16 +3328,21 @@ class RolloutStorage:
                     message_roles=message_roles,
                     sequences=sequences,
                     tool_kinds=tool_kinds,
+                    tool_call_ids=tool_call_ids,
                     view_id=view_id,
                     connection=owned_connection,
                 )
         predicates = ["m.turn_id IN (" + ",".join("?" for _ in ids) + ")"]
         params: list[object] = list(ids)
         roles = tuple(dict.fromkeys(message_roles or ()))
-        if roles:
+        if message_roles is not None and not roles:
+            # 显式空角色集合表示调用方不需要普通 message 行；不能退化为
+            # 不加 role 条件，否则 ToolRow 定点补载会重新读取整轮消息。
+            predicates.append("0")
+        elif roles:
             predicates.append("m.role IN (" + ",".join("?" for _ in roles) + ")")
             params.extend(roles)
-        selected = set(int(value) for value in sequences or ())
+        selected = {int(value) for value in sequences or ()}
         if selected:
             predicates.append(
                 "m.message_sequence IN (" + ",".join("?" for _ in selected) + ")"
@@ -3060,21 +3360,45 @@ class RolloutStorage:
             tuple(params),
         ).fetchall()
         result = {(int(row[0]), str(row[1]), int(row[2]), int(row[3])) for row in rows}
+        selected_tool_call_ids = tuple(dict.fromkeys(tool_call_ids or ()))
+        tool_id_filter = ""
+        tool_id_params: tuple[object, ...] = ()
+        if selected_tool_call_ids:
+            tool_id_filter = " AND tc.tool_call_id IN (" + ",".join(
+                "?" for _ in selected_tool_call_ids
+            ) + ")"
+            tool_id_params = tuple(selected_tool_call_ids)
+
+            # 一个 assistant message 可能同时声明多个工具；先取命中 call 所在的
+            # assistant message，后续 mapper 再按 tool_call_id 过滤 payload。
+            assistant_rows = connection.execute(
+                "SELECT tc.assistant_message_sequence, m.turn_id, m.jsonl_offset, m.jsonl_length "
+                "FROM tool_calls tc JOIN messages m ON m.message_sequence = tc.assistant_message_sequence "
+                "WHERE m.turn_id IN (" + ",".join("?" for _ in ids) + ")"
+                + tool_id_filter,
+                (*ids, *tool_id_params),
+            ).fetchall()
+            result.update(
+                (int(row[0]), str(row[1]), int(row[2]), int(row[3]))
+                for row in assistant_rows
+            )
         if tool_kinds:
             for kind in tool_kinds:
                 if kind == "tool_call":
                     tool_rows = connection.execute(
                         "SELECT tc.assistant_message_sequence, m.turn_id, m.jsonl_offset, m.jsonl_length FROM tool_calls tc JOIN messages m ON m.message_sequence = tc.assistant_message_sequence WHERE m.turn_id IN ("
                         + ",".join("?" for _ in ids)
-                        + ")",
-                        ids,
+                        + ")"
+                        + tool_id_filter,
+                        (*ids, *tool_id_params),
                     ).fetchall()
                 elif kind == "tool_result":
                     tool_rows = connection.execute(
                         "SELECT tc.result_message_sequence, m.turn_id, m.jsonl_offset, m.jsonl_length FROM tool_calls tc JOIN messages m ON m.message_sequence = tc.result_message_sequence WHERE tc.result_message_sequence IS NOT NULL AND m.turn_id IN ("
                         + ",".join("?" for _ in ids)
-                        + ")",
-                        ids,
+                        + ")"
+                        + tool_id_filter,
+                        (*ids, *tool_id_params),
                     ).fetchall()
                 else:
                     tool_rows = []
@@ -3125,6 +3449,7 @@ class RolloutStorage:
         kinds: Iterable[str] | None = None,
         message_roles: Iterable[str] | None = None,
         tool_kinds: Iterable[str] | None = None,
+        tool_call_ids: Iterable[str] | None = None,
         required_sequences: Mapping[str, Iterable[int]] | None = None,
     ) -> dict[str, list[dict[str, object]]]:
         del branch_id, kinds
@@ -3140,6 +3465,7 @@ class RolloutStorage:
             ids,
             message_roles=message_roles,
             tool_kinds=tool_kinds,
+            tool_call_ids=tool_call_ids,
             view_id=view_id,
             connection=connection,
         )
@@ -3187,7 +3513,7 @@ class RolloutStorage:
                 if not isinstance(value, dict) or not isinstance(
                     value.get("message"), dict
                 ):
-                    raise RuntimeError(
+                    raise TypeError(
                         f"rollout.jsonl message envelope 非法: sequence={sequence}"
                     )
                 result.append(
@@ -3217,7 +3543,7 @@ class RolloutStorage:
         self.initialize(thread_id, checkpoint_ns)
         with self._connect(thread_id, checkpoint_ns) as connection:
             rows = connection.execute(
-                "SELECT turn_id, first_message_sequence, last_message_sequence FROM turns WHERE turn_kind = 'normal' AND user_message_sequence IS NOT NULL AND last_message_sequence > ? AND (? IS NULL OR first_message_sequence <= ?) ORDER BY turn_ordinal",
+                f"SELECT t.turn_id, t.first_message_sequence, t.last_message_sequence FROM turns AS t WHERE t.turn_kind = 'normal' AND t.user_message_sequence IS NOT NULL AND t.last_message_sequence > ? AND (? IS NULL OR t.first_message_sequence <= ?) AND {_VISIBLE_NORMAL_TURN_PREDICATE} ORDER BY t.turn_ordinal",
                 (after_sequence, through_sequence, through_sequence),
             ).fetchall()
         return [(str(row[0]), int(row[1]), int(row[2])) for row in rows]
@@ -3231,7 +3557,7 @@ class RolloutStorage:
         view_id = values[-1][0]
         connection = self._snapshot_connection(snapshot)
         rows = connection.execute(
-            "SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence FROM context_view_turns cvt JOIN turns t ON t.turn_id = cvt.turn_id WHERE cvt.view_id = ? ORDER BY cvt.logical_turn_ordinal",
+            f"SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence FROM context_view_turns cvt JOIN turns t ON t.turn_id = cvt.turn_id WHERE cvt.view_id = ? AND {_VISIBLE_NORMAL_TURN_PREDICATE} ORDER BY cvt.logical_turn_ordinal",
             (view_id,),
         ).fetchall()
         return [(str(row[0]), int(row[1]), int(row[2])) for row in rows]
@@ -3244,7 +3570,7 @@ class RolloutStorage:
         """返回一个逻辑 context view 的 Turn 数量，不读取消息正文。"""
         connection = self._snapshot_connection(snapshot)
         row = connection.execute(
-            "SELECT COUNT(*) FROM context_view_turns WHERE view_id = ?",
+            f"SELECT COUNT(*) FROM context_view_turns AS cvt JOIN turns AS t ON t.turn_id = cvt.turn_id WHERE cvt.view_id = ? AND {_VISIBLE_NORMAL_TURN_PREDICATE}",
             (view_id,),
         ).fetchone()
         return int(row[0]) if row is not None else 0
@@ -3287,7 +3613,7 @@ class RolloutStorage:
         rows = connection.execute(
             f"SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence, cvt.logical_turn_ordinal "
             f"FROM context_view_turns cvt JOIN turns t ON t.turn_id = cvt.turn_id "
-            f"WHERE {where} ORDER BY cvt.logical_turn_ordinal {order} LIMIT ?",
+            f"WHERE {where} AND {_VISIBLE_NORMAL_TURN_PREDICATE} ORDER BY cvt.logical_turn_ordinal {order} LIMIT ?",
             (*params, query_limit),
         ).fetchall()
         has_more = len(rows) > limit
@@ -3314,7 +3640,7 @@ class RolloutStorage:
         rows = connection.execute(
             "SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence, cvt.logical_turn_ordinal "
             "FROM context_view_turns cvt JOIN turns t ON t.turn_id = cvt.turn_id "
-            "WHERE cvt.view_id = ? AND cvt.logical_turn_ordinal BETWEEN ? AND ? "
+            f"WHERE cvt.view_id = ? AND cvt.logical_turn_ordinal BETWEEN ? AND ? AND {_VISIBLE_NORMAL_TURN_PREDICATE} "
             "ORDER BY cvt.logical_turn_ordinal",
             (view_id, max(1, anchor_ordinal - before), anchor_ordinal + after),
         ).fetchall()
@@ -3335,7 +3661,7 @@ class RolloutStorage:
         rows = connection.execute(
             f"SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence, cvt.logical_turn_ordinal "
             f"FROM context_view_turns cvt JOIN turns t ON t.turn_id = cvt.turn_id "
-            f"WHERE cvt.view_id = ? AND cvt.turn_id IN ({placeholders}) "
+            f"WHERE cvt.view_id = ? AND cvt.turn_id IN ({placeholders}) AND {_VISIBLE_NORMAL_TURN_PREDICATE} "
             "ORDER BY cvt.logical_turn_ordinal",
             (view_id, *ids),
         ).fetchall()
@@ -3425,9 +3751,9 @@ class RolloutStorage:
                     }
                     if reasoning_text:
                         blocks.append({"kind": "reasoning", "text": str(reasoning_text), **source})
-                    if summary_text:
+                    elif summary_text:
                         blocks.append({"kind": "summary", "text": str(summary_text), **source})
-                    if encrypted_length is not None:
+                    elif encrypted_length is not None:
                         blocks.append({"kind": "encrypted", "text": "", **source})
                 if encrypted_length is not None:
                     result[str(turn_id)]["has_encrypted_reasoning"] = True
@@ -3464,7 +3790,7 @@ class RolloutStorage:
     ) -> BaseMessage:
         del summary_only
         if not isinstance(value, dict):
-            raise RuntimeError("rollout message 必须是对象")
+            raise TypeError("rollout message 必须是对象")
         return messages_from_dict([value])[0]
 
     def pending_writes(
@@ -4115,8 +4441,9 @@ class RolloutStorage:
         self.initialize(target_session_id, checkpoint_ns)
         materialization_id = uuid4().hex
         fork_id = uuid4().hex
-        with self._lock(target_session_id, checkpoint_ns):
-            with self._connect(target_session_id, checkpoint_ns) as connection:
+        with self._lock(target_session_id, checkpoint_ns), self._connect(
+            target_session_id, checkpoint_ns
+        ) as connection:
                 active = connection.execute(
                     "SELECT materialization_id FROM fork_materializations WHERE status IN ('prepared', 'target_committed') LIMIT 1"
                 ).fetchone()
@@ -4157,8 +4484,9 @@ class RolloutStorage:
         checkpoint_ns: str = "",
     ) -> None:
         """显式回滚尚未提交的 fork；崩溃时由 initialize 执行同一恢复路径。"""
-        with self._lock(target_session_id, checkpoint_ns):
-            with self._connect(target_session_id, checkpoint_ns) as connection:
+        with self._lock(target_session_id, checkpoint_ns), self._connect(
+            target_session_id, checkpoint_ns
+        ) as connection:
                 row = connection.execute(
                     "SELECT status FROM fork_materializations WHERE materialization_id = ?",
                     (materialization_id,),
@@ -4205,8 +4533,9 @@ class RolloutStorage:
             source_checkpoint_id,
             checkpoint_ns,
         )
-        with self._lock(target_session_id, checkpoint_ns):
-            with self._connect(target_session_id, checkpoint_ns) as connection:
+        with self._lock(target_session_id, checkpoint_ns), self._connect(
+            target_session_id, checkpoint_ns
+        ) as connection:
                 journal = connection.execute(
                     "SELECT fork_id, status, relationship FROM fork_materializations WHERE materialization_id = ? AND target_session_id = ?",
                     (materialization_id, target_session_id),
@@ -4368,8 +4697,9 @@ class RolloutStorage:
                 owner_session_id=target_session_id,
                 checkpoint_ns=checkpoint_ns,
             )
-        with self._lock(target_session_id, checkpoint_ns):
-            with self._connect(target_session_id, checkpoint_ns) as connection:
+        with self._lock(target_session_id, checkpoint_ns), self._connect(
+            target_session_id, checkpoint_ns
+        ) as connection:
                 connection.execute(
                     "UPDATE fork_materializations SET status = 'committed', committed_at = ?, error_message = NULL WHERE materialization_id = ? AND status = 'target_committed'",
                     (_now(), materialization_id),
@@ -4679,7 +5009,7 @@ class RolloutStorage:
             ).fetchone()
             if meta is None:
                 raise RuntimeError("rollout database_meta 缺失")
-            active_branch_id, projection_epoch = self._namespace_state(
+            active_branch_id, _projection_epoch = self._namespace_state(
                 connection, checkpoint_ns
             )
             query = """
@@ -4743,8 +5073,9 @@ class RolloutStorage:
             raise RuntimeError("pruning plan 不属于当前 rollout 水位")
         if not plan.candidates:
             return ()
-        with self._lock(thread_id, checkpoint_ns):
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        with self._lock(thread_id, checkpoint_ns), self._connect(
+            thread_id, checkpoint_ns
+        ) as connection:
                 transaction_id = uuid4().hex
                 timestamp = _now()
                 connection.execute("BEGIN IMMEDIATE")

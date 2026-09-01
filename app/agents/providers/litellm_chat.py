@@ -226,6 +226,8 @@ class _StreamPartState:
     active_provider_part_id: str | None = None
     fallback_item_ids: dict[int, str] | None = None
     reasoning_summary_provider_ids: set[str] = field(default_factory=set)
+    responses_tool_call_ids_by_item_id: dict[str, str] = field(default_factory=dict)
+    responses_tool_call_ids_by_output_index: dict[int, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.fallback_item_ids = {}

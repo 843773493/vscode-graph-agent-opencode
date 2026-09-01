@@ -113,6 +113,12 @@ class JobPendingRequestService:
             latest = await self._controller.list(snapshot.session_id)
             await self._store.save(latest.session_id, list(latest.requests))
 
+    async def persist_current(self, session_id: str) -> None:
+        """把当前内存队列写回磁盘；未配置持久化时不构造展示 DTO。"""
+        if self._store is None:
+            return
+        await self.persist(await self.list(session_id))
+
     async def delete(self, session_id: str) -> None:
         self._loaded_sessions.discard(session_id)
         if self._store is not None:

@@ -13,6 +13,7 @@ const workspaceId = requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
 const sessionId = requiredEnvironment("BOXTEAM_BROWSER_SESSION_ID");
 const resultPath = requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
 const screenshotPath = requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
+const expectedFinalText = "工具调用完成";
 const executablePath =
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 
@@ -136,11 +137,11 @@ async function loadNextOlder(page, stream, expectedFirstOrdinal) {
     },
     {
       expectedFirstOrdinal,
-      expectedCount: Number(expectedFirstOrdinal) === 124
-        ? 5
-        : Number(expectedFirstOrdinal) === 120
-          ? 9
-          : 13,
+      expectedCount: Number(expectedFirstOrdinal) === 121
+        ? 8
+        : Number(expectedFirstOrdinal) === 118
+          ? 11
+          : 14,
     },
     { timeout: 30_000, polling: "raf" },
   );
@@ -166,13 +167,15 @@ let result;
 
 try {
   await ensureGuest(page);
-  await page.locator(`button[data-session-id="${sessionId}"]`).click();
+  const sessionButton = page.locator(`button[data-session-id="${sessionId}"]`);
+  await sessionButton.waitFor({ state: "visible", timeout: 30_000 });
+  await sessionButton.click();
   await page
     .locator('[data-turn-id="job-0128"]')
     .waitFor({ state: "visible", timeout: 30_000 });
   const latestTurn = page.locator('[data-turn-id="job-0128"]').last();
   await waitUntil(
-    async () => (await latestTurn.innerText()).includes("模型最终响应 128"),
+    async () => (await latestTurn.innerText()).includes(expectedFinalText),
     "最新 Turn 最终响应",
   );
   const latestText = await latestTurn.innerText();
@@ -192,27 +195,27 @@ try {
     },
     body: JSON.stringify({ direction: "tail" }),
   });
-  const defaultItem = defaultPage.data.items[0];
+  const defaultItem = defaultPage.data.items.find(
+    (item) => item.turn_id === "job-0128",
+  );
+  if (!defaultItem) throw new Error("默认历史页缺少 job-0128");
   const defaultJson = JSON.stringify(defaultItem);
   const defaultProjectionSafe =
     defaultItem.user_messages.length === 1 &&
     defaultItem.thinking_blocks.some(
-      (block) =>
-        block.kind === "reasoning" && block.text === "普通模型思考摘要 128",
+      (block) => block.kind === "reasoning" && block.text === "已读取 README，",
     ) &&
     defaultItem.thinking_blocks.some(
-      (block) => block.kind === "summary" && block.text === "Provider 摘要 128",
+      (block) => block.kind === "reasoning" && block.text === "整理最终答复。",
     ) &&
-    defaultItem.thinking_blocks.some((block) => block.kind === "encrypted") &&
-    defaultItem.thinking_blocks
-      .filter((block) => block.kind === "encrypted")
-      .every((block) => !block.text) &&
-    defaultItem.tool_summary.length > 0 &&
+    defaultItem.thinking_blocks.filter((block) => block.kind === "summary")
+      .length === 4 &&
+    defaultItem.tool_summary.length === 2 &&
     defaultItem.items.every(
       (item) => Object.keys(item.raw ?? {}).length === 0,
     ) &&
-    !defaultJson.includes("codex-secret-0128") &&
-    !defaultJson.includes("fixture/0128.json");
+    !defaultJson.includes("LARGE_CALL") &&
+    !defaultJson.includes("LARGE_RESULT");
 
   const detailPage = await api(page, `/api/v1/sessions/${sessionId}/history`, {
     method: "POST",
@@ -232,19 +235,19 @@ try {
       ],
     }),
   });
-  const detailItem = detailPage.data.items[0];
+  const detailItem = detailPage.data.items.find(
+    (item) => item.turn_id === "job-0128",
+  );
+  if (!detailItem) throw new Error("工具详情响应缺少 job-0128");
+  const detailToolCall = detailItem.response_parts.find(
+    (part) => part.kind === "tool_call",
+  );
+  const detailToolResult = detailItem.response_parts.find(
+    (part) => part.kind === "tool_result",
+  );
   const toolDetailsLoaded =
-    detailItem.items.some(
-      (item) => item.raw?.payload?.args?.path === "fixture/0128.json",
-    ) &&
-    detailItem.items.some(
-      (item) =>
-        typeof item.raw?.payload?.result === "string" &&
-        item.raw.payload.result.includes("fixture result 128"),
-    ) &&
-    detailItem.assistant_text.some((text) =>
-      text.includes("我先检查第 128 轮"),
-    );
+    detailToolCall?.arguments?.includes('"marker": "turn-0128"') === true &&
+    detailToolResult?.result?.includes("LARGE_RESULT turn-0128_BEGIN") === true;
 
   const largeToolSummaryPage = await api(
     page,
@@ -264,7 +267,7 @@ try {
   const largeToolSummaryItem = largeToolSummaryPage.data.items[0];
   const largeToolSummaryJson = JSON.stringify(largeToolSummaryItem);
   const largeToolSummarySafe =
-    largeToolSummaryItem.tool_summary.length === 2 &&
+    largeToolSummaryItem.tool_summary.length === 1 &&
     largeToolSummaryItem.tool_summary.every(
       (item) => item.tool_name === "invoke_custom_tool",
     ) &&
@@ -297,10 +300,17 @@ try {
     },
   );
   const largeToolDetailItem = largeToolDetailPage.data.items[0];
+  const largeToolDetailCall = largeToolDetailItem.response_parts.find(
+    (part) => part.kind === "tool_call",
+  );
   const largeToolDetailsBounded =
-    largeToolDetailItem.detail_truncated === true &&
-    largeToolDetailItem.items.length === 0 &&
-    largeToolDetailItem.tool_summary.length === 2;
+    largeToolDetailItem.detail_truncated === false &&
+    largeToolDetailItem.items.length === 1 &&
+    largeToolDetailItem.items.every(
+      (item) => Object.keys(item.raw ?? {}).length === 0,
+    ) &&
+    largeToolDetailItem.tool_summary.length === 0 &&
+    largeToolDetailCall?.arguments?.length === 65536;
 
   const aroundPage = await api(
     page,
@@ -323,7 +333,7 @@ try {
     typeof aroundPage.data.after_cursor === "string";
   if (
     JSON.stringify(aroundOrdinals) !== JSON.stringify(
-      Array.from({ length: 9 }, (_, index) => index + 60),
+      Array.from({ length: 7 }, (_, index) => index + 61),
     ) || !aroundCursorsPresent
   ) {
     throw new Error(`around(anchor) 窗口或双向游标错误: ${JSON.stringify(aroundPage.data)}`);
@@ -360,12 +370,130 @@ try {
   );
   const aroundBidirectionalSafe =
     JSON.stringify(beforeAroundPage.data.items.map((item) => item.ordinal)) ===
-      JSON.stringify([56, 57, 58, 59]) &&
+      JSON.stringify([58, 59, 60]) &&
     JSON.stringify(afterAroundPage.data.items.map((item) => item.ordinal)) ===
-      JSON.stringify([69, 70, 71, 72]);
+      JSON.stringify([68, 69, 70]);
 
-  const avatar = latestTurn.locator('.chat-assistant-avatar[role="button"]');
-  await avatar.click();
+  const latestActivityDetailsResponsePromise = page.waitForResponse(
+    (response) => {
+      if (!response.url().includes("/history") || response.status() !== 200)
+        return false;
+      try {
+        const body = JSON.parse(response.request().postData() || "{}");
+        return (
+          Array.isArray(body.turn_ids) &&
+          body.turn_ids.includes("job-0128") &&
+          body.include?.includes("final_response") &&
+          !body.tool_call_ids
+        );
+      } catch {
+        return false;
+      }
+    },
+    { timeout: 30_000 },
+  );
+  await latestTurn
+    .locator('button.chat-thinking-toggle[aria-expanded="false"]')
+    .click();
+  await latestActivityDetailsResponsePromise;
+  const compactionTurn = page.locator('[data-turn-id="job-0126"]').last();
+  const compactionDetailsResponsePromise = page.waitForResponse(
+    (response) => {
+      if (!response.url().includes("/history") || response.status() !== 200)
+        return false;
+      try {
+        const body = JSON.parse(response.request().postData() || "{}");
+        return (
+          Array.isArray(body.turn_ids) &&
+          body.turn_ids.includes("job-0126") &&
+          body.include?.includes("final_response")
+        );
+      } catch {
+        return false;
+      }
+    },
+    { timeout: 30_000 },
+  );
+  await compactionTurn.waitFor({ state: "visible", timeout: 30_000 });
+  await compactionTurn
+    .locator('button.chat-thinking-toggle[aria-expanded="false"]')
+    .click();
+  // 可见 Turn 可能已被自动详情预加载；点击后允许“新请求完成”或“已有详情已显示”
+  // 先发生，但最终必须确认两条压缩状态都已出现在界面。
+  const compactionDetailsReady = await Promise.race([
+    compactionDetailsResponsePromise.then(() => "request").catch(() => null),
+    waitUntil(
+      async () => {
+        const text = await compactionTurn.innerText();
+        return text.includes("上下文压缩已完成") && text.includes("上下文压缩失败");
+      },
+      "重复上下文压缩 Activity",
+    ).then(() => "content").catch(() => null),
+  ]);
+  if (!compactionDetailsReady) throw new Error("压缩 Turn 未加载详情");
+  await waitUntil(
+    async () => {
+      const text = await compactionTurn.innerText();
+      return text.includes("上下文压缩已完成") && text.includes("上下文压缩失败");
+    },
+    "重复上下文压缩 Activity",
+  );
+  const compactionActivityIds = await compactionTurn
+    .locator(".chat-inline-activity")
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-activity-id")));
+  const compactionCompletedVisible = await compactionTurn
+    .locator('[data-activity-id="browser_compaction_1"]')
+    .filter({ hasText: "上下文压缩已完成" })
+    .isVisible();
+  const compactionFailedVisible = await compactionTurn
+    .locator('[data-activity-id="browser_compaction_2"]')
+    .filter({ hasText: "上下文压缩失败" })
+    .isVisible();
+
+  const activityTurn = page.locator('[data-turn-id="job-0125"]').last();
+  await activityTurn.waitFor({ state: "visible", timeout: 30_000 });
+  const activityDetailsResponsePromise = page.waitForResponse(
+    (response) => {
+      if (!response.url().includes("/history") || response.status() !== 200)
+        return false;
+      try {
+        const body = JSON.parse(response.request().postData() || "{}");
+        return Array.isArray(body.turn_ids) && body.turn_ids.includes("job-0125");
+      } catch {
+        return false;
+      }
+    },
+    { timeout: 30_000 },
+  );
+  await activityTurn
+    .locator('button.chat-thinking-toggle[aria-expanded="false"]')
+    .click();
+  await activityDetailsResponsePromise;
+  await waitUntil(
+    async () => {
+      const text = await activityTurn.innerText();
+      return text.includes("等待审批")
+        && text.includes("子 Agent 已完成")
+        && text.includes("工作区资源操作失败")
+        && text.includes("资源操作结果无法确认")
+        && text.includes("结果未知 provider.private")
+        && text.includes("shell 结果未知")
+        && text.includes("未确认返回结果");
+    },
+    "通用 Activity 生命周期状态",
+  );
+  const activityStatusIds = await activityTurn
+    .locator(".chat-inline-activity")
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-activity-id")));
+  const activityText = await activityTurn.innerText();
+  const approvalWaitingVisible = activityText.includes("等待审批");
+  const subagentCompletedVisible = activityText.includes("子 Agent 已完成");
+  const resourceUnknownVisible = activityText.includes("工作区资源操作失败")
+    && activityText.includes("资源操作结果无法确认");
+  const genericActivityUnknownVisible = activityText.includes("结果未知 provider.private");
+  const unknownToolVisible = activityText.includes("shell 结果未知")
+    && activityText.includes("未确认返回结果");
+
   const toolDetailsResponsePromise = page.waitForResponse(
     (response) => {
       if (!response.url().includes("/history") || response.status() !== 200)
@@ -375,7 +503,8 @@ try {
         return (
           Array.isArray(body.turn_ids) &&
           body.turn_ids.includes("job-0128") &&
-          body.include?.includes("tool_result")
+          body.include?.includes("tool_result") &&
+          body.tool_call_ids?.includes("call_chat_reasoning_tool")
         );
       } catch {
         return false;
@@ -383,41 +512,16 @@ try {
     },
     { timeout: 30_000 },
   );
-  await page
-    .getByRole("menuitem", { name: "加载 tool_call 和 tool_result" })
-    .click();
+  await latestTurn.locator(".chat-tool-summary").first().click();
   const toolDetailsResponse = await toolDetailsResponsePromise;
   const toolDetailsPayload = await toolDetailsResponse.json();
   const toolDetailsBody = JSON.stringify(toolDetailsPayload);
   if (
-    !toolDetailsBody.includes("fixture/0128.json") ||
-    !toolDetailsBody.includes("fixture result 128")
+    !toolDetailsBody.includes("turn-0128") ||
+    !toolDetailsBody.includes("LARGE_RESULT turn-0128_BEGIN")
   ) {
     throw new Error(`当前 Turn 工具详情响应不完整: ${toolDetailsBody}`);
   }
-
-  const activityDetailsResponsePromise = page.waitForResponse(
-    (response) => {
-      if (!response.url().includes("/history") || response.status() !== 200)
-        return false;
-      try {
-        const body = JSON.parse(response.request().postData() || "{}");
-        return (
-          Array.isArray(body.turn_ids) &&
-          body.turn_ids.includes("job-0128") &&
-          body.include?.includes("tool_result")
-        );
-      } catch {
-        return false;
-      }
-    },
-    { timeout: 30_000 },
-  );
-  await page
-    .getByRole("button", { name: "展开 Turn 中间消息" })
-    .last()
-    .click();
-  await activityDetailsResponsePromise;
 
   // 会话进入稳定展示态后，先完成一次同链路热身；性能指标不把首次
   // Gateway/SQLite 连接建立成本混入滚动加载热路径。
@@ -434,7 +538,7 @@ try {
 
   const stream = page.locator(".chat-stream");
   const progressivePages = [];
-  for (const expected of [124, 120, 116]) {
+  for (const expected of [121, 118, 115]) {
     const pageResult = await loadNextOlder(page, stream, expected);
     if (pageResult.ordinals[0] !== expected) {
       throw new Error(
@@ -482,12 +586,84 @@ try {
       include: ["user", "final_response"],
     }),
   });
+  const canonicalItem = canonical.data.items.find(
+    (item) => item.turn_id === "job-0128",
+  );
+  if (!canonicalItem) throw new Error("规范历史页缺少 job-0128");
   const canonicalMixedMessageRestored =
-    canonical.data.items[0].final_response === "模型最终响应 128";
+    canonicalItem.final_response === expectedFinalText;
+
+  await stream.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await latestTurn.waitFor({ state: "visible", timeout: 30_000 });
+  await latestTurn.hover();
+  const responseActions = latestTurn.locator(".chat-response-actions");
+  await responseActions.waitFor({ state: "attached", timeout: 30_000 });
+  const responseActionsVisible = await waitUntil(
+    async () => responseActions.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return style.visibility === "visible"
+        && Number.parseFloat(style.opacity) > 0
+        && style.pointerEvents === "auto";
+    }),
+    "历史回复操作栏悬停显示",
+  ).then(() => true);
+  const responseActionLabels = await responseActions.locator("button").evaluateAll(
+    (buttons) => buttons
+      .map((button) => button.getAttribute("aria-label"))
+      .filter((label) => Boolean(label)),
+  );
+  for (const label of ["复制", "有帮助（暂未开放）", "没有帮助（暂未开放）"]) {
+    if (!responseActionLabels.includes(label)) {
+      throw new Error(`历史回复操作栏缺少 ${label}: ${JSON.stringify(responseActionLabels)}`);
+    }
+  }
+  if (responseActionLabels.includes("重新生成最后回复")) {
+    throw new Error(`回复操作栏不应再显示重新生成: ${JSON.stringify(responseActionLabels)}`);
+  }
+  const boundaryTurn = page.locator('[data-turn-id="job-0127"]').last();
+  await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
+  await boundaryTurn.hover();
+  const boundaryResponseActions = boundaryTurn.locator(".chat-response-actions");
+  await boundaryResponseActions.waitFor({ state: "attached", timeout: 30_000 });
+  const boundaryResponseActionsVisible = await waitUntil(
+    async () => boundaryResponseActions.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return style.visibility === "visible"
+        && Number.parseFloat(style.opacity) > 0
+        && style.pointerEvents === "auto";
+    }),
+    "无正文边界 Turn 操作栏悬停显示",
+  ).then(() => true);
+  const boundaryResponseActionLabels = await boundaryResponseActions.locator("button").evaluateAll(
+    (buttons) => buttons
+      .map((button) => button.getAttribute("aria-label"))
+      .filter((label) => Boolean(label)),
+  );
+  for (const label of ["复制（暂无可复制内容）", "有帮助（暂未开放）", "没有帮助（暂未开放）"]) {
+    if (!boundaryResponseActionLabels.includes(label)) {
+      throw new Error(`无正文边界 Turn 操作栏缺少 ${label}: ${JSON.stringify(boundaryResponseActionLabels)}`);
+    }
+  }
 
   result = {
     defaultProjectionSafe,
     canonicalMixedMessageRestored,
+    compactionActivityIds,
+    compactionCompletedVisible,
+    compactionFailedVisible,
+    activityStatusIds,
+    approvalWaitingVisible,
+    subagentCompletedVisible,
+    resourceUnknownVisible,
+    genericActivityUnknownVisible,
+    unknownToolVisible,
+    responseActionsVisible,
+    responseActionLabels,
+    boundaryResponseActionsVisible,
+    boundaryResponseActionLabels,
     toolDetailsLoaded,
     largeToolSummarySafe,
     largeToolDetailsBounded,

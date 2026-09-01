@@ -17,6 +17,7 @@ import type {
   WorkspaceFileReference,
   WorkspaceFileSelection,
 } from "../utils/workspaceFileReferences";
+import { isWorkspaceTextFilePath } from "../utils/workspaceFileReferences";
 import { useWarmConfirm } from "../components/WarmConfirmProvider";
 
 interface UseWorkspacePreviewTabsOptions {
@@ -102,7 +103,9 @@ export function useWorkspacePreviewTabs({
       };
     }
 
-    const filePaths = (restoredLayout.workspace_preview_file_paths ?? []).slice(-20);
+    const filePaths = (restoredLayout.workspace_preview_file_paths ?? [])
+      .filter(isWorkspaceTextFilePath)
+      .slice(-20);
     if (filePaths.length === 0) {
       setPersistenceReady(true);
       return () => {
@@ -242,6 +245,12 @@ export function useWorkspacePreviewTabs({
   }, [onStatusChange]);
 
   const selectWorkspacePreviewTab = useCallback((path: string) => {
+    if (!isWorkspaceTextFilePath(path)) {
+      setError(null);
+      setLoadingPath(null);
+      onStatusChange(`二进制文件不支持文本预览: ${path}`);
+      return;
+    }
     const tab = tabs.find((item) => item.path === path);
     setVisible(true);
     setActivePath(path);
@@ -266,6 +275,12 @@ export function useWorkspacePreviewTabs({
   }, [apiPort, onStatusChange, openWorkspaceFileContent, tabs, workspaceId]);
 
   const openWorkspaceFilePath = useCallback(async (path: string) => {
+    if (!isWorkspaceTextFilePath(path)) {
+      setError(null);
+      setLoadingPath(null);
+      onStatusChange(`二进制文件不支持文本预览: ${path}`);
+      return;
+    }
     const existingTab = tabs.find((tab) => tab.path === path);
     if (existingTab) {
       if (existingTab.previewType === "file-placeholder") {

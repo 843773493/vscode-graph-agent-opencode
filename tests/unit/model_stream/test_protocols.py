@@ -63,11 +63,23 @@ def test_responses_codec_rejects_mismatched_terminal_payload() -> None:
         codec.validate_frame(frame, label="invalid-responses")
 
 
-def test_anthropic_codec_is_registered_but_not_runtime_supported() -> None:
+def test_anthropic_codec_round_trips_message_stream_events() -> None:
     codec = get_protocol_codec("anthropic_messages_sse")
-
-    with pytest.raises(ModelStreamProtocolError, match="anthropic_messages_sse.*暂未实现"):
-        codec.require_runtime()
+    codec.require_runtime()
+    frame = StreamFrame(
+        kind="done",
+        encoding="json",
+        event="message_stop",
+        payload={"type": "message_stop"},
+    )
+    wire = codec.encode(frame)
+    assert b"event: message_stop\n" in wire
+    decoded = codec.decode(
+        event_name="message_stop",
+        data='{"type":"message_stop"}',
+    )
+    assert decoded.kind == "done"
+    assert codec.is_terminal(decoded)
 
 
 def test_unknown_protocol_fails_without_chat_fallback() -> None:

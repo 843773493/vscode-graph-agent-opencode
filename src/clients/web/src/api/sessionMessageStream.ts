@@ -22,6 +22,18 @@ export class MessageStreamCursorGoneError extends Error {
   }
 }
 
+export class MessageStreamConnectionError extends Error {
+  readonly retryable = true;
+
+  constructor(
+    readonly status: number,
+    readonly statusText: string,
+  ) {
+    super(`无法连接 Turn 消息流: ${status} ${statusText}`);
+    this.name = "MessageStreamConnectionError";
+  }
+}
+
 export interface MessageStreamSnapshotResponse {
   session_id: string;
   turn_id: string;
@@ -42,6 +54,31 @@ export interface MessageStreamSnapshotResponse {
   interrupt_state?: Record<string, unknown> | null;
   failure?: Record<string, unknown> | null;
   resumable: boolean;
+}
+
+export async function getSessionMessageStreamAvailability(
+  port: number,
+  sessionId: string,
+  turnIds: string[],
+  options: {
+    workspaceId?: string | null;
+    signal?: AbortSignal;
+  } = {},
+): Promise<Record<string, string>> {
+  if (turnIds.length === 0) return {};
+  const params = new URLSearchParams();
+  for (const turnId of [...new Set(turnIds)]) {
+    params.append("turn_ids", turnId);
+  }
+  const response = await requestJson<APIResponse<Record<string, string>>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/message-streams/availability?${params.toString()}`,
+    {
+      headers: workspaceHeader(options.workspaceId),
+      signal: options.signal,
+    },
+  );
+  return unwrapApiData(response);
 }
 
 export async function getSessionMessageStreamSnapshot(
@@ -108,7 +145,7 @@ export async function streamSessionMessageEvents(
     throw new MessageStreamCursorGoneError(options.afterSeq ?? 0);
   }
   if (!response.ok || !response.body) {
-    throw new Error(`无法连接 Turn 消息流: ${response.status} ${response.statusText}`);
+    throw new MessageStreamConnectionError(response.status, response.statusText);
   }
   options.onConnected?.(response.headers.get("X-Message-Stream-ID"));
   await consumeSseResponse(response, {

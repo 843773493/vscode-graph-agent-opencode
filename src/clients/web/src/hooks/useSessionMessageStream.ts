@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   getSessionMessageStreamSnapshot,
   MessageStreamCursorGoneError,
+  MessageStreamConnectionError,
   streamSessionMessageEvents,
 } from "../api/sessionMessageStream";
 import {
@@ -11,9 +12,12 @@ import {
   type MessageStreamState,
 } from "../state/messageStream";
 import { cloneMaps } from "../state/appStateMaps";
+import { removePendingForJob } from "../state/conversations";
 import type { SetAppState } from "./sessionEventStream/sessionRefresh";
 import { sessionStreamReconnectDelay } from "./sessionEventStreamPolicy";
 import { waitForReconnect } from "./waitForReconnect";
+
+export type MessageStreamTerminalHandler = (turnId: string) => void;
 
 export function useSessionMessageStream({
   apiPort,
@@ -21,6 +25,7 @@ export function useSessionMessageStream({
   turnId,
   workspaceId,
   sessionCacheKey,
+  onTerminal,
   setState,
 }: {
   apiPort: number | null;
@@ -28,9 +33,12 @@ export function useSessionMessageStream({
   turnId: string | null;
   workspaceId: string | null;
   sessionCacheKey: string | null;
+  onTerminal?: MessageStreamTerminalHandler;
   setState: SetAppState;
 }) {
   const streamAbortRef = useRef<AbortController | null>(null);
+  const onTerminalRef = useRef(onTerminal);
+  onTerminalRef.current = onTerminal;
 
   useEffect(() => {
     streamAbortRef.current?.abort();
@@ -46,7 +54,11 @@ export function useSessionMessageStream({
     let lastEventSeq = 0;
     let turnStreamId: string | null = null;
     let terminalSeen = false;
+    let terminalHandlerCalled = false;
+    let terminalStatus: MessageStreamState["streamStatus"] = "open";
+    let terminalFailure: MessageStreamState["failure"] = null;
     let reconnectAttempt = 0;
+    let notReadyAttempts = 0;
 
     const updateState = (update: (current: MessageStreamState) => MessageStreamState) => {
       setState((previous) => {
@@ -82,6 +94,34 @@ export function useSessionMessageStream({
       updateState((current) => ({ ...current, connectionStatus: status }));
     };
 
+    const notifyTerminal = () => {
+      if (terminalSeen && !terminalHandlerCalled) {
+        terminalHandlerCalled = true;
+        setState((previous) => {
+          if (
+            previous.activeJobIdsBySession.get(sessionCacheKey) !== targetTurnId
+          ) {
+            return previous;
+          }
+          const next = cloneMaps(previous);
+          next.activeJobIdsBySession.delete(sessionCacheKey);
+          removePendingForJob(
+            next.pendingConversations,
+            targetSessionId,
+            targetTurnId,
+            sessionCacheKey,
+          );
+          if (terminalStatus === "failed" && terminalFailure?.message) {
+            next.status = `任务失败: ${terminalFailure.message}`;
+          } else if (terminalStatus === "interrupted") {
+            next.status = "任务已取消";
+          }
+          return next;
+        });
+        onTerminalRef.current?.(targetTurnId);
+      }
+    };
+
     // 先建立消息流展示镜像；聊天主时间线在消息流尚未连接时只显示连接状态。
     updateState((current) => ({
       ...current,
@@ -102,6 +142,10 @@ export function useSessionMessageStream({
         terminalSeen = appliedState.streamStatus === "completed"
           || appliedState.streamStatus === "interrupted"
           || appliedState.streamStatus === "failed";
+        if (terminalSeen) {
+          terminalStatus = appliedState.streamStatus;
+          terminalFailure = appliedState.failure;
+        }
         turnStreamId = appliedState.turnStreamId || turnStreamId;
       }
     };
@@ -153,6 +197,7 @@ export function useSessionMessageStream({
                 reconnectAttempt = 0;
               },
               onConnected: (resolvedStreamId) => {
+                notReadyAttempts = 0;
                 turnStreamId = resolvedStreamId ?? turnStreamId;
                 updateState((current) => ({
                   ...current,
@@ -163,12 +208,18 @@ export function useSessionMessageStream({
               onEvent: applyEvent,
             },
           );
+          // 先让 fetch/SSE 完整消费终态帧，再清理活动 Job。否则终态回调
+          // 触发 React effect cleanup 时，会把最后一个正常响应记录成 ERR_ABORTED。
+          notifyTerminal();
         } catch (error) {
           if (controller.signal.aborted) return;
           if (error instanceof MessageStreamCursorGoneError) {
             try {
               await applySnapshot();
-              if (terminalSeen) return;
+              if (terminalSeen) {
+                notifyTerminal();
+                return;
+              }
               continue;
             } catch (snapshotError) {
               if (controller.signal.aborted) return;
@@ -181,7 +232,21 @@ export function useSessionMessageStream({
               }));
             }
           } else {
-            markConnection("disconnected");
+            if (error instanceof MessageStreamConnectionError && error.status === 404) {
+              notReadyAttempts += 1;
+              if (notReadyAttempts > 5) {
+                updateState((current) => ({
+                  ...current,
+                  connectionStatus: "disconnected",
+                  protocolError: "Turn 消息流在有限重试后仍不可用: HTTP 404",
+                }));
+                return;
+              } else {
+                markConnection("connecting");
+              }
+            } else {
+              markConnection("disconnected");
+            }
           }
         }
         if (terminalSeen || controller.signal.aborted) return;
@@ -192,9 +257,14 @@ export function useSessionMessageStream({
         reconnectAttempt += 1;
       }
     };
-    void connect();
+    // StrictMode 会在开发/热更新探测时先执行一次 effect cleanup。延迟首个
+    // 网络订阅可以让这次探测在发出 fetch 前结束，避免真实 SSE 被主动 abort。
+    const connectTimerId = window.setTimeout(() => {
+      void connect();
+    }, 120);
 
     return () => {
+      window.clearTimeout(connectTimerId);
       controller.abort();
       if (streamAbortRef.current === controller) streamAbortRef.current = null;
     };

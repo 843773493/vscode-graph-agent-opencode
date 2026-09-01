@@ -293,6 +293,7 @@ export type TurnDetailBatch = Omit<WorkspaceProtocol.TurnDetailBatchDTO, "items"
 };
 export type TurnDetailBatchRequest = Omit<WorkspaceProtocol.TurnDetailBatchRequest, "turn_ids" | "include"> & {
   turn_ids: string[];
+  tool_call_ids?: string[] | null;
   include?: string[];
 };
 export type TurnDetail = Omit<WorkspaceProtocol.TurnDetailDTO, "created_at" | "updated_at" | "completed_at" | "source_message_ids" | "merged_job_ids" | "user_messages" | "assistant_text" | "thinking_blocks" | "tool_summary" | "response_parts" | "items" | "activity_stats"> & {
@@ -311,6 +312,7 @@ export type TurnDetail = Omit<WorkspaceProtocol.TurnDetailDTO, "created_at" | "u
 };
 export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadRequest, "turn_ids" | "include"> & {
   turn_ids?: string[] | null;
+  tool_call_ids?: string[] | null;
   include?: string[];
 };
 export type TurnHistoryPage = Omit<WorkspaceProtocol.TurnHistoryPageDTO, "items" | "next_cursor" | "before_cursor" | "after_cursor"> & {

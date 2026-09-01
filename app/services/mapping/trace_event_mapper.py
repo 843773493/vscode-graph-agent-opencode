@@ -152,6 +152,15 @@ class TraceEventMapper:
         if event_type == "session_interrupted":
             phase = payload.get("phase") or "text"
             tool_name = payload.get("tool_name")
+            if payload.get("code") == "execution_lost" or phase == "process_exit":
+                return (
+                    "session",
+                    "执行丢失",
+                    payload.get("message")
+                    or "工作区后端重启，无法安全续接原 AgentLoop 执行",
+                    "failed",
+                    tool_name,
+                )
             if tool_name:
                 message = f"会话已打断（{phase} 阶段，工具：{tool_name}）"
             else:

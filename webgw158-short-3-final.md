@@ -1,0 +1,496 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "后退" [disabled] [ref=e6]:
+        - generic [ref=e7]: 
+      - button "前进" [disabled] [ref=e8]:
+        - generic [ref=e9]: 
+      - button "新建会话" [ref=e10] [cursor=pointer]:
+        - img [ref=e12]
+      - button "工作台视图" [ref=e15] [cursor=pointer]:
+        - generic [ref=e16]: 
+        - generic [ref=e17]: 视图
+        - generic [ref=e18]: 
+    - generic "只做一次最短回归" [ref=e137]:
+      - generic [ref=e20]:
+        - generic [ref=e21]: ▱
+        - generic [ref=e22]: 只做一次最短回归
+    - generic [ref=e23]:
+      - button "用户视图" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 
+      - button "更新" [ref=e27] [cursor=pointer]
+      - button "切换左侧侧边栏" [pressed] [ref=e28] [cursor=pointer]:
+        - generic [ref=e29]: 
+      - button "切换底部面板" [ref=e30] [cursor=pointer]:
+        - generic [ref=e31]: 
+      - button "切换会话区" [pressed] [ref=e32] [cursor=pointer]:
+        - generic [ref=e33]: 
+      - button "切换右侧侧边栏" [pressed] [ref=e34] [cursor=pointer]:
+        - generic [ref=e35]: 
+  - generic [ref=e36]:
+    - complementary [ref=e37]:
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - generic [ref=e40]: 会话
+          - region "会话操作" [ref=e41]:
+            - button "新 Ctrl+N" [ref=e42] [cursor=pointer]:
+              - generic [ref=e43]: 新
+              - generic [ref=e44]: Ctrl+N
+            - button "筛选会话" [ref=e45] [cursor=pointer]:
+              - generic [ref=e46]: 
+            - button "搜索会话" [ref=e47] [cursor=pointer]:
+              - generic [ref=e48]: 
+        - generic [ref=e49]:
+          - region "会话导航" [ref=e50]:
+            - button "已固定" [ref=e51] [cursor=pointer]:
+              - generic [ref=e52]: 
+              - generic [ref=e53]: 已固定
+            - button "Chats" [ref=e54] [cursor=pointer]:
+              - generic [ref=e55]: 
+              - generic [ref=e56]: Chats
+          - region "工作区和会话资源管理器" [ref=e138]:
+            - generic [ref=e139]:
+              - heading "工作区文件夹" [level=2] [ref=e140]:
+                - generic [ref=e141]: 
+                - text: 工作区文件夹
+              - button "刷新资源树" [ref=e142] [cursor=pointer]:
+                - generic [ref=e143]: 
+              - button "添加工作区" [ref=e144] [cursor=pointer]:
+                - generic [ref=e145]: 
+            - tree [ref=e146]:
+              - treeitem "展开工作区文件夹 UX Final Group Renamed UX Final Group Renamed" [ref=e147]:
+                - generic [ref=e148]:
+                  - button "展开工作区文件夹 UX Final Group Renamed" [ref=e149]:
+                    - generic [ref=e150]: 
+                  - generic [ref=e151]: 
+                  - button "UX Final Group Renamed" [ref=e152] [cursor=pointer]
+              - treeitem "展开工作区 Browser Tool E2E Manual Browser Tool E2E Manual 工作区状态：已停止" [ref=e153]:
+                - 'generic "Browser Tool E2E Manual root_path: /data/hyf/20260629_agent/vscode-graph-agent-opencode/out/tests/e2e/browser/test_browser_custom_tools/workspace" [ref=e154]':
+                  - button "展开工作区 Browser Tool E2E Manual" [ref=e155]:
+                    - generic [ref=e156]: 
+                  - generic [ref=e157]: 
+                  - button "Browser Tool E2E Manual" [disabled] [ref=e158] [cursor=pointer]
+                  - status "工作区状态：已停止" [ref=e159]: 已停止
+              - treeitem "展开工作区 20260730_wallpaper 20260730_wallpaper 工作区状态：已停止" [ref=e161]:
+                - 'generic "20260730_wallpaper root_path: /data/hyf/20260730_wallpaper" [ref=e162]':
+                  - button "展开工作区 20260730_wallpaper" [ref=e163]:
+                    - generic [ref=e164]: 
+                  - generic [ref=e165]: 
+                  - button "20260730_wallpaper" [disabled] [ref=e166] [cursor=pointer]
+                  - status "工作区状态：已停止" [ref=e167]: 已停止
+              - treeitem "展开工作区 20260801_auto_task 20260801_auto_task 工作区状态：已停止" [ref=e169]:
+                - 'generic "20260801_auto_task root_path: /data/hyf/20260801_auto_task" [ref=e170]':
+                  - button "展开工作区 20260801_auto_task" [ref=e171]:
+                    - generic [ref=e172]: 
+                  - generic [ref=e173]: 
+                  - button "20260801_auto_task" [disabled] [ref=e174] [cursor=pointer]
+                  - status "工作区状态：已停止" [ref=e175]: 已停止
+              - treeitem "展开工作区 workspace workspace 工作区状态：已停止" [ref=e177]:
+                - 'generic "workspace root_path: /data/hyf/20260629_agent/vscode-graph-agent-opencode/out/tests/temp/file_transfer_web_validation/workspace" [ref=e178]':
+                  - button "展开工作区 workspace" [ref=e179]:
+                    - generic [ref=e180]: 
+                  - generic [ref=e181]: 
+                  - button "workspace" [disabled] [ref=e182] [cursor=pointer]
+                  - status "工作区状态：已停止" [ref=e183]: 已停止
+              - treeitem "展开工作区 workspace workspace 工作区状态：已停止" [ref=e185]:
+                - 'generic "workspace root_path: /data/hyf/20260629_agent/vscode-graph-agent-opencode/out/tests/temp/run-and-connect-ux-audit/workspace" [ref=e186]':
+                  - button "展开工作区 workspace" [ref=e187]:
+                    - generic [ref=e188]: 
+                  - generic [ref=e189]: 
+                  - button "workspace" [disabled] [ref=e190] [cursor=pointer]
+                  - status "工作区状态：已停止" [ref=e191]: 已停止
+              - treeitem "展开工作区 home home" [ref=e193]:
+                - 'generic "home root_path: /home/hyf/.boxteams-dev/boxteam_workspace" [ref=e194]':
+                  - button "展开工作区 home" [ref=e195]:
+                    - generic [ref=e196]: 
+                  - generic [ref=e197]: 
+                  - button "home" [ref=e198] [cursor=pointer]
+              - treeitem "展开工作区 workspace workspace 工作区状态：已停止" [ref=e199]:
+                - 'generic "workspace root_path: /data/hyf/20260629_agent/vscode-graph-agent-opencode/out/tests/temp/gateway-large-rollout-history/workspace" [ref=e200]':
+                  - button "展开工作区 workspace" [ref=e201]:
+                    - generic [ref=e202]: 
+                  - generic [ref=e203]: 
+                  - button "workspace" [disabled] [ref=e204] [cursor=pointer]
+                  - status "工作区状态：已停止" [ref=e205]: 已停止
+              - treeitem "折叠工作区 workspace workspace" [expanded] [ref=e207]:
+                - 'generic "workspace root_path: /data/hyf/20260629_agent/vscode-graph-agent-opencode/out/tests/temp/godot-backup3-agent/workspace" [ref=e208]':
+                  - button "折叠工作区 workspace" [ref=e209]:
+                    - generic [ref=e210]: 
+                  - generic [ref=e211]: 
+                  - button "workspace" [ref=e212] [cursor=pointer]
+                - group [ref=e213]:
+                  - treeitem "只做一次最小回归 23:18:07 会话有未读结果" [ref=e214]:
+                    - button "只做一次最小回归 23:18:07 会话有未读结果" [ref=e217] [cursor=pointer]:
+                      - generic [ref=e218]: 
+                      - generic [ref=e219]: 只做一次最小回归
+                      - time [ref=e220]: 23:18:07
+                      - status "会话有未读结果" [ref=e221]
+                  - treeitem "只做一次最小回归 22:58:03 会话有未读结果" [ref=e222]:
+                    - button "只做一次最小回归 22:58:03 会话有未读结果" [ref=e225] [cursor=pointer]:
+                      - generic [ref=e226]: 
+                      - generic [ref=e227]: 只做一次最小回归
+                      - time [ref=e228]: 22:58:03
+                      - status "会话有未读结果" [ref=e229]
+                  - treeitem "只做一次最小回归 23:17:11 会话有未读结果" [ref=e230]:
+                    - button "只做一次最小回归 23:17:11 会话有未读结果" [ref=e233] [cursor=pointer]:
+                      - generic [ref=e234]: 
+                      - generic [ref=e235]: 只做一次最小回归
+                      - time [ref=e236]: 23:17:11
+                      - status "会话有未读结果" [ref=e237]
+                  - treeitem "只做一次最小回归 23:17:52 会话有未读结果" [ref=e238]:
+                    - button "只做一次最小回归 23:17:52 会话有未读结果" [ref=e241] [cursor=pointer]:
+                      - generic [ref=e242]: 
+                      - generic [ref=e243]: 只做一次最小回归
+                      - time [ref=e244]: 23:17:52
+                      - status "会话有未读结果" [ref=e245]
+                  - treeitem "只做一次最小回归 23:00:15 会话有未读结果" [ref=e246]:
+                    - button "只做一次最小回归 23:00:15 会话有未读结果" [ref=e249] [cursor=pointer]:
+                      - generic [ref=e250]: 
+                      - generic [ref=e251]: 只做一次最小回归
+                      - time [ref=e252]: 23:00:15
+                      - status "会话有未读结果" [ref=e253]
+                  - treeitem "只做一次最小回归 22:59:26 会话有未读结果" [ref=e254]:
+                    - button "只做一次最小回归 22:59:26 会话有未读结果" [ref=e257] [cursor=pointer]:
+                      - generic [ref=e258]: 
+                      - generic [ref=e259]: 只做一次最小回归
+                      - time [ref=e260]: 22:59:26
+                      - status "会话有未读结果" [ref=e261]
+                  - treeitem "只做一次最短回归 01:36:02" [ref=e891]:
+                    - button "只做一次最短回归 01:36:02" [ref=e892] [cursor=pointer]:
+                      - generic [ref=e266]: 
+                      - generic [ref=e267]: 只做一次最短回归
+                      - time [ref=e268]: 01:36:02
+                  - treeitem "只做一次最短的只 19:09:48 会话有未读结果" [ref=e269]:
+                    - button "只做一次最短的只 19:09:48 会话有未读结果" [ref=e272] [cursor=pointer]:
+                      - generic [ref=e273]: 
+                      - generic [ref=e274]: 只做一次最短的只
+                      - time [ref=e275]: 19:09:48
+                      - status "会话有未读结果" [ref=e276]
+                  - treeitem "只执行一次工具调 22:04:28 会话有未读结果" [ref=e277]:
+                    - button "只执行一次工具调 22:04:28 会话有未读结果" [ref=e280] [cursor=pointer]:
+                      - generic [ref=e281]: 
+                      - generic [ref=e282]: 只执行一次工具调
+                      - time [ref=e283]: 22:04:28
+                      - status "会话有未读结果" [ref=e284]
+                  - treeitem "只执行一次工具调 22:17:03 会话有未读结果" [ref=e285]:
+                    - button "只执行一次工具调 22:17:03 会话有未读结果" [ref=e288] [cursor=pointer]:
+                      - generic [ref=e289]: 
+                      - generic [ref=e290]: 只执行一次工具调
+                      - time [ref=e291]: 22:17:03
+                      - status "会话有未读结果" [ref=e292]
+                  - treeitem "只执行一次工具调 21:23:03 会话有未读结果" [ref=e293]:
+                    - button "只执行一次工具调 21:23:03 会话有未读结果" [ref=e296] [cursor=pointer]:
+                      - generic [ref=e297]: 
+                      - generic [ref=e298]: 只执行一次工具调
+                      - time [ref=e299]: 21:23:03
+                      - status "会话有未读结果" [ref=e300]
+                  - treeitem "只执行一次工具调 22:19:42 会话有未读结果" [ref=e301]:
+                    - button "只执行一次工具调 22:19:42 会话有未读结果" [ref=e304] [cursor=pointer]:
+                      - generic [ref=e305]: 
+                      - generic [ref=e306]: 只执行一次工具调
+                      - time [ref=e307]: 22:19:42
+                      - status "会话有未读结果" [ref=e308]
+                  - treeitem "继续把当前工作区 07:51:57 会话有未读结果" [ref=e309]:
+                    - button "继续把当前工作区 07:51:57 会话有未读结果" [ref=e312] [cursor=pointer]:
+                      - generic [ref=e313]: 
+                      - generic [ref=e314]: 继续把当前工作区
+                      - time [ref=e315]: 07:51:57
+                      - status "会话有未读结果" [ref=e316]
+                  - treeitem "请你作为实现者，直 17:36:17 会话有未读结果" [ref=e317]:
+                    - button "请你作为实现者，直 17:36:17 会话有未读结果" [ref=e320] [cursor=pointer]:
+                      - generic [ref=e321]: 
+                      - generic [ref=e322]: 请你作为实现者，直
+                      - time [ref=e323]: 17:36:17
+                      - status "会话有未读结果" [ref=e324]
+                  - treeitem "请只做一次最短连 20:09:49 会话有未读结果" [ref=e325]:
+                    - button "请只做一次最短连 20:09:49 会话有未读结果" [ref=e328] [cursor=pointer]:
+                      - generic [ref=e329]: 
+                      - generic [ref=e330]: 请只做一次最短连
+                      - time [ref=e331]: 20:09:49
+                      - status "会话有未读结果" [ref=e332]
+                  - treeitem "请只做一次短验证 17:32:24 会话有未读结果" [ref=e333]:
+                    - button "请只做一次短验证 17:32:24 会话有未读结果" [ref=e336] [cursor=pointer]:
+                      - generic [ref=e337]: 
+                      - generic [ref=e338]: 请只做一次短验证
+                      - time [ref=e339]: 17:32:24
+                      - status "会话有未读结果" [ref=e340]
+                  - treeitem "请在当前 Godot 游戏工 16:46:49 会话有未读结果" [ref=e341]:
+                    - button "请在当前 Godot 游戏工 16:46:49 会话有未读结果" [ref=e344] [cursor=pointer]:
+                      - generic [ref=e345]: 
+                      - generic [ref=e346]: 请在当前 Godot 游戏工
+                      - time [ref=e347]: 16:46:49
+                      - status "会话有未读结果" [ref=e348]
+                  - treeitem "请基于附件 1/1 phase4-boss-early.png 继 19:37:50 会话有未读结果" [ref=e349]:
+                    - button "请基于附件 1/1 phase4-boss-early.png 继 19:37:50 会话有未读结果" [ref=e352] [cursor=pointer]:
+                      - generic [ref=e353]: 
+                      - generic [ref=e354]: 请基于附件 1/1 phase4-boss-early.png 继
+                      - time [ref=e355]: 19:37:50
+                      - status "会话有未读结果" [ref=e356]
+                  - treeitem "请继续固定工作区 19:52:17 会话有未读结果" [ref=e357]:
+                    - button "请继续固定工作区 19:52:17 会话有未读结果" [ref=e360] [cursor=pointer]:
+                      - generic [ref=e361]: 
+                      - generic [ref=e362]: 请继续固定工作区
+                      - time [ref=e363]: 19:52:17
+                      - status "会话有未读结果" [ref=e364]
+                  - treeitem "附件 1/1 game-next-iteration-context.png 是 8765 游戏 23:31:56 会话有未读结果" [ref=e365]:
+                    - button "附件 1/1 game-next-iteration-context.png 是 8765 游戏 23:31:56 会话有未读结果" [ref=e368] [cursor=pointer]:
+                      - generic [ref=e369]: 
+                      - generic [ref=e370]: 附件 1/1 game-next-iteration-context.png 是 8765 游戏
+                      - time [ref=e371]: 23:31:56
+                      - status "会话有未读结果" [ref=e372]
+                  - treeitem "附件 1/1 game-next-iteration-context.png 是现有 8765 23:19:32 会话有未读结果" [ref=e373]:
+                    - button "附件 1/1 game-next-iteration-context.png 是现有 8765 23:19:32 会话有未读结果" [ref=e376] [cursor=pointer]:
+                      - generic [ref=e377]: 
+                      - generic [ref=e378]: 附件 1/1 game-next-iteration-context.png 是现有 8765
+                      - time [ref=e379]: 23:19:32
+                      - status "会话有未读结果" [ref=e380]
+                  - treeitem "附件 1/1 game-pre-next-iteration.png 是当前 8765 23:02:59 会话有未读结果" [ref=e381]:
+                    - button "附件 1/1 game-pre-next-iteration.png 是当前 8765 23:02:59 会话有未读结果" [ref=e384] [cursor=pointer]:
+                      - generic [ref=e385]: 
+                      - generic [ref=e386]: 附件 1/1 game-pre-next-iteration.png 是当前 8765
+                      - time [ref=e387]: 23:02:59
+                      - status "会话有未读结果" [ref=e388]
+                  - treeitem "附件 1/1 game-second-iteration-post-export-reload.png 是刚刚在 00:23:44" [ref=e389]:
+                    - button "附件 1/1 game-second-iteration-post-export-reload.png 是刚刚在 00:23:44" [ref=e392] [cursor=pointer]:
+                      - generic [ref=e393]: 
+                      - generic [ref=e394]: 附件 1/1 game-second-iteration-post-export-reload.png 是刚刚在
+                      - time [ref=e395]: 00:23:44
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 00:00:23" [ref=e396]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 00:00:23" [ref=e399] [cursor=pointer]:
+                      - generic [ref=e400]: 
+                      - generic [ref=e401]: 附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导
+                      - time [ref=e402]: 00:00:23
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 23:58:06" [ref=e403]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 23:58:06" [ref=e406] [cursor=pointer]:
+                      - generic [ref=e407]: 
+                      - generic [ref=e408]: 附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导
+                      - time [ref=e409]: 23:58:06
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 23:55:18" [ref=e410]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 23:55:18" [ref=e413] [cursor=pointer]:
+                      - generic [ref=e414]: 
+                      - generic [ref=e415]: 附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导
+                      - time [ref=e416]: 23:55:18
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 00:04:42" [ref=e417]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 00:04:42" [ref=e420] [cursor=pointer]:
+                      - generic [ref=e421]: 
+                      - generic [ref=e422]: 附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导
+                      - time [ref=e423]: 00:04:42
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 23:53:21" [ref=e424]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导 23:53:21" [ref=e427] [cursor=pointer]:
+                      - generic [ref=e428]: 
+                      - generic [ref=e429]: 附件 1/1 game-second-iteration-pre-export.png 是 8765 旧导
+                      - time [ref=e430]: 23:53:21
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:43:04 会话有未读结果" [ref=e431]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:43:04 会话有未读结果" [ref=e434] [cursor=pointer]:
+                      - generic [ref=e435]: 
+                      - generic [ref=e436]: 附件 1/1 game-second-iteration-pre-export.png 是当前 8765
+                      - time [ref=e437]: 23:43:04
+                      - status "会话有未读结果" [ref=e438]
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:50:05" [ref=e439]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:50:05" [ref=e442] [cursor=pointer]:
+                      - generic [ref=e443]: 
+                      - generic [ref=e444]: 附件 1/1 game-second-iteration-pre-export.png 是当前 8765
+                      - time [ref=e445]: 23:50:05
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:40:46 会话有未读结果" [ref=e446]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:40:46 会话有未读结果" [ref=e449] [cursor=pointer]:
+                      - generic [ref=e450]: 
+                      - generic [ref=e451]: 附件 1/1 game-second-iteration-pre-export.png 是当前 8765
+                      - time [ref=e452]: 23:40:46
+                      - status "会话有未读结果" [ref=e453]
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:47:13" [ref=e454]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:47:13" [ref=e457] [cursor=pointer]:
+                      - generic [ref=e458]: 
+                      - generic [ref=e459]: 附件 1/1 game-second-iteration-pre-export.png 是当前 8765
+                      - time [ref=e460]: 23:47:13
+                  - treeitem "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:45:09 会话有未读结果" [ref=e461]:
+                    - button "附件 1/1 game-second-iteration-pre-export.png 是当前 8765 23:45:09 会话有未读结果" [ref=e464] [cursor=pointer]:
+                      - generic [ref=e465]: 
+                      - generic [ref=e466]: 附件 1/1 game-second-iteration-pre-export.png 是当前 8765
+                      - time [ref=e467]: 23:45:09
+                      - status "会话有未读结果" [ref=e468]
+                  - treeitem "附件 1/1 是 phase4-boss-parry.png，请继续 19:47:37 会话有未读结果" [ref=e469]:
+                    - button "附件 1/1 是 phase4-boss-parry.png，请继续 19:47:37 会话有未读结果" [ref=e472] [cursor=pointer]:
+                      - generic [ref=e473]: 
+                      - generic [ref=e474]: 附件 1/1 是 phase4-boss-parry.png，请继续
+                      - time [ref=e475]: 19:47:37
+                      - status "会话有未读结果" [ref=e476]
+                  - treeitem "附件是从当前 8765 游 22:23:16 会话有未读结果" [ref=e477]:
+                    - button "附件是从当前 8765 游 22:23:16 会话有未读结果" [ref=e480] [cursor=pointer]:
+                      - generic [ref=e481]: 
+                      - generic [ref=e482]: 附件是从当前 8765 游
+                      - time [ref=e483]: 22:23:16
+                      - status "会话有未读结果" [ref=e484]
+                  - treeitem "附件是当前 Parry Arena 成 20:56:37 会话有未读结果" [ref=e485]:
+                    - button "附件是当前 Parry Arena 成 20:56:37 会话有未读结果" [ref=e488] [cursor=pointer]:
+                      - generic [ref=e489]: 
+                      - generic [ref=e490]: 附件是当前 Parry Arena 成
+                      - time [ref=e491]: 20:56:37
+                      - status "会话有未读结果" [ref=e492]
+        - button "调整会话列表和自定义区域大小" [ref=e60]
+        - generic [ref=e61]:
+          - button "自定义" [expanded] [ref=e62] [cursor=pointer]:
+            - generic [ref=e63]: 自定义
+          - generic [ref=e64]:
+            - button "概述" [ref=e65] [cursor=pointer]:
+              - generic [ref=e66]: 
+              - generic [ref=e67]: 概述
+            - button "智能体 1" [ref=e493] [cursor=pointer]:
+              - generic [ref=e69]: 
+              - generic [ref=e70]: 智能体
+              - generic [ref=e71]: "1"
+            - button "技能 24" [ref=e72] [cursor=pointer]:
+              - generic [ref=e73]: 
+              - generic [ref=e74]: 技能
+              - generic [ref=e75]: "24"
+            - button "指令 1" [ref=e76] [cursor=pointer]:
+              - generic [ref=e77]: 
+              - generic [ref=e78]: 指令
+              - generic [ref=e79]: "1"
+            - button "挂钩" [ref=e80] [cursor=pointer]:
+              - generic [ref=e81]: 
+              - generic [ref=e82]: 挂钩
+            - button "MCP 服务器 1" [ref=e83] [cursor=pointer]:
+              - generic [ref=e84]: 
+              - generic [ref=e85]: MCP 服务器
+              - generic [ref=e86]: "1"
+            - button "插件" [ref=e87] [cursor=pointer]:
+              - generic [ref=e88]: 
+              - generic [ref=e89]: 插件
+            - button "工具" [ref=e90] [cursor=pointer]:
+              - generic [ref=e91]: 
+              - generic [ref=e92]: 工具
+    - button "调整会话侧栏宽度" [ref=e93]
+    - generic [ref=e94]:
+      - text:              
+      - main [ref=e95]:
+        - generic [ref=e96]:
+          - generic [ref=e98]:
+            - generic [ref=e494]:
+              - text: ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶ ▶
+              - generic [ref=e499]:
+                - status [ref=e894]: 继续向上滚动加载更早消息
+                - generic [ref=e503]:
+                  - article [ref=e898]:
+                    - generic [ref=e900]:
+                      - button "消息操作" [ref=e902] [cursor=pointer]:
+                        - generic [ref=e903]: 
+                      - generic [ref=e904]: WEB-GW-158 回归 1：请只回复 disk-recovery-ok-1，不要调用工具。
+                    - generic [ref=e905]:
+                      - generic: 
+                      - generic [ref=e906]:
+                        - button "展开 Turn 中间消息" [ref=e908] [cursor=pointer]:
+                          - generic [ref=e909]: 
+                          - generic [ref=e910]: 
+                        - alert [ref=e911]:
+                          - generic [ref=e912]: 
+                          - generic [ref=e913]: 运行失败
+                          - generic [ref=e914]: "Agent 事件流等待首个模型/工具事件超过 60 秒: session_id=ses_97a2313ca8bb400288cc476936712d80 job_id=job_2d7aa9b8b4e1480fa10ee9925281d3c1"
+                  - article [ref=e837]:
+                    - generic [ref=e839]:
+                      - button "消息操作" [ref=e841] [cursor=pointer]:
+                        - generic [ref=e842]: 
+                      - generic [ref=e843]: WEB-GW-158 回归 1：请只回复 disk-recovery-ok-1，不要调用工具。
+                    - generic [ref=e844]:
+                      - generic: 
+                      - generic [ref=e845]:
+                        - button "展开 Turn 中间消息" [ref=e847] [cursor=pointer]:
+                          - generic [ref=e848]: 
+                          - generic [ref=e849]: 
+                        - alert [ref=e850]:
+                          - generic [ref=e851]: 
+                          - generic [ref=e852]: 运行失败
+                          - generic [ref=e853]: "Agent 事件流等待首个模型/工具事件超过 60 秒: session_id=ses_97a2313ca8bb400288cc476936712d80 job_id=job_41305db2bc554f83afc7a3ce708a9a26"
+                  - article [ref=e857]:
+                    - generic [ref=e859]:
+                      - button "消息操作" [ref=e861] [cursor=pointer]:
+                        - generic [ref=e862]: 
+                      - generic [ref=e863]: WEB-GW-158 回归 2：请只回复 disk-recovery-ok-2，不要调用工具。
+                    - generic [ref=e864]:
+                      - generic: 
+                      - generic [ref=e865]:
+                        - button "展开 Turn 中间消息" [ref=e867] [cursor=pointer]:
+                          - generic [ref=e868]: 
+                          - generic [ref=e869]: 
+                        - paragraph [ref=e871]: disk-recovery-ok-2
+                  - article [ref=e918]:
+                    - generic [ref=e920]:
+                      - button "消息操作" [ref=e922] [cursor=pointer]:
+                        - generic [ref=e923]: 
+                      - generic [ref=e924]: WEB-GW-158 回归 3：请只回复 disk-recovery-ok-3，不要调用工具。
+                    - generic [ref=e925]:
+                      - generic: 
+                      - generic [ref=e926]:
+                        - button "展开 Turn 中间消息" [ref=e928] [cursor=pointer]:
+                          - generic [ref=e929]: 
+                          - generic [ref=e930]: 
+                        - paragraph [ref=e932]: disk-recovery-ok-3
+            - generic [ref=e574]:
+              - textbox "你的路线图下一步是什么？" [active] [ref=e576]
+              - generic [ref=e577]:
+                - generic [ref=e578]:
+                  - button "Choose File"
+                  - button "添加图片或视频附件" [ref=e579] [cursor=pointer]: +
+                  - button "打开视图菜单，当前：默认视图" [ref=e581] [cursor=pointer]:
+                    - img [ref=e582]
+                  - generic: Enter 发送 · Ctrl+Enter 换行
+                - generic [ref=e585]:
+                  - button "选择 Agent，当前：default" [ref=e587] [cursor=pointer]:
+                    - generic [ref=e588]: 
+                    - generic [ref=e589]: default
+                  - button "选择模型，当前：gpt-5.6-luna" [ref=e591] [cursor=pointer]:
+                    - generic [ref=e592]: 
+                    - generic [ref=e593]: gpt-5.6-luna
+                  - button "选择和测试工具" [ref=e595] [cursor=pointer]:
+                    - generic [ref=e596]: 
+                  - button "输入消息以启用发送" [disabled] [ref=e597]:
+                    - img [ref=e598]
+          - button "调整会话区与编辑器工作区宽度" [ref=e99]
+          - generic [ref=e100]:
+            - generic "右侧侧边栏组件" [ref=e101]:
+              - tablist "右侧侧边栏组件标签" [ref=e102]:
+                - tab "文件" [selected] [ref=e103]:
+                  - generic [ref=e104]: 
+                  - generic [ref=e105]: 文件
+                - tab "更改" [ref=e106]:
+                  - generic [ref=e107]: 
+                  - generic [ref=e108]: 更改
+                - tab "调试" [ref=e109]:
+                  - generic [ref=e110]: 
+                  - generic [ref=e111]: 调试
+                - tab "运行与连接" [ref=e112]:
+                  - generic [ref=e113]: 
+                  - generic [ref=e114]: 运行与连接
+            - complementary [ref=e116]:
+              - text: 
+              - generic [ref=e117]:
+                - generic "文件操作" [ref=e118]:
+                  - button "搜索文件" [ref=e119] [cursor=pointer]
+                  - button "全部折叠" [ref=e121] [cursor=pointer]:
+                    - generic [ref=e122]: 
+                - tree "工作区文件树" [ref=e124]:
+                  - button "▣ workspace" [expanded] [ref=e125] [cursor=pointer]:
+                    - generic [ref=e126]: 
+                    - generic [ref=e127]: ▣
+                    - generic [ref=e128]: workspace
+                  - button "▣ .boxteam" [ref=e601] [cursor=pointer]:
+                    - generic [ref=e602]: 
+                    - generic [ref=e603]: ▣
+                    - generic [ref=e604]: .boxteam
+                  - button "▣ parry_arena" [ref=e606] [cursor=pointer]:
+                    - generic [ref=e607]: 
+                    - generic [ref=e608]: ▣
+                    - generic [ref=e609]: parry_arena
+                  - button "◇ patch-regression-live.txt 15 B" [ref=e611] [cursor=pointer]:
+                    - generic [ref=e613]: ◇
+                    - generic [ref=e614]: patch-regression-live.txt
+                    - generic [ref=e615]: 15 B
+                  - button "◇ patch-regression-probe.txt 10 B" [ref=e617] [cursor=pointer]:
+                    - generic [ref=e619]: ◇
+                    - generic [ref=e620]: patch-regression-probe.txt
+                    - generic [ref=e621]: 10 B
+                  - button / [ref=e132] [cursor=pointer]:
+                    - generic [ref=e133]: 
+                    - generic [ref=e134]: 
+                    - generic [ref=e135]: /
+              - text:              
+  - contentinfo "状态栏" [ref=e136]

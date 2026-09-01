@@ -6820,6 +6820,21 @@ export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResp
    * @generated from field: optional bool final = 13;
    */
   final?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool outcome_unknown = 14;
+   */
+  outcomeUnknown?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string completion_reason = 15;
+   */
+  completionReason?: string | undefined;
+
+  /**
+   * @generated from field: optional bool partial = 16;
+   */
+  partial?: boolean | undefined;
 };
 
 /**

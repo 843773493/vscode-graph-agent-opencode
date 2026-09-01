@@ -16,6 +16,7 @@ interface WorkspaceAuxiliaryPanelProps {
   tab: WorkspaceAuxiliaryTab;
   apiPort: number;
   workspaceId: string | null;
+  workspaceFileTreeReady: boolean;
   workspaceName: string;
   workspaceRoot: string;
   sessionId: string;
@@ -54,6 +55,7 @@ export default function WorkspaceAuxiliaryPanel({
   tab,
   apiPort,
   workspaceId,
+  workspaceFileTreeReady,
   workspaceName,
   workspaceRoot,
   sessionId,
@@ -156,7 +158,7 @@ export default function WorkspaceAuxiliaryPanel({
             </button>
           </div>
           <WorkspaceFileTree
-            active={visible && tab === "files"}
+            active={workspaceFileTreeReady && visible && tab === "files"}
             apiPort={apiPort}
             workspaceId={workspaceId}
             workspaceName={workspaceName}

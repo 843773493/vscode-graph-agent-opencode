@@ -3,7 +3,7 @@ import {
   acquireGatewayGuest,
   createGatewayUser,
   deleteGatewayUser,
-  heartbeatGatewayUser,
+  heartbeatGatewayUserWithRetry,
   listGatewayUsers,
   selectGatewayUser,
   takeoverGatewayUser,
@@ -48,7 +48,7 @@ export default function GatewayUserAccessMenu() {
   useEffect(() => {
     if (!current) return;
     const timer = window.setInterval(() => {
-      void heartbeatGatewayUser(apiPort).catch((cause: unknown) => {
+      void heartbeatGatewayUserWithRetry(apiPort).catch((cause: unknown) => {
         if (cause instanceof HttpRequestError && cause.status === 409) {
           void refreshGatewayState()
             .then(() => {

@@ -76,10 +76,14 @@ async def test_replay_config_runs_full_business_chain(
         and get_trace_payload(event).get("kind") == "reasoning"
     )
     assert reasoning_text == (
-        "先读取 README，再根据工具结果作答。"
-        "已读取 README，整理最终答复。"
+        "Chat Completions 先确认要读取的文件，再检查工具返回的证据，"
+        "确认内容和当前问题一致后，再发起一次明确的 Chat Completions 工具调用。"
+        "Chat Completions 工具已经返回，我先核对文件内容，确认结果和请求目标相符，"
+        "再整理一份 Chat Completions 可复查的最终答复。"
     )
 
     messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")
     assert messages_response.status_code == 200, messages_response.text
-    assert last_assistant_message(messages_response.json()["data"]["items"]) == "工具调用完成"
+    assert last_assistant_message(messages_response.json()["data"]["items"]) == (
+        "Chat Completions 会说明检查结果，再给出 Chat Completions 可复查结论。"
+    )

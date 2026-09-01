@@ -493,12 +493,30 @@ async function main() {
           ? 503
         : error?.code === "browser_agent_access_locked"
           ? 423
-          : error?.code === "browser_agent_lock_owned_by_another_user"
+        : error?.code === "browser_agent_lock_owned_by_another_user"
             ? 423
+          : error?.code === "browser_tool_timeout"
+            ? 408
           : 500;
       sendJson(response, status, {
         error: message,
-        ...(error?.code ? { code: error.code } : {}),
+        ...(error?.code
+          ? { code: error.code }
+          : message.startsWith("浏览器页面不存在")
+            ? {
+                code: "browser_page_not_found",
+                retryable: true,
+                recovery: "list_or_open_browser_page",
+              }
+            : {}),
+        ...(error?.code === "browser_tool_timeout"
+          ? {
+              retryable: error.retryable === true,
+              recovery: error.recovery || "page_reset",
+              timeout_ms: error.timeout_ms,
+              ...(error.recovery_error ? { recovery_error: error.recovery_error } : {}),
+            }
+          : {}),
       });
     }
   });

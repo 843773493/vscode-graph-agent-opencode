@@ -15,6 +15,49 @@ from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_pr
 from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_BROWSER_BACKEND_URL = "http://127.0.0.1:8015"
+DEFAULT_BROWSER_REQUEST_TIMEOUT_SECONDS = 30
+BROWSER_RUN_REQUEST_GRACE_SECONDS = 10
+
+
+class BrowserManagerRequestError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        method: str,
+        path: str,
+        status: int,
+        payload: object,
+    ) -> None:
+        self.method = method
+        self.path = path
+        self.status = status
+        self.payload = payload
+        self.code = payload.get("code") if isinstance(payload, dict) else None
+        self.retryable = (
+            payload.get("retryable") if isinstance(payload, dict) else None
+        )
+        self.recovery = (
+            payload.get("recovery") if isinstance(payload, dict) else None
+        )
+        self.timeout_ms = (
+            payload.get("timeout_ms") if isinstance(payload, dict) else None
+        )
+        error_message = payload.get("error") if isinstance(payload, dict) else None
+        detail = (
+            error_message
+            if isinstance(error_message, str) and error_message
+            else f"浏览器管理器请求失败: method={method}, path={path}, status={status}"
+        )
+        metadata = []
+        if isinstance(self.code, str):
+            metadata.append(f"code={self.code}")
+        if isinstance(self.retryable, bool):
+            metadata.append(f"retryable={'true' if self.retryable else 'false'}")
+        if isinstance(self.recovery, str):
+            metadata.append(f"recovery={self.recovery}")
+        if metadata:
+            detail = f"{detail} ({', '.join(metadata)})"
+        super().__init__(detail)
 
 
 class BrowserManagerClient:
@@ -60,11 +103,11 @@ class BrowserManagerClient:
         raw = json.loads(self._state_file.read_text(encoding="utf-8"))
         browsers = raw.get("browsers")
         if not isinstance(browsers, list):
-            raise RuntimeError(f"浏览器状态文件格式错误: {self._state_file}")
+            raise TypeError(f"浏览器状态文件格式错误: {self._state_file}")
         result = []
         for browser in browsers:
             if not isinstance(browser, dict):
-                raise RuntimeError(f"浏览器状态文件包含非对象记录: {self._state_file}")
+                raise TypeError(f"浏览器状态文件包含非对象记录: {self._state_file}")
             if browser.get("session_id") == session_id:
                 normalized = dict(browser)
                 normalized.pop("attach_url", None)
@@ -83,11 +126,11 @@ class BrowserManagerClient:
         )
         data = response.get("data")
         if not isinstance(data, list):
-            raise RuntimeError(f"浏览器管理器列表返回格式错误: {response}")
+            raise TypeError(f"浏览器管理器列表返回格式错误: {response}")
         result: list[dict[str, Any]] = []
         for browser in data:
             if not isinstance(browser, dict):
-                raise RuntimeError(f"浏览器管理器列表包含非对象记录: {browser!r}")
+                raise TypeError(f"浏览器管理器列表包含非对象记录: {browser!r}")
             normalized = browser_page_to_json(browser_page_to_proto(browser))
             browser_id = normalized.get("browser_id")
             if not isinstance(browser_id, str) or not browser_id:
@@ -226,7 +269,7 @@ class BrowserManagerClient:
     def _require_data(self, response: dict[str, Any]) -> dict[str, Any]:
         data = response.get("data")
         if not isinstance(data, dict):
-            raise RuntimeError(f"浏览器管理器返回格式错误: {response}")
+            raise TypeError(f"浏览器管理器返回格式错误: {response}")
         normalized = self._normalize_data(data)
         normalized.pop("attach_url", None)
         return normalized
@@ -244,7 +287,41 @@ class BrowserManagerClient:
         path: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return await asyncio.to_thread(self._json_request_sync, method, path, payload)
+        try:
+            return await asyncio.to_thread(
+                self._json_request_sync,
+                method,
+                path,
+                payload,
+            )
+        except TimeoutError as exc:
+            timeout_seconds = self._request_timeout_seconds(method, path, payload)
+            requested_timeout_ms = (
+                payload.get("timeoutMs")
+                if isinstance(payload, dict)
+                else None
+            )
+            timeout_ms = (
+                requested_timeout_ms
+                if isinstance(requested_timeout_ms, int) and requested_timeout_ms > 0
+                else timeout_seconds * 1000
+            )
+            raise BrowserManagerRequestError(
+                method=method,
+                path=path,
+                status=408,
+                payload={
+                    "code": "browser_tool_timeout",
+                    "error": (
+                        "浏览器管理器操作超时: "
+                        f"method={method}, path={path}, timeoutMs={timeout_ms}；"
+                        "浏览器页面可能已重置，请重新 readPage 后重试"
+                    ),
+                    "retryable": True,
+                    "recovery": "page_reset",
+                    "timeout_ms": timeout_ms,
+                },
+            ) from exc
 
     def _json_request_sync(
         self,
@@ -267,7 +344,10 @@ class BrowserManagerClient:
             },
         )
         try:
-            with urlopen(request, timeout=30) as response:
+            with urlopen(
+                request,
+                timeout=self._request_timeout_seconds(method, path, payload),
+            ) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -275,12 +355,35 @@ class BrowserManagerClient:
                 error_payload = json.loads(detail)
             except json.JSONDecodeError:
                 error_payload = None
-            error_message = (
-                error_payload.get("error")
-                if isinstance(error_payload, dict)
+            if isinstance(error_payload, dict):
+                raise BrowserManagerRequestError(
+                    method=method,
+                    path=path,
+                    status=exc.code,
+                    payload=error_payload,
+                ) from exc
+            raise RuntimeError(
+                f"浏览器管理器请求失败: method={method}, path={path}, status={exc.code}, detail={detail}"
+            ) from exc
+
+    @staticmethod
+    def _request_timeout_seconds(
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None,
+    ) -> int:
+        if method == "POST" and path.endswith("/run"):
+            requested_timeout_ms = (
+                payload.get("timeoutMs")
+                if isinstance(payload, dict)
                 else None
             )
-            raise RuntimeError(
-                error_message
-                or f"浏览器管理器请求失败: method={method}, path={path}, status={exc.code}, detail={detail}"
-            ) from exc
+            if isinstance(requested_timeout_ms, int) and requested_timeout_ms > 0:
+                # Browser 服务本身最多接受 60 秒；HTTP 客户端必须在该预算
+                # 之外留出响应序列化和代理传输余量，否则 30 秒 urlopen
+                # 会先于浏览器的 timeoutMs 把一次合法调用截断。
+                return max(
+                    DEFAULT_BROWSER_REQUEST_TIMEOUT_SECONDS,
+                    requested_timeout_ms // 1000 + BROWSER_RUN_REQUEST_GRACE_SECONDS,
+                )
+        return DEFAULT_BROWSER_REQUEST_TIMEOUT_SECONDS

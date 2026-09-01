@@ -7,7 +7,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
 from app.agents.tools.apply_patch.executor import apply_patch_text
-
+from app.agents.tools.apply_patch.models import DiffError
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
 
@@ -32,17 +32,30 @@ apply_patch 使用专用的 V4A diff 格式修改文件。input 必须使用以�
 
 Update File 由一个或多个 @@ hunk 组成。上下文行以空格开头，删除行以 - 开头，新增行以 + 开头。
 默认在修改前后提供三行上下文；上下文不唯一时，在 @@ 后写类、函数或其它定位行；仍不唯一时可以连续使用多个 @@。
-不要使用行号。必须保持原文件的缩进风格。一次调用可以包含多个文件操作。"""
+不要使用行号。必须保持原文件的缩进风格。一次调用可以包含多个文件操作。成功结果会包含 journal_id 和每个目标文件的实际字节校验；只有看到该校验才可声称补丁已落盘。"""
 
 
 def create_apply_patch_tool(*, workspace_root: Path | None = None) -> BaseTool:
     def apply_patch(input: str, explanation: str) -> str:
         """使用 VS Code 的 V4A apply_patch 格式修改工作区文本文件。"""
-        result = apply_patch_text(
-            input,
-            explanation=explanation,
-            workspace_root=workspace_root,
-        )
+        try:
+            result = apply_patch_text(
+                input,
+                explanation=explanation,
+                workspace_root=workspace_root,
+            )
+        except (DiffError, FileNotFoundError, FileExistsError, RuntimeError, ValueError) as exc:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "explanation": explanation,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "retryable": True,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     return StructuredTool.from_function(

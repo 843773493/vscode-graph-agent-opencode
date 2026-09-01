@@ -444,6 +444,45 @@ export function buildPendingStatusItem(
   const lastEvent = events.length > 0 ? events[events.length - 1] : null;
   const lastPayload = lastEvent ? extractEventInfo(lastEvent).payload : {};
   const timestamp = lastEvent?.timestamp ?? conv.userMessage?.created_at ?? null;
+  const activeState = conv.messageStream?.activeState;
+
+  // Activity 与 interrupting 有自己的消息流状态行；这里不重复生成旧的
+  // “正在处理”，避免一个实体同时出现两种互相冲突的进度文案。
+  if (activeState?.kind === "activity" || activeState?.kind === "interrupting") {
+    return null;
+  }
+
+  if (activeState?.kind === "model_output") {
+    return {
+      kind: "status",
+      id: `${conv.conversationId}-model-output`,
+      title: activeState.phase === "reasoning" ? "正在思考" : "正在生成回复",
+      detail: activeState.phase === "reasoning"
+        ? "模型正在生成思考内容。"
+        : "模型正在生成最终回复。",
+      timestamp,
+    };
+  }
+
+  if (activeState?.kind === "tool_call") {
+    return {
+      kind: "status",
+      id: `${conv.conversationId}-tool-call`,
+      title: "正在准备工具调用",
+      detail: "正在接收工具参数，尚未开始执行工具。",
+      timestamp,
+    };
+  }
+
+  if (activeState?.kind === "tool_execution") {
+    return {
+      kind: "status",
+      id: `${conv.conversationId}-tool-execution`,
+      title: "正在运行工具",
+      detail: "工具执行尚未完成，结果可能仍在返回。",
+      timestamp,
+    };
+  }
 
   if (conv.status === "queued") {
     return {

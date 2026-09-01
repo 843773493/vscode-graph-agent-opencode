@@ -16,6 +16,7 @@ import { useTurnBootstrap } from "./bootstrap";
 import { useTurnDetailLoader } from "./details";
 import {
   useAroundTurnLoader,
+  useInitialTurnLoader,
   useNewerTurnLoader,
   useOlderTurnLoader,
 } from "./page";
@@ -95,6 +96,7 @@ export function useSessionTurnHistory({
     requestIdentity: string | null = null,
     refreshAfterInFlight = false,
     include?: TurnHistoryInclude[],
+    toolCallIds?: string[],
   ): Promise<void> => {
     const loadableTurnIds = turnIds.filter(
       (turnId) => !invalidatedTurnIdsRef.current.has(turnId),
@@ -105,8 +107,19 @@ export function useSessionTurnHistory({
       requestIdentity,
       refreshAfterInFlight,
       include,
+      toolCallIds,
     );
   }, [loadTurnDetailsRaw]);
+  const loadInitialTurns = useInitialTurnLoader({
+    apiPort,
+    sessionId,
+    workspaceId,
+    sessionCacheKey,
+    generationRef,
+    requestSignal: requestScopeController.signal,
+    setState,
+    onMissingTurn: refreshTurnHistory,
+  });
   useTurnBootstrap({
     apiPort,
     sessionId,
@@ -117,7 +130,7 @@ export function useSessionTurnHistory({
     generationRef,
     invalidatedTurnIdsRef,
     setState,
-    loadTurnDetails,
+    loadInitialTurns,
   });
   const loadOlderTurns = useOlderTurnLoader({
     apiPort,

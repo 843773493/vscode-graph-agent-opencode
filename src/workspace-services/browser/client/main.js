@@ -1,5 +1,5 @@
 import { bindBrowserInputEvents } from "./browserInputEvents.js";
-import { encodeBrowserClientMessage } from "../protocol/messages.js";
+import { encodeBrowserClientMessage } from "./protocol/messages.js";
 import { bindBrowserToolbarEvents } from "./browserToolbarEvents.js";
 import { createBrowserModalUi } from "./browserModalUi.js";
 import { createBrowserCollaborationUi } from "./browserCollaborationUi.js";

@@ -70,7 +70,8 @@ class TraceMiddleware(BaseHTTPMiddleware):
         duration = time.perf_counter() - start_time
         
         # Log request with trace info
-        logger.info(
+        # 成功请求数量远大于故障请求；放在 DEBUG，避免冷启动/SSE 轮询把服务日志无限放大。
+        logger.debug(
             "[TRACE] method=%s path=%s status=%s duration=%.4fs request_id=%s",
             request.method,
             request.url.path,

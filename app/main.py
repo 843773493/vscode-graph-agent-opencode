@@ -28,6 +28,7 @@ from app.api.workspace import router as workspace_router
 from app.container import build_app_container
 from app.core.env import load_boxteam_env
 from app.core.logging_config import configure_application_logging
+from app.core.path_utils import get_runtime_workspace_root
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.sse import install_sse_openapi_components
 from app.services.infrastructure.config import (
@@ -226,7 +227,12 @@ app.add_middleware(
 
 @app.get("/api/v1/health", summary="健康检查")
 async def health():
-    return {"status": "ok"}
+    # Gateway 重启时据此校验旧 Workspace API 仍属于同一个工作区，再安全接管。
+    return {
+        "status": "ok",
+        "process_id": os.getpid(),
+        "workspace_root": str(get_runtime_workspace_root()),
+    }
 
 
 app.include_router(workspace_router, prefix="/api/v1")

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getGatewayDiagnostics } from "../gatewayApi";
 import type { GatewayDiagnosticLog, GatewayDiagnostics } from "../types/backend";
+import {
+  diagnosticLogStatusLabel,
+  diagnosticLogUnavailableHint,
+} from "./gatewayLogPresentation";
 
 interface GatewayLogPanelProps {
   apiPort: number;
@@ -16,12 +20,6 @@ function formatTime(value: string | null): string {
   if (!value) return "暂无时间";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function logStatusLabel(log: GatewayDiagnosticLog): string {
-  if (log.status === "available") return "可读";
-  if (log.status === "empty") return "空日志";
-  return "不可用";
 }
 
 function serviceLabel(log: GatewayDiagnosticLog): string {
@@ -230,7 +228,7 @@ export default function GatewayLogPanel({
                   <strong>{serviceLabel(log)}</strong>
                   <small>{log.label}</small>
                 </span>
-                <span className={`gateway-log-panel-log-status ${log.status}`}>{logStatusLabel(log)}</span>
+                <span className={`gateway-log-panel-log-status ${log.status}`}>{diagnosticLogStatusLabel(log)}</span>
               </button>
             ))}
             {!diagnostics && !error ? <span className="gateway-log-panel-empty">正在读取输出通道…</span> : null}
@@ -261,8 +259,8 @@ export default function GatewayLogPanel({
               </header>
               {selectedLog.status === "unavailable" ? (
                 <div className="gateway-log-panel-viewer-empty">
-                  <strong>当前无法读取这份日志</strong>
-                  <span>{selectedLog.error ?? "工作区没有返回日志内容。"}</span>
+                  <strong>诊断日志暂不可用</strong>
+                  <span>{diagnosticLogUnavailableHint(selectedLog)}</span>
                 </div>
               ) : selectedLog.status === "empty" ? (
                 <div className="gateway-log-panel-viewer-empty">

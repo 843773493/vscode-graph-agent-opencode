@@ -100,6 +100,16 @@ async def test_message_stream_sse_replay_and_terminal_close(
             "text": "已持久化",
         },
     )
+    await writer.commit(
+        "block.completed",
+        {
+            "block_id": "block_1",
+            "block_index": 0,
+            "carrier_type": "reasoning",
+            "status": "completed",
+            "completion_reason": "upstream_completed",
+        },
+    )
     await writer.close_completed()
 
     async with httpx.AsyncClient(
@@ -115,7 +125,7 @@ async def test_message_stream_sse_replay_and_terminal_close(
     assert response.headers["x-request-id"] == "req_sse_replay"
     assert response.headers["x-message-stream-id"] == writer.turn_stream_id
     events = _sse_events(response.text)
-    assert [event["event_seq"] for event in events] == [1, 2, 3, 4]
+    assert [event["event_seq"] for event in events] == [1, 2, 3, 4, 5]
     assert events[-1]["type"] == "stream.completed"
 
 
@@ -170,6 +180,17 @@ async def test_message_stream_snapshot_replaces_state_and_preserves_request_id(
         },
         tool_execution_id="exec_1",
     )
+    await writer.commit(
+        "model.failed",
+        {
+            "model_call_id": "model_1",
+            "attempt": 1,
+            "outcome": "upstream_error",
+            "error_code": "provider_error",
+            "message": "上游失败详情",
+        },
+        model_call_id="model_1",
+    )
     await writer.close_failed(
         code="execution_lost",
         message="后端重启",
@@ -195,9 +216,112 @@ async def test_message_stream_snapshot_replaces_state_and_preserves_request_id(
     assert snapshot["failure"]["code"] == "execution_lost"
     assert snapshot["blocks"][0]["text"] == "当前答案"
     assert "model_call_id" not in snapshot["blocks"][0]
+    assert snapshot["model_calls"][0]["outcome"] == "upstream_error"
+    assert "error_code" not in snapshot["model_calls"][0]
+    assert "message" not in snapshot["model_calls"][0]
     assert snapshot["tool_calls"][0]["arguments"] == {"command": "pwd"}
     assert snapshot["tool_executions"][0]["status"] == "completed"
     assert snapshot["tool_executions"][0]["outcome"] == "outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_failed_legacy_snapshot_drops_internal_tool_call_error_without_500(
+    message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
+) -> None:
+    api, store, session_id, turn_id = message_stream_api
+    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    await writer.commit(
+        "tool_call",
+        {
+            "tool_call_id": "call_legacy",
+            "tool_name": "read_file",
+            "arguments": {"path": "legacy.txt"},
+            "status": "incomplete",
+            "completion_reason": "agent_event_timeout",
+            "error": "内部错误详情不属于公共 ToolCall schema",
+        },
+    )
+    await writer.close_failed(
+        code="agent_event_timeout",
+        message="Agent 事件流等待模型响应超过 60 秒",
+        resumable=False,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            f"/api/v1/sessions/{session_id}/turns/{turn_id}/message-stream/snapshot",
+            headers=_headers("req_legacy_snapshot"),
+        )
+
+    assert response.status_code == 200
+    snapshot = response.json()["data"]
+    assert snapshot["stream_status"] == "failed"
+    assert snapshot["failure"]["code"] == "agent_event_timeout"
+    assert snapshot["tool_calls"][0]["tool_call_id"] == "call_legacy"
+    assert "error" not in snapshot["tool_calls"][0]
+
+
+@pytest.mark.asyncio
+async def test_active_snapshot_projects_model_failure_without_500(
+    message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
+) -> None:
+    api, store, session_id, turn_id = message_stream_api
+    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    await writer.commit(
+        "model.failed",
+        {
+            "model_call_id": "model_active_failure",
+            "attempt": 9,
+            "outcome": "upstream_error",
+            "error_code": "ScopeCancelledError",
+            "message": "运行时 scope 已取消: reason=scope_deadline_exceeded",
+            "retryable": True,
+        },
+        model_call_id="model_active_failure",
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            f"/api/v1/sessions/{session_id}/turns/{turn_id}/message-stream/snapshot",
+            headers=_headers("req_active_model_failure"),
+        )
+
+    assert response.status_code == 200
+    snapshot = response.json()["data"]
+    assert snapshot["stream_status"] == "open"
+    assert snapshot["failure"]["code"] == "ScopeCancelledError"
+    assert snapshot["failure"]["message"].startswith("运行时 scope 已取消")
+    assert "model_call_id" not in snapshot["failure"]
+    assert snapshot["model_calls"][0]["outcome"] == "upstream_error"
+
+
+@pytest.mark.asyncio
+async def test_message_stream_availability_does_not_create_missing_streams(
+    message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
+) -> None:
+    api, store, session_id, turn_id = message_stream_api
+    writer = await store.open(session_id=session_id, turn_id=turn_id)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            f"/api/v1/sessions/{session_id}/message-streams/availability",
+            params=[("turn_ids", turn_id), ("turn_ids", "job_without_stream")],
+            headers=_headers("req_availability"),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request_id"] == "req_availability"
+    assert body["data"] == {turn_id: writer.turn_stream_id}
 
 
 @pytest.mark.asyncio

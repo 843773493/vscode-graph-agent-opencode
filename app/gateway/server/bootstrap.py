@@ -66,17 +66,32 @@ async def _restore_managed_local_runtimes(
     default_workspace_id: str,
     gateway_root: Path,
     gateway_config: GatewayConfig | None = None,
+    only_workspace_ids: set[str] | None = None,
+    exclude_workspace_ids: set[str] | None = None,
 ) -> None:
     resolved_gateway_config = gateway_config or load_gateway_config()
     for persisted_target in registry.targets():
         if (
-            persisted_target.workspace_id == default_workspace_id
+            (
+                only_workspace_ids is not None
+                and persisted_target.workspace_id not in only_workspace_ids
+            )
+            or (
+                exclude_workspace_ids is not None
+                and persisted_target.workspace_id in exclude_workspace_ids
+            )
+            or persisted_target.workspace_id == default_workspace_id
             or persisted_target.connection_kind != "local"
             or not persisted_target.managed
             or not persisted_target.desired_running
         ):
             continue
         target = registry.resolve(persisted_target.workspace_id)
+        # 没有运行时的目标不会通过 resolve_service_url 转发；保留地址用于
+        # 校验 Gateway 重启后仍存活的旧后端，并在瞬时失败时继续重试接管。
+        reusable_backend_url = target.backend_url or None
+        target.connection_error = "Gateway 正在恢复工作区运行时"
+        registry.upsert(target, activate=False)
         workspace_root = Path(target.root_path).expanduser().resolve()
         try:
             if not workspace_root.is_dir():
@@ -85,6 +100,8 @@ async def _restore_managed_local_runtimes(
                 project_root=get_project_root(),
                 workspace_root=workspace_root,
                 log_dir=gateway_root / "logs",
+                reusable_backend_url=reusable_backend_url,
+                adopt_existing_backend=False,
                 reusable_service_urls=target.local_service_urls,
                 health_request_timeout_seconds=(
                     resolved_gateway_config.gateway_process_health_request_timeout_seconds
@@ -107,6 +124,7 @@ async def _restore_managed_local_runtimes(
             continue
         target.backend_url = runtime.service_urls["workspace_api"]
         target.local_service_urls = {
+            "terminal_manager": runtime.service_urls["terminal_manager"],
             "browser_manager": runtime.service_urls["browser_manager"]
         }
         target.connection_error = None
@@ -149,6 +167,12 @@ async def create_registry(
             workspace_root=default_root_path,
             log_dir=gateway_root / "logs",
             backend_debug_port=_default_backend_debug_port(),
+            reusable_backend_url=(
+                persisted_default.backend_url
+                if persisted_default is not None and persisted_default.backend_url
+                else None
+            ),
+            adopt_existing_backend=False,
             reusable_service_urls=(
                 persisted_default.local_service_urls
                 if persisted_default is not None
@@ -167,6 +191,7 @@ async def create_registry(
         )
         backend_url = default_runtime.service_urls["workspace_api"]
         local_service_urls = {
+            "terminal_manager": default_runtime.service_urls["terminal_manager"],
             "browser_manager": default_runtime.service_urls["browser_manager"]
         }
         managed = True
@@ -203,13 +228,6 @@ async def create_registry(
     registry.remove_system_default_aliases(
         keep_workspace_id=default_workspace_id,
     )
-    await _restore_managed_local_runtimes(
-        registry=registry,
-        default_workspace_id=default_workspace_id,
-        gateway_root=gateway_root,
-        gateway_config=resolved_gateway_config,
-    )
-
     # TODO: Gateway 配置热重载需要先为 registry 目标增加 config/manual/system
     # 来源归属、原子 batch commit 与代理 runtime lease。否则删除配置可能误删手动
     # 目标，或在 HTTP/SSE/WebSocket 仍使用旧 SSH 隧道时提前关闭它。
@@ -285,7 +303,12 @@ async def create_registry(
             and requested_target.managed
             and not registry.has_runtime(requested_active_workspace_id)
         ):
-            registry.activate(default_workspace_id)
+            if requested_target.desired_running:
+                # 托管工作区会在 Gateway 就绪后异步恢复；保留用户上次选择的
+                # 工作区，避免冷启动时把会话树切回默认工作区。
+                registry.activate(requested_active_workspace_id)
+            else:
+                registry.activate(default_workspace_id)
         else:
             registry.activate(requested_active_workspace_id)
     elif default_workspace_id:

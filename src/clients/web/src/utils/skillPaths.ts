@@ -4,6 +4,6 @@ export function skillNameFromPath(value: unknown): string {
   }
   const match = value
     .replace(/\\/g, "/")
-    .match(/(?:^|\/)\.boxteam\/skills\/([^/]+)\/SKILL\.md$/);
+    .match(/(?:^|\/)\.boxteam\/(?:skills|bundled-skills)\/([^/]+)\/SKILL\.md$/);
   return match?.[1] ?? "";
 }

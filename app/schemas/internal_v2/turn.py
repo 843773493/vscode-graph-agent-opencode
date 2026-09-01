@@ -102,6 +102,7 @@ class TurnResponsePartDTO(BaseModel):
     ]
     projection: Literal["summary", "detail", "streaming"]
     status: Literal["pending", "running", "completed", "failed", "cancelled"] = "completed"
+    outcome_unknown: bool = False
     source: TurnResponseSourceDTO
     text: str = Field(default="", max_length=65536)
     carrier_type: str | None = Field(default=None, max_length=64)
@@ -111,6 +112,8 @@ class TurnResponsePartDTO(BaseModel):
     result: str | None = Field(default=None, max_length=65536)
     truncated: bool = False
     final: bool = False
+    completion_reason: str | None = Field(default=None, max_length=64)
+    partial: bool = False
 
 
 class TurnActivityStatsDTO(BaseModel):
@@ -156,8 +159,11 @@ class TurnSummaryDTO(TurnBaseDTO):
     response_preview: str = Field(default="", max_length=1000)
     preview_truncated: bool = False
     item_count: int = Field(default=0, ge=0)
-    thinking_blocks: list[TurnThinkingBlockDTO] = Field(default_factory=list, max_length=32)
+    # 思考块按消息事件逐项保留；详情投影本身负责文本预算，不能在 DTO
+    # 校验阶段因长回合超过 32 项而把整个 history 请求变成 400。
+    thinking_blocks: list[TurnThinkingBlockDTO] = Field(default_factory=list)
     tool_summary: list[TurnToolSummaryDTO] = Field(default_factory=list, max_length=64)
+    tool_summary_truncated: bool = False
     response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=128)
     activity_stats: TurnActivityStatsDTO = Field(default_factory=TurnActivityStatsDTO)
 
@@ -170,8 +176,11 @@ class TurnDetailDTO(TurnBaseDTO):
     response_preview: str = Field(default="", max_length=1000)
     preview_truncated: bool = False
     assistant_text: list[str] = Field(default_factory=list, max_length=32)
-    thinking_blocks: list[TurnThinkingBlockDTO] = Field(default_factory=list, max_length=32)
+    # 思考块按消息事件逐项保留；详情投影本身负责文本预算，不能在 DTO
+    # 校验阶段因长回合超过 32 项而把整个 history 请求变成 400。
+    thinking_blocks: list[TurnThinkingBlockDTO] = Field(default_factory=list)
     tool_summary: list[TurnToolSummaryDTO] = Field(default_factory=list, max_length=64)
+    tool_summary_truncated: bool = False
     response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=512)
     final_response: str = ""
     items: list[TraceEventDTO] = Field(default_factory=list)
@@ -203,6 +212,7 @@ class TurnDetailBatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     turn_ids: list[str] = Field(min_length=1, max_length=4)
+    tool_call_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     include: list[TurnInclude] | None = Field(
         default=None,
         max_length=MAX_TURN_INCLUDE_FIELDS,
@@ -212,6 +222,18 @@ class TurnDetailBatchRequest(BaseModel):
     def validate_unique_turn_ids(self) -> TurnDetailBatchRequest:
         if len(set(self.turn_ids)) != len(self.turn_ids):
             raise ValueError("turn_ids 不能重复")
+        return self
+
+    @model_validator(mode="after")
+    def validate_tool_call_selector(self) -> TurnDetailBatchRequest:
+        if self.tool_call_ids is None:
+            return self
+        if len(self.turn_ids) != 1:
+            raise ValueError("按 tool_call_ids 加载详情一次只能指定一个 turn_id")
+        if len(set(self.tool_call_ids)) != len(self.tool_call_ids):
+            raise ValueError("tool_call_ids 不能重复")
+        if self.include is not None and not set(self.include) & {"tool_call", "tool_result"}:
+            raise ValueError("按 tool_call_ids 加载详情必须请求 tool_call 或 tool_result")
         return self
 
     @model_validator(mode="after")
@@ -250,6 +272,8 @@ class TurnHistoryLoadRequest(BaseModel):
     cursor: str | None = None
     anchor_turn_id: str | None = Field(default=None, min_length=1, max_length=256)
     turn_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
+    # 只用于单个 Turn 内的 ToolRow 定点补载；不允许退化成整轮工具详情读取。
+    tool_call_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     turns: int | None = Field(default=None, ge=1, le=256)
     before_turns: int | None = Field(default=None, ge=0, le=256)
     after_turns: int | None = Field(default=None, ge=0, le=256)
@@ -269,7 +293,21 @@ class TurnHistoryLoadRequest(BaseModel):
                 raise ValueError("按 turn_ids 加载详情不能提供 anchor_turn_id")
             if self.before_turns is not None or self.after_turns is not None:
                 raise ValueError("按 turn_ids 加载详情不能提供两侧 Turn 数量")
+            if self.tool_call_ids is not None:
+                if len(self.turn_ids) != 1:
+                    raise ValueError("按 tool_call_ids 加载详情一次只能指定一个 turn_id")
+                if len(set(self.tool_call_ids)) != len(self.tool_call_ids):
+                    raise ValueError("tool_call_ids 不能重复")
+                if self.include is not None and not set(self.include) & {
+                    "tool_call",
+                    "tool_result",
+                }:
+                    raise ValueError(
+                        "按 tool_call_ids 加载详情必须请求 tool_call 或 tool_result"
+                    )
             return self
+        if self.tool_call_ids is not None:
+            raise ValueError("tool_call_ids 必须和 turn_ids 一起提供")
         if self.direction == "around":
             if self.cursor is None and self.anchor_turn_id is None:
                 raise ValueError("around 读取必须提供 cursor 或 anchor_turn_id")

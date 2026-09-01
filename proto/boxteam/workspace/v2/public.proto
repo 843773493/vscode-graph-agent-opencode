@@ -1499,6 +1499,9 @@ message TurnResponsePartDTO {
   optional string result = 11;
   optional bool truncated = 12;
   optional bool final = 13;
+  optional bool outcome_unknown = 14;
+  optional string completion_reason = 15;
+  optional bool partial = 16;
 }
 
 message TurnResponseSourceDTO {

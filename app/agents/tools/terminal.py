@@ -4,6 +4,7 @@ import asyncio
 import base64
 import os
 import shlex
+from pathlib import Path
 from time import monotonic
 from typing import Any
 
@@ -13,6 +14,7 @@ from app.agents.tools.terminal_contract import (
     DEFAULT_EXEC_YIELD_TIME_MS,
     DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_WRITE_STDIN_YIELD_TIME_MS,
+    classify_terminal_environment_issue,
     clean_terminal_delta,
     effective_yield_time_ms,
     extract_command_output,
@@ -21,6 +23,7 @@ from app.agents.tools.terminal_contract import (
     validate_max_output_tokens,
 )
 from app.core.identifier import create_uuid_hex
+from app.core.path_utils import get_workspace_root
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 
@@ -168,6 +171,22 @@ def _command_for_shell(
     )
 
 
+def _resolve_terminal_workdir(
+    workdir: str | None,
+    *,
+    workspace_root: Path | None,
+) -> str:
+    """将模型的工作区相对路径解析为 PTY 唯一使用的绝对 cwd。"""
+    root = (workspace_root or get_workspace_root()).resolve()
+    raw_workdir = workdir.strip() if isinstance(workdir, str) else ""
+    if not raw_workdir:
+        return str(root)
+    requested = Path(raw_workdir).expanduser()
+    if not requested.is_absolute():
+        requested = root / requested
+    return str(requested.resolve())
+
+
 async def _get_owned_terminal(
     *,
     terminal_client: TerminalManagerClient,
@@ -207,6 +226,7 @@ def create_exec_command_tool(
     agent_id: str = "default",
     *,
     terminal_client: TerminalManagerClient,
+    workspace_root: Path | None = None,
 ) -> BaseTool:
     """创建 Codex 风格的持久终端命令工具。"""
 
@@ -220,7 +240,13 @@ def create_exec_command_tool(
         shell: str | None = None,
         login: bool = True,
     ) -> dict[str, Any]:
-        """运行命令；未在等待窗口内结束时返回可供 write_stdin 使用的 session_id。"""
+        """运行命令；未在等待窗口内结束时返回可供 write_stdin 使用的 session_id。
+
+        workdir 是相对于 workspace 根目录的一次性 PTY cwd，不要在 cmd 中再次 cd 到该目录。
+        Godot 使用 ``--path project`` 时，``--export-release`` 的输出路径相对于 project；
+        例如从 workspace 根运行时使用 ``godot_export/game.html``，不要重复写成
+        ``project/godot_export/game.html``。
+        """
         if not cmd.strip():
             raise ValueError("cmd 不能为空")
         if shell is not None and not shell.strip():
@@ -230,12 +256,16 @@ def create_exec_command_tool(
         validate_max_output_tokens(max_output_tokens)
         resolved_yield_time_ms = effective_yield_time_ms(yield_time_ms)
         started_at = monotonic()
+        resolved_workdir = _resolve_terminal_workdir(
+            workdir,
+            workspace_root=workspace_root,
+        )
 
         terminal = await terminal_client.create_terminal(
             session_id=session_id,
             title=f"{agent_id} terminal",
             agent_id=agent_id,
-            cwd=workdir,
+            cwd=resolved_workdir,
         )
         terminal_id = str(terminal["terminal_id"])
         run_id = create_uuid_hex()
@@ -243,7 +273,9 @@ def create_exec_command_tool(
         done_marker = f"__BOXTEAM_CMD_DONE_{run_id}__"
         shell_command = _command_for_shell(
             cmd=cmd,
-            workdir=workdir,
+            # cwd 已由 PTY 创建请求设置；这里不能再次 cd，否则相对 workdir
+            # 会从已进入的目录重复拼接（例如 workspace/parry_arena/parry_arena）。
+            workdir=None,
             shell=shell,
             login=login,
             start_marker=start_marker,
@@ -292,14 +324,20 @@ def create_exec_command_tool(
             )
             if completed:
                 await terminal_client.delete_terminal(terminal_id)
-                return tool_output(
+                result = tool_output(
                     terminal_id=terminal_id,
                     wall_time_seconds=monotonic() - started_at,
                     output=raw_output,
                     max_output_tokens=max_output_tokens,
                     exit_code=exit_code,
                     running=False,
+                    environment_issue=classify_terminal_environment_issue(
+                        raw_output,
+                        exit_code,
+                    ),
                 )
+                result["cwd"] = resolved_workdir
+                return result
             remaining_seconds = deadline - asyncio.get_running_loop().time()
             if remaining_seconds <= 0:
                 break
@@ -322,13 +360,15 @@ def create_exec_command_tool(
                     f"cleanup_error={cleanup_error}"
                 ) from cleanup_error
             raise
-        return tool_output(
+        result = tool_output(
             terminal_id=terminal_id,
             wall_time_seconds=monotonic() - started_at,
             output=raw_output,
             max_output_tokens=max_output_tokens,
             running=True,
         )
+        result["cwd"] = resolved_workdir
+        return result
 
     return exec_command
 
@@ -414,6 +454,7 @@ def create_write_stdin_tool(
             max_output_tokens=max_output_tokens,
             exit_code=exit_code,
             running=running,
+            environment_issue=classify_terminal_environment_issue(output, exit_code),
         )
         if not running:
             await terminal_client.delete_terminal(session_id)

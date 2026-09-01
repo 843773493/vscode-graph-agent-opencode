@@ -13,10 +13,16 @@ from urllib.parse import urlparse
 import httpx
 
 from app.core.path_utils import get_gateway_root
-from app.gateway.credentials import FederationCredentialStore
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.service_types import GatewayServiceName
+from app.gateway.workspace_ids import (
+    build_managed_local_workspace_id,
+    build_workspace_id,
+    is_legacy_workspace_id,
+)
 from app.schemas.gateway import (
     GatewayConfigReloadStatusDTO,
     GatewayConnectionKind,
@@ -24,12 +30,6 @@ from app.schemas.gateway import (
     GatewayServiceStatus,
     GatewayServiceStatusDTO,
     GatewayWorkspaceDTO,
-)
-from app.gateway.service_types import GatewayServiceName
-from app.gateway.workspace_ids import (
-    build_managed_local_workspace_id,
-    build_workspace_id,
-    is_legacy_workspace_id,
 )
 
 _REGISTRY_SCHEMA_VERSION = 9
@@ -95,7 +95,13 @@ class GatewayWorkspaceRegistry:
     def active_workspace_id(self) -> str | None:
         return self._active_workspace_id
 
-    def close(self, *, preserve_browser_managers: bool = False) -> None:
+    def close(
+        self,
+        *,
+        preserve_browser_managers: bool = False,
+        preserve_terminal_managers: bool = False,
+        preserve_workspace_backends: bool = False,
+    ) -> None:
         errors: list[str] = []
         for workspace_id in tuple(self._targets):
             self.invalidate_route(workspace_id)
@@ -105,6 +111,14 @@ class GatewayWorkspaceRegistry:
         if preserve_browser_managers:
             for _, runtime in local_runtimes:
                 runtime.detach_process("browser_manager")
+        if preserve_terminal_managers:
+            for _, runtime in local_runtimes:
+                runtime.detach_process("terminal_manager")
+        if preserve_workspace_backends:
+            for workspace_id, runtime in local_runtimes:
+                target = self._targets.get(workspace_id)
+                if target is not None and target.managed:
+                    runtime.detach_process("workspace_api")
 
         for runtime_id, runtime in (*local_runtimes, *remote_runtimes):
             try:
@@ -148,6 +162,13 @@ class GatewayWorkspaceRegistry:
                     and previous_browser_url == replacement_browser_url
                 ):
                     previous.detach_process("browser_manager")
+                previous_terminal_url = previous.service_urls.get("terminal_manager")
+                replacement_terminal_url = runtime.service_urls.get("terminal_manager")
+                if (
+                    previous_terminal_url is not None
+                    and previous_terminal_url == replacement_terminal_url
+                ):
+                    previous.detach_process("terminal_manager")
                 previous.close()
             self._runtimes[target.workspace_id] = runtime
         self._route_signatures[target.workspace_id] = route_signature
@@ -502,7 +523,7 @@ class GatewayWorkspaceRegistry:
         target.connection_error = error
         self._save()
 
-    async def list_dtos(self) -> list[GatewayWorkspaceDTO]:
+    async def list_dtos(self, *, check_health: bool = True) -> list[GatewayWorkspaceDTO]:
         targets = list(self._targets.values())
         async with httpx.AsyncClient(timeout=2) as client:
             async def build_dto(target: WorkspaceTarget) -> GatewayWorkspaceDTO:
@@ -523,30 +544,47 @@ class GatewayWorkspaceRegistry:
                             )
                         except LookupError:
                             continue
-                status = "offline"
-                workspace_service_status: GatewayServiceStatus = "offline"
-                workspace_service_error: str | None = None
-                try:
-                    backend_url = self.resolve_service_url(
-                        target.workspace_id,
-                        "workspace_api",
-                    )
-                    response = await client.get(
-                        f"{backend_url.rstrip('/')}/api/v1/health",
-                        headers=self._target_headers(target),
-                    )
-                    if response.status_code == 200:
-                        status = "ready"
-                        workspace_service_status = "ready"
-                    else:
-                        workspace_service_error = (
-                            f"健康检查返回 HTTP {response.status_code}"
+                status = "ready" if "workspace_api" in runtime_service_urls else "offline"
+                workspace_service_status: GatewayServiceStatus = (
+                    "ready" if status == "ready" else "offline"
+                )
+                workspace_service_error: str | None = (
+                    None
+                    if status == "ready"
+                    else target.connection_error
+                    or f"工作区运行时尚未连接: {target.workspace_id}"
+                )
+                backend_url: str | None = None
+                if check_health:
+                    try:
+                        backend_url = self.resolve_service_url(
+                            target.workspace_id,
+                            "workspace_api",
                         )
-                except Exception as error:
-                    status = "offline"
-                    workspace_service_error = str(error)
+                        response = await client.get(
+                            f"{backend_url.rstrip('/')}/api/v1/health",
+                            headers=self._target_headers(target),
+                        )
+                        if response.status_code == 200:
+                            status = "ready"
+                            workspace_service_status = "ready"
+                            workspace_service_error = None
+                        else:
+                            status = "offline"
+                            workspace_service_status = "offline"
+                            workspace_service_error = (
+                                f"健康检查返回 HTTP {response.status_code}"
+                            )
+                    except Exception as error:
+                        status = "offline"
+                        workspace_service_status = "offline"
+                        workspace_service_error = str(error)
                 config_reload = GatewayConfigReloadStatusDTO()
-                if status == "ready":
+                if check_health and status == "ready":
+                    if backend_url is None:
+                        raise RuntimeError(
+                            f"工作区健康检查已通过但缺少后端地址: {target.workspace_id}"
+                        )
                     try:
                         config_response = await client.get(
                             f"{backend_url.rstrip('/')}/api/v1/config/reload-status",
@@ -617,6 +655,9 @@ class GatewayWorkspaceRegistry:
                             service,
                             "unavailable",
                         )
+                        continue
+                    if not check_health:
+                        service_statuses[service] = service_dto(service, "ready")
                         continue
                     service_url = runtime_service_urls[service]
                     try:

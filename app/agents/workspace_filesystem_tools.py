@@ -1,8 +1,12 @@
 import ast
+import asyncio
+import json
+import subprocess
 from collections.abc import Awaitable, Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, cast
 
+from deepagents.backends.utils import format_grep_matches
 from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemState
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
@@ -16,6 +20,23 @@ from app.agents.workspace_tool_paths import (
 )
 
 DEFAULT_MAX_LINES = 2_000
+DEFAULT_GREP_TIMEOUT_SECONDS = 10
+GREP_TIMEOUT_GRACE_SECONDS = 1
+GREP_MAX_FILE_SIZE = "10M"
+GREP_MAX_MATCHES_PER_FILE = 256
+GREP_MAX_MATCHES_TOTAL = 2_048
+GREP_EXCLUDED_GLOBS = (
+    "!.boxteam",
+    "!.boxteam/**",
+    "!.git",
+    "!.git/**",
+    "!node_modules",
+    "!node_modules/**",
+)
+SYSTEM_SKILL_SOURCES = {
+    "skills": "workspace",
+    "bundled-skills": "bundled",
+}
 
 
 class _ToolSchema(BaseModel):
@@ -146,6 +167,7 @@ def _rewrite_known_path(
         additional_kwargs["read_file_path"] = backend_virtual_to_workspace_relative(
             read_path
         )
+    additional_kwargs.update(_system_skill_metadata(relative_path))
     return message.model_copy(
         update={"content": content, "additional_kwargs": additional_kwargs}
     )
@@ -160,18 +182,219 @@ def _rewrite_path_list(message: ToolMessage) -> ToolMessage:
         return message
     if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
         return message
-    relative_paths = [
-        backend_virtual_to_workspace_relative(path) if path.startswith("/") else path
-        for path in paths
-    ]
+    relative_paths = []
+    for path in paths:
+        relative_path = (
+            backend_virtual_to_workspace_relative(path) if path.startswith("/") else path
+        )
+        if _is_hidden_runtime_path(relative_path):
+            continue
+        relative_paths.append(relative_path)
     return message.model_copy(update={"content": str(relative_paths)})
 
 
-def _rewrite_grep_paths(message: ToolMessage) -> ToolMessage:
-    if message.status != "success" or not isinstance(message.content, str):
-        return message
-    lines = [line.removeprefix("/") for line in message.content.splitlines()]
-    return message.model_copy(update={"content": "\n".join(lines)})
+def _is_hidden_runtime_path(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/").lstrip("/")
+    return normalized == ".boxteam" or normalized.startswith(".boxteam/")
+
+
+def _runtime_path_error(tool_name: str, relative_path: str) -> ValueError:
+    return ValueError(
+        f"{tool_name} 禁止访问工作区运行时目录: {relative_path!r}。"
+        " .boxteam 由系统管理，不能用于普通源码搜索或读写；"
+        "系统 Skill 只允许读取被注入的精确 SKILL.md 文件。"
+    )
+
+
+def _system_skill_metadata(relative_path: str) -> dict[str, str]:
+    parts = PurePosixPath(relative_path).parts
+    if len(parts) != 4 or parts[0] != ".boxteam" or parts[3] != "SKILL.md":
+        return {}
+    source = SYSTEM_SKILL_SOURCES.get(parts[1])
+    if source is None:
+        return {}
+    return {
+        "workspace_path_scope": "system_skill",
+        "workspace_file_kind": "skill_definition",
+        "skill_source": source,
+        "skill_name": parts[2],
+    }
+
+
+def _validate_model_path(
+    tool_name: str,
+    relative_path: str,
+    *,
+    allow_skill_roots: bool = False,
+) -> str:
+    parts = PurePosixPath(relative_path).parts
+    if not parts or parts[0] != ".boxteam":
+        return relative_path
+    if allow_skill_roots and _system_skill_metadata(relative_path):
+        return relative_path
+    raise _runtime_path_error(tool_name, relative_path)
+
+
+def _validate_glob_pattern(pattern: str) -> None:
+    normalized = pattern.replace("\\", "/")
+    if ".boxteam" in PurePosixPath(normalized).parts or ".boxteam/" in normalized:
+        raise _runtime_path_error("glob", pattern)
+
+
+def _grep_scope_error(relative_path: str, glob: str | None) -> ValueError:
+    scope = f"path={relative_path!r}"
+    if glob is not None:
+        scope += f", glob={glob!r}"
+    return ValueError(
+        "grep 拒绝无界搜索运行时或根目录范围（"
+        f"{scope}）。.boxteam 包含会话日志、message stream 和 trace；"
+        "请把 path 限定到源码目录（例如 parry_arena 或 src），"
+        "并按需用 glob 分批搜索。"
+    )
+
+
+def _validate_grep_scope(
+    resolver: WorkspaceToolPathResolver,
+    path: str | None,
+    glob: str | None,
+) -> str:
+    relative_path = resolver.normalize_relative_path(path or ".")
+    if ".boxteam" in PurePosixPath(relative_path).parts:
+        raise _grep_scope_error(relative_path, glob)
+    if relative_path == "." and (glob is None or "**" in glob):
+        raise _grep_scope_error(relative_path, glob)
+    return relative_path
+
+
+def _grep_result_error(
+    runtime: ToolRuntime[None, FilesystemState],
+    detail: str,
+) -> ToolMessage:
+    return ToolMessage(
+        content=f"Error: {detail}",
+        name="grep",
+        tool_call_id=runtime.tool_call_id,
+        status="error",
+    )
+
+
+def _run_bounded_workspace_grep(
+    *,
+    pattern: str,
+    relative_path: str,
+    glob: str | None,
+    output_mode: Literal["files_with_matches", "content", "count"],
+    workspace_root: Path,
+    runtime: ToolRuntime[None, FilesystemState],
+) -> ToolMessage:
+    search_path = workspace_root if relative_path == "." else workspace_root / relative_path
+    command = [
+        "rg",
+        "--json",
+        "--fixed-strings",
+        "--hidden",
+        "--no-messages",
+        "--max-filesize",
+        GREP_MAX_FILE_SIZE,
+    ]
+    if glob:
+        command.extend(("--glob", glob))
+    for excluded_glob in GREP_EXCLUDED_GLOBS:
+        command.extend(("--glob", excluded_glob))
+    command.extend(
+        (
+            "--max-count",
+            str(GREP_MAX_MATCHES_PER_FILE),
+            "--",
+            pattern,
+            str(search_path),
+        )
+    )
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=DEFAULT_GREP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return _grep_result_error(
+            runtime,
+            "grep 在 "
+            f"{DEFAULT_GREP_TIMEOUT_SECONDS} 秒内未完成，已终止搜索；"
+            f"path={relative_path!r}, glob={glob!r}。请缩小 path 或 glob 后重试。",
+        )
+    except FileNotFoundError:
+        return _grep_result_error(
+            runtime,
+            "grep 需要可用的 rg 命令；当前运行环境未找到 rg，"
+            "未执行无界的备用递归扫描。",
+        )
+    except OSError as error:
+        return _grep_result_error(runtime, f"grep 启动失败: {error}")
+
+    if completed.returncode not in {0, 1}:
+        detail = completed.stderr.strip() or f"rg 退出码为 {completed.returncode}"
+        return _grep_result_error(runtime, f"grep 执行失败: {detail}")
+
+    matches: list[dict[str, str | int]] = []
+    truncated = False
+    resolved_root = workspace_root.resolve()
+    for line in completed.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "match":
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict):
+            continue
+        path_data = data.get("path")
+        lines_data = data.get("lines")
+        raw_path = path_data.get("text") if isinstance(path_data, dict) else None
+        line_number = data.get("line_number")
+        line_text = lines_data.get("text", "") if isinstance(lines_data, dict) else ""
+        if (
+            not isinstance(raw_path, str)
+            or not isinstance(line_number, int)
+            or not isinstance(line_text, str)
+        ):
+            continue
+        try:
+            match_path = Path(raw_path).resolve()
+            match_relative = match_path.relative_to(resolved_root).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if ".boxteam" in PurePosixPath(match_relative).parts:
+            continue
+        if len(matches) >= GREP_MAX_MATCHES_TOTAL:
+            truncated = True
+            continue
+        matches.append(
+            {
+                "path": match_relative,
+                "line": line_number,
+                "text": line_text.rstrip("\n"),
+            }
+        )
+
+    content = format_grep_matches(matches, output_mode)
+    if truncated:
+        content += (
+            "\n[grep 结果已限制为 "
+            f"{GREP_MAX_MATCHES_TOTAL} 条；请缩小 path 或 glob 后继续搜索]"
+        )
+    return ToolMessage(
+        content=content,
+        name="grep",
+        tool_call_id=runtime.tool_call_id,
+        status="success",
+    )
 
 
 def configure_workspace_filesystem_tools(
@@ -184,7 +407,7 @@ def configure_workspace_filesystem_tools(
     resolver = WorkspaceToolPathResolver(workspace_root)
     implementations = {
         name: _tool_implementations(middleware, name)
-        for name in ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
+        for name in ("ls", "read_file", "write_file", "edit_file", "glob")
     }
 
     def sync_ls(
@@ -192,6 +415,8 @@ def configure_workspace_filesystem_tools(
         runtime: ToolRuntime[None, FilesystemState],
     ) -> ToolMessage:
         try:
+            relative_path = resolver.normalize_relative_path(path)
+            _validate_model_path("ls", relative_path)
             backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("ls", runtime, error)
@@ -204,6 +429,8 @@ def configure_workspace_filesystem_tools(
         runtime: ToolRuntime[None, FilesystemState],
     ) -> ToolMessage:
         try:
+            relative_path = resolver.normalize_relative_path(path)
+            _validate_model_path("ls", relative_path)
             backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("ls", runtime, error)
@@ -219,6 +446,7 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             relative_path = resolver.normalize_relative_path(path)
+            _validate_model_path("read_file", relative_path, allow_skill_roots=True)
             backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("read_file", runtime, error)
@@ -242,6 +470,7 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             relative_path = resolver.normalize_relative_path(path)
+            _validate_model_path("read_file", relative_path, allow_skill_roots=True)
             backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("read_file", runtime, error)
@@ -264,6 +493,7 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             relative_path = resolver.normalize_relative_path(file_path)
+            _validate_model_path("write_file", relative_path)
             backend_path = resolver.backend_virtual_path(file_path)
         except ValueError as error:
             return _path_error("write_file", runtime, error)
@@ -285,6 +515,7 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             relative_path = resolver.normalize_relative_path(file_path)
+            _validate_model_path("write_file", relative_path)
             backend_path = resolver.backend_virtual_path(file_path)
         except ValueError as error:
             return _path_error("write_file", runtime, error)
@@ -308,6 +539,7 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             relative_path = resolver.normalize_relative_path(file_path)
+            _validate_model_path("edit_file", relative_path)
             backend_path = resolver.backend_virtual_path(file_path)
         except ValueError as error:
             return _path_error("edit_file", runtime, error)
@@ -333,6 +565,7 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         try:
             relative_path = resolver.normalize_relative_path(file_path)
+            _validate_model_path("edit_file", relative_path)
             backend_path = resolver.backend_virtual_path(file_path)
         except ValueError as error:
             return _path_error("edit_file", runtime, error)
@@ -355,6 +588,9 @@ def configure_workspace_filesystem_tools(
         path: str = ".",
     ) -> ToolMessage:
         try:
+            _validate_glob_pattern(pattern)
+            relative_path = resolver.normalize_relative_path(path)
+            _validate_model_path("glob", relative_path)
             backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("glob", runtime, error)
@@ -372,6 +608,9 @@ def configure_workspace_filesystem_tools(
         path: str = ".",
     ) -> ToolMessage:
         try:
+            _validate_glob_pattern(pattern)
+            relative_path = resolver.normalize_relative_path(path)
+            _validate_model_path("glob", relative_path)
             backend_path = resolver.backend_virtual_path(path)
         except ValueError as error:
             return _path_error("glob", runtime, error)
@@ -393,17 +632,16 @@ def configure_workspace_filesystem_tools(
         ] = "files_with_matches",
     ) -> ToolMessage:
         try:
-            backend_path = resolver.backend_virtual_path(path or ".")
+            relative_path = _validate_grep_scope(resolver, path, glob)
         except ValueError as error:
             return _path_error("grep", runtime, error)
-        return _rewrite_grep_paths(
-            implementations["grep"][0](
-                pattern=pattern,
-                path=backend_path,
-                glob=glob,
-                output_mode=output_mode,
-                runtime=runtime,
-            )
+        return _run_bounded_workspace_grep(
+            pattern=pattern,
+            relative_path=relative_path,
+            glob=glob,
+            output_mode=output_mode,
+            workspace_root=resolver.workspace_root,
+            runtime=runtime,
         )
 
     async def async_grep(
@@ -416,18 +654,29 @@ def configure_workspace_filesystem_tools(
         ] = "files_with_matches",
     ) -> ToolMessage:
         try:
-            backend_path = resolver.backend_virtual_path(path or ".")
+            relative_path = _validate_grep_scope(resolver, path, glob)
         except ValueError as error:
             return _path_error("grep", runtime, error)
-        return _rewrite_grep_paths(
-            await implementations["grep"][1](
-                pattern=pattern,
-                path=backend_path,
-                glob=glob,
-                output_mode=output_mode,
-                runtime=runtime,
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    _run_bounded_workspace_grep,
+                    pattern=pattern,
+                    relative_path=relative_path,
+                    glob=glob,
+                    output_mode=output_mode,
+                    workspace_root=resolver.workspace_root,
+                    runtime=runtime,
+                ),
+                timeout=DEFAULT_GREP_TIMEOUT_SECONDS + GREP_TIMEOUT_GRACE_SECONDS,
             )
-        )
+        except TimeoutError:
+            return _grep_result_error(
+                runtime,
+                "grep 调度层在 "
+                f"{DEFAULT_GREP_TIMEOUT_SECONDS + GREP_TIMEOUT_GRACE_SECONDS} 秒内未完成，"
+                "已取消本次工具结果；请缩小 path 或 glob 后重试。",
+            )
 
     replacements = {
         "ls": (sync_ls, async_ls, WorkspaceLsSchema),

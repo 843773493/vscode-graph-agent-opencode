@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path, PureWindowsPath
 
 from app.agents.tools.apply_patch.journal import (
     delete_apply_patch_journal,
+    update_apply_patch_journal,
     write_apply_patch_journal,
 )
 from app.agents.tools.apply_patch.models import ActionType, Commit
@@ -17,6 +22,10 @@ from app.agents.tools.apply_patch.parser import (
     parse_patch,
 )
 from app.core.path_utils import get_workspace_root
+
+_workspace_locks_guard = threading.Lock()
+_workspace_locks: dict[Path, threading.Lock] = {}
+_WORKSPACE_PATCH_LOCK_PATH = Path(".boxteam") / "locks" / "apply_patch.write.lock"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,34 +51,88 @@ def apply_patch_text(
     workspace_root: Path | None = None,
 ) -> dict[str, object]:
     root = (workspace_root or get_workspace_root()).resolve()
-    needed_paths = identify_files_needed(patch_text)
-    added_paths = identify_files_added(patch_text)
-    _validate_declared_paths(needed_paths + added_paths, root)
-    current_files = _load_current_files(needed_paths, root)
-    _validate_added_files(added_paths, root)
-    commit = parse_patch(patch_text, current_files)
-    snapshots = _capture_snapshots(_commit_paths(commit), root)
-    journal_id = write_apply_patch_journal(
-        [_journal_payload(item) for item in snapshots],
-        workspace_root=root,
-    )
+    with _workspace_patch_lock(root):
+        needed_paths = identify_files_needed(patch_text)
+        added_paths = identify_files_added(patch_text)
+        _validate_declared_paths(identify_files_affected(patch_text), root)
+        current_files = _load_current_files(needed_paths, root)
+        _validate_added_files(added_paths, root)
+        commit = parse_patch(patch_text, current_files)
+        snapshots = _capture_snapshots(_commit_paths(commit), root)
+        journal_id = write_apply_patch_journal(
+            [_journal_payload(item) for item in snapshots],
+            workspace_root=root,
+        )
 
-    try:
-        affected_files = _apply_commit_transactionally(commit, snapshots, root)
-    except BaseException:
-        delete_apply_patch_journal(journal_id, workspace_root=root)
-        raise
+        try:
+            affected_files = _apply_commit_transactionally(commit, snapshots, root)
+            verification = _verify_commit(commit, snapshots, root)
+            update_apply_patch_journal(
+                journal_id,
+                verification,
+                workspace_root=root,
+            )
+        except BaseException:
+            _restore_snapshots(snapshots)
+            delete_apply_patch_journal(journal_id, workspace_root=root)
+            raise
 
-    return {
-        "status": "success",
-        "explanation": explanation,
-        "journal_id": journal_id,
-        "fuzz": int(commit.fuzz),
-        "files": [
-            {"path": item.path, "operation": item.operation}
-            for item in affected_files
-        ],
-    }
+        return {
+            "status": "success",
+            "explanation": explanation,
+            "journal_id": journal_id,
+            "fuzz": int(commit.fuzz),
+            "files": [
+                {"path": item.path, "operation": item.operation}
+                for item in affected_files
+            ],
+            "verification": verification,
+        }
+
+
+def _get_workspace_lock(workspace_root: Path) -> threading.Lock:
+    with _workspace_locks_guard:
+        lock = _workspace_locks.get(workspace_root)
+        if lock is None:
+            lock = threading.Lock()
+            _workspace_locks[workspace_root] = lock
+        return lock
+
+
+@contextmanager
+def _workspace_patch_lock(workspace_root: Path) -> Iterator[None]:
+    """同时串行化同进程和多工作区后端进程的补丁写入。"""
+    thread_lock = _get_workspace_lock(workspace_root)
+    with thread_lock:
+        lock_path = workspace_root / _WORKSPACE_PATCH_LOCK_PATH
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as lock_file:
+            if os.name == "nt":
+                # TODO: Windows CI 覆盖跨进程补丁锁的释放与异常恢复。
+                import msvcrt
+
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b" ")
+                    lock_file.flush()
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if os.name == "nt":
+                    import msvcrt
+
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def extract_apply_patch_file_paths(
@@ -178,6 +241,61 @@ def _apply_commit_transactionally(
             ) from rollback_error
         raise
     return affected
+
+
+def _verify_commit(
+    commit: Commit,
+    snapshots: list[FileSnapshot],
+    workspace_root: Path,
+) -> list[dict[str, object]]:
+    """校验补丁返回前的真实文件内容，防止把模型口述当成写入成功。"""
+    expected: dict[str, tuple[bool, str]] = {}
+    for requested_path, change in commit.changes.items():
+        if change.type == ActionType.DELETE:
+            expected[requested_path] = (False, "")
+        elif change.move_path:
+            expected[requested_path] = (False, "")
+            expected[change.move_path] = (True, change.new_content or "")
+        else:
+            expected[requested_path] = (True, change.new_content or "")
+
+    before_by_path = {snapshot.requested_path: snapshot for snapshot in snapshots}
+    verification: list[dict[str, object]] = []
+    changed = False
+    for requested_path, (expected_exists, expected_content) in expected.items():
+        real_path = _resolve_workspace_file(requested_path, workspace_root)
+        exists = real_path.exists()
+        if exists and not real_path.is_file():
+            raise RuntimeError(
+                f"apply_patch 写入后目标不是普通文件: {requested_path}"
+            )
+        actual_bytes = real_path.read_bytes() if exists else b""
+        expected_bytes = expected_content.encode("utf-8")
+        actual_content = actual_bytes.decode("utf-8") if exists else ""
+        if exists != expected_exists or actual_bytes != expected_bytes:
+            raise RuntimeError(
+                "apply_patch 写入校验失败: "
+                f"path={requested_path}, expected_exists={expected_exists}, "
+                f"actual_exists={exists}"
+            )
+        before = before_by_path.get(requested_path)
+        if before is not None and (
+            before.existed != exists or before.content != actual_content
+        ):
+            changed = True
+        verification.append(
+            {
+                "path": _virtual_path(real_path, workspace_root),
+                "exists": exists,
+                "size_bytes": real_path.stat().st_size if exists else 0,
+                "sha256": (
+                    sha256(real_path.read_bytes()).hexdigest() if exists else None
+                ),
+            }
+        )
+    if not changed:
+        raise RuntimeError("apply_patch 写入校验失败: 工作区文件字节未发生变化")
+    return verification
 
 
 def _restore_snapshots(snapshots: list[FileSnapshot]) -> None:

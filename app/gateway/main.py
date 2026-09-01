@@ -8,9 +8,18 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.core.env import get_project_root, load_boxteam_env
 from app.core.logging_config import configure_application_logging
@@ -76,48 +85,10 @@ from app.gateway.runtime.process import (
     wait_for_http_ok,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.schemas.gateway import (
-    ActivateGatewayWorkspaceResultDTO,
-    AddLocalWorkspaceRequest,
-    AddRemoteGatewayRequest,
-    AcquireGatewayUserRequest,
-    CreateFederationManagedWorkspaceRequest,
-    CreateGatewayGuestRequest,
-    CreateGatewayManagedWorkspaceRequest,
-    CreateGatewayUserRequest,
-    DevelopmentRuntimeRestartDTO,
-    FederationProtocolManifestDTO,
-    FederationWorkspaceDTO,
-    FederationWorkspaceListDTO,
-    GatewayConfigSourceDTO,
-    GatewayConfigSourcesDTO,
-    GatewayDiagnosticsDTO,
-    GatewayDirectoryEntryDTO,
-    GatewayDirectoryListDTO,
-    GatewayHealthDTO,
-    GatewayInboundAccessListDTO,
-    GatewayInboundPeerDTO,
-    GatewayInboundWorkspaceDTO,
-    GatewayManagedWorkspaceListDTO,
-    GatewayUserAccessDTO,
-    GatewayUserDTO,
-    GatewayUserLeaseDTO,
-    GatewayUserListDTO,
-    GatewayUserViewStateDTO,
-    GatewayUserViewStateUpdateRequest,
-    GatewayRuntimeRestartResultDTO,
-    GatewayRuntimeStateResultDTO,
-    GatewayThemeCatalogDTO,
-    GatewayUIAssetDTO,
-    GatewayUIAssetListDTO,
-    GatewayWorkspaceListDTO,
-    ReorderGatewayWorkspacesRequest,
-    SshConnectionOptionListDTO,
-    UpdateGatewayWorkspaceRequest,
-    WebUISettingsDTO,
-    WebUISettingsUpdateDTO,
+from app.gateway.server.bootstrap import (
+    _restore_managed_local_runtimes,
+    create_registry,
 )
-from app.gateway.server.bootstrap import create_registry
 from app.gateway.server.port_forwarding import (
     get_port_forward_manager,
 )
@@ -147,6 +118,47 @@ from app.gateway.ui_settings import (
     merge_web_ui_settings_values,
 )
 from app.gateway.workspace_ids import build_workspace_id
+from app.schemas.gateway import (
+    AcquireGatewayUserRequest,
+    ActivateGatewayWorkspaceResultDTO,
+    AddLocalWorkspaceRequest,
+    AddRemoteGatewayRequest,
+    CreateFederationManagedWorkspaceRequest,
+    CreateGatewayGuestRequest,
+    CreateGatewayManagedWorkspaceRequest,
+    CreateGatewayUserRequest,
+    DevelopmentRuntimeRestartDTO,
+    FederationProtocolManifestDTO,
+    FederationWorkspaceDTO,
+    FederationWorkspaceListDTO,
+    GatewayConfigSourceDTO,
+    GatewayConfigSourcesDTO,
+    GatewayDiagnosticsDTO,
+    GatewayDirectoryEntryDTO,
+    GatewayDirectoryListDTO,
+    GatewayHealthDTO,
+    GatewayInboundAccessListDTO,
+    GatewayInboundPeerDTO,
+    GatewayInboundWorkspaceDTO,
+    GatewayManagedWorkspaceListDTO,
+    GatewayRuntimeRestartResultDTO,
+    GatewayRuntimeStateResultDTO,
+    GatewayThemeCatalogDTO,
+    GatewayUIAssetDTO,
+    GatewayUIAssetListDTO,
+    GatewayUserAccessDTO,
+    GatewayUserDTO,
+    GatewayUserLeaseDTO,
+    GatewayUserListDTO,
+    GatewayUserViewStateDTO,
+    GatewayUserViewStateUpdateRequest,
+    GatewayWorkspaceListDTO,
+    ReorderGatewayWorkspacesRequest,
+    SshConnectionOptionListDTO,
+    UpdateGatewayWorkspaceRequest,
+    WebUISettingsDTO,
+    WebUISettingsUpdateDTO,
+)
 from app.schemas.internal_v2.common import APIResponse
 
 logger = logging.getLogger(__name__)
@@ -168,6 +180,40 @@ def _preserve_browser_managers_on_shutdown() -> bool:
     if raw not in {"true", "false"}:
         raise RuntimeError(
             "BOXTEAM_GATEWAY_PRESERVE_BROWSER_MANAGERS_ON_SHUTDOWN "
+            f"必须是 true 或 false，实际为 {raw!r}"
+        )
+    return raw == "true"
+
+
+def _preserve_terminal_managers_on_shutdown() -> bool:
+    raw = (
+        os.environ.get(
+            "BOXTEAM_GATEWAY_PRESERVE_TERMINAL_MANAGERS_ON_SHUTDOWN",
+            "true",
+        )
+        .strip()
+        .lower()
+    )
+    if raw not in {"true", "false"}:
+        raise RuntimeError(
+            "BOXTEAM_GATEWAY_PRESERVE_TERMINAL_MANAGERS_ON_SHUTDOWN "
+            f"必须是 true 或 false，实际为 {raw!r}"
+        )
+    return raw == "true"
+
+
+def _preserve_workspace_backends_on_shutdown() -> bool:
+    raw = (
+        os.environ.get(
+            "BOXTEAM_GATEWAY_PRESERVE_WORKSPACE_BACKENDS_ON_SHUTDOWN",
+            "false",
+        )
+        .strip()
+        .lower()
+    )
+    if raw not in {"true", "false"}:
+        raise RuntimeError(
+            "BOXTEAM_GATEWAY_PRESERVE_WORKSPACE_BACKENDS_ON_SHUTDOWN "
             f"必须是 true 或 false，实际为 {raw!r}"
         )
     return raw == "true"
@@ -407,6 +453,76 @@ async def lifespan(app: FastAPI):
     user_access_cleanup_task = asyncio.create_task(
         _cleanup_user_access_periodically(app.state.user_access_service)
     )
+    default_workspace_id = next(
+        (
+            target.workspace_id
+            for target in registry.targets()
+            if target.system_default
+        ),
+        "",
+    )
+    active_workspace_id = registry.active_workspace_id
+    active_workspace_target = (
+        registry.resolve(active_workspace_id)
+        if active_workspace_id is not None and registry.has_target(active_workspace_id)
+        else None
+    )
+    active_runtime_restore_task: asyncio.Task[None] | None = None
+    if (
+        active_workspace_target is not None
+        and active_workspace_target.connection_kind == "local"
+        and active_workspace_target.managed
+        and active_workspace_target.desired_running
+        and not registry.has_runtime(active_workspace_target.workspace_id)
+    ):
+        # Gateway 必须先完成自己的 lifespan，不能把一个慢启动的工作区后端
+        # 绑定到 uvicorn 的 Application startup。工作区代理会等待这个任务的
+        # 有界结果，因此首个 /api/v1 请求仍能在后端 ready 后进入，而 Gateway
+        # health、维护态和诊断接口不会被托管工作区阻塞。
+        active_runtime_restore_task = asyncio.create_task(
+            _restore_managed_local_runtimes(
+                registry=registry,
+                default_workspace_id=default_workspace_id,
+                gateway_root=_gateway_root(),
+                gateway_config=gateway_config,
+                only_workspace_ids={active_workspace_target.workspace_id},
+            )
+        )
+    managed_runtime_restore_task = asyncio.create_task(
+        _restore_managed_local_runtimes(
+            registry=registry,
+            default_workspace_id=default_workspace_id,
+            gateway_root=_gateway_root(),
+            gateway_config=gateway_config,
+            exclude_workspace_ids=(
+                {active_workspace_target.workspace_id}
+                if active_workspace_target is not None
+                else None
+            ),
+        )
+    )
+    managed_runtime_restore_tasks: dict[str, asyncio.Task[None]] = {}
+    if active_runtime_restore_task is not None and active_workspace_target is not None:
+        managed_runtime_restore_tasks[active_workspace_target.workspace_id] = (
+            active_runtime_restore_task
+        )
+    for target in registry.targets():
+        if (
+            target.workspace_id
+            != (
+                active_workspace_target.workspace_id
+                if active_workspace_target is not None
+                else None
+            )
+            and target.connection_kind == "local"
+            and target.managed
+            and target.desired_running
+        ):
+            managed_runtime_restore_tasks[target.workspace_id] = (
+                managed_runtime_restore_task
+            )
+    app.state.managed_runtime_restore_tasks = managed_runtime_restore_tasks
+    app.state.managed_runtime_restore_task = managed_runtime_restore_task
     try:
         await app.state.session_generator_coordinator.start()
         coordinator_started = True
@@ -426,6 +542,13 @@ async def lifespan(app: FastAPI):
         }
         yield
     finally:
+        if active_runtime_restore_task is not None:
+            active_runtime_restore_task.cancel()
+        managed_runtime_restore_task.cancel()
+        restore_tasks = [managed_runtime_restore_task]
+        if active_runtime_restore_task is not None:
+            restore_tasks.append(active_runtime_restore_task)
+        await asyncio.gather(*restore_tasks, return_exceptions=True)
         user_access_cleanup_task.cancel()
         await asyncio.gather(user_access_cleanup_task, return_exceptions=True)
         if scheduler_started:
@@ -450,7 +573,11 @@ async def lifespan(app: FastAPI):
         logger.info("Gateway 正在关闭托管工作区运行时")
         try:
             registry.close(
-                preserve_browser_managers=(_preserve_browser_managers_on_shutdown())
+                preserve_browser_managers=(_preserve_browser_managers_on_shutdown()),
+                preserve_terminal_managers=(_preserve_terminal_managers_on_shutdown()),
+                preserve_workspace_backends=(
+                    _preserve_workspace_backends_on_shutdown()
+                ),
             )
         except Exception as error:
             shutdown_errors.append(error)
@@ -481,6 +608,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(TraceMiddleware)
+
+
+@app.exception_handler(HTTPException)
+async def gateway_http_exception_handler(
+    request: Request,
+    error: HTTPException,
+) -> JSONResponse:
+    """让依赖注入阶段的错误也遵守 Gateway request_id 响应约定。"""
+    request_id = get_request_id(request)
+    return JSONResponse(
+        status_code=error.status_code,
+        headers=error.headers,
+        content={
+            "detail": error.detail,
+            "request_id": request_id,
+        },
+    )
 
 
 def get_registry(request: Request) -> GatewayWorkspaceRegistry:
@@ -902,11 +1046,16 @@ async def acquire_gateway_guest(
 @app.get("/api/gateway/users/current", response_model=APIResponse[GatewayUserAccessDTO])
 async def current_gateway_user(
     request: Request,
+    response: Response,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     service: UserAccessService = Depends(get_user_access_service),
 ):
-    context = _current_user_access(request, service)
+    context = service.resolve_cookie(request.cookies.get(USER_ACCESS_COOKIE_NAME))
+    if context is None:
+        # 本机 Web 首次加载默认进入游客态，避免业务初始化先看到一次无意义的 401。
+        context = service.acquire_guest()
+        _set_user_access_cookie(response, context)
     return APIResponse(
         data=_user_access_dto(context, service),
         request_id=request_id,
@@ -1021,13 +1170,17 @@ async def put_gateway_user_view_state(
 
 @app.get("/api/gateway/workspaces", response_model=APIResponse[GatewayWorkspaceListDTO])
 async def list_workspaces(
+    check_health: bool = Query(
+        default=True,
+        description="是否探测所有工作区及其附属服务的健康状态",
+    ),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
-            items=await registry.list_dtos(),
+            items=await registry.list_dtos(check_health=check_health),
         ),
         request_id=request_id,
     )

@@ -137,4 +137,54 @@ describe("待处理消息状态", () => {
 
     expect(pending.has("workspace::ses_failed")).toBe(false);
   });
+
+  test("历史刷新期间的空快照仍保留乐观 replay 回合", () => {
+    const sessionId = "ses_replay_bootstrap_race";
+    const mapKey = `workspace::${sessionId}`;
+    const pending = new Map<string, ConversationView[]>([[mapKey, [{
+      conversationId: "msg_replay_new",
+      displayMode: "live",
+      sessionId,
+      userMessage: {
+        message_id: "msg_replay_new",
+        session_id: sessionId,
+        role: "user",
+        content: "重放上一条回复",
+        attachments: [],
+        metadata: {
+          source: "optimistic_replay",
+          replay_action: "regenerate",
+        },
+        created_at: "2026-07-24T00:00:00Z",
+        updated_at: "2026-07-24T00:00:00Z",
+      },
+      assistantMessages: [],
+      events: [],
+      status: "running",
+      jobId: "job_replay_new",
+      pending: true,
+      activeJobOverlay: true,
+      source: "pending",
+    }]]]);
+
+    writePendingSnapshot(
+      pending,
+      new Map(),
+      {
+        session_id: sessionId,
+        active_job_id: null,
+        requests: [],
+        snapshot_version: 1,
+      },
+      mapKey,
+    );
+
+    expect(pending.get(mapKey)).toEqual([
+      expect.objectContaining({
+        conversationId: "msg_replay_new",
+        activeJobOverlay: true,
+        pending: true,
+      }),
+    ]);
+  });
 });

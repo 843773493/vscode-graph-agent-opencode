@@ -1,9 +1,9 @@
+import { isTransientNetworkError } from "../../api/http";
 import { listPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
 import { updateAttachmentSummariesFromTraces } from "../../state/attachments";
 import {
   appendTraceEventsToPendingConversations,
-  removePendingForTraceEvent,
   writePendingSnapshot,
 } from "../../state/conversations";
 import { goalStreamMutation } from "../../state/sessionGoal";
@@ -11,7 +11,6 @@ import {
   appendBoundedLiveTraceEvents,
   appendReceivedEvents,
   buildTraceEvent,
-  isJobTerminalTraceType,
   tracePayloadString,
 } from "../../state/traceEvents";
 import {
@@ -80,16 +79,6 @@ function updateCurrentSessionFromEvents(
       context.sessionCacheKey,
       true,
     );
-    for (const traceEvent of traceEvents) {
-      if (isJobTerminalTraceType(traceEvent.type)) {
-        removePendingForTraceEvent(
-          next.pendingConversations,
-          context.sessionId,
-          traceEvent,
-          context.sessionCacheKey,
-        );
-      }
-    }
     for (const event of events) {
       const mutation = goalStreamMutation(event);
       if (mutation?.kind === "updated") {
@@ -114,7 +103,9 @@ function setRefreshError(
   prefix: string,
   error: unknown,
 ): void {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = isTransientNetworkError(error)
+    ? "本地服务连接暂时变化，已保留当前状态并自动重试"
+    : error instanceof Error ? error.message : String(error);
   setState((latest) => ({
     ...latest,
     status: `${prefix}: ${message}`,

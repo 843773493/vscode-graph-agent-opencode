@@ -97,7 +97,7 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "turns": { "type": "integer", "minimum": 1, "maximum": 8, "default": 1 },
+                "turns": { "type": "integer", "minimum": 1, "maximum": 8, "default": 5 },
                 "include": { "$ref": "#/$defs/historyInclude" }
               }
             },
@@ -105,8 +105,8 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "before_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 2 },
-                "after_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 2 },
+                "before_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 3 },
+                "after_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 3 },
                 "include": { "$ref": "#/$defs/historyInclude" }
               }
             }

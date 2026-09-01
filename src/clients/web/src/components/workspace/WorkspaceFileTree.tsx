@@ -75,6 +75,7 @@ interface WorkspaceFileTreeProps {
 
 const ROOT_PATH = "";
 const FILESYSTEM_ROOT_PATH = filesystemFileTreePath("/");
+const SESSION_AUXILIARY_LOAD_DELAY_MS = 200;
 
 interface FileTreeContextMenu {
   treePath: string;
@@ -630,20 +631,23 @@ export default function WorkspaceFileTree({
       return;
     }
     let cancelled = false;
-    void getSessionFileTreeSettings(port, sessionId, workspaceId)
-      .then((result) => {
-        if (!cancelled) {
-          acceptFileTreeSettings(result);
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          const message = error instanceof Error ? error.message : String(error);
-          onStatusChange(`快捷路径加载失败: ${message}`);
-        }
-      });
+    const timerId = window.setTimeout(() => {
+      void getSessionFileTreeSettings(port, sessionId, workspaceId)
+        .then((result) => {
+          if (!cancelled) {
+            acceptFileTreeSettings(result);
+          }
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) {
+            const message = error instanceof Error ? error.message : String(error);
+            onStatusChange(`快捷路径加载失败: ${message}`);
+          }
+        });
+    }, SESSION_AUXILIARY_LOAD_DELAY_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timerId);
     };
   }, [
     acceptFileTreeSettings,

@@ -143,3 +143,37 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
     assert new_dispatch.job_status == "queued"
     assert service._session_current_job["ses_restore_race"] == "job_restored_first"
     assert service._pending_queue.ids("ses_restore_race") == (new_dispatch.job_id,)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_removes_started_head_from_persistent_queue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_dispatch_persistence"
+    session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    await store.save(
+        session_id,
+        [
+            _request(
+                session_id,
+                job_id="job_started",
+                message_id="msg_started",
+                sequence=1,
+            ),
+        ],
+    )
+
+    service = _service(sessions_dir)
+    started_jobs: list[str] = []
+    _prevent_background_execution(service, monkeypatch, started_jobs)
+
+    pending = await service.list_pending(session_id)
+
+    assert pending.active_job_id == "job_started"
+    assert pending.requests == []
+    assert started_jobs == ["job_started"]
+    assert await store.load(session_id) == []

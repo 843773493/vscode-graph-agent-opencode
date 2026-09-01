@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.outputs import ChatGenerationChunk
 
-from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.agents.providers.openai_responses import (
+    BoxteamOpenAIResponsesModel,
+    ResponsesPayloadBuildTimeoutError,
+    ResponsesStreamOpenTimeoutError,
+)
 from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
@@ -15,7 +20,7 @@ from app.core.model_delta_context import (
 
 
 @pytest.mark.asyncio
-async def test_backup_4_first_chunk_waits_at_litellm_aresponses(monkeypatch):
+async def test_responses_stream_open_has_a_bounded_provider_timeout(monkeypatch):
     upstream_entered = asyncio.Event()
     upstream_released = asyncio.Event()
 
@@ -36,6 +41,10 @@ async def test_backup_4_first_chunk_waits_at_litellm_aresponses(monkeypatch):
         "app.agents.providers.openai_responses.litellm.aresponses",
         fake_aresponses,
     )
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS",
+        0.01,
+    )
     model = BoxteamOpenAIResponsesModel(
         model="gpt-5.6-luna",
         api_base="https://chatgpt.com/backend-api/codex",
@@ -51,13 +60,148 @@ async def test_backup_4_first_chunk_waits_at_litellm_aresponses(monkeypatch):
         anext(model._astream([HumanMessage(content="只回复 OK")]))
     )
     await asyncio.wait_for(upstream_entered.wait(), timeout=0.5)
-    await asyncio.sleep(0)
-    assert not first_chunk.done()
+    with pytest.raises(ResponsesStreamOpenTimeoutError, match="未建立事件流"):
+        await asyncio.wait_for(first_chunk, timeout=0.5)
 
-    upstream_released.set()
-    chunk = await asyncio.wait_for(first_chunk, timeout=0.5)
 
+@pytest.mark.asyncio
+async def test_responses_payload_preparation_does_not_block_event_loop(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    ticks = asyncio.Event()
+
+    async def response_events():
+        yield SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(usage=None),
+        )
+
+    async def fake_aresponses(**_payload):
+        return response_events()
+
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-5.6-luna",
+        api_base="https://chatgpt.com/backend-api/codex",
+        api_key="",
+        custom_llm_provider="chatgpt",
+        provider_id="backup_4",
+        responses_store=False,
+    )
+    original_payload_builder = model._responses_payload
+
+    def slow_payload_builder(*args, **kwargs):
+        entered.set()
+        release.wait(timeout=1)
+        return original_payload_builder(*args, **kwargs)
+
+    monkeypatch.setattr(model, "_responses_payload", slow_payload_builder)
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.litellm.aresponses",
+        fake_aresponses,
+    )
+
+    async def observe_event_loop():
+        await asyncio.sleep(0.01)
+        ticks.set()
+
+    stream_task = asyncio.create_task(
+        anext(model._astream([HumanMessage(content="只回复 OK")]))
+    )
+    await asyncio.wait_for(asyncio.to_thread(entered.wait, 0.5), timeout=0.6)
+    await asyncio.wait_for(observe_event_loop(), timeout=0.1)
+    assert not stream_task.done()
+
+    release.set()
+    chunk = await asyncio.wait_for(stream_task, timeout=0.5)
+
+    assert ticks.is_set()
     assert chunk.message.chunk_position == "last"
+
+
+@pytest.mark.asyncio
+async def test_responses_payload_timeout_is_reported_before_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = threading.Event()
+
+    async def fake_aresponses(**_payload):
+        raise AssertionError("payload 投影超时后不应调用 provider")
+
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-5.6-luna",
+        api_base="https://chatgpt.com/backend-api/codex",
+        api_key="",
+        custom_llm_provider="chatgpt",
+        provider_id="backup_4",
+        responses_store=False,
+    )
+
+    def timed_out_payload(*_args, **kwargs):
+        entered.set()
+        assert kwargs["deadline"] > 0
+        raise ResponsesPayloadBuildTimeoutError("历史 payload 投影测试超时")
+
+    monkeypatch.setattr(model, "_responses_payload", timed_out_payload)
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.litellm.aresponses",
+        fake_aresponses,
+    )
+
+    stream_task = asyncio.create_task(
+        anext(model._astream([HumanMessage(content="只回复 OK")]))
+    )
+    await asyncio.wait_for(asyncio.to_thread(entered.wait, 0.5), timeout=0.6)
+    with pytest.raises(ResponsesPayloadBuildTimeoutError, match="历史 payload"):
+        await asyncio.wait_for(stream_task, timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_responses_payload_build_watchdog_does_not_wait_for_blocked_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    provider_called = False
+
+    async def fake_aresponses(**_payload):
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("payload 构造超时后不应调用 provider")
+
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-5.6-luna",
+        api_base="https://chatgpt.com/backend-api/codex",
+        api_key="",
+        custom_llm_provider="chatgpt",
+        provider_id="backup_4",
+        responses_store=False,
+    )
+
+    def blocked_payload_builder(*_args, **_kwargs):
+        entered.set()
+        release.wait(timeout=1)
+        return {"model": "gpt-5.6-luna", "input": []}
+
+    monkeypatch.setattr(model, "_responses_payload", blocked_payload_builder)
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.litellm.aresponses",
+        fake_aresponses,
+    )
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    stream_task = asyncio.create_task(
+        anext(model._astream([HumanMessage(content="只回复 OK")]))
+    )
+    try:
+        await asyncio.wait_for(asyncio.to_thread(entered.wait, 0.5), timeout=0.6)
+        with pytest.raises(ResponsesPayloadBuildTimeoutError, match="payload 构造"):
+            await asyncio.wait_for(stream_task, timeout=0.5)
+        assert not provider_called
+    finally:
+        release.set()
 
 
 @pytest.mark.asyncio

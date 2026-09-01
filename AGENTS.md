@@ -130,7 +130,7 @@
 
 1. 仓库正式测试脚本的运行工作区必须写入 `out/tests/<与 tests/ 下测试文件相同的路径（去掉测试文件后缀）>/workspace/`。例如 `tests/integration/workspace_services/mcp/test_mini_mcp.py` 对应 `out/tests/integration/workspace_services/mcp/test_mini_mcp/workspace/`。
 2. Codex/Agent 为当前开发任务执行的临时 Web UI、浏览器、E2E 探索或 subagent 真实操作不属于仓库正式测试脚本；这类临时操作只能使用当前用户明确允许的默认工作区，或使用 `out/tests/temp/<task_name>/workspace/` 下的临时隔离工作区。
-3. 测试需要独立工作区时，从 `asset/` 选择合适的测试工作区复制到上述对应的 `workspace/`，再使用复制后的目录；不要直接修改或注册 `asset/` 中的模板目录。
+3. 测试需要独立工作区时，从 `tests/fixtures/workspaces/` 选择合适的完整测试工作区 fixture 复制到上述对应的 `workspace/`，再使用复制后的目录；不要直接修改或注册 fixture 源目录。
 4. 禁止把本项目根目录注册为测试工作区，也禁止为了测试在项目根目录产生 `.boxteam/`、会话、运行时状态或其他测试数据。
 5. 向 subagent 委派临时 Web 或 E2E 操作时，任务说明必须明确指定 `out/tests/temp/<task_name>/` 下的工作区和产物目录，不能让 subagent 自行选择目录，也不能新增项目根目录工作区；让 subagent 运行仓库正式测试脚本时，沿用该脚本在 `out/tests/` 下的正式输出路径。
 

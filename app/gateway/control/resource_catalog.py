@@ -6,13 +6,13 @@ import httpx
 
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.gateway_control import (
     GatewayResourceDTO,
     GatewayResourceListDTO,
     GatewayResourceScopeErrorDTO,
 )
-from app.gateway.credentials import FederationCredentialStore
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.internal_v2.common import CursorPage
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_resource import SessionResourceListDTO
@@ -130,6 +130,7 @@ class GatewayResourceCatalogService:
             target,
             f"sessions/{session.session_id}/resources",
             request_id=request_id,
+            params={"include_history": "false"},
         )
         resource_list = SessionResourceListDTO.model_validate(data)
         return [

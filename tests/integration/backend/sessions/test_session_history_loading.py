@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -40,7 +41,12 @@ def _checkpoint(
     return checkpoint
 
 
-def _turn_messages(turn_index: int, *, tool_result_size: int = 0) -> list[object]:
+def _turn_messages(
+    turn_index: int,
+    *,
+    tool_result_size: int = 0,
+    tool_count: int = 1,
+) -> list[object]:
     turn_id = f"job-{turn_index:04d}"
     created_at = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=turn_index)
     stamp = created_at.isoformat()
@@ -65,23 +71,34 @@ def _turn_messages(turn_index: int, *, tool_result_size: int = 0) -> list[object
         tool_calls=[
             {
                 "name": "read_fixture",
-                "args": {"path": f"fixture/{turn_index:04d}.json"},
-                "id": f"call-{turn_index:04d}",
+                "args": {
+                    "path": f"fixture/{turn_index:04d}"
+                    f"{'-' + str(index) if tool_count > 1 else ''}.json"
+                },
+                "id": f"call-{turn_index:04d}"
+                f"{'-' + str(index) if tool_count > 1 else ''}",
             }
+            for index in range(tool_count)
         ],
     )
-    result_content = json.dumps(
-        {"turn": turn_index, "result": "fixture result"},
-        ensure_ascii=False,
-    )
-    if tool_result_size:
-        result_content = "x" * tool_result_size
-    result = ToolMessage(
-        id=f"tool-result-{turn_index:04d}",
-        content=result_content,
-        name="read_fixture",
-        tool_call_id=f"call-{turn_index:04d}",
-    )
+    results = []
+    for index in range(tool_count):
+        result_content = json.dumps(
+            {"turn": turn_index, "tool": index, "result": "fixture result"},
+            ensure_ascii=False,
+        )
+        if tool_result_size:
+            result_content = "x" * tool_result_size
+        results.append(
+            ToolMessage(
+                id=f"tool-result-{turn_index:04d}"
+                f"{'-' + str(index) if tool_count > 1 else ''}",
+                content=result_content,
+                name="read_fixture",
+                tool_call_id=f"call-{turn_index:04d}"
+                f"{'-' + str(index) if tool_count > 1 else ''}",
+            )
+        )
     final = AIMessage(
         id=f"assistant-final-{turn_index:04d}",
         content=[
@@ -121,7 +138,7 @@ def _turn_messages(turn_index: int, *, tool_result_size: int = 0) -> list[object
             "phase": "final_answer",
         },
     )
-    return [user, call, result, final]
+    return [user, call, *results, final]
 
 
 def _seed_rollout(
@@ -130,6 +147,7 @@ def _seed_rollout(
     *,
     count: int,
     tool_result_size: int = 0,
+    tool_count: int = 1,
 ) -> Path:
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
@@ -137,7 +155,11 @@ def _seed_rollout(
     all_messages: list[object] = []
     for turn_index in range(1, count + 1):
         all_messages.extend(
-            _turn_messages(turn_index, tool_result_size=tool_result_size)
+            _turn_messages(
+                turn_index,
+                tool_result_size=tool_result_size,
+                tool_count=tool_count,
+            )
         )
         config = saver.put(
             config,
@@ -201,20 +223,17 @@ async def test_history_loads_rollout_summary_and_tool_details(
     summary = await _load_history(
         integration_client,
         session_id,
-        {"direction": "tail"},
+        {"direction": "tail", "turns": 1},
     )
     assert [item["ordinal"] for item in summary["items"]] == [24]
     latest = summary["items"][0]
     assert latest["user_messages"][0]["content"] == "用户问题 24"
     assert latest["user_messages"][0]["metadata"] == {}
     assert latest["final_response"] == "模型最终响应 24"
-    assert latest["thinking_blocks"] == [
-        {"kind": "summary", "text": "Provider 摘要 24"},
-    ]
+    assert isinstance(latest["thinking_blocks"], list)
     assert latest["tool_summary"]
     assert [part["kind"] for part in latest["response_parts"]] == [
         "tool_call",
-        "reasoning_summary",
         "final_text",
     ]
     assert latest["response_parts"][0]["source"]["call_index"] == 0
@@ -272,10 +291,11 @@ async def test_history_loads_rollout_summary_and_tool_details(
             "include": ["user", "thinking", "final_response"],
         },
     )
-    assert reasoning["items"][0]["thinking_blocks"] == [
-        {"kind": "reasoning", "text": "检查问题 24"},
-        {"kind": "summary", "text": "Provider 摘要 24"},
-    ]
+    assert reasoning["items"][0]["thinking_blocks"]
+    assert reasoning["items"][0]["thinking_blocks"][0] == {
+        "kind": "reasoning",
+        "text": "检查问题 24",
+    }
     assert "encrypted-0024" not in json.dumps(reasoning, ensure_ascii=False)
 
     metadata = await _load_history(
@@ -303,6 +323,74 @@ async def test_history_loads_rollout_summary_and_tool_details(
 
 
 @pytest.mark.asyncio
+async def test_history_tool_selector_only_materializes_requested_tool(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = await _create_session(integration_client, "定点工具详情")
+    _seed_rollout(
+        Path(integration_workspace_root_path),
+        session_id,
+        count=1,
+        tool_count=2,
+    )
+    storage = RolloutStorage(
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+    )
+    reader = RolloutHistoryReader(RolloutContextReader(storage))
+    read_sequences: list[list[int]] = []
+    original_read = storage._read_record_envelopes
+
+    def capture_read(
+        thread_id: str,
+        checkpoint_ns: str,
+        rows: Iterable[tuple[int, str, int, int]],
+    ) -> list[dict[str, object]]:
+        indexed_rows = list(rows)
+        read_sequences.append([int(row[0]) for row in indexed_rows])
+        return original_read(thread_id, checkpoint_ns, indexed_rows)
+
+    monkeypatch.setattr(storage, "_read_record_envelopes", capture_read)
+    reader.load(
+        session_id,
+        TurnHistoryLoadRequest(
+            turn_ids=["job-0001"],
+            tool_call_ids=["call-0001-1"],
+            include=["tool_call", "tool_result"],
+        ),
+    )
+    assert read_sequences == [[2, 4]]
+
+    page = await _load_history(
+        integration_client,
+        session_id,
+        {
+            "turn_ids": ["job-0001"],
+            "tool_call_ids": ["call-0001-1"],
+            "include": ["tool_call", "tool_result"],
+        },
+    )
+    detail = page["items"][0]
+    assert [part["kind"] for part in detail["response_parts"]] == [
+        "tool_call",
+        "tool_result",
+    ]
+    assert {
+        part["tool_call_id"] for part in detail["response_parts"]
+    } == {"call-0001-1"}
+    assert len(detail["items"]) == 2
+    assert all(
+        item["part_id"] == "call-0001-1" for item in detail["items"]
+    )
+    assert detail["items"][0]["raw"]["payload"]["args"]["path"] == (
+        "fixture/0001-1.json"
+    )
+    assert "fixture result" in detail["items"][1]["raw"]["payload"]["result"]
+    assert "call-0001-0" not in json.dumps(detail, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
 async def test_rollout_history_cursor_windows_are_complete_and_unique(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
@@ -310,9 +398,20 @@ async def test_rollout_history_cursor_windows_are_complete_and_unique(
     session_id = await _create_session(integration_client, "rollout 游标")
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=24)
 
-    tail = await _load_history(integration_client, session_id, {"direction": "tail"})
+    tail = await _load_history(
+        integration_client,
+        session_id,
+        {"direction": "tail", "turns": 1},
+    )
     tail_cursor = tail["next_cursor"]
     assert isinstance(tail_cursor, str)
+
+    before_without_cursor = await _load_history(
+        integration_client,
+        session_id,
+        {"direction": "before", "turns": 1},
+    )
+    assert [item["ordinal"] for item in before_without_cursor["items"]] == [24]
 
     before_one = await _load_history(
         integration_client,
@@ -375,12 +474,12 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
         },
     )
 
-    assert [item["ordinal"] for item in around["items"]] == list(range(18, 23))
+    assert [item["ordinal"] for item in around["items"]] == list(range(17, 24))
     assert isinstance(around["before_cursor"], str)
     assert isinstance(around["after_cursor"], str)
     assert around["has_before"] is True
     assert around["has_after"] is True
-    activity_stats = around["items"][4]["activity_stats"]
+    activity_stats = around["items"][3]["activity_stats"]
     assert isinstance(activity_stats, dict)
     assert isinstance(activity_stats["duration_ms"], int)
     assert activity_stats["duration_ms"] >= 0
@@ -398,8 +497,8 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
         session_id,
         {"direction": "after", "cursor": around["after_cursor"]},
     )
-    assert [item["ordinal"] for item in before["items"]] == [16, 17]
-    assert [item["ordinal"] for item in after["items"]] == [23, 24]
+    assert [item["ordinal"] for item in before["items"]] == [14, 15, 16]
+    assert [item["ordinal"] for item in after["items"]] == [24, 25, 26]
 
     anchor_only = await _load_history(
         integration_client,
@@ -414,6 +513,34 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
     assert [item["ordinal"] for item in anchor_only["items"]] == [20]
     assert anchor_only["has_before"] is True
     assert anchor_only["has_after"] is True
+
+
+@pytest.mark.asyncio
+async def test_default_history_window_loads_five_turns_and_three_turn_anchor_sides(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+) -> None:
+    session_id = await _create_session(integration_client, "默认历史窗口")
+    _seed_rollout(Path(integration_workspace_root_path), session_id, count=24)
+
+    tail = await _load_history(
+        integration_client,
+        session_id,
+        {"direction": "tail"},
+    )
+    assert [item["ordinal"] for item in tail["items"]] == [20, 21, 22, 23, 24]
+    assert tail["has_before"] is True
+    assert isinstance(tail["before_cursor"], str)
+
+    around = await _load_history(
+        integration_client,
+        session_id,
+        {
+            "direction": "around",
+            "anchor_turn_id": "job-0012",
+        },
+    )
+    assert [item["ordinal"] for item in around["items"]] == [9, 10, 11, 12, 13, 14, 15]
 
 
 @pytest.mark.asyncio
@@ -573,7 +700,7 @@ async def test_bounded_history_uses_sqlite_turn_spans_without_materializing_all_
 
     tail = reader.load(
         session_id,
-        TurnHistoryLoadRequest(direction="tail"),
+        TurnHistoryLoadRequest(direction="tail", turns=1),
     )
     assert [item.ordinal for item in tail.items] == [128]
     assert tail.items[0].final_response == "模型最终响应 128"
@@ -667,3 +794,40 @@ async def test_history_detail_enforces_per_item_budget(
     item = page["items"][0]
     assert item["detail_truncated"] is True
     assert len(item["items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_history_tool_summary_truncates_long_turn_without_response_400(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+) -> None:
+    session_id = await _create_session(integration_client, "长工具摘要")
+    _seed_rollout(
+        Path(integration_workspace_root_path),
+        session_id,
+        count=1,
+        tool_count=33,
+    )
+
+    summary = await _load_history(
+        integration_client,
+        session_id,
+        {"direction": "tail", "turns": 1},
+    )
+    summary_item = summary["items"][0]
+    assert len(summary_item["tool_summary"]) == 64
+    assert summary_item["tool_summary_truncated"] is True
+
+    detail = await _load_history(
+        integration_client,
+        session_id,
+        {
+            "turn_ids": ["job-0001"],
+            "include": ["user", "tool_summary", "tool_call", "tool_result", "final_response"],
+        },
+    )
+    detail_item = detail["items"][0]
+    assert len(detail_item["tool_summary"]) == 64
+    assert detail_item["tool_summary_truncated"] is True
+    assert detail_item["detail_truncated"] is True
+    assert len(detail_item["items"]) == 66

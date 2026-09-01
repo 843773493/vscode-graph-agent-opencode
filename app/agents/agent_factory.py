@@ -137,6 +137,45 @@ def _team_aware_system_prompt(
     return append_to_system_message(base_message, TEAM_COORDINATION_SYSTEM_PROMPT)
 
 
+def _runtime_identity_system_prompt(
+    system_prompt: str | SystemMessage,
+    *,
+    workspace_root: Path | None,
+    provider_candidates: Sequence[tuple[str, str]],
+) -> SystemMessage:
+    """向模型注入不可由工作区文件推断的运行时身份和路径边界。"""
+    if not provider_candidates:
+        raise ValueError("运行时身份至少需要一个 provider/model 候选")
+
+    primary_provider_id, primary_model_id = provider_candidates[0]
+    fallback_text = ", ".join(
+        f"{provider_id}/{model_id}"
+        for provider_id, model_id in provider_candidates[1:]
+    )
+    workspace_text = (
+        str(workspace_root.resolve())
+        if workspace_root is not None
+        else "由当前 Agent runtime 显式提供"
+    )
+    identity_prompt = (
+        "## 当前运行时身份与路径边界（系统权威元数据）\n"
+        f"- workspace 根目录（exec_command 未提供 workdir 时的 cwd）：`{workspace_text}`\n"
+        f"- 当前首选 provider id：`{primary_provider_id}`\n"
+        f"- 当前首选 model id：`{primary_model_id}`\n"
+        f"- 已配置 fallback provider/model（按顺序）：`{fallback_text or '无'}`\n"
+        "这些字段来自当前运行时配置，不是从 project.godot 或其他工作区文件推断的。\n"
+        "回答 provider/model 身份时必须使用上述元数据；project.godot 的 `config/name` 只是项目显示名，绝不是模型名或 provider 名。\n"
+        "所有文件工具路径都相对于 workspace 根目录。项目位于子目录时必须保留该前缀：例如 `parry_arena/project.godot` 和 `parry_arena/godot_export/parry_arena.html`。只有在 exec_command 的 cwd 明确为 `parry_arena` 时，`godot_export/parry_arena.html` 才是同一文件的项目相对路径；不能因为 workspace 根下没有不带前缀的路径就报告文件不存在。\n"
+        "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次；不要在命令中再次 cd 到同一个 workdir。工具结果中的 cwd 是实际执行目录，应以它解释相对路径。"
+    )
+    base_message = (
+        system_prompt
+        if isinstance(system_prompt, SystemMessage)
+        else SystemMessage(content=system_prompt)
+    )
+    return append_to_system_message(base_message, identity_prompt)
+
+
 def build_model_from_provider(
     provider: dict[str, Any],
     runtime_config: dict[str, Any],
@@ -239,6 +278,7 @@ def build_runtime_for_agent(
     *,
     prompt_cache_key: str | None = None,
     preferred_provider_id: str | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if config_service is None:
         raise RuntimeError("build_runtime_for_agent 需要显式传入 ConfigService")
@@ -266,7 +306,14 @@ def build_runtime_for_agent(
     return {
         "model": candidates[0].model,
         "model_routing": CapabilityRoutingMiddleware(candidates),
-        "system_prompt": runtime_config["system_prompt"],
+        "system_prompt": _runtime_identity_system_prompt(
+            runtime_config["system_prompt"],
+            workspace_root=workspace_root,
+            provider_candidates=[
+                (candidate.provider_id, candidate.model_id)
+                for candidate in candidates
+            ],
+        ),
     }
 
 
@@ -323,6 +370,7 @@ def create_my_deep_agent(
     tool_timeout_seconds: float | None = None,
     resource_manager: ResourceManager | None = None,
     workspace_root: Path,
+    include_team_tools: bool = False,
 ) -> Any:
     if checkpointer is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
@@ -353,7 +401,7 @@ def create_my_deep_agent(
         raise RuntimeError("create_my_deep_agent 需要显式传入 SessionOrchestrator")
     if session_subagent_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 SessionSubagentService")
-    if team_service is None:
+    if include_team_tools and team_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 TeamCoordinationService")
     if job_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 JobService")
@@ -411,6 +459,7 @@ def create_my_deep_agent(
             workspace_root=workspace_root,
             session_message_delivery_service=session_message_delivery_service,
             include_test_tools=config_service.development_test_tools_enabled(),
+            include_team_tools=include_team_tools,
         )
         custom_tool_bundle = build_custom_tool_bundle(
             custom_tool_specs or [],
@@ -672,6 +721,7 @@ def create_runtime_deep_agent_for_session(
     tool_timeout_seconds: float | None = None,
     resource_manager: ResourceManager | None = None,
     workspace_root: Path,
+    include_team_tools: bool = False,
 ):
     if config_service is None:
         raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
@@ -681,6 +731,7 @@ def create_runtime_deep_agent_for_session(
         config_service=service,
         prompt_cache_key=session_id,
         preferred_provider_id=preferred_provider_id,
+        workspace_root=workspace_root,
     )
     tool_config = service.get_agent_tool_config(agent_id)
     tool_policy = service.resolve_agent_tool_policy(agent_id)
@@ -739,6 +790,7 @@ def create_runtime_deep_agent_for_session(
         mcp_tools=mcp_tools,
         tool_timeout_seconds=tool_timeout_seconds,
         resource_manager=resource_manager,
+        include_team_tools=include_team_tools,
         interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
         custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=service,

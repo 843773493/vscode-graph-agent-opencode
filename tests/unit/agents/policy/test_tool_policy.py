@@ -160,6 +160,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         terminal_manager_client=MagicMock(),
         invocation_context=invocation_context,
         workspace_root=tmp_path,
+        include_team_tools=True,
     )
     model = FakeListChatModel(responses=["ok"])
     middleware = build_deep_agent_middleware(

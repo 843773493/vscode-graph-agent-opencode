@@ -85,6 +85,7 @@ class _IndexedHistory:
 
 
 _INDEXED_HISTORY_CACHE_LIMIT = 64
+_TOOL_SUMMARY_LIMIT = 64
 
 
 class RolloutHistoryReader:
@@ -181,6 +182,11 @@ class RolloutHistoryReader:
         self,
         session_id: str,
     ) -> _IndexedHistory | None:
+        # 历史读取必须保持纯只读：open_snapshot() 持有 rollout 的共享文件锁，
+        # 而 repair_active_context_view() 会申请同一个文件的独占写锁。若调用方
+        # 已经持有读快照（例如历史分页或异常回收路径），先 repair 会在 Linux
+        # 的 flock 上自锁。索引修复属于显式维护/写入边界，不能塞进读取入口；
+        # 这里只读取一个固定快照，异常也由下面的 finally 路径关闭它。
         snapshot = self._context_reader.open_snapshot(session_id)
         try:
             return self._read_indexed_history_snapshot(session_id, snapshot)
@@ -356,6 +362,7 @@ class RolloutHistoryReader:
                 session_id,
                 selected,
                 include=include,
+                tool_call_ids=tuple(request.tool_call_ids or ()),
                 next_cursor=None,
                 has_more=False,
                 projection_epoch=projection_epoch,
@@ -591,6 +598,7 @@ class RolloutHistoryReader:
         projection: dict[str, object] | None = None,
         load_tool_payload: bool = False,
         include: tuple[str, ...] | None = None,
+        tool_call_ids: frozenset[str] | None = None,
     ) -> _HistoryTurn:
         selected_records = records
         if selected_records is None:
@@ -652,6 +660,7 @@ class RolloutHistoryReader:
             projection=projection,
             mode=projection_mode,
             include=frozenset(fields),
+            tool_call_ids=tool_call_ids,
         )
         return _HistoryTurn(
             detail=self._build_detail(
@@ -662,6 +671,7 @@ class RolloutHistoryReader:
                 message_sequences=message_sequences,
                 projection=projection,
                 response_parts=response_parts,
+                tool_call_ids=tool_call_ids,
             ),
             messages=messages,
         )
@@ -738,9 +748,11 @@ class RolloutHistoryReader:
         projection_epoch: int,
         snapshot: RolloutReadSnapshot,
         chain: ContextChain,
+        tool_call_ids: tuple[str, ...] = (),
     ) -> TurnHistoryPageDTO:
         budget = DetailReadBudget(LoadLimits())
         load_tool_payload = bool(set(include) & {"tool_call", "tool_result"})
+        selected_tool_call_ids = frozenset(tool_call_ids) or None
         projections = self._context_reader.read_turn_projections(
             snapshot,
             [span.turn_id for span in spans],
@@ -766,13 +778,9 @@ class RolloutHistoryReader:
                 record_roles.add("assistant")
                 continue
             final_sequence = projection.get("final_message_sequence")
-            final_text_truncated = (
-                projection.get("final_response_text_truncated") is True
-            )
             if (
                 isinstance(final_sequence, int)
                 and not isinstance(final_sequence, bool)
-                and final_text_truncated
             ):
                 required_sequences.setdefault(span.turn_id, set()).add(final_sequence)
             elif not isinstance(final_sequence, int) or isinstance(
@@ -780,12 +788,18 @@ class RolloutHistoryReader:
             ):
                 # 没有显式 final pointer 时，读取 AIMessage 供 heuristic fallback。
                 record_roles.add("assistant")
+        if selected_tool_call_ids is not None:
+            # 定点补载不读取该 Turn 的其它 assistant/tool message；同一
+            # assistant message 内未命中的 call 由 mapper 再次过滤。
+            record_roles = set()
+            required_sequences = {}
         records_by_turn = self._context_reader.read_projection_records_batch(
             snapshot,
             turn_ids=[span.turn_id for span in spans],
             chain=chain,
             message_roles=record_roles,
             tool_kinds=tool_kinds,
+            tool_call_ids=selected_tool_call_ids,
             required_sequences=required_sequences,
         )
         items = [
@@ -799,6 +813,7 @@ class RolloutHistoryReader:
                     projection=projections.get(span.turn_id),
                     load_tool_payload=load_tool_payload,
                     include=include,
+                    tool_call_ids=selected_tool_call_ids,
                 ).detail,
                 include,
                 budget,
@@ -875,6 +890,7 @@ class RolloutHistoryReader:
         message_sequences: list[int] | None = None,
         projection: Mapping[str, object] | None = None,
         response_parts: list[TurnResponsePartDTO] | None = None,
+        tool_call_ids: frozenset[str] | None = None,
     ) -> TurnDetailDTO:
         user_messages = [
             message
@@ -937,6 +953,7 @@ class RolloutHistoryReader:
             turn_id,
             messages,
             fallback_timestamp=created_at,
+            tool_call_ids=tool_call_ids,
         )
         projected_tool_summary: list[TurnToolSummaryDTO] = []
         projected_tool_items: list[TraceEventDTO] = []
@@ -954,6 +971,14 @@ class RolloutHistoryReader:
                     continue
                 tool_name = raw_item.get("tool_name")
                 tool_call_id = raw_item.get("tool_call_id")
+                if (
+                    tool_call_ids is not None
+                    and (
+                        not isinstance(tool_call_id, str)
+                        or tool_call_id not in tool_call_ids
+                    )
+                ):
+                    continue
                 if (
                     isinstance(tool_name, str)
                     and isinstance(tool_call_id, str)
@@ -987,6 +1012,14 @@ class RolloutHistoryReader:
                         )
                     )
                 )
+                if (
+                    tool_call_ids is not None
+                    and (
+                        not isinstance(tool_call_id, str)
+                        or tool_call_id not in tool_call_ids
+                    )
+                ):
+                    continue
                 if raw_item.get("item_kind") == "tool_result":
                     projected_call_ids_all = [
                         value
@@ -1036,6 +1069,17 @@ class RolloutHistoryReader:
                 duration_ms=duration_ms,
                 message_count=self._nonnegative_int(raw_activity_stats.get("message_count")),
             )
+        tool_summary, tool_summary_truncated = self._bounded_tool_summary(
+            projected_tool_summary
+            or [
+                TurnToolSummaryDTO(
+                    tool_name=item.tool_name or "tool",
+                    status=item.status,
+                    tool_call_id=item.part_id,
+                )
+                for item in decoded_tool_items
+            ]
+        )
         detail = TurnDetailDTO(
             turn_id=turn_id,
             job_id=turn_id,
@@ -1063,18 +1107,12 @@ class RolloutHistoryReader:
             preview_truncated=len(final_text) > 1000,
             assistant_text=assistant_text,
             thinking_blocks=thinking_blocks,
-            tool_summary=projected_tool_summary
-            or [
-                TurnToolSummaryDTO(
-                    tool_name=item.tool_name or "tool",
-                    status=item.status,
-                    tool_call_id=item.part_id,
-                )
-                for item in decoded_tool_items
-            ],
+            tool_summary=tool_summary,
+            tool_summary_truncated=tool_summary_truncated,
             final_response=final_text,
             response_parts=response_parts or [],
             items=tool_items,
+            detail_truncated=tool_summary_truncated,
             activity_stats=activity_stats,
         )
         return detail
@@ -1086,6 +1124,7 @@ class RolloutHistoryReader:
         messages: list[BaseMessage],
         *,
         fallback_timestamp: datetime,
+        tool_call_ids: frozenset[str] | None = None,
     ) -> list[TraceEventDTO]:
         items: list[TraceEventDTO] = []
         tool_names: dict[str, str] = {}
@@ -1096,6 +1135,11 @@ class RolloutHistoryReader:
                 continue
             for call in message.tool_calls or []:
                 call_id = call.get("id")
+                if (
+                    tool_call_ids is not None
+                    and (not isinstance(call_id, str) or call_id not in tool_call_ids)
+                ):
+                    continue
                 name = call.get("name")
                 if isinstance(call_id, str) and isinstance(name, str) and name:
                     tool_names[call_id] = name
@@ -1108,6 +1152,11 @@ class RolloutHistoryReader:
                     name = str(call.get("name") or "unknown_tool")
                     args = call.get("args", {})
                     call_id = str(call.get("id") or f"{turn_id}:call:{call_index}")
+                    if (
+                        tool_call_ids is not None
+                        and call_id not in tool_call_ids
+                    ):
+                        continue
                     items.append(
                         self._tool_event(
                             event_id=f"{turn_id}:tool_call:{message_index}:{call_index}",
@@ -1130,6 +1179,14 @@ class RolloutHistoryReader:
             elif isinstance(message, ToolMessage):
                 name = message.name or tool_names.get(message.tool_call_id) or "tool"
                 tool_call_id = message.tool_call_id
+                if (
+                    tool_call_ids is not None
+                    and (
+                        not isinstance(tool_call_id, str)
+                        or tool_call_id not in tool_call_ids
+                    )
+                ):
+                    continue
                 if not tool_call_id and tool_ids_by_name.get(name):
                     tool_call_id = tool_ids_by_name[name].pop(0)
                 if not tool_call_id and tool_ids:
@@ -1185,6 +1242,16 @@ class RolloutHistoryReader:
             timestamp=timestamp,
             raw=raw,
         )
+
+    @staticmethod
+    def _bounded_tool_summary(
+        items: list[TurnToolSummaryDTO],
+    ) -> tuple[list[TurnToolSummaryDTO], bool]:
+        if len(items) <= _TOOL_SUMMARY_LIMIT:
+            return items, False
+        head_count = _TOOL_SUMMARY_LIMIT // 2
+        tail_count = _TOOL_SUMMARY_LIMIT - head_count
+        return [*items[:head_count], *items[-tail_count:]], True
 
     def _project(
         self,
@@ -1289,6 +1356,10 @@ class RolloutHistoryReader:
             requested = (
                 "final_response"
                 if part.kind == "final_text"
+                or (
+                    part.partial is True
+                    and part.completion_reason == "user_interrupt"
+                )
                 else "text"
                 if part.kind == "text"
                 else "reasoning_detail"
@@ -1343,6 +1414,7 @@ class RolloutHistoryReader:
                 "items": items,
                 "response_parts": response_parts,
                 "detail_truncated": output_truncated
+                or detail.detail_truncated
                 or (tool_detail_requested and len(items) < expected_items),
             }
         )
@@ -1410,6 +1482,7 @@ class RolloutHistoryReader:
             item_count=len(detail.items),
             thinking_blocks=detail.thinking_blocks,
             tool_summary=detail.tool_summary,
+            tool_summary_truncated=detail.tool_summary_truncated,
             response_parts=detail.response_parts[:128],
             activity_stats=detail.activity_stats,
         )
@@ -1451,7 +1524,9 @@ class RolloutHistoryReader:
 
     @staticmethod
     def _anchor_ordinal(cursor: TurnCursorDTO | None, default: int) -> int:
-        return cursor.anchor_turn_id and int(cursor.anchor_turn_id) or default
+        if cursor is None:
+            return default
+        return int(cursor.anchor_turn_id)
 
     def _decode_cursor(
         self,
@@ -1607,7 +1682,11 @@ class RolloutHistoryReader:
                             text=text.strip()[:4096],
                         )
                     )
-        return result[:32]
+                # 同一 provider item 的可见思考和 encrypted carrier 已在
+                # canonical 投影中合并，不能再为 encrypted carrier 追加重复卡片。
+        # 详情 DTO 不再以 thinking block 数量限制历史；文本预算在显式投影阶段
+        # 统一处理，避免第 33 个及之后的思考块在无 SQLite 投影路径中丢失。
+        return result
 
     @staticmethod
     def _is_internal(message: BaseMessage) -> bool:

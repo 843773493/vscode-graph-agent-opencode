@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +15,7 @@ import {
   openServiceLog,
   resolveServiceLogPath,
   SERVICE_LOG_CAPTURED_ENV,
+  SERVICE_LOG_MAX_BYTES,
   SERVICE_LOG_PATH_ENV,
 } from "./service-log.mjs";
 
@@ -84,5 +87,24 @@ describe("service log", () => {
     expect(serviceLog.stderr).toBe(stderr);
     serviceLog.close();
     expect(existsSync(logPath)).toBe(false);
+  });
+
+  test("启动时轮转超过上限的旧日志", () => {
+    const boxteamHome = temporaryRoot();
+    const logPath = resolveServiceLogPath(boxteamHome, {});
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    writeFileSync(logPath, Buffer.alloc(SERVICE_LOG_MAX_BYTES, "x"));
+
+    const serviceLog = openServiceLog({
+      boxteamHome,
+      environment: {},
+      stdout: { write() {} },
+      stderr: { write() {} },
+    });
+    serviceLog.stdout.write("new\n");
+    serviceLog.close();
+
+    expect(readFileSync(logPath, "utf8")).toBe("new\n");
+    expect(statSync(`${logPath}.1`).size).toBe(SERVICE_LOG_MAX_BYTES);
   });
 });

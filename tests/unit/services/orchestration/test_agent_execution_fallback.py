@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.session_interrupt_state import SessionInterruptState
+from app.core.turn_execution_scope import ScopeCancelledError
 from app.services.infrastructure.message_stream_store import MessageStreamTerminalError
 from app.services.orchestration.agent_event_stream_processor import (
     STREAM_JOB_ID_METADATA_KEY,
@@ -1347,7 +1348,7 @@ async def test_interrupt_wins_when_completion_races_with_persisted_request(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_without_user_interrupt_closes_as_execution_cancelled(
+async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_as_execution_lost(
     mock_dependencies,
 ):
     service = _make_service(mock_dependencies)
@@ -1379,10 +1380,189 @@ async def test_cancelled_without_user_interrupt_closes_as_execution_cancelled(
             )
 
     persist_checkpoint.assert_called_once()
+    assert persist_checkpoint.call_args.kwargs["checkpoint_source"] == "execution_lost"
     writer = mock_dependencies["message_stream_store"].open.return_value
     writer.close_failed.assert_awaited_once_with(
-        code="execution_cancelled",
-        message="AgentLoop 在没有用户中断请求的情况下被取消",
+        code="execution_lost",
+        message="AgentLoop 因内部取消而结束，未收到用户中断请求",
+        resumable=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+
+    async def process_job_timeout(**_kwargs):
+        raise asyncio.CancelledError("运行时 scope 已取消: reason=job_timeout")
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_job_timeout,
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.persist_interrupt_checkpoint",
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await service.run_step(
+            session_id="ses_scope_job_timeout",
+            message="总超时",
+            agent_id="test_agent",
+            job_id="job_scope_job_timeout",
+            message_id="msg_scope_job_timeout",
+            message_created_at="2026-07-20T00:00:00+00:00",
+        )
+
+    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer.close_failed.assert_awaited_once_with(
+        code="job_timeout",
+        message="Job 执行超过总超时上限",
+        resumable=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+
+    async def process_scope_deadline(**_kwargs):
+        raise ScopeCancelledError("scope_deadline_exceeded")
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_scope_deadline,
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.persist_interrupt_checkpoint",
+        ) as persist_checkpoint,
+        pytest.raises(ScopeCancelledError, match="scope_deadline_exceeded"),
+    ):
+        await service.run_step(
+            session_id="ses_scope_deadline",
+            message="在预算内完成",
+            agent_id="test_agent",
+            job_id="job_scope_deadline",
+            message_id="msg_scope_deadline",
+            message_created_at="2026-07-20T00:00:00+00:00",
+        )
+
+    persist_checkpoint.assert_called_once()
+    assert persist_checkpoint.call_args.kwargs["checkpoint_source"] == (
+        "scope_deadline_exceeded"
+    )
+    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer.close_failed.assert_awaited_once_with(
+        code="scope_deadline_exceeded",
+        message="运行时 scope 已取消: reason=scope_deadline_exceeded",
+        after_interrupt_requested=False,
+        resumable=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+
+    async def process_cancelled(**kwargs):
+        runtime = kwargs["message_stream_runtime"]
+        await runtime.start_model("model_dispatch_timeout", "backup_3")
+        await runtime.accept_message_chunk(
+            create_chunk(
+                tool_calls=[
+                    {
+                        "id": "call_dispatch_timeout",
+                        "name": "exec_command",
+                        "args": '{"cmd":"pwd"}',
+                    }
+                ]
+            )
+        )
+        raise asyncio.CancelledError()
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_cancelled,
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.persist_interrupt_checkpoint",
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await service.run_step(
+            session_id="ses_dispatch_timeout_cancelled",
+            message="分派超时",
+            agent_id="test_agent",
+            job_id="job_dispatch_timeout_cancelled",
+            message_id="msg_dispatch_timeout_cancelled",
+            message_created_at="2026-07-20T00:00:00+00:00",
+        )
+
+    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer.close_failed.assert_awaited_once_with(
+        code="tool_dispatch_timeout",
+        message=(
+            "模型工具调用参数已完整，但工具执行分派在取消前没有启动: "
+            "tool_calls=['call_dispatch_timeout']"
+        ),
+        resumable=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_job_timeout_cancel_closes_stream_as_timed_out(
+    mock_dependencies,
+):
+    service = _make_service(mock_dependencies)
+
+    async def process_timed_out(**_kwargs):
+        raise asyncio.CancelledError("job_timeout")
+
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            side_effect=process_timed_out,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await service.run_step(
+            session_id="ses_job_timeout_stream",
+            message="总超时",
+            agent_id="test_agent",
+            job_id="job_timeout_stream",
+            message_id="msg_timeout_stream",
+            message_created_at="2026-07-20T00:00:00+00:00",
+        )
+
+    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer.close_failed.assert_awaited_once_with(
+        code="job_timeout",
+        message="Job 执行超过总超时上限",
         resumable=False,
     )
 

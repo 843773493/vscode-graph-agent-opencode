@@ -1,0 +1,5 @@
+{
+  "scenario_id": "anthropic-reasoning-tool",
+  "asset": "handwritten/anthropic_messages/reasoning-tool.json",
+  "business_assertion": "Anthropic Messages 原生 thinking 与 tool_use 循环"
+}

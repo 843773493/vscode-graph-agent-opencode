@@ -387,6 +387,28 @@ class ConfigService:
     def get_runtime_override_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self._runtime_config_overrides))
 
+    def get_agent_run_timeout_seconds(self) -> float:
+        """返回单个 Agent Job 的总执行上限。"""
+        value = self._read_runtime_value(("agent", "run", "timeout_seconds"))
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                "runtime.agent.run.timeout_seconds 必须是正数"
+            )
+        if value <= 0:
+            raise ValueError(
+                "runtime.agent.run.timeout_seconds 必须大于 0"
+            )
+        return float(value)
+
+    def get_agent_run_mode(self) -> str:
+        """返回 Agent 运行模式，决定是否向模型暴露团队面板工具。"""
+        value = self._read_runtime_value(("agent", "run", "mode"))
+        if value not in {"single_agent", "team"}:
+            raise ValueError(
+                "runtime.agent.run.mode 必须是 single_agent 或 team"
+            )
+        return value
+
     def _read_runtime_value(self, path: tuple[str, ...]) -> object:
         current: object = self._get_effective_config().get("runtime", {})
         for key in path:

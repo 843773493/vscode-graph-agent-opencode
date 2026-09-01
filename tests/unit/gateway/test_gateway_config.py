@@ -154,6 +154,18 @@ def test_gateway_history_loading_config_is_nested_and_uses_anchor_window(
     assert result.history_loading.anchor_limit("before") == 2
     assert result.history_loading.anchor_limit("after") == 5
 
+
+def test_gateway_history_loading_defaults_use_five_initial_and_three_sided_turns(
+    tmp_path: Path,
+) -> None:
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+
+    result = load_gateway_config(config_path=config_path, schema_path=schema_path)
+
+    assert result.history_loading.initial_turns == 5
+    assert result.history_loading.anchor_before_turns == 3
+    assert result.history_loading.anchor_after_turns == 3
+
 def test_load_gateway_config_merges_local_override_and_records_sources(
     tmp_path: Path,
 ) -> None:

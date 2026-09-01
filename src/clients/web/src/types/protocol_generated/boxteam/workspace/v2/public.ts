@@ -1499,6 +1499,9 @@ export interface TurnResponsePartDTO {
   result?: string | undefined;
   truncated?: boolean | undefined;
   final?: boolean | undefined;
+  outcome_unknown?: boolean | undefined;
+  completion_reason?: string | undefined;
+  partial?: boolean | undefined;
 }
 
 export interface TurnResponseSourceDTO {
@@ -11592,6 +11595,9 @@ function createBaseTurnResponsePartDTO(): TurnResponsePartDTO {
     result: undefined,
     truncated: undefined,
     final: undefined,
+    outcome_unknown: undefined,
+    completion_reason: undefined,
+    partial: undefined,
   };
 }
 
@@ -11611,6 +11617,9 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
       result: isSet(object.result) ? globalThis.String(object.result) : undefined,
       truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : undefined,
       final: isSet(object.final) ? globalThis.Boolean(object.final) : undefined,
+      outcome_unknown: isSet(object.outcome_unknown) ? globalThis.Boolean(object.outcome_unknown) : undefined,
+      completion_reason: isSet(object.completion_reason) ? globalThis.String(object.completion_reason) : undefined,
+      partial: isSet(object.partial) ? globalThis.Boolean(object.partial) : undefined,
     };
   },
 
@@ -11655,6 +11664,15 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
     if (message.final !== undefined) {
       obj.final = message.final;
     }
+    if (message.outcome_unknown !== undefined) {
+      obj.outcome_unknown = message.outcome_unknown;
+    }
+    if (message.completion_reason !== undefined) {
+      obj.completion_reason = message.completion_reason;
+    }
+    if (message.partial !== undefined) {
+      obj.partial = message.partial;
+    }
     return obj;
   },
 
@@ -11678,6 +11696,9 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
     message.result = object.result ?? undefined;
     message.truncated = object.truncated ?? undefined;
     message.final = object.final ?? undefined;
+    message.outcome_unknown = object.outcome_unknown ?? undefined;
+    message.completion_reason = object.completion_reason ?? undefined;
+    message.partial = object.partial ?? undefined;
     return message;
   },
 };

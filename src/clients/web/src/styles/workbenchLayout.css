@@ -732,9 +732,26 @@ body.is-layout-resizing {
   padding: 8px 10px;
 }
 
+/* 没有并列预览时，辅助面板必须独占编辑器主体宽度。 */
+.workspace-editor-body:not(.has-shared-preview) {
+  width: 100%;
+  min-width: 0;
+}
+
+.workspace-editor-body:not(.has-shared-preview) > .auxiliary-panel {
+  flex: 1 1 0 !important;
+  width: 100%;
+  min-width: 0;
+}
+
 .auxiliary-resources-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  justify-items: stretch;
+  width: 100%;
+  min-width: 0;
   padding: 0;
   overflow: hidden;
 }
@@ -744,8 +761,24 @@ body.is-layout-resizing {
 }
 
 .auxiliary-resources-body > .resource-panel {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
   min-height: 0;
+  align-self: stretch;
+  justify-self: stretch;
   overflow: hidden;
+}
+
+.auxiliary-resources-body.has-runtime-preview > .workspace-runtime-preview {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.auxiliary-resources-body:not(.has-runtime-preview) > .resource-panel {
+  min-width: 100%;
 }
 
 .workspace-runtime-preview {

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import AttachmentRef
@@ -21,9 +21,11 @@ class JobRuntimeState:
     attachments: list[AttachmentRef] = field(default_factory=list)
     status: JobStatus = JobStatus.queued
     progress: int = 0
-    error_message: Optional[str] = None
-    result: Optional[str] = None
+    current_step: str | None = None
+    error_message: str | None = None
+    result: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
-    ended_at: Optional[datetime] = None
-    task: Optional[asyncio.Task] = None
+    ended_at: datetime | None = None
+    task: asyncio.Task | None = None
+    progress_reporter: Callable[[str], None] | None = None

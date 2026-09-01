@@ -17,6 +17,8 @@ allowed-tools: listBrowserPage, openBrowserPage, readPage, screenshotPage, navig
 - 不要读取 `.boxteam/browser-manager/browsers.json`；浏览器状态必须通过 `listBrowserPage` 获取。
 - `clickElement`、`typeInPage`、`hoverElement` 和 `screenshotPage` 优先使用最近一次 `readPage` 返回的 `ref`。页面变化后，旧 `ref` 和 `document_revision` 不再可靠，应重新读取页面。
 - `runPlaywrightCode` 只有在其它浏览器工具无法完成任务时才使用；代码必须通过 `page` 对象访问页面，不得绕过浏览器锁或读取内部状态文件。
+- 验收本地 HTTP 服务前，先用 `openBrowserPage` 或已有页面探测任务提供的预览地址（例如 `8765`）；地址可用时直接复用，不要再次执行 `python -m http.server`。
+- 若终端返回 `port_in_use`、`EADDRINUSE` 或 `Address already in use`，这是可恢复的环境状态：禁止盲重试同一端口，先复用现有服务；确实不可用时才探测并选择明确空闲端口，然后把新 URL 传给浏览器工具。
 
 ## 工具参数 schema
 

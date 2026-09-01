@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from urllib.error import URLError
 
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.terminal_execution_monitor import (
@@ -46,6 +47,11 @@ class TerminalSteeringService:
             await task
         except asyncio.CancelledError:
             pass
+        except Exception as error:
+            logger.error(
+                "终端 steering 监控任务关闭时发现未处理异常",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def scan_once(self) -> None:
         terminals = await self._terminal_client.list_terminals()
@@ -90,7 +96,15 @@ class TerminalSteeringService:
 
     async def _run(self) -> None:
         while True:
-            await self.scan_once()
+            try:
+                await self.scan_once()
+            except asyncio.CancelledError:
+                raise
+            except (ConnectionError, TimeoutError, URLError) as error:
+                logger.warning(
+                    "终端 steering 监控暂时无法连接 terminal manager，将重试: %s",
+                    error,
+                )
             await asyncio.sleep(self._poll_interval_seconds)
 
     @staticmethod

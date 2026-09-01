@@ -11,6 +11,7 @@ from app.core.history_loading import (
     DEFAULT_ANCHOR_BEFORE_TURNS,
     DEFAULT_ANCHOR_INCLUDE,
     DEFAULT_INITIAL_INCLUDE,
+    DEFAULT_INITIAL_TURNS,
     HistoryLoadingConfig,
 )
 from app.core.path_utils import (
@@ -150,7 +151,7 @@ def _history_loading_config(raw: dict[str, object]) -> GatewayHistoryLoadingConf
     )
     initial = cast(dict[str, object], initial_value or {})
     anchor = cast(dict[str, object], anchor_value or {})
-    initial_turns = initial.get("turns", 1)
+    initial_turns = initial.get("turns", DEFAULT_INITIAL_TURNS)
     anchor_before_turns = anchor.get("before_turns", DEFAULT_ANCHOR_BEFORE_TURNS)
     anchor_after_turns = anchor.get("after_turns", DEFAULT_ANCHOR_AFTER_TURNS)
     initial_include = initial.get(

@@ -196,6 +196,7 @@ async function main() {
       if (request.method === "GET" && pathname === "/health") {
         sendJson(response, 200, {
           ok: true,
+          process_id: process.pid,
           workspace_id: workspaceId,
           workspace_root: workspaceRoot,
           terminal_count: manager.list().length,

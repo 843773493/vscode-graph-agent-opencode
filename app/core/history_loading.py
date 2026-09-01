@@ -29,8 +29,9 @@ DEFAULT_INITIAL_INCLUDE: tuple[str, ...] = (
     "final_response",
 )
 DEFAULT_ANCHOR_INCLUDE: tuple[str, ...] = ("user", "final_response")
-DEFAULT_ANCHOR_BEFORE_TURNS = 2
-DEFAULT_ANCHOR_AFTER_TURNS = 2
+DEFAULT_INITIAL_TURNS = 5
+DEFAULT_ANCHOR_BEFORE_TURNS = 3
+DEFAULT_ANCHOR_AFTER_TURNS = 3
 _VALID_INCLUDES = frozenset(
     {
         "user",
@@ -55,7 +56,7 @@ _VALID_INCLUDES = frozenset(
 class HistoryLoadingConfig:
     """Gateway 所属会话使用的首次加载和锚点窗口策略。"""
 
-    initial_turns: int = 1
+    initial_turns: int = DEFAULT_INITIAL_TURNS
     initial_include: tuple[str, ...] = DEFAULT_INITIAL_INCLUDE
     anchor_before_turns: int = DEFAULT_ANCHOR_BEFORE_TURNS
     anchor_after_turns: int = DEFAULT_ANCHOR_AFTER_TURNS
@@ -92,7 +93,7 @@ class HistoryLoadingConfig:
     def from_mapping(cls, value: object) -> HistoryLoadingConfig:
         if not isinstance(value, dict):
             raise TypeError("历史加载策略必须是对象")
-        initial_turns = value.get("initial_turns", 1)
+        initial_turns = value.get("initial_turns", DEFAULT_INITIAL_TURNS)
         anchor_before_turns = value.get(
             "anchor_before_turns", DEFAULT_ANCHOR_BEFORE_TURNS
         )

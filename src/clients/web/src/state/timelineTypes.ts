@@ -29,6 +29,12 @@ export type TimelineItem =
       id: string;
       text: string;
       partKind: "markdown" | "reasoning";
+      /**
+       * reasoning 的稳定语义类别；不暴露 Provider carrier，但保留
+       * detail、summary 和 encrypted/redacted 的边界供展示与诊断使用。
+       */
+      reasoningKind?: "reasoning" | "reasoning_summary" | "reasoning_encrypted";
+      redacted?: boolean;
       active: boolean;
       timestamp: string | null;
       eventCount: number;
@@ -38,13 +44,16 @@ export type TimelineItem =
       kind: "aggregated_tool";
       id: string;
       toolName: string;
+      toolCallId?: string;
       inputText: string;
       resultText: string;
       timestamp: string | null;
       rawStart: Record<string, unknown>;
       rawEnd: Record<string, unknown>;
       active: boolean;
+      detailsLoaded?: boolean;
       failed?: boolean;
+      incomplete?: boolean;
       outcomeUnknown?: boolean;
     }
   | {

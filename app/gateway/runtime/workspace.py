@@ -27,9 +27,16 @@ class WorkspaceRuntime:
         if process is not None:
             process.detach()
 
-    def close_for_gateway_restart(self) -> None:
-        """保留 Browser Manager；其它由 Gateway 直接拥有的进程正常关闭。"""
-        self.detach_process("browser_manager")
+    def close_for_gateway_restart(
+        self,
+        *,
+        preserve_process_names: set[str] | None = None,
+    ) -> None:
+        """保留可接管的辅助服务；其它由 Gateway 直接拥有的进程正常关闭。"""
+        names = {"browser_manager"}
+        names.update(preserve_process_names or set())
+        for name in names:
+            self.detach_process(name)
         self.close()
 
     def request_terminate(self) -> None:

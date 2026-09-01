@@ -10,6 +10,7 @@ import {
   hoverElement,
   inspectPageElement,
   readBrowserSummary,
+  runWithStaleSelectorRecovery,
   runPlaywrightCode,
   screenshotPage,
   typeInPage,
@@ -18,6 +19,7 @@ import {
   DEFAULT_VIEWPORT,
   NAVIGATION_TIMEOUT_MS,
   TOOL_TIMEOUT_MS,
+  withTimeout,
 } from "./browserRuntime.js";
 import {
   browserDeviceContextOptions,
@@ -152,6 +154,8 @@ export class BrowserSession extends EventEmitter {
     this.frameSequence = 0;
     this.attachRequestedAtMs = null;
     this.closingRequested = false;
+    this.recoveringTimedOutPageIds = new Set();
+    this.timeoutRecovery = Promise.resolve();
   }
 
   get id() {
@@ -216,13 +220,42 @@ export class BrowserSession extends EventEmitter {
       error.code = "browser_closing";
       throw error;
     }
+    await this.timeoutRecovery;
     this.pendingOperations += 1;
     try {
       await this.wake({ reason: `operation:${actor}` });
+      if (this.browser || this.context || this.page || this.pageEntries.size > 0) {
+        await this.ensureActivePage();
+      }
     } catch (error) {
       this.pendingOperations = Math.max(0, this.pendingOperations - 1);
       throw error;
     }
+  }
+
+  async ensureActivePage() {
+    const isClosed = (entry) => (
+      typeof entry.page.isClosed === "function" && entry.page.isClosed()
+    );
+    const activeEntry = this.pageEntries.get(this.activePageId);
+    if (activeEntry && !isClosed(activeEntry)) {
+      if (this.page !== activeEntry.page || this.cdpSession !== activeEntry.cdpSession) {
+        await this.activatePage(activeEntry.pageId);
+      }
+      return activeEntry;
+    }
+
+    if (activeEntry && isClosed(activeEntry)) {
+      await this.handlePageClosed(activeEntry.pageId, activeEntry.page);
+    }
+    const replacement = [...this.pageEntries.values()]
+      .reverse()
+      .find((entry) => !isClosed(entry));
+    if (!replacement) {
+      throw new Error(`当前没有可用的浏览器标签页: browser_id=${this.id}`);
+    }
+    await this.activatePage(replacement.pageId);
+    return replacement;
   }
 
   beginOperation(operation) {
@@ -912,7 +945,6 @@ export class BrowserSession extends EventEmitter {
         return;
       }
       const registration = this.registerPage(page, { activate: true });
-      this.pageRegistrationPromises.set(page, registration);
       void registration.catch((error) => {
         const message = error instanceof Error ? (error.stack || error.message) : String(error);
         this.record.error_message = `注册新标签页失败: ${message}`;
@@ -943,6 +975,26 @@ export class BrowserSession extends EventEmitter {
   }
 
   async registerPage(page, { pageId = `page_${randomUUID().replaceAll("-", "")}`, activate = true } = {}) {
+    const pendingRegistration = this.pageRegistrationPromises.get(page);
+    if (pendingRegistration) {
+      const existing = await pendingRegistration;
+      if (activate) {
+        await this.activatePage(existing.pageId);
+      }
+      return existing;
+    }
+    const registration = this._registerPage(page, { pageId, activate });
+    this.pageRegistrationPromises.set(page, registration);
+    try {
+      return await registration;
+    } finally {
+      if (this.pageRegistrationPromises.get(page) === registration) {
+        this.pageRegistrationPromises.delete(page);
+      }
+    }
+  }
+
+  async _registerPage(page, { pageId = `page_${randomUUID().replaceAll("-", "")}`, activate = true } = {}) {
     const existing = [...this.pageEntries.values()].find((entry) => entry.page === page);
     if (existing) {
       if (activate) {
@@ -977,6 +1029,7 @@ export class BrowserSession extends EventEmitter {
       await this.applyDeviceEmulation(entry);
     }
     this.pageEntries.set(pageId, entry);
+    this.manager.registerPageAlias?.(pageId, this.id);
     cdpSession.on("Page.screencastFrame", (event) => {
       void this.handleScreencastFrame(event, entry);
     });
@@ -1117,7 +1170,7 @@ export class BrowserSession extends EventEmitter {
       void this.handleDownload(download);
     });
     page.on("close", () => {
-      void this.handlePageClosed(pageId).catch((error) => {
+      void this.handlePageClosed(pageId, page).catch((error) => {
         const message = error instanceof Error ? (error.stack || error.message) : String(error);
         this.record.resource_transition_error = `处理标签页关闭事件失败: page_id=${pageId}, error=${message}`;
         console.error(`[browser-session] ${this.record.resource_transition_error}`);
@@ -1163,11 +1216,15 @@ export class BrowserSession extends EventEmitter {
     return this.snapshot();
   }
 
-  async handlePageClosed(pageId) {
+  async handlePageClosed(pageId, closedPage = null) {
     const entry = this.pageEntries.get(pageId);
     if (!entry) {
       return;
     }
+    if (closedPage && entry.page !== closedPage) {
+      return;
+    }
+    this.manager.registerPageAlias?.(pageId, this.id);
     this.pageEntries.delete(pageId);
     if (this.closingRequested) {
       return;
@@ -2137,9 +2194,21 @@ export class BrowserSession extends EventEmitter {
     return await inspectPageElement(this.page, this.refSelectors, point, this.documentRevision);
   }
 
-  async readSummary() {
+  async readSummary({ timeoutMs = TOOL_TIMEOUT_MS } = {}) {
     this.assertRunning();
-    const result = await readBrowserSummary(this.page, this.refSelectors, this.documentRevision);
+    const execution = {
+      page: this.page,
+      pageId: this.activePageId,
+      recovery: null,
+    };
+    const result = await withTimeout(
+      readBrowserSummary(this.page, this.refSelectors, this.documentRevision),
+      timeoutMs,
+      "浏览器页面读取",
+      {
+        onTimeout: (error) => this.recoverAfterPlaywrightTimeout(execution, error),
+      },
+    );
     this.record.url = result.url;
     this.record.title = result.title;
     const activeEntry = this.pageEntries.get(this.activePageId);
@@ -2196,25 +2265,49 @@ export class BrowserSession extends EventEmitter {
 
   async click(args) {
     this.assertRunning();
-    await this.runPageActionWithModalDetection(() => clickElement(this.page, this.refSelectors, args));
+    await this.runPageActionWithModalDetection(() => runWithStaleSelectorRecovery(
+      this.page,
+      this.refSelectors,
+      args,
+      () => clickElement(this.page, this.refSelectors, args),
+      () => this.readSummary(),
+    ));
     return await this.syncAndEmitState();
   }
 
   async hover(args) {
     this.assertRunning();
-    await this.runPageActionWithModalDetection(() => hoverElement(this.page, this.refSelectors, args));
+    await this.runPageActionWithModalDetection(() => runWithStaleSelectorRecovery(
+      this.page,
+      this.refSelectors,
+      args,
+      () => hoverElement(this.page, this.refSelectors, args),
+      () => this.readSummary(),
+    ));
     return await this.syncAndEmitState();
   }
 
   async typeInPage(args) {
     this.assertRunning();
-    await this.runPageActionWithModalDetection(() => typeInPage(this.page, this.refSelectors, args));
+    await this.runPageActionWithModalDetection(() => runWithStaleSelectorRecovery(
+      this.page,
+      this.refSelectors,
+      args,
+      () => typeInPage(this.page, this.refSelectors, args),
+      () => this.readSummary(),
+    ));
     return await this.syncAndEmitState();
   }
 
   async drag(args) {
     this.assertRunning();
-    await this.runPageActionWithModalDetection(() => dragElement(this.page, this.refSelectors, args));
+    await this.runPageActionWithModalDetection(() => runWithStaleSelectorRecovery(
+      this.page,
+      this.refSelectors,
+      args,
+      () => dragElement(this.page, this.refSelectors, args),
+      () => this.readSummary(),
+    ));
     return await this.syncAndEmitState();
   }
 
@@ -2224,9 +2317,27 @@ export class BrowserSession extends EventEmitter {
     return { ...result, state: await this.syncAndEmitState() };
   }
 
-  async screenshot(args) {
+  async screenshot(args, { timeoutMs = TOOL_TIMEOUT_MS } = {}) {
     this.assertRunning();
-    const buffer = await screenshotPage(this.page, this.refSelectors, args);
+    const execution = {
+      page: this.page,
+      pageId: this.activePageId,
+      recovery: null,
+    };
+    const buffer = await withTimeout(
+      runWithStaleSelectorRecovery(
+        this.page,
+        this.refSelectors,
+        args,
+        () => screenshotPage(this.page, this.refSelectors, args),
+        () => this.readSummary(),
+      ),
+      timeoutMs,
+      "浏览器截图",
+      {
+        onTimeout: (error) => this.recoverAfterPlaywrightTimeout(execution, error),
+      },
+    );
     const imagePath = await this.manager.writeScreenshot(this.id, buffer);
     await this.syncAndEmitState();
     return {
@@ -2320,11 +2431,19 @@ export class BrowserSession extends EventEmitter {
 
   async runPlaywrightCode(args) {
     this.assertRunning();
+    const execution = {
+      page: this.page,
+      pageId: this.activePageId,
+      recovery: null,
+    };
     let result = null;
     const modalKind = await this.runPageActionWithModalDetection(async () => {
       result = await runPlaywrightCode(
         { page: this.page, context: this.context, browser: this.browserHandle },
         args,
+        {
+          onTimeout: (error) => this.recoverAfterPlaywrightTimeout(execution, error),
+        },
       );
     });
     await this.syncAndEmitState();
@@ -2336,5 +2455,61 @@ export class BrowserSession extends EventEmitter {
       };
     }
     return result;
+  }
+
+  async recoverAfterPlaywrightTimeout(execution, timeoutError) {
+    if (execution.recovery) return await execution.recovery;
+    execution.recovery = (async () => {
+      if (this.page !== execution.page || this.record.status !== "running") {
+        return;
+      }
+      const entry = this.pageEntries.get(execution.pageId);
+      if (!entry || !this.context || !this.browser) {
+        throw new Error(`超时后的浏览器页面无法重置: browser_id=${this.id}`);
+      }
+      const recoveryUrl = entry.requestedUrl || this.record.url || "about:blank";
+      this.recoveringTimedOutPageIds.add(execution.pageId);
+      try {
+        if (typeof execution.page.isClosed === "function" && execution.page.isClosed()) {
+          throw new Error(`超时恢复前页面已关闭: page_id=${execution.pageId}`);
+        }
+
+        // 超时只会取消工具暴露的 signal，用户脚本本身可能仍在 Playwright
+        // 调用中。必须先隔离出新 Page，再关闭旧 Page，避免恢复导航与旧脚本
+        // 并发操作同一个页面，导致下一次短调用继续卡住或收到旧错误。
+        const replacementPage = await this.context.newPage();
+        const registration = this.pageRegistrationPromises.get(replacementPage);
+        const replacementEntry = registration
+          ? await registration
+          : await this.registerPage(replacementPage, { activate: true });
+        if (this.activePageId !== replacementEntry.pageId) {
+          await this.activatePage(replacementEntry.pageId);
+        }
+        if (this.pendingDialog?.pageId === execution.pageId) {
+          this.pendingDialog = null;
+        }
+        this.pendingFileChooser = null;
+        await execution.page.close();
+        if (recoveryUrl !== "about:blank") {
+          await this.goto(recoveryUrl);
+        } else {
+          await this.syncAndEmitState();
+        }
+        this.record.resource_transition_error = null;
+        this.record.error_message = null;
+      } finally {
+        this.recoveringTimedOutPageIds.delete(execution.pageId);
+      }
+    })();
+    this.timeoutRecovery = execution.recovery;
+    try {
+      await execution.recovery;
+    } catch (recoveryError) {
+      timeoutError.recovery = "page_reset_failed";
+      timeoutError.recovery_error = recoveryError instanceof Error
+        ? recoveryError.message
+        : String(recoveryError);
+      throw recoveryError;
+    }
   }
 }

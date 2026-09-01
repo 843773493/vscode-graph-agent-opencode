@@ -45,9 +45,17 @@ class SessionResourceService:
         self._job_service = job_service
         self._provider_registry = provider_registry
 
-    async def list(self, session_id: str) -> SessionResourceListDTO:
+    async def list(
+        self,
+        session_id: str,
+        *,
+        include_history: bool = True,
+    ) -> SessionResourceListDTO:
         await self._session_service.get(session_id)
-        items = await self._provider_registry.list_resources(session_id)
+        items = await self._provider_registry.list_resources(
+            session_id,
+            include_history=include_history,
+        )
         items.sort(key=lambda item: item.created_at, reverse=True)
         return SessionResourceListDTO(session_id=session_id, items=items)
 

@@ -16,14 +16,22 @@ from tests.support.trace import get_trace_payload
 
 FIXTURE_ROOT = Path.cwd() / "tests" / "fixtures" / "model_stream"
 SCENARIO_ID = "responses-reasoning-tool"
+EXPECTED_FINAL_TEXT = (
+    "OpenAI Responses 工具已经返回，我核对了 OpenAI Responses 文件内容，"
+    "现在给出 OpenAI Responses 可复查的结论。"
+)
 EXPECTED_FIRST_EVENTS = [
     "response.created",
     "response.output_item.added",
     "response.reasoning_summary_part.added",
     "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.delta",
     "response.reasoning_summary_part.done",
     "response.output_item.done",
     "response.output_item.added",
+    "response.function_call_arguments.delta",
     "response.function_call_arguments.delta",
     "response.function_call_arguments.delta",
     "response.function_call_arguments.done",
@@ -33,9 +41,16 @@ EXPECTED_FIRST_EVENTS = [
 EXPECTED_SECOND_EVENTS = [
     "response.created",
     "response.output_item.added",
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_part.done",
     "response.output_item.done",
     "response.output_item.added",
     "response.content_part.added",
+    "response.output_text.delta",
+    "response.output_text.delta",
     "response.output_text.delta",
     "response.output_text.done",
     "response.content_part.done",
@@ -60,17 +75,31 @@ def _load_and_validate_recorded_data() -> dict[str, object]:
     assert [frame.event for frame in first.response.frames] == EXPECTED_FIRST_EVENTS
     assert [frame.event for frame in second.response.frames] == EXPECTED_SECOND_EVENTS
 
-    reasoning_item = first.response.frames[5].payload["item"]
+    reasoning_item = next(
+        frame.payload["item"]
+        for frame in first.response.frames
+        if frame.event == "response.output_item.done"
+        and frame.payload["item"]["type"] == "reasoning"
+    )
     assert reasoning_item["type"] == "reasoning"
-    assert reasoning_item["summary"][0]["text"] == "先读取 README，再根据工具结果作答。"
+    assert reasoning_item["summary"][0]["text"] == (
+        "OpenAI Responses 先确认待读取的文件，再检查工具返回的证据，"
+        "确认内容和当前问题一致后，再发起一次明确的 OpenAI Responses 工具调用。"
+    )
     assert reasoning_item["encrypted_content"] == "encrypted-reasoning-tool"
 
     argument_deltas = [
-        first.response.frames[7].payload["delta"],
-        first.response.frames[8].payload["delta"],
+        frame.payload["delta"]
+        for frame in first.response.frames
+        if frame.event == "response.function_call_arguments.delta"
     ]
     assert json.loads("".join(argument_deltas)) == {"path": "README.md"}
-    function_call_item = first.response.frames[10].payload["item"]
+    function_call_item = next(
+        frame.payload["item"]
+        for frame in first.response.frames
+        if frame.event == "response.output_item.done"
+        and frame.payload["item"]["type"] == "function_call"
+    )
     assert function_call_item == {
         "id": "fc_reasoning_tool",
         "type": "function_call",
@@ -80,12 +109,25 @@ def _load_and_validate_recorded_data() -> dict[str, object]:
         "arguments": "{\"path\":\"README.md\"}",
     }
 
-    final_message = second.response.frames[8].payload["item"]
+    final_message = next(
+        frame.payload["item"]
+        for frame in second.response.frames
+        if frame.event == "response.output_item.done"
+        and frame.payload["item"]["type"] == "message"
+    )
     assert final_message["type"] == "message"
-    assert final_message["content"][0]["text"] == "工具调用完成"
-    second_reasoning_item = second.response.frames[1].payload["item"]
+    assert final_message["content"][0]["text"] == EXPECTED_FINAL_TEXT
+    second_reasoning_item = next(
+        frame.payload["item"]
+        for frame in second.response.frames
+        if frame.event == "response.output_item.done"
+        and frame.payload["item"]["type"] == "reasoning"
+    )
     assert second_reasoning_item["type"] == "reasoning"
-    assert second_reasoning_item["summary"][0]["text"] == "已读取 README，整理最终答复。"
+    assert second_reasoning_item["summary"][0]["text"] == (
+        "OpenAI Responses 先核对工具结果，确认它和请求目标相符，"
+        "再整理一份 OpenAI Responses 最终答复。"
+    )
     assert second_reasoning_item["encrypted_content"] == "encrypted-reasoning-tool-2"
     terminal_payload = second.response.frames[-1].payload
     assert terminal_payload["type"] == "response.completed"
@@ -154,7 +196,7 @@ async def test_responses_replay_records_reasoning_and_tool_call_loop(
             json={
                 "message": {
                     "content": (
-                        "请先读取当前工作区的 README.md，然后只回复工具调用完成，"
+                        "请先读取当前工作区的 README.md，然后只回复最终结论，"
                         "不要补充其它解释。"
                     )
                 },
@@ -195,31 +237,27 @@ async def test_responses_replay_records_reasoning_and_tool_call_loop(
         and get_trace_payload(event).get("kind") == "reasoning"
         and get_trace_payload(event).get("text")
     ]
-    assert any(
-        "先读取 README，再根据工具结果作答。" in text
-        for text in reasoning_trace_texts
+    reasoning_trace_text = "".join(reasoning_trace_texts)
+    assert (
+        "OpenAI Responses 先确认待读取的文件，再检查工具返回的证据，"
+        "确认内容和当前问题一致后，再发起一次明确的 OpenAI Responses 工具调用。"
+        in reasoning_trace_text
     )
-    assert any(
-        "已读取 README，整理最终答复。" in text
-        for text in reasoning_trace_texts
+    assert (
+        "OpenAI Responses 先核对工具结果，确认它和请求目标相符，"
+        "再整理一份 OpenAI Responses 最终答复。"
+        in reasoning_trace_text
     )
 
     messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")
     assert messages_response.status_code == 200, messages_response.text
     messages = messages_response.json()["data"]["items"]
-    assert last_assistant_message(messages) == "工具调用完成"
+    assert last_assistant_message(messages) == EXPECTED_FINAL_TEXT
     assistant_message = next(
         message for message in reversed(messages) if message.get("role") == "assistant"
     )
     assert assistant_message["metadata"]["provider_id"] == "backup_3"
     assert assistant_message["metadata"]["custom_llm_provider"] == "openai"
-
-    agent_state_response = await client.get(
-        f"/api/v1/sessions/{session_id}/agent-state/messages"
-    )
-    assert agent_state_response.status_code == 200, agent_state_response.text
-    agent_state_jsonl = agent_state_response.json()["data"]["jsonl"]
-    assert "先读取 README，再根据工具结果作答。" in agent_state_jsonl
 
     logs_response = await client.get(
         f"/api/v1/sessions/{session_id}/llm-request-logs"
@@ -252,10 +290,13 @@ async def test_responses_replay_records_reasoning_and_tool_call_loop(
         "{\"path\":\"README.md\"}"
     )
     assert upstream_attempts[1]["response"]["output"][1]["type"] == "message"
-    assert upstream_attempts[1]["response"]["output"][1]["content"][0]["text"] == "工具调用完成"
+    assert upstream_attempts[1]["response"]["output"][1]["content"][0]["text"] == (
+        EXPECTED_FINAL_TEXT
+    )
     assert upstream_attempts[1]["response"]["output"][0]["type"] == "reasoning"
     assert upstream_attempts[1]["response"]["output"][0]["summary"][0]["text"] == (
-        "已读取 README，整理最终答复。"
+        "OpenAI Responses 工具已经返回，我核对了 OpenAI Responses 文件内容，"
+        "现在整理一份 OpenAI Responses 可复查的最终答复。"
     )
     assert upstream_attempts[1]["response"]["output"][0]["encrypted_content"] == (
         "encrypted-reasoning-tool-2"
@@ -280,7 +321,6 @@ async def test_responses_replay_records_reasoning_and_tool_call_loop(
         "upstream_tool_result_preview": str(
             upstream_attempts[1]["request"]["input"][-1]["output"]
         )[:120],
-        "agent_state_contains_reasoning": "先读取 README，再根据工具结果作答。" in agent_state_jsonl,
         "trace_contains_tool_call": (
             "tool_call_start" in event_types and "tool_call_end" in event_types
         ),

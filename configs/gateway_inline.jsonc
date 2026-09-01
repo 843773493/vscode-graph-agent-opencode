@@ -25,12 +25,12 @@
       "loading": {
         "progressive": {
           "initial": {
-            "turns": 1,
+            "turns": 5,
             "include": ["user", "thinking", "tool_summary", "final_response"]
           },
           "anchor": {
-            "before_turns": 2,
-            "after_turns": 2,
+            "before_turns": 3,
+            "after_turns": 3,
             "include": ["user", "final_response"]
           }
         }

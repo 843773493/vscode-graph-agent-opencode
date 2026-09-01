@@ -18,11 +18,14 @@ from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
 )
+from app.core.bounded_json import bound_json_value
 from app.core.job_context import get_current_job_id
 from app.core.path_utils import get_session_path_resolver, get_sessions_dir
 
-
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)
+LLM_LOG_MAX_PAYLOAD_BYTES = 256 * 1024
+LLM_LOG_MAX_FILES = 128
+LLM_LOG_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 
 
 class _MessageLog(BaseModel):
@@ -312,7 +315,50 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         )
 
         log_file = self._session_log_dir(session_id) / f"{time.time_ns()}.json"
-        log_file.write_text(full_log.model_dump_json(indent=2), encoding="utf-8")
+        payload = full_log.model_dump(mode="json")
+        bounded_payload = {
+            "timestamp": payload["timestamp"],
+            "session_id": payload["session_id"],
+            "job_id": payload["job_id"],
+            "request": bound_json_value(
+                payload["request"], max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
+            ),
+            "response": bound_json_value(
+                payload["response"], max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
+            ),
+            "upstream": bound_json_value(
+                payload["upstream"], max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
+            ),
+        }
+        log_file.write_text(
+            json.dumps(bounded_payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        self._prune_session_logs(log_file.parent)
+
+    @staticmethod
+    def _prune_session_logs(log_dir: Path) -> None:
+        log_files = sorted(log_dir.glob("*.json"), key=lambda path: path.name)
+        total_bytes = sum(path.stat().st_size for path in log_files)
+        retained_files = list(log_files)
+        while (
+            len(retained_files) > LLM_LOG_MAX_FILES
+            or total_bytes > LLM_LOG_MAX_TOTAL_BYTES
+        ) and retained_files:
+            stale_file = retained_files.pop(0)
+            try:
+                stale_size = stale_file.stat().st_size
+                stale_file.unlink()
+                total_bytes -= stale_size
+            except OSError:
+                # 诊断日志清理失败不覆盖模型调用的真实结果，但必须留痕。
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "LLM 日志轮转失败: path=%s",
+                    stale_file,
+                    exc_info=True,
+                )
 
     def wrap_model_call(
         self,

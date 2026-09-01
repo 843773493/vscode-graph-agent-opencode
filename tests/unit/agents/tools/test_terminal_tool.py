@@ -3,17 +3,20 @@ from __future__ import annotations
 import base64
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app.agents.tools.terminal import (
     _command_for_shell,
+    _resolve_terminal_workdir,
     create_exec_command_tool,
     create_kill_terminal_tool,
     create_list_terminal_sessions_tool,
     create_write_stdin_tool,
 )
+from app.agents.tools.terminal_contract import tool_output
 
 
 def test_windows_cmd_wrapper_uses_cmd_syntax(
@@ -61,6 +64,28 @@ def test_windows_powershell_wrapper_preserves_command_and_markers(
     encoded_command = base64.b64encode('Write-Output "中文"'.encode()).decode()
     assert encoded_command in script
     assert "__BOXTEAM_CMD_DONE_test__:" in script
+
+
+def test_terminal_output_marks_port_conflict_as_retryable_environment_issue() -> None:
+    result = tool_output(
+        terminal_id="terminal_port_conflict",
+        wall_time_seconds=0.1,
+        output="OSError: [Errno 98] Address already in use",
+        max_output_tokens=None,
+        exit_code=1,
+        running=False,
+        environment_issue={
+            "code": "port_in_use",
+            "retryable": True,
+            "message": "命令尝试绑定已占用端口；请先复用现有服务，或选择明确空闲端口。",
+            "recovery": "reuse_existing_service_or_choose_free_port",
+        },
+    )
+
+    assert result["exit_code"] == 1
+    assert result["status"] == "error"
+    assert result["environment_issue"]["code"] == "port_in_use"
+    assert result["environment_issue"]["retryable"] is True
 
 
 class _FakeTerminalClient:
@@ -210,15 +235,17 @@ def test_exec_command_schema_matches_codex() -> None:
 @pytest.mark.asyncio
 async def test_exec_command_creates_independent_terminals_and_applies_options() -> None:
     client = _FakeTerminalClient()
+    workspace_root = Path("/tmp/workspace").resolve()
     tool = create_exec_command_tool(
         session_id="session_1",
         terminal_client=client,  # type: ignore[arg-type]
+        workspace_root=workspace_root,
     )
 
     first = await tool.ainvoke(
         {
             "cmd": "pwd",
-            "workdir": "/tmp/project",
+            "workdir": "parry_arena",
             "shell": "/bin/sh",
             "login": False,
             "yield_time_ms": 1,
@@ -233,9 +260,22 @@ async def test_exec_command_creates_independent_terminals_and_applies_options() 
     assert first["chunk_id"] != first["terminal_id"]
     assert first["original_token_count"] > 2
     assert len(first["output"]) < len("alpha beta gamma delta epsilon")
-    assert client.terminals[first["terminal_id"]]["cwd"] == "/tmp/project"
+    assert client.terminals[first["terminal_id"]]["cwd"] == str(
+        workspace_root / "parry_arena"
+    )
+    assert first["cwd"] == str(workspace_root / "parry_arena")
     assert client.terminals[first["terminal_id"]]["status"] == "deleted"
-    assert "cd -- /tmp/project && /bin/sh -c pwd" in str(client.writes[0]["data"])
+    assert "/bin/sh -c pwd" in str(client.writes[0]["data"])
+    assert "cd --" not in str(client.writes[0]["data"])
+    assert second["cwd"] == str(workspace_root)
+    assert client.terminals[second["terminal_id"]]["cwd"] == str(workspace_root)
+
+
+def test_resolves_relative_workdir_once_against_workspace_root(tmp_path: Path) -> None:
+    assert _resolve_terminal_workdir(
+        "parry_arena",
+        workspace_root=tmp_path,
+    ) == str((tmp_path / "parry_arena").resolve())
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
+PROCESS_LOG_MAX_BYTES = 64 * 1024 * 1024
+PROCESS_LOG_ROTATIONS = 3
+
 
 @dataclass(frozen=True, slots=True)
 class ProcessLogStore:
@@ -24,6 +27,7 @@ class ProcessLogStore:
         log_path = self.path_for(file_name)
         if log_path.is_symlink():
             raise RuntimeError(f"进程日志文件不允许是符号链接: {log_path}")
+        self._rotate_if_needed(log_path)
         flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -35,3 +39,23 @@ class ProcessLogStore:
         except Exception:
             os.close(descriptor)
             raise
+
+    @staticmethod
+    def _rotate_if_needed(log_path: Path) -> None:
+        if not log_path.exists():
+            return
+        if log_path.stat().st_size < PROCESS_LOG_MAX_BYTES:
+            return
+        for index in range(PROCESS_LOG_ROTATIONS - 1, 0, -1):
+            source = log_path.with_name(f"{log_path.name}.{index}")
+            target = log_path.with_name(f"{log_path.name}.{index + 1}")
+            if source.is_symlink() or target.is_symlink():
+                raise RuntimeError(
+                    f"进程日志轮转目标不允许是符号链接: source={source} target={target}"
+                )
+            if source.exists():
+                source.replace(target)
+        rotated_path = log_path.with_name(f"{log_path.name}.1")
+        if rotated_path.is_symlink():
+            raise RuntimeError(f"进程日志轮转目标不允许是符号链接: {rotated_path}")
+        log_path.replace(rotated_path)

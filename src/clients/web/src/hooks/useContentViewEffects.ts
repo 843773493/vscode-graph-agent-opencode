@@ -5,12 +5,14 @@ import type { RefreshOptions } from "./contentViewLoaderTypes";
 export function useContentViewEffects({
   contentView,
   sessionId,
+  userAccessReady,
   refreshLLMRequestLogs,
   refreshSessionChanges,
   refreshSessionResources,
 }: {
   contentView: ConversationContentView;
   sessionId: string | null;
+  userAccessReady: boolean;
   refreshLLMRequestLogs: (sessionId: string) => Promise<void>;
   refreshSessionChanges: (sessionId: string) => Promise<void>;
   refreshSessionResources: (
@@ -49,7 +51,7 @@ export function useContentViewEffects({
   ]);
 
   useEffect(() => {
-    if (contentView !== "resources" || !sessionId) {
+    if (contentView !== "resources" || !sessionId || !userAccessReady) {
       return;
     }
 
@@ -83,5 +85,6 @@ export function useContentViewEffects({
     contentView,
     refreshSessionResources,
     sessionId,
+    userAccessReady,
   ]);
 }

@@ -18,6 +18,7 @@ from app.agents.provider_capabilities import (
     detect_required_capabilities_from_messages,
     parse_provider_capabilities,
 )
+from app.core.turn_execution_scope import ScopeCancelledError
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,11 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
             try:
                 response = handler(request.override(model=candidate.model))
                 return _validate_visible_response(candidate, response)
+            except ScopeCancelledError:
+                # 父 turn 的用户中断、Job 总超时和内部执行取消都已经是
+                # 明确的执行边界，不能被 fallback 当成 provider 失败再次发起请求。
+                # 候选模型自己的可重试失败仍通过普通 Exception 走 fallback。
+                raise
             except Exception as error:  # noqa: BLE001 - provider 失败时必须尝试后续候选
                 last_error = error
                 dispatch_custom_event(
@@ -142,6 +148,10 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
             try:
                 response = await handler(request.override(model=candidate.model))
                 return _validate_visible_response(candidate, response)
+            except ScopeCancelledError:
+                # 取消不是 provider 能力降级；保留原始 reason 交给 Job/stream
+                # 状态机分类，避免 backup_4 覆盖用户选择或把 Job 继续拖成 running。
+                raise
             except Exception as error:  # noqa: BLE001 - provider 失败时必须尝试后续候选
                 last_error = error
                 await adispatch_custom_event(

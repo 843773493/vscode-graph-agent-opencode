@@ -21,8 +21,9 @@ from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
 
-# TODO: Windows 嵌入式 Python 首次导入依赖较慢，单独放宽本地后端冷启动窗口。
-GATEWAY_PROCESS_READY_TIMEOUT_SECONDS = 120 if os.name == "nt" else 45
+# 工作区后端需要完成 Python 冷启动导入和 lifespan 初始化；本地与 Windows
+# 统一保留足够的就绪窗口，避免 Gateway 在后端即将就绪时提前清理进程组。
+GATEWAY_PROCESS_READY_TIMEOUT_SECONDS = 120
 WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS = 2
 DEFAULT_SSH_TUNNEL_PORT_MIN = 41000
 DEFAULT_SSH_TUNNEL_PORT_MAX = 41999

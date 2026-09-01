@@ -180,6 +180,9 @@ class TraceEventStore:
             "job_completed": "completed",
             "job_failed": "failed",
             "job_cancelled": "cancelled",
+            # 后端进程重启时没有可安全续接的 AgentLoop；它是失败终态，
+            # 不是用户主动取消，历史回放和 retry_failed 需要保留这个区别。
+            "session_interrupted": "failed",
         }
         statuses: dict[str, str] = {}
         for event in self.read_events(session_id, tail_limit=tail_limit):

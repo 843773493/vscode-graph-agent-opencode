@@ -33,7 +33,13 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
     )
     workspace_root = prepare_default_test_workspace(
         workspace_root=output_root / "workspace",
-        template_root=project_root / "asset" / "default_test_workspace",
+        template_root=(
+            project_root
+            / "tests"
+            / "fixtures"
+            / "workspaces"
+            / "default_test_workspace"
+        ),
         shared_skill_root=project_root / "resources" / "skills",
     )
     return str(workspace_root)

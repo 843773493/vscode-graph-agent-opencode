@@ -36,6 +36,40 @@ function contentType(filePath) {
   return "application/octet-stream";
 }
 
+function resolveModuleAsset(pathname, assetRoot) {
+  const decodedPathname = decodeURIComponent(pathname);
+  let moduleRoot;
+  let relativePath;
+  if (decodedPathname === "/protocol/messages.js") {
+    moduleRoot = path.resolve(currentDir, "..", "protocol");
+    relativePath = "messages.js";
+  } else if (decodedPathname.startsWith("/protocol/generated/")) {
+    moduleRoot = path.resolve(currentDir, "..", "..", "protocol");
+    relativePath = decodedPathname.slice("/protocol/".length);
+  } else if (
+    decodedPathname === "/@bufbuild/protobuf" ||
+    decodedPathname.startsWith("/@bufbuild/protobuf/")
+  ) {
+    moduleRoot = path.resolve(assetRoot, "node_modules", "@bufbuild", "protobuf", "dist", "esm");
+    relativePath = decodedPathname.slice("/@bufbuild/protobuf".length).replace(/^\/+/, "");
+    if (!relativePath) {
+      relativePath = "index.js";
+    } else if (!path.extname(relativePath)) {
+      relativePath = path.join(relativePath, "index.js");
+    }
+  } else {
+    return null;
+  }
+  const resolvedPath = path.resolve(moduleRoot, relativePath);
+  if (
+    resolvedPath !== moduleRoot &&
+    !resolvedPath.startsWith(`${moduleRoot}${path.sep}`)
+  ) {
+    throw new Error(`模块资源路径越界: ${pathname}`);
+  }
+  return resolvedPath;
+}
+
 function send(response, status, body, type = "text/plain; charset=utf-8") {
   response.writeHead(status, {
     "content-type": type,
@@ -131,6 +165,17 @@ async function main() {
           `window.BOXTEAM_BROWSER_BACKEND_URL = ${JSON.stringify(browserBackendUrl)};\n`,
           "application/javascript; charset=utf-8",
         );
+        return;
+      }
+
+      const modulePath = resolveModuleAsset(url.pathname, assetRoot);
+      if (modulePath) {
+        const body = await readFile(modulePath);
+        response.writeHead(200, {
+          "content-type": contentType(modulePath),
+          "cache-control": "no-store",
+        });
+        response.end(body);
         return;
       }
 

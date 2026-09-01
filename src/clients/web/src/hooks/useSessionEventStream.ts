@@ -8,6 +8,7 @@ import {
   streamSessionEvents,
   TraceCursorGoneError,
 } from "../api/sessionTraceStream";
+import { isTransientNetworkError } from "../api/http";
 import { isJobTerminalTraceType } from "../state/traceEvents";
 import type { SessionStreamEvent } from "../types/backend";
 import {
@@ -107,7 +108,6 @@ export function useSessionEventStream({
         sessionListRefreshInFlight = false;
       });
     };
-    refreshWorkspaceSessionsForStream(true);
     // TODO: 工作区摘要事件流落地后删除这一低频完整快照兜底。
     const sessionListRefreshIntervalId = window.setInterval(
       refreshWorkspaceSessionsForStream,
@@ -203,7 +203,9 @@ export function useSessionEventStream({
             refreshTurnHistory();
             return;
           } else {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = isTransientNetworkError(error)
+              ? "本地服务连接暂时变化"
+              : error instanceof Error ? error.message : String(error);
             setState((prev) => ({
               ...prev,
               status: error instanceof SessionStreamIdleTimeoutError

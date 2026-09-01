@@ -9,7 +9,14 @@ import pytest
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.session_paths import SessionPathResolver
-from app.schemas.event import JobStartedEvent, JobStartedPayload
+from app.schemas.event import (
+    JobFailedEvent,
+    JobFailedPayload,
+    JobStartedEvent,
+    JobStartedPayload,
+    SessionInterruptedEvent,
+    SessionInterruptedPayload,
+)
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import (
     JobAdmissionClosedError,
@@ -38,7 +45,27 @@ class NeverFinishExecutor:
         raise AssertionError("不可达")
 
 
-def build_runtime(tmp_path: Path) -> tuple[RuntimeService, JobService]:
+class RecordingTurnStatusWriter:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    def mark_turn_terminal_status(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        status: str,
+    ) -> bool:
+        self.calls.append(
+            {"session_id": session_id, "turn_id": turn_id, "status": status}
+        )
+        return True
+
+
+def build_runtime(
+    tmp_path: Path,
+    terminal_status_writer: RecordingTurnStatusWriter | None = None,
+) -> tuple[RuntimeService, JobService]:
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     bus = RecordingJobEventBus()
     jobs = JobService(
@@ -54,6 +81,7 @@ def build_runtime(tmp_path: Path) -> tuple[RuntimeService, JobService]:
         message_stream_store=MessageStreamStore(
             path_resolver=SessionPathResolver(sessions_dir)
         ),
+        terminal_status_writer=terminal_status_writer,
     )
     return runtime, jobs
 
@@ -129,3 +157,131 @@ async def test_startup_reconciles_job_without_terminal_event(
     assert reconciled == 1
     assert events[-1].type == "session_interrupted"
     assert events[-1].payload.phase == "process_exit"
+
+
+@pytest.mark.asyncio
+async def test_startup_reconciles_persisted_turn_as_failed(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_stale")
+    writer = RecordingTurnStatusWriter()
+    runtime, _ = build_runtime(tmp_path, writer)
+    await runtime._trace_event_store.append(
+        "ses_stale",
+        JobStartedEvent(
+            event_id=create_prefixed_id("evt"),
+            job_id="job_stale",
+            timestamp=datetime.now(UTC),
+            payload=JobStartedPayload(),
+        ),
+    )
+
+    await runtime.reconcile_stale_executions()
+
+    assert writer.calls == [
+        {"session_id": "ses_stale", "turn_id": "job_stale", "status": "failed"}
+    ]
+    event = runtime._trace_event_store.read_events("ses_stale")[-1]
+    assert event.payload.code == "execution_lost"
+    assert event.payload.resumable is False
+
+
+@pytest.mark.asyncio
+async def test_startup_repairs_existing_process_exit_turn_status(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_stale")
+    writer = RecordingTurnStatusWriter()
+    runtime, _ = build_runtime(tmp_path, writer)
+    now = datetime.now(UTC)
+    await runtime._trace_event_store.append(
+        "ses_stale",
+        JobStartedEvent(
+            event_id=create_prefixed_id("evt"),
+            job_id="job_stale",
+            timestamp=now,
+            payload=JobStartedPayload(),
+        ),
+    )
+    await runtime._trace_event_store.append(
+        "ses_stale",
+        SessionInterruptedEvent(
+            event_id=create_prefixed_id("evt"),
+            job_id="job_stale",
+            timestamp=now,
+            payload=SessionInterruptedPayload(
+                session_id="ses_stale",
+                phase="process_exit",
+                code="execution_lost",
+                message="工作区后端重启，无法安全续接原 AgentLoop 执行",
+            ),
+        ),
+    )
+
+    reconciled = await runtime.reconcile_stale_executions()
+
+    assert reconciled == 0
+    assert writer.calls == [
+        {"session_id": "ses_stale", "turn_id": "job_stale", "status": "failed"}
+    ]
+    assert len(runtime._trace_event_store.read_events("ses_stale")) == 2
+
+
+@pytest.mark.asyncio
+async def test_startup_preserves_timeout_status_from_failed_event(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_timeout")
+    writer = RecordingTurnStatusWriter()
+    runtime, _ = build_runtime(tmp_path, writer)
+    await runtime._trace_event_store.append(
+        "ses_timeout",
+        JobFailedEvent(
+            event_id=create_prefixed_id("evt"),
+            job_id="job_timeout",
+            timestamp=datetime.now(UTC),
+            payload=JobFailedPayload(
+                error="Job 执行超过总超时上限",
+                code="job_timeout",
+                timeout_seconds=600,
+            ),
+        ),
+    )
+
+    await runtime.reconcile_stale_executions()
+
+    assert writer.calls == [{
+        "session_id": "ses_timeout",
+        "turn_id": "job_timeout",
+        "status": "timed_out",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_startup_preserves_legacy_timeout_text_status(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "ses_legacy_timeout")
+    writer = RecordingTurnStatusWriter()
+    runtime, _ = build_runtime(tmp_path, writer)
+    await runtime._trace_event_store.append(
+        "ses_legacy_timeout",
+        JobFailedEvent(
+            event_id=create_prefixed_id("evt"),
+            job_id="job_legacy_timeout",
+            timestamp=datetime.now(UTC),
+            payload=JobFailedPayload(error="Job 执行超过总超时上限"),
+        ),
+    )
+
+    await runtime.reconcile_stale_executions()
+
+    assert writer.calls == [{
+        "session_id": "ses_legacy_timeout",
+        "turn_id": "job_legacy_timeout",
+        "status": "timed_out",
+    }]

@@ -1,0 +1,169 @@
+{
+  "fixture_version": 5,
+  "description": "由 tests/fixtures/model_stream/handwritten 重建的 rollout 历史 fixture",
+  "source": "handwritten_sse",
+  "source_assets": [
+    "openai_chat/reasoning-stream.json",
+    "openai_chat/reasoning-tool.json"
+  ],
+  "history_semantics": [
+    "user_message",
+    "reasoning_content",
+    "reasoning_items",
+    "redacted_thinking",
+    "tool_call",
+    "tool_result",
+    "final_response",
+    "compaction_boundary",
+    "fork_origin",
+    "same_model_message_text_and_tool_call",
+    "partial_tool_call",
+    "outcome_unknown_tool_execution",
+    "partial_text_block",
+    "tool_markup_plain_text",
+    "parallel_tool_calls"
+  ],
+  "large_tool_payload": {
+    "tool_name": "large_test_output",
+    "argument_bytes": 65536,
+    "result_bytes": 65536,
+    "stored_as": "inline JSONL record",
+    "detail_behavior": "bounded detail with detail_truncated"
+  },
+  "sessions": [
+    {
+      "session_id": "ses_a1b2c3d4e5f6478899aabbccddeeff00",
+      "turn_count": 128,
+      "title": "自定义工具工作区：128 Turn 历史压测（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
+    },
+    {
+      "session_id": "ses_8128d7f0a4b64aa0b3f1c9e7d2a65018",
+      "turn_count": 128,
+      "title": "手写 SSE 128 Turn block carrier 压测",
+      "kind": "handwritten_sse_snapshot"
+    },
+    {
+      "session_id": "ses_9f4e2c7a1b6d4830a5e8f2c1d7b90436",
+      "turn_count": 128,
+      "title": "大型工具调用：128 Turn 历史投影压测（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
+    },
+    {
+      "session_id": "ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345",
+      "turn_count": 24,
+      "title": "上下文压缩与摘要示例（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
+    },
+    {
+      "session_id": "ses_7e5d3c1b9a8f4762b4d6e8f0a1c23579",
+      "turn_count": 12,
+      "title": "多工具调用和大输出示例（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
+    },
+    {
+      "session_id": "ses_6b2d4f8a0c1e4937b5d9f1a3c7e24680",
+      "turn_count": 7,
+      "title": "独立历史分支示例（handwritten SSE）",
+      "kind": "handwritten_sse_snapshot"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff01",
+      "turn_count": 1,
+      "title": "边界：同一 AI 消息中的 text + tool_call",
+      "kind": "handwritten_boundary",
+      "boundary_case": "text_tool",
+      "terminal_status": "completed"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff02",
+      "turn_count": 1,
+      "title": "边界：中断的半截 tool_call",
+      "kind": "handwritten_boundary",
+      "boundary_case": "partial_tool_call",
+      "terminal_status": "cancelled"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff03",
+      "turn_count": 1,
+      "title": "边界：ToolExecution 结果未知",
+      "kind": "handwritten_boundary",
+      "boundary_case": "unknown_tool_outcome",
+      "terminal_status": "failed"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff04",
+      "turn_count": 1,
+      "title": "边界：中断的 partial text block",
+      "kind": "handwritten_boundary",
+      "boundary_case": "partial_text",
+      "terminal_status": "cancelled"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff05",
+      "turn_count": 1,
+      "title": "边界：工具标记作为普通文本",
+      "kind": "handwritten_boundary",
+      "boundary_case": "tool_markup_text",
+      "terminal_status": "completed"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff06",
+      "turn_count": 1,
+      "title": "边界：同一 AI 消息中的并行 tool_call",
+      "kind": "handwritten_boundary",
+      "boundary_case": "parallel_tool_calls",
+      "terminal_status": "completed"
+    }
+  ],
+  "boundary_sessions": [
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff01",
+      "turn_count": 1,
+      "title": "边界：同一 AI 消息中的 text + tool_call",
+      "kind": "handwritten_boundary",
+      "boundary_case": "text_tool",
+      "terminal_status": "completed"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff02",
+      "turn_count": 1,
+      "title": "边界：中断的半截 tool_call",
+      "kind": "handwritten_boundary",
+      "boundary_case": "partial_tool_call",
+      "terminal_status": "cancelled"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff03",
+      "turn_count": 1,
+      "title": "边界：ToolExecution 结果未知",
+      "kind": "handwritten_boundary",
+      "boundary_case": "unknown_tool_outcome",
+      "terminal_status": "failed"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff04",
+      "turn_count": 1,
+      "title": "边界：中断的 partial text block",
+      "kind": "handwritten_boundary",
+      "boundary_case": "partial_text",
+      "terminal_status": "cancelled"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff05",
+      "turn_count": 1,
+      "title": "边界：工具标记作为普通文本",
+      "kind": "handwritten_boundary",
+      "boundary_case": "tool_markup_text",
+      "terminal_status": "completed"
+    },
+    {
+      "session_id": "ses_b1a2c3d4e5f6478899aabbccddeeff06",
+      "turn_count": 1,
+      "title": "边界：同一 AI 消息中的并行 tool_call",
+      "kind": "handwritten_boundary",
+      "boundary_case": "parallel_tool_calls",
+      "terminal_status": "completed"
+    }
+  ]
+}

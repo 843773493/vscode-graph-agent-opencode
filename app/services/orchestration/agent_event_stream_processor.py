@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -57,6 +58,22 @@ FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", APPLY_PATCH_TOOL_NAME}
 STREAM_SESSION_ID_METADATA_KEY = "boxteam_session_id"
 STREAM_JOB_ID_METADATA_KEY = "boxteam_job_id"
 SUBAGENT_TOOL_NAMES = frozenset({"task"})
+# 首个事件只用于确认 AgentLoop 已经开始推进。模型开始后，生产调用不再
+# 使用固定的模型空闲超时；JobService 的总超时负责限制整个 AgentLoop。
+# 只有明确传入 model_timeout_seconds 时，才启用模型空闲 watchdog。首个模型事件
+# 可能还要等待上下文投影、Provider 冷启动和连接建立，不能把 60 秒边界当作硬墙。
+# 首个可观察模型/工具事件之前可能包含历史投影、附件整理和 Provider 冷启动。
+# 这是有限的 AgentLoop 启动预算，不是 Job 总超时；超过后仍明确失败收敛。
+DEFAULT_INITIAL_EVENT_TIMEOUT_SECONDS = 180.0
+DEFAULT_TOOL_DISPATCH_TIMEOUT_SECONDS = 30.0
+
+
+class AgentEventStreamTimeoutError(TimeoutError):
+    """Agent 事件流在模型/工具事件出现前或模型响应期间未收敛。"""
+
+    def __init__(self, message: str, *, code: str = "agent_event_timeout") -> None:
+        self.code = code
+        super().__init__(message)
 
 
 def _model_end_contains_tool_calls(value: object) -> bool:
@@ -104,6 +121,24 @@ def _tool_message_from_output(
         f"execution_id={execution_id} tool={tool_name} "
         f"output_type={type(output).__name__}"
     )
+
+
+def _system_skill_event_metadata(output: ToolMessage) -> dict[str, str]:
+    """把精确系统 Skill 读取标记为元数据，不伪装成工作区源码读取。"""
+    additional_kwargs = output.additional_kwargs
+    if additional_kwargs.get("workspace_path_scope") != "system_skill":
+        return {}
+    metadata: dict[str, str] = {}
+    for key in (
+        "workspace_path_scope",
+        "workspace_file_kind",
+        "skill_source",
+        "skill_name",
+    ):
+        value = additional_kwargs.get(key)
+        if isinstance(value, str) and value:
+            metadata[key] = value
+    return metadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +267,44 @@ def _build_isolated_stream_config(
     return stream_config
 
 
+def _is_progress_event(event: dict[str, Any]) -> bool:
+    """判断事件流是否已经进入可观察的模型或工具阶段。"""
+    event_type = event.get("event")
+    name = event.get("name", "")
+    if (
+        isinstance(event_type, str)
+        and event_type.startswith("on_chat_model_")
+        and isinstance(name, str)
+        and is_tracked_chat_model_event(name)
+    ):
+        return True
+    return event_type in {"on_tool_start", "on_tool_end"} or (
+        event_type == "on_custom_event" and name == MODEL_FAILED_CUSTOM_EVENT
+    )
+
+
+def _is_agent_lifecycle_event(event: dict[str, Any]) -> bool:
+    """判断事件流是否仍在推进 Agent 生命周期。"""
+    event_type = event.get("event")
+    return isinstance(event_type, str) and event_type.startswith("on_")
+
+
+def _is_model_start_event(event: dict[str, Any]) -> bool:
+    return (
+        event.get("event") == "on_chat_model_start"
+        and isinstance(event.get("name"), str)
+        and is_tracked_chat_model_event(event["name"])
+    )
+
+
+def _is_model_end_event(event: dict[str, Any]) -> bool:
+    return (
+        event.get("event") == "on_chat_model_end"
+        and isinstance(event.get("name"), str)
+        and is_tracked_chat_model_event(event["name"])
+    )
+
+
 def _validate_stream_event_identity(
     metadata: object,
     *,
@@ -255,14 +328,29 @@ def _validate_stream_event_identity(
         )
 
 
-def _tool_output_succeeded(output: Any) -> bool:
+def _tool_output_status(output: Any) -> str:
+    """合并 ToolMessage 状态与工具返回体中的状态。"""
     status = getattr(output, "status", None)
     if status == "error":
-        return False
-    if status == "success":
-        return True
+        return "error"
     text = extract_tool_result_text(output).strip()
-    return bool(text) and not text.startswith("Error:")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, Mapping):
+        result_status = parsed.get("status")
+        if result_status == "error":
+            return "error"
+        if result_status == "success":
+            return "success"
+    if status == "success":
+        return "success"
+    return "success" if text and not text.startswith("Error:") else "error"
+
+
+def _tool_output_succeeded(output: Any) -> bool:
+    return _tool_output_status(output) == "success"
 
 
 def _file_paths_from_tool_args(tool_name: str, tool_args: dict[str, Any]) -> list[str]:
@@ -355,6 +443,25 @@ def _activity_result_detail(
         parsed = json.loads(result_text)
     except json.JSONDecodeError:
         parsed = None
+    if isinstance(parsed, Mapping):
+        if parsed.get("status") == "error":
+            detail["phase"] = "failed"
+        code = parsed.get("code")
+        if isinstance(code, str) and code:
+            detail["code"] = code
+        retryable = parsed.get("retryable")
+        if isinstance(retryable, bool):
+            detail["retryable"] = retryable
+        recovery = parsed.get("recovery")
+        if isinstance(recovery, str) and recovery:
+            detail["recovery"] = recovery
+        timeout_ms = parsed.get("timeoutMs")
+        if (
+            isinstance(timeout_ms, int)
+            and not isinstance(timeout_ms, bool)
+            and timeout_ms > 0
+        ):
+            detail["timeout_ms"] = timeout_ms
     if tool_name in SUBAGENT_TOOL_NAMES and isinstance(parsed, Mapping):
         child_session_id = parsed.get("child_session_id")
         if isinstance(child_session_id, str) and child_session_id:
@@ -378,8 +485,29 @@ async def process_agent_event_stream(
     cancellation_signal: CancellationSignal | None = None,
     execution_scope: TurnExecutionScope | None = None,
     model_timeout_seconds: float | None = None,
+    tool_dispatch_timeout_seconds: float | None = None,
+    progress_reporter: Callable[[str], None] | None = None,
 ) -> AgentEventStreamResult:
     """消费 DeepAgent 事件流，并发布前端可观察的 trace 事件。"""
+    idle_model_timeout_seconds: float | None
+    if model_timeout_seconds is None:
+        idle_model_timeout_seconds = None
+        initial_event_timeout_seconds = DEFAULT_INITIAL_EVENT_TIMEOUT_SECONDS
+    else:
+        if isinstance(model_timeout_seconds, bool) or model_timeout_seconds <= 0:
+            raise ValueError("model_timeout_seconds 必须大于 0")
+        idle_model_timeout_seconds = model_timeout_seconds
+        initial_event_timeout_seconds = model_timeout_seconds
+    effective_tool_dispatch_timeout_seconds = (
+        DEFAULT_TOOL_DISPATCH_TIMEOUT_SECONDS
+        if tool_dispatch_timeout_seconds is None
+        else tool_dispatch_timeout_seconds
+    )
+    if (
+        isinstance(effective_tool_dispatch_timeout_seconds, bool)
+        or effective_tool_dispatch_timeout_seconds <= 0
+    ):
+        raise ValueError("tool_dispatch_timeout_seconds 必须大于 0")
     collected_text_parts: list[str] = []
     latest_model_part_order: list[str] = []
     latest_model_parts: dict[str, dict[str, object]] = {}
@@ -489,17 +617,163 @@ async def process_agent_event_stream(
             existing["extras"] = merged_extras
 
     async def _iter_agent_events() -> AsyncIterator[dict[str, Any]]:
+        event_iterator = agent.astream_events(
+            input_payload,
+            config=stream_config,
+            version="v2",
+        ).__aiter__()
+        loop = asyncio.get_running_loop()
+        next_event_task: asyncio.Task[dict[str, Any]] | None = None
+        timeout_triggered = False
+        first_progress_deadline: float | None = loop.time() + initial_event_timeout_seconds
+        model_deadline: float | None = None
+        tool_dispatch_deadline: float | None = None
+
+        async def raise_stream_timeout(phase: str, *, code: str) -> None:
+            if code == "tool_dispatch_timeout" and message_stream_runtime is not None:
+                pending = message_stream_runtime.pending_tool_calls()
+                if pending:
+                    await message_stream_runtime.fail_pending_tool_calls(
+                        completion_reason=code,
+                        error=(
+                            "模型工具调用参数已完整，但在有限时间内没有收到工具执行分派事件: "
+                            f"tool_calls={[item[0] for item in pending]}"
+                        ),
+                    )
+            timeout_seconds = (
+                effective_tool_dispatch_timeout_seconds
+                if code == "tool_dispatch_timeout"
+                else idle_model_timeout_seconds
+                if idle_model_timeout_seconds is not None
+                else initial_event_timeout_seconds
+            )
+            raise AgentEventStreamTimeoutError(
+                f"Agent 事件流等待{phase}超过 {timeout_seconds:.0f} 秒: "
+                f"session_id={session_id} job_id={turn_id}",
+                code=code,
+            )
+
         try:
-            async for event in agent.astream_events(
-                input_payload,
-                config=stream_config,
-                version="v2",
-            ):
+            while True:
+                pending_tool_calls = (
+                    message_stream_runtime.pending_tool_calls()
+                    if message_stream_runtime is not None
+                    else ()
+                )
+                if model_deadline is None and pending_tool_calls:
+                    if tool_dispatch_deadline is None:
+                        tool_dispatch_deadline = (
+                            loop.time() + effective_tool_dispatch_timeout_seconds
+                        )
+                else:
+                    tool_dispatch_deadline = None
+                deadlines = [
+                    (model_deadline, "模型响应", "agent_event_timeout"),
+                    (
+                        tool_dispatch_deadline,
+                        "工具调用分派",
+                        "tool_dispatch_timeout",
+                    ),
+                    (
+                        first_progress_deadline,
+                        "首个模型/工具事件",
+                        "agent_event_timeout",
+                    ),
+                ]
+                active_deadlines = [
+                    item for item in deadlines if item[0] is not None
+                ]
+                if active_deadlines:
+                    deadline, phase, timeout_code = min(
+                        active_deadlines,
+                        key=lambda item: item[0] or float("inf"),
+                    )
+                else:
+                    deadline = None
+                    phase = "Agent 事件流"
+                    timeout_code = "agent_event_timeout"
+                if deadline is None:
+                    try:
+                        event = await event_iterator.__anext__()
+                    except StopAsyncIteration:
+                        return
+                else:
+                    timeout = deadline - loop.time()
+                    if timeout <= 0:
+                        await raise_stream_timeout(phase, code=timeout_code)
+                    if next_event_task is None:
+                        next_event_task = asyncio.create_task(
+                            event_iterator.__anext__(),
+                        )
+                    try:
+                        # wait_for 直接包住异步生成器的 __anext__ 时，超时会把
+                        # CancelledError 注入 AgentLoop。使用独立 task 配合 wait，
+                        # 保证这里的等待超时只产生本地 tool_dispatch_timeout；
+                        # 生成器任务在 finally 中单独收束，不能把清理取消冒泡成
+                        # execution_lost。
+                        done, _ = await asyncio.wait(
+                            {next_event_task},
+                            timeout=timeout,
+                        )
+                        if not done:
+                            timeout_triggered = True
+                            await raise_stream_timeout(phase, code=timeout_code)
+                        event = next_event_task.result()
+                        next_event_task = None
+                    except StopAsyncIteration:
+                        next_event_task = None
+                        return
                 yield event
+                if _is_progress_event(event):
+                    first_progress_deadline = None
+                elif first_progress_deadline is not None and _is_agent_lifecycle_event(
+                    event
+                ):
+                    # LangGraph 在首个模型事件前可能先发出 chain/prompt/parser
+                    # 生命周期事件。它们不是用户可见的模型进展，但说明 AgentLoop
+                    # 没有卡死；把首事件 watchdog 作为“无事件空闲超时”续期。
+                    first_progress_deadline = (
+                        loop.time() + initial_event_timeout_seconds
+                    )
+                if _is_model_start_event(event):
+                    model_deadline = (
+                        loop.time() + idle_model_timeout_seconds
+                        if idle_model_timeout_seconds is not None
+                        else None
+                    )
+                elif _is_model_end_event(event):
+                    model_deadline = None
+                elif model_deadline is not None:
+                    # 这是模型空闲 watchdog，而不是从模型开始事件起算的固定
+                    # 响应总预算。活跃的长推理/流式响应不应被 60 秒硬切。
+                    model_deadline = loop.time() + idle_model_timeout_seconds
         except ScopeCancelledError as error:
             if cancellation_signal is None or not cancellation_signal.is_cancelled:
                 raise
             raise asyncio.CancelledError(str(error)) from error
+        finally:
+            primary_exception = sys.exc_info()[1]
+            if next_event_task is not None and not next_event_task.done():
+                next_event_task.cancel("agent_event_stream_cleanup")
+            if next_event_task is not None:
+                try:
+                    await next_event_task
+                except asyncio.CancelledError:
+                    if not timeout_triggered and primary_exception is None:
+                        raise
+                except BaseException:
+                    if not timeout_triggered and primary_exception is None:
+                        raise
+            close_iterator = getattr(event_iterator, "aclose", None)
+            if callable(close_iterator):
+                try:
+                    await close_iterator()
+                except asyncio.CancelledError:
+                    if not timeout_triggered and primary_exception is None:
+                        raise
+                except RuntimeError:
+                    if not timeout_triggered and primary_exception is None:
+                        raise
 
     async for event in _iter_agent_events():
         if cancellation_signal is not None:
@@ -532,10 +806,35 @@ async def process_agent_event_stream(
                 name=name,
             )
 
+        if progress_reporter is not None:
+            if is_model_event:
+                progress_reporter("model")
+            elif is_model_failed_event:
+                progress_reporter("model_failed")
+            elif event_type in {"on_tool_start", "on_tool_end"}:
+                progress_reporter(f"tool:{name or 'unknown'}")
+
         if is_model_failed_event:
             if not isinstance(data, dict):
                 raise TypeError("模型失败自定义事件 data 必须是 dict")
             await publish(EventType.MODEL_FAILED, dict(data))
+            if message_stream_runtime is not None:
+                error_type = data.get("error_type")
+                error_message = data.get("error")
+                await message_stream_runtime.fail_model(
+                    code=(
+                        str(error_type)
+                        if isinstance(error_type, str) and error_type
+                        else "provider_failed"
+                    ),
+                    message=(
+                        str(error_message)
+                        if isinstance(error_message, str) and error_message
+                        else "模型 provider 请求失败"
+                    ),
+                    outcome="upstream_error",
+                    retryable=True,
+                )
             continue
 
         if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
@@ -550,9 +849,11 @@ async def process_agent_event_stream(
                 if previous_model_scope is not None:
                     execution_scope.clear_active_operation(previous_model_scope)
                     await previous_model_scope.close()
+                # 模型事件的 timeout 只用于下面的 idle watchdog。这里不能再给
+                # child scope 设置固定 deadline，否则持续输出超过该时长时会
+                # 取消底层流，路由层再误当作 provider 失败切到 backup_4。
                 model_scope = execution_scope.child(
                     f"model-{model_run_id or len(model_scopes_by_run_id)}",
-                    timeout_seconds=model_timeout_seconds,
                 )
                 model_scopes_by_run_id[model_run_id] = model_scope
                 model_scope_tokens_by_run_id[model_run_id] = (
@@ -797,8 +1098,12 @@ async def process_agent_event_stream(
                     f"execution_id={run_id} tool={display_context.tool_name}"
                 )
             raw_result_text = extract_tool_result_text(raw_output)
+            effective_tool_status = _tool_output_status(raw_output)
             output = raw_output
-            if isinstance(raw_output, ToolMessage) and raw_output.status != "error":
+            if (
+                isinstance(raw_output, ToolMessage)
+                and effective_tool_status == "success"
+            ):
                 output = await tool_output_store.abound(
                     session_id=session_id,
                     tool_name=display_context.tool_name,
@@ -808,7 +1113,7 @@ async def process_agent_event_stream(
             result_text = extract_tool_result_text(output)
             last_tool_result_text = result_text
             skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
-            if raw_output.status != "error":
+            if effective_tool_status == "success":
                 successful_tool_calls.append(
                     SuccessfulToolCall(
                         tool_name=display_context.tool_name,
@@ -855,10 +1160,11 @@ async def process_agent_event_stream(
                 "tool_call_id": tool_call_id,
                 "tool_name": display_context.tool_name,
                 "result": result_text,
-                "status": raw_output.status,
-                "failed": raw_output.status == "error",
+                "status": effective_tool_status,
+                "failed": effective_tool_status == "error",
                 "agent_id": agent_id,
             }
+            payload.update(_system_skill_event_metadata(raw_output))
             tool_output_reference = extract_tool_output_reference(output)
             if tool_output_reference is not None:
                 payload["tool_output"] = tool_output_reference
@@ -893,11 +1199,11 @@ async def process_agent_event_stream(
                     tool_name=display_context.tool_name,
                     status=(
                         "failed"
-                        if raw_output.status == "error"
+                        if effective_tool_status == "error"
                         else "succeeded"
                     ),
                     result=result_text,
-                    error=result_text if raw_output.status == "error" else None,
+                    error=result_text if effective_tool_status == "error" else None,
                 )
                 activity_bindings = activity_bindings_by_run_id.pop(run_id, ())
                 for activity_id, activity_kind, resource_id in activity_bindings:
@@ -916,7 +1222,7 @@ async def process_agent_event_stream(
                         status="stopping",
                         detail=detail,
                     )
-                    if raw_output.status == "error":
+                    if effective_tool_status == "error":
                         await message_stream_runtime.activities.failed(
                             activity_id=activity_id,
                             kind=activity_kind,
@@ -937,6 +1243,22 @@ async def process_agent_event_stream(
             tool_scope = tool_scopes_by_run_id.pop(run_id, None)
             if tool_scope is not None:
                 await tool_scope.close()
+
+    if message_stream_runtime is not None:
+        pending_tool_calls = message_stream_runtime.pending_tool_calls()
+        if pending_tool_calls:
+            await message_stream_runtime.fail_pending_tool_calls(
+                completion_reason="tool_dispatch_timeout",
+                error=(
+                    "模型工具调用参数已完整，但事件流结束前没有收到工具执行分派事件: "
+                    f"tool_calls={[item[0] for item in pending_tool_calls]}"
+                ),
+            )
+            raise AgentEventStreamTimeoutError(
+                "Agent 事件流结束时仍存在未分派的工具调用: "
+                f"tool_calls={[item[0] for item in pending_tool_calls]}",
+                code="tool_dispatch_timeout",
+            )
 
     if tracked_model_run_order:
         last_model_run_id = tracked_model_run_order[-1]

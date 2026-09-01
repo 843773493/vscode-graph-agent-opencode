@@ -44,7 +44,15 @@ def _round_prompt(round_number: int) -> str:
 
 
 def _test_image_data_url() -> str:
-    image_path = Path.cwd() / "asset" / "default_test_workspace" / "assets" / "test.jpg"
+    image_path = (
+        Path.cwd()
+        / "tests"
+        / "fixtures"
+        / "workspaces"
+        / "default_test_workspace"
+        / "assets"
+        / "test.jpg"
+    )
     encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
     return f"data:image/jpeg;base64,{encoded}"
 

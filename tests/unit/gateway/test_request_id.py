@@ -48,6 +48,22 @@ def test_gateway_endpoint_returns_middleware_request_id(
     assert response.json()["data"]["development_restart_available"] is False
 
 
+def test_gateway_auth_error_contains_request_id_in_body(
+    gateway_client: TestClient,
+) -> None:
+    response = gateway_client.get(
+        "/api/v1/workspace",
+        headers={"X-Request-ID": "req_gateway_auth_error"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["X-Request-ID"] == "req_gateway_auth_error"
+    assert response.json() == {
+        "detail": "缺少 Gateway 访问凭据",
+        "request_id": "req_gateway_auth_error",
+    }
+
+
 def test_gateway_proxy_forwards_authoritative_request_id() -> None:
     request = Request(
         {

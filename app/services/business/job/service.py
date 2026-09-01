@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobExecutorProtocol
@@ -52,6 +52,26 @@ class JobAdmissionClosedError(RuntimeError):
     """Workspace API 正在排空时拒绝创建新的 Job。"""
 
 
+class JobExecutionTimeoutError(TimeoutError):
+    """Job 在配置的总执行时间内没有收敛。"""
+
+
+class JobStartupTimeoutError(TimeoutError):
+    """Job 已进入 running 但在启动预算内没有进入 AgentLoop。"""
+
+
+class TurnTerminalStatusWriter(Protocol):
+    """把 Job 终态同步到持久化 Turn，供历史回放使用。"""
+
+    def mark_turn_terminal_status(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        status: str,
+    ) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class JobDrainBlocker:
     job_id: str
@@ -73,6 +93,7 @@ class JobState:
     message_metadata: dict[str, object] = field(default_factory=dict)
     attachments: list[AttachmentRef] = field(default_factory=list)
     progress: int = 0
+    current_step: str | None = None
     error_message: str | None = None
     result: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
@@ -93,7 +114,26 @@ class JobService:
         job_event_bus: JobEventBusProtocol,
         job_executor: JobExecutorProtocol,
         pending_request_store: PendingRequestStoreProtocol | None = None,
+        job_timeout_seconds: float = 600.0,
+        job_startup_timeout_seconds: float = 30.0,
+        job_finalization_grace_seconds: float | None = None,
+        terminal_status_writer: TurnTerminalStatusWriter | None = None,
     ):
+        if isinstance(job_timeout_seconds, bool) or job_timeout_seconds <= 0:
+            raise ValueError("job_timeout_seconds 必须大于 0")
+        if (
+            isinstance(job_startup_timeout_seconds, bool)
+            or job_startup_timeout_seconds <= 0
+        ):
+            raise ValueError("job_startup_timeout_seconds 必须大于 0")
+        if (
+            job_finalization_grace_seconds is not None
+            and (
+                isinstance(job_finalization_grace_seconds, bool)
+                or job_finalization_grace_seconds <= 0
+            )
+        ):
+            raise ValueError("job_finalization_grace_seconds 必须大于 0")
         self._jobs: dict[str, JobState] = {}
         self._bus: JobEventBusProtocol | None = job_event_bus
         self._session_current_job: dict[str, str] = {}
@@ -104,6 +144,17 @@ class JobService:
         self._deleting_sessions: set[str] = set()
         self._accepting_jobs = True
         self._job_executor = job_executor
+        self._job_timeout_seconds = job_timeout_seconds
+        self._job_startup_timeout_seconds = job_startup_timeout_seconds
+        # 总预算到点时，最后一个模型响应可能已经完成工具阶段、只差落盘/收尾。
+        # 默认给一个有界的收尾窗口；生产最多额外 60 秒，避免浏览器工具
+        # 刚返回就被总预算硬切，同时不会把真正卡住的任务变成无限运行。
+        self._job_finalization_grace_seconds = (
+            job_finalization_grace_seconds
+            if job_finalization_grace_seconds is not None
+            else min(60.0, max(0.1, job_timeout_seconds * 0.1))
+        )
+        self._terminal_status_writer = terminal_status_writer
         self._pending_requests = JobPendingRequestService(
             queue=self._pending_queue,
             lock=self._dispatch_lock,
@@ -164,7 +215,7 @@ class JobService:
         sessions_with_queued_jobs: set[str] = set()
         queued_blocker_ids: set[str] = set()
         tasks: list[asyncio.Task] = []
-        now = datetime.now()
+        now = datetime.now()  # noqa: DTZ005
         async with self._dispatch_lock:
             for blocker in blockers:
                 job = self._jobs.get(blocker.job_id)
@@ -213,7 +264,7 @@ class JobService:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        ended_at = datetime.now()
+        ended_at = datetime.now()  # noqa: DTZ005
         for blocker in active_blockers:
             job = self._jobs.get(blocker.job_id)
             if job is None or job.status != JobStatus.cancelling:
@@ -261,7 +312,7 @@ class JobService:
                     status=job.status,
                     entry_agent=job.agent_id,
                     progress=job.progress,
-                    current_step=None,
+                    current_step=job.current_step,
                     error_message=job.error_message,
                     metadata={},
                     created_at=job.created_at,
@@ -283,7 +334,7 @@ class JobService:
             status=job.status,
             entry_agent=job.agent_id,
             progress=job.progress,
-            current_step=None,
+            current_step=job.current_step,
             error_message=job.error_message,
             metadata={},
             created_at=job.created_at,
@@ -525,7 +576,7 @@ class JobService:
             self._session_current_job.pop(session_id, None)
             self._pending_queue.clear(session_id)
 
-            now = datetime.now()
+            now = datetime.now()  # noqa: DTZ005
             for job in jobs:
                 if not self._is_terminal_status(job.status):
                     transition_job_status(
@@ -743,6 +794,29 @@ class JobService:
     def _is_terminal_status(self, status: JobStatus) -> bool:
         return status in TERMINAL_JOB_STATUSES
 
+    async def _persist_terminal_turn_status(
+        self,
+        job: JobState,
+        status: str,
+    ) -> bool:
+        writer = self._terminal_status_writer
+        if writer is None:
+            return False
+        try:
+            return await asyncio.to_thread(
+                writer.mark_turn_terminal_status,
+                session_id=job.session_id,
+                turn_id=job.job_id,
+                status=status,
+            )
+        except Exception:
+            logger.exception(
+                "Job 终态未能同步到持久化 Turn: job_id=%s status=%s",
+                job.job_id,
+                status,
+            )
+            return False
+
     def _start_job_task(self, job: JobState) -> None:
         loop = asyncio.get_running_loop()
 
@@ -763,7 +837,7 @@ class JobService:
                         self._bus.publish(
                             job_id=job.job_id,
                             event_type=EventType.JOB_FAILED,
-                            payload={"error": str(e)},
+                            payload={"session_id": job.session_id, "error": str(e)},
                             agent_id="job_service",
                         )
                     )
@@ -835,21 +909,104 @@ class JobService:
                     == finished_job.job_id
                 ):
                     self._session_current_job.pop(finished_job.session_id, None)
+            # 终态 Job 没有后继消息时也要把内存队列的空状态落盘。否则
+            # 上一轮已经取出并失败的队首可能在重启后再次被恢复。
+            await self._pending_requests.persist_current(finished_job.session_id)
             return
 
+        stale_internal_jobs: list[JobState] = []
         async with self._dispatch_lock:
             current_job_id = self._session_current_job.get(finished_job.session_id)
             if current_job_id != finished_job.job_id:
                 return
 
+            if finished_job.status in {JobStatus.failed, JobStatus.timed_out}:
+                stale_internal_jobs = self._discard_stale_terminal_followups(
+                    finished_job.session_id,
+                    parent_job_id=finished_job.job_id,
+                )
+
             if not self._pending_queue.peek_head(finished_job.session_id):
                 self._session_current_job.pop(finished_job.session_id, None)
-                return
+                should_dispatch = False
+            else:
+                should_dispatch = True
+
+        await self._record_discarded_stale_followups(
+            finished_job.session_id,
+            stale_internal_jobs,
+            parent_job_id=finished_job.job_id,
+        )
+
+        if not should_dispatch:
+            await self._pending_requests.persist_current(finished_job.session_id)
+            return
         await self._start_next_pending(
             finished_job.session_id,
             boundary=finished_job.delivery_boundary or "after_turn",
             tool_result_available=False,
         )
+
+    def _discard_stale_terminal_followups(
+        self,
+        session_id: str,
+        *,
+        parent_job_id: str,
+    ) -> list[JobState]:
+        """失败后丢弃尚未执行的终端收尾提醒，避免创建孤立 continuation stream。"""
+        stale_jobs: list[JobState] = []
+        for job_id in tuple(self._pending_queue.ids(session_id)):
+            job = self._jobs.get(job_id)
+            if job is None or not self._is_terminal_followup(job):
+                continue
+            self._pending_queue.remove(session_id, job_id)
+            transition_job_status(
+                job,
+                JobStatus.failed,
+                error_message=(
+                    "父任务已失败，未执行的终端收尾消息已丢弃: "
+                    f"parent_job_id={parent_job_id}"
+                ),
+            )
+            job.current_step = None
+            stale_jobs.append(job)
+        return stale_jobs
+
+    @staticmethod
+    def _is_terminal_followup(job: JobState) -> bool:
+        return (
+            job.status == JobStatus.queued
+            and job.message_metadata.get("internal") is True
+            and job.message_metadata.get("structured_prompt_kind")
+            == "terminal_execution_completed"
+        )
+
+    async def _record_discarded_stale_followups(
+        self,
+        session_id: str,
+        jobs: list[JobState],
+        *,
+        parent_job_id: str,
+    ) -> None:
+        if not jobs:
+            return
+        await self._pending_requests.persist(
+            await self._pending_requests.list(session_id)
+        )
+        for job in jobs:
+            await self._persist_terminal_turn_status(job, "failed")
+            if self._bus is not None:
+                await self._bus.publish(
+                    job_id=job.job_id,
+                    event_type=EventType.JOB_FAILED,
+                    payload={
+                        "session_id": session_id,
+                        "code": "stale_internal_followup",
+                        "error": job.error_message,
+                        "parent_job_id": parent_job_id,
+                    },
+                    agent_id="job_service",
+                )
 
     async def _run_job_background(self, job_id: str, session_id: str, message: str):
         job = self._jobs[job_id]
@@ -861,9 +1018,13 @@ class JobService:
             job.agent_id,
             len(message or ""),
         )
+        heartbeat_task: asyncio.Task[None] | None = None
+        startup_ready = asyncio.Event()
 
         try:
             transition_job_status(job, JobStatus.running)
+            job.progress = max(job.progress, 1)
+            job.current_step = "agent_execution"
 
             if self._bus is not None:
                 await self._bus.publish(
@@ -881,7 +1042,7 @@ class JobService:
                     agent_id="job_service",
                 )
 
-            result = await self._job_executor.run(JobRuntimeState(
+            runtime_state = JobRuntimeState(
                 job_id=job.job_id,
                 session_id=job.session_id,
                 message=job.message,
@@ -892,16 +1053,113 @@ class JobService:
                 message_metadata=dict(job.message_metadata),
                 status=job.status,
                 progress=job.progress,
+                current_step=job.current_step,
                 error_message=job.error_message,
                 result=job.result,
                 created_at=job.created_at,
                 updated_at=job.updated_at,
                 ended_at=job.ended_at,
                 task=job.task,
-            ))
+            )
+
+            def report_progress(step: str) -> None:
+                if job.status in TERMINAL_JOB_STATUSES:
+                    return
+                normalized_step = step.strip()
+                if not normalized_step:
+                    raise ValueError("Job 进度事件缺少 current_step")
+                now = datetime.now()  # noqa: DTZ005
+                runtime_state.progress = min(99, max(runtime_state.progress + 1, 1))
+                runtime_state.current_step = normalized_step
+                runtime_state.updated_at = now
+                job.progress = max(job.progress, runtime_state.progress)
+                job.current_step = normalized_step
+                job.updated_at = now
+                # agent_start 只是 AgentExecutionService 已进入执行函数的通知，
+                # 此时 runtime/checkpoint/provider 仍可能尚未真正推进。只有首个
+                # 可观察的模型或工具事件到达后，才算通过 Job 启动 watchdog。
+                if (
+                    normalized_step == "agent_loop_ready"
+                    or normalized_step == "model"
+                    or normalized_step == "model_failed"
+                    or normalized_step.startswith("tool:")
+                ):
+                    startup_ready.set()
+
+            runtime_state.progress_reporter = report_progress
+            heartbeat_task = asyncio.create_task(
+                self._touch_active_job(job, runtime_state),
+            )
+
+            execution_task = asyncio.create_task(
+                self._job_executor.run(runtime_state),
+                context=contextvars.Context(),
+            )
+            timeout_task = asyncio.create_task(
+                asyncio.sleep(self._job_timeout_seconds),
+                context=contextvars.Context(),
+            )
+            startup_timeout_task = asyncio.create_task(
+                asyncio.sleep(self._job_startup_timeout_seconds),
+                context=contextvars.Context(),
+            )
+            startup_ready_task = asyncio.create_task(startup_ready.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {execution_task, timeout_task, startup_timeout_task, startup_ready_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if execution_task in done:
+                    result = execution_task.result()
+                elif startup_timeout_task in done:
+                    execution_task.cancel("job_startup_timeout")
+                    await asyncio.gather(execution_task, return_exceptions=True)
+                    raise JobStartupTimeoutError(
+                        "Job 启动超过等待 AgentLoop 的上限: "
+                        f"job_id={job.job_id}, session_id={job.session_id}, "
+                        f"timeout_seconds={self._job_startup_timeout_seconds:g}"
+                    )
+                elif startup_ready_task in done:
+                    startup_timeout_task.cancel()
+                    await asyncio.gather(startup_timeout_task, return_exceptions=True)
+                    done, _ = await asyncio.wait(
+                        {execution_task, timeout_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if execution_task in done:
+                        result = execution_task.result()
+                    else:
+                        result = await self._await_finalizing_execution(
+                            execution_task,
+                            job,
+                        )
+                else:
+                    execution_task.cancel("job_timeout")
+                    await asyncio.gather(execution_task, return_exceptions=True)
+                    raise JobExecutionTimeoutError(
+                        "Job 执行超过总超时上限: "
+                        f"job_id={job.job_id}, session_id={job.session_id}, "
+                        f"timeout_seconds={self._job_timeout_seconds:g}"
+                    )
+            except asyncio.CancelledError:
+                if not execution_task.done():
+                    execution_task.cancel()
+                await asyncio.gather(execution_task, return_exceptions=True)
+                raise
+            finally:
+                timeout_task.cancel()
+                startup_timeout_task.cancel()
+                startup_ready_task.cancel()
+                await asyncio.gather(
+                    timeout_task,
+                    startup_timeout_task,
+                    startup_ready_task,
+                    return_exceptions=True,
+                )
             job.result = result
             transition_job_status(job, JobStatus.completed)
             job.progress = 100
+            job.current_step = None
         except asyncio.CancelledError:
             if job.status == JobStatus.paused:
                 transition_job_status(
@@ -915,24 +1173,136 @@ class JobService:
                     JobStatus.cancelled,
                     error_message=job.cancellation_reason or "任务被用户取消",
                 )
+                await self._persist_terminal_turn_status(job, "cancelled")
                 if self._bus is not None:
                     await self._bus.publish(
                         job_id=job_id,
                         event_type=EventType.JOB_CANCELLED,
-                        payload={},
+                        payload={"session_id": session_id},
                         agent_id="job_service",
                     )
-        except Exception as error:  # noqa: BLE001
-            transition_job_status(job, JobStatus.failed, error_message=str(error))
+        except (JobExecutionTimeoutError, JobStartupTimeoutError) as error:
+            transition_job_status(
+                job,
+                JobStatus.timed_out,
+                error_message=str(error),
+            )
+            job.current_step = None
+            await self._persist_terminal_turn_status(job, "timed_out")
             if self._bus is not None:
                 await self._bus.publish(
                     job_id=job_id,
                     event_type=EventType.JOB_FAILED,
-                    payload={"error": str(error)},
+                    payload={
+                        "session_id": session_id,
+                        "error": str(error),
+                        "code": (
+                            "job_startup_timeout"
+                            if isinstance(error, JobStartupTimeoutError)
+                            else "job_timeout"
+                        ),
+                        "timeout_seconds": (
+                            self._job_startup_timeout_seconds
+                            if isinstance(error, JobStartupTimeoutError)
+                            else self._job_timeout_seconds
+                        ),
+                    },
+                    agent_id="job_service",
+                )
+        except Exception as error:  # noqa: BLE001
+            transition_job_status(job, JobStatus.failed, error_message=str(error))
+            await self._persist_terminal_turn_status(job, "failed")
+            if self._bus is not None:
+                payload: dict[str, object] = {"error": str(error)}
+                payload["session_id"] = session_id
+                error_code = getattr(error, "code", None)
+                if isinstance(error_code, str) and error_code:
+                    payload["code"] = error_code
+                error_reason = getattr(error, "reason", None)
+                if (
+                    "code" not in payload
+                    and isinstance(error_reason, str)
+                    and error_reason
+                ):
+                    payload["code"] = error_reason
+                await self._bus.publish(
+                    job_id=job_id,
+                    event_type=EventType.JOB_FAILED,
+                    payload=payload,
                     agent_id="job_service",
                 )
         finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
             await self._schedule_next_job_if_needed(job)
+
+    async def _await_finalizing_execution(
+        self,
+        execution_task: asyncio.Task,
+        job: JobState,
+    ) -> object:
+        """给已启动 AgentLoop 的任务一个有限收尾窗口。
+
+        工具或模型阶段的最后一个事件可能正处于结果提交边界，而进度字段
+        可能还没有来得及从上一个阶段刷新。总预算到点直接 cancel 会把已
+        开始的浏览器/终端操作误报成 job_timeout，导致用户已看到的工具结果
+        和最终回复一起丢失。调用方只在 AgentLoop 已报告启动进展后进入这里，
+        因此这里不再依赖容易滞后的 current_step；收尾窗口仍然有硬上限，
+        不会把真正卡住的任务变成无限运行。
+        """
+        current_step = job.current_step
+        if current_step == "model":
+            finalizing_step = "model_finalizing"
+        elif isinstance(current_step, str) and current_step.startswith("tool:"):
+            finalizing_step = "tool_finalizing"
+        else:
+            finalizing_step = "execution_finalizing"
+        job.current_step = finalizing_step
+        job.updated_at = datetime.now()  # noqa: DTZ005
+        logger.warning(
+            "[job_service] total timeout reached; waiting for execution finalization: "
+            "job_id=%s current_step=%s grace_seconds=%s",
+            job.job_id,
+            current_step,
+            self._job_finalization_grace_seconds,
+        )
+        done, _ = await asyncio.wait(
+            {execution_task},
+            timeout=self._job_finalization_grace_seconds,
+        )
+        if execution_task in done:
+            return execution_task.result()
+
+        execution_task.cancel("job_timeout")
+        await asyncio.gather(execution_task, return_exceptions=True)
+        raise JobExecutionTimeoutError(
+            "Job 执行超过总超时上限（含最终响应收尾窗口）: "
+            f"job_id={job.job_id}, session_id={job.session_id}, "
+            f"timeout_seconds={self._job_timeout_seconds:g}, "
+            f"finalization_grace_seconds={self._job_finalization_grace_seconds:g}"
+        )
+
+    @staticmethod
+    async def _touch_active_job(
+        job: JobState,
+        runtime_state: JobRuntimeState,
+    ) -> None:
+        """在执行器没有事件时仍更新可观察的 Job 活跃时间。"""
+        while True:
+            await asyncio.sleep(1)
+            if job.status not in {
+                JobStatus.running,
+                JobStatus.streaming,
+                JobStatus.waiting_input,
+                JobStatus.interrupt_pending,
+                JobStatus.cancelling,
+            }:
+                return
+            job.progress = max(job.progress, runtime_state.progress)
+            if runtime_state.current_step is not None:
+                job.current_step = runtime_state.current_step
+            job.updated_at = datetime.now()  # noqa: DTZ005
 
     async def _ensure_pending_loaded(self, session_id: str) -> None:
         async with self._pending_restore_lock:
@@ -1031,11 +1401,22 @@ class JobService:
         boundary: QueueBoundary = "idle",
         tool_result_available: bool = True,
     ) -> bool:
+        stale_internal_jobs: list[JobState] = []
+        stale_parent_job_id: str | None = None
         async with self._dispatch_lock:
             current_job_id = self._session_current_job.get(session_id)
             current_job = self._jobs.get(current_job_id) if current_job_id else None
             if current_job is not None and not self._is_terminal_status(current_job.status):
                 return False
+            if current_job is not None and current_job.status in {
+                JobStatus.failed,
+                JobStatus.timed_out,
+            }:
+                stale_parent_job_id = current_job.job_id
+                stale_internal_jobs = self._discard_stale_terminal_followups(
+                    session_id,
+                    parent_job_id=current_job.job_id,
+                )
             entry = self._pending_queue.take_head(
                 session_id,
                 boundary,
@@ -1043,18 +1424,31 @@ class JobService:
             )
             if entry is None:
                 self._session_current_job.pop(session_id, None)
-                return False
-            next_job = self._jobs.get(entry.job_id)
-            if next_job is None:
-                raise RuntimeError(
-                    f"FIFO 队列引用不存在的 Job: session_id={session_id}, job_id={entry.job_id}"
-                )
-            self._session_current_job[session_id] = next_job.job_id
-            next_job.delivery_boundary = entry.last_boundary
-            transition_job_status(next_job, JobStatus.running)
-        await self._pending_requests.persist(
-            await self._pending_requests.list(session_id)
+                next_job = None
+            else:
+                next_job = self._jobs.get(entry.job_id)
+                if next_job is None:
+                    raise RuntimeError(
+                        "FIFO 队列引用不存在的 Job: "
+                        f"session_id={session_id}, job_id={entry.job_id}"
+                    )
+                self._session_current_job[session_id] = next_job.job_id
+                next_job.delivery_policy = entry.delivery_policy
+                next_job.delivery_boundary = entry.last_boundary
+                transition_job_status(next_job, JobStatus.running)
+        await self._record_discarded_stale_followups(
+            session_id,
+            stale_internal_jobs,
+            parent_job_id=stale_parent_job_id or "unknown",
         )
+        if next_job is None:
+            await self._pending_requests.persist_current(session_id)
+            return False
+        # 队首已经从内存 FIFO 取出后立即覆盖磁盘快照。否则进程重启会把
+        # 已经启动、甚至已经失败的 Job 当成新的 queued 请求再次恢复。
+        # 必须在创建后台任务之前完成落盘，避免进程恰好在两步之间退出而
+        # 把同一个 Job 恢复成第二个并发执行根。
+        await self._pending_requests.persist_current(session_id)
         self._start_job_task(next_job)
         return True
 

@@ -21,7 +21,13 @@ def case(request: pytest.FixtureRequest) -> EditFileScenarioCase:
 
 @pytest.fixture
 def asset_root() -> Path:
-    return Path.cwd() / "asset" / "model_tool_test_workspace"
+    return (
+        Path.cwd()
+        / "tests"
+        / "fixtures"
+        / "workspaces"
+        / "model_tool_test_workspace"
+    )
 
 
 @pytest.fixture

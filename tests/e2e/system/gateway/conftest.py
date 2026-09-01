@@ -70,6 +70,12 @@ def keep_docker_runtime(request: pytest.FixtureRequest) -> bool:
 
 
 def _copy_default_workspace(target: Path) -> None:
-    source = Path.cwd().resolve() / "asset" / "default_test_workspace"
+    source = (
+        Path.cwd().resolve()
+        / "tests"
+        / "fixtures"
+        / "workspaces"
+        / "default_test_workspace"
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, target)

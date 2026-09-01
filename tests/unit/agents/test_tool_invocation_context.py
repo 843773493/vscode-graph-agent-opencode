@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,76 @@ async def test_tool_local_timeout_returns_error_without_cancelling_turn():
     assert result.status == "error"
     assert "局部超时" in result.content
     assert scope.cancellation_signal.is_cancelled is False
+
+
+@pytest.mark.asyncio
+async def test_transport_timeout_returns_recoverable_tool_result_without_aborting_turn():
+    context = ToolInvocationContext()
+    middleware = ToolInvocationContextMiddleware(context)
+    scope = TurnExecutionScope("stream_transport_timeout")
+
+    async def handler(_request_value):
+        raise TimeoutError("timed out")
+
+    from app.core.turn_execution_scope import (
+        reset_current_turn_execution_scope,
+        set_current_turn_execution_scope,
+    )
+
+    token = set_current_turn_execution_scope(scope)
+    try:
+        result = await middleware.awrap_tool_call(
+            _request("call_transport_timeout"),
+            handler,
+        )
+    finally:
+        reset_current_turn_execution_scope(token)
+        await scope.close()
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert result.tool_call_id == "call_transport_timeout"
+    payload = json.loads(result.content)
+    assert payload == {
+        "status": "error",
+        "code": "tool_execution_timeout",
+        "error": (
+            "工具执行超时: tool=test_tool, call_id=call_transport_timeout；"
+            "下游操作结果未确认: timed out"
+        ),
+        "retryable": True,
+        "recovery": "check_tool_state_before_retry",
+    }
+    assert scope.cancellation_signal.is_cancelled is False
+
+
+@pytest.mark.asyncio
+async def test_parallel_transport_timeouts_still_emit_one_result_per_tool_call():
+    context = ToolInvocationContext()
+    middleware = ToolInvocationContextMiddleware(context)
+
+    async def invoke(tool_call_id: str):
+        async def handler(_request_value):
+            raise TimeoutError("terminal manager timed out")
+
+        return await middleware.awrap_tool_call(_request(tool_call_id), handler)
+
+    results = await asyncio.gather(
+        invoke("call_timeout_a"),
+        invoke("call_timeout_b"),
+        invoke("call_timeout_c"),
+    )
+
+    assert [result.tool_call_id for result in results] == [
+        "call_timeout_a",
+        "call_timeout_b",
+        "call_timeout_c",
+    ]
+    assert all(result.status == "error" for result in results)
+    assert all(
+        json.loads(result.content)["code"] == "tool_execution_timeout"
+        for result in results
+    )
 
 
 @pytest.mark.asyncio

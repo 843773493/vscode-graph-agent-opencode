@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.types import Send
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
@@ -64,6 +65,62 @@ async def test_persist_user_message_checkpoint_is_idempotent(
     assert [item.response_metadata["message_id"] for item in messages] == [
         "msg_user_checkpoint"
     ]
+
+
+@pytest.mark.asyncio
+async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_id = "sess_checkpoint_stale_tasks"
+    session_bundle_factory(tmp_path, session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    config = build_checkpoint_config(session_id)
+    stale_send = Send(
+        "tools",
+        {
+            "name": "exec_command",
+            "id": "call_stale",
+            "args": {"cmd": "pwd"},
+        },
+    )
+    await saver.aput(
+        config,
+        {
+            "channel_values": {
+                "messages": [],
+                "__pregel_tasks": [stale_send],
+            },
+            "channel_versions": {"messages": 1, "__pregel_tasks": 2},
+            "updated_channels": ["__pregel_tasks"],
+            "pending_sends": [stale_send],
+            "id": "ckpt-stale-task",
+        },
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": 1, "__pregel_tasks": 2},
+    )
+    message = HumanMessage(
+        content="失败后重新开始",
+        response_metadata={
+            "message_id": "msg_after_stale_task",
+            "created_at": MESSAGE_TIME.isoformat(),
+            "updated_at": MESSAGE_TIME.isoformat(),
+        },
+    )
+
+    assert persist_user_message_checkpoint(
+        checkpointer=saver,
+        session_id=session_id,
+        message=message,
+    ) is True
+
+    latest = await saver.aget_tuple(config)
+    assert latest is not None
+    checkpoint = latest.checkpoint
+    assert "__pregel_tasks" not in checkpoint["channel_values"]
+    assert "__pregel_tasks" not in checkpoint["channel_versions"]
+    assert checkpoint["updated_channels"] == ["messages"]
+    assert checkpoint["pending_sends"] == []
 
 
 @pytest.mark.asyncio

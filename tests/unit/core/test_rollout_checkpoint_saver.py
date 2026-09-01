@@ -16,8 +16,11 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.rollout_append_writer import RolloutAppendWriter
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.rollout_context_reader import RolloutContextReader
-from app.core.rollout_storage import RolloutStorage
+from app.core.rollout_storage import RolloutStorage, _RolloutFileLock
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.services.business.system_reminder_checkpoint_service import (
+    append_system_reminder_checkpoint,
+)
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
 
@@ -55,6 +58,50 @@ def _turn(turn_id: str, suffix: str) -> list[object]:
     )
     final = AIMessage(content=f"最终响应 {suffix}", id=f"final-{suffix}")
     return [user, call, result, final]
+
+
+def test_rollout_file_lock_times_out_instead_of_waiting_forever(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fcntl
+
+    lock_path = tmp_path / ".rollout.write.lock"
+    original_flock = fcntl.flock
+
+    def reject_nonblocking_lock(fd: int, operation: int) -> None:
+        if operation & fcntl.LOCK_NB:
+            raise BlockingIOError("test lock is held")
+        original_flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, "flock", reject_nonblocking_lock)
+    lock = _RolloutFileLock(
+        lock_path,
+        exclusive=True,
+        timeout_seconds=0.01,
+    )
+
+    with pytest.raises(TimeoutError, match="rollout 文件锁获取超时"):
+        lock.acquire()
+
+
+def test_rollout_history_preserves_more_than_32_thinking_blocks() -> None:
+    message = AIMessage(
+        id="assistant-many-thinking-blocks",
+        content=[
+            {
+                "type": "reasoning",
+                "id": f"reasoning-{index}",
+                "reasoning": f"思考块 {index}",
+            }
+            for index in range(33)
+        ],
+    )
+
+    blocks = RolloutHistoryReader._thinking_blocks([message])
+
+    assert len(blocks) == 33
+    assert blocks[-1].text == "思考块 32"
 
 
 def test_rollout_preserves_langchain_invalid_tool_calls_field(
@@ -407,7 +454,7 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
     session_bundle_factory(sessions_dir, "session_1")
     saver = RolloutCheckpointSaver(sessions_dir)
     messages = _turn("turn-1", "001")
-    config = saver.put(
+    checkpoint_config = saver.put(
         build_checkpoint_config("session_1"),
         _checkpoint("cp-1", messages, counter=3, task_state=None),
         {"source": "unit", "step": 1},
@@ -419,7 +466,7 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
         final_message_id="final-001",
     )
 
-    restored = saver.get_tuple(config)
+    restored = saver.get_tuple(checkpoint_config)
     assert restored is not None
     assert [
         message.id for message in restored.checkpoint["channel_values"]["messages"]
@@ -492,6 +539,101 @@ def test_failed_turn_status_survives_history_reload(
     )
     assert page.items[0].turn_id == "failed-turn"
     assert page.items[0].status.value == "failed"
+
+
+def test_hidden_system_reminder_does_not_create_empty_chat_turn(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    user = HumanMessage(
+        content="带工具的任务",
+        id="user-job-1",
+        response_metadata={
+            "message_metadata": {"turn_id": "job-1", "job_id": "job-1"}
+        },
+    )
+    saver.put(
+        build_checkpoint_config("session_1"),
+        _checkpoint("cp-1", [user]),
+        {"source": "test"},
+        {"messages": "1"},
+    )
+
+    assert append_system_reminder_checkpoint(
+        checkpointer=saver,
+        session_id="session_1",
+        reminder="任务已超时，请根据已完成结果明确报告失败。",
+        response_metadata={"source": "job_timeout"},
+        checkpoint_source="job_timeout",
+    ) is True
+
+    with sqlite3.connect(
+        get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+        / "rollout"
+        / "index.sqlite"
+    ) as connection:
+        turns = connection.execute(
+            "SELECT turn_id, status FROM turns ORDER BY turn_ordinal"
+        ).fetchall()
+        reminder = connection.execute(
+            "SELECT turn_id, visibility FROM messages WHERE role = 'user' AND message_id != ?",
+            ("user-job-1",),
+        ).fetchone()
+
+    assert turns == [("job-1", "running")]
+    assert reminder is not None
+    assert reminder[0].startswith("internal-")
+    assert reminder[1] == "internal"
+
+    assert saver.mark_turn_terminal_status(
+        session_id="session_1",
+        turn_id="job-1",
+        status="failed",
+    ) is True
+    page = RolloutHistoryReader(
+        RolloutContextReader(RolloutStorage(sessions_dir))
+    ).load(
+        "session_1",
+        TurnHistoryLoadRequest(direction="tail", turns=8),
+    )
+    assert [item.turn_id for item in page.items] == ["job-1"]
+    assert page.items[0].status.value == "failed"
+
+
+def test_legacy_hidden_reminder_turn_is_excluded_from_history(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    legacy_reminder = HumanMessage(
+        content="<system_reminder>旧的超时提醒</system_reminder>",
+        id="legacy-reminder",
+        response_metadata={
+            "internal": True,
+            # 模拟修复前已把隐藏提醒错误写成 normal Turn 的索引形态。
+            "turn_id": "turn-legacy-reminder",
+        },
+    )
+    saver.put(
+        build_checkpoint_config("session_1"),
+        _checkpoint("cp-legacy", [legacy_reminder]),
+        {"source": "legacy-reminder"},
+        {"messages": "1"},
+    )
+
+    page = RolloutHistoryReader(
+        RolloutContextReader(RolloutStorage(sessions_dir))
+    ).load(
+        "session_1",
+        TurnHistoryLoadRequest(direction="tail", turns=8),
+    )
+
+    assert page.items == []
 
 
 def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(

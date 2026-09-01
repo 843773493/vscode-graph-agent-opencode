@@ -148,6 +148,87 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
     ]
 
 
+def test_registry_can_detach_terminal_and_browser_for_gateway_restart(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    terminal = _OrderedCloseProcess("terminal", events, 0)
+    browser = _OrderedCloseProcess("browser", events, 0)
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="workspace",
+            name="Workspace",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:8100",
+            connection_kind="local",
+            managed=True,
+        ),
+        runtime=WorkspaceRuntime(
+            service_urls={
+                "workspace_api": "http://127.0.0.1:8100",
+                "terminal_manager": "http://127.0.0.1:8101",
+                "browser_manager": "http://127.0.0.1:8102",
+            },
+            processes={
+                "terminal_manager": terminal,
+                "browser_manager": browser,
+            },
+        ),
+    )
+
+    registry.close(
+        preserve_browser_managers=True,
+        preserve_terminal_managers=True,
+    )
+
+    assert events == ["detach:browser", "detach:terminal"]
+
+
+def test_registry_can_detach_managed_workspace_backend_for_gateway_restart(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    backend = _OrderedCloseProcess("backend", events, 0)
+    terminal = _OrderedCloseProcess("terminal", events, 0)
+    browser = _OrderedCloseProcess("browser", events, 0)
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="workspace",
+            name="Workspace",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:8100",
+            connection_kind="local",
+            managed=True,
+        ),
+        runtime=WorkspaceRuntime(
+            service_urls={
+                "workspace_api": "http://127.0.0.1:8100",
+                "terminal_manager": "http://127.0.0.1:8101",
+                "browser_manager": "http://127.0.0.1:8102",
+            },
+            processes={
+                "workspace_api": backend,
+                "terminal_manager": terminal,
+                "browser_manager": browser,
+            },
+        ),
+    )
+
+    registry.close(
+        preserve_browser_managers=True,
+        preserve_terminal_managers=True,
+        preserve_workspace_backends=True,
+    )
+
+    assert events == [
+        "detach:browser",
+        "detach:terminal",
+        "detach:backend",
+    ]
+
+
 def test_registry_migrates_legacy_workspace_ids_and_active_reference(tmp_path: Path):
     storage_path = tmp_path / "gateway.json"
     local_legacy_id = "gw_0123456789ab"
@@ -263,7 +344,7 @@ def test_registry_v8_only_migrates_active_managed_workspace_as_running(
     assert registry.resolve("stopped-with-stale-url").desired_running is False
 
 
-def test_registry_persists_browser_manager_url_for_gateway_restart(
+def test_registry_persists_auxiliary_manager_urls_for_gateway_restart(
     tmp_path: Path,
 ) -> None:
     storage_path = tmp_path / "gateway.json"
@@ -277,7 +358,8 @@ def test_registry_persists_browser_manager_url_for_gateway_restart(
             connection_kind="local",
             managed=True,
             local_service_urls={
-                "browser_manager": "http://127.0.0.1:41002"
+                "terminal_manager": "http://127.0.0.1:41001",
+                "browser_manager": "http://127.0.0.1:41002",
             },
         )
     )
@@ -285,6 +367,7 @@ def test_registry_persists_browser_manager_url_for_gateway_restart(
     restored = GatewayWorkspaceRegistry(storage_path=storage_path)
 
     assert restored.resolve("gw_browser_survival").local_service_urls == {
+        "terminal_manager": "http://127.0.0.1:41001",
         "browser_manager": "http://127.0.0.1:41002"
     }
     assert restored.resolve("gw_browser_survival").desired_running is False
@@ -369,6 +452,29 @@ async def test_list_dtos_checks_workspace_health_concurrently(
     assert result[0].services["workspace_api"].health_path == "/api/v1/health"
     assert result[0].services["terminal_manager"].status == "unavailable"
     assert _ConcurrentHealthClient.peak_requests == 3
+
+
+@pytest.mark.asyncio
+async def test_list_dtos_can_skip_health_probes(
+    registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ConcurrentHealthClient.active_requests = 0
+    _ConcurrentHealthClient.peak_requests = 0
+    monkeypatch.setattr(
+        "app.gateway.registry.httpx.AsyncClient",
+        _ConcurrentHealthClient,
+    )
+
+    result = await registry.list_dtos(check_health=False)
+
+    assert [item.workspace_id for item in result] == [
+        "workspace-0",
+        "workspace-1",
+        "workspace-2",
+    ]
+    assert all(item.status == "ready" for item in result)
+    assert _ConcurrentHealthClient.peak_requests == 0
 
 
 @pytest.mark.asyncio

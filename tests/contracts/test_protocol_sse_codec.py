@@ -81,6 +81,84 @@ def test_message_stream_snapshot_preserves_tool_call_arguments() -> None:
     assert snapshot["tool_calls"][0]["arguments"] == {"command": "pwd"}
 
 
+def test_message_stream_codec_projects_internal_tool_and_model_fields() -> None:
+    encoded_delta = message_stream_to_proto(
+        {
+            "event_id": "event_tool_delta",
+            "session_id": "session_123",
+            "turn_id": "turn_123",
+            "turn_stream_id": "stream_123",
+            "event_seq": 13,
+            "type": "tool_call.delta",
+            "payload": {
+                "tool_call_id": "call_123",
+                "tool_name": "shell",
+                "arguments_delta": "{\"command\":\"pwd\"}",
+                "status": "streaming",
+            },
+        }
+    )
+    delta = message_stream_to_json(encoded_delta)["payload"]
+    assert delta["arguments_delta"] == '{"command":"pwd"}'
+    assert "status" not in delta
+
+    encoded_snapshot = message_stream_to_proto(
+        {
+            "event_id": "event_snapshot_projection",
+            "session_id": "session_123",
+            "turn_id": "turn_123",
+            "turn_stream_id": "stream_123",
+            "event_seq": 14,
+            "type": "stream.snapshot",
+            "payload": {
+                "snapshot_seq": 14,
+                "stream_status": "failed",
+                "agent_loop_status": "failed",
+                "model_calls": [
+                    {
+                        "model_call_id": "model_1",
+                        "attempt": 1,
+                        "status": "failed",
+                        "outcome": "upstream_error",
+                        "error_code": "provider_error",
+                        "message": "上游失败详情",
+                        "reason": "provider_error",
+                    }
+                ],
+                "tool_calls": [
+                    {
+                        "tool_call_id": "call_123",
+                        "tool_name": "shell",
+                        "arguments": {"command": "pwd"},
+                        "status": "completed",
+                    }
+                ],
+                "tool_executions": [
+                    {
+                        "tool_execution_id": "exec_123",
+                        "tool_call_id": "call_123",
+                        "tool_name": "shell",
+                        "status": "completed",
+                        "outcome": "success",
+                        "result": "/workspace",
+                    }
+                ],
+            },
+        }
+    )
+    snapshot = message_stream_to_json(encoded_snapshot)["payload"]
+    assert snapshot["model_calls"] == [
+        {
+            "model_call_id": "model_1",
+            "attempt": 1,
+            "status": "failed",
+            "outcome": "upstream_error",
+        }
+    ]
+    assert snapshot["tool_calls"][0]["arguments"] == {"command": "pwd"}
+    assert snapshot["tool_executions"][0]["result"] == "/workspace"
+
+
 def test_message_stream_v1_round_trip_preserves_terminal_projection() -> None:
     encoded = message_stream_to_proto(
         {
@@ -159,6 +237,7 @@ def test_message_stream_v1_round_trip_preserves_terminal_projection() -> None:
                     "scope_ref": "session",
                     "status": "unknown",
                     "outcome": "execution_lost",
+                    "completion_reason": "execution_lost",
                     "cancellable": False,
                     "resumable": False,
                     "side_effect_policy": "external",
@@ -211,5 +290,6 @@ def test_message_stream_v1_round_trip_preserves_terminal_projection() -> None:
     assert snapshot["activities"][0]["detail_available"] is False
     assert snapshot["activities"][0]["started_seq"] == 12
     assert snapshot["activities"][0]["completed_at"] == "2026-08-24T00:00:20Z"
+    assert "completion_reason" not in snapshot["activities"][0]
     assert snapshot["active_state"]["phase"] == "failed"
     assert snapshot["interrupt_state"]["fact_confirmed"] is False

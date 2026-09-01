@@ -56,13 +56,22 @@ def _load_and_validate_recorded_data() -> dict[str, object]:
     ]
     assert tool_call_parts[0]["function"]["name"] == "read_file"
     assert "{\"path\":" in tool_call_parts[0]["function"]["arguments"]
-    assert tool_call_parts[1]["function"]["arguments"] == "\"README.md\"}"
+    assert "".join(
+        part["function"]["arguments"]
+        for part in tool_call_parts
+    ) == '{"path":"README.md"}'
     assert first_payloads[-2]["choices"][0]["finish_reason"] == EXPECTED_FIRST_FINISH_REASON
 
     assert "reasoning_content" in second_deltas[0]
     assert "reasoning_content" in second_deltas[1]
-    assert second_deltas[2]["content"] == "工具调用"
-    assert second_deltas[3]["content"] == "完成"
+    assert [
+        delta["content"]
+        for delta in second_deltas
+        if "content" in delta
+    ] == [
+        "Chat Completions 会说明检查结果，",
+        "再给出 Chat Completions 可复查结论。",
+    ]
     assert second_payloads[-2]["choices"][0]["finish_reason"] == EXPECTED_SECOND_FINISH_REASON
 
     review: dict[str, object] = {
@@ -178,7 +187,9 @@ async def test_chat_replay_records_reasoning_and_tool_call_loop(
     messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")
     assert messages_response.status_code == 200, messages_response.text
     messages = messages_response.json()["data"]["items"]
-    assert last_assistant_message(messages) == "工具调用完成"
+    assert last_assistant_message(messages) == (
+        "Chat Completions 会说明检查结果，再给出 Chat Completions 可复查结论。"
+    )
     assistant_message = next(
         message for message in reversed(messages) if message.get("role") == "assistant"
     )
@@ -190,7 +201,7 @@ async def test_chat_replay_records_reasoning_and_tool_call_loop(
     )
     assert agent_state_response.status_code == 200, agent_state_response.text
     agent_state_jsonl = agent_state_response.json()["data"]["jsonl"]
-    assert "先读取 README，再根据工具结果作答。" in agent_state_jsonl
+    assert "Chat Completions 先确认要读取的文件，再检查工具返回的证据，" in agent_state_jsonl
     reasoning_deltas = [
         get_trace_payload(event).get("text", "")
         for event in events
@@ -198,8 +209,10 @@ async def test_chat_replay_records_reasoning_and_tool_call_loop(
         and get_trace_payload(event).get("kind") == "reasoning"
     ]
     assert "".join(str(text) for text in reasoning_deltas) == (
-        "先读取 README，再根据工具结果作答。"
-        "已读取 README，整理最终答复。"
+        "Chat Completions 先确认要读取的文件，再检查工具返回的证据，"
+        "确认内容和当前问题一致后，再发起一次明确的 Chat Completions 工具调用。"
+        "Chat Completions 工具已经返回，我先核对文件内容，确认结果和请求目标相符，"
+        "再整理一份 Chat Completions 可复查的最终答复。"
     )
 
     logs_response = await client.get(
@@ -233,12 +246,16 @@ async def test_chat_replay_records_reasoning_and_tool_call_loop(
     second_response = upstream_attempts[1]["response"]
     assert first_response["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "read_file"
     assert first_response["choices"][0]["message"]["reasoning_content"] == (
-        "先读取 README，再根据工具结果作答。"
+        "Chat Completions 先确认要读取的文件，再检查工具返回的证据，"
+        "确认内容和当前问题一致后，再发起一次明确的 Chat Completions 工具调用。"
     )
     assert second_response["choices"][0]["message"]["reasoning_content"] == (
-        "已读取 README，整理最终答复。"
+        "Chat Completions 工具已经返回，我先核对文件内容，确认结果和请求目标相符，"
+        "再整理一份 Chat Completions 可复查的最终答复。"
     )
-    assert second_response["choices"][0]["message"]["content"] == "工具调用完成"
+    assert second_response["choices"][0]["message"]["content"] == (
+        "Chat Completions 会说明检查结果，再给出 Chat Completions 可复查结论。"
+    )
 
     review["observed"] = {
         "session_id": session_id,
@@ -253,7 +270,8 @@ async def test_chat_replay_records_reasoning_and_tool_call_loop(
         },
         "assistant_text": assistant_message["content"],
         "agent_state_contains_reasoning": (
-            "先读取 README，再根据工具结果作答。" in agent_state_jsonl
+            "Chat Completions 先确认要读取的文件，再检查工具返回的证据，"
+            in agent_state_jsonl
         ),
         "trace_reasoning": "".join(str(text) for text in reasoning_deltas),
         "upstream": [

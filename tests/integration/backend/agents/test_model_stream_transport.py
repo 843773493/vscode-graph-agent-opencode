@@ -26,6 +26,9 @@ from app.testing.model_stream import (
 CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream.jsonc"
 CHAT_BASIC_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream_chat_basic.jsonc"
 RESPONSES_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream_responses.jsonc"
+RESPONSES_PARALLEL_TOOL_CONFIG_PATH = (
+    Path.cwd() / "configs" / "tests" / "model_stream_responses_parallel_tool.jsonc"
+)
 FIXTURE_ROOT = Path.cwd() / "tests" / "fixtures" / "model_stream"
 
 
@@ -108,6 +111,40 @@ async def _responses_reasoning_and_tool(
             if isinstance(name, str) and name not in tool_names:
                 tool_names.append(name)
     return "".join(reasoning), "".join(tool_names)
+
+
+async def _responses_parallel_tool_calls(
+    model: BoxteamOpenAIResponsesModel,
+) -> dict[str, tuple[str, str]]:
+    tool_calls: dict[str, dict[str, str]] = {}
+    async for chunk in model.astream(
+        [
+            SystemMessage(content="测试系统消息"),
+            HumanMessage(content="请并行读取 README.md 和 pyproject.toml"),
+        ]
+    ):
+        for raw_tool_call in chunk.tool_call_chunks:
+            call_id = raw_tool_call.get("id")
+            index = raw_tool_call.get("index")
+            if not isinstance(call_id, str) or not call_id:
+                raise RuntimeError(
+                    f"Responses 并发工具 chunk 缺少 call_id: chunk={raw_tool_call!r}"
+                )
+            if not isinstance(index, int):
+                raise TypeError(
+                    f"Responses 并发工具 chunk 缺少 index: chunk={raw_tool_call!r}"
+                )
+            current = tool_calls.setdefault(call_id, {"name": "", "args": ""})
+            name = raw_tool_call.get("name")
+            if isinstance(name, str):
+                current["name"] = name
+            args = raw_tool_call.get("args")
+            if isinstance(args, str):
+                current["args"] += args
+    return {
+        call_id: (tool_call["name"], tool_call["args"])
+        for call_id, tool_call in tool_calls.items()
+    }
 
 
 def _responses_model() -> BoxteamOpenAIResponsesModel:
@@ -229,7 +266,8 @@ async def test_litellm_chat_replay_parses_reasoning_and_tool_loop(
         assert first.tool_calls[0]["args"] == {"path": "README.md"}
         assert first.content[0]["type"] == "reasoning_content"
         assert first.content[0]["reasoning_content"] == (
-            "先读取 README，再根据工具结果作答。"
+            "Chat Completions 先确认要读取的文件，再检查工具返回的证据，"
+            "确认内容和当前问题一致后，再发起一次明确的 Chat Completions 工具调用。"
         )
 
         second = await _chat_tool_model().ainvoke(
@@ -244,9 +282,12 @@ async def test_litellm_chat_replay_parses_reasoning_and_tool_loop(
         )
         assert second.content[0]["type"] == "reasoning_content"
         assert second.content[0]["reasoning_content"] == (
-            "已读取 README，整理最终答复。"
+            "Chat Completions 工具已经返回，我先核对文件内容，"
+            "确认结果和请求目标相符，再整理一份 Chat Completions 可复查的最终答复。"
         )
-        assert second.content[1]["text"] == "工具调用完成"
+        assert second.content[1]["text"] == (
+            "Chat Completions 会说明检查结果，再给出 Chat Completions 可复查结论。"
+        )
         assert controller.transport.hit_counts == {0: 1, 1: 1}
     finally:
         await controller.aclose()
@@ -266,11 +307,46 @@ async def test_litellm_responses_replay_uses_real_aresponses_parser() -> None:
             )
         )
 
-        assert results == [("先读取 README，再根据工具结果作答。", "read_file")] * 12
+        assert results == [
+            (
+                (
+                    "OpenAI Responses 先确认待读取的文件，再检查工具返回的证据，"
+                    "确认内容和当前问题一致后，再发起一次明确的 OpenAI Responses 工具调用。"
+                ),
+                "read_file",
+            )
+        ] * 12
         assert controller.transport.request_urls == (
             "https://www.cctq.ai/v1/responses",
         ) * 12
         assert controller.transport.hit_counts == {0: 12}
+    finally:
+        await controller.aclose()
+
+
+@pytest.mark.asyncio
+async def test_litellm_responses_replay_preserves_interleaved_parallel_tools() -> None:
+    config = load_model_stream_config(RESPONSES_PARALLEL_TOOL_CONFIG_PATH)
+    controller = ModelStreamTransportController.install(config)
+    if controller is None:
+        raise RuntimeError("Responses parallel tool replay controller 未安装")
+    try:
+        results = await asyncio.gather(
+            *(
+                _responses_parallel_tool_calls(_responses_model())
+                for _ in range(8)
+            )
+        )
+
+        expected = {
+            "call_parallel_one": ("read_file", '{"path":"README.md"}'),
+                "call_parallel_two": ("read_file", '{"path":"test.md"}'),
+        }
+        assert results == [expected] * 8
+        assert controller.transport.request_urls == (
+            "https://www.cctq.ai/v1/responses",
+        ) * 8
+        assert controller.transport.hit_counts == {0: 8}
     finally:
         await controller.aclose()
 

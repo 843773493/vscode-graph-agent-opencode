@@ -100,6 +100,7 @@ def build_session_agent_runtime(
     tool_timeout_seconds: float | None = None,
     resource_manager: ResourceManager | None = None,
     workspace_root: Path,
+    include_team_tools: bool = False,
 ) -> Any:
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
     checkpointer = dependency_provider.get_checkpointer()
@@ -148,6 +149,7 @@ def build_session_agent_runtime(
         preferred_provider_id=preferred_provider_id,
         tool_timeout_seconds=tool_timeout_seconds,
         resource_manager=resource_manager,
+        include_team_tools=include_team_tools,
         workspace_root=workspace_root,
     )
 

@@ -13,11 +13,10 @@ function collapsedPreview(items: WorkItem[]): string {
     return "查看思考过程";
   }
   if (latest.kind === "aggregated_tool") {
-    return latest.active
-      ? `正在运行 ${latest.toolName}`
-      : latest.failed
-        ? `${latest.toolName} 执行失败`
-        : `已运行 ${latest.toolName}`;
+    if (latest.active) return `正在运行 ${latest.toolName}`;
+    if (latest.outcomeUnknown) return `${latest.toolName} 结果未知`;
+    if (latest.failed) return `${latest.toolName} 执行失败`;
+    return `已运行 ${latest.toolName}`;
   }
   const plain = latest.text.slice(0, 512)
     .replace(/```[\s\S]*?```/g, " ")
@@ -63,6 +62,10 @@ function ThinkingSection({
     }
   }, [active, items, open]);
 
+  const hasRedactedThinking = items.some(
+    (item) => item.kind === "aggregated_text" && item.redacted === true,
+  );
+
   return (
     <section className={`chat-thinking ${active ? "is-active" : "is-complete"}`}>
       <button
@@ -86,6 +89,12 @@ function ThinkingSection({
       </button>
       {open ? (
         <div ref={bodyRef} className="chat-thinking-body">
+          {hasRedactedThinking ? (
+            <div className="chat-thinking-notice" role="status">
+              <span className="codicon codicon-lock" aria-hidden="true" />
+              <span>部分思考内容已隐藏</span>
+            </div>
+          ) : null}
           {items.map((item) =>
             item.kind === "aggregated_tool" ? (
               <ToolRow key={item.id} item={item} showRawDetails={showRawDetails} />

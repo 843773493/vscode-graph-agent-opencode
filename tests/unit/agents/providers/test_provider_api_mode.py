@@ -14,7 +14,9 @@ from app.agents.providers.litellm_chat import (
     BoxteamLiteLLMChatModel,
     _StreamPartState,
 )
-from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.agents.providers.openai_responses import (
+    BoxteamOpenAIResponsesModel,
+)
 from app.agents.upstream_request_trace import (
     UpstreamRequestTraceCallback,
     begin_upstream_capture,
@@ -408,6 +410,7 @@ def test_responses_history_replays_encrypted_reasoning_without_server_id():
                 "type": "reasoning",
                 "id": "rs_server",
                 "status": "completed",
+                "content": [{"type": "reasoning_text", "text": "内部推理"}],
                 "encrypted_content": "encrypted-reasoning",
                 "summary": [],
             }
@@ -422,6 +425,89 @@ def test_responses_history_replays_encrypted_reasoning_without_server_id():
             "summary": [],
         }
     ]
+
+
+def test_responses_attachment_history_drops_reasoning_output_content():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    model = build_model_from_provider(_provider("responses"), {})
+    payload = model._responses_payload(
+        [
+            HumanMessage(content="先处理上一条请求"),
+            AIMessage(
+                content=[
+                    {
+                        "type": "reasoning",
+                        "content": [
+                            {"type": "reasoning_text", "text": "内部推理"}
+                        ],
+                        "encrypted_content": "encrypted-reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "已完成上一条请求"}
+                        ],
+                    },
+                    {"type": "text", "text": "上一条请求已完成"},
+                ],
+                response_metadata={"provider_id": "provider-test"},
+            ),
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": "请继续并查看附件"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,eA=="},
+                    },
+                ]
+            ),
+        ],
+        None,
+        {},
+    )
+
+    reasoning = next(item for item in payload["input"] if item.get("type") == "reasoning")
+    assert "content" not in reasoning
+    assert reasoning["encrypted_content"] == "encrypted-reasoning"
+    assert any(
+        item.get("type") == "message"
+        and any(
+            block.get("type") == "input_image"
+            for block in item.get("content", [])
+            if isinstance(block, dict)
+        )
+        for item in payload["input"]
+        if isinstance(item, dict)
+    )
+
+
+def test_responses_payload_final_boundary_drops_reintroduced_reasoning_content(
+    monkeypatch,
+):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    model = build_model_from_provider(_provider("responses"), {})
+    legacy_history = [
+        AIMessage(
+            content=[
+                {
+                    "type": "reasoning",
+                    "content": [
+                        {"type": "reasoning_text", "text": "旧推理"}
+                    ],
+                    "summary": [],
+                }
+            ]
+        ),
+        HumanMessage(content="继续执行只读检查"),
+    ]
+    monkeypatch.setattr(model, "_history_messages", lambda _messages: legacy_history)
+
+    payload = model._responses_payload([HumanMessage(content="当前请求")], None, {})
+
+    assert [item.get("type") for item in payload["input"]] == [
+        "reasoning",
+        "message",
+    ]
+    assert "content" not in payload["input"][0]
 
 
 def test_responses_history_drops_unportable_provider_reasoning_id():
@@ -520,6 +606,256 @@ def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
         item.get("type") == "function_call_output"
         and item.get("call_id") == "call_readme"
         for item in payload["input"]
+    )
+
+
+def test_responses_history_reconstructs_content_function_call_before_result():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    model = build_model_from_provider(_provider("responses"), {})
+    payload = model._responses_payload(
+        [
+            HumanMessage(content="读取 README"),
+            AIMessage(
+                content=[
+                    {
+                        "type": "function_call",
+                        "call_id": "call_content",
+                        "name": "read_file",
+                        "arguments": '{"path":"README.md"}',
+                    }
+                ]
+            ),
+            ToolMessage(
+                content="README 内容",
+                tool_call_id="call_content",
+                name="read_file",
+            ),
+        ],
+        None,
+        {},
+    )
+
+    assert any(
+        item.get("type") == "function_call"
+        and item.get("call_id") == "call_content"
+        for item in payload["input"]
+    )
+    assert any(
+        item.get("type") == "function_call_output"
+        and item.get("call_id") == "call_content"
+        for item in payload["input"]
+    )
+
+
+def test_responses_history_drops_unpaired_tool_result_and_allows_continuation():
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    model = build_model_from_provider(_provider("responses"), {})
+
+    payload = model._responses_payload(
+        [
+            HumanMessage(content="继续执行"),
+            ToolMessage(content="旧工具结果", tool_call_id="call_orphan"),
+            HumanMessage(content="后续消息应继续发送"),
+        ],
+        None,
+        {},
+    )
+
+    assert all(
+        item.get("type") != "function_call_output" for item in payload["input"]
+    )
+    assert any(
+        item.get("content") == "后续消息应继续发送" for item in payload["input"]
+    )
+
+
+def test_responses_history_drops_stale_unfinished_tool_segment_at_new_job_boundary():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    stale_call_id = "call_mnM0tiEs03n5IxxaST3"
+    model = build_model_from_provider(_provider("responses"), {})
+    payload = model._responses_payload(
+        [
+            HumanMessage(content="旧 job 的任务"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "read_file",
+                        "args": {"path": "parry_arena/main.gd"},
+                        "id": stale_call_id,
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            HumanMessage(content="新 job 继续执行，只读取当前工作区"),
+        ],
+        None,
+        {},
+    )
+
+    serialized = repr(payload["input"])
+    assert stale_call_id not in serialized
+    assert any(
+        item.get("content") == "新 job 继续执行，只读取当前工作区"
+        for item in payload["input"]
+    )
+
+
+def test_responses_history_drops_late_tool_result_after_job_boundary():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    stale_call_id = "call_mnM0tiEs03n5IxxaST3"
+    model = build_model_from_provider(_provider("responses"), {})
+
+    payload = model._responses_payload(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "read_file",
+                        "args": {"path": "README.md"},
+                        "id": stale_call_id,
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            HumanMessage(content="新 job 的用户消息"),
+            ToolMessage(content="旧 job 延迟到达的结果", tool_call_id=stale_call_id),
+        ],
+        None,
+        {},
+    )
+
+    serialized = repr(payload["input"])
+    assert stale_call_id not in serialized
+    assert "新 job 的用户消息" in serialized
+
+
+def test_responses_history_isolates_previous_tool_transactions_and_internal_reminder():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    stale_call_id = "call_QWLcaGAtSpzygm4gaup0JyJS"
+    model = build_model_from_provider(_provider("responses"), {})
+    payload = model._responses_payload(
+        [
+            HumanMessage(content="旧任务"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ls",
+                        "args": {"path": "parry_arena"},
+                        "id": stale_call_id,
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            ToolMessage(content="旧工具结果", tool_call_id=stale_call_id),
+            HumanMessage(
+                content=(
+                    "<system_reminder>\n"
+                    "用户主动取消旧任务。请停止当前输出。\n"
+                    "</system_reminder>"
+                ),
+                response_metadata={"internal": True},
+            ),
+            HumanMessage(content="当前任务只读取 project.godot"),
+        ],
+        None,
+        {},
+    )
+
+    serialized = repr(payload["input"])
+    assert stale_call_id not in serialized
+    assert "用户主动取消旧任务" not in serialized
+    assert any(
+        item.get("content") == "当前任务只读取 project.godot"
+        for item in payload["input"]
+    )
+
+
+def test_responses_history_recovers_from_persisted_orphan_tool_result():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    orphan_call_id = "call_EgMF1XbUORJwSX5TTOXTBmBg"
+    model = build_model_from_provider(_provider("responses"), {})
+
+    payload = model._responses_payload(
+        [
+            HumanMessage(content="历史任务"),
+            AIMessage(
+                content=["...[BoxTeam list items 已截断]"],
+                tool_calls=[],
+            ),
+            ToolMessage(
+                content="旧 job 延迟写入的 read_file 结果",
+                tool_call_id=orphan_call_id,
+                name="read_file",
+            ),
+            HumanMessage(content="新 job 继续执行"),
+        ],
+        None,
+        {},
+    )
+
+    serialized = repr(payload["input"])
+    assert orphan_call_id not in serialized
+    assert "新 job 继续执行" in serialized
+
+
+def test_responses_history_replays_image_tool_result_as_portable_text_pair():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    call_id = "call_UDf0yQNxKcvfzQMU265h0Egf"
+    model = build_model_from_provider(_provider("responses"), {})
+    payload = model._responses_payload(
+        [
+            HumanMessage(content="继续处理附件任务"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "read_file",
+                        "args": {"path": "verification.png"},
+                        "id": call_id,
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            ToolMessage(
+                content=[
+                    {
+                        "type": "image",
+                        "base64": "eA==",
+                        "mime_type": "image/png",
+                    }
+                ],
+                tool_call_id=call_id,
+                additional_kwargs={"read_file_path": "verification.png"},
+            ),
+            HumanMessage(content="继续验证，不要丢失工具配对"),
+        ],
+        None,
+        {},
+    )
+
+    call_indexes = [
+        index
+        for index, item in enumerate(payload["input"])
+        if item.get("call_id") == call_id
+    ]
+    assert len(call_indexes) == 2
+    assert payload["input"][call_indexes[0]]["type"] == "function_call"
+    output = payload["input"][call_indexes[1]]
+    assert output["type"] == "function_call_output"
+    assert output["output"] == (
+        "[工具结果包含 1 个图片媒体，路径：verification.png。"
+        "图片仍保留在会话记录中；本次 Responses 请求将其按文本占位符回放，"
+        "以兼容仅接受字符串 function_call_output 的 provider。]"
     )
 
 
@@ -746,6 +1082,104 @@ def test_responses_empty_added_summary_does_not_emit_empty_reasoning_block() -> 
     )
 
     assert chunk is None
+
+
+def test_responses_interleaved_function_call_deltas_keep_call_identity() -> None:
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-test",
+        api_key="test-key",
+        custom_llm_provider="openai",
+    )
+    part_state = _StreamPartState()
+    indexes = (-1, -1, -1)
+    events = [
+        SimpleNamespace(
+            type="response.output_item.added",
+            output_index=1,
+            item={
+                "type": "function_call",
+                "id": "fc_one",
+                "call_id": "call_one",
+                "name": "read_file",
+                "arguments": "",
+            },
+        ),
+        SimpleNamespace(
+            type="response.output_item.added",
+            output_index=2,
+            item={
+                "type": "function_call",
+                "id": "fc_two",
+                "call_id": "call_two",
+                "name": "read_file",
+                "arguments": "",
+            },
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            output_index=1,
+            item_id="fc_one",
+            delta='{"path":"README',
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            output_index=2,
+            item_id="fc_two",
+            delta='{"path":"pyproject',
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            output_index=1,
+            item_id="fc_one",
+            delta='.md"}',
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            output_index=2,
+            item_id="fc_two",
+            delta='.toml"}',
+        ),
+    ]
+
+    observed: list[tuple[str, str, int]] = []
+    observed_names: list[str | None] = []
+    arguments_by_call_id: dict[str, list[str]] = {}
+    for event in events:
+        index, output_index, sub_index, chunk = model._convert_response_event(
+            event,
+            current_index=indexes[0],
+            current_output_index=indexes[1],
+            current_sub_index=indexes[2],
+            part_state=part_state,
+            original_schema=None,
+        )
+        indexes = (index, output_index, sub_index)
+        assert chunk is not None
+        tool_chunk = chunk.message.tool_call_chunks[0]
+        call_id = tool_chunk.get("id")
+        args = tool_chunk.get("args")
+        assert isinstance(call_id, str)
+        assert isinstance(args, str)
+        observed.append((call_id, args, int(tool_chunk["index"])))
+        observed_names.append(tool_chunk.get("name"))
+        arguments_by_call_id.setdefault(call_id, []).append(args)
+
+    assert observed == [
+        ("call_one", "", 1),
+        ("call_two", "", 2),
+        ("call_one", '{"path":"README', 1),
+        ("call_two", '{"path":"pyproject', 2),
+        ("call_one", '.md"}', 1),
+        ("call_two", '.toml"}', 2),
+    ]
+    assert {
+        call_id: "".join(parts)
+        for call_id, parts in arguments_by_call_id.items()
+    } == {
+        "call_one": '{"path":"README.md"}',
+        "call_two": '{"path":"pyproject.toml"}',
+    }
+    assert observed_names == ["read_file", "read_file", None, None, None, None]
 
 
 def test_responses_upstream_trace_uses_final_payload_when_litellm_input_is_empty():

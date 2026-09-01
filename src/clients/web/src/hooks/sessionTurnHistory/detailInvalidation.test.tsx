@@ -67,8 +67,13 @@ describe("useSessionTurnHistory detail invalidation", () => {
             },
           });
         }
-        if (path.endsWith("/message-stream/snapshot")) {
-          return Response.json({ detail: "message stream not found" }, { status: 404 });
+        if (path.endsWith("/message-streams/availability")) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_availability_dirty",
+            data: {},
+          });
         }
         throw new Error(`测试收到未预期请求: ${path}`);
       },
@@ -154,8 +159,13 @@ describe("useSessionTurnHistory detail invalidation", () => {
             data: { items: [turnDetail(2)], projection_epoch: 2 },
           });
         }
-        if (path.endsWith("/message-stream/snapshot")) {
-          return Response.json({ detail: "message stream not found" }, { status: 404 });
+        if (path.endsWith("/message-streams/availability")) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_availability_future",
+            data: {},
+          });
         }
         throw new Error(`测试收到未预期请求: ${path}`);
       },
@@ -198,7 +208,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
     act(() => renderer!.unmount());
   });
 
-  test("bootstrap 返回已失效的最新 Turn 时不会重复请求详情", async () => {
+  test("bootstrap 返回旧历史位置时不会移除实时回合或重复请求", async () => {
     const apiPort = 9117;
     installWindow(apiPort);
     let currentState = appState();
@@ -265,11 +275,89 @@ describe("useSessionTurnHistory detail invalidation", () => {
 
     const timeline = currentState.turnTimelinesBySession.get(SCOPE_KEY);
     expect(historyCalls).toBe(1);
-    expect(bootstrapCalls).toBe(2);
-    expect(timeline?.orderedTurnIds).not.toContain("job_latest");
-    expect(timeline?.invalidatedTurnIds).toContain("job_latest");
-    await history!.loadTurnDetails(["job_latest"], null, true);
+    expect(bootstrapCalls).toBe(1);
+    expect(timeline?.orderedTurnIds).toContain("job_latest");
+    expect(timeline?.invalidatedTurnIds).not.toContain("job_latest");
+    act(() => renderer!.unmount());
+  });
+
+  test("详情返回 stale_turn_reference 后登记失效且不重复请求", async () => {
+    const apiPort = 9118;
+    installWindow(apiPort);
+    let currentState = appState();
+    let history: ReturnType<typeof useSessionTurnHistory> | null = null;
+    let historyCalls = 0;
+    let bootstrapCalls = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const path = new URL(
+          String(args[0]),
+          `http://127.0.0.1:${apiPort}`,
+        ).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({ data: { token: "turn-history-stale-detail-token" } });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
+          bootstrapCalls += 1;
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: `req_bootstrap_stale_detail_${bootstrapCalls}`,
+            data: { ...bootstrap("ready", 1), latest_turn: null },
+          });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          historyCalls += 1;
+          return Response.json(
+            {
+              detail: {
+                code: "stale_turn_reference",
+                session_id: SESSION_ID,
+                turn_ids: ["job_latest"],
+                message: "Turn 已不属于当前上下文视图",
+              },
+            },
+            { status: 409 },
+          );
+        }
+        throw new Error(`测试收到未预期请求: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    function Harness(): React.ReactNode {
+      history = useSessionTurnHistory({
+        apiPort,
+        sessionId: SESSION_ID,
+        workspaceId: WORKSPACE_ID,
+        sessionCacheKey: SCOPE_KEY,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
+        reloadNonce: 0,
+        setState: (update) => {
+          currentState = typeof update === "function" ? update(currentState) : update;
+        },
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+      await wait(30);
+    });
+    expect(bootstrapCalls).toBe(1);
+
+    await act(async () => {
+      await history!.loadTurnDetails(["job_latest"]);
+      await wait(40);
+    });
     expect(historyCalls).toBe(1);
+
+    await act(async () => {
+      await history!.loadTurnDetails(["job_latest"]);
+    });
+    expect(historyCalls).toBe(1);
+    expect(bootstrapCalls).toBe(2);
     act(() => renderer!.unmount());
   });
 

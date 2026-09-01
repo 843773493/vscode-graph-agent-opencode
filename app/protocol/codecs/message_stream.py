@@ -201,6 +201,10 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
         normalized["operation"] = enum_maps["operation"].get(
             normalized["operation"], normalized["operation"]
         )
+    # TODO: 公共 message.v1 schema 增加这些字段后再移除该边界投影。
+    # status 属于内部 tool-call 聚合状态，ToolCallDelta 只承载参数增量。
+    if event_type == "tool_call.delta":
+        normalized.pop("status", None)
     if event_type == "tool.completed" and isinstance(normalized.get("status"), str):
         if normalized["status"] == "outcome_unknown":
             normalized["status"] = "completed"
@@ -213,6 +217,9 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
             normalized["outcome"], normalized["outcome"]
         )
     if event_type.startswith("activity."):
+        # Activity 的完成原因属于内部诊断字段，message.v1 公共 Activity
+        # 尚未声明该字段，不能把它交给严格 protobuf 解析。
+        normalized.pop("completion_reason", None)
         if isinstance(normalized.get("status"), str):
             normalized["status"] = enum_maps["activity_status"].get(
                 normalized["status"], normalized["status"]
@@ -230,6 +237,38 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                 snapshot["stream_status"] = enum_maps["status"].get(
                     snapshot["stream_status"], snapshot["stream_status"]
                 )
+            failure = snapshot.get("failure")
+            if isinstance(failure, dict):
+                # model.failed 事件历史上会把内部模型错误暂存到顶层
+                # failure；公共快照这里实际要求的是 StreamFailure，不能
+                # 把 model_call_id、attempt 等内部字段直接交给 protobuf。
+                public_failure = {
+                    key: failure[key]
+                    for key in (
+                        "code",
+                        "message",
+                        "after_interrupt_requested",
+                        "resumable",
+                    )
+                    if key in failure
+                }
+                if "code" not in public_failure:
+                    error_code = failure.get("error_code")
+                    public_failure["code"] = (
+                        error_code
+                        if isinstance(error_code, str) and error_code
+                        else "model_error"
+                    )
+                if "message" not in public_failure:
+                    public_failure["message"] = str(
+                        failure.get("error_code") or "模型调用失败"
+                    )
+                snapshot["failure"] = public_failure
+            elif failure is not None:
+                snapshot["failure"] = {
+                    "code": "invalid_snapshot_failure",
+                    "message": "消息流快照中的失败详情格式无效",
+                }
             for execution in snapshot.get("tool_executions", []):
                 if (
                     isinstance(execution, dict)
@@ -245,8 +284,26 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                     execution["outcome"] = enum_maps["outcome_tool"].get(
                         execution["outcome"], execution["outcome"]
                     )
+            # TODO: ModelCallSnapshot 只公开生命周期和结果状态；错误详情由
+            # StreamFailure 承载，不能把 ModelFailed 的内部字段泄漏进 snapshot。
+            for model_call in snapshot.get("model_calls", []):
+                if isinstance(model_call, dict):
+                    model_call.pop("error_code", None)
+                    model_call.pop("message", None)
+                    # reason 是内部完成/重试诊断字段，公共 schema 使用
+                    # completion_reason，不能把两者混写后交给严格 protobuf 解析。
+                    model_call.pop("reason", None)
+            for tool_call in snapshot.get("tool_calls", []):
+                if isinstance(tool_call, dict):
+                    # tool-call 聚合会保留旧版本的内部错误详情，但公共
+                    # ToolCall 没有 error 字段；终态 StreamFailure 承载对用户
+                    # 可见的失败原因，不能让旧字段把整个 snapshot 编码成 500。
+                    tool_call.pop("error", None)
             for activity in snapshot.get("activities", []):
                 if isinstance(activity, dict):
+                    # Activity 的完成原因属于内部诊断字段，公共快照只投影
+                    # schema 已声明的生命周期、结果和时间字段。
+                    activity.pop("completion_reason", None)
                     if isinstance(activity.get("status"), str):
                         activity["status"] = enum_maps["activity_status"].get(
                             activity["status"], activity["status"]

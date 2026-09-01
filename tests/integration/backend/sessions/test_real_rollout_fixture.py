@@ -34,7 +34,7 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
     )
     workspace_root = prepare_default_test_workspace(
         workspace_root=output_root / "workspace",
-        template_root=project_root / "asset" / "custom_tool_test_workspace",
+        template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
     return str(workspace_root)
@@ -121,7 +121,7 @@ def _advance_to_64_cursor(
         REAL_SESSION_ID,
         TurnHistoryLoadRequest(direction="before", cursor=cursor),
     )
-    assert [item.ordinal for item in first.items] == [124, 125, 126, 127]
+    assert [item.ordinal for item in first.items] == [125, 126, 127]
     second = reader.load(
         REAL_SESSION_ID,
         TurnHistoryLoadRequest(
@@ -130,7 +130,7 @@ def _advance_to_64_cursor(
             turns=16,
         ),
     )
-    assert [item.ordinal for item in second.items] == list(range(108, 124))
+    assert [item.ordinal for item in second.items] == list(range(109, 125))
     assert second.next_cursor is not None
     return second.next_cursor
 
@@ -258,7 +258,10 @@ def test_real_128_turn_rollout_has_complete_indexed_projection_and_latency(
     )
 
     reader = _reader(real_rollout_workspace)
-    tail = reader.load(REAL_SESSION_ID, TurnHistoryLoadRequest(direction="tail"))
+    tail = reader.load(
+        REAL_SESSION_ID,
+        TurnHistoryLoadRequest(direction="tail", turns=1),
+    )
     assert [item.ordinal for item in tail.items] == [128]
     assert tail.items[0].final_response
     assert tail.items[0].tool_summary

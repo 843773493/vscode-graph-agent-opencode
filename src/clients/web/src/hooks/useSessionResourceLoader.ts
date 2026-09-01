@@ -3,6 +3,8 @@ import {
   controlSessionResource as apiControlSessionResource,
   getSessionResources,
 } from "../api";
+import { HttpRequestError } from "../api";
+import { ensureGatewayUserAccess } from "../gatewayApi";
 import type {
   Session,
   SessionResourceAction,
@@ -14,6 +16,14 @@ import {
   statusLabel,
 } from "../state/resourceDisplay";
 import type { RefreshOptions, SetAppState } from "./contentViewLoaderTypes";
+
+function isExpiredGatewayUserAccess(error: unknown): error is HttpRequestError {
+  return (
+    error instanceof HttpRequestError
+    && error.status === 401
+    && error.detail === "user_session_required"
+  );
+}
 
 export function useSessionResourceLoader({
   apiPort,
@@ -27,6 +37,7 @@ export function useSessionResourceLoader({
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
+  const userAccessRecoveryRef = useRef<Promise<Awaited<ReturnType<typeof ensureGatewayUserAccess>> | null> | null>(null);
 
   const invalidateSessionResources = useCallback(() => {
     requestIdRef.current += 1;
@@ -45,7 +56,25 @@ export function useSessionResourceLoader({
       }));
 
       try {
-        const resources = await getSessionResources(apiPort, sessionId, workspaceId);
+        const loadResources = async () => {
+          try {
+            return await getSessionResources(apiPort, sessionId, workspaceId);
+          } catch (error: unknown) {
+            if (!isExpiredGatewayUserAccess(error)) {
+              throw error;
+            }
+            const pendingRecovery = userAccessRecoveryRef.current ?? ensureGatewayUserAccess(apiPort);
+            userAccessRecoveryRef.current = pendingRecovery;
+            const userAccess = await pendingRecovery.finally(() => {
+              if (userAccessRecoveryRef.current === pendingRecovery) {
+                userAccessRecoveryRef.current = null;
+              }
+            });
+            setState((prev) => ({ ...prev, gatewayUserAccess: userAccess }));
+            return await getSessionResources(apiPort, sessionId, workspaceId);
+          }
+        };
+        const resources = await loadResources();
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||

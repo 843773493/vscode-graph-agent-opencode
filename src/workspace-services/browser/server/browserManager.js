@@ -70,6 +70,9 @@ export class BrowserManager {
     this.stateStore = new BrowserStateStore({ workspaceRoot: this.workspaceRoot });
     this.browserFrontendBaseUrl = browserFrontendBaseUrl.replace(/\/$/, "");
     this.sessions = new Map();
+    // Browser 工具对外使用 browser_id；恢复/重置页面时内部 page_id 会变化，
+    // 这里保留短期别名，避免模型收到旧 page_id 后被错误判定为页面不存在。
+    this.pageAliases = new Map();
     this.persistTail = Promise.resolve();
     this.persistTimer = null;
     this.createAdmissionTail = Promise.resolve();
@@ -178,6 +181,11 @@ export class BrowserManager {
       }
       const session = new BrowserSession({ manager: this, record });
       this.sessions.set(session.id, session);
+      this.registerPageAlias(record.page_id, session.id);
+      this.registerPageAlias(record.active_page_id, session.id);
+      for (const page of record.discarded_pages || []) {
+        this.registerPageAlias(page?.page_id, session.id);
+      }
     }
     await this.persist();
   }
@@ -237,10 +245,39 @@ export class BrowserManager {
 
   get(id) {
     const session = this.sessions.get(id);
-    if (!session) {
-      throw new Error(`浏览器页面不存在: ${id}`);
+    if (session) return session;
+
+    const aliasedBrowserId = this.pageAliases.get(id);
+    const aliasedSession = aliasedBrowserId
+      ? this.sessions.get(aliasedBrowserId)
+      : null;
+    if (aliasedSession) return aliasedSession;
+
+    for (const candidate of this.sessions.values()) {
+      if (candidate.pageEntries?.has(id)
+        || candidate.record?.page_id === id
+        || candidate.record?.active_page_id === id
+        || (candidate.record?.discarded_pages || []).some((page) => page?.page_id === id)) {
+        this.registerPageAlias(id, candidate.id);
+        return candidate;
+      }
     }
-    return session;
+    throw new Error(`浏览器页面不存在: ${id}`);
+  }
+
+  registerPageAlias(pageId, browserId) {
+    if (typeof pageId !== "string" || pageId.length === 0
+      || typeof browserId !== "string" || browserId.length === 0
+      || pageId === browserId) {
+      return;
+    }
+    this.pageAliases.set(pageId, browserId);
+  }
+
+  forgetPageAliases(browserId) {
+    for (const [pageId, ownerId] of this.pageAliases) {
+      if (ownerId === browserId) this.pageAliases.delete(pageId);
+    }
   }
 
   async create({
@@ -339,8 +376,9 @@ export class BrowserManager {
   async delete(id) {
     const session = this.get(id);
     const snapshot = await session.close({ status: "deleted", reason: "browser_deleted_by_user" });
+    this.forgetPageAliases(session.id);
     await this.persist();
-    return { deleted: true, browser_id: id, browser: snapshot };
+    return { deleted: true, browser_id: session.id, browser: snapshot };
   }
 
   async discard(id, reason = "browser_discarded_by_user") {

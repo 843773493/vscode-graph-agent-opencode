@@ -63,13 +63,14 @@ def build_default_tools(
     goal_service: SessionGoalService | None = None,
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     include_test_tools: bool = False,
+    include_team_tools: bool = False,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
     if session_orchestrator is None:
         raise RuntimeError("build_default_tools 需要显式传入 SessionOrchestrator")
     if session_subagent_service is None:
         raise RuntimeError("build_default_tools 需要显式传入 SessionSubagentService")
-    if team_service is None:
+    if include_team_tools and team_service is None:
         raise RuntimeError("build_default_tools 需要显式传入 TeamCoordinationService")
     if message_service is None:
         raise RuntimeError("build_default_tools 需要显式传入 MessageService")
@@ -99,6 +100,7 @@ def build_default_tools(
             session_id=session_id,
             agent_id=agent_id,
             terminal_client=terminal_manager_client,
+            workspace_root=workspace_root,
         ),
         create_write_stdin_tool(
             session_id=session_id,
@@ -126,6 +128,7 @@ def build_default_tools(
             team_service=team_service,
             invocation_context=invocation_context,
             session_message_delivery_service=session_message_delivery_service,
+            include_team_tools=include_team_tools,
         ),
     ]
     if goal_service is not None:

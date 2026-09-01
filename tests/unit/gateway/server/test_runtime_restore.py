@@ -65,13 +65,16 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(
     )
 
     started_roots: list[Path] = []
+    reusable_backend_urls: list[str | None] = []
 
     async def fake_start_runtime(
         *,
         workspace_root: Path,
+        reusable_backend_url: str | None = None,
         **_: object,
     ) -> WorkspaceRuntime:
         started_roots.append(workspace_root)
+        reusable_backend_urls.append(reusable_backend_url)
         port = 44000 + len(started_roots) * 10
         return WorkspaceRuntime(
             service_urls={
@@ -93,12 +96,29 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(
 
     registry = await bootstrap.create_registry()
 
-    assert started_roots == [default_root, running_root]
+    assert started_roots == [default_root]
+    assert reusable_backend_urls == ["http://127.0.0.1:41000"]
     assert registry.has_runtime(default_id) is True
+    assert registry.has_runtime(running_id) is False
+    assert registry.resolve(running_id).backend_url == "http://127.0.0.1:42000"
+    await bootstrap._restore_managed_local_runtimes(
+        registry=registry,
+        default_workspace_id=default_id,
+        gateway_root=gateway_root,
+    )
+    assert started_roots == [default_root, running_root]
+    assert reusable_backend_urls == [
+        "http://127.0.0.1:41000",
+        "http://127.0.0.1:42000",
+    ]
     assert registry.has_runtime(running_id) is True
     assert registry.has_runtime(stopped_id) is False
     assert registry.active_workspace_id == running_id
     assert registry.resolve(running_id).desired_running is True
+    assert registry.resolve(running_id).local_service_urls == {
+        "terminal_manager": "http://127.0.0.1:44021",
+        "browser_manager": "http://127.0.0.1:44022",
+    }
     assert registry.resolve(stopped_id).desired_running is False
     registry.close()
 
@@ -136,6 +156,7 @@ async def test_gateway_restore_failure_keeps_intent_and_restores_other_targets(
         return WorkspaceRuntime(
             service_urls={
                 "workspace_api": "http://127.0.0.1:42000",
+                "terminal_manager": "http://127.0.0.1:42001",
                 "browser_manager": "http://127.0.0.1:42002",
             }
         )

@@ -49,10 +49,10 @@ def test_incoming_request_id_is_used_as_the_single_authority() -> None:
     assert response.json()["request_id"] == "req_from_client"
 
 
-def test_request_trace_is_emitted_at_info_level(
+def test_successful_request_trace_is_emitted_at_debug_level(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.INFO, logger="app.core.trace_middleware")
+    caplog.set_level(logging.DEBUG, logger="app.core.trace_middleware")
 
     response = _build_client().get(
         "/request-id",

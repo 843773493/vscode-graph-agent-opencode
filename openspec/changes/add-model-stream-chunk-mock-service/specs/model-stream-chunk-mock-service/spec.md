@@ -23,7 +23,7 @@
 
 ### Requirement: 协议 registry 必须区分 Chat、Responses 和 Anthropic
 
-registry MUST 识别 `openai_chat_sse`、`openai_responses_sse` 和 `anthropic_messages_sse`。前两个协议 MUST 提供可运行的 decode、encode、terminal 判断和 stream 校验；Anthropic MUST 可被发现但以未实现错误拒绝运行。未知协议 MUST NOT 默认为 Chat。
+registry MUST 识别 `openai_chat_sse`、`openai_responses_sse` 和 `anthropic_messages_sse`。三个协议 MUST 提供可运行的 decode、encode、terminal 判断和 stream 校验；未知协议 MUST NOT 默认为 Chat。
 
 #### Scenario: Responses codec 被选择
 
@@ -31,11 +31,11 @@ registry MUST 识别 `openai_chat_sse`、`openai_responses_sse` 和 `anthropic_m
 - **WHEN** transport 创建 replay response
 - **THEN** transport 使用 Responses codec 编码 frame，并保留每个 frame 的 SSE event 名称
 
-#### Scenario: Anthropic 接口暂不运行
+#### Scenario: Anthropic Messages codec 处理原生 event
 
 - **GIVEN** 请求或 cassette 声明 `anthropic_messages_sse`
-- **WHEN** transport 尝试安装或 codec 尝试处理 frame
-- **THEN** 系统必须抛出包含 protocol id 和“未实现”信息的明确错误，且不得伪造回放数据或触网
+- **WHEN** transport 安装或 codec 处理 frame
+- **THEN** 系统必须保留 event 名称和 JSON payload，并把最后的 `message_stop` 识别为唯一 terminal
 
 #### Scenario: 未知协议快速失败
 
@@ -70,6 +70,22 @@ registry MUST 识别 `openai_chat_sse`、`openai_responses_sse` 和 `anthropic_m
 Chat Completions 与 OpenAI Responses MUST 各自提供长期手写 cassette 和可运行 E2E 场景。两者默认场景 MUST 覆盖首轮 reasoning、tool call、工具结果驱动的后续 reasoning 和最终可见文本；Responses 另有显式 reasoning + text 场景供轻量协议测试使用。涉及 tool loop 的 E2E MUST 同时断言 provider 上游记录、业务 tool call 事件、工具执行结果和最终 assistant 文本。Chat cassette MUST 使用 `message_roles` 等不含消息正文的安全结构字段区分 interaction；Responses cassette MUST 使用 `input_types` 区分 interaction。
 
 默认测试配置 MUST 使用体现完整链路的稳定基线：Chat Completions 默认选择 `reasoning-tool`，Responses 默认选择 `responses-reasoning-tool`，两者都使用最简单的 `read_file(README.md)` 测试工具。基础文本、Responses reasoning + text 或其它特定工具需求 MUST 通过 `configs/tests/` 下的显式 JSONC 配置切换，不得改变默认基线的语义。
+
+Responses 并发工具场景 MUST 额外提供显式的 JSONC 配置和手写 cassette，使用两个不同参数的 `read_file` 调用。cassette MUST 允许两个 function call 的 `response.output_item.added` 先后出现，并交错发送各自的 `response.function_call_arguments.delta`；解析器 MUST 根据 `item_id` 或等价的稳定 `call_id` 为每个调用独立累积参数，不得依赖两个调用的 delta 连续到达。该场景的测试 MUST 验证两个工具调用、两个工具结果以及第二轮最终文本均未串线。
+
+#### Scenario: Responses 交错并发 function call 保持独立身份
+
+- **GIVEN** Responses stream 先添加 `fc1` 和 `fc2` 两个 function call item
+- **AND** `fc1` 与 `fc2` 的 arguments delta 按交错顺序到达，且每个事件带有对应 `item_id`/`output_index`
+- **WHEN** 真实 `BoxteamOpenAIResponsesModel` 通过 LiteLLM `aresponses` 消费该 stream
+- **THEN** 解析结果 MUST 产生两个稳定的 tool call，`fc1` 和 `fc2` 的完整 JSON 参数互不混合
+- **AND** Agent MUST 并发执行两个工具，并在下一次 Responses 请求中按各自 `call_id` 提交两个 `function_call_output`
+
+#### Scenario: Responses 并发工具结果不能改变调用关联
+
+- **GIVEN** 两个并发工具的完成顺序与模型输出顺序不同
+- **WHEN** 业务层消费两个 `on_tool_end` 事件
+- **THEN** 每个工具结果 MUST 关联到原始 `tool_call_id`，并且最终 assistant 文本只在两个工具结果都可用后生成
 
 #### Scenario: Chat 完整 tool loop 被真实业务链路消费
 
@@ -159,11 +175,11 @@ record MUST 把上游原始 response bytes 原样转发给 LiteLLM，同时通�
 - **WHEN** 两个测试加载 scenario
 - **THEN** 两者必须读取同一协议 cassette，而业务断言由各自 expectation 完成
 
-#### Scenario: 没有真实 Anthropic 资源时不制造 fixture
+#### Scenario: Anthropic 手写 fixture 不冒充真实 provider
 
-- **GIVEN** registry 已有 Anthropic protocol id 但 fixture root 没有 Anthropic cassette
+- **GIVEN** fixture root 中存在 `anthropic_messages_sse` 手写 cassette
 - **WHEN** 测试发现可用协议和资源
-- **THEN** 测试只能验证接口和明确未实现行为，不得生成猜测性的 Anthropic response fixture
+- **THEN** 测试可以验证 codec、loader 和 wire round-trip，但不得据此声称访问或验证了真实 Anthropic provider
 
 ### Requirement: 错误和敏感信息边界必须可诊断且安全
 

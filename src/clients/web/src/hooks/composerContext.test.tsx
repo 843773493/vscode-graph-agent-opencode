@@ -264,4 +264,42 @@ describe("Composer React 状态边界", () => {
     });
     expect(composerDraftScopeKey("workspace", "session", null)).toBeNull();
   });
+
+  test("游客草稿只在内存中按会话隔离", () => {
+    const storage = createMemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { localStorage: storage },
+    });
+    let latestDraft = "";
+    let updateDraft: ((value: string) => void) | null = null;
+
+    function DraftConsumer({ sessionId }: { sessionId: string }): React.ReactNode {
+      const [draft, setDraft] = useComposerDraft("guest-workspace", sessionId, null);
+      latestDraft = draft;
+      updateDraft = setDraft;
+      return <span>{draft}</span>;
+    }
+
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(<DraftConsumer sessionId="guest-session-a" />);
+    });
+    act(() => {
+      updateDraft?.("游客草稿 A");
+    });
+    expect(latestDraft).toBe("游客草稿 A");
+
+    act(() => {
+      renderer.update(<DraftConsumer sessionId="guest-session-b" />);
+    });
+    expect(latestDraft).toBe("");
+
+    act(() => {
+      renderer.update(<DraftConsumer sessionId="guest-session-a" />);
+    });
+    expect(latestDraft).toBe("游客草稿 A");
+    expect(storage.getItem("boxteam.web.composerDrafts")).toBeNull();
+    renderer.unmount();
+  });
 });

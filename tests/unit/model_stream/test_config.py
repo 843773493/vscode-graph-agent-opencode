@@ -16,6 +16,9 @@ RESPONSES_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream_respons
 RESPONSES_REASONING_TEXT_CONFIG_PATH = (
     Path.cwd() / "configs" / "tests" / "model_stream_responses_reasoning_text.jsonc"
 )
+RESPONSES_PARALLEL_TOOL_CONFIG_PATH = (
+    Path.cwd() / "configs" / "tests" / "model_stream_responses_parallel_tool.jsonc"
+)
 
 
 def test_model_stream_config_uses_explicit_defaults() -> None:
@@ -48,6 +51,12 @@ def test_responses_reasoning_text_config_is_an_explicit_alternate() -> None:
     config = load_model_stream_config(RESPONSES_REASONING_TEXT_CONFIG_PATH)
 
     assert config.transport.scenario_id == "responses-reasoning-text"
+
+
+def test_responses_parallel_tool_config_is_an_explicit_alternate() -> None:
+    config = load_model_stream_config(RESPONSES_PARALLEL_TOOL_CONFIG_PATH)
+
+    assert config.transport.scenario_id == "responses-reasoning-parallel-tool"
 
 
 def test_invalid_environment_config_fails_with_schema_context(tmp_path: Path) -> None:

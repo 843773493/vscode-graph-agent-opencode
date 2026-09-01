@@ -4,6 +4,7 @@ import {
   getWorkspace,
   listAgents as apiListAgents,
 } from "../api";
+import { HttpRequestError } from "../api/http";
 import {
   activateGatewayWorkspace,
   ensureGatewayUserAccess,
@@ -30,6 +31,25 @@ type WorkspaceBootstrapPayload = {
   workspaceSessionResults: PromiseSettledResult<WorkspaceSessionListSnapshot>[];
   agents: Awaited<ReturnType<typeof apiListAgents>>;
 };
+
+const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 5000];
+
+export function isRetryableWorkspaceBootstrapError(error: unknown): boolean {
+  return (
+    error instanceof HttpRequestError
+    && [502, 503, 504].includes(error.status)
+  ) || error instanceof TypeError;
+}
+
+async function waitForBootstrapRetry(
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    globalThis.setTimeout(resolve, delayMs);
+  });
+  signal.throwIfAborted();
+}
 
 export function selectBootstrapSessionId({
   preferredSessionId,
@@ -104,25 +124,41 @@ export function shouldRestorePersistedWorkspace({
   );
 }
 
-const initialBootstrapRequests = new Map<
-  number,
-  Promise<WorkspaceBootstrapPayload>
->();
-
 async function loadWorkspaceBootstrap(
   apiPort: number,
-  options: { restorePersistedWorkspace: boolean },
+  options: {
+    restorePersistedWorkspace: boolean;
+    checkGatewayWorkspaceHealth: boolean;
+    uiSettings?: Awaited<ReturnType<typeof getGatewayUiSettings>>;
+    signal?: AbortSignal;
+  },
 ): Promise<WorkspaceBootstrapPayload> {
+  const { signal } = options;
   const userAccess = await ensureGatewayUserAccess(apiPort);
-  const userViewState = userAccess.kind === "user"
-    ? await getLatestGatewayUserViewState(apiPort)
-    : null;
-  const uiSettings = await getGatewayUiSettings(apiPort);
+  signal?.throwIfAborted();
+  const uiSettingsPromise = options.uiSettings
+    ? Promise.resolve(options.uiSettings)
+    : getGatewayUiSettings(apiPort);
+  const gatewayWorkspacesPromise = listGatewayWorkspaces(apiPort, {
+    checkHealth: options.checkGatewayWorkspaceHealth,
+  });
+  const [uiSettings, initialGatewayWorkspaces] = await Promise.all([
+    uiSettingsPromise,
+    gatewayWorkspacesPromise,
+  ]);
+  signal?.throwIfAborted();
+  const userViewStatePromise = userAccess.kind === "user"
+    ? getLatestGatewayUserViewState(apiPort)
+    : Promise.resolve(null);
+  const userViewState = await userViewStatePromise;
+  signal?.throwIfAborted();
   if (!uiSettings.theme.resolved_theme) {
     throw new Error("Gateway UI Settings 缺少已解析主题");
   }
-  await loadAndApplyResolvedGatewayTheme(uiSettings.theme.resolved_theme);
-  let gatewayWorkspaces = await listGatewayWorkspaces(apiPort);
+  if (!options.uiSettings) {
+    await loadAndApplyResolvedGatewayTheme(uiSettings.theme.resolved_theme);
+  }
+  let gatewayWorkspaces = initialGatewayWorkspaces;
   const persistedWorkspaceId = userViewState?.workspace_id;
   if (
     shouldRestorePersistedWorkspace({
@@ -135,9 +171,13 @@ async function loadWorkspaceBootstrap(
     })
     && persistedWorkspaceId
   ) {
-    await activateGatewayWorkspace(apiPort, persistedWorkspaceId);
-    gatewayWorkspaces = await listGatewayWorkspaces(apiPort);
+    await activateGatewayWorkspace(apiPort, persistedWorkspaceId, signal);
+    signal?.throwIfAborted();
+    gatewayWorkspaces = await listGatewayWorkspaces(apiPort, {
+      checkHealth: options.checkGatewayWorkspaceHealth,
+    });
   }
+  signal?.throwIfAborted();
   const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
   const [workspace, workspaceSessionResults, agents] = await Promise.all([
     getWorkspace(apiPort, activeWorkspaceId),
@@ -159,40 +199,63 @@ async function loadWorkspaceBootstrap(
   };
 }
 
-function loadInitialWorkspaceBootstrap(apiPort: number) {
-  const existing = initialBootstrapRequests.get(apiPort);
-  if (existing) {
-    return existing;
-  }
-  const request = loadWorkspaceBootstrap(apiPort, {
-    restorePersistedWorkspace: true,
-  }).finally(() => {
-    if (initialBootstrapRequests.get(apiPort) === request) {
-      initialBootstrapRequests.delete(apiPort);
+async function loadWorkspaceBootstrapWithRetry(
+  apiPort: number,
+  options: Parameters<typeof loadWorkspaceBootstrap>[1],
+): Promise<WorkspaceBootstrapPayload> {
+  for (let attempt = 0; ; attempt += 1) {
+    options.signal?.throwIfAborted();
+    try {
+      return await loadWorkspaceBootstrap(apiPort, options);
+    } catch (error: unknown) {
+      if (
+        !isRetryableWorkspaceBootstrapError(error)
+        || attempt >= BOOTSTRAP_RETRY_DELAYS_MS.length
+      ) {
+        throw error;
+      }
+      await waitForBootstrapRetry(
+        BOOTSTRAP_RETRY_DELAYS_MS[attempt],
+        options.signal ?? new AbortController().signal,
+      );
     }
-  });
-  initialBootstrapRequests.set(apiPort, request);
-  return request;
+  }
 }
 
 export function useWorkspaceBootstrap({
   apiPort,
+  uiSettings,
   setState,
 }: {
   apiPort: number | null;
+  uiSettings: Awaited<ReturnType<typeof getGatewayUiSettings>>;
   setState: SetAppState;
 }) {
   const refreshGenerationRef = useRef(0);
+  const workspaceStatusRefreshGenerationRef = useRef(0);
+  const refreshAbortRef = useRef<AbortController | null>(null);
+  const currentUiSettingsRef = useRef(uiSettings);
+  currentUiSettingsRef.current = uiSettings;
 
   const invalidateWorkspaceRefreshes = useCallback(() => {
     refreshGenerationRef.current += 1;
+    workspaceStatusRefreshGenerationRef.current += 1;
+    refreshAbortRef.current?.abort();
+    refreshAbortRef.current = null;
   }, []);
 
   const refreshSessions = useCallback(async (
     preferredSessionId?: string | null,
-    options: { reuseInitialRequest?: boolean } = {},
+    options: {
+      restorePersistedWorkspace?: boolean;
+      checkGatewayWorkspaceHealth?: boolean;
+      reuseCurrentUiSettings?: boolean;
+    } = {},
   ) => {
     const refreshGeneration = ++refreshGenerationRef.current;
+    refreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshAbortRef.current = controller;
     try {
       const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
       const {
@@ -203,11 +266,14 @@ export function useWorkspaceBootstrap({
         workspace,
         workspaceSessionResults,
         agents,
-      } = options.reuseInitialRequest
-        ? await loadInitialWorkspaceBootstrap(resolvedApiPort)
-        : await loadWorkspaceBootstrap(resolvedApiPort, {
-          restorePersistedWorkspace: false,
-        });
+      } = await loadWorkspaceBootstrapWithRetry(resolvedApiPort, {
+        restorePersistedWorkspace: options.restorePersistedWorkspace ?? false,
+        checkGatewayWorkspaceHealth: options.checkGatewayWorkspaceHealth ?? true,
+        uiSettings: options.reuseCurrentUiSettings
+          ? currentUiSettingsRef.current
+          : undefined,
+        signal: controller.signal,
+      });
       writeCachedUiSettings(uiSettings);
       const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
       const workspaceIds = activeWorkspaceId ? [activeWorkspaceId] : [];
@@ -242,18 +308,17 @@ export function useWorkspaceBootstrap({
         failedWorkspaceNames.length > 0
           ? `部分工作区离线，未加载会话：${failedWorkspaceNames.join("、")}`
           : null;
-      if (refreshGeneration !== refreshGenerationRef.current) {
+      if (
+        controller.signal.aborted
+        || refreshGeneration !== refreshGenerationRef.current
+      ) {
         return false;
       }
       setState((prev) => {
         const sessionsByWorkspace = new Map(prev.sessionsByWorkspace);
         const userChanged =
           prev.gatewayUserAccess?.kind !== userAccess.kind
-          || prev.gatewayUserAccess?.user_id !== userAccess.user_id
-          || (
-            userAccess.kind === "guest"
-            && prev.gatewayUserAccess?.expires_at !== userAccess.expires_at
-          );
+          || prev.gatewayUserAccess?.user_id !== userAccess.user_id;
         const gatewayUserViewStates = userChanged
           ? new Map()
           : new Map(prev.gatewayUserViewStates);
@@ -352,7 +417,10 @@ export function useWorkspaceBootstrap({
       });
       return true;
     } catch (error) {
-      if (refreshGeneration !== refreshGenerationRef.current) {
+      if (
+        controller.signal.aborted
+        || refreshGeneration !== refreshGenerationRef.current
+      ) {
         return false;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -363,14 +431,72 @@ export function useWorkspaceBootstrap({
         isBootstrapping: false,
       }));
       throw error;
+    } finally {
+      if (refreshAbortRef.current === controller) {
+        refreshAbortRef.current = null;
+      }
+    }
+  }, [apiPort, setState]);
+
+  const refreshGatewayWorkspaceStatuses = useCallback(async (
+    expectedWorkspaceId?: string | null,
+  ): Promise<void> => {
+    const requestGeneration = ++workspaceStatusRefreshGenerationRef.current;
+    try {
+      const workspaceList = await listGatewayWorkspaces(
+        apiPort ?? DEFAULT_BACKEND_PORT,
+      );
+      if (requestGeneration !== workspaceStatusRefreshGenerationRef.current) {
+        return;
+      }
+      setState((previous) => {
+        if (
+          expectedWorkspaceId
+          && (
+            previous.activeGatewayWorkspaceId !== expectedWorkspaceId
+            || workspaceList.active_workspace_id !== expectedWorkspaceId
+          )
+        ) {
+          return previous;
+        }
+        return {
+          ...previous,
+          gatewayWorkspaces: workspaceList.items,
+        };
+      });
+    } catch (error) {
+      if (requestGeneration !== workspaceStatusRefreshGenerationRef.current) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      setState((previous) => {
+        if (
+          expectedWorkspaceId
+          && previous.activeGatewayWorkspaceId !== expectedWorkspaceId
+        ) {
+          return previous;
+        }
+        return {
+          ...previous,
+          gatewayError: `后台刷新工作区状态失败: ${message}`,
+          status: `后台刷新工作区状态失败: ${message}`,
+        };
+      });
     }
   }, [apiPort, setState]);
 
   useEffect(() => {
-    void refreshSessions(undefined, { reuseInitialRequest: true }).catch(() => {
+    void refreshSessions(undefined, {
+      restorePersistedWorkspace: true,
+      checkGatewayWorkspaceHealth: true,
+    }).catch(() => {
       // 错误详情已经写入全局状态；这里只处理 effect Promise，避免未处理拒绝。
     });
   }, [refreshSessions]);
 
-  return { invalidateWorkspaceRefreshes, refreshSessions };
+  return {
+    invalidateWorkspaceRefreshes,
+    refreshGatewayWorkspaceStatuses,
+    refreshSessions,
+  };
 }

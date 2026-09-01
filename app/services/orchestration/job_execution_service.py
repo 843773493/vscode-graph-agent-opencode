@@ -72,6 +72,7 @@ class JobExecutionService:
             attachments=job.attachments,
             message_created_at=job.message_created_at,
             message_metadata=job.message_metadata,
+            progress_reporter=getattr(job, "progress_reporter", None),
         )
 
         result_text = result if isinstance(result, str) else str(result)
@@ -83,7 +84,7 @@ class JobExecutionService:
         await self._bus.publish(
             job_id=job.job_id,
             event_type=EventType.JOB_COMPLETED,
-            payload={"result": result_text},
+            payload={"session_id": job.session_id, "result": result_text},
             agent_id="job_service",
         )
         return result_text
@@ -97,7 +98,7 @@ class JobExecutionService:
         await self._bus.publish(
             job_id=job.job_id,
             event_type=EventType.JOB_FAILED,
-            payload={"error": str(error)},
+            payload={"session_id": job.session_id, "error": str(error)},
             agent_id="job_service",
         )
 

@@ -24,7 +24,7 @@
 
 - 以一个协议中立的 cassette 模型保存手写 provider frame 和 E2E 录制的真实 provider frame。
 - 真实执行请求构造、LiteLLM HTTP 调用、协议解析、SDK/LangChain 转换和业务事件聚合。
-- 现在实现 Chat Completions SSE 和 OpenAI Responses SSE；为 Anthropic Messages 保留可发现、可诊断的 codec 接口。
+- 现在实现 Chat Completions、OpenAI Responses 和 Anthropic Messages SSE codec；Chat/Responses 继续覆盖真实 LiteLLM adapter，Anthropic 本次覆盖 codec、asset 和 wire round-trip。
 - 让 protocol codec 决定 `event`、payload 编码和终止事件，通用 transport 不包含 provider 专用判断。
 - 多会话并发共享只读 cassette；每个请求独立拥有 response stream，`request_reusable` 不共享迭代器，`session_sequence` 只在显式 session context 内维护游标。
 - 用 `configs/tests/*.jsonc` 选择运行模式和 scenario，避免大量环境变量和重复配置。
@@ -36,7 +36,7 @@
 - 不定义或冻结 `message.v1`、block projection、Trace 或前端事件协议。
 - 不把 SDK chunk、Provider frame 和 Business event 混存为同一种数据。
 - 不通过修改 provider endpoint 环境变量把请求改发到 localhost，不新增必须监听端口的服务。
-- 不在本次实现 Anthropic 真实 codec、手写资源、录制资源或真实上游测试；只有接口注册和显式未实现错误。
+- 不在本次访问真实 Anthropic provider，也不承诺 Anthropic adapter 的完整业务集成；Anthropic 手写 cassette、codec round-trip 和资产校验属于本次范围。
 - 不复现 TCP packet 边界、真实 provider 时延分布或网络背压模型。
 - replay 匹配失败时不连接真实 provider、不返回默认文本、不静默跳过。
 
@@ -77,7 +77,7 @@ scenario manifest ──► cassette metadata.protocol
 | --- | --- | --- | --- |
 | `openai_chat_sse` | `chat_completions` | 已实现 | 最后的 `data: [DONE]` |
 | `openai_responses_sse` | `responses` | 已实现 | `event: response.completed` 的 JSON event |
-| `anthropic_messages_sse` | `anthropic_messages` | 只注册接口 | 由后续 Anthropic codec 定义，本次不可运行 |
+| `anthropic_messages_sse` | `anthropic_messages` | codec + 手写 asset | `message_stop` JSON event |
 
 ### Canonical provider frame
 
@@ -105,7 +105,7 @@ Cassette 中的 frame 使用以下结构：
 3. 判断某 frame 是否是终止 frame；
 4. 校验单个 frame 和完整 stream 的协议约束。
 
-registry 按 `metadata.protocol` 查找 codec。未知协议直接报告资产错误；已注册但 `runtime_supported=false` 的 Anthropic codec 在 transport 安装或真实 decode/encode 时报告明确的未实现错误。不存在“把未知协议当 Chat”或“自动使用默认 codec”的降级路径。
+registry 按 `metadata.protocol` 查找 codec。未知协议直接报告资产错误；每个已实现 codec 都必须在 transport 安装和真实 decode/encode 时执行协议校验。不存在“把未知协议当 Chat”或“自动使用默认 codec”的降级路径。
 
 ## Asset and Config Layout
 
@@ -118,12 +118,14 @@ configs/tests/
 ├── model_stream_responses_basic.jsonc         # Responses 基础文本切换
 ├── model_stream_responses_tool.jsonc          # Responses 显式工具场景切换
 ├── model_stream_responses_reasoning_text.jsonc # Responses 显式 reasoning/text 切换
+├── model_stream_responses_parallel_tool.jsonc # Responses 交错双工具切换
 └── model_stream_schema.jsonc                  # 共享配置 schema
 
 tests/fixtures/model_stream/
 ├── handwritten/
 │   ├── openai_chat/*.json
-│   └── openai_responses/*.json
+│   ├── openai_responses/*.json
+│   └── anthropic_messages/*.json
 ├── recorded/
 │   ├── openai_chat/*.json
 │   └── openai_responses/*.json
@@ -131,7 +133,7 @@ tests/fixtures/model_stream/
 └── expectations/*.{json,jsonc}
 ```
 
-`handwritten` 是可读、稳定、最小的 provider 事实；`recorded` 是从真实上游采集并经过审查后显式提升的长期资产；两者经过同一 loader。Anthropic 目录不提前创建伪造资源，等有真实上游响应后再增加 `handwritten/anthropic_messages` 或 `recorded/anthropic_messages`。
+`handwritten` 是可读、稳定、最小的 provider 事实；`recorded` 是从真实上游采集并经过审查后显式提升的长期资产；两者经过同一 loader。Anthropic 当前只维护协议事实的手写 asset，不因手写 asset 存在而宣称已经覆盖真实 provider adapter。
 
 业务 expectation 只检查模型输出、reasoning/tool block、结束状态或业务事件，不复制完整 provider frame。当前 Chat 默认由 `reasoning-tool` 提供完整工具循环，Responses 默认由 `responses-reasoning-tool` 提供完整工具循环；`responses-reasoning-text` 和其它基础/特定工具场景通过对应 JSONC 配置显式选择。一个 scenario 可被单元、集成和 E2E 测试复用，测试层按自身粒度决定检查 provider frame、SDK chunk 还是业务事件。
 
@@ -165,11 +167,13 @@ record 只在完整读取且 codec 观察到协议终止事件后提交 cassette
 
 ### OpenAI Responses
 
-保存 `response.created`、`response.output_item.*`、`response.content_part.*`、`response.output_text.*`、reasoning/tool 相关 event 以及 `response.completed` 中的完整 JSON 字段。默认 `model_stream_responses.jsonc` 选择 `responses-reasoning-tool`，覆盖首轮 reasoning、function call、工具结果后的再次 reasoning、最终 message 和 `response.completed`；`responses-reasoning-text` 由 `model_stream_responses_reasoning_text.jsonc` 显式选择，Responses 工具循环另有 `model_stream_responses_tool.jsonc` 显式入口，并通过 LiteLLM `aresponses` 真实解析验证。
+保存 `response.created`、`response.output_item.*`、`response.content_part.*`、`response.output_text.*`、reasoning/tool 相关 event 以及 `response.completed` 中的完整 JSON 字段。默认 `model_stream_responses.jsonc` 选择 `responses-reasoning-tool`，覆盖首轮 reasoning、function call、工具结果后的再次 reasoning、最终 message 和 `response.completed`；`responses-reasoning-text` 由 `model_stream_responses_reasoning_text.jsonc` 显式选择，Responses 工具循环另有 `model_stream_responses_tool.jsonc` 显式入口。`model_stream_responses_parallel_tool.jsonc` 选择双 `read_file` 并发场景，cassette 中先添加两个 function call，再交错发送两个调用的 arguments delta，并通过 LiteLLM `aresponses` 验证两个调用和两个结果没有串线。
+
+Responses function call 的 wire identity 以 provider `item_id`/`call_id` 为主，`output_index` 作为稳定的输出位置；不能把一个全局“当前 output index”当作交错 delta 的身份。适配层在生成 `AIMessageChunk.tool_call_chunks` 时必须把稳定 `call_id` 和 provider 输出位置保留到每一个参数 delta，业务聚合层再按稳定身份维护独立的 JSON 参数缓冲。工具执行可以按各自 Agent `run_id` 独立完成，下一轮输入按 `function_call_output.call_id` 回填，完成顺序不要求等于输出顺序。
 
 ### Anthropic Messages
 
-registry 预留 `anthropic_messages_sse`，其 codec contract、协议 id 和错误边界已经固定，但本次不声称可以运行。没有真实上游响应时不添加手写“猜测数据”，也不把 Anthropic frame 当 Chat 或 Responses 回放。
+`anthropic_messages_sse` 使用 `message_start`、`content_block_*`、`message_delta` 和 `message_stop` 等原生事件，终止语义是最后一个 `message_stop` JSON event。手写 asset 覆盖 thinking、tool_use、text 和多段 delta，供 codec、loader、wire round-trip 与后续 adapter 测试复用；本次不访问真实 Anthropic provider。
 
 ## Error and Security Boundaries
 
@@ -180,8 +184,8 @@ registry 预留 `anthropic_messages_sse`，其 codec contract、协议 id 和错
 
 ## Verification Strategy
 
-1. asset/codec 单元测试验证三种 protocol id、frame event 保留、Chat `[DONE]`、Responses terminal 和 Anthropic 未实现错误。
-2. transport 集成测试验证原始 bytes 转发、完整/不完整 record、Chat/Responses replay、脱敏诊断和多请求独立迭代器。
+1. asset/codec 单元测试验证三种 protocol id、frame event 保留、Chat `[DONE]`、Responses `response.completed` 和 Anthropic `message_stop` terminal。
+2. transport 集成测试验证原始 bytes 转发、完整/不完整 record、Chat/Responses replay、Anthropic wire round-trip、脱敏诊断和多请求独立迭代器。
 3. provider 集成测试使用真实 `BoxteamLiteLLMChatModel` 与 `BoxteamOpenAIResponsesModel`，只通过注入的 LiteLLM async client，不访问真实 provider。
-4. Chat 与 Responses 默认都使用手写完整 tool loop cassette；Responses 额外保留显式 reasoning + text cassette。通过 in-process provider model/transport 验证 reasoning、tool call、工具结果和最终文本从上游事件到业务输出的链路；Anthropic 本次不跑真实响应测试。
+4. Chat 与 Responses 默认都使用手写完整 tool loop cassette；Responses 额外保留显式 reasoning + text 和交错双工具 cassette。通过 in-process provider model/transport 验证 reasoning、tool call、工具结果和最终文本从上游事件到业务输出的链路，并单独验证两个并发调用及不同完成顺序下的 call_id 关联；Anthropic 验证手写 asset 与 codec/wire round-trip，不访问真实 provider。
 5. OpenSpec strict validation、ruff 和相关 pytest 必须通过；正式测试产物遵循 `out/tests/<test-path>/` 目录规则。

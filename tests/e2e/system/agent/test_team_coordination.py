@@ -27,6 +27,16 @@ def e2e_workspace_config_path(
         '"primary_provider": "backup_3"',
         1,
     )
+    payload = payload.replace(
+        '  "development": {',
+        '  "runtime": {\n'
+        '    "agent": {\n'
+        '      "run": {"mode": "team"}\n'
+        '    }\n'
+        '  },\n'
+        '  "development": {',
+        1,
+    )
     target_path.write_text(payload, encoding="utf-8")
     shutil.copy2(
         Path.cwd().resolve() / "configs" / "workspace_schema.jsonc",

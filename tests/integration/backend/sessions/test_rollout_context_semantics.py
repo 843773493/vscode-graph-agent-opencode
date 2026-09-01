@@ -163,6 +163,224 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
         )
 
 
+def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    """增量 checkpoint 不能只恢复 ToolMessage 而丢掉其 assistant call。"""
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    first_config = saver.put(
+        build_checkpoint_config("session_1"),
+        _checkpoint(
+            "checkpoint-tool-call",
+            [
+                HumanMessage(
+                    content="读取 README",
+                    id="user-tool-call",
+                    response_metadata={"turn_id": "turn-tool-call"},
+                ),
+                AIMessage(
+                    content="",
+                    id="assistant-tool-call",
+                    response_metadata={"turn_id": "turn-tool-call"},
+                    tool_calls=[
+                        {
+                            "name": "read_file",
+                            "args": {"path": "README.md"},
+                            "id": "call-tool-call",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+            ],
+        ),
+        {"source": "incremental-tool-test", "step": 1},
+        {"messages": "1"},
+    )
+    saver.put(
+        first_config,
+        _checkpoint(
+            "checkpoint-tool-result",
+            [
+                ToolMessage(
+                    content="README 内容",
+                    id="tool-result",
+                    tool_call_id="call-tool-call",
+                    name="read_file",
+                    response_metadata={"turn_id": "turn-tool-call"},
+                )
+            ],
+        ),
+        {"source": "incremental-tool-test", "step": 2},
+        {"messages": "2"},
+    )
+
+    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
+        view_id = connection.execute(
+            "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'checkpoint-tool-result'"
+        ).fetchone()[0]
+        assert connection.execute(
+            "SELECT source_kind FROM context_view_ranges WHERE view_id = ? ORDER BY range_index LIMIT 1",
+            (view_id,),
+        ).fetchone()[0] == "view"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM context_view_turns WHERE view_id = ? AND turn_id = 'turn-tool-call'",
+            (view_id,),
+        ).fetchone()[0] == 1
+
+    restored = saver.get_tuple(build_checkpoint_config("session_1"))
+    assert restored is not None
+    assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == [
+        "user-tool-call",
+        "assistant-tool-call",
+        "tool-result",
+    ]
+    restored_call = restored.checkpoint["channel_values"]["messages"][1]
+    restored_result = restored.checkpoint["channel_values"]["messages"][2]
+    assert isinstance(restored_call, AIMessage)
+    assert isinstance(restored_result, ToolMessage)
+    assert restored_call.tool_calls[0]["id"] == restored_result.tool_call_id
+
+    # 旧版本已落盘的 checkpoint 没有 parent range，读取兼容路径也必须恢复。
+    with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
+        view_id = connection.execute(
+            "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'checkpoint-tool-result'"
+        ).fetchone()[0]
+        connection.execute(
+            "DELETE FROM context_view_ranges WHERE view_id = ? AND source_kind = 'view'",
+            (view_id,),
+        )
+        connection.commit()
+    restored_legacy = saver.get_tuple(build_checkpoint_config("session_1"))
+    assert restored_legacy is not None
+    assert [
+        message.id
+        for message in restored_legacy.checkpoint["channel_values"]["messages"]
+    ] == ["user-tool-call", "assistant-tool-call", "tool-result"]
+
+
+def test_parallel_tool_continuation_restores_all_call_declarations(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    """并行工具组之后的 continuation 不能只携带 ToolMessage 结果。"""
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    saver = RolloutCheckpointSaver(sessions_dir)
+    parallel_calls = [
+        {
+            "name": "read_file",
+            "args": {"path": f"file-{index}.txt"},
+            "id": f"call-parallel-{index}",
+            "type": "tool_call",
+        }
+        for index in range(4)
+    ]
+    parent_messages = [
+        HumanMessage(content="并行读取文件", id="user-parallel"),
+        AIMessage(
+            content="",
+            id="assistant-parallel",
+            tool_calls=parallel_calls,
+        ),
+        *[
+            ToolMessage(
+                content=f"结果 {index}",
+                id=f"result-parallel-{index}",
+                name="read_file",
+                tool_call_id=f"call-parallel-{index}",
+            )
+            for index in range(4)
+        ],
+    ]
+    parent_config = saver.put(
+        build_checkpoint_config("session_1"),
+        _checkpoint("parallel-parent", parent_messages),
+        {"source": "parallel-continuation-test", "step": 1},
+        {"messages": "1"},
+    )
+
+    # LangGraph continuation 的增量 checkpoint 只带新 HumanMessage；旧 view
+    # 必须通过 parent range 继续提供整个并行 AI tool-call 声明组。
+    saver.put(
+        parent_config,
+        _checkpoint(
+            "parallel-continuation",
+            [HumanMessage(content="继续处理", id="user-continuation")],
+        ),
+        {"source": "parallel-continuation-test", "step": 2},
+        {"messages": "2"},
+    )
+
+    restored = saver.get_tuple(build_checkpoint_config("session_1"))
+    assert restored is not None
+    restored_messages = restored.checkpoint["channel_values"]["messages"]
+    assert [message.id for message in restored_messages] == [
+        "user-parallel",
+        "assistant-parallel",
+        "result-parallel-0",
+        "result-parallel-1",
+        "result-parallel-2",
+        "result-parallel-3",
+        "user-continuation",
+    ]
+    assert isinstance(restored_messages[1], AIMessage)
+    assert {
+        call["id"] for call in restored_messages[1].tool_calls
+    } == {f"call-parallel-{index}" for index in range(4)}
+
+    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
+        child_view = connection.execute(
+            "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'parallel-continuation'"
+        ).fetchone()[0]
+        parent_view = connection.execute(
+            "SELECT parent_view_id FROM context_views WHERE view_id = ?",
+            (child_view,),
+        ).fetchone()[0]
+        assert connection.execute(
+            "SELECT source_kind FROM context_view_ranges WHERE view_id = ? ORDER BY range_index LIMIT 1",
+            (child_view,),
+        ).fetchone()[0] == "view"
+
+        # 再现 WEB-GW-057 中旧运行时落下的形态：child 没有 parent range，
+        # parent range 漏掉并行 AI 声明但仍保留四个 ToolMessage 结果。
+        connection.execute(
+            "DELETE FROM context_view_ranges WHERE view_id = ? AND source_kind = 'view'",
+            (child_view,),
+        )
+        connection.execute(
+            "DELETE FROM context_view_ranges WHERE view_id = ?",
+            (parent_view,),
+        )
+        connection.executemany(
+            "INSERT INTO context_view_ranges(view_id, range_index, source_kind, start_message_sequence, end_message_sequence, message_start_sequence, message_end_sequence, range_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal) VALUES (?, ?, 'messages', ?, ?, ?, ?, ?, NULL, NULL)",
+            [
+                (parent_view, 0, 1, 1, 1, 1, 0),
+                (parent_view, 1, 3, 6, 3, 6, 1),
+            ],
+        )
+        connection.commit()
+
+    restored_legacy = saver.get_tuple(build_checkpoint_config("session_1"))
+    assert restored_legacy is not None
+    assert [
+        message.id
+        for message in restored_legacy.checkpoint["channel_values"]["messages"]
+    ] == [
+        "user-parallel",
+        "assistant-parallel",
+        "result-parallel-0",
+        "result-parallel-1",
+        "result-parallel-2",
+        "result-parallel-3",
+        "user-continuation",
+    ]
+
+
 def test_context_view_validation_accepts_single_message_range(
     tmp_path: Path,
     session_bundle_factory,

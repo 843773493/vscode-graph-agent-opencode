@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from app.gateway.runtime.process import _spawn_logged_process
-from app.gateway.runtime.process_logs import ProcessLogStore
+from app.gateway.runtime.process_logs import (
+    PROCESS_LOG_MAX_BYTES,
+    ProcessLogStore,
+)
 
 
 def test_process_log_store_appends_and_restricts_permissions(tmp_path: Path) -> None:
@@ -25,6 +28,21 @@ def test_process_log_store_appends_and_restricts_permissions(tmp_path: Path) -> 
     if os.name == "posix":
         assert log_root.stat().st_mode & 0o777 == 0o700
         assert log_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_process_log_store_rotates_an_oversized_previous_log(tmp_path: Path) -> None:
+    log_root = tmp_path / "logs"
+    log_root.mkdir()
+    log_path = log_root / "local-backend-12345.log"
+    log_path.write_bytes(b"x" * PROCESS_LOG_MAX_BYTES)
+
+    with ProcessLogStore(log_root).open(log_path.name) as stream:
+        stream.write("new\n")
+
+    assert log_path.read_text(encoding="utf-8") == "new\n"
+    assert (
+        log_root / "local-backend-12345.log.1"
+    ).stat().st_size == PROCESS_LOG_MAX_BYTES
 
 
 @pytest.mark.parametrize("file_name", ["", "../outside.log", "nested/log.log", "log.txt"])

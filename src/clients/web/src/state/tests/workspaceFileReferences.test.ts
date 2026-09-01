@@ -1,5 +1,6 @@
 import {
   isLikelyWorkspaceFileReference,
+  isWorkspaceTextFilePath,
   parseWorkspaceFileReference,
   plainWorkspaceFileReferences,
   remarkWorkspaceFileReferences,
@@ -49,9 +50,23 @@ for (const target of [
   "state.counter++",
   "<parameter=tool_name>unknown_tool</parameter>",
   "<function=invoke_custom_tool><parameter=tool_name>unknown_tool</parameter></function>",
+  "WINDUP/STRIKE",
+  "A/D",
+  ".html/.wasm",
 ]) {
   if (isLikelyWorkspaceFileReference(target)) {
     throw new Error(`普通 inline code 不应触发文件探测: ${target}`);
+  }
+}
+for (const target of [
+  "parry_arena/verification_artifacts/phase3-perfect-final.png",
+  "parry_arena/verification_artifacts/phase3-feint-final.png",
+  "parry_arena/godot_export/game.wasm",
+  "parry_arena/verification_artifacts/phase3-perfect-final.png#L1",
+  "parry_arena/verification_artifacts/phase3-perfect-final.png:1",
+]) {
+  if (isWorkspaceTextFilePath(target) || isLikelyWorkspaceFileReference(target)) {
+    throw new Error(`二进制文件不应触发文本文件引用验证: ${target}`);
   }
 }
 for (const target of ["src/main.py", "AGENTS.md", "./README.md#L3"]) {

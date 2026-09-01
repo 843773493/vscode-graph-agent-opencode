@@ -11,6 +11,14 @@ from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSource
 
 Projection = Literal["summary", "detail", "streaming"]
 
+_TERMINAL_TURN_STATUSES = {
+    "completed",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "timed_out",
+}
+
 
 def _text(value: object) -> str:
     if isinstance(value, str):
@@ -34,15 +42,39 @@ def _blocks(content: object) -> list[Mapping[str, object]]:
 def _serialized_message(record: Mapping[str, object]) -> Mapping[str, object]:
     message = record.get("message")
     if not isinstance(message, Mapping):
-        raise RuntimeError("rollout message record 缺少 message")
+        raise TypeError("rollout message record 缺少 message")
     return message
 
 
 def _message_data(message: Mapping[str, object]) -> Mapping[str, object]:
     data = message.get("data")
     if not isinstance(data, Mapping):
-        raise RuntimeError("rollout message record 缺少 data")
+        raise TypeError("rollout message record 缺少 data")
     return data
+
+
+def _completion_metadata(record: Mapping[str, object]) -> tuple[str | None, bool]:
+    """读取 AIMessage 的 block 收尾语义，不把 partial 当作正常完成。"""
+    metadata = _message_data(_serialized_message(record)).get("response_metadata")
+    if not isinstance(metadata, Mapping):
+        return None, False
+    reason = metadata.get("completion_reason")
+    return (
+        reason if isinstance(reason, str) and reason else None,
+        metadata.get("partial") is True,
+    )
+
+
+def _completion_metadata_for_sequence(
+    records: Sequence[Mapping[str, object]],
+    sequence: object,
+) -> tuple[str | None, bool]:
+    if not isinstance(sequence, int) or isinstance(sequence, bool):
+        return None, False
+    for record in records:
+        if record.get("_indexed_sequence") == sequence:
+            return _completion_metadata(record)
+    return None, False
 
 
 def _bounded(value: object, limit: int = 65536) -> tuple[str, bool]:
@@ -59,6 +91,18 @@ def _summary_tool_parts(
     raw_items = projection.get("tool_items")
     if not isinstance(raw_items, list):
         return []
+    projection_status = projection.get("status")
+    terminal_turn = (
+        isinstance(projection_status, str)
+        and projection_status in _TERMINAL_TURN_STATUSES
+    )
+    result_call_ids = {
+        raw_item.get("tool_call_id")
+        for raw_item in raw_items
+        if isinstance(raw_item, Mapping)
+        and raw_item.get("item_kind") == "tool_result"
+        and isinstance(raw_item.get("tool_call_id"), str)
+    }
     parts: list[TurnResponsePartDTO] = []
     for index, raw_item in enumerate(raw_items):
         if not isinstance(raw_item, Mapping):
@@ -88,6 +132,18 @@ def _summary_tool_parts(
         if not isinstance(tool_name, str) or not tool_name:
             tool_name = "tool"
         normalized_status = status if isinstance(status, str) and status else "unknown"
+        terminal_failure = normalized_status in {"failed", "error"}
+        terminal_success = normalized_status in {
+            "completed",
+            "ok",
+            "success",
+            "succeeded",
+        }
+        outcome_unknown = (
+            item_kind == "tool_call"
+            and terminal_turn
+            and call_id not in result_call_ids
+        )
         parts.append(
             TurnResponsePartDTO(
                 part_id=f"tool-call:{assistant_sequence}:{call_index or 0}",
@@ -95,9 +151,9 @@ def _summary_tool_parts(
                 projection="summary",
                 status=(
                     "failed"
-                    if normalized_status in {"failed", "error"}
+                    if terminal_failure or outcome_unknown
                     else "completed"
-                    if item_kind == "tool_result"
+                    if item_kind == "tool_result" or terminal_success
                     else "pending"
                 ),
                 source=TurnResponseSourceDTO(
@@ -111,6 +167,7 @@ def _summary_tool_parts(
                 text=normalized_status[:limit],
                 tool_call_id=call_id,
                 tool_name=tool_name,
+                outcome_unknown=outcome_unknown,
             )
         )
     return parts
@@ -122,11 +179,13 @@ def response_parts_from_records(
     projection: Mapping[str, object] | None,
     mode: Projection,
     include: frozenset[str],
+    tool_call_ids: frozenset[str] | None = None,
     max_parts: int = 512,
 ) -> list[TurnResponsePartDTO]:
     """按 canonical 顺序生成 response parts。
 
-    summary 模式只依赖 SQLite 投影；detail 模式才读取命中的 JSONL records。
+    summary 模式以 SQLite 投影为正文来源，并从命中的最终 JSONL record 补充
+    partial/completion_reason；detail 模式读取命中的 JSONL records。
     """
     if mode == "summary":
         if projection is None:
@@ -136,15 +195,21 @@ def response_parts_from_records(
         if isinstance(final_sequence, int) and not isinstance(final_sequence, bool):
             final_text = projection.get("final_response_text")
             if isinstance(final_text, str) and final_text:
+                completion_reason, partial = _completion_metadata_for_sequence(
+                    records,
+                    final_sequence,
+                )
                 parts.append(
                     TurnResponsePartDTO(
                         part_id=f"message:{final_sequence}:final",
-                        kind="final_text",
+                        kind="text" if partial else "final_text",
                         projection="summary",
                         source=TurnResponseSourceDTO(message_sequence=final_sequence),
                         text=final_text[:65536],
                         truncated=bool(projection.get("final_response_text_truncated")),
-                        final=True,
+                        final=not partial,
+                        completion_reason=completion_reason,
+                        partial=partial,
                     )
                 )
         raw_blocks = projection.get("thinking_blocks")
@@ -231,6 +296,19 @@ def response_parts_from_records(
 
     parts = []
     tool_call_sources: dict[str, list[tuple[int, int]]] = {}
+    terminal_turn = (
+        isinstance(projection, Mapping)
+        and isinstance(projection.get("status"), str)
+        and projection.get("status") in _TERMINAL_TURN_STATUSES
+    )
+    result_call_ids = {
+        data.get("tool_call_id")
+        for record in records
+        if isinstance(record, Mapping)
+        and _serialized_message(record).get("type") == "tool"
+        for data in [_message_data(_serialized_message(record))]
+        if isinstance(data.get("tool_call_id"), str)
+    }
     final_sequence = (
         projection.get("final_message_sequence") if projection is not None else None
     )
@@ -244,6 +322,8 @@ def response_parts_from_records(
         if message_type == "ai":
             content = data.get("content")
             blocks = _blocks(content)
+            reasoning_rows = reasoning_projection_rows(content)
+            completion_reason, partial = _completion_metadata(record)
             for block_index, block in enumerate(blocks):
                 block_type = block.get("type")
                 if block_type in {"text", "input_text", "output_text", "refusal"}:
@@ -262,7 +342,7 @@ def response_parts_from_records(
                     parts.append(
                         TurnResponsePartDTO(
                             part_id=f"message:{sequence}:content:{block_index}",
-                            kind="final_text" if is_final else "text",
+                            kind="final_text" if is_final and not partial else "text",
                             projection="detail",
                             source=TurnResponseSourceDTO(
                                 message_sequence=sequence,
@@ -270,12 +350,18 @@ def response_parts_from_records(
                             ),
                             text=text,
                             truncated=truncated,
-                            final=is_final,
+                            final=is_final and not partial,
+                            completion_reason=completion_reason,
+                            partial=partial,
                         )
                     )
                     continue
-                reasoning_rows = reasoning_projection_rows([block])
-                for row in reasoning_rows:
+                block_rows = [
+                    row
+                    for row in reasoning_rows
+                    if row.get("content_block_index") == block_index
+                ]
+                for row in block_rows:
                     row_index = row.get("item_index")
                     if not isinstance(row_index, int):
                         row_index = 0
@@ -293,43 +379,31 @@ def response_parts_from_records(
                         if isinstance(row.get("carrier_type"), str)
                         else None
                     )
-                    reasoning_text = row.get("reasoning_text")
-                    summary_text = row.get("summary_text")
-                    encrypted = row.get("encrypted_length") is not None
-                    logical_rows: list[tuple[str, object, bool]] = []
-                    if isinstance(reasoning_text, str) and reasoning_text.strip():
-                        logical_rows.append(("reasoning", reasoning_text, False))
-                    if isinstance(summary_text, str) and summary_text.strip():
-                        logical_rows.append(("reasoning_summary", summary_text, False))
-                    if encrypted:
-                        logical_rows.append(
-                            ("reasoning_encrypted", "思考内容已加密", False)
+                    logical_kind = (
+                        "reasoning_encrypted"
+                        if kind == "encrypted"
+                        else "reasoning_summary"
+                        if kind == "summary"
+                        else "reasoning"
+                    )
+                    if not text and logical_kind != "reasoning_encrypted":
+                        continue
+                    parts.append(
+                        TurnResponsePartDTO(
+                            part_id=(
+                                f"message:{sequence}:reasoning:{block_index}:"
+                                f"{row_index}"
+                            ),
+                            kind=logical_kind,
+                            projection="detail",
+                            source=source,
+                            text=text,
+                            carrier_type=carrier_type,
+                            truncated=truncated,
+                            completion_reason=completion_reason,
+                            partial=partial,
                         )
-                    if not logical_rows and text:
-                        logical_rows.append(
-                            (
-                                "reasoning_summary"
-                                if kind == "summary"
-                                else "reasoning",
-                                text,
-                                truncated,
-                            )
-                        )
-                    for logical_kind, logical_text, logical_truncated in logical_rows:
-                        parts.append(
-                            TurnResponsePartDTO(
-                                part_id=(
-                                    f"message:{sequence}:reasoning:{block_index}:"
-                                    f"{row_index}:{logical_kind}"
-                                ),
-                                kind=logical_kind,
-                                projection="detail",
-                                source=source,
-                                text=str(logical_text),
-                                carrier_type=carrier_type,
-                                truncated=logical_truncated,
-                            )
-                        )
+                    )
             if "tool_call" in include or "tool_result" in include:
                 calls = data.get("tool_calls")
                 if isinstance(calls, list):
@@ -340,6 +414,8 @@ def response_parts_from_records(
                         name = call.get("name")
                         if not isinstance(call_id, str) or not call_id:
                             continue
+                        if tool_call_ids is not None and call_id not in tool_call_ids:
+                            continue
                         if not isinstance(name, str) or not name:
                             name = "tool"
                         arguments, truncated = _bounded(
@@ -349,13 +425,14 @@ def response_parts_from_records(
                                 default=str,
                             )
                         )
+                        outcome_unknown = terminal_turn and call_id not in result_call_ids
                         if "tool_call" in include:
                             parts.append(
                                 TurnResponsePartDTO(
                                     part_id=f"tool-call:{sequence}:{call_index}",
                                     kind="tool_call",
                                     projection="detail",
-                                    status="pending",
+                                    status="failed" if outcome_unknown else "pending",
                                     source=TurnResponseSourceDTO(
                                         message_sequence=sequence,
                                         assistant_message_sequence=sequence,
@@ -365,6 +442,7 @@ def response_parts_from_records(
                                     tool_name=name,
                                     arguments=arguments,
                                     truncated=truncated,
+                                    outcome_unknown=outcome_unknown,
                                 )
                             )
                         tool_call_sources.setdefault(call_id, []).append(
@@ -372,6 +450,11 @@ def response_parts_from_records(
                         )
         elif message_type == "tool" and "tool_result" in include:
             call_id = data.get("tool_call_id")
+            if (
+                tool_call_ids is not None
+                and (not isinstance(call_id, str) or call_id not in tool_call_ids)
+            ):
+                continue
             result, truncated = _bounded(data.get("content"))
             if not result:
                 continue
@@ -409,4 +492,32 @@ def response_parts_from_records(
                     truncated=truncated,
                 )
             )
+    if "tool_summary" in include:
+        existing_tool_kinds = {
+            part.kind for part in parts if part.kind in {"tool_call", "tool_result"}
+        }
+        parts.extend(
+            part
+            for part in _summary_tool_parts(
+                projection or {},
+                limit=65536,
+                include=include,
+            )
+            if part.kind not in existing_tool_kinds
+        )
+        parts.sort(
+            key=lambda part: (
+                part.source.message_sequence,
+                part.source.content_block_index
+                if part.source.content_block_index is not None
+                else 1_000_000_000,
+                part.source.item_index
+                if part.source.item_index is not None
+                else 1_000_000_000,
+                part.source.call_index
+                if part.source.call_index is not None
+                else 1_000_000_000,
+                1 if part.kind == "tool_result" else 0,
+            )
+        )
     return parts[:max_parts]

@@ -127,7 +127,17 @@ class ActivityHandlerRegistry:
         self.register(
             kind="resource.operation",
             handler=SafeDetailActivityHandler(
-                frozenset({"resource_id", "operation", "phase"})
+                frozenset(
+                    {
+                        "resource_id",
+                        "operation",
+                        "phase",
+                        "code",
+                        "retryable",
+                        "recovery",
+                        "timeout_ms",
+                    }
+                )
             ),
             capabilities=ActivityCapabilities(
                 detail=True,

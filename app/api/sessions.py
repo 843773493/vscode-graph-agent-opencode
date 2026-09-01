@@ -40,9 +40,9 @@ from app.schemas.internal_v2.session import (
     SessionCompactResultDTO,
     SessionCreateRequest,
     SessionDTO,
+    SessionForkRequest,
     SessionInformationSnapshotDTO,
     SessionInterruptResultDTO,
-    SessionForkRequest,
     SessionUpdateRequest,
 )
 from app.schemas.internal_v2.session_changes import (
@@ -307,12 +307,16 @@ async def list_session_resources(
     session_id: str,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
+    include_history: bool = Query(default=True),
     session_resource_service: SessionResourceService = Depends(
         get_session_resource_service
     ),
 ):
     try:
-        result = await session_resource_service.list(session_id)
+        result = await session_resource_service.list(
+            session_id,
+            include_history=include_history,
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return APIResponse(data=result, request_id=request_id)

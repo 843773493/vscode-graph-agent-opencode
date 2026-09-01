@@ -443,6 +443,8 @@ def build_app_container(
         job_event_bus=job_event_bus,
         job_executor=job_executor,
         pending_request_store=pending_request_store,
+        job_timeout_seconds=config_service.get_agent_run_timeout_seconds(),
+        terminal_status_writer=checkpointer,
     )
     session_service.bind_job_service(job_service)
     session_turn_history_service = SessionTurnHistoryService(
@@ -519,6 +521,7 @@ def build_app_container(
         background_task_registry=background_task_registry,
         trace_event_store=trace_event_store,
         message_stream_store=message_stream_store,
+        terminal_status_writer=checkpointer,
     )
     goal_runtime_service = GoalRuntimeService(
         goal_service=goal_service,
@@ -598,7 +601,11 @@ def build_app_container(
         registry=ToolTestRegistry(),
         store=ToolTestStore(root=resolved_boxteam_root / "tool_tests"),
         workspace_root=resolved_workspace_root,
-        asset_root=resolved_project_root / "asset" / "model_tool_test_workspace",
+        asset_root=resolved_project_root
+        / "tests"
+        / "fixtures"
+        / "workspaces"
+        / "model_tool_test_workspace",
     )
     tool_catalog_service = ToolCatalogService(
         runtime_catalog=agent_execution_service,

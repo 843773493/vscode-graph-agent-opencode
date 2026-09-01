@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -120,18 +120,30 @@ def persist_interrupt_checkpoint(
     session_id: str,
     current_text: str,
     active_tool_name: str | None,
+    checkpoint_source: str = "interrupt",
 ) -> None:
-    """任务被取消时，把部分 assistant 文本和独立 system_reminder 写入 checkpoint。"""
+    """任务被取消时，保存部分结果并记录真实的取消来源。"""
     if checkpointer is None:
         raise RuntimeError("任务取消时无法写入 checkpoint：checkpointer 未配置")
 
     phase = "tool" if active_tool_name else "text"
-    interrupted_at = datetime.now(timezone.utc).isoformat()
-    reminder = build_user_interrupt_reminder(
-        phase=phase,
-        active_tool_name=active_tool_name,
-        interrupted_at=interrupted_at,
-    )
+    interrupted_at = datetime.now(UTC).isoformat()
+    if checkpoint_source == "interrupt":
+        reminder = build_user_interrupt_reminder(
+            phase=phase,
+            active_tool_name=active_tool_name,
+            interrupted_at=interrupted_at,
+        )
+    elif checkpoint_source == "job_timeout":
+        reminder = (
+            f"AgentLoop 在 {interrupted_at} 达到任务总超时上限并停止。"
+            "请保留此前已完成的工具结果，根据最新用户请求继续或明确报告失败。"
+        )
+    else:
+        reminder = (
+            f"AgentLoop 在 {interrupted_at} 因内部执行丢失而停止，未收到用户中断请求。"
+            "请保留此前已完成的工具结果，根据最新用户请求继续或明确报告失败。"
+        )
     content = current_text if phase == "text" else ""
     injected = append_system_reminder_checkpoint(
         checkpointer=checkpointer,
@@ -140,15 +152,15 @@ def persist_interrupt_checkpoint(
         response_metadata={
             "phase": phase,
             "tool_name": active_tool_name,
-            "source": "interrupt",
+            "source": checkpoint_source,
         },
         assistant_text=content,
         assistant_response_metadata={
             "phase": phase,
             "tool_name": active_tool_name,
-            "source": "interrupt",
+            "source": checkpoint_source,
         },
-        checkpoint_source="interrupt",
+        checkpoint_source=checkpoint_source,
     )
     if not injected:
         raise RuntimeError(f"任务取消时未找到可写入的 checkpoint: session_id={session_id}")

@@ -4,9 +4,11 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from watchfiles import Change
 
 from app.services.infrastructure.workspace_file_watch_service import (
     FILE_WATCH_QUEUE_SIZE,
+    WORKSPACE_FILE_WATCH_FILTER,
     WorkspaceFileChange,
     WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
@@ -36,6 +38,15 @@ def test_watch_roots_reject_filesystem_root(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="必须是绝对目录"):
         service.resolve_watch_roots(["relative/path"])
+
+
+def test_watcher_filters_boxteam_runtime_before_watch_batches(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    internal_file = workspace / ".boxteam" / "sessions" / "stream.state.json"
+    source_file = workspace / "parry_arena" / "main.gd"
+
+    assert WORKSPACE_FILE_WATCH_FILTER(Change.modified, str(internal_file)) is False
+    assert WORKSPACE_FILE_WATCH_FILTER(Change.modified, str(source_file)) is True
 
 
 def test_queue_overflow_is_reported_instead_of_silently_dropping() -> None:

@@ -50,12 +50,29 @@ import type {
   WorkspaceNavigationNodeUpdateRequest,
   WorkspaceNavigationPlacementRequest,
 } from "./types/backend";
-import { HttpRequestError, requestJson, unwrapApiData } from "./api";
+import {
+  HttpRequestError,
+  invalidateGatewayUserSession,
+  registerGatewayUserSessionInitializer,
+  requestJson,
+  unwrapApiData,
+} from "./api/http";
 import type { CreatableSessionConnectionKind } from "./types/frontend";
 
 const WEB_GUEST_REQUEST: CreateGatewayGuestRequest = {
-  tracking: { source: "web" },
+  // Guest 请求只发送协议必需字段，避免旧 Gateway/新 Gateway 间的
+  // tracking 结构差异把初始化阻断为 422。
 };
+
+const pendingGatewayUserAccessByPort = new Map<
+  number,
+  Promise<GatewayUserAccess>
+>();
+const HEARTBEAT_RETRY_DELAYS_MS = [250, 1_000] as const;
+
+// 所有工作区业务请求都经由 http.ts 的屏障等待这里完成 current/guest。
+// 认证探测本身显式跳过屏障，避免初始化请求递归等待自己。
+registerGatewayUserSessionInitializer((port) => ensureGatewayUserAccess(port));
 
 export interface CreatedSessionConnection {
   kind: CreatableSessionConnectionKind;
@@ -138,6 +155,7 @@ export async function getCurrentGatewayUser(
     await requestJson<APIResponse<GatewayUserAccess>>(
       port,
       "/api/gateway/users/current",
+      { skipGatewayUserSession: true },
     ),
   );
 }
@@ -145,28 +163,58 @@ export async function getCurrentGatewayUser(
 export async function ensureGatewayUserAccess(
   port: number,
 ): Promise<GatewayUserAccess> {
-  try {
-    return await getCurrentGatewayUser(port);
-  } catch (error: unknown) {
-    if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
-    return unwrapApiData(
-      await requestJson<APIResponse<GatewayUserAccess>>(
-        port,
-        "/api/gateway/users/guest",
-        { method: "POST", body: JSON.stringify(WEB_GUEST_REQUEST) },
-      ),
-    );
-  }
+  const pending = pendingGatewayUserAccessByPort.get(port);
+  if (pending) return pending;
+
+  const initialization = (async () => {
+    try {
+      return await getCurrentGatewayUser(port);
+    } catch (error: unknown) {
+      if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
+      return unwrapApiData(
+        await requestJson<APIResponse<GatewayUserAccess>>(
+          port,
+          "/api/gateway/users/guest",
+          {
+            method: "POST",
+            body: JSON.stringify(WEB_GUEST_REQUEST),
+            skipGatewayUserSession: true,
+          },
+        ),
+      );
+    }
+  })();
+  pendingGatewayUserAccessByPort.set(port, initialization);
+  void initialization.then(() => {
+    if (pendingGatewayUserAccessByPort.get(port) === initialization) {
+      pendingGatewayUserAccessByPort.delete(port);
+    }
+  }, () => {
+    if (pendingGatewayUserAccessByPort.get(port) === initialization) {
+      pendingGatewayUserAccessByPort.delete(port);
+    }
+  });
+  return initialization;
+}
+
+function invalidatePendingGatewayUserAccess(port: number): void {
+  pendingGatewayUserAccessByPort.delete(port);
 }
 
 export async function acquireGatewayGuest(
   port: number,
 ): Promise<GatewayUserAccess> {
+  invalidatePendingGatewayUserAccess(port);
+  invalidateGatewayUserSession(port);
   return unwrapApiData(
     await requestJson<APIResponse<GatewayUserAccess>>(
       port,
       "/api/gateway/users/guest",
-      { method: "POST", body: JSON.stringify(WEB_GUEST_REQUEST) },
+      {
+        method: "POST",
+        body: JSON.stringify(WEB_GUEST_REQUEST),
+        skipGatewayUserSession: true,
+      },
     ),
   );
 }
@@ -203,6 +251,8 @@ async function acquireGatewayUser(
   path: "access" | "takeover",
   clientLabel?: string,
 ): Promise<GatewayUserAccess> {
+  invalidatePendingGatewayUserAccess(port);
+  invalidateGatewayUserSession(port);
   return unwrapApiData(
     await requestJson<APIResponse<GatewayUserAccess>>(
       port,
@@ -212,6 +262,7 @@ async function acquireGatewayUser(
         body: JSON.stringify({
           client_label: clientLabel ?? null,
         } satisfies AcquireGatewayUserRequest),
+        skipGatewayUserSession: true,
       },
     ),
   );
@@ -243,6 +294,26 @@ export async function heartbeatGatewayUser(
       { method: "POST" },
     ),
   );
+}
+
+export async function heartbeatGatewayUserWithRetry(
+  port: number,
+): Promise<GatewayUserAccess> {
+  for (let attempt = 0; attempt <= HEARTBEAT_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await heartbeatGatewayUser(port);
+    } catch (error) {
+      // 409/401 是业务鉴权结果，必须立即交给访问状态处理；这里只恢复
+      // 重启或网络切换造成的 fetch 传输失败，并且重试次数严格有界。
+      if (error instanceof HttpRequestError || attempt === HEARTBEAT_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, HEARTBEAT_RETRY_DELAYS_MS[attempt]);
+      });
+    }
+  }
+  throw new Error("heartbeat 重试未返回结果");
 }
 
 export async function getGatewayUserViewState(
@@ -324,11 +395,15 @@ export async function restartDevelopmentRuntime(
 
 export async function listGatewayWorkspaces(
   port: number,
+  options: { checkHealth?: boolean } = {},
 ): Promise<GatewayWorkspaceList> {
+  const query = options.checkHealth === undefined
+    ? ""
+    : `?check_health=${String(options.checkHealth)}`;
   return unwrapApiData(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
       port,
-      "/api/gateway/workspaces",
+      `/api/gateway/workspaces${query}`,
     ),
   );
 }
@@ -673,12 +748,13 @@ export async function revokeGatewayDeviceConnection(
 export async function activateGatewayWorkspace(
   port: number,
   workspaceId: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const result = unwrapApiData(
     await requestJson<APIResponse<ActivateGatewayWorkspaceResultDTO>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/activate`,
-      { method: "POST" },
+      { method: "POST", signal },
     ),
   );
   return result.active_workspace_id;

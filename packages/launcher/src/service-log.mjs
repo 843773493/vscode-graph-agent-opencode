@@ -1,8 +1,29 @@
-import { chmodSync, closeSync, mkdirSync, openSync, writeSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  statSync,
+  writeSync,
+} from "node:fs";
 import path from "node:path";
 
 export const SERVICE_LOG_PATH_ENV = "BOXTEAM_SERVICE_LOG_PATH";
 export const SERVICE_LOG_CAPTURED_ENV = "BOXTEAM_SERVICE_LOG_CAPTURED";
+export const SERVICE_LOG_MAX_BYTES = 64 * 1024 * 1024;
+export const SERVICE_LOG_ROTATIONS = 3;
+
+export function rotateServiceLog(logPath) {
+  if (!existsSync(logPath) || statSync(logPath).size < SERVICE_LOG_MAX_BYTES) return;
+  for (let index = SERVICE_LOG_ROTATIONS - 1; index >= 1; index -= 1) {
+    const source = `${logPath}.${index}`;
+    const target = `${logPath}.${index + 1}`;
+    if (existsSync(source)) renameSync(source, target);
+  }
+  renameSync(logPath, `${logPath}.1`);
+}
 
 export function resolveServiceLogPath(boxteamHome, environment = process.env) {
   const configured = environment[SERVICE_LOG_PATH_ENV]?.trim();
@@ -28,6 +49,7 @@ export function openServiceLog({
   }
 
   mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
+  rotateServiceLog(logPath);
   const descriptor = openSync(logPath, "a", 0o600);
   // TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
   if (process.platform !== "win32") {

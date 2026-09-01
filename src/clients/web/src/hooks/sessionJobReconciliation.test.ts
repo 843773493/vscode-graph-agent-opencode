@@ -261,6 +261,9 @@ function installMockBackend({
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: `token-${port}` });
       }
+      if (url.pathname === "/api/gateway/users/current") {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
       businessRequests.push(`${url.pathname}${url.search}`);
       if (url.pathname === `/api/v1/jobs/${ACTIVE_JOB_ID}`) {
         return apiResponse(activeJob);
@@ -478,6 +481,50 @@ describe("运行中 Job 对账", () => {
     await reconciliation;
   });
 
+  test("所有终态 Job 都在历史回填前清除 pending 镜像", async () => {
+    const terminalStatuses = [
+      "completed",
+      "failed",
+      "timed_out",
+      "cancelled",
+    ] as const;
+
+    for (const [index, status] of terminalStatuses.entries()) {
+      const port = 49_108 + index;
+      installMockBackend({
+        port,
+        activeJob: job(
+          status,
+          status === "failed" || status === "timed_out"
+            ? "终态回归错误"
+            : null,
+        ),
+        traces: [],
+      });
+      const harness = stateHarness(appState());
+      let releaseRefresh!: () => void;
+      const refreshStarted = new Promise<void>((resolve) => {
+        releaseRefresh = resolve;
+      });
+      const reconciliation = reconcileActiveJob(
+        port,
+        SESSION_ID,
+        WORKSPACE_ID,
+        SESSION_CACHE_KEY,
+        ACTIVE_JOB_ID,
+        async () => refreshStarted,
+        harness.setState,
+      );
+
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+      expect(harness.current().pendingConversations.has(SESSION_CACHE_KEY)).toBe(
+        false,
+      );
+      releaseRefresh();
+      await reconciliation;
+    }
+  });
+
   test("终态 detail 来自未来 epoch 时不合并并通过 reloadNonce 请求 bootstrap", async () => {
     const port = 49_106;
     installMockBackend({
@@ -562,6 +609,38 @@ describe("运行中 Job 对账", () => {
     expect(requests.filter((path) => path.endsWith("/history"))).toHaveLength(1);
   });
 
+  test("history 回填失败时也先清除转圈并显示 Job 终态", async () => {
+    const port = 49_109;
+    installMockBackend({
+      port,
+      activeJob: job("failed", "模型响应等待超时"),
+      traces: [],
+    });
+    const harness = stateHarness(appState());
+
+    await expect(
+      reconcileActiveJob(
+        port,
+        SESSION_ID,
+        WORKSPACE_ID,
+        SESSION_CACHE_KEY,
+        ACTIVE_JOB_ID,
+        async () => {
+          throw new Error("模拟 history 400");
+        },
+        harness.setState,
+      ),
+    ).rejects.toThrow("模拟 history 400");
+
+    expect(harness.current().pendingConversations.has(SESSION_CACHE_KEY)).toBe(
+      false,
+    );
+    expect(harness.current().activeJobIdsBySession.has(SESSION_CACHE_KEY)).toBe(
+      false,
+    );
+    expect(harness.current().status).toBe("任务失败: 模型响应等待超时");
+  });
+
   test("Job 仍在运行时只发一个轻量请求且不修改状态", async () => {
     const port = 49_103;
     const requests = installMockBackend({
@@ -619,7 +698,7 @@ describe("运行中 Job 对账", () => {
     expect(harness.current().status).toBe("正在处理");
   });
 
-  test("Job 已终止但 pending 仍标记运行中时透明报错", async () => {
+  test("Job API 已终止时清理仍标记运行中的旧 pending 镜像", async () => {
     const port = 49_104;
     installMockBackend({
       port,
@@ -632,19 +711,18 @@ describe("运行中 Job 对账", () => {
     });
     const harness = stateHarness(appState());
 
-    await expect(
-      reconcileActiveJob(
-        port,
-        SESSION_ID,
-        WORKSPACE_ID,
-        SESSION_CACHE_KEY,
-        ACTIVE_JOB_ID,
-        turnDetailRefresher(port, harness),
-        harness.setState,
-      ),
-    ).rejects.toThrow("Job 已终止但会话仍标记为运行中");
-    expect(harness.current().activeJobIdsBySession.get(SESSION_CACHE_KEY)).toBe(
+    await reconcileActiveJob(
+      port,
+      SESSION_ID,
+      WORKSPACE_ID,
+      SESSION_CACHE_KEY,
       ACTIVE_JOB_ID,
+      turnDetailRefresher(port, harness),
+      harness.setState,
     );
+    expect(harness.current().activeJobIdsBySession.has(SESSION_CACHE_KEY)).toBe(
+      false,
+    );
+    expect(harness.current().status).toBe("任务已完成");
   });
 });

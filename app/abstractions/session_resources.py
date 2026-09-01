@@ -241,7 +241,12 @@ class SessionResourceProviderProtocol(Protocol):
 
     kind: SessionResourceKind
 
-    async def list_resources(self, session_id: str) -> list[SessionResourceDTO]: ...
+    async def list_resources(
+        self,
+        session_id: str,
+        *,
+        include_history: bool = True,
+    ) -> list[SessionResourceDTO]: ...
 
     async def control(
         self,

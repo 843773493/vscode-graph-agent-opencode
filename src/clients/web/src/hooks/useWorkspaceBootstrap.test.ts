@@ -5,7 +5,9 @@ import {
   canAcceptUserViewStateResponse,
   canAcceptUserViewStateMutation,
   shouldRestorePersistedWorkspace,
+  isRetryableWorkspaceBootstrapError,
 } from "./useWorkspaceBootstrap";
+import { HttpRequestError } from "../api/http";
 
 describe("selectBootstrapSessionId", () => {
   test("用户切换后不沿用上一个用户的当前会话", () => {
@@ -125,5 +127,19 @@ describe("shouldRestorePersistedWorkspace", () => {
       activeWorkspaceId: "workspace-a",
       availableWorkspaceIds: ["workspace-a"],
     })).toBe(false);
+  });
+});
+
+describe("isRetryableWorkspaceBootstrapError", () => {
+  test("工作区后端尚未就绪的 503 可以重试", () => {
+    expect(isRetryableWorkspaceBootstrapError(
+      new HttpRequestError(503, "Service Unavailable", "not ready", "/api/v1/workspace"),
+    )).toBe(true);
+  });
+
+  test("业务鉴权失败不应被初始化重试吞掉", () => {
+    expect(isRetryableWorkspaceBootstrapError(
+      new HttpRequestError(401, "Unauthorized", "expired", "/api/v1/sessions"),
+    )).toBe(false);
   });
 });

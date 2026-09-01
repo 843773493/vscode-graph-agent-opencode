@@ -24,19 +24,55 @@ const COMMON_FILE_EXTENSIONS = new Set([
   "java", "js", "json", "jsonc", "jsx", "md", "mjs", "py", "rs", "scss",
   "sh", "sql", "svg", "toml", "ts", "tsx", "txt", "vue", "xml", "yaml", "yml",
 ]);
+const NON_TEXT_FILE_EXTENSIONS = new Set([
+  "7z", "avif", "bin", "bmp", "class", "dll", "doc", "docx", "exe", "flac",
+  "gif", "gz", "ico", "jpeg", "jpg", "m4a", "mov", "mp3", "mp4", "ogg", "pdf",
+  "pck", "rar", "tar", "wasm", "wav", "webm", "webp", "woff", "woff2", "zip",
+  "png",
+]);
+
+function workspaceFileExtension(path: string): string {
+  const pathWithoutSelection = path
+    .replace(/#L?\d+(?:-L?\d+)?$/u, "")
+    .replace(/:\d+(?::\d+)?$/u, "");
+  const fileName = pathWithoutSelection
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean)
+    .at(-1) ?? "";
+  return fileName.split(".").at(-1)?.toLowerCase() ?? "";
+}
+
+export function isWorkspaceTextFilePath(path: string): boolean {
+  return !NON_TEXT_FILE_EXTENSIONS.has(workspaceFileExtension(path));
+}
 
 export function isLikelyWorkspaceFileReference(target: string): boolean {
   const normalized = target.trim().replace(/\\/g, "/");
   if (!normalized || /\s/u.test(normalized) || /[<>]/u.test(normalized)) {
     return false;
   }
+  // 文件引用只负责文本预览；二进制资源应通过文件树的下载/原始资源路径处理，
+  // 不得为了验证它们调用文本内容接口并把预期的 400 记录成前端错误。
+  if (!isWorkspaceTextFilePath(normalized)) {
+    return false;
+  }
   if (
     normalized.startsWith(GENERATED_REFERENCE_PREFIX) ||
     normalized.startsWith("./") ||
-    normalized.startsWith("../") ||
-    normalized.includes("/")
+    normalized.startsWith("../")
   ) {
     return true;
+  }
+  if (normalized.includes("/")) {
+    const pathWithoutSelection = normalized
+      .replace(/#L?\d+(?:-L?\d+)?$/u, "")
+      .replace(/:\d+(?::\d+)?$/u, "");
+    const pathSegments = pathWithoutSelection.split("/").filter(Boolean);
+    const fileName = pathSegments[pathSegments.length - 1];
+    // 只有末段看起来像真实文件名时才探测内容；例如游戏说明中的
+    // `WINDUP/STRIKE`、`A/D` 和 `.html/.wasm` 不是工作区文件路径。
+    return Boolean(fileName && !fileName.startsWith(".") && /\.[a-z\d]+$/iu.test(fileName));
   }
   const match = /^[^./]+\.([a-z\d]+)(?::\d+(?::\d+)?)?(?:#L?\d+(?:-L?\d+)?)?$/iu.exec(
     normalized,

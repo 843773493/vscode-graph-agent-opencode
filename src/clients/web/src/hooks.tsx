@@ -9,6 +9,8 @@ import React, {
 } from "react";
 import {
   DEFAULT_BACKEND_PORT,
+  getSession as apiGetSession,
+  listAgents as apiListAgents,
   listSessions as apiListSessions,
 } from "./api";
 import {
@@ -60,6 +62,7 @@ import { useContentViewEffects } from "./hooks/useContentViewEffects";
 import { useSessionTurnHistory } from "./hooks/sessionTurnHistory/useSessionTurnHistory";
 import { useSessionEventStream } from "./hooks/useSessionEventStream";
 import { useSessionMessageStream } from "./hooks/useSessionMessageStream";
+import { reconcileTerminalJob } from "./hooks/sessionJobReconciliation";
 import { useBackgroundSessionActivity } from "./hooks/useBackgroundSessionActivity";
 import { useWorkspaceSessionActivity } from "./hooks/useWorkspaceSessionActivity";
 import { useSessionInformationClipboard } from "./hooks/useSessionInformationClipboard";
@@ -88,7 +91,6 @@ import {
 } from "./state/composerState";
 import {
   createLatestSerialTaskQueue,
-  createSerialTaskQueue,
 } from "./hooks/serialTaskQueue";
 import type { SessionTurnTimeline } from "./state/session/turnTimeline";
 
@@ -188,6 +190,7 @@ interface AppContextType {
     requestIdentity?: string | null,
     refreshAfterInFlight?: boolean,
     include?: TurnHistoryInclude[],
+    toolCallIds?: string[],
   ) => Promise<void>;
   loadAgentStateMessageRawContent: (
     sessionId: string,
@@ -221,7 +224,11 @@ interface AppContextType {
   ) => Promise<void>;
   interruptSession: () => void;
   selectSession: (sessionId: string) => void;
-  selectWorkspaceSession: (workspaceId: string, sessionId: string) => void;
+  selectWorkspaceSession: (
+    workspaceId: string,
+    sessionId: string,
+    sessionOverride?: Session,
+  ) => void;
   openWorkspaceSession: (workspaceId: string, sessionId: string) => Promise<void>;
   createSession: (
     title?: string,
@@ -305,7 +312,19 @@ interface AppContextType {
   }) => void;
 }
 
-const AppContext = createContext<AppContextType | null>(null);
+type HotReloadContextStore = {
+  appContext?: React.Context<AppContextType | null>;
+  composerContext?: React.Context<ComposerContextType | null>;
+};
+
+// Vite 热更新会分别重载 Provider 和消费者模块；复用 Context 身份，避免
+// 旧 AppShell 读取到新 AppProvider 之外的 Context。生产构建不依赖这段状态。
+const hotReloadContextStore = import.meta.hot?.data as HotReloadContextStore | undefined;
+const AppContext = hotReloadContextStore?.appContext
+  ?? createContext<AppContextType | null>(null);
+if (hotReloadContextStore) {
+  hotReloadContextStore.appContext = AppContext;
+}
 
 type ComposerContextActions = Pick<
   AppContextType,
@@ -331,7 +350,11 @@ export interface ComposerContextType extends ComposerContextActions {
   getLatestAssistantContent: () => string | null;
 }
 
-export const ComposerContext = createContext<ComposerContextType | null>(null);
+export const ComposerContext = hotReloadContextStore?.composerContext
+  ?? createContext<ComposerContextType | null>(null);
+if (hotReloadContextStore) {
+  hotReloadContextStore.composerContext = ComposerContext;
+}
 
 export function useAppState() {
   const ctx = useContext(AppContext);
@@ -353,8 +376,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const latestStateRef = useRef(state);
   latestStateRef.current = state;
-  const workspaceActivationQueueRef = useRef(createSerialTaskQueue());
+  const workspaceActivationQueueRef = useRef(createLatestSerialTaskQueue());
   const workspaceSessionSelectionQueueRef = useRef(createLatestSerialTaskQueue());
+  const workspaceSessionSelectionIntentRef = useRef(0);
+  const backgroundWorkspaceActivationSequenceRef = useRef(0);
   const currentSessionId = state.currentSession?.session_id ?? null;
   const defaultGatewayWorkspaceId =
     state.gatewayWorkspaces.find((workspace) => workspace.system_default)
@@ -427,6 +452,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     reloadNonce: state.sessionHistoryReloadNonce,
     setState,
   });
+  const loadTurnDetailsForTerminalReconcile = loadTurnDetails;
+  const handleMessageStreamTerminal = useCallback((turnId: string) => {
+    if (!state.apiPort || !currentSessionId || !currentSessionCacheKey) {
+      return;
+    }
+    void reconcileTerminalJob(
+      state.apiPort,
+      currentSessionId,
+      currentSessionGatewayWorkspaceId,
+      currentSessionCacheKey,
+      turnId,
+      loadTurnDetailsForTerminalReconcile,
+      setState,
+    ).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      setState((previous) => (
+        previous.currentSession?.session_id === currentSessionId
+          ? { ...previous, status: `任务收尾失败: ${message}` }
+          : previous
+      ));
+    });
+  }, [
+    currentSessionCacheKey,
+    currentSessionGatewayWorkspaceId,
+    currentSessionId,
+    loadTurnDetailsForTerminalReconcile,
+    setState,
+    state.apiPort,
+  ]);
   const currentTurnTimeline = currentSessionCacheKey
     ? state.turnTimelinesBySession.get(currentSessionCacheKey) ?? null
     : null;
@@ -450,6 +504,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     turnId: currentActiveJobId,
     workspaceId: currentSessionGatewayWorkspaceId,
     sessionCacheKey: currentSessionCacheKey,
+    onTerminal: handleMessageStreamTerminal,
     setState,
   });
   useBackgroundSessionActivity({
@@ -742,8 +797,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
   }, [persistSessionViewState, selectSessionCallback]);
 
-  const selectWorkspaceSession = useCallback((workspaceId: string, sessionId: string) => {
-    selectWorkspaceSessionCallback(workspaceId, sessionId);
+  const selectWorkspaceSession = useCallback((
+    workspaceId: string,
+    sessionId: string,
+    sessionOverride?: Session,
+  ) => {
+    selectWorkspaceSessionCallback(workspaceId, sessionId, sessionOverride);
     void persistSessionViewState(workspaceId, sessionId);
   }, [persistSessionViewState, selectWorkspaceSessionCallback]);
 
@@ -780,13 +839,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, [saveSessionViewState]);
 
-  const { invalidateWorkspaceRefreshes, refreshSessions } = useWorkspaceBootstrap({
+  const {
+    invalidateWorkspaceRefreshes,
+    refreshGatewayWorkspaceStatuses,
+    refreshSessions,
+  } = useWorkspaceBootstrap({
     apiPort: state.apiPort,
+    uiSettings: state.uiSettings,
     setState,
   });
   useContentViewEffects({
     contentView: state.contentView,
     sessionId: currentSessionId,
+    userAccessReady: state.gatewayUserAccess !== null,
     refreshLLMRequestLogs,
     refreshSessionChanges,
     refreshSessionResources,
@@ -802,10 +867,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [abortCurrentStream]);
 
-  const finishWorkspaceRefresh = useCallback(async (preferredSessionId?: string | null) => {
-    const applied = await refreshSessions(preferredSessionId);
+  const finishWorkspaceRefresh = useCallback(async (
+    preferredSessionId?: string | null,
+    options: {
+      checkGatewayWorkspaceHealth?: boolean;
+      reuseCurrentUiSettings?: boolean;
+    } = {},
+  ): Promise<boolean> => {
+    const applied = await refreshSessions(preferredSessionId, options);
     if (!applied) {
-      return;
+      return false;
     }
     setState((prev) => ({
       ...prev,
@@ -813,17 +884,82 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       error: null,
       status: "工作区已就绪",
     }));
+    return true;
   }, [refreshSessions]);
+
+  const activateGatewayWorkspaceInBackground = useCallback((workspaceId: string) => {
+    const requestSequence = ++backgroundWorkspaceActivationSequenceRef.current;
+    const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+    invalidateWorkspaceRefreshes();
+    const operation = workspaceActivationQueueRef.current.enqueue(async () => {
+      await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
+    });
+    void operation.then(() => {
+      if (requestSequence !== backgroundWorkspaceActivationSequenceRef.current) {
+        return;
+      }
+      void apiListAgents(resolvedApiPort, workspaceId)
+        .then((agents) => {
+          if (
+            requestSequence !== backgroundWorkspaceActivationSequenceRef.current
+            || latestStateRef.current.currentSessionWorkspaceId !== workspaceId
+          ) {
+            return;
+          }
+          setState((previous) => ({ ...previous, agents }));
+        })
+        .catch((error: unknown) => {
+          if (
+            requestSequence !== backgroundWorkspaceActivationSequenceRef.current
+            || latestStateRef.current.currentSessionWorkspaceId !== workspaceId
+          ) {
+            return;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          setState((previous) => ({
+            ...previous,
+            gatewayError: "后台加载工作区 Agent 失败: " + message,
+            status: "后台加载工作区 Agent 失败: " + message,
+          }));
+        });
+      void refreshGatewayWorkspaceStatuses(workspaceId);
+    }).catch((error: unknown) => {
+      if (
+        requestSequence !== backgroundWorkspaceActivationSequenceRef.current
+        || latestStateRef.current.currentSessionWorkspaceId !== workspaceId
+      ) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      setState((previous) => ({
+        ...previous,
+        gatewayError: message,
+        status: "后台切换工作区失败: " + message,
+      }));
+    });
+  }, [
+    invalidateWorkspaceRefreshes,
+    refreshGatewayWorkspaceStatuses,
+    setState,
+    state.apiPort,
+  ]);
 
   const activateGatewayWorkspace = useCallback(
     (workspaceId: string, preferredSessionId?: string | null) => {
       const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+      backgroundWorkspaceActivationSequenceRef.current += 1;
       invalidateWorkspaceRefreshes();
       resetWorkspaceScopedState();
       return workspaceActivationQueueRef.current.enqueue(async () => {
         try {
           await apiActivateGatewayWorkspace(resolvedApiPort, workspaceId);
-          await finishWorkspaceRefresh(preferredSessionId);
+          const applied = await finishWorkspaceRefresh(preferredSessionId, {
+            checkGatewayWorkspaceHealth: false,
+            reuseCurrentUiSettings: true,
+          });
+          if (applied) {
+            void refreshGatewayWorkspaceStatuses(workspaceId);
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           setState((prev) => ({
@@ -841,24 +977,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [
       finishWorkspaceRefresh,
       invalidateWorkspaceRefreshes,
+      refreshGatewayWorkspaceStatuses,
       resetWorkspaceScopedState,
       state.apiPort,
     ],
   );
 
   const openWorkspaceSession = useCallback((workspaceId: string, sessionId: string) => {
+    const intent = ++workspaceSessionSelectionIntentRef.current;
     return workspaceSessionSelectionQueueRef.current.enqueue(async () => {
-      const latestState = latestStateRef.current;
-      if (
-        workspaceId !== latestState.activeGatewayWorkspaceId
-        || latestState.workspaceSwitching
-      ) {
-        await activateGatewayWorkspace(workspaceId, sessionId);
+      if (intent !== workspaceSessionSelectionIntentRef.current) {
         return;
       }
-      selectSession(sessionId);
+      const latestState = latestStateRef.current;
+      const cachedSession = latestState.sessionsByWorkspace
+        .get(workspaceId)
+        ?.find((session) => session.session_id === sessionId);
+      const shouldActivateWorkspace =
+        workspaceId !== latestState.activeGatewayWorkspaceId
+        || latestState.workspaceSwitching;
+      const selectedSession = cachedSession
+        ?? await apiGetSession(
+          state.apiPort ?? DEFAULT_BACKEND_PORT,
+          sessionId,
+          workspaceId,
+        );
+      if (intent !== workspaceSessionSelectionIntentRef.current) {
+        return;
+      }
+      selectWorkspaceSession(workspaceId, sessionId, selectedSession);
+      if (shouldActivateWorkspace) {
+        activateGatewayWorkspaceInBackground(workspaceId);
+      }
     });
-  }, [activateGatewayWorkspace, selectSession]);
+  }, [
+    activateGatewayWorkspaceInBackground,
+    selectWorkspaceSession,
+    state.apiPort,
+  ]);
 
   const refreshGatewayState = useCallback(async () => {
     setState((prev) => ({

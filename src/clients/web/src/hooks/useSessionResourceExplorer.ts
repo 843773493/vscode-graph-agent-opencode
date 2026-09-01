@@ -38,6 +38,21 @@ const emptySearch: GatewaySessionSearchResults = {
   total: 0,
 };
 
+const CATALOG_RETRY_LIMIT = 3;
+
+function isRetryableCatalogError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:HTTP\s*(?:401|502|503|504)|401\s+Unauthorized|Failed to fetch|NetworkError|ERR_NETWORK_CHANGED|连接被拒绝|暂时不可用)/i.test(
+    message,
+  );
+}
+
+function catalogRetryDelay(attempt: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 250 * (attempt + 1));
+  });
+}
+
 function branchKey(workspaceId: string, parentNodeId?: string | null): string {
   return `${workspaceId}:${parentNodeId ?? "root"}`;
 }
@@ -158,12 +173,23 @@ export function useSessionResourceExplorer({
       return next;
     });
     try {
-      const page = await listSessionCatalogChildren(
-        apiPort,
-        workspaceId,
-        parentNodeId,
-        append ? current?.cursor : null,
-      );
+      let page: SessionCatalogPage;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          page = await listSessionCatalogChildren(
+            apiPort,
+            workspaceId,
+            parentNodeId,
+            append ? current?.cursor : null,
+          );
+          break;
+        } catch (error) {
+          if (attempt >= CATALOG_RETRY_LIMIT - 1 || !isRetryableCatalogError(error)) {
+            throw error;
+          }
+          await catalogRetryDelay(attempt);
+        }
+      }
       if (branchRequestRefs.current.get(key) !== requestId) {
         return;
       }
@@ -722,6 +748,14 @@ export function useSessionResourceExplorer({
     }
     const revealKey = `${activeWorkspaceId}:${currentSessionId}`;
     if (currentSessionRevealKeyRef.current === revealKey) {
+      return;
+    }
+    const currentSessionIsVisible = [...branchesRef.current.entries()].some(([key, branch]) =>
+      key.startsWith(`${activeWorkspaceId}:`)
+      && branch.items.some((item) => item.session_id === currentSessionId),
+    );
+    if (currentSessionIsVisible) {
+      currentSessionRevealKeyRef.current = revealKey;
       return;
     }
     currentSessionRevealKeyRef.current = revealKey;

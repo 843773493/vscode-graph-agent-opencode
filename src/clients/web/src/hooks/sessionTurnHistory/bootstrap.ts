@@ -1,4 +1,5 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
+import { isTransientNetworkError } from "../../api/http";
 import { getSessionTurnBootstrap } from "../../api/sessionTurnHistory";
 import { listPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
@@ -19,6 +20,7 @@ import type { SetAppState } from "../contentViewLoaderTypes";
 
 const PARTIAL_BOOTSTRAP_POLL_BASE_DELAY_MS = 250;
 const PARTIAL_BOOTSTRAP_POLL_MAX_DELAY_MS = 2_000;
+const TRANSIENT_BOOTSTRAP_RETRY_LIMIT = 5;
 
 export function partialBootstrapPollDelay(attempt: number): number {
   if (!Number.isInteger(attempt) || attempt < 0) {
@@ -47,7 +49,7 @@ export function useTurnBootstrap({
   generationRef,
   invalidatedTurnIdsRef,
   setState,
-  loadTurnDetails,
+  loadInitialTurns,
 }: {
   apiPort: number | null;
   sessionId: string | null;
@@ -58,16 +60,14 @@ export function useTurnBootstrap({
   generationRef: MutableRefObject<number>;
   invalidatedTurnIdsRef: MutableRefObject<Set<string>>;
   setState: SetAppState;
-  loadTurnDetails: (
-    turnIds: string[],
-    requestIdentity?: string | null,
-    refreshAfterInFlight?: boolean,
-  ) => Promise<void>;
+  loadInitialTurns: (latestTurnId?: string) => Promise<void>;
 }): void {
   const bootstrapAbortRef = useRef<AbortController | null>(null);
   const lastProjectionEpochRef = useRef<number | null>(null);
   const lastScopeKeyRef = useRef<string | null>(null);
   const visitedScopeKeysRef = useRef(new Set<string>());
+  const lastReloadNonceByScopeRef = useRef(new Map<string, number>());
+  const lastManualReloadNonceByScopeRef = useRef(new Map<string, number>());
 
   useEffect(() => {
     if (!apiPort || !sessionId || !sessionCacheKey) {
@@ -79,6 +79,21 @@ export function useTurnBootstrap({
     bootstrapAbortRef.current = controller;
     const isNewScope = lastScopeKeyRef.current !== sessionCacheKey;
     const hasVisitedScope = visitedScopeKeysRef.current.has(sessionCacheKey);
+    const previousReloadNonce = lastReloadNonceByScopeRef.current.get(sessionCacheKey);
+    const previousManualReloadNonce = lastManualReloadNonceByScopeRef.current.get(
+      sessionCacheKey,
+    );
+    const shouldLoadInitialHistory = !hasVisitedScope
+      || (
+        previousReloadNonce !== undefined
+        && previousReloadNonce !== reloadNonce
+      )
+      || (
+        previousManualReloadNonce !== undefined
+        && previousManualReloadNonce !== manualReloadNonce
+      );
+    lastReloadNonceByScopeRef.current.set(sessionCacheKey, reloadNonce);
+    lastManualReloadNonceByScopeRef.current.set(sessionCacheKey, manualReloadNonce);
     if (isNewScope) {
       invalidatedTurnIdsRef.current.clear();
       lastProjectionEpochRef.current = null;
@@ -88,13 +103,17 @@ export function useTurnBootstrap({
     const targetGeneration = generationRef.current + 1;
     generationRef.current = targetGeneration;
     let pollTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-    let latestDetailIdentity: string | null = null;
+    let initialHistoryIdentity: string | null = null;
     let pendingSnapshotIdentity: string | null = null;
 
     setState((previous) => {
-      const timeline = isNewScope && !hasVisitedScope
+      // 显式刷新/重载必须丢弃旧的上下文窗口。旧窗口中的 Turn 可能已经
+      // 不属于当前 context view，继续拿它们请求详情会被后端正确拒绝为 409。
+      const timeline = shouldLoadInitialHistory
         ? createSessionTurnTimeline(sessionCacheKey)
-        : timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
+        : isNewScope && !hasVisitedScope
+          ? createSessionTurnTimeline(sessionCacheKey)
+          : timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
       return {
         ...previous,
         turnTimelinesBySession: writeTurnTimelineCache(
@@ -128,6 +147,7 @@ export function useTurnBootstrap({
         const activeJobCount = bootstrap.active_job_count
           ?? bootstrap.active_jobs?.length
           ?? 0;
+        const activeJobId = bootstrap.active_job_id ?? null;
         setState((previous) => {
           if (
             previous.currentSession?.session_id !== sessionId
@@ -142,7 +162,6 @@ export function useTurnBootstrap({
             sessionCacheKey,
             applyTurnBootstrap(timeline, targetGeneration, bootstrap),
           );
-          const activeJobId = bootstrap.active_job_id ?? null;
           if (activeJobId) {
             next.activeJobIdsBySession.set(sessionCacheKey, activeJobId);
             syncActiveJobConversation(
@@ -211,17 +230,26 @@ export function useTurnBootstrap({
                   return previous;
                 }
                 const next = cloneMaps(previous);
+                // replay 新 Job 启动后可能已经离开 queued requests 列表，
+                // 但 bootstrap 仍提供 active_job_id。保留这段时间的乐观
+                // replay 会话，避免回退提示在首个 SSE 到达前被清掉。
+                const snapshotWithActiveJob = snapshot.active_job_id
+                  || !activeJobId
+                  ? snapshot
+                  : { ...snapshot, active_job_id: activeJobId };
                 writePendingSnapshot(
                   next.pendingConversations,
                   next.activeJobIdsBySession,
-                  snapshot,
+                  snapshotWithActiveJob,
                   sessionCacheKey,
                 );
                 return next;
               });
             }).catch((error: unknown) => {
               if (controller.signal.aborted) return;
-              const message = error instanceof Error ? error.message : String(error);
+              const message = isTransientNetworkError(error)
+                ? "本地服务连接暂时变化，已保留当前队列并自动重试"
+                : error instanceof Error ? error.message : String(error);
               setState((previous) => ({
                 ...previous,
                 status: `加载待处理消息失败: ${message}`,
@@ -230,21 +258,28 @@ export function useTurnBootstrap({
           }
         }
         if (
-          bootstrap.latest_turn
+          shouldLoadInitialHistory
+          && bootstrap.latest_turn
           && !invalidatedTurnIdsRef.current.has(bootstrap.latest_turn.turn_id)
         ) {
-          const detailIdentity = [
+          const initialHistoryRequestIdentity = [
             bootstrap.projection_epoch,
             bootstrap.latest_turn.turn_id,
             bootstrap.latest_turn.revision,
           ].join(":");
-          if (detailIdentity !== latestDetailIdentity) {
-            latestDetailIdentity = detailIdentity;
-            void loadTurnDetails(
-              [bootstrap.latest_turn.turn_id],
-              detailIdentity,
-            ).catch(() => {
-              // 详情错误已写入 Turn timeline，调用方不需要制造第二条全局错误。
+          if (initialHistoryRequestIdentity !== initialHistoryIdentity) {
+            initialHistoryIdentity = initialHistoryRequestIdentity;
+            void loadInitialTurns(bootstrap.latest_turn.turn_id).catch((error: unknown) => {
+              if (controller.signal.aborted || generationRef.current !== targetGeneration) {
+                return;
+              }
+              const message = isTransientNetworkError(error)
+                ? "本地服务连接暂时变化，历史内容已保留并自动重试"
+                : error instanceof Error ? error.message : String(error);
+              setState((previous) => ({
+                ...previous,
+                status: `加载 Turn 历史失败: ${message}`,
+              }));
             });
           }
         }
@@ -256,18 +291,46 @@ export function useTurnBootstrap({
         }
       } catch (error: unknown) {
         if (controller.signal.aborted || generationRef.current !== targetGeneration) return;
+        if (isTransientNetworkError(error) && pollAttempt < TRANSIENT_BOOTSTRAP_RETRY_LIMIT) {
+          pollTimer = globalThis.setTimeout(() => {
+            pollTimer = null;
+            void requestBootstrap(pollAttempt + 1);
+          }, partialBootstrapPollDelay(pollAttempt));
+          setState((previous) => ({
+            ...previous,
+            status: "会话连接暂时变化，正在有限重试并保留当前内容",
+          }));
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         setState((previous) => {
           const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
           if (timeline.generation !== targetGeneration) return previous;
+          const hasVisibleContent = timeline.orderedTurnIds.length > 0;
           return {
             ...previous,
             turnTimelinesBySession: writeTurnTimelineCache(
               previous.turnTimelinesBySession,
               sessionCacheKey,
-              failTurnTimeline(timeline, targetGeneration, message),
+              hasVisibleContent
+                ? {
+                    ...timeline,
+                    loadingBefore: false,
+                    loadingAfter: false,
+                    loadingOlder: false,
+                    error: null,
+                  }
+                : failTurnTimeline(
+                    timeline,
+                    targetGeneration,
+                    isTransientNetworkError(error)
+                      ? "会话服务暂时不可用，请稍后重试"
+                      : message,
+                  ),
             ),
-            status: `加载 Turn 历史失败: ${message}`,
+            status: isTransientNetworkError(error)
+              ? "会话连接暂时不可用，已保留当前内容，请稍后重试"
+              : `加载 Turn 历史失败: ${message}`,
           };
         });
       }
@@ -282,7 +345,7 @@ export function useTurnBootstrap({
     apiPort,
     generationRef,
     invalidatedTurnIdsRef,
-    loadTurnDetails,
+    loadInitialTurns,
     manualReloadNonce,
     reloadNonce,
     sessionCacheKey,

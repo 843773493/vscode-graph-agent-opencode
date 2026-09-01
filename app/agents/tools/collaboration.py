@@ -32,12 +32,13 @@ def build_agent_collaboration_tools(
     session_service: SessionStoreProtocol,
     session_orchestrator: SessionOrchestratorProtocol,
     session_subagent_service: SessionSubagentProtocol,
-    team_service: TeamCoordinationProtocol,
+    team_service: TeamCoordinationProtocol | None,
     invocation_context: ToolInvocationContext,
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
+    include_team_tools: bool = False,
 ) -> list[BaseTool]:
-    """构建默认启用的跨 Session Agent 协作工具组。"""
-    return [
+    """构建跨 Session 协作工具；团队面板工具按运行模式显式启用。"""
+    tools = [
         create_monitor_session_agent_end_tool(
             session_id=session_id,
             agent_id=agent_id,
@@ -59,10 +60,16 @@ def build_agent_collaboration_tools(
             session_subagent_service=session_subagent_service,
             invocation_context=invocation_context,
         ),
-        *create_team_tools(
-            session_id=session_id,
-            agent_id=agent_id,
-            team_service=team_service,
-            invocation_context=invocation_context,
-        ),
     ]
+    if include_team_tools:
+        if team_service is None:
+            raise RuntimeError("启用团队工具时必须显式传入 TeamCoordinationService")
+        tools.extend(
+            create_team_tools(
+                session_id=session_id,
+                agent_id=agent_id,
+                team_service=team_service,
+                invocation_context=invocation_context,
+            )
+        )
+    return tools

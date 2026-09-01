@@ -8,7 +8,7 @@
 """
 
 from datetime import datetime
-from typing import Any, Literal, Optional, Self, Union
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
@@ -19,10 +19,10 @@ from app.schemas.internal_v2.pending_request import DeliveryBoundary, DeliveryPo
 class BaseEvent(BaseModel):
     """所有事件的基类"""
     event_id: str
-    part_id: Optional[str] = None
+    part_id: str | None = None
     job_id: str
-    step_id: Optional[str] = None
-    agent_id: Optional[str] = None
+    step_id: str | None = None
+    agent_id: str | None = None
     timestamp: datetime
 
     @model_validator(mode="after")
@@ -69,37 +69,42 @@ class JobCreatedPayload(BaseModel):
 
 
 class JobStartedPayload(BaseModel):
-    """JOB_STARTED 事件的 payload（无额外字段）"""
-    pass
+    """JOB_STARTED 事件的 payload。"""
+    # 生命周期事件必须自带 session_id，不能依赖 job_created 监听顺序建立映射。
+    session_id: str | None = None
 
 
 class JobCompletedPayload(BaseModel):
     """JOB_COMPLETED 事件的 payload"""
     result: str = ""
+    session_id: str | None = None
 
 
 class JobCancelledPayload(BaseModel):
-    """JOB_CANCELLED 事件的 payload（无额外字段）"""
-    pass
+    """JOB_CANCELLED 事件的 payload。"""
+    session_id: str | None = None
 
 
 class JobFailedPayload(BaseModel):
     """JOB_FAILED 事件的 payload"""
     error: str
+    code: str | None = None
+    timeout_seconds: float | None = None
+    session_id: str | None = None
 
 
 class StatusChangePayload(BaseModel):
     """STATUS_CHANGE 事件的 payload"""
     status: str
     reason: str
-    session_id: Optional[str] = None
-    title: Optional[str] = None
-    blocked_by_job_id: Optional[str] = None
-    queued_jobs_ahead: Optional[int] = Field(default=None, ge=0)
-    queued_job_count: Optional[int] = Field(default=None, ge=0)
-    pending_job_count: Optional[int] = Field(default=None, ge=1)
-    message_id: Optional[str] = None
-    enqueue_sequence: Optional[int] = Field(default=None, ge=1)
+    session_id: str | None = None
+    title: str | None = None
+    blocked_by_job_id: str | None = None
+    queued_jobs_ahead: int | None = Field(default=None, ge=0)
+    queued_job_count: int | None = Field(default=None, ge=0)
+    pending_job_count: int | None = Field(default=None, ge=1)
+    message_id: str | None = None
+    enqueue_sequence: int | None = Field(default=None, ge=1)
     delivery_policy: DeliveryPolicy | None = None
     boundary: DeliveryBoundary | None = None
     queue_snapshot_version: int = Field(default=0, ge=0)
@@ -222,8 +227,11 @@ class SessionInterruptedPayload(BaseModel):
     """SESSION_INTERRUPTED 事件的 payload"""
     session_id: str
     phase: str
-    tool_name: Optional[str] = None
+    tool_name: str | None = None
     interrupted_at: datetime = Field(default_factory=datetime.now)
+    code: str | None = None
+    message: str | None = None
+    resumable: bool = False
 
 
 class TextDeltaPayload(BaseModel):
@@ -390,26 +398,26 @@ class TextEndEvent(BaseEvent):
         print(event.payload.message)  # 类型安全！
 """
 
-Event = Union[
-    MessageCreatedEvent,
-    JobCreatedEvent,
-    JobStartedEvent,
-    JobCompletedEvent,
-    JobCancelledEvent,
-    JobFailedEvent,
-    StatusChangeEvent,
-    GoalUpdatedEvent,
-    GoalClearedEvent,
-    AgentStartEvent,
-    AgentStepEvent,
-    AgentEndEvent,
-    ToolCallStartEvent,
-    ToolCallEndEvent,
-    ErrorEvent,
-    LLMRequestEvent,
-    ModelFailedEvent,
-    SessionInterruptedEvent,
-    TextStartEvent,
-    TextDeltaEvent,
-    TextEndEvent,
-] 
+Event = (
+    MessageCreatedEvent
+    | JobCreatedEvent
+    | JobStartedEvent
+    | JobCompletedEvent
+    | JobCancelledEvent
+    | JobFailedEvent
+    | StatusChangeEvent
+    | GoalUpdatedEvent
+    | GoalClearedEvent
+    | AgentStartEvent
+    | AgentStepEvent
+    | AgentEndEvent
+    | ToolCallStartEvent
+    | ToolCallEndEvent
+    | ErrorEvent
+    | LLMRequestEvent
+    | ModelFailedEvent
+    | SessionInterruptedEvent
+    | TextStartEvent
+    | TextDeltaEvent
+    | TextEndEvent
+)

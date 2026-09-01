@@ -10,6 +10,7 @@ import pytest
 from app.agents.policy import ToolMetadata
 from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
+from app.services.infrastructure.config.watcher import ConfigFileWatcher
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
@@ -88,6 +89,40 @@ def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
 
     service.validate_workspace_config()
     assert service.get_llm_provider("backup_4")["auth"]["method"] == "chatgpt"
+
+
+def test_config_reads_agent_run_timeout(tmp_path: Path) -> None:
+    config = _base_config()
+    config["runtime"] = {"agent": {"run": {"timeout_seconds": 12.5}}}
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=_write_workspace_config(tmp_path, config),
+    )
+
+    assert service.get_agent_run_timeout_seconds() == 12.5
+
+
+def test_config_reads_agent_run_mode(tmp_path: Path) -> None:
+    config = _base_config()
+    config["runtime"] = {"agent": {"run": {"mode": "team"}}}
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=_write_workspace_config(tmp_path, config),
+    )
+
+    assert service.get_agent_run_mode() == "team"
+
+
+def test_config_rejects_unknown_agent_run_mode(tmp_path: Path) -> None:
+    config = _base_config()
+    config["runtime"] = {"agent": {"run": {"mode": "unexpected"}}}
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=_write_workspace_config(tmp_path, config),
+    )
+
+    with pytest.raises(ValueError, match="single_agent 或 team"):
+        service.get_agent_run_mode()
 
 
 def test_config_rejects_provider_without_api_key_or_oauth(tmp_path: Path):
@@ -1143,3 +1178,38 @@ async def test_watcher_does_not_create_missing_user_config_directory(
         await service.start_watching()
 
     assert missing_config_path.parent.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_config_watcher_does_not_recurse_into_runtime_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / ".boxteam"
+    directory.mkdir()
+    observed: dict[str, object] = {}
+
+    class WatchLoopStopped(Exception):
+        pass
+
+    async def fake_awatch(*paths: Path, **kwargs: object):
+        observed["paths"] = paths
+        observed.update(kwargs)
+        raise WatchLoopStopped
+        yield set()  # pragma: no cover
+
+    monkeypatch.setattr(
+        "app.services.infrastructure.config.watcher.awatch",
+        fake_awatch,
+    )
+    watcher = ConfigFileWatcher(
+        directories=[directory],
+        candidate_paths=[directory / "workspace.jsonc"],
+        on_change=lambda: asyncio.sleep(0),
+    )
+
+    with pytest.raises(WatchLoopStopped):
+        await watcher._watch_loop()
+
+    assert observed["paths"] == (directory.resolve(),)
+    assert observed["recursive"] is False

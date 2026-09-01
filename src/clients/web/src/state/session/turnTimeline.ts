@@ -177,33 +177,71 @@ function mergeTurnItems(
     item.event_id.includes(":tool_summary:");
   const isMaterialized = (item: TurnDetailItem): boolean =>
     Object.keys(item.raw ?? {}).length > 0 || Boolean(item.content);
-  const currentHasMaterialized = current.some(isMaterialized);
-  const incomingHasMaterialized = incoming.some(isMaterialized);
-  const currentItems = incomingHasMaterialized
-    ? current.filter((item) => !isSummaryPlaceholder(item))
-    : current;
-  const incomingItems = currentHasMaterialized
-    ? incoming.filter((item) => !isSummaryPlaceholder(item))
-    : incoming;
+  const itemKey = (item: TurnDetailItem): string =>
+    `${item.part_id ?? item.event_id}:${item.type}`;
+  const materializedPartIds = new Set(
+    incoming
+      .filter(isMaterialized)
+      .map(itemKey),
+  );
+  const currentItems = current.filter((item) =>
+    !isSummaryPlaceholder(item) || !materializedPartIds.has(itemKey(item)),
+  );
+  const currentPartIds = new Set(
+    currentItems
+      .map(itemKey),
+  );
+  const incomingItems = incoming.filter((item) =>
+    !isSummaryPlaceholder(item) || !currentPartIds.has(itemKey(item)),
+  );
 
   const merged = new Map<string, TurnDetailItem>();
   for (const item of currentItems) {
-    merged.set(item.event_id, item);
+    merged.set(itemKey(item), item);
   }
   for (const item of incomingItems) {
-    const previous = merged.get(item.event_id);
+    const previous = merged.get(itemKey(item));
     if (!previous) {
-      merged.set(item.event_id, item);
+      merged.set(itemKey(item), item);
       continue;
     }
     merged.set(
-      item.event_id,
+      itemKey(item),
       projectionRichness(item) >= projectionRichness(previous)
         ? item
         : previous,
     );
   }
   return [...merged.values()];
+}
+
+function mergeResponseParts(
+  current: unknown,
+  incoming: unknown,
+): unknown[] | undefined {
+  const currentParts = Array.isArray(current) ? current : [];
+  const incomingParts = Array.isArray(incoming) ? incoming : [];
+  if (currentParts.length === 0 && incomingParts.length === 0) return undefined;
+  const parts = new Map<string, Record<string, unknown>>();
+  const order: string[] = [];
+  const add = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const part = value as Record<string, unknown>;
+    const key = `${String(part.part_id ?? "")}:${String(part.kind ?? "")}`;
+    if (!parts.has(key)) order.push(key);
+    const previous = parts.get(key);
+    parts.set(
+      key,
+      previous && projectionRichness(previous) > projectionRichness(part)
+        ? previous
+        : part,
+    );
+  };
+  currentParts.forEach(add);
+  incomingParts.forEach(add);
+  return order.map((key) => parts.get(key)).filter(
+    (part): part is Record<string, unknown> => part !== undefined,
+  );
 }
 
 function mergeSameRevisionTurn(
@@ -226,6 +264,14 @@ function mergeSameRevisionTurn(
     "final_response",
   ];
   for (const field of projectionFields) {
+    if (field === "response_parts") {
+      const mergedResponseParts = mergeResponseParts(
+        currentRecord[field],
+        incomingRecord[field],
+      );
+      if (mergedResponseParts !== undefined) merged[field] = mergedResponseParts;
+      continue;
+    }
     const value = preferProjectionValue(
       currentRecord[field],
       incomingRecord[field],

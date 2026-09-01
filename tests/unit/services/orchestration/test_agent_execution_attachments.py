@@ -67,7 +67,13 @@ def test_build_human_content_converts_workspace_video_attachment_to_frames(monke
     if shutil.which("ffmpeg") is None:
         pytest.skip("需要 ffmpeg 才能验证视频抽帧")
 
-    workspace_root = Path.cwd() / "asset" / "default_test_workspace"
+    workspace_root = (
+        Path.cwd()
+        / "tests"
+        / "fixtures"
+        / "workspaces"
+        / "default_test_workspace"
+    )
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
 
     content = build_human_content(

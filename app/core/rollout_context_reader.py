@@ -50,6 +50,14 @@ class RolloutContextReader:
             validate_integrity=validate_integrity,
         )
 
+    def repair_active_context_view(
+        self,
+        thread_id: str,
+        checkpoint_ns: str = "",
+    ) -> bool:
+        """在建立历史只读快照前修复旧版本生成的 active Turn 索引。"""
+        return self._storage.repair_active_context_view(thread_id, checkpoint_ns)
+
     def latest_checkpoint(
         self,
         snapshot: RolloutReadSnapshot,
@@ -163,6 +171,7 @@ class RolloutContextReader:
         kinds: Iterable[str] = ("message_append",),
         message_roles: Iterable[str] | None = None,
         tool_kinds: Iterable[str] | None = None,
+        tool_call_ids: Iterable[str] | None = None,
         required_sequences: Mapping[str, Iterable[int]] | None = None,
     ) -> dict[str, list[dict[str, object]]]:
         return self._storage.read_indexed_records_batch(
@@ -172,6 +181,7 @@ class RolloutContextReader:
             kinds=kinds,
             message_roles=message_roles,
             tool_kinds=tool_kinds,
+            tool_call_ids=tool_call_ids,
             required_sequences=required_sequences,
         )
 

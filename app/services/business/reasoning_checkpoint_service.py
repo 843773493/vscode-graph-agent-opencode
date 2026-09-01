@@ -11,6 +11,8 @@ from app.agents.providers.litellm_content import canonicalize_ai_message
 from app.core.checkpoint_config import build_checkpoint_config
 from app.schemas.event import ModelTokenUsagePayload
 
+_STALE_EXECUTION_CHANNEL = "__pregel_tasks"
+
 
 def _build_assistant_content(
     content_blocks: Sequence[Mapping[str, object]],
@@ -218,15 +220,30 @@ def persist_user_message_checkpoint(
 
     messages = [*raw_messages, message]
     channel_values["messages"] = messages
+    # 失败/重启后的 LangGraph checkpoint 可能仍保留上一轮已经失效的
+    # Pregel task。新用户消息只能从干净的会话上下文启动，不能把旧工具
+    # Send 重新交给当前 AgentLoop；否则新 job 会显示 running，却永远等
+    # 不到自己的首个模型/工具事件。
+    channel_values.pop(_STALE_EXECUTION_CHANNEL, None)
+    checkpoint["pending_sends"] = []
     checkpoint["channel_values"] = channel_values
     checkpoint["id"] = str(uuid.uuid4())
 
     channel_versions = dict(checkpoint.get("channel_versions", {}))
+    channel_versions.pop(_STALE_EXECUTION_CHANNEL, None)
     messages_version = checkpointer.get_next_version(
         channel_versions.get("messages"), None
     )
     channel_versions["messages"] = messages_version
     checkpoint["channel_versions"] = channel_versions
+    updated_channels = [
+        channel
+        for channel in checkpoint.get("updated_channels", [])
+        if channel != _STALE_EXECUTION_CHANNEL
+    ]
+    if "messages" not in updated_channels:
+        updated_channels.append("messages")
+    checkpoint["updated_channels"] = updated_channels
     checkpointer.put(
         config=tup.config,
         checkpoint=checkpoint,

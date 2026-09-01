@@ -16,6 +16,10 @@ from tests.support.trace import get_trace_payload
 
 FIXTURE_ROOT = Path.cwd() / "tests" / "fixtures" / "model_stream"
 SCENARIO_ID = "responses-reasoning-tool"
+EXPECTED_FINAL_TEXT = (
+    "OpenAI Responses 工具已经返回，我核对了 OpenAI Responses 文件内容，"
+    "现在给出 OpenAI Responses 可复查的结论。"
+)
 
 
 @pytest.fixture(scope="module")
@@ -39,10 +43,30 @@ def _load_default_cassette_review() -> dict[str, object]:
     ]
     assert first.response.frames[-1].event == "response.completed"
     assert second.response.frames[-1].event == "response.completed"
-    assert first.response.frames[5].payload["item"]["type"] == "reasoning"
-    assert first.response.frames[10].payload["item"]["type"] == "function_call"
-    assert second.response.frames[1].payload["item"]["type"] == "reasoning"
-    assert second.response.frames[8].payload["item"]["type"] == "message"
+    assert next(
+        frame
+        for frame in first.response.frames
+        if frame.event == "response.output_item.added"
+        and frame.payload["item"]["type"] == "reasoning"
+    )
+    assert next(
+        frame
+        for frame in first.response.frames
+        if frame.event == "response.output_item.added"
+        and frame.payload["item"]["type"] == "function_call"
+    )
+    assert next(
+        frame
+        for frame in second.response.frames
+        if frame.event == "response.output_item.added"
+        and frame.payload["item"]["type"] == "reasoning"
+    )
+    assert next(
+        frame
+        for frame in second.response.frames
+        if frame.event == "response.output_item.added"
+        and frame.payload["item"]["type"] == "message"
+    )
     return {
         "scenario_id": scenario.scenario_id,
         "asset_path": str(scenario.asset_path.relative_to(Path.cwd())),
@@ -103,7 +127,7 @@ async def test_default_responses_replay_runs_complete_tool_loop(
             json={
                 "message": {
                     "content": (
-                        "请先读取当前工作区的 README.md，然后只回复工具调用完成，"
+                        "请先读取当前工作区的 README.md，然后只回复最终结论，"
                         "不要补充其它解释。"
                     )
                 },
@@ -145,14 +169,16 @@ async def test_default_responses_replay_runs_complete_tool_loop(
         and get_trace_payload(event).get("kind") == "reasoning"
     )
     assert reasoning_text == (
-        "先读取 README，再根据工具结果作答。"
-        "已读取 README，整理最终答复。"
+        "OpenAI Responses 先确认待读取的文件，再检查工具返回的证据，"
+        "确认内容和当前问题一致后，再发起一次明确的 OpenAI Responses 工具调用。"
+        "OpenAI Responses 先核对工具结果，确认它和请求目标相符，"
+        "再整理一份 OpenAI Responses 最终答复。"
     )
 
     messages_response = await client.get(f"/api/v1/sessions/{session_id}/messages")
     assert messages_response.status_code == 200, messages_response.text
     messages = messages_response.json()["data"]["items"]
-    assert last_assistant_message(messages) == "工具调用完成"
+    assert last_assistant_message(messages) == EXPECTED_FINAL_TEXT
 
     logs_response = await client.get(
         f"/api/v1/sessions/{session_id}/llm-request-logs"
@@ -168,7 +194,9 @@ async def test_default_responses_replay_runs_complete_tool_loop(
     assert "# 统一测试工作区" in str(attempts[1]["request"]["input"][-1]["output"])
     assert attempts[1]["response"]["output"][0]["type"] == "reasoning"
     assert attempts[1]["response"]["output"][1]["type"] == "message"
-    assert attempts[1]["response"]["output"][1]["content"][0]["text"] == "工具调用完成"
+    assert attempts[1]["response"]["output"][1]["content"][0]["text"] == (
+        EXPECTED_FINAL_TEXT
+    )
 
     review["observed"] = {
         "session_id": session_id,

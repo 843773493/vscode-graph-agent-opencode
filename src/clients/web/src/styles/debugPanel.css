@@ -1,6 +1,7 @@
 .auxiliary-debug-body {
   min-width: 0;
   overflow: auto;
+  padding: 0;
 }
 
 .debug-panel {

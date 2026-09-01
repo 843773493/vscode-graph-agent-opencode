@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -27,8 +27,13 @@ class FakeResourceProvider:
         self.control_calls: list[tuple[str, str, SessionResourceAction]] = []
         self.cleanup_calls: list[str] = []
 
-    async def list_resources(self, session_id: str) -> list[SessionResourceDTO]:
-        now = datetime(2026, 7, 13, 12, 0, 0)
+    async def list_resources(
+        self,
+        session_id: str,
+        *,
+        include_history: bool = True,
+    ) -> list[SessionResourceDTO]:
+        now = datetime(2026, 7, 13, 12, 0, 0, tzinfo=UTC)
         return [
             SessionResourceDTO(
                 resource_id=f"{self.kind}_1",

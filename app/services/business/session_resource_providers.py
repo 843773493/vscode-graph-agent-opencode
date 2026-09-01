@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
@@ -38,15 +38,21 @@ class BackgroundTaskResourceProvider:
         self._message_service = message_service
         self._resource_mapper = resource_mapper
 
-    async def list_resources(self, session_id: str) -> list[SessionResourceDTO]:
+    async def list_resources(
+        self,
+        session_id: str,
+        *,
+        include_history: bool = True,
+    ) -> list[SessionResourceDTO]:
         handles = [
             *self._task_registry.list_handles(session_id),
-            *[
+        ]
+        if include_history:
+            handles.extend(
                 handle
                 for handle in self._task_registry.list_closed_handles(session_id)
                 if handle.status != "deleted"
-            ],
-        ]
+            )
         return [self._to_resource(handle) for handle in handles]
 
     async def control(
@@ -95,7 +101,7 @@ class BackgroundTaskResourceProvider:
         )
 
     def _append_monitor_cancel_reminder(self, handle: BackgroundTaskHandle) -> None:
-        cancelled_at = datetime.now(timezone.utc).isoformat()
+        cancelled_at = datetime.now(UTC).isoformat()
         target_session_id = handle.metadata.get("target_session_id")
         target_text = (
             f"目标 session：{target_session_id}。"
@@ -147,8 +153,15 @@ class TerminalResourceProvider:
         self._message_service = message_service
         self._resource_mapper = resource_mapper
 
-    async def list_resources(self, session_id: str) -> list[SessionResourceDTO]:
+    async def list_resources(
+        self,
+        session_id: str,
+        *,
+        include_history: bool = True,
+    ) -> list[SessionResourceDTO]:
         active_terminals = self._terminal_manager.list_terminals_from_state(session_id)
+        if not include_history:
+            return [self._to_resource(terminal) for terminal in active_terminals]
         records = await self._message_service.list_agent_state_records(session_id)
         historical_terminals = self._historical_reader.read_records(
             session_id=session_id,
@@ -232,7 +245,12 @@ class BrowserResourceProvider:
         self._browser_manager = browser_manager
         self._resource_mapper = resource_mapper
 
-    async def list_resources(self, session_id: str) -> list[SessionResourceDTO]:
+    async def list_resources(
+        self,
+        session_id: str,
+        *,
+        include_history: bool = True,
+    ) -> list[SessionResourceDTO]:
         return [
             self._to_resource(dict(browser))
             for browser in self._browser_manager.list_browsers_from_state(session_id)

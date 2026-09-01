@@ -61,14 +61,14 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       { preconnect: originalFetch.preconnect },
     );
 
-    function Harness(): React.ReactNode {
+    function Harness({ reloadNonce = 0 }: { reloadNonce?: number }): React.ReactNode {
       useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
         workspaceId: WORKSPACE_ID,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
-        reloadNonce: 0,
+        reloadNonce,
         setState: (update) => {
           currentState = typeof update === "function" ? update(currentState) : update;
         },
@@ -85,6 +85,19 @@ describe("useSessionTurnHistory partial bootstrap", () => {
     const timeline = currentState.turnTimelinesBySession.get(SCOPE_KEY);
     expect(timeline?.orderedTurnIds).toEqual([]);
     expect(timeline?.turnsById.job_latest).toBeUndefined();
+
+    // 显式刷新也必须从空 context window 开始，不能把已经失效的旧 Turn
+    // 带回下一次详情水合。
+    currentState.turnTimelinesBySession.set(
+      SCOPE_KEY,
+      upsertTurns(createSessionTurnTimeline(SCOPE_KEY), [turnDetail(1)]),
+    );
+    await act(async () => {
+      renderer!.update(<Harness reloadNonce={1} />);
+      await wait(30);
+    });
+    expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.orderedTurnIds)
+      .toEqual([]);
     act(() => renderer!.unmount());
   });
 
@@ -140,8 +153,13 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             },
           });
         }
-        if (path.endsWith("/message-stream/snapshot")) {
-          return Response.json({ detail: "message stream not found" }, { status: 404 });
+        if (path.endsWith("/message-streams/availability")) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_availability",
+            data: {},
+          });
         }
         throw new Error(`测试收到未预期请求: ${path}`);
       },

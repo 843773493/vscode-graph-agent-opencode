@@ -11,7 +11,10 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import SystemMessage
 
-from app.agents.agent_factory import _team_aware_system_prompt
+from app.agents.agent_factory import (
+    _runtime_identity_system_prompt,
+    _team_aware_system_prompt,
+)
 from app.agents.deep_agent_stack import build_deep_agent_middleware
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
@@ -176,3 +179,77 @@ def test_team_system_prompt_forbids_polling_and_preserves_base_prompt():
     assert "exec_command/sleep" in prompt.text
     assert "get_team_board once" in prompt.text
     assert "never claim that the team board is pending" in prompt.text
+
+
+def test_runtime_identity_separates_model_from_project_and_path_roots(tmp_path):
+    prompt = _runtime_identity_system_prompt(
+        "base prompt",
+        workspace_root=tmp_path,
+        provider_candidates=(
+            ("backup_3", "gpt-5.6-luna"),
+            ("backup_4", "gpt-5.6-luna"),
+        ),
+    )
+
+    assert "base prompt" in prompt.text
+    assert "provider id：`backup_3`" in prompt.text
+    assert "model id：`gpt-5.6-luna`" in prompt.text
+    assert "config/name` 只是项目显示名" in prompt.text
+    assert str(tmp_path.resolve()) in prompt.text
+    assert "parry_arena/godot_export/parry_arena.html" in prompt.text
+    assert "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次" in prompt.text
+
+
+def test_build_runtime_injects_selected_provider_and_workspace_root(
+    tmp_path,
+    monkeypatch,
+):
+    from unittest.mock import MagicMock
+
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    from app.agents import agent_factory
+
+    config_service = MagicMock()
+    config_service.get_agent_runtime_config.return_value = {
+        "system_prompt": "base prompt",
+        "providers": [
+            {
+                "id": "backup_3",
+                "model": "gpt-5.6-luna",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "supports_reasoning": {},
+                    "request_features": {},
+                    "replay_policy": {},
+                },
+            },
+            {
+                "id": "backup_4",
+                "model": "gpt-5.6-luna",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "supports_reasoning": {},
+                    "request_features": {},
+                    "replay_policy": {},
+                },
+            },
+        ],
+    }
+    monkeypatch.setattr(
+        agent_factory,
+        "build_model_from_provider",
+        lambda provider, runtime_config, prompt_cache_key=None: FakeListChatModel(
+            responses=["ok"]
+        ),
+    )
+
+    runtime = agent_factory.build_runtime_for_agent(
+        "default",
+        config_service,
+        workspace_root=tmp_path,
+    )
+
+    assert "backup_3" in runtime["system_prompt"].text
+    assert "gpt-5.6-luna" in runtime["system_prompt"].text
+    assert str(tmp_path.resolve()) in runtime["system_prompt"].text

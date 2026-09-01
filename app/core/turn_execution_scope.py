@@ -571,14 +571,24 @@ class AgentLoopControlCoordinator:
         while not stop_event.is_set():
             next_command = asyncio.create_task(self.inbox.next())
             stop_waiter = asyncio.create_task(stop_event.wait())
-            done, pending = await asyncio.wait(
-                {next_command, stop_waiter},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            if stop_waiter in done:
-                return
-            command = next_command.result()
-            await self.process(command)
+            try:
+                done, pending = await asyncio.wait(
+                    {next_command, stop_waiter},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                if stop_waiter in done:
+                    return
+                command = next_command.result()
+                await self.process(command)
+            finally:
+                for task in (next_command, stop_waiter):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    next_command,
+                    stop_waiter,
+                    return_exceptions=True,
+                )

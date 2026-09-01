@@ -1,0 +1,5 @@
+{
+  "scenario_id": "responses-reasoning-parallel-tool",
+  "asset": "handwritten/openai_responses/reasoning-parallel-tool.json",
+  "business_assertion": "responses-reasoning-parallel-tool-loop"
+}

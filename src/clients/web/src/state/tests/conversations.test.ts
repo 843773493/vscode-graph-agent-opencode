@@ -4,8 +4,11 @@ import {
   appendTraceEventsToPendingConversations,
   getConversationsForSession,
   pendingSnapshotToConversations,
+  preservePendingTerminalConversation,
   removePendingForTraceEvent,
+  statusForConversationEvents,
   syncActiveJobConversation,
+  writePendingSnapshot,
 } from "../conversations";
 import { createSessionTurnTimeline } from "../session/turnTimeline";
 import {
@@ -51,6 +54,48 @@ test("非 pending 来源即使带有 live 标记也不显示实时等待状态",
   expect(buildPendingStatusItem(staleHistoryConversation)).toBeNull();
 });
 
+test("消息流 active_state 直接映射为对应的阶段状态", () => {
+  const base: ConversationView = {
+    conversationId: "turn_active_state",
+    displayMode: "live",
+    sessionId: "ses_active_state",
+    userMessage: null,
+    events: [],
+    status: "running",
+    jobId: "job_active_state",
+    pending: true,
+    source: "pending",
+    messageStream: {
+      connectionStatus: "connected",
+      streamStatus: "open",
+      lastEventSeq: 1,
+      failure: null,
+      resumable: true,
+    },
+  };
+  const cases = [
+    ["model_output", "reasoning", "正在思考"],
+    ["model_output", "text", "正在生成回复"],
+    ["tool_call", "accumulating", "正在准备工具调用"],
+    ["tool_execution", "running", "正在运行工具"],
+  ] as const;
+  for (const [kind, phase, title] of cases) {
+    const item = buildPendingStatusItem({
+      ...base,
+      messageStream: {
+        ...base.messageStream!,
+        activeState: {
+          kind,
+          phase,
+          entity_id: `${kind}-${phase}`,
+          status: "running",
+        },
+      },
+    });
+    expect(item?.title).toBe(title);
+  }
+});
+
 test("Job 终态先移除 live Turn，历史视图不会与实时视图并存", () => {
   const sessionId = "ses_terminal_projection";
   const jobId = "job_terminal_projection";
@@ -87,6 +132,92 @@ test("Job 终态先移除 live Turn，历史视图不会与实时视图并存", 
   );
 
   expect(getConversationsForSession(sessionId, state)).toEqual([]);
+});
+
+test("历史提交期间的终态 live Turn 不会被空 pending 快照删除", () => {
+  const sessionId = "ses_pending_commit";
+  const jobId = "job_pending_commit";
+  const terminalConversation: ConversationView = {
+    conversationId: "msg_pending_commit",
+    displayMode: "live",
+    sessionId,
+    userMessage: null,
+    events: [{
+      event_id: "evt_pending_commit_done",
+      session_id: sessionId,
+      job_id: jobId,
+      type: "job_completed",
+      phase: "job",
+      title: "任务完成",
+      content: "",
+      timestamp: "2026-08-21T00:00:00Z",
+    }],
+    status: "done",
+    jobId,
+    pending: false,
+    source: "pending",
+  };
+  const pendingMap = new Map([[sessionId, [terminalConversation]]]);
+  writePendingSnapshot(
+    pendingMap,
+    new Map(),
+    { session_id: sessionId, active_job_id: null, requests: [], snapshot_version: 1 },
+  );
+
+  expect(pendingMap.get(sessionId)).toEqual([terminalConversation]);
+});
+
+test("历史 stale_turn_reference 期间保留超时回合及可见错误", () => {
+  const sessionId = "ses_timeout_fallback";
+  const jobId = "job_timeout_fallback";
+  const pendingConversation: ConversationView = {
+    conversationId: "msg_timeout_fallback",
+    displayMode: "live",
+    sessionId,
+    userMessage: {
+      message_id: "msg_timeout_fallback",
+      session_id: sessionId,
+      role: "user",
+      content: "长任务",
+      attachments: [],
+      metadata: {},
+      created_at: "2026-08-31T14:33:00Z",
+      updated_at: "2026-08-31T14:33:00Z",
+    },
+    events: [],
+    status: "running",
+    jobId,
+    pending: true,
+    source: "pending",
+  };
+  const pendingMap = new Map([[sessionId, [pendingConversation]]]);
+  const timeoutEvent: TraceEvent = {
+    event_id: "evt_timeout_fallback",
+    session_id: sessionId,
+    job_id: jobId,
+    type: "job_failed",
+    phase: "job",
+    title: "任务超时",
+    content: "Job 执行超过总超时上限",
+    status: "failed",
+    timestamp: "2026-08-31T14:43:00Z",
+    skill_names: [],
+    payload: { code: "job_timeout", error: "Job 执行超过总超时上限" },
+  };
+
+  preservePendingTerminalConversation(
+    pendingMap,
+    sessionId,
+    timeoutEvent,
+    "timed_out",
+  );
+
+  const fallback = pendingMap.get(sessionId)?.[0];
+  expect(fallback?.pending).toBe(false);
+  expect(fallback?.turnStatus).toBe("timed_out");
+  expect(fallback?.status).toBe("error");
+  expect(fallback?.userMessage?.content).toBe("长任务");
+  expect(fallback?.events).toEqual([timeoutEvent]);
 });
 
 test("内部 Goal continuation 不构造用户可见会话", () => {
@@ -345,6 +476,75 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
   expect(state.pendingConversations.has(sessionId)).toBe(false);
 });
 
+test("历史摘要与 replay live Turn 合并时保留回退元数据", () => {
+  const sessionId = "ses_replay_metadata_merge";
+  const jobId = "job_replay_metadata_merge";
+  const timeline = {
+    ...createSessionTurnTimeline(sessionId),
+    phase: "ready" as const,
+    orderedTurnIds: [jobId],
+    turnsById: {
+      [jobId]: {
+        turn_id: jobId,
+        job_id: jobId,
+        session_id: sessionId,
+        ordinal: 1,
+        revision: 1,
+        status: "running" as const,
+        created_at: "2026-07-29T00:00:00Z",
+        updated_at: "2026-07-29T00:00:01Z",
+        items_view: "summary" as const,
+        source_message_ids: ["msg_replay_metadata_merge"],
+        user_messages: [{
+          message_id: "msg_replay_metadata_merge",
+          preview: "重新生成",
+          content_truncated: false,
+          attachment_count: 0,
+          created_at: "2026-07-29T00:00:00Z",
+        }],
+        response_preview: "",
+      },
+    },
+  };
+  const pending: ConversationView = {
+    conversationId: "msg_replay_metadata_merge",
+    displayMode: "live",
+    sessionId,
+    userMessage: {
+      message_id: "msg_replay_metadata_merge",
+      session_id: sessionId,
+      role: "user",
+      content: "重新生成",
+      attachments: [],
+      metadata: {
+        source: "optimistic_replay",
+        replay_action: "regenerate",
+        replaced_message_id: "user-original",
+      },
+      created_at: "2026-07-29T00:00:02Z",
+      updated_at: "2026-07-29T00:00:02Z",
+    },
+    assistantMessages: [],
+    events: [],
+    status: "running",
+    jobId,
+    pending: true,
+    source: "pending",
+  };
+  const state = {
+    pendingConversations: new Map([[sessionId, [pending]]]),
+    turnTimelinesBySession: new Map([[sessionId, timeline]]),
+  } as unknown as AppState;
+
+  const [conversation] = getConversationsForSession(sessionId, state);
+
+  expect(conversation?.source).toBe("pending");
+  expect(conversation?.userMessage?.metadata?.replay_action).toBe("regenerate");
+  expect(conversation?.userMessage?.metadata?.replaced_message_id).toBe(
+    "user-original",
+  );
+});
+
 test("同一 Turn 的重复消息流镜像优先使用最高序号的终态", () => {
   const sessionId = "ses_duplicate_message_stream";
   const turnId = "job_duplicate_message_stream";
@@ -412,4 +612,92 @@ test("同一 Turn 的重复消息流镜像优先使用最高序号的终态", ()
 
   expect(conversation?.messageStream?.streamStatus).toBe("completed");
   expect(conversation?.responseParts?.[0]?.text).toBe("snapshot 已恢复");
+});
+
+test("Job failed 镜像优先于迟到的 open message stream", () => {
+  const sessionId = "ses_failed_job_mirror";
+  const jobId = "job_failed_job_mirror";
+  const failure: TraceEvent = {
+    event_id: "evt_failed_job_mirror",
+    session_id: sessionId,
+    job_id: jobId,
+    type: "job_failed",
+    phase: "job",
+    title: "任务失败",
+    content: "No tool call found for function call output with call_id call_old",
+    status: "failed",
+    timestamp: "2026-08-31T18:52:00Z",
+    payload: {
+      error: "No tool call found for function call output with call_id call_old",
+    },
+  };
+  const pending: ConversationView = {
+    conversationId: "msg_failed_job_mirror",
+    displayMode: "live",
+    sessionId,
+    userMessage: {
+      message_id: "msg_failed_job_mirror",
+      session_id: sessionId,
+      role: "user",
+      content: "请执行只读检查",
+      attachments: [],
+      metadata: {},
+      created_at: "2026-08-31T18:47:34Z",
+      updated_at: "2026-08-31T18:47:34Z",
+    },
+    events: [failure],
+    status: "error",
+    turnStatus: "failed",
+    jobId,
+    pending: false,
+    activeJobOverlay: false,
+    source: "pending",
+  };
+  const staleStream = {
+    ...createMessageStreamState(sessionId, jobId, "strm_stale_open"),
+    lastEventSeq: 99,
+    streamStatus: "open" as const,
+    connectionStatus: "connected" as const,
+  };
+  const state = {
+    pendingConversations: new Map([[sessionId, [pending]]]),
+    turnTimelinesBySession: new Map(),
+    messageStreamsByTurnStream: new Map([[staleStream.turnStreamId, staleStream]]),
+  } as unknown as AppState;
+
+  const [conversation] = getConversationsForSession(sessionId, state);
+
+  expect(conversation?.status).toBe("error");
+  expect(conversation?.pending).toBe(false);
+  expect(conversation?.activeJobOverlay).toBe(false);
+  expect(conversation?.events[0]?.content).toContain("No tool call found");
+  expect(conversation?.messageStream?.streamStatus).toBe("open");
+});
+
+test("终态事件之后的迟到 running 事件不能恢复转圈", () => {
+  const events: TraceEvent[] = [
+    {
+      event_id: "evt_terminal_first",
+      session_id: "ses_terminal_priority",
+      job_id: "job_terminal_priority",
+      type: "job_failed",
+      phase: "job",
+      title: "任务失败",
+      content: "provider failed",
+      timestamp: "2026-08-31T18:52:00Z",
+    },
+    {
+      event_id: "evt_late_running",
+      session_id: "ses_terminal_priority",
+      job_id: "job_terminal_priority",
+      type: "status_change",
+      phase: "job",
+      title: "任务运行中",
+      content: "旧 SSE",
+      timestamp: "2026-08-31T18:52:01Z",
+      payload: { status: "running" },
+    },
+  ];
+
+  expect(statusForConversationEvents(events, "running")).toBe("error");
 });

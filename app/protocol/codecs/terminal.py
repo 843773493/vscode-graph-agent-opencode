@@ -6,11 +6,20 @@ from typing import cast
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 
+_TERMINAL_STATUS_ALIASES = {
+    # Terminal Manager 会在命令完成、隐藏 PTY 释放完成前短暂报告 completed。
+    # TODO: 兼容 Terminal Manager 的命令完成中间态；协议枚举仍以 exited 表示
+    # 进程生命周期结束，原始状态通过 metadata 保留给上层业务。
+    "completed": terminal_pb2.TERMINAL_STATUS_EXITED,
+}
+
 
 def _status(value: object) -> int:
     if not isinstance(value, str) or not value:
         raise ValueError(f"Terminal 状态必须是非空字符串: {value!r}")
-    enum_value = getattr(terminal_pb2, f"TERMINAL_STATUS_{value.upper()}", None)
+    enum_value = _TERMINAL_STATUS_ALIASES.get(value)
+    if enum_value is None:
+        enum_value = getattr(terminal_pb2, f"TERMINAL_STATUS_{value.upper()}", None)
     if not isinstance(enum_value, int):
         raise TypeError(f"Terminal 状态不在协议范围内: {value}")
     return enum_value

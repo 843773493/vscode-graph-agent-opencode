@@ -11,7 +11,10 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from app.core.path_utils import get_boxteam_root, get_workspace_root
-from app.protocol.codecs.terminal import terminal_session_to_json, terminal_session_to_proto
+from app.protocol.codecs.terminal import (
+    terminal_session_to_json,
+    terminal_session_to_proto,
+)
 from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_TERMINAL_BACKEND_URL = "http://127.0.0.1:8012"
@@ -138,7 +141,7 @@ class TerminalManagerClient:
         response = await self._json_request(
             "POST", f"/api/terminals/{terminal_id}/claim-steering"
         )
-        return self._require_data(response)
+        return self._require_terminal_envelope(response)
 
     async def finish_terminal_steering(
         self,
@@ -151,7 +154,7 @@ class TerminalManagerClient:
             f"/api/terminals/{terminal_id}/finish-steering",
             {"dispatched": dispatched},
         )
-        return self._require_data(response)
+        return self._require_terminal_envelope(response)
 
     async def write_terminal(
         self,
@@ -183,17 +186,28 @@ class TerminalManagerClient:
             f"/api/terminals/{terminal_id}/kill",
             None if reason is None else {"reason": reason},
         )
-        return self._require_data(response)
+        return self._require_terminal_envelope(response)
 
     async def delete_terminal(self, terminal_id: str) -> dict[str, Any]:
         response = await self._json_request("DELETE", f"/api/terminals/{terminal_id}")
-        return self._require_data(response)
+        return self._require_terminal_envelope(response)
 
     def _require_data(self, response: dict[str, Any]) -> dict[str, Any]:
         data = response.get("data")
         if not isinstance(data, dict):
             raise TypeError(f"终端管理器返回格式错误: {response}")
         return self._normalize_terminal(data)
+
+    def _require_terminal_envelope(self, response: dict[str, Any]) -> dict[str, Any]:
+        data = response.get("data")
+        if not isinstance(data, dict):
+            raise TypeError(f"终端管理器返回格式错误: {response}")
+        terminal = data.get("terminal")
+        if not isinstance(terminal, dict):
+            raise TypeError(f"终端管理器返回缺少 terminal: {response}")
+        normalized = dict(data)
+        normalized["terminal"] = self._normalize_terminal(terminal)
+        return normalized
 
     @staticmethod
     def _normalize_terminal(data: dict[str, Any]) -> dict[str, Any]:

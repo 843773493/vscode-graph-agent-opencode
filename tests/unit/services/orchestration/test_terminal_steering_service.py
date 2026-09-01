@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -45,6 +46,26 @@ class _FakeTerminalClient:
         if not dispatched:
             self.claimed.remove(terminal_id)
         return {"terminal_id": terminal_id}
+
+
+class _FlakyTerminalClient(_FakeTerminalClient):
+    def __init__(self, failures: int) -> None:
+        super().__init__([])
+        self.failures = failures
+        self.list_calls = 0
+        self.ready = asyncio.Event()
+
+    async def list_terminals(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        self.list_calls += 1
+        if self.failures:
+            self.failures -= 1
+            raise ConnectionRefusedError("terminal manager 未就绪")
+        self.ready.set()
+        return []
 
 
 class _FakeSessionOrchestrator:
@@ -141,3 +162,19 @@ async def test_scan_ignores_completion_already_observed_by_model(
 
     assert orchestrator.calls == []
     assert terminal_client.finished == []
+
+
+@pytest.mark.asyncio
+async def test_monitor_retries_when_terminal_manager_is_temporarily_unavailable() -> None:
+    terminal_client = _FlakyTerminalClient(failures=2)
+    service = TerminalSteeringService(
+        terminal_client=terminal_client,
+        session_orchestrator=_FakeSessionOrchestrator(),  # type: ignore[arg-type]
+        poll_interval_seconds=0.001,
+    )
+
+    await service.start()
+    await asyncio.wait_for(terminal_client.ready.wait(), timeout=1)
+    await service.shutdown()
+
+    assert terminal_client.list_calls >= 3

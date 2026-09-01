@@ -270,20 +270,29 @@ export class TerminalSession {
         });
       });
     });
-    const ready = await isolatedPty.start({
-      command: this.command,
-      args: this.args,
-      options: {
-        name: "xterm-256color",
-        cwd: this.cwd,
-        cols: this.cols,
-        rows: this.rows,
-        env: {
-          ...process.env,
-          TERM: "xterm-256color",
+    let ready;
+    try {
+      ready = await isolatedPty.start({
+        command: this.command,
+        args: this.args,
+        options: {
+          name: "xterm-256color",
+          cwd: this.cwd,
+          cols: this.cols,
+          rows: this.rows,
+          env: {
+            ...process.env,
+            TERM: "xterm-256color",
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `终端 PTY 启动失败: terminal_id=${this.id}, cwd=${this.cwd}, command=${this.command}; ${message}`,
+        { cause: error },
+      );
+    }
     this.status = "running";
     this.startedAt = this.startedAt || nowIso();
     this.osPid = ready.pid;

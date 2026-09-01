@@ -12,6 +12,12 @@ import commentjson
 import httpx
 import pytest
 
+from app.core.session_paths import SessionPathResolver
+from app.services.infrastructure.message_stream_store import MessageStreamStore
+from app.services.orchestration.activity_runtime import (
+    ActivityHandlerRegistry,
+    ActivityRuntime,
+)
 from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -24,6 +30,132 @@ from tests.support.processes import close_backend_process, start_backend_process
 from tests.support.workspaces import prepare_default_test_workspace
 
 STATIC_LONG_SESSION_ID = "ses_9f4e2c7a1b6d4830a5e8f2c1d7b90436"
+COMPACTION_STREAM_TURN_ID = "job-0126"
+ACTIVITY_STREAM_TURN_ID = "job-0125"
+
+
+async def seed_compaction_message_stream(workspace_root: Path) -> None:
+    """在隔离测试工作区写入可通过 Web snapshot 恢复的重复压缩 Activity。"""
+
+    sessions_root = workspace_root / ".boxteam" / "sessions"
+    resolver = SessionPathResolver(sessions_root)
+    resolver.initialize()
+    store = MessageStreamStore(path_resolver=resolver)
+    writer = await store.open(
+        session_id=STATIC_LONG_SESSION_ID,
+        turn_id=COMPACTION_STREAM_TURN_ID,
+    )
+    runtime = ActivityRuntime(writer, ActivityHandlerRegistry())
+    await runtime.started(
+        activity_id="browser_compaction_1",
+        kind="context.compaction",
+        summary="第一次压缩服务端摘要",
+    )
+    await runtime.completed(
+        activity_id="browser_compaction_1",
+        kind="context.compaction",
+        summary="第一次压缩已提交",
+    )
+    await runtime.started(
+        activity_id="browser_compaction_2",
+        kind="context.compaction",
+        summary="第二次压缩服务端摘要",
+    )
+    await runtime.failed(
+        activity_id="browser_compaction_2",
+        kind="context.compaction",
+        outcome="outcome_unknown",
+        summary="第二次压缩结果未知",
+    )
+    await writer.close_completed()
+
+
+async def seed_additional_message_stream_display_cases(workspace_root: Path) -> None:
+    """写入通用 Activity 和未知工具结果的历史消息流。"""
+
+    sessions_root = workspace_root / ".boxteam" / "sessions"
+    resolver = SessionPathResolver(sessions_root)
+    resolver.initialize()
+    store = MessageStreamStore(path_resolver=resolver)
+
+    activity_writer = await store.open(
+        session_id=STATIC_LONG_SESSION_ID,
+        turn_id=ACTIVITY_STREAM_TURN_ID,
+    )
+    activity_runtime = ActivityRuntime(activity_writer, ActivityHandlerRegistry())
+    await activity_runtime.started(
+        activity_id="browser_approval_wait",
+        kind="approval.wait",
+        summary="等待浏览器审批",
+    )
+    await activity_runtime.updated(
+        activity_id="browser_approval_wait",
+        kind="approval.wait",
+        status="waiting",
+    )
+    await activity_runtime.started(
+        activity_id="browser_subagent_done",
+        kind="subagent.run",
+    )
+    await activity_runtime.completed(
+        activity_id="browser_subagent_done",
+        kind="subagent.run",
+    )
+    await activity_runtime.started(
+        activity_id="browser_resource_unknown",
+        kind="resource.operation",
+        resource_refs=("resource_browser_1",),
+    )
+    await activity_runtime.failed(
+        activity_id="browser_resource_unknown",
+        kind="resource.operation",
+        outcome="outcome_unknown",
+        summary="资源操作结果无法确认",
+    )
+    await activity_runtime.failed(
+        activity_id="browser_private_unknown",
+        kind="provider.private",
+        outcome="outcome_unknown",
+    )
+    await activity_writer.commit(
+        "activity.updated",
+        {
+            "activity_id": "browser_private_unknown",
+            "kind": "provider.private",
+            "status": "unknown",
+            "summary": "Provider 私有 Activity 状态无法确认",
+        },
+    )
+    await activity_writer.commit(
+        "tool_call",
+        {
+            "tool_call_id": "browser_unknown_call",
+            "tool_name": "shell",
+            "arguments": {"command": "touch side-effect"},
+            "status": "completed",
+        },
+    )
+    await activity_writer.commit(
+        "tool.started",
+        {
+            "tool_execution_id": "browser_unknown_execution",
+            "tool_call_id": "browser_unknown_call",
+            "tool_name": "shell",
+        },
+    )
+    await activity_writer.commit(
+        "tool.completed",
+        {
+            "tool_execution_id": "browser_unknown_execution",
+            "tool_call_id": "browser_unknown_call",
+            "tool_name": "shell",
+            "status": "completed",
+            "outcome": "outcome_unknown",
+            "completion_reason": "execution_lost",
+        },
+    )
+    # 保留 approval.wait 的 waiting 状态，用于验证前端不会把等待中的
+    # Activity 误显示成已完成；该测试工作区在 fixture 生命周期结束时销毁。
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +168,7 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
     )
     workspace_root = prepare_default_test_workspace(
         workspace_root=output_root / "workspace",
-        template_root=project_root / "asset" / "custom_tool_test_workspace",
+        template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
     return str(workspace_root)
@@ -59,12 +191,28 @@ def browser_backend(
         {
             "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
             "model": "rollout-history-browser-stub",
-            "api_key": "rollout-history-local-key",
+            "api_key": "e2e-local-model-key",
             "custom_llm_provider": "openai",
         }
     )
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    # 该历史 fixture 原本由 handwritten provider 生成，但本测试的 replay
+    # 需要真正启动一轮新 Job；复制后的工作区统一切到测试 stub provider，
+    # 不修改只读 fixture 源目录。
+    session_path = (
+        workspace_root
+        / ".boxteam"
+        / "sessions"
+        / STATIC_LONG_SESSION_ID
+        / "session.json"
+    )
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    session["current_provider_id"] = "primary"
+    session_path.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     with openai_chat_stub(port_block.port(10)):
@@ -157,6 +305,8 @@ async def test_rollout_history_around_loading_real_web_chain(
         f"/api/v1/sessions/{session_id}"
     )
     assert session_response.status_code == 200, session_response.text
+    await seed_compaction_message_stream(Path(integration_workspace_root_path))
+    await seed_additional_message_stream_display_cases(Path(integration_workspace_root_path))
 
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway = start_gateway_process(
@@ -224,16 +374,47 @@ async def test_rollout_history_around_loading_real_web_chain(
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["defaultProjectionSafe"] is True
         assert result["canonicalMixedMessageRestored"] is True
+        assert result["compactionActivityIds"] == [
+            "browser_compaction_1",
+            "browser_compaction_2",
+        ]
+        assert result["compactionCompletedVisible"] is True
+        assert result["compactionFailedVisible"] is True
+        assert result["activityStatusIds"] == [
+            "browser_approval_wait",
+            "browser_subagent_done",
+            "browser_resource_unknown",
+            "browser_private_unknown",
+        ]
+        assert result["approvalWaitingVisible"] is True
+        assert result["subagentCompletedVisible"] is True
+        assert result["resourceUnknownVisible"] is True
+        assert result["genericActivityUnknownVisible"] is True
+        assert result["unknownToolVisible"] is True
+        assert result["responseActionsVisible"] is True
+        assert result["responseActionLabels"] == [
+            "朗读（暂未开放）",
+            "复制",
+            "有帮助（暂未开放）",
+            "没有帮助（暂未开放）",
+        ]
+        assert result["boundaryResponseActionsVisible"] is True
+        assert result["boundaryResponseActionLabels"] == [
+            "朗读（暂未开放）",
+            "复制（暂无可复制内容）",
+            "有帮助（暂未开放）",
+            "没有帮助（暂未开放）",
+        ]
         assert result["toolDetailsLoaded"] is True
         assert result["largeToolSummarySafe"] is True
         assert result["largeToolDetailsBounded"] is True
-        assert result["aroundOrdinals"] == list(range(60, 69))
+        assert result["aroundOrdinals"] == list(range(61, 68))
         assert result["aroundCursorsPresent"] is True
         assert result["aroundBidirectionalSafe"] is True
         assert result["beforeOrdinals"] == [
-            [124, 125, 126, 127],
-            [120, 121, 122, 123],
-            [116, 117, 118, 119],
+            [121, 122, 123],
+            [118, 119, 120],
+            [115, 116, 117],
         ]
         # SQLite reader 本身远低于该值；这里约束完整浏览器/Gateway 链路，
         # 不把前端渲染预算误当成数据库耗时。

@@ -521,7 +521,13 @@ def main() -> None:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=Path.cwd() / "asset" / "custom_tool_test_workspace",
+        default=(
+            Path.cwd()
+            / "tests"
+            / "fixtures"
+            / "workspaces"
+            / "custom_tool_test_workspace"
+        ),
     )
     parser.add_argument("--start-turn", type=int, default=1)
     parser.add_argument("--end-turn", type=int, default=128)

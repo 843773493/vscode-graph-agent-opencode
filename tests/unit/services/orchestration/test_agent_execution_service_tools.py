@@ -386,6 +386,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
         terminal_manager_client=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
         include_test_tools=True,
+        include_team_tools=True,
     )
 
     tool_names = [tool.name for tool in tools]
@@ -425,9 +426,44 @@ async def test_agent_omits_test_tool_without_development_config(monkeypatch, tmp
         config_service=_DummyConfigService(),
         terminal_manager_client=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
+        include_team_tools=True,
     )
 
     assert "test_tool" not in {tool.name for tool in tools}
+
+
+@pytest.mark.asyncio
+async def test_single_agent_tool_set_omits_team_board_tools(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    tools = build_default_tools(
+        session_id="session_single_agent",
+        background_task_registry=_FakeBackgroundTaskRegistry(),
+        background_message_bus=_FakeBackgroundMessageBus(),
+        job_event_bus=_FakeJobEventBus(),
+        job_service=_FakeJobService(),
+        message_service=_FakeMessageService(),
+        session_service=_FakeSessionService(),
+        session_orchestrator=_FakeSessionOrchestrator(),
+        session_subagent_service=_FakeSessionSubagentService(),
+        config_service=_DummyConfigService(),
+        terminal_manager_client=_FakeTerminalManagerClient(),
+        invocation_context=ToolInvocationContext(),
+        include_team_tools=False,
+    )
+
+    tool_names = {tool.name for tool in tools}
+    assert tool_names.isdisjoint(
+        {
+            "create_team",
+            "list_my_teams",
+            "get_team_board",
+            "create_team_member",
+            "attach_team_session",
+            "assign_team_task",
+            "update_team_task",
+        }
+    )
+    assert {"send_message_to_session", "task"} <= tool_names
 
 
 
@@ -461,6 +497,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         terminal_manager_client=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
         include_test_tools=True,
+        include_team_tools=True,
     )
 
     direct_tool_names = [tool.name for tool in tools]

@@ -40,14 +40,10 @@ export default function ResponseActionToolbar({
   responseText,
   tokenUsage,
   modelUsage,
-  canRegenerate,
-  onRegenerate,
 }: {
   responseText: string;
   tokenUsage: ConversationTokenUsage | null;
   modelUsage: ConversationModelUsage | null;
-  canRegenerate: boolean;
-  onRegenerate: () => void;
 }): React.ReactNode {
   const [copyState, setCopyState] = React.useState<"idle" | "copied" | "error">("idle");
   const resetTimerRef = React.useRef<number | null>(null);
@@ -84,6 +80,7 @@ export default function ResponseActionToolbar({
     : copyState === "error"
       ? "复制失败"
       : "复制";
+  const copyDisabled = responseText.length === 0;
   const numberFormatter = React.useMemo(
     () => new Intl.NumberFormat("zh-CN"),
     [],
@@ -119,8 +116,9 @@ export default function ResponseActionToolbar({
       <button
         type="button"
         className={`chat-response-action-button chat-copy-response${copyState === "copied" ? " is-copied" : ""}${copyState === "error" ? " is-error" : ""}`}
-        title={copyLabel}
-        aria-label={copyLabel}
+        title={copyDisabled ? "复制（暂无可复制内容）" : copyLabel}
+        aria-label={copyDisabled ? "复制（暂无可复制内容）" : copyLabel}
+        disabled={copyDisabled}
         onClick={() => void copyResponse()}
       >
         <span
@@ -140,18 +138,6 @@ export default function ResponseActionToolbar({
           <span className={`codicon codicon-${action.icon}`} aria-hidden="true" />
         </button>
       ))}
-      {canRegenerate ? (
-        // TODO: 后续补齐可选模型、重试参数和多候选回复；当前只重新生成最后回复。
-        <button
-          type="button"
-          className="chat-response-action-button"
-          title="重新生成最后回复"
-          aria-label="重新生成最后回复"
-          onClick={onRegenerate}
-        >
-          <span className="codicon codicon-refresh" aria-hidden="true" />
-        </button>
-      ) : null}
       <span className="chat-response-action-status" aria-live="polite">
         {copyState === "idle" ? "" : copyLabel}
       </span>

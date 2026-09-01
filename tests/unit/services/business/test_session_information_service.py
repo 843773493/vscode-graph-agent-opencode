@@ -62,6 +62,7 @@ def _trace_event(
     event_type: str,
     content: str,
     timestamp: datetime,
+    raw: dict[str, object] | None = None,
 ) -> TraceEventDTO:
     return TraceEventDTO(
         event_id=event_id,
@@ -72,7 +73,7 @@ def _trace_event(
         title=event_type,
         content=content,
         timestamp=timestamp,
-        raw={},
+        raw=raw or {},
     )
 
 
@@ -117,3 +118,38 @@ async def test_information_uses_latest_bounded_trace_page_for_execution_and_erro
         "evt_old_error",
         "evt_latest_failed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_information_marks_process_exit_as_failed(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    events = [
+        _trace_event(
+            event_id="evt_process_exit",
+            job_id="job_process_exit",
+            event_type="session_interrupted",
+            content="工作区后端重启，无法安全续接原 AgentLoop 执行",
+            timestamp=now,
+            raw={
+                "payload": {
+                    "phase": "process_exit",
+                    "code": "execution_lost",
+                }
+            },
+        )
+    ]
+    service = SessionInformationService(
+        session_service=_Sessions(events),  # type: ignore[arg-type]
+        session_resource_service=_Resources(),  # type: ignore[arg-type]
+        workspace_service=_Workspace(),  # type: ignore[arg-type]
+        path_resolver=SimpleNamespace(
+            resolve_session_node=lambda session_id: tmp_path / session_id
+        ),
+    )
+
+    result = await service.get_information("ses_information")
+
+    assert result.execution.status == "failed"
+    assert result.execution.last_error == (
+        "工作区后端重启，无法安全续接原 AgentLoop 执行"
+    )

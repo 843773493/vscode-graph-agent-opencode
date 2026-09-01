@@ -128,6 +128,19 @@ describe("浏览器状态持久化", () => {
     expect(maximumActive).toBe(1);
   });
 
+  test("恢复后的内部标签页 ID 解析回所属浏览器会话", () => {
+    const manager = managerWithWriter(async () => undefined);
+    const session = {
+      id: "browser_recovered",
+      pageEntries: new Map([["page_recovered_internal", {}]]),
+      record: { page_id: "page_recovered_internal" },
+    };
+    manager.sessions.set(session.id, session);
+
+    expect(manager.get("page_recovered_internal")).toBe(session);
+    expect(manager.get("page_recovered_internal")).toBe(session);
+  });
+
   test("短时间内的后台写入请求合并为一次", async () => {
     let writes = 0;
     const manager = managerWithWriter(async () => {

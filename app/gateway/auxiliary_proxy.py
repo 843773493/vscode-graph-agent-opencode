@@ -311,8 +311,7 @@ async def proxy_browser_websocket(websocket: WebSocket, workspace_id: str) -> No
     )
 
 
-@router.get("/api/gateway/attach/{kind}/{path:path}")
-async def proxy_attach_frontend(kind: str, path: str, request: Request):
+async def _proxy_attach_frontend(request: Request, *, kind: str, path: str):
     frontend_urls = getattr(request.app.state, "attach_frontend_urls", {})
     frontend_url = frontend_urls.get(kind)
     if not isinstance(frontend_url, str):
@@ -336,3 +335,32 @@ async def proxy_attach_frontend(kind: str, path: str, request: Request):
         headers=_proxy_response_headers(response),
         media_type=response.headers.get("content-type"),
     )
+
+
+@router.get("/api/gateway/attach/protocol/{path:path}")
+async def proxy_protocol_attach_asset(path: str, request: Request):
+    if path.startswith("generated/boxteam/terminal/"):
+        kind = "terminal"
+    elif path.startswith("generated/boxteam/browser/"):
+        kind = "browser"
+    elif path.startswith("generated/boxteam/common/"):
+        # common 生成文件被两个 attach 客户端共享，使用任一静态协议前端回源即可。
+        kind = "terminal"
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "无法从协议资源路径判断 attach 前端，"
+                f"仅支持 terminal/browser generated namespace: {path}"
+            ),
+        )
+    return await _proxy_attach_frontend(
+        request,
+        kind=kind,
+        path=f"protocol/{path}",
+    )
+
+
+@router.get("/api/gateway/attach/{kind}/{path:path}")
+async def proxy_attach_frontend(kind: str, path: str, request: Request):
+    return await _proxy_attach_frontend(request, kind=kind, path=path)

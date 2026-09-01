@@ -1,5 +1,6 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { existsSync, statSync } from "node:fs";
 import {
   readProcessStat,
   terminateTerminalProcessTree,
@@ -15,6 +16,21 @@ import { TerminalStateStore } from "./terminalStateStore.js";
 export const MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE = 64;
 export const MAX_RETAINED_TERMINAL_HISTORY = 256;
 const PROTECTED_RECENT_EXECUTIONS = 8;
+
+export function resolveTerminalCwd(workspaceRoot, cwd) {
+  const rawCwd = typeof cwd === "string" && cwd.trim() !== ""
+    ? cwd.trim()
+    : workspaceRoot;
+  const resolved = path.isAbsolute(rawCwd)
+    ? path.resolve(rawCwd)
+    : path.resolve(workspaceRoot, rawCwd);
+  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+    throw new Error(
+      `终端工作目录不存在或不是目录: cwd=${rawCwd}, resolved=${resolved}`,
+    );
+  }
+  return resolved;
+}
 
 function terminalId() {
   return `term_${randomUUID().replaceAll("-", "")}`;
@@ -215,7 +231,7 @@ export class TerminalManager {
     }
     await this.pruneTerminalHistory();
     await this.ensureExecutionCapacity();
-    const resolvedCwd = path.resolve(cwd);
+    const resolvedCwd = resolveTerminalCwd(this.workspaceRoot, cwd);
     const id = terminalId();
     const session = new TerminalSession({
       manager: this,
@@ -279,7 +295,7 @@ export class TerminalManager {
     const session = this.get(id);
     session.finishSteering({ dispatched });
     await this.persist();
-    return session.snapshot();
+    return { terminal: session.snapshot() };
   }
 
   async ensureExecutionCapacity() {

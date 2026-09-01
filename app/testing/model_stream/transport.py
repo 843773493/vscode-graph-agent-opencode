@@ -225,8 +225,13 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
         protocol = scenario.cassette.metadata.get("protocol")
         if not isinstance(protocol, str):
             raise ModelStreamError("model stream cassette 缺少有效 protocol metadata")
-        codec = get_protocol_codec(protocol)
-        codec.require_runtime()
+        codec = None if protocol == "mixed" else get_protocol_codec(protocol)
+        if codec is not None:
+            codec.require_runtime()
+        elif mode == "record":
+            raise ModelStreamError(
+                "model stream mixed cassette 仅支持 replay；record 必须为单一 protocol"
+            )
         self._scenario = scenario
         self._codec = codec
         self._mode = mode
@@ -264,14 +269,18 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
         self._request_urls.append(str(request.url))
         if self._mode == "replay":
             interaction = self._coordinator.select(request)
+            codec = get_protocol_codec(interaction.protocol)
+            codec.require_runtime()
             return httpx.Response(
                 status_code=interaction.response.status,
                 headers=interaction.response.headers,
-                stream=_ReplayByteStream(interaction.response.frames, self._codec),
+                stream=_ReplayByteStream(interaction.response.frames, codec),
                 request=request,
             )
         if self._live_transport is None:
             raise RuntimeError("record transport 缺少 live HTTP transport")
+        if self._codec is None:
+            raise RuntimeError("record transport 缺少单一 protocol codec")
         upstream = await self._live_transport.handle_async_request(request)
         recorder = _SSEFrameRecorder(self._codec)
         asset_id = str(self._scenario.cassette.metadata["asset_id"])

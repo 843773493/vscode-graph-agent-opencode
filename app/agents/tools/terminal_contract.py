@@ -13,6 +13,7 @@ MIN_EMPTY_POLL_YIELD_TIME_MS = 5_000
 MAX_EMPTY_POLL_YIELD_TIME_MS = 300_000
 DEFAULT_MAX_OUTPUT_TOKENS = 10_000
 APPROX_BYTES_PER_TOKEN = 4
+PORT_IN_USE_MARKERS = ("Address already in use", "EADDRINUSE", "Errno 98")
 
 
 def extract_command_output(
@@ -111,6 +112,20 @@ def validate_max_output_tokens(max_output_tokens: int | None) -> None:
         raise ValueError("max_output_tokens 必须大于 0")
 
 
+def classify_terminal_environment_issue(
+    output: str,
+    exit_code: int | None,
+) -> dict[str, Any] | None:
+    if exit_code != 1 or not any(marker in output for marker in PORT_IN_USE_MARKERS):
+        return None
+    return {
+        "code": "port_in_use",
+        "retryable": True,
+        "message": "命令尝试绑定已占用端口；请先复用现有服务，或选择明确空闲端口。",
+        "recovery": "reuse_existing_service_or_choose_free_port",
+    }
+
+
 def tool_output(
     *,
     terminal_id: str,
@@ -119,6 +134,7 @@ def tool_output(
     max_output_tokens: int | None,
     exit_code: int | None = None,
     running: bool,
+    environment_issue: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     truncated_output, original_token_count = truncate_output(
         output,
@@ -135,6 +151,9 @@ def tool_output(
         result["session_id"] = terminal_id
     elif exit_code is not None:
         result["exit_code"] = exit_code
+        result["status"] = "success" if exit_code == 0 else "error"
+    if environment_issue is not None:
+        result["environment_issue"] = environment_issue
     return result
 
 
@@ -142,6 +161,7 @@ __all__ = [
     "DEFAULT_EXEC_YIELD_TIME_MS",
     "DEFAULT_MAX_OUTPUT_TOKENS",
     "DEFAULT_WRITE_STDIN_YIELD_TIME_MS",
+    "classify_terminal_environment_issue",
     "clean_terminal_delta",
     "effective_yield_time_ms",
     "extract_command_output",

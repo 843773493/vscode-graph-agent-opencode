@@ -20,6 +20,13 @@ function toolStatus(item: ToolItem): {
       className: "is-active",
     };
   }
+  if (item.incomplete) {
+    return {
+      icon: "codicon-debug-stop",
+      label: `${item.toolName} 调用未完成`,
+      className: "is-incomplete",
+    };
+  }
   if (item.outcomeUnknown) {
     return {
       icon: "codicon-warning",
@@ -53,19 +60,43 @@ function fallbackContent(item: ToolItem): string {
 function ToolRow({
   item,
   showRawDetails,
+  onLoadDetails,
 }: {
   item: ToolItem;
   showRawDetails: boolean;
+  onLoadDetails?: (toolCallId: string) => Promise<void>;
 }): React.ReactNode {
   const [open, setOpen] = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
   const status = toolStatus(item);
-  const hasDetails = Boolean(
-    item.inputText
+  const hasMaterializedDetails = Boolean(
+    item.detailsLoaded
+    || item.inputText
     || item.resultText
     || showRawDetails
     || Object.keys(item.rawStart).length > 0
     || Object.keys(item.rawEnd).length > 0,
   );
+  const canLoadDetails = Boolean(item.toolCallId && onLoadDetails);
+  const hasDetails = hasMaterializedDetails || canLoadDetails;
+  const handleClick = async () => {
+    if (loading) return;
+    if (!item.detailsLoaded && item.toolCallId && onLoadDetails) {
+      setLoading(true);
+      setError(null);
+      try {
+        await onLoadDetails(item.toolCallId);
+        setOpen(true);
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : String(loadError));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    setOpen((current) => !current);
+  };
   const content = open
     ? formatToolCardContent(item) ?? fallbackContent(item)
     : null;
@@ -76,12 +107,15 @@ function ToolRow({
         type="button"
         className="chat-tool-summary"
         aria-expanded={open}
+        aria-busy={loading}
         disabled={!hasDetails}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => void handleClick()}
       >
-        <span className={`codicon ${status.icon}`} aria-hidden="true" />
+        <span className={`codicon ${loading ? "codicon-loading codicon-modifier-spin" : status.icon}`} aria-hidden="true" />
         <span className="chat-tool-label">{status.label}</span>
-        <span className="chat-tool-preview">{toolCollapsedText(item)}</span>
+        <span className="chat-tool-preview">
+          {loading ? "正在加载工具详情…" : toolCollapsedText(item)}
+        </span>
         {hasDetails ? (
           <span
             className={`codicon ${open ? "codicon-chevron-down" : "codicon-chevron-right"}`}
@@ -91,6 +125,9 @@ function ToolRow({
       </button>
       {open ? (
         <div className="chat-tool-details">
+          {error ? (
+            <div className="chat-inline-error" role="alert">{error}</div>
+          ) : null}
           {content ? <MarkdownContent value={content} /> : null}
           {showRawDetails ? (
             <details className="chat-tool-raw">

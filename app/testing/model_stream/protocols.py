@@ -228,29 +228,78 @@ class OpenAIResponsesCodec(StreamProtocolCodec):
 
 class AnthropicMessagesCodec(StreamProtocolCodec):
     protocol_id: ProtocolId = "anthropic_messages_sse"
-    runtime_supported = False
-
-    def _unsupported(self) -> None:
-        self.require_runtime()
+    """Anthropic Messages 的标准 SSE codec。"""
 
     def decode(self, *, event_name: str | None, data: str) -> StreamFrame:
-        del event_name, data
-        self._unsupported()
-        raise AssertionError("unreachable")
+        try:
+            parsed: object = json.loads(data)
+        except json.JSONDecodeError as error:
+            raise ModelStreamProtocolError(
+                "Anthropic Messages SSE data 必须是 JSON object"
+            ) from error
+        if not isinstance(parsed, dict):
+            raise ModelStreamProtocolError(
+                "Anthropic Messages SSE data 必须是 JSON object"
+            )
+        payload_type = parsed.get("type")
+        effective_event = (
+            event_name
+            if event_name is not None
+            else payload_type
+            if isinstance(payload_type, str)
+            else None
+        )
+        if effective_event is None:
+            raise ModelStreamProtocolError(
+                "Anthropic Messages SSE event 缺少 event 行和 payload.type"
+            )
+        return StreamFrame(
+            kind="done" if effective_event == "message_stop" else "data",
+            encoding="json",
+            payload=parsed,
+            event=effective_event,
+        )
 
     def encode(self, frame: StreamFrame) -> bytes:
-        del frame
-        self._unsupported()
-        raise AssertionError("unreachable")
+        self.validate_frame(frame, label="Anthropic Messages frame")
+        return _encode_sse(
+            event_name=frame.event,
+            data=_json_payload(frame, label="Anthropic Messages frame"),
+        )
 
     def is_terminal(self, frame: StreamFrame) -> bool:
-        del frame
-        self._unsupported()
-        raise AssertionError("unreachable")
+        return (
+            frame.kind == "done"
+            and frame.encoding == "json"
+            and frame.event == "message_stop"
+            and isinstance(frame.payload, dict)
+            and frame.payload.get("type") == "message_stop"
+        )
 
     def validate_frame(self, frame: StreamFrame, *, label: str) -> None:
-        del frame, label
-        self._unsupported()
+        payload = frame.payload
+        if frame.encoding != "json" or not isinstance(payload, dict):
+            raise ModelStreamProtocolError(
+                f"{label} Anthropic Messages frame 必须是 encoding=json、payload object"
+            )
+        payload_type = payload.get("type")
+        if not isinstance(payload_type, str) or not payload_type:
+            raise ModelStreamProtocolError(
+                f"{label} Anthropic Messages payload.type 必须是非空字符串"
+            )
+        if frame.event != payload_type:
+            raise ModelStreamProtocolError(
+                f"{label} Anthropic Messages event 与 payload.type 不一致: "
+                f"event={frame.event!r} type={payload_type!r}"
+            )
+        if frame.kind == "done" and not self.is_terminal(frame):
+            raise ModelStreamProtocolError(
+                f"{label} Anthropic Messages terminal 必须是 message_stop event"
+            )
+        if frame.kind == "data" and payload_type == "message_stop":
+            raise ModelStreamProtocolError(
+                f"{label} message_stop 必须标记为 done frame"
+            )
 
 
 _CODECS: dict[ProtocolId, StreamProtocolCodec] = {

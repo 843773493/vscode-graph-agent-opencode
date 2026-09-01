@@ -1,0 +1,24 @@
+{
+  "expectation_id": "responses-reasoning-parallel-tool-loop",
+  "protocol": "openai_responses_sse",
+  "first_reasoning_summary": "先并行读取两个文件，再根据结果作答。",
+  "second_reasoning_summary": "两个文件都已读取，正在汇总结果。",
+  "tool_calls": [
+    {
+      "tool_name": "read_file",
+      "call_id": "call_parallel_one",
+      "arguments": {
+        "path": "README.md"
+      }
+    },
+    {
+      "tool_name": "read_file",
+      "call_id": "call_parallel_two",
+      "arguments": {
+        "path": "test.md"
+      }
+    }
+  ],
+  "visible_text": "两个工具都已完成，文件内容已核对。",
+  "terminal_event": "response.completed"
+}
