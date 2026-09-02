@@ -13,12 +13,14 @@ from app.core.session_tree.support import (
     SESSION_CHILDREN_DIR_NAME,
     SESSION_MANIFEST_NAME,
     SessionPhysicalNode,
+    SessionTreeOperationLock,
     _atomic_write_json_value,
     _navigation_signature,
     _parse_optional_datetime,
     _read_json_object,
     physical_display_segment,
     physical_segment,
+    session_tree_operation_locked,
     validate_generator_physical_segment,
 )
 
@@ -60,12 +62,19 @@ class SessionPathResolver(SessionPathMutationSupport):
         self._nodes: dict[str, SessionPhysicalNode] = {}
         self._navigation_mtimes: dict[Path, tuple[int, int, int]] = {}
         self._lock = threading.RLock()
+        self._session_tree_operation_lock = SessionTreeOperationLock(
+            self.index_path.parent / ".session-catalog.lock"
+        )
         self._loaded = False
         self._revision = 0
         self._deleting_subtrees: set[str] = set()
+        self._physical_tree_error: str | None = None
 
+    @session_tree_operation_locked
     def initialize(self) -> None:
         with self._lock:
+            if self._loaded:
+                return
             self.sessions_root.mkdir(parents=True, exist_ok=True)
             if self.authority_marker_path.is_file() and not self.index_path.is_file():
                 raise RuntimeError(
@@ -85,18 +94,34 @@ class SessionPathResolver(SessionPathMutationSupport):
                 )
                 self._write_index_locked()
             self._write_authority_marker_locked()
-            self._refresh_locked()
+            try:
+                self._refresh_locked()
+            except RuntimeError as error:
+                if "检测到绕过软件修改会话目录结构" not in str(error):
+                    raise
+                # 只加载权威索引，让后端能够启动并对外报告可恢复的目录错误；
+                # 普通目录 API 仍会由 _raise_if_physical_tree_invalid_locked 拒绝，
+                # 运行时写入则使用专门的索引解析器，不会因无关孤儿节点失去终态。
+                self._nodes = self._nodes_from_records_locked(
+                    self._load_index_records_locked()
+                )
+                self._loaded = True
+                self._revision += 1
+                self._physical_tree_error = str(error)
 
     def invalidate(self) -> None:
         with self._lock:
             self._loaded = False
             self._nodes = {}
             self._navigation_mtimes = {}
+            self._physical_tree_error = None
 
+    @session_tree_operation_locked
     def refresh(self) -> list[SessionPhysicalNode]:
         with self._lock:
             if not self._loaded:
                 self.initialize()
+                self._raise_if_physical_tree_invalid_locked()
                 return list(self._nodes.values())
             return self._refresh_locked()
 
@@ -298,12 +323,12 @@ class SessionPathResolver(SessionPathMutationSupport):
             )
         records = raw.get("nodes")
         if not isinstance(records, list):
-            raise RuntimeError(f"会话目录索引 nodes 必须是数组: {self.index_path}")
+            raise TypeError(f"会话目录索引 nodes 必须是数组: {self.index_path}")
         normalized: list[dict[str, object]] = []
         seen: set[str] = set()
         for offset, value in enumerate(records):
             if not isinstance(value, dict):
-                raise RuntimeError(
+                raise TypeError(
                     f"会话目录索引节点必须是对象: path={self.index_path}, offset={offset}"
                 )
             node_id = value.get("node_id")
@@ -447,6 +472,7 @@ class SessionPathResolver(SessionPathMutationSupport):
                     path=target / current.path.relative_to(source),
                 )
 
+    @session_tree_operation_locked
     def update_node_name(self, node_id: str, name: str) -> SessionPhysicalNode:
         with self._lock:
             if not name:
@@ -583,6 +609,7 @@ class SessionPathResolver(SessionPathMutationSupport):
         self._recover_stale_allocations_locked(nodes)
         self._validate_filesystem_locked(nodes)
         self._nodes = nodes
+        self._physical_tree_error = None
         tracked_paths = [self.index_path, self.sessions_root]
         for node in nodes.values():
             tracked_paths.extend(
@@ -603,13 +630,16 @@ class SessionPathResolver(SessionPathMutationSupport):
         return list(nodes.values())
 
     @property
+    @session_tree_operation_locked
     def revision(self) -> int:
         """返回物理树进程内修订号，并先检查人工文件系统变更。"""
         with self._lock:
             self._ensure_loaded()
             self._refresh_if_navigation_changed_locked()
+            self._raise_if_physical_tree_invalid_locked()
             return self._revision
 
+    @session_tree_operation_locked
     def list_nodes(self, *, refresh: bool = False) -> list[SessionPhysicalNode]:
         with self._lock:
             if not self._loaded:
@@ -617,17 +647,48 @@ class SessionPathResolver(SessionPathMutationSupport):
             if refresh:
                 return self._refresh_locked()
             self._refresh_if_navigation_changed_locked()
+            self._raise_if_physical_tree_invalid_locked()
             return list(self._nodes.values())
 
+    @session_tree_operation_locked
+    def list_authoritative_nodes(self) -> list[SessionPhysicalNode]:
+        """只投影权威索引，不扫描或吸收未登记的物理目录。"""
+        with self._lock:
+            self._ensure_loaded()
+            nodes = self._nodes_from_records_locked(
+                self._load_index_records_locked()
+            )
+            self._nodes = nodes
+            return list(nodes.values())
+
+    @property
+    @session_tree_operation_locked
+    def physical_tree_error(self) -> str | None:
+        """返回最近一次严格物理树校验错误，不触发新的扫描。"""
+        with self._lock:
+            self._ensure_loaded()
+            return self._physical_tree_error
+
+    @property
+    @session_tree_operation_locked
+    def authoritative_revision(self) -> int:
+        """返回索引投影修订号，不要求物理树当前一致。"""
+        with self._lock:
+            self._ensure_loaded()
+            return self._revision
+
+    @session_tree_operation_locked
     def get_node(self, node_id: str) -> SessionPhysicalNode:
         with self._lock:
             self._ensure_loaded()
             self._refresh_node_if_changed_locked(node_id)
+            self._raise_if_physical_tree_invalid_locked()
             node = self._nodes.get(node_id)
             if node is None:
                 raise KeyError(f"物理会话节点不存在: {node_id}")
             return node
 
+    @session_tree_operation_locked
     def resolve_session_node(self, session_id: str) -> Path:
         """通过稳定会话 ID 返回物理树中的绝对会话目录。"""
         node = self.get_node(session_id)
@@ -640,6 +701,64 @@ class SessionPathResolver(SessionPathMutationSupport):
             )
         return node.path
 
+    @session_tree_operation_locked
+    def resolve_session_node_for_runtime(self, session_id: str) -> Path:
+        """按索引定位运行时会话，但不扫描无关物理兄弟节点。
+
+        事件、消息流和作业终态必须能够在目录树异常时完成收尾；否则一个
+        无关的物理孤儿节点会让失败事件本身也无法落盘，最终留下永久运行态。
+        这里仍校验索引、目标目录和目标 manifest，普通目录 API 继续使用严格
+        的 ``resolve_session_node``，因此不会静默吸收物理树漂移。
+        """
+        with self._lock:
+            nodes = self._nodes_from_records_locked(
+                self._load_index_records_locked()
+            )
+            node = nodes.get(session_id)
+            if node is None:
+                raise KeyError(f"权威会话目录索引不存在: session_id={session_id}")
+            if node.kind != "session":
+                raise RuntimeError(
+                    f"节点不是会话: node_id={session_id}, path={node.path}"
+                )
+            if not node.path.is_absolute():
+                raise RuntimeError(
+                    "会话物理节点不是绝对路径: "
+                    f"session_id={session_id}, path={node.path}"
+                )
+            if not node.path.is_dir() or node.path.is_symlink():
+                raise RuntimeError(
+                    "检测到绕过软件修改会话目录结构；权威索引声明的运行时会话目录"
+                    "不存在或不是普通目录: "
+                    f"session_id={session_id}, path={node.path}"
+                )
+            if node.path.name != node.node_id:
+                raise RuntimeError(
+                    "检测到绕过软件修改会话目录结构；运行时会话目录名必须等于稳定 ID: "
+                    f"session_id={session_id}, path={node.path}"
+                )
+            manifest_path = node.path / SESSION_MANIFEST_NAME
+            manifest = _read_json_object(manifest_path)
+            if manifest.get("session_id") != session_id:
+                raise RuntimeError(
+                    "检测到绕过软件修改会话目录结构；运行时会话 manifest 稳定 ID 不匹配: "
+                    f"session_id={session_id}, manifest={manifest_path}"
+                )
+            expected_parent_session_id = nearest_session_ancestor_from_nodes(
+                node.parent_node_id,
+                nodes,
+            )
+            if manifest.get("parent_session_id") != expected_parent_session_id:
+                raise RuntimeError(
+                    "检测到绕过软件修改会话目录结构；运行时会话 manifest 与权威索引"
+                    "父关系不一致: "
+                    f"session_id={session_id}, "
+                    f"expected_parent_session_id={expected_parent_session_id}, "
+                    f"manifest_parent_session_id={manifest.get('parent_session_id')}"
+                )
+            return node.path
+
+    @session_tree_operation_locked
     def resolve_folder_dir(self, folder_id: str) -> Path:
         node = self.get_node(folder_id)
         if node.kind != "folder":
@@ -647,10 +766,12 @@ class SessionPathResolver(SessionPathMutationSupport):
         return node.path
 
 
+    @session_tree_operation_locked
     def relative_path(self, node_id: str) -> str:
         with self._lock:
             return self.get_node(node_id).path.relative_to(self.sessions_root).as_posix()
 
+    @session_tree_operation_locked
     def child_nodes(self, node_id: str) -> list[SessionPhysicalNode]:
         with self._lock:
             self._ensure_loaded()
@@ -659,6 +780,7 @@ class SessionPathResolver(SessionPathMutationSupport):
                 node for node in self._nodes.values() if node.parent_node_id == node_id
             ]
 
+    @session_tree_operation_locked
     def descendant_session_ids(self, node_id: str, *, include_self: bool = False) -> list[str]:
         with self._lock:
             self._ensure_loaded()
@@ -700,9 +822,11 @@ class SessionPathResolver(SessionPathMutationSupport):
             )
         return result
 
+    @session_tree_operation_locked
     def nearest_session_ancestor(self, parent_node_id: str | None) -> str | None:
         with self._lock:
             self._ensure_loaded()
+            self._raise_if_physical_tree_invalid_locked()
             return nearest_session_ancestor_from_nodes(
                 parent_node_id,
                 self._nodes,
@@ -710,6 +834,10 @@ class SessionPathResolver(SessionPathMutationSupport):
     def _ensure_loaded(self) -> None:
         if not self._loaded:
             self.initialize()
+
+    def _raise_if_physical_tree_invalid_locked(self) -> None:
+        if self._physical_tree_error is not None:
+            raise RuntimeError(self._physical_tree_error)
 
 
     def _refresh_if_navigation_changed_locked(self) -> None:

@@ -186,6 +186,118 @@ def visible_text(content: Any) -> str:
     return "".join(parts)
 
 
+def project_user_message_content(
+    content: Any,
+    *,
+    target_format: str,
+    image_input: bool,
+) -> dict[str, Any]:
+    """把 canonical HumanMessage content 投影为目标 provider 的临时 blocks。
+
+    ``metadata``、preview 状态和其它 canonical-only 字段不会越过请求边界；
+    source content 保持不变。不可选的 rich block 失败只影响该 block，manifest
+    文本和附件路径仍会发送，并通过 diagnostics 暴露原因。
+    """
+
+    source_blocks = _content_blocks(content)
+    projected: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
+    for index, source in enumerate(source_blocks):
+        block_type = source.get("type")
+        if block_type in {"text", "input_text", "output_text"}:
+            text = source.get("text")
+            if isinstance(text, str):
+                projected.append(
+                    {
+                        "type": "input_text" if target_format == "responses" else "text",
+                        "text": text,
+                    }
+                )
+            continue
+        if block_type == "refusal":
+            projected.append(
+                {
+                    key: copy.deepcopy(value)
+                    for key, value in source.items()
+                    if key != "metadata"
+                }
+            )
+            continue
+        if block_type not in {"image_url", "image", "input_image"}:
+            if isinstance(block_type, str) and block_type not in {
+                "reasoning",
+                "thinking",
+                "redacted_thinking",
+                "reasoning_content",
+                "reasoning_items",
+            }:
+                diagnostics.append(
+                    {
+                        "block_index": index,
+                        "block_type": block_type,
+                        "status": "projection_failed",
+                        "detail": f"目标 provider 未定义用户 block 类型: {block_type}",
+                    }
+                )
+            continue
+        if not image_input:
+            diagnostics.append(
+                {
+                    "block_index": index,
+                    "block_type": block_type,
+                    "status": "not_sent",
+                    "detail": "目标 provider 未声明 image_input 能力",
+                }
+            )
+            continue
+
+        image_url = source.get("image_url")
+        if block_type in {"image_url", "input_image"}:
+            image_url = (
+                image_url.get("url")
+                if isinstance(image_url, Mapping)
+                else image_url
+            )
+        if target_format == "responses":
+            if not isinstance(image_url, str) or not image_url:
+                diagnostics.append(
+                    {
+                        "block_index": index,
+                        "block_type": block_type,
+                        "status": "projection_failed",
+                        "detail": "Responses image block 缺少非空 image_url",
+                    }
+                )
+                continue
+            projected.append({"type": "input_image", "image_url": image_url})
+            continue
+        if block_type == "image" and isinstance(source.get("source"), Mapping):
+            projected.append(
+                {
+                    key: copy.deepcopy(value)
+                    for key, value in source.items()
+                    if key != "metadata"
+                }
+            )
+            continue
+        if not isinstance(image_url, str) or not image_url:
+            diagnostics.append(
+                {
+                    "block_index": index,
+                    "block_type": block_type,
+                    "status": "projection_failed",
+                    "detail": "image block 缺少可发送的 URL",
+                }
+            )
+            continue
+        projected.append({"type": "image_url", "image_url": {"url": image_url}})
+
+    return {
+        "content": content if isinstance(content, str) else projected or "",
+        "diagnostics": diagnostics,
+    }
+
+
 def _summary_text(value: Any) -> str:
     return extract_reasoning_summary(value).strip()
 

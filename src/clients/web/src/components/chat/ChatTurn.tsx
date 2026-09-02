@@ -1,5 +1,6 @@
 import React from "react";
 import type { TurnHistoryInclude } from "../../api/sessionTurnHistory";
+import type { AttachmentRef } from "../../types/backend";
 import { isLiveConversationView } from "../../state/trace/traceAggregation";
 import type { ConversationView } from "../../types/frontend";
 import ChatTurnResponseBody from "./turn/ChatTurnResponseBody";
@@ -30,6 +31,7 @@ export interface ChatTurnProps extends ChatTurnActionCallbacks {
     toolCallIds?: string[],
   ) => Promise<void>;
   onLoadToolDetails?: (turnId: string, toolCallId: string) => Promise<void>;
+  onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
 }
 
 function ChatTurn({
@@ -45,6 +47,7 @@ function ChatTurn({
   onUpdatePending,
   onRemovePending,
   onChangePendingPolicy,
+  onOpenAttachment,
 }: ChatTurnProps): React.ReactNode {
   const actions = useChatTurnActions({
     conversation,
@@ -63,6 +66,7 @@ function ChatTurn({
         onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}
         onRemovePending={onRemovePending}
         onChangePendingPolicy={onChangePendingPolicy}
+        onOpenAttachment={onOpenAttachment}
       />
       <div className="chat-assistant-row">
         <div className="chat-assistant-avatar-menu">
@@ -155,6 +159,7 @@ export function areChatTurnPropsEqual(
     || previous.onUpdatePending !== next.onUpdatePending
     || previous.onRemovePending !== next.onRemovePending
     || previous.onChangePendingPolicy !== next.onChangePendingPolicy
+    || previous.onOpenAttachment !== next.onOpenAttachment
   ) {
     return false;
   }

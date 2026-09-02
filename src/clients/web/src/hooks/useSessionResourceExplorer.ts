@@ -42,7 +42,7 @@ const CATALOG_RETRY_LIMIT = 3;
 
 function isRetryableCatalogError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /(?:HTTP\s*(?:401|502|503|504)|401\s+Unauthorized|Failed to fetch|NetworkError|ERR_NETWORK_CHANGED|连接被拒绝|暂时不可用)/i.test(
+  return /(?:HTTP\s*(?:502|503|504)|Failed to fetch|NetworkError|ERR_NETWORK_CHANGED|连接被拒绝|暂时不可用)/i.test(
     message,
   );
 }
@@ -167,6 +167,7 @@ export function useSessionResourceExplorer({
         items: current?.items ?? [],
         cursor: current?.cursor ?? null,
         total: current?.total ?? 0,
+        consistency_warning: current?.consistency_warning ?? null,
         loading: true,
         error: null,
       });
@@ -225,6 +226,7 @@ export function useSessionResourceExplorer({
           items: previousBranch?.items ?? [],
           cursor: previousBranch?.cursor ?? null,
           total: previousBranch?.total ?? 0,
+          consistency_warning: previousBranch?.consistency_warning ?? null,
           loading: false,
           error: message,
         });
@@ -569,16 +571,15 @@ export function useSessionResourceExplorer({
     workspaceId: string,
     parentNodeIds: Array<string | null>,
   ) => {
-    const errors: string[] = [];
-    for (const parentNodeId of new Set(parentNodeIds)) {
+    const uniqueParentNodeIds = [...new Set(parentNodeIds)];
+    const errors = (await Promise.all(uniqueParentNodeIds.map(async (parentNodeId) => {
       try {
         await loadBranch(workspaceId, parentNodeId);
+        return null;
       } catch (error) {
-        errors.push(
-          `${parentNodeId ?? "root"}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        return `${parentNodeId ?? "root"}: ${error instanceof Error ? error.message : String(error)}`;
       }
-    }
+    }))).filter((error): error is string => error !== null);
     if (errors.length > 0) {
       throw new Error(`重新读取会话目录失败: ${errors.join("；")}`);
     }

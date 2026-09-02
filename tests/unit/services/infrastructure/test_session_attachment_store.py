@@ -97,10 +97,78 @@ def test_read_thumbnail_generates_bounded_cached_webp(
 
     assert thumbnail.content_type == "image/webp"
     with Image.open(BytesIO(thumbnail.data)) as image:
-        assert max(image.size) == 384
+        assert max(image.size) == 512
     derived = list((session_dir / "attachments" / "derived").glob("*.webp"))
     assert len(derived) == 1
     assert store.read_thumbnail("session_thumbnail", stored.file_id).data == thumbnail.data
+
+
+def test_read_thumbnail_does_not_upscale_small_image(tmp_path, session_bundle_factory):
+    source_buffer = BytesIO()
+    Image.new("RGB", (120, 80), color=(20, 40, 60)).save(source_buffer, format="PNG")
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "session_small")
+    store = SessionAttachmentStore(tmp_path)
+    stored = store.persist_inline(
+        "session_small",
+        [
+            AttachmentRef(
+                file_id="inline:small.png",
+                content_type="image/png",
+                data_url=_data_url("image/png", source_buffer.getvalue()),
+            )
+        ],
+    )[0]
+
+    thumbnail = store.read_thumbnail("session_small", stored.file_id)
+
+    with Image.open(BytesIO(thumbnail.data)) as image:
+        assert image.size == (120, 80)
+
+
+def test_persist_inline_accepts_generic_pdf_attachment(tmp_path, session_bundle_factory):
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "session_pdf")
+    store = SessionAttachmentStore(tmp_path)
+    payload = b"%PDF-1.7\nnot-a-renderer"
+
+    stored = store.persist_inline(
+        "session_pdf",
+        [
+            AttachmentRef(
+                file_id="inline:document.pdf",
+                name="document.pdf",
+                content_type="application/pdf",
+                data_url=_data_url("application/pdf", payload),
+            )
+        ],
+    )[0]
+
+    assert store.read("session_pdf", stored.file_id).data == payload
+    assert store.read("session_pdf", stored.file_id).content_type == "application/pdf"
+    with pytest.raises(ValueError, match="不是图片"):
+        store.read_thumbnail("session_pdf", stored.file_id)
+
+
+def test_persist_inline_accepts_custom_generic_mime_with_name_suffix(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", "session_custom")
+    store = SessionAttachmentStore(tmp_path)
+
+    stored = store.persist_inline(
+        "session_custom",
+        [
+            AttachmentRef(
+                file_id="inline:document.custom",
+                name="document.custom",
+                content_type="application/x-custom-document",
+                data_url=_data_url("application/x-custom-document", b"custom"),
+            )
+        ],
+    )[0]
+
+    assert stored.file_id.endswith(".custom")
+    assert store.read("session_custom", stored.file_id).data == b"custom"
 
 
 def test_read_rejects_attachment_from_another_session(

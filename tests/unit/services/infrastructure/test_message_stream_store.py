@@ -124,6 +124,29 @@ async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
 
 
 @pytest.mark.asyncio
+async def test_stream_terminal_event_survives_unrelated_catalog_drift(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    session_dir = resolver.resolve_session_node(session_id)
+    (session_dir.parent / "ses_unindexed_runtime_drift_12345678").mkdir()
+
+    writer = await store.open(
+        session_id=session_id,
+        turn_id="job_runtime_drift_terminal",
+    )
+    await writer.close_failed(
+        code="execution_error",
+        message="工具执行失败",
+        resumable=True,
+    )
+
+    state = await store.get_state(writer.turn_stream_id)
+    assert state["stream_status"] == "failed"
+    assert state["failure"]["code"] == "execution_error"
+
+
+@pytest.mark.asyncio
 async def test_stream_events_do_not_duplicate_full_checkpoint_on_disk(
     message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
 ) -> None:

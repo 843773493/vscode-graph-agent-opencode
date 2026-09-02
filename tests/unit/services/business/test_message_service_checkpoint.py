@@ -11,7 +11,6 @@ from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
 
-
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
 
 
@@ -196,6 +195,49 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
         {"type": "text", "text": "查看图片"}
     ]
     assert page.items[0].attachments[0].name == "a.png"
+
+
+def test_agent_state_record_preserves_canonical_user_preview_without_display_dump():
+    message = HumanMessage(
+        content=[
+            {"type": "text", "text": "查看图片"},
+            {
+                "type": "text",
+                "text": "<attachment path='assets/a.png'>",
+                "metadata": {
+                    "origin": "generated",
+                    "kind": "attachment_manifest",
+                    "schema_version": 1,
+                    "file_id": "assets/a.png",
+                },
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/webp;base64,preview"},
+                "metadata": {
+                    "origin": "generated",
+                    "kind": "attachment_preview",
+                    "schema_version": 1,
+                    "file_id": "assets/a.png",
+                },
+            },
+        ],
+        response_metadata=_visible_metadata(
+            "msg_canonical",
+            attachments=[
+                {
+                    "file_id": "assets/a.png",
+                    "name": "a.png",
+                    "content_type": "image/png",
+                }
+            ],
+        ),
+    )
+
+    record = MessageService._message_to_agent_state_record(message)
+
+    assert record["content"] == message.content
+    assert "preview" in json.dumps(record, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -749,11 +791,11 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
 
 
 @pytest.mark.asyncio
-async def test_message_service_uses_display_content_for_user_message_text(
+async def test_message_service_uses_user_content_blocks_for_user_message_text(
     tmp_path,
     session_bundle_factory,
 ):
-    """用户消息列表应显示原始输入，不把内部附件处理提示混成用户正文。"""
+    """用户消息列表只按 canonical block 提取正文，不读取 display_content。"""
     saver, _ = _create_saver(
         tmp_path,
         session_bundle_factory,
@@ -766,12 +808,22 @@ async def test_message_service_uses_display_content_for_user_message_text(
             {
                 "type": "text",
                 "text": "视频附件 demo.mp4 已抽取为 3 个按时间顺序排列的关键帧。",
+                "metadata": {
+                    "origin": "generated",
+                    "kind": "attachment_manifest",
+                    "schema_version": 1,
+                    "file_id": "assets/demo.mp4",
+                    "name": "demo.mp4",
+                    "content_type": "video/mp4",
+                    "path": "assets/demo.mp4",
+                    "preview_status": "available",
+                },
             },
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,abc123"}},
         ],
         response_metadata={
             **_visible_metadata("msg_video"),
-            "display_content": "请按时间顺序说明这个视频。",
+            "display_content": "不应被普通用户消息读取的旧展示字段",
             "attachments": [
                 AttachmentRef(
                     file_id="assets/demo.mp4",

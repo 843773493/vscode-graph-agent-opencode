@@ -704,7 +704,7 @@ function Composer() {
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept="image/*,video/mp4,video/webm,video/quicktime,video/x-matroska"
+                  accept="*/*"
                   className="composer-file-input"
                   onChange={handleFileChange}
                 />
@@ -714,7 +714,7 @@ function Composer() {
                   className="composer-icon-button sessions-chat-attach-button"
                   onClick={handleAttachClick}
                   title="添加附件"
-                  aria-label="添加图片或视频附件"
+                  aria-label="添加附件"
                 >
                   +
                 </button>

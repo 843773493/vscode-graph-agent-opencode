@@ -117,6 +117,7 @@ class JobService:
         job_timeout_seconds: float = 600.0,
         job_startup_timeout_seconds: float = 30.0,
         job_finalization_grace_seconds: float | None = None,
+        execution_cancel_timeout_seconds: float = 5.0,
         terminal_status_writer: TurnTerminalStatusWriter | None = None,
     ):
         if isinstance(job_timeout_seconds, bool) or job_timeout_seconds <= 0:
@@ -134,6 +135,11 @@ class JobService:
             )
         ):
             raise ValueError("job_finalization_grace_seconds 必须大于 0")
+        if (
+            isinstance(execution_cancel_timeout_seconds, bool)
+            or execution_cancel_timeout_seconds <= 0
+        ):
+            raise ValueError("execution_cancel_timeout_seconds 必须大于 0")
         self._jobs: dict[str, JobState] = {}
         self._bus: JobEventBusProtocol | None = job_event_bus
         self._session_current_job: dict[str, str] = {}
@@ -146,6 +152,7 @@ class JobService:
         self._job_executor = job_executor
         self._job_timeout_seconds = job_timeout_seconds
         self._job_startup_timeout_seconds = job_startup_timeout_seconds
+        self._execution_cancel_timeout_seconds = execution_cancel_timeout_seconds
         # 总预算到点时，最后一个模型响应可能已经完成工具阶段、只差落盘/收尾。
         # 默认给一个有界的收尾窗口；生产最多额外 60 秒，避免浏览器工具
         # 刚返回就被总预算硬切，同时不会把真正卡住的任务变成无限运行。
@@ -1112,8 +1119,11 @@ class JobService:
                 if execution_task in done:
                     result = execution_task.result()
                 elif startup_timeout_task in done:
-                    execution_task.cancel("job_startup_timeout")
-                    await asyncio.gather(execution_task, return_exceptions=True)
+                    await self._cancel_execution_task(
+                        execution_task,
+                        reason="job_startup_timeout",
+                        job_id=job.job_id,
+                    )
                     raise JobStartupTimeoutError(
                         "Job 启动超过等待 AgentLoop 的上限: "
                         f"job_id={job.job_id}, session_id={job.session_id}, "
@@ -1134,8 +1144,11 @@ class JobService:
                             job,
                         )
                 else:
-                    execution_task.cancel("job_timeout")
-                    await asyncio.gather(execution_task, return_exceptions=True)
+                    await self._cancel_execution_task(
+                        execution_task,
+                        reason="job_timeout",
+                        job_id=job.job_id,
+                    )
                     raise JobExecutionTimeoutError(
                         "Job 执行超过总超时上限: "
                         f"job_id={job.job_id}, session_id={job.session_id}, "
@@ -1143,8 +1156,11 @@ class JobService:
                     )
             except asyncio.CancelledError:
                 if not execution_task.done():
-                    execution_task.cancel()
-                await asyncio.gather(execution_task, return_exceptions=True)
+                    await self._cancel_execution_task(
+                        execution_task,
+                        reason="job_cancelled",
+                        job_id=job.job_id,
+                    )
                 raise
             finally:
                 timeout_task.cancel()
@@ -1274,14 +1290,56 @@ class JobService:
         if execution_task in done:
             return execution_task.result()
 
-        execution_task.cancel("job_timeout")
-        await asyncio.gather(execution_task, return_exceptions=True)
+        await self._cancel_execution_task(
+            execution_task,
+            reason="job_timeout",
+            job_id=job.job_id,
+        )
         raise JobExecutionTimeoutError(
             "Job 执行超过总超时上限（含最终响应收尾窗口）: "
             f"job_id={job.job_id}, session_id={job.session_id}, "
             f"timeout_seconds={self._job_timeout_seconds:g}, "
             f"finalization_grace_seconds={self._job_finalization_grace_seconds:g}"
         )
+
+    async def _cancel_execution_task(
+        self,
+        execution_task: asyncio.Task,
+        *,
+        reason: str,
+        job_id: str,
+    ) -> bool:
+        """在有限窗口内取消执行器，避免终态依赖不合作任务的收尾。"""
+        if execution_task.done():
+            return True
+
+        execution_task.cancel(reason)
+        done, _ = await asyncio.wait(
+            {execution_task},
+            timeout=self._execution_cancel_timeout_seconds,
+        )
+        if execution_task in done:
+            return True
+
+        logger.error(
+            "[job_service] execution task ignored cancellation; forcing a second "
+            "cancel and closing the Job independently: job_id=%s reason=%s "
+            "wait_seconds=%s",
+            job_id,
+            reason,
+            self._execution_cancel_timeout_seconds,
+        )
+        execution_task.cancel(f"{reason}:force")
+        done, _ = await asyncio.wait(
+            {execution_task},
+            timeout=self._execution_cancel_timeout_seconds,
+        )
+        if execution_task not in done:
+            logger.critical(
+                "[job_service] execution task remained pending after forced "
+                "cancellation; Job terminal state is authoritative",
+            )
+        return execution_task in done
 
     @staticmethod
     async def _touch_active_job(

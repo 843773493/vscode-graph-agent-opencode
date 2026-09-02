@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.exceptions import NotFoundError
@@ -39,7 +40,7 @@ class ForkRelationshipChecker(Protocol):
 
 
 class SessionService:
-    DEFAULT_SESSION_TITLES = {"", "新会话", "未命名"}
+    DEFAULT_SESSION_TITLES: ClassVar[set[str]] = {"", "新会话", "未命名"}
 
     def __init__(
         self,
@@ -86,15 +87,17 @@ class SessionService:
     async def get(self, session_id: str) -> SessionDTO:
         try:
             session_file = (
-                self._path_resolver.resolve_session_node(session_id) / "session.json"
+                self._path_resolver.resolve_session_node_for_runtime(session_id)
+                / "session.json"
             )
         except KeyError as error:
             raise NotFoundError(f"Session {session_id} not found") from error
         if not session_file.is_file():
             raise NotFoundError(f"Session {session_id} not found")
 
-        with open(session_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = json.loads(
+            await asyncio.to_thread(session_file.read_text, encoding="utf-8")
+        )
 
         session = SessionDTO.model_validate(data)
         if session.current_provider_id is None:
@@ -111,12 +114,19 @@ class SessionService:
         cursor: str | None = None,
     ) -> SessionListResultDTO:
         sessions = []
-        for node in self._path_resolver.list_nodes():
+        try:
+            nodes = self._path_resolver.list_nodes()
+        except RuntimeError:
+            # 业务读只投影权威索引，保留物理树错误供目录刷新入口报告；
+            # 不扫描或吸收未登记的物理目录。
+            nodes = self._path_resolver.list_authoritative_nodes()
+        for node in nodes:
             if node.kind != "session":
                 continue
             session_file = node.path / "session.json"
-            with open(session_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = json.loads(
+                await asyncio.to_thread(session_file.read_text, encoding="utf-8")
+            )
             session = SessionDTO.model_validate(data)
             if session.current_provider_id is None:
                 session.current_provider_id = (
@@ -561,7 +571,7 @@ class SessionService:
             temporary_path.unlink(missing_ok=True)
 
     async def control(
-        self, session_id: str, action: str, payload: dict = None
+        self, session_id: str, action: str, payload: dict[str, object] | None = None
     ) -> SessionControlResultDTO:
         await self.get(session_id)
         return SessionControlResultDTO(

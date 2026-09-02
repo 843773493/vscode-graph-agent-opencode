@@ -15,7 +15,6 @@ from app.core.path_utils import get_session_path_resolver, safe_join
 from app.schemas.internal_v2.message import AttachmentRef
 
 MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
-SUPPORTED_MEDIA_PREFIXES = ("image/", "audio/", "video/")
 SESSION_ATTACHMENT_SCHEME = "boxteam-session://"
 
 
@@ -26,7 +25,7 @@ class StoredAttachmentContent:
 
 
 class SessionAttachmentStore:
-    """持久化并读取属于单个会话的媒体附件。"""
+    """持久化并读取属于单个会话的通用附件及其图片预览。"""
 
     def __init__(self, workspace_root: Path) -> None:
         self._workspace_root = workspace_root.resolve()
@@ -48,8 +47,8 @@ class SessionAttachmentStore:
         if not file_path.is_file():
             raise FileNotFoundError(f"会话附件不存在: {file_id}")
         content_type, _ = mimetypes.guess_type(file_path.name)
-        if not content_type or not content_type.startswith(SUPPORTED_MEDIA_PREFIXES):
-            raise ValueError(f"无法识别会话媒体附件类型: {file_id}")
+        if not content_type:
+            content_type = "application/octet-stream"
         return StoredAttachmentContent(
             data=file_path.read_bytes(),
             content_type=content_type,
@@ -60,7 +59,7 @@ class SessionAttachmentStore:
         session_id: str,
         file_id: str,
         *,
-        max_edge: int = 384,
+        max_edge: int = 512,
     ) -> StoredAttachmentContent:
         """读取缓存缩略图；首次请求时从原图派生 WebP。"""
         if max_edge < 64 or max_edge > 1024:
@@ -99,16 +98,16 @@ class SessionAttachmentStore:
                 "附件 content_type 与 data_url MIME 不一致: "
                 f"{declared_type!r} != {content_type!r}"
             )
-        if not content_type.startswith(SUPPORTED_MEDIA_PREFIXES):
-            raise ValueError(f"不支持持久化的媒体附件类型: {content_type!r}")
         if len(data) > MAX_ATTACHMENT_BYTES:
             raise ValueError(
-                f"媒体附件超过 {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB 限制"
+                f"附件超过 {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB 限制"
             )
 
         suffix = mimetypes.guess_extension(content_type)
         if not suffix:
-            raise ValueError(f"无法根据 MIME 类型确定附件扩展名: {content_type!r}")
+            suffix = Path(attachment.name or "").suffix.lower()
+        if not suffix:
+            suffix = ".bin"
         digest = hashlib.sha256(data).hexdigest()
         attachments_root = self._attachments_root(session_id)
         attachments_root.mkdir(parents=True, exist_ok=True)
@@ -126,6 +125,13 @@ class SessionAttachmentStore:
     def _attachments_root(self, session_id: str) -> Path:
         session_root = self._path_resolver.resolve_session_node(session_id)
         return session_root / "attachments"
+
+    def relative_path(self, session_id: str, file_id: str) -> str:
+        """返回可交给模型工具的工作区相对路径，不暴露本机绝对路径。"""
+        file_path = self._resolve_file_id(session_id, file_id)
+        if not file_path.is_file():
+            raise FileNotFoundError(f"会话附件不存在: {file_id}")
+        return file_path.relative_to(self._workspace_root).as_posix()
 
     def _resolve_file_id(self, session_id: str, file_id: str) -> Path:
         prefix = f"{SESSION_ATTACHMENT_SCHEME}{session_id}/attachments/"

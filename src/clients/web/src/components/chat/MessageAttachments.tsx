@@ -145,11 +145,13 @@ export default function MessageAttachments({
   apiPort,
   sessionId,
   workspaceId,
+  onOpenAttachment,
 }: {
   attachments: AttachmentRef[];
   apiPort: number;
   sessionId: string;
   workspaceId?: string | null;
+  onOpenAttachment?: (attachment: AttachmentRef) => void;
 }): React.ReactNode {
   const items = React.useMemo(() => buildMessageMediaItems(attachments), [attachments]);
   const imageItems = React.useMemo(
@@ -180,8 +182,14 @@ export default function MessageAttachments({
               <button
                 type="button"
                 className="message-attachment-preview-button"
-                onClick={() => setViewerIndex(imageIndex)}
-                aria-label={`查看图片：${item.name}`}
+                onClick={() => {
+                  if (onOpenAttachment) {
+                    onOpenAttachment(item.attachment);
+                  } else {
+                    setViewerIndex(imageIndex);
+                  }
+                }}
+                aria-label={onOpenAttachment ? `在右侧打开附件：${item.name}` : `查看图片：${item.name}`}
               >
                 <img src={source} alt={item.name} className="message-attachment-thumb" />
                 <span className="message-attachment-open-hint" aria-hidden="true">
@@ -189,12 +197,28 @@ export default function MessageAttachments({
                 </span>
               </button>
             ) : (
-              // TODO: 在媒体查看器中接入音频波形与视频播放器后，替换对应类型的占位卡片。
-              <span className="message-attachment-icon" aria-hidden="true">
-                {fallbackLabel(item.kind)}
-              </span>
+              <button
+                type="button"
+                className="message-attachment-open-button"
+                onClick={() => onOpenAttachment?.(item.attachment)}
+                disabled={!onOpenAttachment}
+                aria-label={`在右侧打开附件：${item.name}`}
+              >
+                {/* TODO: 在媒体查看器中接入音频波形与视频播放器后，替换对应类型的占位卡片。 */}
+                <span className="message-attachment-icon" aria-hidden="true">
+                  {fallbackLabel(item.kind)}
+                </span>
+              </button>
             )}
-            <span className="message-attachment-name" title={item.name}>{item.name}</span>
+            <button
+              type="button"
+              className="message-attachment-name-button"
+              onClick={() => onOpenAttachment?.(item.attachment)}
+              disabled={!onOpenAttachment}
+              title={item.name}
+            >
+              <span className="message-attachment-name">{item.name}</span>
+            </button>
             {error ? (
               <button
                 type="button"
@@ -202,7 +226,7 @@ export default function MessageAttachments({
                 title={error}
                 onClick={reload}
               >
-                重新加载图片
+                重新加载附件预览
               </button>
             ) : null}
           </article>

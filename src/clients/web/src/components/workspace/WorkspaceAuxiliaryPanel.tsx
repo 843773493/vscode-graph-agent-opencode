@@ -34,6 +34,7 @@ interface WorkspaceAuxiliaryPanelProps {
   expandedFileTreePaths: string[];
   onExpandedFileTreePathsChange: (paths: string[]) => void;
   resourcePanel: ReactNode;
+  attachmentPreview: ReactNode;
   runtimePreview: ReactNode;
   debugPanel: ReactNode;
   onToggleSearch: () => void;
@@ -73,6 +74,7 @@ export default function WorkspaceAuxiliaryPanel({
   expandedFileTreePaths,
   onExpandedFileTreePathsChange,
   resourcePanel,
+  attachmentPreview,
   runtimePreview,
   debugPanel,
   onToggleSearch,
@@ -157,6 +159,7 @@ export default function WorkspaceAuxiliaryPanel({
               <span className="codicon codicon-collapse-all auxiliary-action-icon" aria-hidden="true" />
             </button>
           </div>
+          {attachmentPreview}
           <WorkspaceFileTree
             active={workspaceFileTreeReady && visible && tab === "files"}
             apiPort={apiPort}

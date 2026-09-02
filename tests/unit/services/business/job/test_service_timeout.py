@@ -24,6 +24,16 @@ class _NeverFinishExecutor:
         raise AssertionError("不可达")
 
 
+class _CancellationResistantExecutor:
+    async def run(self, _job: object) -> str:
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            # 模拟 provider/工具在第一次取消后仍卡在自己的清理等待中。
+            await asyncio.Future()
+        raise AssertionError("不可达")
+
+
 class _BlockingExecutor:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -230,6 +240,34 @@ async def test_job_timeout_marks_job_terminal_and_releases_session() -> None:
         "turn_id": job.job_id,
         "status": "timed_out",
     }]
+
+
+@pytest.mark.asyncio
+async def test_job_timeout_does_not_wait_for_uncooperative_executor() -> None:
+    service = JobService(
+        job_event_bus=_RecordingBus(),
+        job_executor=_CancellationResistantExecutor(),
+        job_timeout_seconds=0.01,
+        execution_cancel_timeout_seconds=0.01,
+    )
+    job = JobState(
+        job_id="job_uncooperative_timeout",
+        session_id="session_uncooperative_timeout",
+        message="超时后执行器不配合取消",
+        message_id="msg_uncooperative_timeout",
+        message_created_at="2026-08-31T00:00:00+00:00",
+        agent_id="default",
+        status=JobStatus.queued,
+    )
+    service._jobs[job.job_id] = job
+    service._pending_queue.append(job.session_id, job.job_id, "after_turn")
+
+    assert await service._start_next_pending(job.session_id) is True
+    assert job.task is not None
+    await asyncio.wait_for(job.task, timeout=0.2)
+
+    assert job.status == JobStatus.timed_out
+    assert service._session_current_job.get(job.session_id) is None
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,7 @@ class SessionCatalogPageDTO(BaseModel):
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
     cursor: str | None = None
     total: int = 0
+    consistency_warning: str | None = None
 
 
 class SessionCatalogBreadcrumbDTO(BaseModel):
@@ -64,7 +65,7 @@ class SessionFolderUpdateRequest(BaseModel):
     parent_folder_id: str | None = None
 
     @model_validator(mode="after")
-    def require_field(self) -> "SessionFolderUpdateRequest":
+    def require_field(self) -> SessionFolderUpdateRequest:
         if not self.model_fields_set:
             raise ValueError("会话文件夹更新至少需要一个字段")
         return self
@@ -96,7 +97,7 @@ class SessionGenerationPlacementDTO(BaseModel):
     folder_id: str | None = None
 
     @model_validator(mode="after")
-    def validate_target(self) -> "SessionGenerationPlacementDTO":
+    def validate_target(self) -> SessionGenerationPlacementDTO:
         if self.kind == "session" and self.session_id is None:
             raise ValueError("session placement 缺少 session_id")
         if self.kind == "session_folder" and self.folder_id is None:
@@ -134,7 +135,7 @@ class SessionGenerationStrategyDTO(BaseModel):
     ] = "none"
 
     @model_validator(mode="after")
-    def validate_target(self) -> "SessionGenerationStrategyDTO":
+    def validate_target(self) -> SessionGenerationStrategyDTO:
         if self.mode == "new_per_run" and self.target is not None:
             raise ValueError("new_per_run strategy 不允许 target")
         if self.mode != "new_per_run" and self.target is None:

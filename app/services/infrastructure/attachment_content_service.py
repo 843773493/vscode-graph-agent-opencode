@@ -5,7 +5,10 @@ import mimetypes
 import shutil
 import subprocess
 import tempfile
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image, ImageOps
 
 from app.core.path_utils import (
     get_session_path_resolver,
@@ -13,12 +16,12 @@ from app.core.path_utils import (
     safe_join,
     validate_workspace_path,
 )
+from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.session_attachment_store import (
     SESSION_ATTACHMENT_SCHEME,
+    SessionAttachmentStore,
 )
-from app.schemas.internal_v2.message import AttachmentRef
 
-SUPPORTED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 SUPPORTED_VIDEO_MIME_TYPES = {
     "video/mp4",
     "video/webm",
@@ -29,6 +32,7 @@ VIDEO_FRAME_MIME_TYPE = "image/jpeg"
 VIDEO_FRAME_COUNT = 6
 VIDEO_FRAME_FPS = 1
 VIDEO_FRAME_WIDTH = 512
+ATTACHMENT_PREVIEW_MAX_EDGE = 512
 
 
 def _resolve_attachment_file(file_id: str, workspace_root: Path | None) -> Path:
@@ -65,7 +69,7 @@ def _attachment_content_type(attachment: AttachmentRef, file_path: Path) -> str:
         return guessed_type
     raise ValueError(
         f"无法识别附件 MIME 类型: file_id={attachment.file_id!r}。"
-        "请在 attachments[].content_type 中显式传入 image/jpeg、video/mp4 等类型。"
+        "请在 attachments[].content_type 中显式传入 MIME 类型。"
     )
 
 
@@ -104,35 +108,93 @@ def _frame_data_url(frame_path: Path) -> str:
     return f"data:{VIDEO_FRAME_MIME_TYPE};base64,{encoded}"
 
 
-def _attachment_display_name(attachment: AttachmentRef) -> str:
-    return attachment.name or attachment.file_id
+class AttachmentContentService:
+    """提供附件定位、读取和预览变体等基础设施能力。"""
 
+    def __init__(
+        self,
+        *,
+        workspace_root: Path | None = None,
+        attachment_store: SessionAttachmentStore | None = None,
+    ) -> None:
+        self._workspace_root = (workspace_root or get_workspace_root()).resolve()
+        self._attachment_store = attachment_store or SessionAttachmentStore(
+            self._workspace_root
+        )
 
-def _media_kind_name(content_type: str) -> str:
-    if content_type in SUPPORTED_IMAGE_MIME_TYPES:
-        return "图片"
-    if content_type in SUPPORTED_VIDEO_MIME_TYPES:
-        return "视频"
-    return "附件"
+    def resolve_content_type(self, attachment: AttachmentRef) -> str:
+        return _resolve_attachment_content_type(attachment, self._workspace_root)
 
+    def relative_path(self, attachment: AttachmentRef) -> str:
+        if attachment.data_url:
+            raise ValueError(
+                "Agent 运行阶段不接受 data_url 附件；浏览器上传内容必须先持久化为 "
+                f"boxteam-session 定位符: file_id={attachment.file_id!r}"
+            )
+        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+            session_id = attachment.file_id.removeprefix(
+                SESSION_ATTACHMENT_SCHEME
+            ).split("/", 1)[0]
+            return self._attachment_store.relative_path(session_id, attachment.file_id)
+        file_path = _resolve_attachment_file(attachment.file_id, self._workspace_root)
+        if not file_path.is_file():
+            raise FileNotFoundError(f"附件不存在: {file_path}")
+        return file_path.relative_to(self._workspace_root).as_posix()
 
-def _build_attachment_label_block(
-    attachment: AttachmentRef,
-    *,
-    content_type: str,
-    index: int,
-    total: int,
-) -> dict[str, object]:
-    name = _attachment_display_name(attachment)
-    kind_name = _media_kind_name(content_type)
-    return {
-        "type": "text",
-        "text": (
-            f"附件 {index}/{total}：{name}（{kind_name}，{content_type}）。"
-            "请把后续媒体内容视为这个附件；如果用户要求逐个附件说明，"
-            "请按附件编号和文件名逐项回应。"
-        ),
-    }
+    def image_preview_data_url(self, attachment: AttachmentRef) -> str:
+        raw = self._read_attachment(attachment)
+        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+            session_id = attachment.file_id.removeprefix(
+                SESSION_ATTACHMENT_SCHEME
+            ).split("/", 1)[0]
+            preview = self._attachment_store.read_thumbnail(
+                session_id,
+                attachment.file_id,
+                max_edge=ATTACHMENT_PREVIEW_MAX_EDGE,
+            )
+            preview_type = preview.content_type
+            preview_data = preview.data
+        else:
+            with Image.open(BytesIO(raw)) as image:
+                normalized = ImageOps.exif_transpose(image)
+                normalized.thumbnail(
+                    (ATTACHMENT_PREVIEW_MAX_EDGE, ATTACHMENT_PREVIEW_MAX_EDGE),
+                    Image.Resampling.LANCZOS,
+                )
+                if normalized.mode not in {"RGB", "RGBA"}:
+                    normalized = normalized.convert(
+                        "RGBA" if "A" in normalized.mode else "RGB"
+                    )
+                output = BytesIO()
+                normalized.save(output, format="WEBP", quality=78, method=4)
+            preview_type = "image/webp"
+            preview_data = output.getvalue()
+        encoded = base64.b64encode(preview_data).decode("ascii")
+        return f"data:{preview_type};base64,{encoded}"
+
+    def video_preview_data_urls(self, attachment: AttachmentRef) -> list[str]:
+        content_type, video_bytes = _read_workspace_attachment_bytes(
+            attachment,
+            supported_types=SUPPORTED_VIDEO_MIME_TYPES,
+            media_name="视频",
+            workspace_root=self._workspace_root,
+        )
+        return _extract_video_frame_data_urls(
+            video_bytes=video_bytes,
+            content_type=content_type,
+            attachment_name=attachment.name or attachment.file_id,
+        )
+
+    def _read_attachment(self, attachment: AttachmentRef) -> bytes:
+        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+            session_id = attachment.file_id.removeprefix(
+                SESSION_ATTACHMENT_SCHEME
+            ).split("/", 1)[0]
+            return self._attachment_store.read(session_id, attachment.file_id).data
+        file_path = _resolve_attachment_file(attachment.file_id, self._workspace_root)
+        if not file_path.is_file():
+            raise FileNotFoundError(f"附件不存在: {file_path}")
+        return file_path.read_bytes()
 
 
 def _resolve_attachment_content_type(
@@ -144,23 +206,6 @@ def _resolve_attachment_content_type(
         file_path = _resolve_attachment_file(attachment.file_id, workspace_root)
         content_type = _attachment_content_type(attachment, file_path)
     return content_type
-
-
-def _build_attachment_manifest_block(
-    attachment_content_types: list[tuple[AttachmentRef, str]],
-) -> dict[str, object]:
-    lines = [
-        f"本消息包含 {len(attachment_content_types)} 个附件。请按下面清单逐个处理，"
-        "最终回复中如果需要提及附件，请保留附件编号和文件名，不能把多个附件合并成未命名附件。"
-    ]
-    for index, (attachment, content_type) in enumerate(
-        attachment_content_types,
-        start=1,
-    ):
-        name = _attachment_display_name(attachment)
-        kind_name = _media_kind_name(content_type)
-        lines.append(f"{index}. {name}（{kind_name}，{content_type}）")
-    return {"type": "text", "text": "\n".join(lines)}
 
 
 def _extract_video_frame_data_urls(
@@ -208,144 +253,3 @@ def _extract_video_frame_data_urls(
         if not frame_paths:
             raise RuntimeError(f"视频附件 {attachment_name!r} 未能抽取任何关键帧")
         return [_frame_data_url(path) for path in frame_paths]
-
-
-def _build_image_content_block(
-    attachment: AttachmentRef,
-    workspace_root: Path | None,
-) -> dict[str, object]:
-    if attachment.data_url:
-        raise ValueError(
-            "Agent 运行阶段不接受 data_url 附件；浏览器上传内容必须先持久化为 "
-            f"boxteam-session 定位符: file_id={attachment.file_id!r}"
-        )
-
-    file_path = _resolve_attachment_file(attachment.file_id, workspace_root)
-    if not file_path.exists():
-        raise FileNotFoundError(f"图片附件不存在: {file_path}")
-    if not file_path.is_file():
-        raise ValueError(f"图片附件必须是文件: {file_path}")
-
-    content_type = _attachment_content_type(attachment, file_path)
-    if content_type not in SUPPORTED_IMAGE_MIME_TYPES:
-        raise ValueError(
-            f"不支持的图片附件类型: {content_type!r}，file_id={attachment.file_id!r}"
-        )
-
-    encoded = base64.b64encode(file_path.read_bytes()).decode("ascii")
-    return {
-        "type": "image_url",
-        "image_url": {
-            "url": f"data:{content_type};base64,{encoded}",
-        },
-    }
-
-
-def _build_video_content_blocks(
-    attachment: AttachmentRef,
-    workspace_root: Path | None,
-) -> list[dict[str, object]]:
-    if attachment.data_url:
-        raise ValueError(
-            "Agent 运行阶段不接受 data_url 附件；浏览器上传内容必须先持久化为 "
-            f"boxteam-session 定位符: file_id={attachment.file_id!r}"
-        )
-    content_type, video_bytes = _read_workspace_attachment_bytes(
-        attachment,
-        supported_types=SUPPORTED_VIDEO_MIME_TYPES,
-        media_name="视频",
-        workspace_root=workspace_root,
-    )
-
-    attachment_name = _attachment_display_name(attachment)
-    frame_urls = _extract_video_frame_data_urls(
-        video_bytes=video_bytes,
-        content_type=content_type,
-        attachment_name=attachment_name,
-    )
-    blocks: list[dict[str, object]] = [
-        {
-            "type": "text",
-            "text": (
-                f"视频附件 {attachment_name} 已抽取为 {len(frame_urls)} 个按时间顺序排列的关键帧。"
-                "请把这些关键帧视为同一个视频的时间线进行分析。"
-            ),
-        }
-    ]
-    for index, frame_url in enumerate(frame_urls, start=1):
-        blocks.extend(
-            [
-                {
-                    "type": "text",
-                    "text": f"视频关键帧 {index}/{len(frame_urls)}：",
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": frame_url,
-                    },
-                },
-            ]
-        )
-    return blocks
-
-
-def _build_attachment_content_blocks(
-    attachment: AttachmentRef,
-    *,
-    content_type: str,
-    index: int,
-    total: int,
-    workspace_root: Path | None,
-) -> list[dict[str, object]]:
-    label_block = _build_attachment_label_block(
-        attachment,
-        content_type=content_type,
-        index=index,
-        total=total,
-    )
-    if content_type in SUPPORTED_IMAGE_MIME_TYPES:
-        return [label_block, _build_image_content_block(attachment, workspace_root)]
-    if content_type in SUPPORTED_VIDEO_MIME_TYPES:
-        return [
-            label_block,
-            *_build_video_content_blocks(attachment, workspace_root),
-        ]
-    raise ValueError(
-        f"不支持的附件类型: {content_type!r}，file_id={attachment.file_id!r}。"
-        "当前支持图片和视频附件。"
-    )
-
-
-def build_human_content(
-    message: str,
-    attachments: list[AttachmentRef],
-    *,
-    workspace_root: Path | None = None,
-) -> str | list[dict[str, object]]:
-    if not attachments:
-        return message
-
-    content: list[dict[str, object]] = []
-    if message:
-        content.append({"type": "text", "text": message})
-    attachment_content_types = [
-        (attachment, _resolve_attachment_content_type(attachment, workspace_root))
-        for attachment in attachments
-    ]
-    content.append(_build_attachment_manifest_block(attachment_content_types))
-    total = len(attachment_content_types)
-    for index, (attachment, content_type) in enumerate(
-        attachment_content_types,
-        start=1,
-    ):
-        content.extend(
-            _build_attachment_content_blocks(
-                attachment,
-                content_type=content_type,
-                index=index,
-                total=total,
-                workspace_root=workspace_root,
-            )
-        )
-    return content

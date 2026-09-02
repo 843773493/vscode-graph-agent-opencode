@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import multiprocessing
 import sqlite3
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -16,7 +18,11 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.rollout_append_writer import RolloutAppendWriter
 from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.rollout_context_reader import RolloutContextReader
-from app.core.rollout_storage import RolloutStorage, _RolloutFileLock
+from app.core.rollout_storage import (
+    RolloutStorage,
+    _RolloutFileLock,
+    _RolloutOperationLock,
+)
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.system_reminder_checkpoint_service import (
     append_system_reminder_checkpoint,
@@ -83,6 +89,49 @@ def test_rollout_file_lock_times_out_instead_of_waiting_forever(
 
     with pytest.raises(TimeoutError, match="rollout 文件锁获取超时"):
         lock.acquire()
+
+
+def test_rollout_operation_lock_times_out_when_same_process_writer_is_busy(
+    tmp_path: Path,
+) -> None:
+    lock = _RolloutOperationLock(
+        tmp_path / ".rollout.write.lock",
+        timeout_seconds=0.01,
+    )
+    holder_ready = threading.Event()
+    release_holder = threading.Event()
+
+    def hold_lock() -> None:
+        with lock:
+            holder_ready.set()
+            release_holder.wait(timeout=1)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        holder = executor.submit(hold_lock)
+        assert holder_ready.wait(timeout=1)
+        with pytest.raises(TimeoutError, match="rollout 进程内写锁获取超时"):
+            lock.__enter__()
+        release_holder.set()
+        holder.result(timeout=1)
+
+
+def test_rollout_operation_lock_releases_thread_lock_when_file_unlock_fails(
+    tmp_path: Path,
+) -> None:
+    lock = _RolloutOperationLock(tmp_path / ".rollout.write.lock")
+    lock._thread_lock.acquire()
+    lock._depth = 1
+
+    def fail_release() -> None:
+        raise OSError("模拟解锁失败")
+
+    lock._file_lock = SimpleNamespace(release=fail_release)
+
+    with pytest.raises(OSError, match="模拟解锁失败"):
+        lock.__exit__(None, None, None)
+
+    assert lock._thread_lock.acquire(timeout=0.01)
+    lock._thread_lock.release()
 
 
 def test_rollout_history_preserves_more_than_32_thinking_blocks() -> None:
@@ -331,6 +380,35 @@ def test_read_snapshot_does_not_touch_existing_rollout_files(
         for path in (rollout_path, index_path)
     }
     assert after == before
+
+
+def test_checkpoint_read_does_not_reinitialize_existing_rollout(
+    tmp_path: Path,
+    session_bundle_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, "session_1")
+    storage = RolloutStorage(sessions_dir)
+    saver = RolloutCheckpointSaver(sessions_dir, storage=storage)
+    config = saver.put(
+        build_checkpoint_config("session_1"),
+        _checkpoint(
+            "cp-existing",
+            [HumanMessage(content="只读 checkpoint", id="user-existing")],
+        ),
+        {"source": "read-without-recovery"},
+        {"messages": "existing"},
+    )
+
+    def fail_initialize(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("已有 rollout 的 checkpoint 读取不应重新初始化")
+
+    monkeypatch.setattr(storage, "initialize", fail_initialize)
+    restored = saver.get_tuple(config)
+
+    assert restored is not None
+    assert restored.checkpoint["id"] == "cp-existing"
 
 
 def test_delete_legacy_rollout_does_not_initialize_removed_layout(

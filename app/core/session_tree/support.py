@@ -4,10 +4,15 @@ import json
 import os
 import re
 import tempfile
+import threading
+import time
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
+from typing import BinaryIO, ClassVar, ParamSpec, Self, TypeVar
 
 FOLDER_MANIFEST_NAME = ".boxteam-folder.json"
 SESSION_MANIFEST_NAME = "session.json"
@@ -15,6 +20,8 @@ SESSION_CHILDREN_DIR_NAME = "children"
 SESSION_ALLOCATION_MARKER_NAME = ".boxteam-session-allocating.json"
 SESSION_ALLOCATION_TEMP_PREFIX = ".boxteam-session-allocating-"
 PHYSICAL_LAYOUT_VERSION = 1
+SESSION_TREE_LOCK_TIMEOUT_SECONDS = 5.0
+SESSION_TREE_LOCK_POLL_INTERVAL_SECONDS = 0.01
 _INVALID_SEGMENT_CHARS = re.compile(r"[<>:\"/\\|?*\x00-\x1f]")
 _STABLE_ID_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
 _WINDOWS_RESERVED_NAMES = {
@@ -25,6 +32,143 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class _SessionTreeLockState:
+    def __init__(self) -> None:
+        self.thread_lock = threading.RLock()
+        self.depth = 0
+        self.handle: BinaryIO | None = None
+
+
+class SessionTreeLockTimeoutError(RuntimeError):
+    """会话目录锁在有界时间内未释放。"""
+
+
+class SessionTreeOperationLock:
+    """为会话目录索引与物理树提供有界、可重入的进程间互斥。"""
+
+    _registry_guard = threading.Lock()
+    _states: ClassVar[dict[str, _SessionTreeLockState]] = {}
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        timeout_seconds: float = SESSION_TREE_LOCK_TIMEOUT_SECONDS,
+    ) -> None:
+        if isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            raise ValueError("session tree lock timeout_seconds 必须大于 0")
+        self._path = path.resolve()
+        self._timeout_seconds = timeout_seconds
+        with self._registry_guard:
+            self._state = self._states.setdefault(
+                str(self._path),
+                _SessionTreeLockState(),
+            )
+
+    def __enter__(self) -> Self:
+        if not self._state.thread_lock.acquire(timeout=self._timeout_seconds):
+            raise SessionTreeLockTimeoutError(
+                "会话目录锁获取超时: "
+                f"path={self._path} timeout_seconds={self._timeout_seconds:g}"
+            )
+        if self._state.depth == 0:
+            try:
+                self._state.handle = self._acquire_file_lock()
+            except BaseException:
+                self._state.thread_lock.release()
+                raise
+        self._state.depth += 1
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._state.depth -= 1
+        try:
+            if self._state.depth == 0:
+                handle = self._state.handle
+                self._state.handle = None
+                if handle is not None:
+                    self._release_file_lock(handle)
+        finally:
+            self._state.thread_lock.release()
+
+    def _acquire_file_lock(self) -> BinaryIO:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self._path.open("a+b")
+        deadline = time.monotonic() + self._timeout_seconds
+        try:
+            if os.name == "nt":
+                # TODO: Windows CI 覆盖 session catalog 进程锁的并发行为。
+                import msvcrt
+
+                if handle.seek(0, os.SEEK_END) == 0:
+                    handle.write(b" ")
+                    handle.flush()
+                handle.seek(0)
+                while True:
+                    try:
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    except OSError as error:
+                        if time.monotonic() >= deadline:
+                            raise SessionTreeLockTimeoutError(
+                                "会话目录锁获取超时: "
+                                f"path={self._path} timeout_seconds={self._timeout_seconds:g}"
+                            ) from error
+                        time.sleep(SESSION_TREE_LOCK_POLL_INTERVAL_SECONDS)
+                    else:
+                        break
+            else:
+                import fcntl
+
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError as error:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise SessionTreeLockTimeoutError(
+                                "会话目录锁获取超时: "
+                                f"path={self._path} timeout_seconds={self._timeout_seconds:g}"
+                            ) from error
+                        time.sleep(min(SESSION_TREE_LOCK_POLL_INTERVAL_SECONDS, remaining))
+                    else:
+                        break
+        except BaseException:
+            handle.close()
+            raise
+        return handle
+
+    @staticmethod
+    def _release_file_lock(handle: BinaryIO) -> None:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def session_tree_operation_locked(function: Callable[P, R]) -> Callable[P, R]:
+    """在不改变业务方法签名的情况下保护 resolver 的公开操作。"""
+
+    @wraps(function)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        if not args:
+            raise TypeError("session tree operation 缺少 resolver 实例")
+        with args[0]._session_tree_operation_lock:
+            return function(*args, **kwargs)
+
+    return wrapped
 
 
 @dataclass(frozen=True, slots=True)

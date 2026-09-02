@@ -333,16 +333,19 @@ export default function AgentSessionsPanel({
     });
   };
   const applyFilterMode = (mode: SessionFilterMode, label: string) => {
+    setCustomizationNotice('');
     onPreferencesChange(() => ({ filter_mode: mode }));
     setFilterMenuOpen(false);
     onStatusChange(`已筛选会话: ${label}`);
   };
   const applySortMode = (mode: SessionSortMode, label: string) => {
+    setCustomizationNotice('');
     onPreferencesChange(() => ({ sort_mode: mode }));
     setFilterMenuOpen(false);
     onStatusChange(`已排序会话: ${label}`);
   };
   const applyGroupingMode = (mode: SessionGroupingMode, label: string) => {
+    setCustomizationNotice('');
     onPreferencesChange(() => ({ grouping_mode: mode }));
     setFilterMenuOpen(false);
     onStatusChange(`已分组会话: ${label}`);
@@ -503,9 +506,16 @@ export default function AgentSessionsPanel({
             </label>
           ) : null}
           <section className="agent-sessions-sidebar-groups" aria-label="会话导航">
-            <button type="button" className="agent-sessions-nav-row" onClick={() => showCustomizationNotice('已固定')}>
+            <button
+              type="button"
+              className="agent-sessions-nav-row"
+              aria-disabled="true"
+              title="已固定：Web 端暂未接入固定会话"
+              onClick={() => showCustomizationNotice('已固定')}
+            >
               <span className="codicon codicon-pinned agent-sessions-nav-icon" aria-hidden="true" />
               <span>已固定</span>
+              <span className="agent-sessions-nav-unavailable">暂不可用</span>
             </button>
             <button type="button" className="agent-sessions-nav-row" onClick={() => applyFilterMode('all', 'Chats')}>
               <span className="codicon codicon-comment-discussion agent-sessions-nav-icon" aria-hidden="true" />

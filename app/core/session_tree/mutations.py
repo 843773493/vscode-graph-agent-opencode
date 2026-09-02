@@ -19,16 +19,18 @@ from app.core.session_tree.support import (
     SessionPhysicalNode,
     _atomic_write_bytes,
     _atomic_write_json,
-    _process_identity,
     _parse_datetime,
+    _process_identity,
     _read_json_object,
     physical_segment,
+    session_tree_operation_locked,
 )
 
 
 class SessionPathMutationSupport(SessionMetadataMigrationSupport):
     """封装物理会话树的分配、移动与递归删除事务。"""
 
+    @session_tree_operation_locked
     def allocate_session_dir(
         self,
         *,
@@ -70,6 +72,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                 self.abandon_session_allocation(temporary)
                 raise
 
+    @session_tree_operation_locked
     def register_session(
         self,
         session_id: str,
@@ -116,6 +119,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
             self._refresh_locked()
             return self.get_node(session_id)
 
+    @session_tree_operation_locked
     def abandon_session_allocation(self, session_dir: Path) -> None:
         """回收尚未形成有效 session.json 的会话目录。"""
         with self._lock:
@@ -124,6 +128,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
             if session_dir.exists() and not any(session_dir.iterdir()):
                 session_dir.rmdir()
 
+    @session_tree_operation_locked
     def create_folder(
         self,
         *,
@@ -163,6 +168,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
             self._refresh_locked()
             return self.get_node(resolved_folder_id)
 
+    @session_tree_operation_locked
     def move_node(
         self,
         *,
@@ -191,9 +197,8 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                 raise ValueError("会话文件夹显示名不能为空")
             if target == node.path and target_display_name == node.name:
                 return node
-            if target.exists():
-                if target != node.path:
-                    raise FileExistsError(f"会话物理节点目标已存在: {target}")
+            if target.exists() and target != node.path:
+                raise FileExistsError(f"会话物理节点目标已存在: {target}")
             source = node.path
             if target != source:
                 os.replace(source, target)
@@ -208,6 +213,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
             self._refresh_locked()
             return self.get_node(node_id)
 
+    @session_tree_operation_locked
     def relocate_session(
         self,
         *,
@@ -272,6 +278,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                 self._refresh_locked()
                 raise
 
+    @session_tree_operation_locked
     def expected_session_parents_after_folder_move(
         self,
         *,
@@ -309,6 +316,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                 )
             return expected
 
+    @session_tree_operation_locked
     def relocate_folder_tree(
         self,
         *,
@@ -399,6 +407,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                 self._refresh_locked()
                 raise
 
+    @session_tree_operation_locked
     def begin_subtree_delete(self, folder_id: str) -> None:
         """冻结文件夹子树的创建和移动，直到递归删除完成或失败。"""
         with self._lock:
@@ -417,12 +426,14 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
                     )
             self._deleting_subtrees.add(folder_id)
 
+    @session_tree_operation_locked
     def finish_subtree_delete(self, folder_id: str) -> None:
         with self._lock:
             if folder_id not in self._deleting_subtrees:
                 raise RuntimeError(f"会话文件夹子树删除锁不存在: {folder_id}")
             self._deleting_subtrees.remove(folder_id)
 
+    @session_tree_operation_locked
     def delete_folder(
         self,
         folder_id: str,
@@ -478,6 +489,7 @@ class SessionPathMutationSupport(SessionMetadataMigrationSupport):
             self._write_index_locked()
             self._refresh_locked()
 
+    @session_tree_operation_locked
     def delete_session_subtree(self, session_id: str) -> list[str]:
         """删除完整会话子树，并在同一 resolver 临界区更新权威索引。"""
         with self._lock:

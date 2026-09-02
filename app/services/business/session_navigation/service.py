@@ -23,9 +23,8 @@ from app.schemas.internal_v2.session_navigation import (
     SessionFolderCreateRequest,
     SessionFolderUpdateRequest,
 )
-from app.services.business.session_service import SessionService
 from app.services.business.session_resource_service import SessionResourceService
-
+from app.services.business.session_service import SessionService
 
 T = TypeVar("T")
 
@@ -48,12 +47,14 @@ class SessionCatalogService:
         self._cached_nodes: list[SessionCatalogNodeDTO] | None = None
         self._cached_revision: str | None = None
         self._cached_physical_revision: int | None = None
+        self._consistency_error: str | None = None
         self._session_service.register_change_listener(self._on_session_changed)
 
     def invalidate(self) -> None:
         self._cached_nodes = None
         self._cached_revision = None
         self._cached_physical_revision = None
+        self._consistency_error = None
 
     @property
     def path_resolver(self) -> SessionPathResolver:
@@ -82,7 +83,7 @@ class SessionCatalogService:
         limit: int,
         cursor: str | None,
     ) -> SessionCatalogPageDTO:
-        nodes, revision = await self._snapshot()
+        nodes, revision = await self._snapshot(allow_inconsistent=True)
         if parent_node_id is not None and not any(
             node.node_id == parent_node_id for node in nodes
         ):
@@ -101,10 +102,11 @@ class SessionCatalogService:
                 else None
             ),
             total=len(children),
+            consistency_warning=self._consistency_error,
         )
 
     async def breadcrumb(self, node_id: str) -> SessionCatalogBreadcrumbDTO:
-        nodes, revision = await self._snapshot()
+        nodes, revision = await self._snapshot(allow_inconsistent=True)
         nodes_by_id = {node.node_id: node for node in nodes}
         node = nodes_by_id.get(node_id)
         if node is None:
@@ -124,7 +126,7 @@ class SessionCatalogService:
         normalized_query = query.strip().casefold()
         if not normalized_query:
             raise ValueError("会话目录搜索词不能为空")
-        nodes, revision = await self._snapshot()
+        nodes, revision = await self._snapshot(allow_inconsistent=True)
         offset = self._decode_cursor(cursor, revision)
         nodes_by_id = {node.node_id: node for node in nodes}
         matches: list[SessionCatalogNodeDTO] = []
@@ -464,17 +466,37 @@ class SessionCatalogService:
         self,
         *,
         force: bool = False,
+        allow_inconsistent: bool = False,
     ) -> tuple[list[SessionCatalogNodeDTO], str]:
-        physical_revision = self._path_resolver.revision
+        consistency_error: str | None = None
+        try:
+            physical_revision = self._path_resolver.revision
+            if (
+                not force
+                and self._cached_nodes is not None
+                and self._cached_revision is not None
+                and self._cached_physical_revision == physical_revision
+            ):
+                self._consistency_error = None
+                return self._cached_nodes, self._cached_revision
+            physical_nodes = self._path_resolver.list_nodes(refresh=force)
+            physical_revision = self._path_resolver.revision
+        except RuntimeError as error:
+            if not allow_inconsistent:
+                raise
+            # 业务读使用索引投影保留可见性；严格 refresh 仍拒绝不一致，
+            # 因此未登记的物理孤儿不会被静默吸收到目录树中。
+            consistency_error = str(error)
+            physical_nodes = self._path_resolver.list_authoritative_nodes()
+            physical_revision = self._path_resolver.authoritative_revision
         if (
-            not force
+            consistency_error is not None
             and self._cached_nodes is not None
             and self._cached_revision is not None
-            and self._cached_physical_revision == physical_revision
+            and physical_revision == self._cached_physical_revision
         ):
+            self._consistency_error = consistency_error
             return self._cached_nodes, self._cached_revision
-        physical_nodes = self._path_resolver.list_nodes(refresh=force)
-        physical_revision = self._path_resolver.revision
         child_parent_ids = {
             node.parent_node_id
             for node in physical_nodes
@@ -487,6 +509,7 @@ class SessionCatalogService:
         self._cached_nodes = nodes
         self._cached_revision = revision
         self._cached_physical_revision = physical_revision
+        self._consistency_error = consistency_error
         return nodes, revision
 
     def _to_catalog_node(
@@ -603,7 +626,7 @@ class SessionCatalogService:
         except (ValueError, json.JSONDecodeError) as error:
             raise ValueError("会话目录 cursor 无效") from error
         if not isinstance(payload, dict):
-            raise ValueError("会话目录 cursor 格式无效")
+            raise TypeError("会话目录 cursor 格式无效")
         if payload.get("revision") != revision:
             raise ValueError("会话目录已更新，请从第一页重新加载")
         offset = payload.get("offset")

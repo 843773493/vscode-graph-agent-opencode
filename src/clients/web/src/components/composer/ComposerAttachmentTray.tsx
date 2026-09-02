@@ -27,12 +27,20 @@ export default function ComposerAttachmentTray({
                   preload="metadata"
                   aria-label={attachment.name ?? "视频附件"}
                 />
-              ) : (
+              ) : attachment.mediaKind === "image" ? (
                 <img
                   src={attachment.previewUrl}
                   alt={attachment.name ?? "图片附件"}
                   className="composer-attachment-thumb"
                 />
+              ) : (
+                <div
+                  className="composer-attachment-thumb composer-attachment-file"
+                  aria-label={attachment.name ?? "通用文件附件"}
+                >
+                  <span className="codicon codicon-file" aria-hidden="true" />
+                  <span>FILE</span>
+                </div>
               )}
               <span className="composer-attachment-name">
                 {attachment.name ?? "附件"}

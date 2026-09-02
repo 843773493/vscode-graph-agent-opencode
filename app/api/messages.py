@@ -239,12 +239,12 @@ async def list_messages(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get("/{session_id}/attachments/content", summary="读取会话媒体附件")
+@router.get("/{session_id}/attachments/content", summary="读取会话附件")
 async def get_session_attachment_content(
     session_id: str,
     file_id: str = Query(min_length=1),
     variant: str = Query(default="original", pattern="^(original|thumbnail)$"),
-    max_edge: int = Query(default=384, ge=64, le=1024),
+    max_edge: int = Query(default=512, ge=64, le=1024),
     _: str = Depends(verify_local_token),
     attachment_store: SessionAttachmentStore = Depends(get_session_attachment_store),
     job_service: JobServiceProtocol = Depends(get_job_service),

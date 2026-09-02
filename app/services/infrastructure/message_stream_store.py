@@ -186,7 +186,10 @@ class MessageStreamStore:
         return self._index_locks.setdefault(session_id, asyncio.Lock())
 
     def _stream_dir(self, session_id: str) -> Path:
-        return self._path_resolver.resolve_session_node(session_id) / "message_streams"
+        return (
+            self._path_resolver.resolve_session_node_for_runtime(session_id)
+            / "message_streams"
+        )
 
     def _stream_path(self, session_id: str, turn_stream_id: str) -> Path:
         return self._stream_dir(session_id) / f"{turn_stream_id}.jsonl"

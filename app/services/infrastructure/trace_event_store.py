@@ -57,7 +57,7 @@ class TraceEventStore:
 
     def _trace_file(self, session_id: str) -> Path:
         return (
-            self._path_resolver.resolve_session_node(session_id)
+            self._path_resolver.resolve_session_node_for_runtime(session_id)
             / "logs"
             / "traces"
             / "events.jsonl"
@@ -72,7 +72,7 @@ class TraceEventStore:
 
     def _message_trace_file(self, session_id: str) -> Path:
         return (
-            self._path_resolver.resolve_session_node(session_id)
+            self._path_resolver.resolve_session_node_for_runtime(session_id)
             / "logs"
             / "traces"
             / "messages.jsonl"

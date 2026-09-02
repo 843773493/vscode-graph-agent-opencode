@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from hashlib import sha256
 from pathlib import Path
 
@@ -20,6 +21,56 @@ from app.agents.tools.apply_patch import executor as apply_patch_executor
 
 def _apply(patch: str, *, explanation: str = "单元测试补丁") -> dict[str, object]:
     return apply_patch_text(patch, explanation=explanation)
+
+
+def test_apply_patch_lock_times_out_when_same_process_writer_is_busy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path.resolve()
+    lock = apply_patch_executor._get_workspace_lock(workspace_root)
+    monkeypatch.setattr(
+        apply_patch_executor,
+        "_WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS",
+        0.01,
+    )
+    assert lock.acquire()
+    try:
+        with pytest.raises(
+            TimeoutError,
+            match="apply_patch 进程内锁获取超时",
+        ), apply_patch_executor._workspace_patch_lock(workspace_root):
+            pass
+    finally:
+        lock.release()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="仅在 POSIX 上覆盖 fcntl 文件锁")
+def test_apply_patch_file_lock_times_out_when_cross_process_lock_is_busy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fcntl
+
+    original_flock = fcntl.flock
+
+    def reject_nonblocking_lock(fd: int, operation: int) -> None:
+        if operation & fcntl.LOCK_NB:
+            raise BlockingIOError("test lock is held")
+        original_flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, "flock", reject_nonblocking_lock)
+    monkeypatch.setattr(
+        apply_patch_executor,
+        "_WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    with pytest.raises(
+        TimeoutError,
+        match="apply_patch 跨进程锁获取超时",
+    ), apply_patch_executor._workspace_patch_lock(tmp_path.resolve()):
+        pass
 
 
 def test_apply_patch_schema_matches_vscode_required_parameters() -> None:

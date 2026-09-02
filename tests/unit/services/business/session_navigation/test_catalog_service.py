@@ -11,7 +11,6 @@ from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.session_navigation import SessionFolderUpdateRequest
 from app.services.business.session_navigation import SessionCatalogService
 
-
 T = TypeVar("T")
 
 
@@ -64,6 +63,44 @@ async def test_catalog_cache_detects_manual_physical_move(
     assert first_node.parent_node_id == source_folder.node_id
     with pytest.raises(RuntimeError, match="绕过软件修改会话目录结构"):
         await catalog.export_index()
+
+
+@pytest.mark.asyncio
+async def test_catalog_read_keeps_authoritative_nodes_when_physical_tree_has_orphan(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    """孤立物理目录不能让目录读模型变成空列表。"""
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+    folder = resolver.create_folder(name="归档", parent_node_id=None)
+    session_id = "ses_catalog_runtime"
+    session_dir = session_bundle_factory(sessions_root, session_id)
+    resolver.relocate_session(
+        session_id=session_id,
+        parent_node_id=folder.node_id,
+        manifest=json.loads((session_dir / "session.json").read_text(encoding="utf-8")),
+    )
+
+    # 模拟历史重启留下的空根目录：不修改索引，也不删除它，验证业务读的边界。
+    (sessions_root / session_id).mkdir()
+    catalog = SessionCatalogService(session_service=session_service)
+
+    page = await catalog.list_children(
+        parent_node_id=folder.node_id,
+        limit=100,
+        cursor=None,
+    )
+
+    assert [node.node_id for node in page.items] == [session_id]
+    assert page.items[0].storage_relative_path == f"{folder.node_id}/{session_id}"
+    assert page.consistency_warning is not None
+    assert "权威索引与磁盘目录不一致" in page.consistency_warning
+    assert (sessions_root / session_id).is_dir()
+
+    with pytest.raises(RuntimeError, match="权威索引与磁盘目录不一致"):
+        await catalog.refresh()
 
 
 @pytest.mark.asyncio

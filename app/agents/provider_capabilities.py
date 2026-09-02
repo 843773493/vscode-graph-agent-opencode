@@ -61,6 +61,15 @@ def detect_required_capabilities(content: object) -> set[ProviderCapability]:
         if not isinstance(part, dict):
             continue
         block_type = part.get("type")
+        metadata = part.get("metadata")
+        if (
+            isinstance(metadata, dict)
+            and metadata.get("origin") == "generated"
+            and metadata.get("kind") == "attachment_preview"
+        ):
+            # User attachment preview 是可选 rich block；没有 vision 能力时
+            # UserContentBuilder 仍会发送 manifest 路径文本，由模型自行使用已有工具。
+            continue
         if isinstance(block_type, str):
             required.update(CONTENT_BLOCK_CAPABILITY_REQUIREMENTS.get(block_type, set()))
     return required

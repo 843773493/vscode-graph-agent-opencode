@@ -1086,6 +1086,116 @@ body.is-layout-resizing {
   overflow: hidden;
 }
 
+.workspace-attachment-preview {
+  display: flex;
+  flex: 0 1 52%;
+  flex-direction: column;
+  min-height: 180px;
+  overflow: hidden;
+  border-bottom: 1px solid color-mix(in srgb, var(--bt-text-muted) 18%, transparent);
+  background: var(--bt-surface-background);
+}
+
+.workspace-attachment-preview-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--bt-text-muted) 12%, transparent);
+}
+
+.workspace-attachment-preview-header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workspace-attachment-preview-header strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.workspace-attachment-preview-header span {
+  color: var(--bt-text-muted);
+  font-size: 10px;
+}
+
+.workspace-attachment-download,
+.workspace-attachment-generic-preview a {
+  flex: 0 0 auto;
+  color: var(--bt-accent);
+  font-size: 11px;
+}
+
+.workspace-attachment-preview-status,
+.workspace-attachment-preview-error,
+.workspace-attachment-generic-preview {
+  padding: 16px;
+  color: var(--bt-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.workspace-attachment-preview-error {
+  color: var(--bt-status-danger);
+}
+
+.workspace-attachment-media-preview {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  text-align: center;
+}
+
+.workspace-attachment-media-preview img {
+  max-width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.workspace-attachment-document-preview {
+  width: 100%;
+  min-height: 280px;
+  flex: 1 1 auto;
+  border: 0;
+}
+
+.workspace-attachment-text-preview {
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.workspace-attachment-text-preview pre {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--bt-text-primary);
+  font: 12px/1.5 var(--bt-font-mono);
+}
+
+.workspace-attachment-text-preview > div {
+  margin-top: 8px;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.workspace-attachment-generic-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.workspace-attachment-generic-preview .codicon {
+  font-size: 28px;
+}
+
 .auxiliary-files-toolbar {
   display: flex;
   flex: 0 0 32px;
@@ -1581,6 +1691,26 @@ button.files-tree-item:hover {
   cursor: zoom-in;
 }
 
+.message-attachment-open-button,
+.message-attachment-name-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.message-attachment-open-button:disabled,
+.message-attachment-name-button:disabled {
+  cursor: default;
+}
+
+.message-attachment-open-button:focus-visible,
+.message-attachment-name-button:focus-visible {
+  outline: 2px solid var(--bt-focus-border);
+  outline-offset: 2px;
+}
+
 .message-attachment-preview-button:focus-visible {
   outline: 2px solid var(--bt-focus-border);
   outline-offset: 2px;
@@ -1628,6 +1758,12 @@ button.files-tree-item:hover {
   white-space: nowrap;
   font-size: 12px;
   color: var(--bt-text-primary);
+}
+
+.message-attachment-name-button {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
 }
 
 .message-attachment-error {

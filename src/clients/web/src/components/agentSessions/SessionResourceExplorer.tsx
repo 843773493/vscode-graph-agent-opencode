@@ -352,13 +352,8 @@ export default function SessionResourceExplorer({
         source.parentNodeId,
       );
     } catch (error) {
-      try {
-        await onRefreshWorkspaceSessions(source.workspaceId);
-      } catch (reconciliationError) {
-        throw new Error(
-          `${error instanceof Error ? error.message : String(error)}；重新读取工作区会话也失败: ${reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError)}`,
-        );
-      }
+      // moveCatalogNode 已经重新读取旧父/新父分支；这里保留树状态，
+      // 避免一次鉴权或网络失败再触发全量 sessions 请求覆盖现有内容。
       throw error;
     }
     await onRefreshWorkspaceSessions(source.workspaceId);
@@ -475,6 +470,19 @@ export default function SessionResourceExplorer({
       <ul className="session-resource-list" role="group">
         {branch.items.map((node) => renderCatalogNode(workspaceId, node, depth))}
         {branch.loading ? <li className="session-resource-state">正在加载…</li> : null}
+        {branch.consistency_warning ? (
+          <li className="session-resource-error-card" role="status">
+            <strong>会话目录存在物理树异常</strong>
+            <span>当前仍按权威索引显示，未登记的物理目录未被自动吸收或删除。</span>
+            <button type="button" onClick={() => void explorer.refreshResourceTree().catch((error) => handleError("刷新目录失败", error))}>
+              重新校验目录
+            </button>
+            <details>
+              <summary>查看技术详情</summary>
+              <code>{branch.consistency_warning}</code>
+            </details>
+          </li>
+        ) : null}
         {failure ? (
           <li className="session-resource-error-card" role="alert">
             <strong>{failure.title}</strong>

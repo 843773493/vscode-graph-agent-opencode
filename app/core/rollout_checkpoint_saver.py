@@ -481,7 +481,6 @@ class RolloutCheckpointSaver(
         with self._context_reader.open_snapshot(
             thread_id,
             checkpoint_ns,
-            recover=True,
         ) as snapshot:
             checkpoint_index = self._context_reader.latest_checkpoint(
                 snapshot,
@@ -856,7 +855,6 @@ class RolloutCheckpointSaver(
         with self._context_reader.open_snapshot(
             thread_id,
             checkpoint_ns,
-            recover=True,
         ) as snapshot:
             return self._context_reader.resolve_turn_anchor(
                 snapshot,
@@ -875,7 +873,6 @@ class RolloutCheckpointSaver(
         with self._context_reader.open_snapshot(
             thread_id,
             checkpoint_ns,
-            recover=True,
         ) as snapshot:
             return self._context_reader.resolve_latest_completed_turn_anchor(
                 snapshot,
@@ -893,7 +890,6 @@ class RolloutCheckpointSaver(
         with self._context_reader.open_snapshot(
             thread_id,
             checkpoint_ns,
-            recover=True,
         ) as snapshot:
             anchor = self._context_reader.resolve_turn_anchor(
                 snapshot,

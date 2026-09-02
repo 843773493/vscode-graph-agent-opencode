@@ -28,6 +28,7 @@ from langchain_openai.chat_models.base import (
 )
 
 from app.agents.provider_api_mode import parse_provider_api_mode
+from app.agents.provider_capabilities import parse_provider_capabilities
 from app.agents.providers.litellm_chat import (
     BoxteamLiteLLMChatModel,
     _message_chunk_token,
@@ -35,6 +36,7 @@ from app.agents.providers.litellm_chat import (
 )
 from app.agents.providers.litellm_content import (
     project_ai_message_content,
+    project_user_message_content,
 )
 from app.agents.upstream_request_trace import (
     attach_upstream_trace_callback,
@@ -416,6 +418,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
     responses_store: bool = False
     reasoning_items_summary_replay: bool = False
     reasoning_items_encrypted_replay: bool = False
+    image_input_replay: bool = False
 
     def _history_messages(
         self,
@@ -432,7 +435,17 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     f"timeout_seconds={DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
                 )
             if not isinstance(message, AIMessage):
-                prepared.append(message)
+                if isinstance(message, HumanMessage):
+                    projection = project_user_message_content(
+                        message.content,
+                        target_format="responses",
+                        image_input=self.image_input_replay,
+                    )
+                    prepared.append(
+                        message.model_copy(update={"content": projection["content"]})
+                    )
+                else:
+                    prepared.append(message)
                 continue
 
             projection = project_ai_message_content(
@@ -463,7 +476,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     if not isinstance(block, dict):
                         continue
                     block_type = block.get("type")
-                    if block_type in {"text", "output_text"}:
+                    if block_type in {"text", "input_text", "output_text"}:
                         text = block.get("text")
                         if isinstance(text, str):
                             prepared_content.append({"type": "text", "text": text})
@@ -1116,4 +1129,5 @@ def build_openai_responses_model(
         responses_include=responses_include,
         reasoning_items_summary_replay=api_mode.supports_reasoning.reasoning_items_summary,
         reasoning_items_encrypted_replay=api_mode.supports_reasoning.reasoning_items_encrypted_content,
+        image_input_replay="image_input" in parse_provider_capabilities(provider),
     )

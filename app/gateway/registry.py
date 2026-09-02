@@ -502,6 +502,14 @@ class GatewayWorkspaceRegistry:
                 f"{gateway_url}/api/gateway/workspaces/"
                 f"{remote_workspace_id}/{service_path}"
             )
+        if (
+            not target.managed
+            and service == "workspace_api"
+            and target.backend_url
+        ):
+            # 外部编排的本地后端没有 Gateway runtime，但仍然可以直接通过
+            # 持久化的 backend_url 代理工作区 API。
+            return target.backend_url
         runtime = self._runtimes.get(target.workspace_id)
         if runtime is None:
             raise LookupError(f"工作区运行时尚未连接: {workspace_id}")

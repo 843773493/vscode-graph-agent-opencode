@@ -32,6 +32,7 @@ from app.services.business.system_reminder_checkpoint_service import (
 )
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+from app.services.mapping.user_message_content_projection import user_content_projection
 
 
 class MessageService:
@@ -56,20 +57,26 @@ class MessageService:
         structured_metadata = internal_prompt_metadata(response_metadata)
         display_projection = None
         if isinstance(message.content, str):
-            display_projection = project_message_for_display(
-                message.content,
-                response_metadata,
-            )
-            if role == MessageRole.user:
+            if structured_metadata is not None or role != MessageRole.user:
+                display_projection = project_message_for_display(
+                    message.content,
+                    response_metadata,
+                )
                 content = display_projection.content
         elif structured_metadata is not None:
             raise TypeError("内部结构消息 content 必须是字符串")
         else:
-            display_content = response_metadata.get("display_content")
-            if display_content is not None:
-                if not isinstance(display_content, str):
-                    raise TypeError("message metadata.display_content 必须是字符串")
-                if role == MessageRole.user:
+            if role == MessageRole.user:
+                user_projection = user_content_projection(
+                    message.content,
+                    response_metadata,
+                )
+                content = user_projection.visible_text
+            else:
+                display_content = response_metadata.get("display_content")
+                if display_content is not None:
+                    if not isinstance(display_content, str):
+                        raise TypeError("message metadata.display_content 必须是字符串")
                     content = display_content
         message_id = response_metadata.get("message_id")
         if not isinstance(message_id, str) or not message_id:
@@ -123,7 +130,10 @@ class MessageService:
             session_id=session_id,
             role=role,
             content=content,
-            attachments=MessageService._attachments_from_metadata(response_metadata),
+            attachments=MessageService._attachments_for_message(
+                message,
+                response_metadata,
+            ),
             metadata=metadata,
             created_at=created_at,
             updated_at=updated_at,
@@ -185,19 +195,39 @@ class MessageService:
         attachments: list[AttachmentRef] = []
         for item in raw_attachments:
             if isinstance(item, AttachmentRef):
-                attachments.append(item)
+                attachments.append(item.model_copy(update={"data_url": None}))
                 continue
             if isinstance(item, Mapping):
-                attachments.append(
-                    AttachmentRef.model_validate(
-                        {str(key): value for key, value in item.items()}
-                    )
-                )
+                attachments.append(AttachmentRef.model_validate({
+                    str(key): value
+                    for key, value in item.items()
+                    if str(key) != "data_url"
+                }))
                 continue
             raise TypeError(
                 f"message.response_metadata.attachments 中出现不支持的元素类型: {type(item).__name__}"
             )
         return attachments
+
+    @staticmethod
+    def _attachments_for_message(
+        message: BaseMessage,
+        response_metadata: Mapping[object, object],
+    ) -> list[AttachmentRef]:
+        attachments = MessageService._attachments_from_metadata(response_metadata)
+        if attachments or not isinstance(message, HumanMessage):
+            return attachments
+        projection = user_content_projection(message.content, response_metadata)
+        return [
+            AttachmentRef.model_validate(
+                {
+                    str(key): value
+                    for key, value in item.items()
+                    if str(key) != "data_url"
+                }
+            )
+            for item in projection.attachments
+        ]
 
     @staticmethod
     def _is_system_reminder_only_message(message: BaseMessage) -> bool:
@@ -240,7 +270,9 @@ class MessageService:
             "role": MessageService._persisted_role(message).value,
             "type": message.type,
             "content": MessageService._json_safe(
-                content_blocks if content_blocks else raw_content
+                raw_content
+                if isinstance(message, HumanMessage)
+                else content_blocks if content_blocks else raw_content
             ),
         }
         tool_calls = getattr(message, "tool_calls", None) or []
@@ -471,6 +503,16 @@ class MessageService:
             if not isinstance(block, Mapping):
                 continue
             block_type = block.get("type")
+            block_metadata = block.get("metadata")
+            if (
+                isinstance(block_metadata, Mapping)
+                and block_metadata.get("origin") == "generated"
+                and block_metadata.get("kind") in {
+                    "attachment_manifest",
+                    "attachment_preview",
+                }
+            ):
+                continue
             if block_type == "text" and isinstance(block.get("text"), str):
                 normalized: dict[str, object] = {
                     "type": "text",

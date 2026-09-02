@@ -40,6 +40,7 @@ from app.agents.providers.litellm_content import (
     build_ai_message_content,
     canonicalize_ai_message,
     project_ai_message_content,
+    project_user_message_content,
     reasoning_projection_rows,
 )
 from app.agents.upstream_request_trace import (
@@ -315,6 +316,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
     provider_id: str | None = None
     reasoning_content_replay: bool = False
     thinking_blocks_replay: bool = False
+    image_input_replay: bool = False
 
     def _stream_attempt_count(self) -> int:
         """返回包含首次请求在内的流式请求总尝试次数。"""
@@ -505,6 +507,17 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                 elif role == "ai":
                     item["role"] = "assistant"
                 original_content = item.get("content")
+                if item.get("role") == "user":
+                    item.pop("response_metadata", None)
+                    item.pop("additional_kwargs", None)
+                    user_projection = project_user_message_content(
+                        original_content,
+                        target_format="chat_completions",
+                        image_input=self.image_input_replay,
+                    )
+                    item["content"] = user_projection["content"]
+                    result.append(item)
+                    continue
                 projection = project_ai_message_content(
                     original_content,
                     target_provider=self.provider_id,
@@ -532,6 +545,21 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
                         content=original_content,
                     )
                 result.append(item)
+                continue
+
+            if isinstance(message, HumanMessage):
+                user_projection = project_user_message_content(
+                    message.content,
+                    target_format="chat_completions",
+                    image_input=self.image_input_replay,
+                )
+                message_dict = {
+                    "content": user_projection["content"],
+                    "role": "user",
+                }
+                if message.name:
+                    message_dict["name"] = message.name
+                result.append(message_dict)
                 continue
 
             projection = project_ai_message_content(
@@ -1246,6 +1274,7 @@ def build_litellm_chat_model(
         "provider_id": provider.get("id"),
         "reasoning_content_replay": api_mode.supports_reasoning.reasoning_content,
         "thinking_blocks_replay": api_mode.supports_reasoning.thinking_blocks,
+        "image_input_replay": "image_input" in capabilities,
     }
 
     if provider.get("endpoint"):

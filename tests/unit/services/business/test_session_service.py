@@ -73,6 +73,25 @@ class TestSessionService:
         assert data["current_provider_id"] == "primary"
 
     @pytest.mark.asyncio
+    async def test_list_uses_index_projection_when_physical_tree_has_orphan(self):
+        session = await self.service.create(SessionCreateRequest(title="目录读模型"))
+        folder = self.service.path_resolver.create_folder(
+            name="归档",
+            parent_node_id=None,
+        )
+        await self.service.move_session(session.session_id, folder.node_id)
+
+        # 只模拟遗留的空物理目录，不删除或修正它；列表必须保留索引中的会话。
+        (get_sessions_dir() / session.session_id).mkdir()
+
+        result = await self.service.list()
+
+        assert [item.session_id for item in result.items] == [session.session_id]
+        assert self.service.path_resolver.resolve_session_node_for_runtime(
+            session.session_id
+        ) == get_sessions_dir() / folder.node_id / session.session_id
+
+    @pytest.mark.asyncio
     async def test_update_session_provider_is_persisted(self):
         config = {
             "llm": {

@@ -26,6 +26,7 @@ from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.turn import (
     TurnActivityStatsDTO,
+    TurnAttachmentDTO,
     TurnCursorDTO,
     TurnDetailDTO,
     TurnHistoryLoadRequest,
@@ -38,6 +39,7 @@ from app.schemas.internal_v2.turn import (
     TurnUserMessageSummaryDTO,
 )
 from app.services.mapping.turn_response_parts import response_parts_from_records
+from app.services.mapping.user_message_content_projection import user_content_projection
 
 from .turn_history.load_plan import DetailReadBudget, LoadLimits
 from .turn_history.models import (
@@ -1766,12 +1768,26 @@ class RolloutHistoryReader:
         message: BaseMessage,
         index: int,
     ) -> TurnUserMessageDTO:
-        content = self._content_text(message)
+        response_metadata = dict(message.response_metadata)
+        projection = user_content_projection(message.content, response_metadata)
+        attachments = [
+            TurnAttachmentDTO.model_validate(
+                {
+                    str(key): value
+                    for key, value in item.items()
+                    if str(key) != "data_url"
+                }
+            )
+            for item in projection.attachments
+        ]
+        response_metadata.pop("display_content", None)
+        response_metadata.pop("attachments", None)
         return TurnUserMessageDTO(
             message_id=self._message_id(message, f"{turn_id}:user:{index}"),
-            content=content,
+            content=projection.visible_text,
             content_truncated=False,
-            metadata=dict(message.response_metadata),
+            attachments=attachments,
+            metadata=response_metadata,
             created_at=self._message_time(message),
         )
 

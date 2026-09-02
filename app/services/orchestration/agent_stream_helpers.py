@@ -66,6 +66,7 @@ def build_human_response_metadata(
     attachments: list[AttachmentRef],
     message_created_at: str,
     message_metadata: dict[str, object],
+    attachment_diagnostics: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     metadata: dict[str, object] = {
         "message_id": message_id,
@@ -79,5 +80,9 @@ def build_human_response_metadata(
         metadata["attachments"] = [
             attachment.model_dump(mode="json", exclude={"data_url"})
             for attachment in attachments
+        ]
+    if attachment_diagnostics:
+        metadata["attachment_diagnostics"] = [
+            dict(diagnostic) for diagnostic in attachment_diagnostics
         ]
     return metadata

@@ -69,7 +69,13 @@ async def lifespan(_: FastAPI):
     )
     _.state.container = container
 
-    migrated_pending_files = await container.pending_request_store.migrate_all()
+    try:
+        migrated_pending_files = await container.pending_request_store.migrate_all()
+    except RuntimeError as error:
+        # 会话目录漂移必须继续对 API 暴露为可恢复错误，但不能让一个工作区
+        # 的目录问题阻止后端启动，进而使 Gateway 和运行中任务全部失联。
+        logger.error("会话目录不一致，跳过 pending 迁移并继续启动: %s", error)
+        migrated_pending_files = 0
     if migrated_pending_files:
         logger.info(
             "已升级 %s 个旧 pending request 存储文件",

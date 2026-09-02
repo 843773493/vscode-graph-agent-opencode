@@ -15,6 +15,7 @@ from app.agents.providers.litellm_content import (
     build_ai_message_content,
     canonicalize_ai_message,
     project_ai_message_content,
+    project_user_message_content,
     reasoning_projection_rows,
     visible_text,
 )
@@ -359,6 +360,95 @@ def test_checkpoint_roundtrip_preserves_direct_content_and_tool_contract():
 
 def test_visible_text_ignores_reasoning_and_encrypted_content():
     assert visible_text(_content()) == "最终回答"
+
+
+def test_user_projection_strips_canonical_metadata_and_keeps_source_immutable():
+    content = [
+        {"type": "text", "text": "请查看"},
+        {
+            "type": "text",
+            "text": "<attachment path='a.png'>",
+            "metadata": {
+                "origin": "generated",
+                "kind": "attachment_manifest",
+                "file_id": "a.png",
+            },
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/webp;base64,preview"},
+            "metadata": {"origin": "generated", "kind": "attachment_preview"},
+        },
+    ]
+
+    projected = project_user_message_content(
+        content,
+        target_format="chat_completions",
+        image_input=True,
+    )
+
+    assert projected["content"] == [
+        {"type": "text", "text": "请查看"},
+        {"type": "text", "text": "<attachment path='a.png'>"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/webp;base64,preview"},
+        },
+    ]
+    assert "metadata" not in projected["content"][0]
+    assert "metadata" not in projected["content"][1]
+    assert "metadata" not in projected["content"][2]
+    assert content[2]["metadata"]["kind"] == "attachment_preview"
+
+
+def test_user_projection_supports_responses_and_reports_unsupported_image():
+    content = [
+        {"type": "text", "text": "看图"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/webp;base64,preview"},
+        },
+    ]
+
+    responses = project_user_message_content(
+        content,
+        target_format="responses",
+        image_input=True,
+    )
+    text_only = project_user_message_content(
+        content,
+        target_format="chat_completions",
+        image_input=False,
+    )
+
+    assert responses["content"][0] == {"type": "input_text", "text": "看图"}
+    assert responses["content"][1] == {
+        "type": "input_image",
+        "image_url": "data:image/webp;base64,preview",
+    }
+    assert text_only["content"] == [{"type": "text", "text": "看图"}]
+    assert text_only["diagnostics"][0]["status"] == "not_sent"
+
+
+def test_user_projection_reports_unknown_block_without_json_dumping_it():
+    projected = project_user_message_content(
+        [
+            {"type": "text", "text": "保留路径"},
+            {"type": "vendor_document", "payload": {"pages": 80}},
+        ],
+        target_format="chat_completions",
+        image_input=True,
+    )
+
+    assert projected["content"] == [{"type": "text", "text": "保留路径"}]
+    assert projected["diagnostics"] == [
+        {
+            "block_index": 1,
+            "block_type": "vendor_document",
+            "status": "projection_failed",
+            "detail": "目标 provider 未定义用户 block 类型: vendor_document",
+        }
+    ]
 
 
 def test_streaming_invoke_canonicalizes_langchain_cache_merge(monkeypatch):

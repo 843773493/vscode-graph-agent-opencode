@@ -1,5 +1,5 @@
 import React from "react";
-import type { DeliveryPolicy } from "../../../types/backend";
+import type { AttachmentRef, DeliveryPolicy } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
 import { fileToSelectedAttachment } from "../../../utils/mediaAttachments";
 import AnchoredOverlay from "../../AnchoredOverlay";
@@ -20,6 +20,7 @@ export function ChatTurnUserSection({
   onLoadAgentStateMessageRawContent,
   onRemovePending,
   onChangePendingPolicy,
+  onOpenAttachment,
 }: Pick<
   ChatTurnActionCallbacks,
   "onRemovePending" | "onChangePendingPolicy"
@@ -33,6 +34,7 @@ export function ChatTurnUserSection({
     sessionId: string,
     messageId: string,
   ) => Promise<string>;
+  onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
 }): React.ReactNode {
   const editAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
   const actionMenuAnchorRef = React.useRef<HTMLDivElement | null>(null);
@@ -290,6 +292,9 @@ export function ChatTurnUserSection({
                 workspaceId={workspaceId}
                 sessionId={conversation.sessionId}
                 attachments={userAttachments}
+                onOpenAttachment={onOpenAttachment
+                  ? (attachment) => onOpenAttachment(conversation.sessionId, attachment)
+                  : undefined}
               />
             ) : null}
           </>

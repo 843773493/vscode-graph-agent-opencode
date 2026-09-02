@@ -165,14 +165,25 @@ class _RolloutFileLock:
 class _RolloutOperationLock:
     """同一进程可重入、跨进程独占的 rollout 写入锁。"""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        timeout_seconds: float = _ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS,
+    ) -> None:
         self._thread_lock = threading.RLock()
         self._path = path
+        self._timeout_seconds = timeout_seconds
         self._depth = 0
         self._file_lock: _RolloutFileLock | None = None
 
     def __enter__(self) -> Self:
-        self._thread_lock.acquire()
+        acquired = self._thread_lock.acquire(timeout=self._timeout_seconds)
+        if not acquired:
+            raise TimeoutError(
+                "rollout 进程内写锁获取超时: "
+                f"path={self._path} timeout_seconds={self._timeout_seconds:g}"
+            )
         if self._depth == 0:
             file_lock = _RolloutFileLock(self._path, exclusive=True)
             try:
@@ -186,12 +197,14 @@ class _RolloutOperationLock:
 
     def __exit__(self, *_: object) -> None:
         self._depth -= 1
-        if self._depth == 0:
-            file_lock = self._file_lock
-            self._file_lock = None
-            if file_lock is not None:
-                file_lock.release()
-        self._thread_lock.release()
+        try:
+            if self._depth == 0:
+                file_lock = self._file_lock
+                self._file_lock = None
+                if file_lock is not None:
+                    file_lock.release()
+        finally:
+            self._thread_lock.release()
 
 
 class _RolloutSQLiteConnection(sqlite3.Connection):
@@ -438,13 +451,17 @@ class RolloutStorage:
             return self._locks.setdefault(
                 key,
                 _RolloutOperationLock(
-                    self.root(thread_id, checkpoint_ns).parent / ".rollout.write.lock"
+                    self.root(thread_id, checkpoint_ns).parent / ".rollout.write.lock",
+                    timeout_seconds=_ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS,
                 ),
             )
 
     def root(self, thread_id: str, checkpoint_ns: str = "") -> Path:
         del checkpoint_ns
-        return self._path_resolver.resolve_session_node(thread_id) / "rollout"
+        return (
+            self._path_resolver.resolve_session_node_for_runtime(thread_id)
+            / "rollout"
+        )
 
     def index_path(self, thread_id: str, checkpoint_ns: str = "") -> Path:
         return self.root(thread_id, checkpoint_ns) / "index.sqlite"

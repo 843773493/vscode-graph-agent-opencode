@@ -26,6 +26,7 @@ import { WorkspaceFileReferenceProvider } from "./components/workspace/Workspace
 import WorkspaceAuxiliaryPanel, {
   type WorkspaceAuxiliaryTab,
 } from "./components/workspace/WorkspaceAuxiliaryPanel";
+import WorkspaceAttachmentPreview from "./components/workspace/preview/WorkspaceAttachmentPreview";
 import {
   useCallback,
   useEffect,
@@ -74,6 +75,7 @@ import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences"
 import { buildGatewayAttachUrl } from "./utils/attachUrls";
 import type { GatewayExtensionResourceEntry } from "./hooks/useGatewayExtensionResources";
 import type {
+  AttachmentRef,
   SessionChangesSummary,
   SessionFileChange,
   WebUiMainAreaRatios,
@@ -262,12 +264,24 @@ export default function AppShell() {
     summary: SessionChangesSummary;
   } | null>(null);
   const [defaultViewChangesLoading, setDefaultViewChangesLoading] = useState(false);
+  const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<{
+    sessionId: string;
+    attachment: AttachmentRef;
+  } | null>(null);
   const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
   const defaultViewChangesRequestScopeRef = useRef<string | null>(null);
   const cleanupLayoutResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
+  useEffect(() => {
+    if (
+      selectedAttachmentPreview
+      && selectedAttachmentPreview.sessionId !== activeSession?.session_id
+    ) {
+      setSelectedAttachmentPreview(null);
+    }
+  }, [activeSession?.session_id, selectedAttachmentPreview]);
   const bottomPanelWorkspaceId = state.activeGatewayWorkspaceId ?? activeSessionWorkspaceId;
   const bottomPanelWorkspace = useMemo(
     () => state.gatewayWorkspaces.find(
@@ -879,6 +893,13 @@ export default function AppShell() {
       persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: tab });
     }
   };
+  const handleOpenAttachment = useCallback(
+    (sessionId: string, attachment: AttachmentRef) => {
+      setSelectedAttachmentPreview({ sessionId, attachment });
+      openAuxiliaryTab("files");
+    },
+    [openAuxiliaryTab],
+  );
   const openTerminalPanel = (terminalId: string) => {
     if (!bottomPanelWorkspaceId) {
       setStatus("打开终端失败：当前没有活动工作区");
@@ -1509,6 +1530,7 @@ export default function AppShell() {
             onUpdatePending={updatePendingRequest}
             onRemovePending={removePendingRequest}
             onChangePendingPolicy={updatePendingRequestPolicy}
+            onOpenAttachment={handleOpenAttachment}
             viewState={
               activeSessionCacheKey
                 ? state.gatewayUserViewStates.get(activeSessionCacheKey) ?? null
@@ -1849,6 +1871,19 @@ export default function AppShell() {
                         },
                       }));
                     }}
+                    attachmentPreview={
+                      selectedAttachmentPreview
+                      && selectedAttachmentPreview.sessionId === activeSession?.session_id
+                        ? (
+                          <WorkspaceAttachmentPreview
+                            attachment={selectedAttachmentPreview.attachment}
+                            apiPort={resolvedApiPort}
+                            sessionId={selectedAttachmentPreview.sessionId}
+                            workspaceId={activeSessionWorkspaceId}
+                          />
+                        )
+                        : null
+                    }
                     resourcePanel={(
                       extensionWindowRequested ? (
                         <GatewayExtensionResourcePanel

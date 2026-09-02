@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import tempfile
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path, PureWindowsPath
+from typing import BinaryIO
 
 from app.agents.tools.apply_patch.journal import (
     delete_apply_patch_journal,
@@ -26,6 +28,8 @@ from app.core.path_utils import get_workspace_root
 _workspace_locks_guard = threading.Lock()
 _workspace_locks: dict[Path, threading.Lock] = {}
 _WORKSPACE_PATCH_LOCK_PATH = Path(".boxteam") / "locks" / "apply_patch.write.lock"
+_WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS = 10.0
+_WORKSPACE_PATCH_LOCK_POLL_INTERVAL_SECONDS = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,36 +107,83 @@ def _get_workspace_lock(workspace_root: Path) -> threading.Lock:
 def _workspace_patch_lock(workspace_root: Path) -> Iterator[None]:
     """同时串行化同进程和多工作区后端进程的补丁写入。"""
     thread_lock = _get_workspace_lock(workspace_root)
-    with thread_lock:
+    acquired = thread_lock.acquire(timeout=_WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS)
+    if not acquired:
+        raise TimeoutError(
+            "apply_patch 进程内锁获取超时: "
+            f"workspace={workspace_root} "
+            f"timeout_seconds={_WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS:g}"
+        )
+    try:
         lock_path = workspace_root / _WORKSPACE_PATCH_LOCK_PATH
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+b") as lock_file:
-            if os.name == "nt":
-                # TODO: Windows CI 覆盖跨进程补丁锁的释放与异常恢复。
-                import msvcrt
-
-                lock_file.seek(0, os.SEEK_END)
-                if lock_file.tell() == 0:
-                    lock_file.write(b" ")
-                    lock_file.flush()
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            _acquire_workspace_file_lock(lock_file, lock_path)
             try:
                 yield
             finally:
-                if os.name == "nt":
-                    import msvcrt
+                _release_workspace_file_lock(lock_file)
+    finally:
+        thread_lock.release()
 
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
 
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+def _acquire_workspace_file_lock(lock_file: BinaryIO, lock_path: Path) -> None:
+    """在跨进程锁被占用时有界等待，避免 apply_patch 永久卡住 Agent。"""
+    if os.name == "nt":
+        # TODO: Windows CI 覆盖跨进程补丁锁的释放与异常恢复。
+        import msvcrt
+
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b" ")
+            lock_file.flush()
+        lock_file.seek(0)
+        deadline = time.monotonic() + _WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        "apply_patch 跨进程锁获取超时: "
+                        f"path={lock_path} "
+                        f"timeout_seconds={_WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS:g}"
+                    ) from error
+                time.sleep(min(_WORKSPACE_PATCH_LOCK_POLL_INTERVAL_SECONDS, remaining))
+            else:
+                return
+
+    import fcntl
+
+    deadline = time.monotonic() + _WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "apply_patch 跨进程锁获取超时: "
+                    f"path={lock_path} "
+                    f"timeout_seconds={_WORKSPACE_PATCH_LOCK_TIMEOUT_SECONDS:g}"
+                ) from error
+            time.sleep(min(_WORKSPACE_PATCH_LOCK_POLL_INTERVAL_SECONDS, remaining))
+        else:
+            return
+
+
+def _release_workspace_file_lock(lock_file: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def extract_apply_patch_file_paths(

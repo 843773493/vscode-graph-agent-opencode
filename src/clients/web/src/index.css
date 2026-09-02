@@ -697,6 +697,16 @@ body > #root {
 .composer-attachment-video {
   background: var(--bt-terminal-background);
 }
+.composer-attachment-file {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: var(--bt-surface-raised);
+  color: var(--bt-text-secondary);
+  font-size: 9px;
+  font-weight: 600;
+}
 .composer-attachment-name {
   min-width: 0;
   overflow: hidden;

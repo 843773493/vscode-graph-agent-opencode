@@ -1,6 +1,6 @@
 import type { AttachmentRef } from "../types/backend";
 
-export type AttachmentMediaKind = "image" | "video";
+export type AttachmentMediaKind = "image" | "video" | "file";
 
 export type SelectedAttachment = AttachmentRef & {
   mediaKind: AttachmentMediaKind;
@@ -55,7 +55,7 @@ function extensionFromName(name: string): string {
 }
 
 function fallbackContentType(file: File, mediaKind: AttachmentMediaKind): string {
-  if (mediaKind === "image" && file.type) {
+  if (file.type && mediaKind !== "video") {
     return file.type;
   }
 
@@ -70,10 +70,16 @@ function fallbackContentType(file: File, mediaKind: AttachmentMediaKind): string
     }
   }
 
-  return mediaKind === "image" ? "image/png" : "video/mp4";
+  if (mediaKind === "image") {
+    return "image/png";
+  }
+  if (mediaKind === "video") {
+    return "video/mp4";
+  }
+  return "application/octet-stream";
 }
 
-function detectMediaKind(file: File): AttachmentMediaKind {
+export function detectAttachmentMediaKind(file: File): AttachmentMediaKind {
   if (file.type.startsWith("image/")) {
     return "image";
   }
@@ -87,7 +93,7 @@ function detectMediaKind(file: File): AttachmentMediaKind {
       return "video";
     }
 
-    throw new Error("仅支持 mp4、webm、mov 或 mkv 视频附件");
+    return "file";
   }
 
   const extension = extensionFromName(file.name);
@@ -95,7 +101,7 @@ function detectMediaKind(file: File): AttachmentMediaKind {
     return "video";
   }
 
-  throw new Error("仅支持图片或视频附件");
+  return "file";
 }
 
 function generatedAttachmentName(
@@ -108,7 +114,9 @@ function generatedAttachmentName(
   }
 
   const contentType = fallbackContentType(file, mediaKind);
-  const extension = contentType.split("/")[1] || (mediaKind === "image" ? "png" : "mp4");
+  const extension = contentType === "application/octet-stream"
+    ? "bin"
+    : contentType.split("/")[1] || (mediaKind === "image" ? "png" : "mp4");
   const timestamp = new Date()
     .toISOString()
     .replace(/:/g, "")
@@ -128,7 +136,7 @@ export async function fileToSelectedAttachment(
   file: File,
   fallbackIndex = 0,
 ): Promise<SelectedAttachment> {
-  const mediaKind = detectMediaKind(file);
+  const mediaKind = detectAttachmentMediaKind(file);
   const name = generatedAttachmentName(file, mediaKind, fallbackIndex);
   const contentType = fallbackContentType(file, mediaKind);
   const dataUrl = normalizeDataUrlContentType(
@@ -145,20 +153,13 @@ export async function fileToSelectedAttachment(
   };
 }
 
-function isSupportedClipboardMedia(item: DataTransferItem): boolean {
-  return item.kind === "file" && (
-    item.type.startsWith("image/") ||
-    item.type.startsWith("video/")
-  );
+function isClipboardFile(item: DataTransferItem): boolean {
+  return item.kind === "file";
 }
 
 function isSupportedFile(file: File): boolean {
-  try {
-    detectMediaKind(file);
-    return true;
-  } catch {
-    return false;
-  }
+  detectAttachmentMediaKind(file);
+  return true;
 }
 
 export function mediaFilesFromClipboard(data: DataTransfer): File[] {
@@ -168,7 +169,7 @@ export function mediaFilesFromClipboard(data: DataTransfer): File[] {
   }
 
   return Array.from(data.items)
-    .filter(isSupportedClipboardMedia)
+    .filter(isClipboardFile)
     .map((item) => item.getAsFile())
     .filter((file): file is File => file !== null);
 }

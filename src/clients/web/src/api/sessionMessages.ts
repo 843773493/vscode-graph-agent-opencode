@@ -57,7 +57,7 @@ export async function getSessionAttachmentBlob(
   const query = new URLSearchParams({ file_id: fileId });
   query.set("variant", options.variant ?? "original");
   if (options.variant === "thumbnail") {
-    query.set("max_edge", "384");
+    query.set("max_edge", "512");
   }
   const response = await fetch(
     `${getApiBaseUrl(port)}/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/content?${query}`,

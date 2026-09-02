@@ -57,6 +57,7 @@ export default function ChatPanel({
   onUpdatePending,
   onRemovePending,
   onChangePendingPolicy,
+  onOpenAttachment,
   viewState,
   onViewStateChange,
   onViewStateRestoreStatus,
@@ -113,6 +114,7 @@ export default function ChatPanel({
     policy: DeliveryPolicy,
     expectedSnapshotVersion?: number,
   ) => Promise<void>;
+  onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
   viewState?: GatewayUserViewState | null;
   onViewStateChange?: (payload: {
     turn_anchor: string | null;
@@ -310,6 +312,7 @@ export default function ChatPanel({
                     onUpdatePending={updatePending}
                     onRemovePending={removePending}
                     onChangePendingPolicy={updatePendingPolicy}
+                    onOpenAttachment={onOpenAttachment}
                   />
                 </ChatTurnErrorBoundary>
               </div>

@@ -21,13 +21,15 @@ from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
 )
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 from app.agents.provider_api_mode import parse_provider_api_mode
+from app.agents.provider_capabilities import parse_provider_capabilities
 from app.agents.providers.litellm_content import (
     canonicalize_ai_message,
     project_ai_message_content,
+    project_user_message_content,
 )
 from app.core.cancelable_stream import CancelableStream
 from app.core.model_delta_context import get_current_model_delta_sink
@@ -66,6 +68,7 @@ class BoxteamAnthropicMessagesModel(ChatAnthropic):
     provider_id: str | None = None
     thinking_blocks_replay: bool = False
     redacted_thinking_replay: bool = False
+    image_input_replay: bool = False
 
     def _project_ai_message(self, message: AIMessage) -> AIMessage:
         target_capabilities = {"thinking_blocks"}
@@ -98,6 +101,16 @@ class BoxteamAnthropicMessagesModel(ChatAnthropic):
         return [
             self._project_ai_message(message)
             if isinstance(message, AIMessage)
+            else message.model_copy(
+                update={
+                    "content": project_user_message_content(
+                        message.content,
+                        target_format="anthropic_messages",
+                        image_input=self.image_input_replay,
+                    )["content"]
+                }
+            )
+            if isinstance(message, HumanMessage)
             else message
             for message in messages
         ]
@@ -260,4 +273,5 @@ def build_anthropic_messages_model(
         provider_id=provider.get("id"),
         thinking_blocks_replay=thinking.thinking_blocks_thinking,
         redacted_thinking_replay=thinking.thinking_blocks_redacted_thinking,
+        image_input_replay="image_input" in parse_provider_capabilities(provider),
     )

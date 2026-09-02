@@ -285,28 +285,22 @@ export function useWorkspaceBootstrap({
           continue;
         }
         const workspaceId = workspaceIds[index];
+        if (!workspaceId) continue;
         const message =
           result.reason instanceof Error
             ? result.reason.message
             : String(result.reason);
         workspaceSessionErrors.set(workspaceId, message);
       }
-      if (activeWorkspaceId && workspaceSessionErrors.has(activeWorkspaceId)) {
-        throw new Error(
-          `当前工作区会话加载失败：${workspaceSessionErrors.get(activeWorkspaceId)}`,
-        );
-      }
-      const visibleGatewayWorkspaces = gatewayWorkspaces.items.map((workspace) =>
-        workspaceSessionErrors.has(workspace.workspace_id)
-          ? { ...workspace, status: "offline" as const }
-          : workspace,
-      );
+      // 会话目录异常只代表该分支暂时不可读，不能把健康的 Gateway 工作区
+      // 标成 offline，更不能用空数组覆盖之前已经加载的会话。
+      const visibleGatewayWorkspaces = gatewayWorkspaces.items;
       const failedWorkspaceNames = visibleGatewayWorkspaces
         .filter((workspace) => workspaceSessionErrors.has(workspace.workspace_id))
         .map((workspace) => workspace.name);
       const partialGatewayError =
         failedWorkspaceNames.length > 0
-          ? `部分工作区离线，未加载会话：${failedWorkspaceNames.join("、")}`
+          ? `部分工作区会话暂不可用，已保留现有会话状态：${failedWorkspaceNames.join("、")}`
           : null;
       if (
         controller.signal.aborted

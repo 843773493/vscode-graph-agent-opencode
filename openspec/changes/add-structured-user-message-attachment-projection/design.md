@@ -90,7 +90,7 @@ provider 投影结果是短生命周期的请求对象，不回写 `HumanMessage
 
 进入 Agent 执行的用户消息按模型输入的 canonical source 保存；如果 source 中有模型使用的 preview `image_url` data URL，就让它随 HumanMessage 进入 checkpoint 和 rollout JSONL。这样历史恢复可以验证 block 顺序和模型输入，而不是将 preview 当成临时 UI 数据丢掉。
 
-SQLite 只建立可定位的消息/content block 坐标、附件身份和有界 display projection，不复制 preview 正文到索引列。完整 LangGraph 恢复从 checkpoint view 读取原始 HumanMessage；目标 provider adapter 再生成临时请求。默认 Web history 则只读取 `visible_text` 与 `TurnAttachmentDTO`，绝不把 full content list 或 data URL 放入 `TurnUserMessageDTO.content`。新用户消息不写重复的 `display_content`；旧消息仍可使用已有 `display_content` 作为兼容 fallback，内部消息继续使用现有的 internal display policy。
+SQLite 只建立可定位的消息/content block 坐标、附件身份和有界 display projection，不复制 preview 正文到索引列。完整 LangGraph 恢复从 checkpoint view 读取原始 HumanMessage；目标 provider adapter 再生成临时请求。默认 Web history 则只读取 `visible_text` 与 `TurnAttachmentDTO`，绝不把 full content list 或 data URL 放入 `TurnUserMessageDTO.content`。普通用户消息不读取或写入 `display_content`；内部消息继续使用现有的 internal display policy。
 
 这也是修复“显示出 `{"image_url": {"url": "data:image/...`”问题的关键：问题不在于 checkpoint 中存在 base64，而在于用户消息 display projection 把非文本 block 直接字符串化。
 
@@ -100,19 +100,17 @@ SQLite 只建立可定位的消息/content block 坐标、附件身份和有界 
 
 前端不读取或解析 checkpoint content，也不从正文 markdown 反推 file id。缩略图与正文加载可渐进进行：最新 Turn 先展示文本和附件占位，预览随后更新；原件只在用户点击资源时请求。
 
-### 8. 兼容旧数据而不重写历史
+### 8. Canonical-only 数据边界
 
-- 旧的纯字符串用户消息归一为一个文本 block；旧的结构化列表按 block walker 读取。
-- 旧消息中的 `image_url`、`data_url` 和附件 metadata 不做破坏性清洗；展示层开始按 block 提取后，旧 checkpoint 也不再被整体 dump。
-- 既有附件 API 的 `original`/`thumbnail` 读取继续复用，preview 默认尺寸迁移到 512；文件名、MIME 和稳定 id 的新字段以追加方式提供。
-- 不扫描磁盘重建会话附件身份，不根据显示名或显示文本推导路径；无法通过现有稳定 id 解析的历史附件返回明确错误。
-- 迁移期间不改写 rollout JSONL 和 checkpoint。回滚应用代码仍可读取 LangChain-compatible 的用户 content；新增的 projection/DTO 字段缺失时按既有旧历史读取路径处理，但不把新 source 数据迁移成另一种格式。
+- 普通用户消息只有字符串正文或当前 canonical block 序列两种输入形态；结构化内容统一经过 `UserContentBuilder` 或显式 block projection，不提供额外导入别名或展示字段回退入口。
+- checkpoint、rollout 和源消息不做破坏性清洗，也不为兼容历史格式新增迁移分支；无法解析的 block、附件身份或变体必须返回明确错误。
+- 既有会话附件 API 的 `original`/`thumbnail` 读取继续复用；preview 默认尺寸固定为 512，附件身份只来自稳定 `file_id` 和系统生成的 block metadata。
 
 ## Risks / Trade-offs
 
 - [preview base64 增大 checkpoint/rollout] → 只保存最长边不超过 512 的 preview，不把原图塞入 message；SQLite 不复制正文，并在历史 API 上继续使用 projection/detail/full 的边界。
 - [不同 provider 对 image/document block 的语义不一致] → canonical source 不绑定单一 wire schema；LiteLLM 处理共通部分，目标 adapter 按能力显式投影，未发送与失败状态可诊断。
-- [旧历史存在被整体序列化的用户 content] → reader 先按结构化 block 解析，保留真正字符串为文本；不对无法可靠推断的旧字符串进行启发式 JSON 反解析，避免改变用户原文。
+- [结构化用户 content 被整体序列化] → reader 只按 canonical block 提取文本；未知 block 不进入正文，也不对无法可靠解析的内容做启发式字符串反解析。
 - [预览文件与原件生命周期不一致] → 以稳定 file id 和 variant 记录绑定原件/预览，删除、清理和读取均经过附件存储层；任何缺失 variant 都返回状态而不是空图片。
 - [Web 与模型需要不同数据量] → 保持 `content`、`attachments`、full checkpoint 三种边界；Web renderer 永不接触 full content，模型恢复也不依赖 Web DTO。
 - [路径暴露工作区内部结构] → 只提供 workspace-relative/session-resolvable path，不暴露绝对路径；服务端对 file id 和相对路径做会话范围校验。

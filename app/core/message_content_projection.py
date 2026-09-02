@@ -1,7 +1,8 @@
-"""对 canonical AIMessage 内容执行与 provider 无关的 SQLite 投影。"""
+"""对 canonical 消息内容执行与 provider 无关的安全投影。"""
 
 from __future__ import annotations
 
+import copy
 import hashlib
 from collections.abc import Mapping
 from typing import Any
@@ -20,7 +21,12 @@ def _blocks(content: Any) -> list[dict[str, Any]]:
             if value:
                 result.append({"type": "text", "text": value})
         elif isinstance(value, Mapping):
-            result.append({str(key): item for key, item in value.items()})
+            result.append(
+                {
+                    str(key): copy.deepcopy(item)
+                    for key, item in value.items()
+                }
+            )
         elif value is not None:
             result.append({"type": "text", "text": str(value)})
     return result

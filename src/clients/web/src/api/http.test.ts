@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { listSessionCatalogChildren } from "./sessionCatalog";
 import { requestJson } from "./http";
 
 const originalFetch = globalThis.fetch;
@@ -110,6 +111,77 @@ describe("requestJson 请求取消", () => {
       .resolves.toEqual({ value: "ok" });
     expect(credentialCalls).toBe(2);
     expect(apiTokens).toEqual(["stale-token", "fresh-token"]);
+  });
+
+  test("session-catalog 收到 user_session_required 时单次恢复用户会话后重试", async () => {
+    const port = 49_305;
+    installWindow(port);
+    const requestedPaths: string[] = [];
+    let currentCalls = 0;
+    let guestCalls = 0;
+    let catalogCalls = 0;
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const url = new URL(String(input));
+        requestedPaths.push(url.pathname);
+        if (url.pathname === "/api/gateway/auth/local-credential") {
+          return tokenResponse();
+        }
+        if (url.pathname === "/api/gateway/users/current") {
+          currentCalls += 1;
+          if (currentCalls === 1) {
+            return Response.json({
+              data: { kind: "guest", user_id: null },
+              request_id: "request-current-initial",
+            });
+          }
+          return Response.json({ detail: "user_session_required" }, { status: 401 });
+        }
+        if (url.pathname === "/api/gateway/users/guest") {
+          guestCalls += 1;
+          return Response.json({
+            data: { kind: "guest", user_id: null },
+            request_id: "request-guest-recovery",
+          });
+        }
+        if (url.pathname === "/api/v1/session-catalog/children") {
+          catalogCalls += 1;
+          if (catalogCalls === 1) {
+            return Response.json({ detail: "user_session_required" }, { status: 401 });
+          }
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "request-catalog-recovered",
+            data: {
+              revision: "revision-recovered",
+              parent_node_id: null,
+              items: [],
+              cursor: null,
+              total: 0,
+            },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    await expect(
+      listSessionCatalogChildren(port, "workspace-test"),
+    ).resolves.toMatchObject({ revision: "revision-recovered", items: [] });
+    expect(currentCalls).toBe(2);
+    expect(guestCalls).toBe(1);
+    expect(catalogCalls).toBe(2);
+    expect(requestedPaths).toEqual([
+      "/api/gateway/auth/local-credential",
+      "/api/gateway/users/current",
+      "/api/v1/session-catalog/children",
+      "/api/gateway/users/current",
+      "/api/gateway/users/guest",
+      "/api/v1/session-catalog/children",
+    ]);
   });
 
   test("响应体下载中超时会 abort fetch 并返回超时错误", async () => {

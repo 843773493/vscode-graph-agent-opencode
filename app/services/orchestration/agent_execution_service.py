@@ -53,7 +53,6 @@ from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_display import (
     DISPLAY_CONTENT_METADATA_KEY,
-    project_message_for_display,
 )
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
@@ -62,7 +61,7 @@ from app.services.business.reasoning_checkpoint_service import (
 from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
 )
-from app.services.infrastructure.attachment_content_service import build_human_content
+from app.services.business.user_content_builder import UserContentBuilder
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.message_stream_store import (
     MessageStreamStore,
@@ -516,10 +515,6 @@ class AgentExecutionService(JobStepExecutor):
         )
         resolved_attachments = list(attachments or [])
         resolved_message_metadata = dict(message_metadata or {})
-        display_projection = project_message_for_display(
-            message,
-            resolved_message_metadata,
-        )
         resolved_message_metadata.pop(DISPLAY_CONTENT_METADATA_KEY, None)
         preferred_provider_id_value = resolved_message_metadata.pop(
             "boxteam_session_provider_id",
@@ -531,19 +526,17 @@ class AgentExecutionService(JobStepExecutor):
         ):
             raise TypeError("会话模型 provider id 必须是字符串")
         preferred_provider_id = preferred_provider_id_value
-        human_content = build_human_content(
-            message,
-            resolved_attachments,
+        human_content_result = UserContentBuilder(
             workspace_root=self._workspace_root,
-        )
+        ).build(message, resolved_attachments)
+        human_content = human_content_result.content
         human_response_metadata = build_human_response_metadata(
             message_id=message_id,
-            display_content=(
-                display_projection.content if display_projection.visible else None
-            ),
+            display_content=None,
             attachments=resolved_attachments,
             message_created_at=message_created_at,
             message_metadata=resolved_message_metadata,
+            attachment_diagnostics=human_content_result.diagnostics,
         )
         raw_message_metadata = human_response_metadata.get("message_metadata")
         if raw_message_metadata is not None and not isinstance(

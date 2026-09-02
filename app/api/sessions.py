@@ -194,7 +194,12 @@ async def list_sessions(
     request_id: str = Depends(get_request_id),
     session_service: SessionService = Depends(get_session_service),
 ):
-    result = await session_service.list(limit=limit, cursor=cursor)
+    try:
+        result = await session_service.list(limit=limit, cursor=cursor)
+    except (RuntimeError, TimeoutError) as error:
+        # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表，
+        # 也不能让前端收到无上下文的 500。
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -211,6 +216,8 @@ async def get_session(
         result = await session_service.get(session_id)
     except NotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error.detail)) from error
+    except (RuntimeError, TimeoutError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

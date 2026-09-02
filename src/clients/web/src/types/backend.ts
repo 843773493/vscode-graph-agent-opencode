@@ -648,6 +648,8 @@ export interface SessionCatalogPage {
   items: SessionCatalogNode[];
   cursor?: string | null;
   total: number;
+  /** 目录仍按权威索引展示时，提示未通过严格物理树校验的原因。 */
+  consistency_warning?: string | null;
 }
 
 export type GatewaySessionSearchMatch = DeepRequired<GatewaySessionSearchMatchDTO>;

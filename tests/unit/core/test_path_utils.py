@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -493,6 +494,44 @@ class TestPathUtils:
         )
         with pytest.raises(RuntimeError, match="与权威索引父关系不一致"):
             resolver.refresh()
+
+    def test_runtime_session_resolution_ignores_unrelated_physical_drift(
+        self,
+        tmp_path,
+    ):
+        sessions_root = tmp_path / ".boxteam" / "sessions"
+        resolver = SessionPathResolver(sessions_root)
+        resolver.initialize()
+        session_id = "ses_runtime_resolve_12345678"
+        session_dir = resolver.allocate_session_dir(
+            session_id=session_id,
+            title="运行时收尾",
+        )
+        now = datetime.now(UTC).isoformat()
+        (session_dir / "session.json").write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "title": "运行时收尾",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ),
+            encoding="utf-8",
+        )
+        resolver.register_session(session_id, session_dir)
+
+        indexed_path = resolver.resolve_session_node(session_id)
+        shutil.copytree(indexed_path, sessions_root / "ses_unindexed_12345678")
+
+        with pytest.raises(RuntimeError, match="权威索引与磁盘目录不一致"):
+            resolver.refresh()
+
+        restarted = SessionPathResolver(sessions_root)
+        restarted.initialize()
+        with pytest.raises(RuntimeError, match="权威索引与磁盘目录不一致"):
+            restarted.list_nodes()
+        assert restarted.resolve_session_node_for_runtime(session_id) == indexed_path
 
     def test_resolver_detects_manual_session_manifest_update(
         self,

@@ -74,6 +74,20 @@ async function shouldRefreshGatewayToken(response: Response): Promise<boolean> {
   return typeof detail === "string" && detail.includes("invalid local token");
 }
 
+async function isGatewayUserSessionRequired(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
+  const body = await response.clone().json().catch(() => null) as {
+    detail?: unknown;
+    message?: unknown;
+  } | null;
+  const detail = body?.detail ?? body?.message;
+  if (typeof detail === "string") return detail.includes("user_session_required");
+  return detail !== null
+    && typeof detail === "object"
+    && "code" in detail
+    && detail.code === "user_session_required";
+}
+
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("请求已取消", "AbortError");
 }
@@ -171,6 +185,7 @@ type GatewayUserSessionInitializer = (
 ) => Promise<unknown>;
 let gatewayUserSessionInitializer: GatewayUserSessionInitializer | null = null;
 const gatewayUserSessionReadyByPort = new Map<number, Promise<void>>();
+const gatewayUserSessionRecoveryByPort = new Map<number, Promise<void>>();
 
 export function registerGatewayUserSessionInitializer(
   initializer: GatewayUserSessionInitializer,
@@ -200,6 +215,32 @@ async function initializeGatewayUserSessionFallback(
       skipGatewayUserSession: true,
     });
   }
+}
+
+async function recoverGatewayUserSession(port: number): Promise<void> {
+  const existing = gatewayUserSessionRecoveryByPort.get(port);
+  if (existing) return await existing;
+
+  const recovery = (async () => {
+    invalidateGatewayUserSession(port);
+    // 恢复请求不复用可能已经失效的 gatewayApi pending 结果，直接完成
+    // current/guest 屏障；业务请求仍会在同一 requestJson 调用中重试一次。
+    await initializeGatewayUserSessionFallback(port, undefined);
+  })();
+  gatewayUserSessionRecoveryByPort.set(port, recovery);
+  void recovery.then(
+    () => {
+      if (gatewayUserSessionRecoveryByPort.get(port) === recovery) {
+        gatewayUserSessionRecoveryByPort.delete(port);
+      }
+    },
+    () => {
+      if (gatewayUserSessionRecoveryByPort.get(port) === recovery) {
+        gatewayUserSessionRecoveryByPort.delete(port);
+      }
+    },
+  );
+  return await recovery;
 }
 
 async function ensureGatewayUserSession(
@@ -266,14 +307,17 @@ export async function requestJson<T>(
       await ensureGatewayUserSession(port, abortState.signal);
     }
     // Gateway 重启会轮换本地凭据；同一个 SPA 进程不能永久复用旧 token。
-    // 401 只自动刷新一次，真实的鉴权失败仍然向调用方抛出。
+    // user_session_required 和 invalid local token 各只恢复一次，真实鉴权
+    // 失败仍然向调用方抛出。
     let tokenPromise = getGatewayToken(port);
+    let userSessionRecovered = false;
+    let tokenRefreshed = false;
     const requestHeaders = new Headers(normalizeHeaders(headers));
     if (!(fetchInit.body instanceof FormData)) {
       requestHeaders.set("Content-Type", "application/json");
     }
     let response: Response | null = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       const localToken = await awaitWithAbort(tokenPromise, abortState.signal);
       requestHeaders.set("X-Local-Token", localToken);
       response = await awaitWithAbort(
@@ -285,17 +329,26 @@ export async function requestJson<T>(
         }),
         abortState.signal,
       );
-      if (
-        response.status !== 401
-        || attempt === 1
-        || !(await shouldRefreshGatewayToken(response))
-      ) {
-        break;
+      if (response.status === 401) {
+        if (
+          !skipGatewayUserSession
+          && !userSessionRecovered
+          && await isGatewayUserSessionRequired(response)
+        ) {
+          userSessionRecovered = true;
+          await recoverGatewayUserSession(port);
+          continue;
+        }
+        if (!tokenRefreshed && await shouldRefreshGatewayToken(response)) {
+          tokenRefreshed = true;
+          if (gatewayTokenByPort.get(port) === tokenPromise) {
+            gatewayTokenByPort.delete(port);
+          }
+          tokenPromise = getGatewayToken(port);
+          continue;
+        }
       }
-      if (gatewayTokenByPort.get(port) === tokenPromise) {
-        gatewayTokenByPort.delete(port);
-      }
-      tokenPromise = getGatewayToken(port);
+      break;
     }
     if (response === null) {
       throw new Error(`请求未获得响应: ${path}`);

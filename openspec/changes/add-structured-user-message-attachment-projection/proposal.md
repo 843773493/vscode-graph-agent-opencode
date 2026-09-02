@@ -13,7 +13,7 @@
 - 为 Chat Completions、Responses、Anthropic Messages 等 provider 增加用户 content 的目标 provider 投影，优先复用 LiteLLM；图片预览 block 在目标能力支持时发送，不支持时保留附件路径与明确的投影结果。
 - 附件元信息向模型提供工作区内的相对路径和附件专用 manifest 标记；该 manifest 可以复用现有标记生成器的转义约定，但不复用只服务于 `system_reminder` 内部消息的 middleware。系统不新增 `attachment.xxx` 工具或为 PDF 单独引入应用级 modality，模型可组合现有文件、终端和查看能力自行处理未直接注入上下文的附件。
 - Web 历史为附件提供独立预览与资源入口；用户点击附件后，在主窗口的右侧侧边栏打开对应会话资源，而不是显示原始 `image_url` JSON。
-- 增加旧消息、混合 block、超大附件、provider 不支持灵活 block 和前端附件资源跳转的确定性验证。
+- 增加混合 block、超大附件、provider 不支持灵活 block 和前端附件资源跳转的确定性验证。
 
 ## Capabilities
 

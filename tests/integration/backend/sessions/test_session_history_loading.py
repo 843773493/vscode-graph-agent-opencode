@@ -323,6 +323,119 @@ async def test_history_loads_rollout_summary_and_tool_details(
 
 
 @pytest.mark.asyncio
+async def test_history_user_projection_keeps_canonical_preview_out_of_display_content(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+) -> None:
+    session_id = await _create_session(integration_client, "用户附件 canonical 投影")
+    timestamp = "2026-01-01T00:01:00+00:00"
+    file_id = f"boxteam-session://{session_id}/attachments/preview.png"
+    user = HumanMessage(
+        id="user-attachment-projection",
+        content=[
+            {"type": "text", "text": "请检查图片"},
+            {
+                "type": "text",
+                "text": f"<attachment path='.boxteam/sessions/{session_id}/attachments/preview.png'>",
+                "metadata": {
+                    "origin": "generated",
+                    "kind": "attachment_manifest",
+                    "schema_version": 1,
+                    "file_id": file_id,
+                    "path": f".boxteam/sessions/{session_id}/attachments/preview.png",
+                },
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/webp;base64,history-preview-only"
+                },
+                "metadata": {
+                    "origin": "generated",
+                    "kind": "attachment_preview",
+                    "schema_version": 1,
+                    "file_id": file_id,
+                },
+            },
+        ],
+        response_metadata={
+            "message_id": "user-attachment-projection",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "message_metadata": {
+                "turn_id": "job-attachment-projection",
+                "job_id": "job-attachment-projection",
+            },
+            "attachments": [
+                {
+                    "file_id": file_id,
+                    "name": "preview.png",
+                    "content_type": "image/png",
+                    "data_url": "data:image/png;base64,metadata-must-not-display",
+                }
+            ],
+        },
+    )
+    final = AIMessage(
+        id="assistant-attachment-projection",
+        content="图片已收到",
+        response_metadata={
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "phase": "final_answer",
+        },
+    )
+    sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+    saver = RolloutCheckpointSaver(sessions_dir)
+    saver.put(
+        build_checkpoint_config(session_id),
+        _checkpoint(
+            "checkpoint-attachment-projection",
+            [user, final],
+            channel_version=1,
+        ),
+        {"source": "attachment-projection-test"},
+        {"messages": "1"},
+    )
+    saver.finalize_turn(
+        session_id=session_id,
+        turn_id="job-attachment-projection",
+        final_message_id=final.id,
+    )
+
+    page = await _load_history(
+        integration_client,
+        session_id,
+        {"direction": "tail", "turns": 1},
+    )
+    user_payload = page["items"][0]["user_messages"][0]
+    serialized = json.dumps(user_payload, ensure_ascii=False)
+    assert user_payload["content"] == "请检查图片"
+    assert user_payload["attachments"] == [
+        {
+            "file_id": file_id,
+            "name": "preview.png",
+            "content_type": "image/png",
+        }
+    ]
+    assert "attachments" not in user_payload["metadata"]
+    assert "image_url" not in serialized
+    assert "data:image" not in serialized
+    assert "history-preview-only" not in serialized
+
+    restored = RolloutStorage(sessions_dir).materialize_messages(
+        session_id,
+        "",
+        2,
+    )
+    restored_user = restored[0]
+    assert isinstance(restored_user, HumanMessage)
+    assert restored_user.content[2]["image_url"]["url"].endswith(
+        "history-preview-only"
+    )
+
+
+@pytest.mark.asyncio
 async def test_history_tool_selector_only_materializes_requested_tool(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,

@@ -114,6 +114,28 @@ def test_gateway_workspace_ids_use_32_hex_characters():
     assert local_id != remote_id
 
 
+def test_external_local_workspace_resolves_backend_without_gateway_runtime(
+    tmp_path: Path,
+) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="external",
+            name="External",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:30100",
+            connection_kind="local",
+            managed=False,
+        )
+    )
+
+    assert registry.resolve_service_url("external", "workspace_api") == (
+        "http://127.0.0.1:30100"
+    )
+    with pytest.raises(LookupError, match="工作区运行时尚未连接"):
+        registry.resolve_service_url("external", "terminal_manager")
+
+
 def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
     tmp_path: Path,
 ) -> None:

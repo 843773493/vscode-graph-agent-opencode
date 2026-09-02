@@ -36,7 +36,7 @@ class PendingRequestStore:
 
     def _path(self, session_id: str) -> Path:
         return (
-            self._path_resolver.resolve_session_node(session_id)
+            self._path_resolver.resolve_session_node_for_runtime(session_id)
             / "pending_requests.json"
         )
 

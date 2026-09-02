@@ -20,7 +20,11 @@ class LLMRequestLogService:
         self._path_resolver = path_resolver or SessionPathResolver(sessions_dir)
 
     def list_session_logs(self, session_id: str) -> list[LLMRequestLogRecordDTO]:
-        session_dir = self._path_resolver.resolve_session_node(session_id) / "logs" / "llm_requests"
+        session_dir = (
+            self._path_resolver.resolve_session_node_for_runtime(session_id)
+            / "logs"
+            / "llm_requests"
+        )
         if not session_dir.exists():
             return []
         if not session_dir.is_dir():
@@ -39,7 +43,7 @@ class LLMRequestLogService:
         with log_file.open("r", encoding="utf-8") as handle:
             raw = json.load(handle)
         if not isinstance(raw, dict):
-            raise ValueError(f"LLM 请求日志不是 JSON object: {log_file}")
+            raise TypeError(f"LLM 请求日志不是 JSON object: {log_file}")
 
         timestamp = raw.get("timestamp")
         if not isinstance(timestamp, int):
@@ -51,7 +55,7 @@ class LLMRequestLogService:
         if upstream is None:
             upstream = {"attempts": []}
         if not isinstance(upstream, dict):
-            raise ValueError(f"LLM 请求日志 upstream 必须是 object: {log_file}")
+            raise TypeError(f"LLM 请求日志 upstream 必须是 object: {log_file}")
         raw_session_id = raw.get("session_id")
         raw_job_id = raw.get("job_id")
 
@@ -74,7 +78,7 @@ class LLMRequestLogService:
     ) -> dict[str, Any]:
         value = raw.get(field_name)
         if not isinstance(value, dict):
-            raise ValueError(f"LLM 请求日志缺少 {field_name} object: {log_file}")
+            raise TypeError(f"LLM 请求日志缺少 {field_name} object: {log_file}")
         return value
 
     def _log_sort_key(self, log_file: Path) -> tuple[int, str]:
