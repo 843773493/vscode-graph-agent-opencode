@@ -1,10 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayDiagnostics } from "../gatewayApi";
 import type { GatewayDiagnosticLog, GatewayDiagnostics } from "../types/backend";
-import {
-  diagnosticLogStatusLabel,
-  diagnosticLogUnavailableHint,
-} from "./gatewayLogPresentation";
+import { diagnosticLogUnavailableHint } from "./gatewayLogPresentation";
 
 interface GatewayLogPanelProps {
   apiPort: number;
@@ -14,12 +11,6 @@ interface GatewayLogPanelProps {
   onOpenTerminal?: () => void;
   onOpenPorts?: () => void;
   onOpenAutomation?: () => void;
-}
-
-function formatTime(value: string | null): string {
-  if (!value) return "暂无时间";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function serviceLabel(log: GatewayDiagnosticLog): string {
@@ -32,12 +23,6 @@ function serviceLabel(log: GatewayDiagnosticLog): string {
   return labels[log.service] ?? log.service.replaceAll("_", " ");
 }
 
-function serviceIcon(log: GatewayDiagnosticLog): string {
-  if (log.service.includes("terminal")) return "codicon-terminal";
-  if (log.service.includes("browser")) return "codicon-globe";
-  return "codicon-server-process";
-}
-
 function getWorkspaceLogs(
   diagnostics: GatewayDiagnostics | null,
   fallbackWorkspaceId: string | null,
@@ -47,6 +32,29 @@ function getWorkspaceLogs(
   return diagnostics.logs.filter(
     (log) => log.source === "workspace" && log.workspace_id === selectedWorkspaceId,
   );
+}
+
+function filterLogTail(tail: string, filterText: string): string {
+  const filters = filterText
+    .split(",")
+    .map((filter) => filter.trim().toLocaleLowerCase())
+    .filter(Boolean);
+  if (filters.length === 0) return tail;
+
+  const includeFilters = filters.filter((filter) => !filter.startsWith("!"));
+  const excludeFilters = filters
+    .filter((filter) => filter.startsWith("!"))
+    .map((filter) => filter.slice(1).trim())
+    .filter(Boolean);
+
+  return tail
+    .split("\n")
+    .filter((line) => {
+      const normalizedLine = line.toLocaleLowerCase();
+      if (excludeFilters.some((filter) => normalizedLine.includes(filter))) return false;
+      return includeFilters.length === 0 || includeFilters.some((filter) => normalizedLine.includes(filter));
+    })
+    .join("\n");
 }
 
 export default function GatewayLogPanel({
@@ -62,6 +70,11 @@ export default function GatewayLogPanel({
   const [diagnostics, setDiagnostics] = useState<GatewayDiagnostics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filterText, setFilterText] = useState("");
+  const inFlightRequestRef = useRef<{
+    key: string;
+    promise: Promise<void>;
+  } | null>(null);
 
   const workspaceLogs = useMemo(
     () => getWorkspaceLogs(diagnostics, workspaceId).filter((log) => log.service !== "workspace_api"),
@@ -80,32 +93,52 @@ export default function GatewayLogPanel({
         setError("当前会话没有绑定工作区");
         return;
       }
+      const requestKey = `${apiPort}:${workspaceId}:${logId ?? ""}`;
+      const inFlight = inFlightRequestRef.current;
+      if (inFlight?.key === requestKey) {
+        await inFlight.promise;
+        return;
+      }
       if (!silent) setLoading(true);
       setError(null);
-      try {
-        const next = await getGatewayDiagnostics(apiPort, {
-          workspaceId,
-          logId,
-          tailLines: 300,
-        });
-        const nextWorkspaceLogs = getWorkspaceLogs(next, workspaceId);
-        setDiagnostics(next);
-        setSelectedLogId(
-          nextWorkspaceLogs.some((log) => log.log_id === next.selected_log_id)
-            ? next.selected_log_id
-            : nextWorkspaceLogs[0]?.log_id ?? null,
-        );
-      } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
-        if (!silent) {
-          setDiagnostics(null);
-          setSelectedLogId(null);
+      const request = (async () => {
+        try {
+          const next = await getGatewayDiagnostics(apiPort, {
+            workspaceId,
+            logId,
+            tailLines: 300,
+          });
+          const nextWorkspaceLogs = getWorkspaceLogs(next, workspaceId).filter(
+            (log) => log.service !== "workspace_api",
+          );
+          setDiagnostics(next);
+          setSelectedLogId(
+            nextWorkspaceLogs.some((log) => log.log_id === next.selected_log_id)
+              ? next.selected_log_id
+              : nextWorkspaceLogs[0]?.log_id ?? null,
+          );
+        } catch (loadError) {
+          setError(loadError instanceof Error ? loadError.message : String(loadError));
+          if (!silent) {
+            setDiagnostics(null);
+            setSelectedLogId(null);
+          }
+        } finally {
+          if (!silent) setLoading(false);
         }
-      } finally {
-        if (!silent) setLoading(false);
+      })();
+      inFlightRequestRef.current = { key: requestKey, promise: request };
+      await request;
+      if (inFlightRequestRef.current?.promise === request) {
+        inFlightRequestRef.current = null;
       }
     },
     [apiPort, workspaceId],
+  );
+
+  const filteredLogTail = useMemo(
+    () => (selectedLog?.tail ? filterLogTail(selectedLog.tail, filterText) : ""),
+    [filterText, selectedLog],
   );
 
   useEffect(() => {
@@ -118,15 +151,6 @@ export default function GatewayLogPanel({
     }, 3000);
     return () => window.clearInterval(intervalId);
   }, [loadDiagnostics, selectedLogId]);
-
-  const copySelectedLog = async () => {
-    if (!selectedLog?.tail) return;
-    try {
-      await navigator.clipboard.writeText(selectedLog.tail);
-    } catch (copyError) {
-      setError(`复制失败：${copyError instanceof Error ? copyError.message : String(copyError)}`);
-    }
-  };
 
   return (
     <section
@@ -177,6 +201,34 @@ export default function GatewayLogPanel({
             </button>
           ) : null}
         </div>
+        <div className="gateway-log-panel-toolbar">
+          <label className="gateway-log-panel-filter">
+            <span className="visually-hidden">筛选当前输出</span>
+            <input
+              type="search"
+              value={filterText}
+              placeholder="筛选器（例如 text、!excludeText）"
+              aria-label="筛选当前输出"
+              onChange={(event) => setFilterText(event.target.value)}
+            />
+          </label>
+          <label className="gateway-log-panel-channel">
+            <span className="visually-hidden">选择输出通道</span>
+            <select
+              value={selectedLog?.log_id ?? ""}
+              aria-label="选择输出通道"
+              disabled={workspaceLogs.length === 0}
+              onChange={(event) => void loadDiagnostics(event.target.value)}
+            >
+              {workspaceLogs.length === 0 ? <option value="">暂无输出通道</option> : null}
+              {workspaceLogs.map((log) => (
+                <option key={log.log_id} value={log.log_id}>
+                  {serviceLabel(log)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <div className="gateway-log-panel-actions">
           <button
             type="button"
@@ -208,55 +260,9 @@ export default function GatewayLogPanel({
       ) : null}
 
       <div className="gateway-log-panel-content">
-        <aside className="gateway-log-panel-list" aria-label="当前工作区日志入口">
-          <div className="gateway-log-panel-list-heading">
-            <strong>输出通道</strong>
-            <span>{workspaceLogs.length}</span>
-          </div>
-          <div className="gateway-log-panel-list-scroll">
-            {workspaceLogs.map((log) => (
-              <button
-                type="button"
-                key={log.log_id}
-                className={log.log_id === selectedLog?.log_id ? "active" : ""}
-                title={`打开日志：${serviceLabel(log)}`}
-                aria-label={`打开日志：${serviceLabel(log)}`}
-                onClick={() => void loadDiagnostics(log.log_id)}
-              >
-                <span className={`codicon ${serviceIcon(log)}`} aria-hidden="true" />
-                <span className="gateway-log-panel-list-copy">
-                  <strong>{serviceLabel(log)}</strong>
-                  <small>{log.label}</small>
-                </span>
-                <span className={`gateway-log-panel-log-status ${log.status}`}>{diagnosticLogStatusLabel(log)}</span>
-              </button>
-            ))}
-            {!diagnostics && !error ? <span className="gateway-log-panel-empty">正在读取输出通道…</span> : null}
-            {diagnostics && workspaceLogs.length === 0 ? (
-              <span className="gateway-log-panel-empty">当前工作区暂无输出日志</span>
-            ) : null}
-          </div>
-        </aside>
-
         <article className="gateway-log-panel-viewer" aria-label="当前工作区日志内容">
           {selectedLog ? (
             <>
-              <header>
-                <div>
-                  <strong>{serviceLabel(selectedLog)}</strong>
-                  <span>{selectedLog.updated_at ? `更新于 ${formatTime(selectedLog.updated_at)}` : "暂无更新时间"}</span>
-                </div>
-                <button
-                  type="button"
-                  className="gateway-log-panel-copy"
-                  title="复制当前输出"
-                  aria-label="复制当前输出"
-                  disabled={!selectedLog.tail}
-                  onClick={() => void copySelectedLog()}
-                >
-                  <span className="codicon codicon-copy" aria-hidden="true" />
-                </button>
-              </header>
               {selectedLog.status === "unavailable" ? (
                 <div className="gateway-log-panel-viewer-empty">
                   <strong>诊断日志暂不可用</strong>
@@ -268,7 +274,7 @@ export default function GatewayLogPanel({
                   <span>服务尚未输出内容，稍后会自动刷新。</span>
                 </div>
               ) : (
-                <pre>{selectedLog.tail || "暂无日志内容"}</pre>
+                <pre>{filteredLogTail || (filterText.trim() ? "没有匹配的输出" : "暂无日志内容")}</pre>
               )}
             </>
           ) : (

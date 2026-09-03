@@ -418,19 +418,8 @@ try {
   await compactionTurn
     .locator('button.chat-thinking-toggle[aria-expanded="false"]')
     .click();
-  // 可见 Turn 可能已被自动详情预加载；点击后允许“新请求完成”或“已有详情已显示”
-  // 先发生，但最终必须确认两条压缩状态都已出现在界面。
-  const compactionDetailsReady = await Promise.race([
-    compactionDetailsResponsePromise.then(() => "request").catch(() => null),
-    waitUntil(
-      async () => {
-        const text = await compactionTurn.innerText();
-        return text.includes("上下文压缩已完成") && text.includes("上下文压缩失败");
-      },
-      "重复上下文压缩 Activity",
-    ).then(() => "content").catch(() => null),
-  ]);
-  if (!compactionDetailsReady) throw new Error("压缩 Turn 未加载详情");
+  // 详情只在用户展开后请求；最终必须确认两条压缩状态都已出现在界面。
+  await compactionDetailsResponsePromise;
   await waitUntil(
     async () => {
       const text = await compactionTurn.innerText();

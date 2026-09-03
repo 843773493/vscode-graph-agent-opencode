@@ -451,6 +451,37 @@ def test_user_projection_reports_unknown_block_without_json_dumping_it():
     ]
 
 
+def test_user_projection_does_not_emit_anthropic_native_image_source_block():
+    projected = project_user_message_content(
+        [
+            {"type": "text", "text": "看图"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/webp",
+                    "data": "preview",
+                },
+            },
+        ],
+        target_format="chat_completions",
+        image_input=True,
+    )
+
+    assert projected["content"] == [{"type": "text", "text": "看图"}]
+    assert projected["diagnostics"] == [
+        {
+            "block_index": 1,
+            "block_type": "image",
+            "status": "projection_failed",
+            "detail": (
+                "应用层不接受 provider 原生 image/source block；"
+                "canonical 用户图片必须使用 image_url 形状"
+            ),
+        }
+    ]
+
+
 def test_streaming_invoke_canonicalizes_langchain_cache_merge(monkeypatch):
     from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 

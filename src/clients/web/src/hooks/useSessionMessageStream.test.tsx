@@ -67,8 +67,6 @@ describe("useSessionMessageStream 首次连接", () => {
     const port = 49_410;
     installWindow(port);
     let streamRequests = 0;
-    let streamSignal: AbortSignal | null = null;
-    let signalAbortedWhenTerminalWasNotified: boolean | null = null;
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
         const path = new URL(String(args[0])).pathname;
@@ -76,7 +74,6 @@ describe("useSessionMessageStream 首次连接", () => {
           return Response.json({ data: { token: "stream-retry-token" } });
         }
         streamRequests += 1;
-        streamSignal = args[1]?.signal ?? null;
         if (streamRequests === 1) {
           return new Response("not ready", { status: 404, statusText: "Not Found" });
         }
@@ -96,9 +93,6 @@ describe("useSessionMessageStream 首次连接", () => {
         turnId: "turn_stream_retry",
         workspaceId: "workspace_stream_retry",
         sessionCacheKey: "workspace_stream_retry::ses_stream_retry",
-        onTerminal: () => {
-          signalAbortedWhenTerminalWasNotified = streamSignal?.aborted ?? null;
-        },
         setState,
       });
       return null;
@@ -111,15 +105,14 @@ describe("useSessionMessageStream 首次连接", () => {
     });
 
     expect(streamRequests).toBe(2);
-    const stream = [...state.messageStreamsByTurnStream.values()][0];
+    const stream = [...(state.messageStreamsByTurnStream ?? new Map()).values()][0];
     expect(stream?.streamStatus).toBe("completed");
     expect(stream?.connectionStatus).toBe("terminal");
     expect(stream?.protocolError).toBeNull();
-    expect(signalAbortedWhenTerminalWasNotified).toBe(false);
     act(() => renderer!.unmount());
   });
 
-  test("终端回调更新不会主动 abort 已建立的消息流", async () => {
+  test("组件更新不会重新建立已连接的消息流", async () => {
     const port = 49_411;
     installWindow(port);
     let streamRequests = 0;
@@ -139,20 +132,16 @@ describe("useSessionMessageStream 首次连接", () => {
     );
 
     let state = minimalState();
-    let terminalCallbackVersion = 0;
     const setState: SetAppState = (update) => {
       state = typeof update === "function" ? update(state) : update;
     };
-    function Harness({ version }: { version: number }): React.ReactNode {
+    function Harness(): React.ReactNode {
       useSessionMessageStream({
         apiPort: port,
         sessionId: "ses_stream_stable",
         turnId: "turn_stream_stable",
         workspaceId: "workspace_stream_stable",
         sessionCacheKey: "workspace_stream_stable::ses_stream_stable",
-        onTerminal: () => {
-          terminalCallbackVersion = version;
-        },
         setState,
       });
       return null;
@@ -160,13 +149,13 @@ describe("useSessionMessageStream 首次连接", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<Harness version={1} />);
+      renderer = create(<Harness />);
       await new Promise((resolve) => setTimeout(resolve, 180));
     });
     expect(streamRequests).toBe(1);
 
     await act(async () => {
-      renderer!.update(<Harness version={2} />);
+      renderer!.update(<Harness />);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(streamRequests).toBe(1);
@@ -175,9 +164,8 @@ describe("useSessionMessageStream 首次连接", () => {
       releaseStream?.(streamResponse("ses_stream_stable", "turn_stream_stable"));
       await new Promise((resolve) => setTimeout(resolve, 80));
     });
-    expect([...state.messageStreamsByTurnStream.values()][0]?.streamStatus)
+    expect([...(state.messageStreamsByTurnStream ?? new Map()).values()][0]?.streamStatus)
       .toBe("completed");
-    expect(terminalCallbackVersion).toBe(2);
     act(() => renderer!.unmount());
   });
 });

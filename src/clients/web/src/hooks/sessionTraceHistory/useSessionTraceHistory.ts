@@ -59,6 +59,8 @@ export function useSessionTraceHistory({
   const sessionId = currentSession?.session_id ?? null;
   const generationRef = React.useRef(0);
   const abortRef = React.useRef<AbortController | null>(null);
+  const historyRef = React.useRef(history);
+  historyRef.current = history;
 
   const refresh = React.useCallback(async (): Promise<void> => {
     if (!sessionId || !scopeKey) return;
@@ -119,6 +121,10 @@ export function useSessionTraceHistory({
   React.useEffect(() => {
     if (!active || !sessionId || !scopeKey) {
       abortRef.current?.abort();
+      return;
+    }
+    const cachedHistory = historyRef.current;
+    if (cachedHistory?.scopeKey === scopeKey && !cachedHistory.loading && !cachedHistory.error) {
       return;
     }
     void refresh();

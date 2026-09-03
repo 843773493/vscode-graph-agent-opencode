@@ -14,6 +14,7 @@
 .gateway-log-panel-header,
 .gateway-log-panel-content,
 .gateway-log-panel-actions,
+.gateway-log-panel-toolbar,
 .gateway-log-panel-tabs {
   display: flex;
   min-width: 0;
@@ -30,6 +31,67 @@
 .gateway-log-panel-tabs {
   align-items: stretch;
   overflow-x: auto;
+}
+
+.gateway-log-panel-toolbar {
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 5px;
+}
+
+.gateway-log-panel-filter,
+.gateway-log-panel-channel {
+  display: flex;
+  min-width: 0;
+}
+
+.gateway-log-panel-filter {
+  flex: 0 1 200px;
+}
+
+.gateway-log-panel-channel {
+  flex: 0 1 170px;
+}
+
+.gateway-log-panel-filter input,
+.gateway-log-panel-channel select {
+  box-sizing: border-box;
+  width: 100%;
+  height: 24px;
+  min-width: 0;
+  padding: 0 7px;
+  border: 1px solid var(--bt-input-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-input-background);
+  color: var(--bt-input-foreground);
+  font: inherit;
+  font-size: 10px;
+}
+
+.gateway-log-panel-filter input::placeholder {
+  color: var(--bt-text-muted);
+  opacity: 0.85;
+}
+
+.gateway-log-panel-filter input:focus-visible,
+.gateway-log-panel-channel select:focus-visible {
+  border-color: var(--bt-focus-border);
+  outline: 1px solid var(--bt-focus-border);
+  outline-offset: -1px;
+}
+
+.gateway-log-panel-channel select {
+  background: var(--bt-dropdown-background);
+  color: var(--bt-dropdown-foreground);
+  cursor: pointer;
+}
+
+.gateway-log-panel-channel select:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .gateway-log-panel-tab {
@@ -63,8 +125,7 @@
   padding: 0 5px;
 }
 
-.gateway-log-panel-icon-button,
-.gateway-log-panel-copy {
+.gateway-log-panel-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -86,8 +147,7 @@
   color: var(--bt-text-primary);
 }
 
-.gateway-log-panel-icon-button:disabled,
-.gateway-log-panel-copy:disabled {
+.gateway-log-panel-icon-button:disabled {
   cursor: default;
   opacity: 0.45;
 }
@@ -110,117 +170,6 @@
   overflow: hidden;
 }
 
-.gateway-log-panel-list {
-  display: flex;
-  flex: 0 0 min(220px, 22vw);
-  flex-direction: column;
-  min-width: 160px;
-  min-height: 0;
-  border-right: 1px solid var(--bt-panel-border);
-  background: color-mix(in srgb, var(--bt-surface-background) 58%, transparent);
-}
-
-.gateway-log-panel-list-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 27px;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--bt-panel-border);
-  color: var(--bt-text-muted);
-  font-size: 10px;
-}
-
-.gateway-log-panel-list-heading span {
-  min-width: 18px;
-  padding: 2px 5px;
-  border-radius: 9px;
-  background: var(--bt-badge-background);
-  text-align: center;
-}
-
-.gateway-log-panel-list-scroll {
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-}
-
-.gateway-log-panel-list-scroll button {
-  display: grid;
-  grid-template-columns: 15px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  min-height: 35px;
-  padding: 4px 8px;
-  border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--bt-panel-border) 70%, transparent);
-  background: transparent;
-  color: var(--bt-text-muted);
-  text-align: left;
-  cursor: pointer;
-}
-
-.gateway-log-panel-list-scroll button[title]:focus-visible {
-  outline: 1px solid var(--bt-focus-border);
-  outline-offset: -1px;
-}
-
-.gateway-log-panel-list-scroll button:hover,
-.gateway-log-panel-list-scroll button.active {
-  background: var(--bt-hover-background);
-  color: var(--bt-text-primary);
-}
-
-.gateway-log-panel-list-scroll button.active {
-  box-shadow: inset 2px 0 0 var(--bt-accent);
-}
-
-.gateway-log-panel-list-copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
-
-.gateway-log-panel-list-copy strong,
-.gateway-log-panel-list-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.gateway-log-panel-list-copy strong {
-  color: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.35;
-  white-space: normal;
-}
-
-.gateway-log-panel-list-copy small {
-  color: var(--bt-text-muted);
-  font-size: 9px;
-}
-
-.gateway-log-panel-log-status {
-  font-size: 9px;
-  white-space: nowrap;
-}
-
-.gateway-log-panel-log-status.available {
-  color: var(--bt-status-success);
-}
-
-.gateway-log-panel-log-status.empty {
-  color: var(--bt-status-warning);
-}
-
-.gateway-log-panel-log-status.unavailable {
-  color: var(--bt-status-danger);
-}
-
-.gateway-log-panel-empty,
 .gateway-log-panel-viewer-empty {
   display: flex;
   flex-direction: column;
@@ -241,55 +190,6 @@
   min-width: 0;
   min-height: 0;
   background: var(--bt-bottom-panel-viewer-background);
-}
-
-.gateway-log-panel-viewer > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 29px;
-  padding: 3px 8px;
-  border-bottom: 1px solid var(--bt-panel-border);
-}
-
-.gateway-log-panel-viewer > header > div {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
-
-.gateway-log-panel-viewer > header strong,
-.gateway-log-panel-viewer > header span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.gateway-log-panel-viewer > header strong {
-  font-size: 11px;
-}
-
-.gateway-log-panel-viewer > header span {
-  color: var(--bt-text-muted);
-  font-size: 9px;
-}
-
-.gateway-log-panel-copy {
-  width: 21px;
-  height: 21px;
-  gap: 0;
-  padding: 0;
-  border-color: var(--bt-input-border);
-  border-radius: var(--bt-radius-small);
-  font: inherit;
-  font-size: 10px;
-}
-
-.gateway-log-panel-copy:hover:not(:disabled) {
-  background: var(--bt-hover-background);
-  color: var(--bt-text-primary);
 }
 
 .gateway-log-panel-viewer pre {
@@ -794,17 +694,17 @@
     flex-basis: min(360px, 44vh);
   }
 
-  .gateway-log-panel-list {
-    flex-basis: 45%;
-    min-width: 210px;
+  .gateway-log-panel-toolbar {
+    gap: 2px;
+    padding: 0 2px;
   }
 
-  .gateway-log-panel-list-scroll button {
-    grid-template-columns: 17px minmax(0, 1fr);
+  .gateway-log-panel-filter {
+    flex-basis: min(180px, 27vw);
   }
 
-  .gateway-log-panel-list-scroll button > .gateway-log-panel-log-status {
-    display: none;
+  .gateway-log-panel-channel {
+    flex-basis: min(150px, 23vw);
   }
 
   .terminal-panel-context {

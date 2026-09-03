@@ -72,17 +72,22 @@
 
 ### Requirement: 预览 rich block 可以按目标能力选择性发送
 
-系统 SHALL 在目标模型声明支持图像输入且存在有效预览时，允许将预览作为模型请求中的 `image_url` 或目标 provider 等价 block 发送；原始附件和相对路径文本仍是 canonical 用户消息的一部分。目标 provider 不支持该 rich block 时，系统 SHALL 保留路径文本并产生可诊断的未发送/失败投影结果，不得将可选 rich block 的失败伪装为成功解析。
+系统 SHALL 在目标模型声明支持图像输入且存在有效预览时，通过 LiteLLM 的模型请求入口发送预览；原始附件和相对路径文本仍是 canonical 用户消息的一部分。Chat Completions 与 Anthropic Messages 传给 LiteLLM 的图片 block SHALL 使用 `image_url` 形状，Responses 传给 LiteLLM 的图片 block SHALL 使用 `input_image` 及字符串 `image_url` 形状。应用层不得构造或发送 Anthropic 原生 `image/source` block，最终 provider wire 转换由 LiteLLM 完成。目标 provider 不支持该 rich block 时，系统 SHALL 保留路径文本并产生可诊断的未发送/失败投影结果，不得将可选 rich block 的失败伪装为成功解析或绕过 LiteLLM 直连 provider SDK。
 
-#### Scenario: 支持图像输入的目标 provider
+#### Scenario: Chat Completions 或 Anthropic 支持图像输入
 
-- **WHEN** 目标 provider 支持图像输入，且附件存在生成成功的预览
-- **THEN** 请求投影可以包含预览 `image_url` block，同时保留用户文本和附件路径元信息
+- **WHEN** 目标协议为 Chat Completions 或 Anthropic Messages，且附件存在生成成功的预览
+- **THEN** 请求通过 LiteLLM 发送并包含 `{"type":"image_url","image_url":{"url":"data:image/...;base64,..."}}` block，同时保留用户文本和附件路径元信息；应用层不生成 Anthropic 原生 `image/source` block
+
+#### Scenario: Responses 支持图像输入
+
+- **WHEN** 目标协议为 Responses，且附件存在生成成功的预览
+- **THEN** 请求通过 LiteLLM Responses 入口发送，并包含 `{"type":"input_image","image_url":"data:image/...;base64,..."}` block，同时保留用户文本和附件路径元信息
 
 #### Scenario: 不支持图像输入的目标 provider
 
 - **WHEN** 目标 provider 不接受该图片 rich block
-- **THEN** 请求仍包含可见文本和相对附件路径，rich block 被明确标记为未发送或投影失败，原始用户消息和附件文件不被修改
+- **THEN** 请求仍包含可见文本和相对附件路径，rich block 被明确标记为未发送或投影失败，原始用户消息和附件文件不被修改，系统不得绕过 LiteLLM 直连 provider SDK
 
 ### Requirement: 模型实际使用的预览 content 必须进入 checkpoint 和历史
 

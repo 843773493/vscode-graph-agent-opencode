@@ -1,6 +1,6 @@
 import React from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
-import { conversationTurnKey } from "../../state/session/turnDetailHydration";
+import { conversationTurnKey } from "../../state/session/turnIdentity";
 import {
   advanceTurnVirtualIndex,
   type TurnVirtualIndexState,

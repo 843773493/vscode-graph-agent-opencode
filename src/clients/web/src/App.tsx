@@ -39,7 +39,6 @@ import {
   DEFAULT_BACKEND_PORT,
   DEFAULT_SESSION_TITLE,
   createSessionCatalogFolder,
-  getSessionChangesets,
 } from "./api";
 import {
   FRONTEND_EVENT_QUEUE_LIMIT,
@@ -66,6 +65,7 @@ import {
   type LayoutResizeTarget,
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
+import { shouldLoadDefaultViewChangesHint } from "./state/defaultViewChanges";
 import {
   resolveWorkspaceBottomPanelState,
   toWorkspaceBottomPanelSettings,
@@ -162,6 +162,7 @@ export default function AppShell() {
     renameSession,
     setSessionParent,
     deleteSession,
+    loadSessionChangesets,
     refreshSessionChanges,
     refreshSessionResources,
     reviewSessionChangeFile,
@@ -269,7 +270,6 @@ export default function AppShell() {
     attachment: AttachmentRef;
   } | null>(null);
   const lastOpenedChangesPreviewKeyRef = useRef<string | null>(null);
-  const defaultViewChangesRequestScopeRef = useRef<string | null>(null);
   const cleanupLayoutResizeRef = useRef<(() => void) | null>(null);
   const activeSession = state.currentSession;
   const activeSessionWorkspaceId =
@@ -430,7 +430,10 @@ export default function AppShell() {
     state.eventQueuesBySession,
   ]);
   const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
-  const generatorResources = useSessionGeneratorResources(resolvedApiPort);
+  const generatorResources = useSessionGeneratorResources(
+    resolvedApiPort,
+    panelVisible && bottomPanelState.tab === "automation",
+  );
   const sortedSessions = useMemo(
     () => [...state.sessions].sort(
       (a, b) =>
@@ -654,7 +657,8 @@ export default function AppShell() {
   }, [persistLayoutSettings, state.contentView, switchContentView]);
 
   useEffect(() => {
-    if (!resourcePanelActive || !activeSession) {
+    const resourceSessionId = activeSession?.session_id ?? null;
+    if (!resourcePanelActive || !resourceSessionId) {
       return;
     }
 
@@ -670,7 +674,7 @@ export default function AppShell() {
       }
       pollInFlight = true;
       try {
-        await refreshSessionResources(activeSession.session_id, { silent });
+        await refreshSessionResources(resourceSessionId, { silent });
       } finally {
         pollInFlight = false;
       }
@@ -684,8 +688,8 @@ export default function AppShell() {
       window.clearInterval(timerId);
     };
   }, [
-    activeSession,
-    activeSessionCacheKey,
+    activeSession?.session_id,
+    activeSessionWorkspaceId,
     refreshSessionResources,
     resourcePanelActive,
   ]);
@@ -700,16 +704,17 @@ export default function AppShell() {
   };
 
   useEffect(() => {
-    if (!activeSession || state.contentView !== "default") {
+    const activeSessionId = activeSession?.session_id ?? null;
+    if (!activeSessionId || state.contentView !== "default") {
       setDefaultViewChangesHint(null);
       setDefaultViewChangesLoading(false);
       return;
     }
 
     if (auxiliaryVisible && auxiliaryTab === "changes") {
-      if (state.activeChangeset?.session_id === activeSession.session_id) {
+      if (state.activeChangeset?.session_id === activeSessionId) {
         setDefaultViewChangesHint({
-          sessionId: activeSession.session_id,
+          sessionId: activeSessionId,
           summary: state.activeChangeset.summary,
         });
         setDefaultViewChangesLoading(false);
@@ -719,22 +724,21 @@ export default function AppShell() {
       return;
     }
 
-    let cancelled = false;
-    const requestScope =
-      (activeSessionWorkspaceId ?? "") + ":" + activeSession.session_id;
-    if (defaultViewChangesRequestScopeRef.current === requestScope) {
+    if (!shouldLoadDefaultViewChangesHint({
+      contentView: state.contentView,
+      sessionId: activeSessionId,
+      timeline: activeTurnTimeline,
+      conversationCount: conversations.length,
+    })) {
+      setDefaultViewChangesHint(null);
+      setDefaultViewChangesLoading(false);
       return;
     }
-    defaultViewChangesRequestScopeRef.current = requestScope;
+
+    let cancelled = false;
     setDefaultViewChangesLoading(true);
-    let requestStarted = false;
     const timerId = window.setTimeout(() => {
-      requestStarted = true;
-      void getSessionChangesets(
-        resolvedApiPort,
-        activeSession.session_id,
-        activeSessionWorkspaceId,
-      )
+      void loadSessionChangesets(activeSessionId)
         .then((list) => {
           if (cancelled) {
             return;
@@ -744,7 +748,7 @@ export default function AppShell() {
             list.items[0]?.summary ??
             { files: 0, additions: 0, deletions: 0 };
           setDefaultViewChangesHint({
-            sessionId: activeSession.session_id,
+            sessionId: activeSessionId,
             summary,
           });
         })
@@ -752,7 +756,6 @@ export default function AppShell() {
           if (cancelled) {
             return;
           }
-          defaultViewChangesRequestScopeRef.current = null;
           const message = error instanceof Error ? error.message : String(error);
           setDefaultViewChangesHint(null);
           setStatus(`会话文件变更提示加载失败: ${message}`);
@@ -767,16 +770,15 @@ export default function AppShell() {
     return () => {
       cancelled = true;
       window.clearTimeout(timerId);
-      if (!requestStarted && defaultViewChangesRequestScopeRef.current === requestScope) {
-        defaultViewChangesRequestScopeRef.current = null;
-      }
     };
   }, [
-    activeSession,
+    activeSession?.session_id,
     activeSessionWorkspaceId,
+    activeTurnTimeline,
+    conversations.length,
+    loadSessionChangesets,
     auxiliaryTab,
     auxiliaryVisible,
-    resolvedApiPort,
     setStatus,
     state.activeChangeset,
     state.contentView,
@@ -839,14 +841,16 @@ export default function AppShell() {
       return;
     }
     const timerId = window.setTimeout(() => {
-      void refreshSessionChanges(activeSession.session_id);
+      // 只切换到变更视图；请求由 useContentViewEffects 统一发起，
+      // 避免右侧栏 effect 和内容视图 effect 同时读取同一份变更。
+      void switchContentView("changes");
     }, 120);
     return () => window.clearTimeout(timerId);
   }, [
     activeSession,
     auxiliaryTab,
     auxiliaryVisible,
-    refreshSessionChanges,
+    switchContentView,
     state.activeChangeset,
     state.contentView,
     state.sessionChangesError,
@@ -1512,13 +1516,10 @@ export default function AppShell() {
               !activeTurnTimeline || activeTurnTimeline.phase === "bootstrapping"
             )}
             projectionState={activeTurnTimeline?.projectionState ?? "ready"}
-            timelineGeneration={activeTurnTimeline?.generation ?? 0}
-            projectionEpoch={activeTurnTimeline?.projectionEpoch ?? null}
             historyError={activeTurnTimeline?.error ?? null}
             onLoadOlderMessages={loadOlderMessages}
             onLoadNewerMessages={loadNewerMessages}
             onLoadAroundTurn={loadAroundTurn}
-            loadingDetailTurnIds={activeTurnTimeline?.loadingDetailIds ?? []}
             onLoadTurnDetails={loadTurnDetails}
             onLoadToolDetails={loadToolDetails}
             onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
@@ -1981,6 +1982,7 @@ export default function AppShell() {
                         void refreshSessionChanges(
                           activeSession.session_id,
                           state.selectedChangesetId,
+                          { refreshList: true },
                         );
                       }
                     }}

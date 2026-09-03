@@ -127,6 +127,7 @@ export function useSessionResourceExplorer({
   const currentSessionRevealRequestRef = useRef(0);
   const navigationRequestRef = useRef(0);
   const branchRequestRefs = useRef<Map<string, number>>(new Map());
+  const branchInFlightRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
   const catalogSyncKeysRef = useRef(catalogSyncKeys);
   const catalogRefreshVersionsRef = useRef(catalogRefreshVersions);
   const generationOutputSyncKeysRef = useRef<ReadonlyMap<string, string>>(new Map());
@@ -156,6 +157,11 @@ export function useSessionResourceExplorer({
     append = false,
   ) => {
     const key = branchKey(workspaceId, parentNodeId);
+    const requestKey = `${key}:${append ? "append" : "replace"}`;
+    const inFlight = branchInFlightRequestsRef.current.get(requestKey);
+    if (inFlight) {
+      return inFlight;
+    }
     const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
     branchRequestRefs.current.set(key, requestId);
     const current = branchesRef.current.get(key);
@@ -173,67 +179,80 @@ export function useSessionResourceExplorer({
       });
       return next;
     });
-    try {
-      let page: SessionCatalogPage;
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          page = await listSessionCatalogChildren(
-            apiPort,
+    const request = (async () => {
+      try {
+        let page: SessionCatalogPage;
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            page = await listSessionCatalogChildren(
+              apiPort,
+              workspaceId,
+              parentNodeId,
+              append ? current?.cursor : null,
+            );
+            break;
+          } catch (error) {
+            if (attempt >= CATALOG_RETRY_LIMIT - 1 || !isRetryableCatalogError(error)) {
+              throw error;
+            }
+            await catalogRetryDelay(attempt);
+          }
+        }
+        if (branchRequestRefs.current.get(key) !== requestId) {
+          return;
+        }
+        setBranches((previous) => {
+          const next = new Map(previous);
+          const previousItems = append ? next.get(key)?.items ?? [] : [];
+          const items = [...previousItems, ...page.items];
+          next.set(key, {
+            ...page,
+            items,
+            loading: false,
+            error: null,
+          });
+          updateParentNodeChildFlag(
+            next,
             workspaceId,
             parentNodeId,
-            append ? current?.cursor : null,
+            page.total > 0,
           );
-          break;
-        } catch (error) {
-          if (attempt >= CATALOG_RETRY_LIMIT - 1 || !isRetryableCatalogError(error)) {
-            throw error;
-          }
-          await catalogRetryDelay(attempt);
+          return next;
+        });
+      } catch (error) {
+        if (branchRequestRefs.current.get(key) !== requestId) {
+          return;
         }
-      }
-      if (branchRequestRefs.current.get(key) !== requestId) {
-        return;
-      }
-      setBranches((previous) => {
-        const next = new Map(previous);
-        const previousItems = append ? next.get(key)?.items ?? [] : [];
-        const items = [...previousItems, ...page.items];
-        next.set(key, {
-          ...page,
-          items,
-          loading: false,
-          error: null,
+        const message = error instanceof Error ? error.message : String(error);
+        setBranches((previous) => {
+          const next = new Map(previous);
+          const previousBranch = next.get(key);
+          next.set(key, {
+            revision: previousBranch?.revision ?? "",
+            parent_node_id: parentNodeId ?? null,
+            items: previousBranch?.items ?? [],
+            cursor: previousBranch?.cursor ?? null,
+            total: previousBranch?.total ?? 0,
+            consistency_warning: previousBranch?.consistency_warning ?? null,
+            loading: false,
+            error: message,
+          });
+          return next;
         });
-        updateParentNodeChildFlag(
-          next,
-          workspaceId,
-          parentNodeId,
-          page.total > 0,
-        );
-        return next;
-      });
-    } catch (error) {
-      if (branchRequestRefs.current.get(key) !== requestId) {
-        return;
+        throw error;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      setBranches((previous) => {
-        const next = new Map(previous);
-        const previousBranch = next.get(key);
-        next.set(key, {
-          revision: previousBranch?.revision ?? "",
-          parent_node_id: parentNodeId ?? null,
-          items: previousBranch?.items ?? [],
-          cursor: previousBranch?.cursor ?? null,
-          total: previousBranch?.total ?? 0,
-          consistency_warning: previousBranch?.consistency_warning ?? null,
-          loading: false,
-          error: message,
-        });
-        return next;
-      });
-      throw error;
-    }
+    })();
+    branchInFlightRequestsRef.current.set(requestKey, request);
+    void request.then(() => {
+      if (branchInFlightRequestsRef.current.get(requestKey) === request) {
+        branchInFlightRequestsRef.current.delete(requestKey);
+      }
+    }, () => {
+      if (branchInFlightRequestsRef.current.get(requestKey) === request) {
+        branchInFlightRequestsRef.current.delete(requestKey);
+      }
+    });
+    return request;
   }, [apiPort]);
 
   const refreshCatalogWorkspace = useCallback(async (workspaceId: string) => {
@@ -298,10 +317,22 @@ export function useSessionResourceExplorer({
     targetNodeId: string,
   ) => {
     const key = branchKey(workspaceId, parentNodeId);
+    const pendingRequest = [...branchInFlightRequestsRef.current.entries()]
+      .find(([requestKey]) => requestKey.startsWith(`${key}:`))?.[1];
+    if (pendingRequest) {
+      await pendingRequest;
+    }
     const loaded = branchesRef.current.get(key);
     if (loaded?.items.some((item) => item.node_id === targetNodeId)) {
       return;
     }
+    if (loaded && !loaded.cursor) {
+      throw new Error(
+        `目录分支已加载但未找到定位节点: workspace=${workspaceId}, node=${targetNodeId}`,
+      );
+    }
+    const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
+    branchRequestRefs.current.set(key, requestId);
     setBranches((previous) => {
       const next = new Map(previous);
       next.set(key, {
@@ -315,9 +346,9 @@ export function useSessionResourceExplorer({
       });
       return next;
     });
-    const items: SessionCatalogPage["items"] = [];
+    const items: SessionCatalogPage["items"] = [...(loaded?.items ?? [])];
     const visitedCursors = new Set<string>();
-    let cursor: string | null = null;
+    let cursor: string | null = loaded?.cursor ?? null;
     try {
       while (true) {
         const page = await listSessionCatalogChildren(
@@ -326,6 +357,9 @@ export function useSessionResourceExplorer({
           parentNodeId,
           cursor,
         );
+        if (branchRequestRefs.current.get(key) !== requestId) {
+          return;
+        }
         items.push(...page.items);
         const found = items.some((item) => item.node_id === targetNodeId);
         setBranches((previous) => {

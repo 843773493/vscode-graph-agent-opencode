@@ -55,44 +55,79 @@ export function useGatewayExtensionResources({
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(initialResourceKey);
   const requestSequence = useRef(0);
+  const inFlightRefreshRef = useRef<Promise<void> | null>(null);
+  const initialResourceKeyRef = useRef(initialResourceKey);
+  initialResourceKeyRef.current = initialResourceKey;
 
-  const refresh = useCallback(async (silent = false) => {
+  const refresh = useCallback(async (silent = false, force = false) => {
     if (!enabled) {
       return;
+    }
+    const inFlight = inFlightRefreshRef.current;
+    if (inFlight) {
+      await inFlight;
+      if (!force) {
+        return;
+      }
+      // 强制刷新用于控制动作完成后重新读取；先等待旧请求结束，
+      // 再检查是否已有另一个强制刷新接手，避免并发重复读取。
+      if (inFlightRefreshRef.current && inFlightRefreshRef.current !== inFlight) {
+        await inFlightRefreshRef.current;
+        return;
+      }
+      if (inFlightRefreshRef.current === inFlight) {
+        inFlightRefreshRef.current = null;
+      }
     }
     const requestId = ++requestSequence.current;
     if (!silent) {
       setLoading(true);
     }
-    try {
-      const result = await listGatewayResources(apiPort);
-      if (requestId !== requestSequence.current) {
-        return;
+    const request = (async () => {
+      try {
+        const result = await listGatewayResources(apiPort);
+        if (requestId !== requestSequence.current) {
+          return;
+        }
+        const nextEntries: GatewayExtensionResourceEntry[] = result.items.map((item) => ({
+          ...item,
+          key: resourceKey(item),
+          resource: item.resource as GatewayExtensionRuntimeResource,
+        }));
+        setEntries(nextEntries);
+        setErrors(result.errors);
+        setLoadedAt(new Date().toISOString());
+        setSelectedKey((current) => selectDefaultResource(
+          nextEntries,
+          current ?? initialResourceKeyRef.current,
+        ));
+      } catch (error) {
+        if (requestId !== requestSequence.current) {
+          return;
+        }
+        setErrors([{
+          scope_key: "gateway",
+          label: "Gateway 全局资源",
+          message: errorMessage(error),
+        }]);
+      } finally {
+        if (requestId === requestSequence.current) {
+          setLoading(false);
+        }
       }
-      const nextEntries: GatewayExtensionResourceEntry[] = result.items.map((item) => ({
-        ...item,
-        key: resourceKey(item),
-        resource: item.resource as GatewayExtensionRuntimeResource,
-      }));
-      setEntries(nextEntries);
-      setErrors(result.errors);
-      setLoadedAt(new Date().toISOString());
-      setSelectedKey((current) => selectDefaultResource(nextEntries, current ?? initialResourceKey));
-    } catch (error) {
-      if (requestId !== requestSequence.current) {
-        return;
+    })();
+    inFlightRefreshRef.current = request;
+    void request.then(() => {
+      if (inFlightRefreshRef.current === request) {
+        inFlightRefreshRef.current = null;
       }
-      setErrors([{
-        scope_key: "gateway",
-        label: "Gateway 全局资源",
-        message: errorMessage(error),
-      }]);
-    } finally {
-      if (requestId === requestSequence.current) {
-        setLoading(false);
+    }, () => {
+      if (inFlightRefreshRef.current === request) {
+        inFlightRefreshRef.current = null;
       }
-    }
-  }, [apiPort, enabled, initialResourceKey]);
+    });
+    await request;
+  }, [apiPort, enabled]);
 
   useEffect(() => {
     setSelectedKey((current) => current ?? initialResourceKey);
@@ -126,7 +161,7 @@ export function useGatewayExtensionResources({
       action,
       entry.workspace_id,
     );
-    await refresh(true);
+    await refresh(true, true);
   }, [apiPort, refresh]);
 
   return {
@@ -137,7 +172,7 @@ export function useGatewayExtensionResources({
     selectedKey,
     selectedEntry: entries.find((entry) => entry.key === selectedKey) ?? null,
     select: setSelectedKey,
-    refresh: () => refresh(false),
+    refresh: () => refresh(false, true),
     control,
   };
 }

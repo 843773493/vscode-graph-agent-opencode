@@ -14,7 +14,7 @@ See `proposal.md` and the capability deltas for the externally visible contract.
 - 建立一个可遍历的 canonical 用户 content 序列，并让 checkpoint、rollout、provider 请求和 Web 历史都从这个 source 生成各自投影。
 - 保留模型使用的图片预览 block（包括 preview data URL/base64）以支持精确 checkpoint/history roundtrip，同时禁止它进入默认用户正文展示。
 - 让附件原件、预览变体、稳定身份、相对路径和 MIME 元数据可被后端、provider adapter 和 Web 共同使用。
-- 用 LiteLLM 处理共通 provider content，在 Chat Completions、Responses、Anthropic Messages 等边界保留必要的 provider-specific mapper。
+- 让 Chat Completions、Responses、Anthropic Messages 的所有最终模型请求都经过 LiteLLM；provider-specific mapper 只负责生成对应 LiteLLM 入口可接受的输入和归一化返回结果，不负责调用 provider SDK。
 - 在 rich block 不可发送、预览生成失败或资源读取失败时留下明确诊断，并保留模型可组合现有工具使用的附件路径。
 
 **Non-Goals:**
@@ -23,6 +23,7 @@ See `proposal.md` and the capability deltas for the externally visible contract.
 - 不新增 PDF/document 之类的应用级 `image/video/audio` modality。PDF、文档和其它 MIME 作为通用附件保存，是否能直接映射为目标 provider block 由 adapter 决定。
 - 不把完整原始附件、原始图片 base64 或未界定的大型文档正文塞入用户 message；message 只携带相对路径、元信息和受界限的 preview block。
 - 不要求 Web 直接理解所有 provider block，也不让 Web 通过反解析展示文本恢复附件身份。
+- 不允许应用层通过 `langchain-anthropic`、`ChatAnthropic` 或 Anthropic 原生 HTTP 客户端完成最终发送；LiteLLM 不支持某种投影时不得以直连 provider SDK 作为兼容性回退。
 
 ## Decisions
 
@@ -73,18 +74,31 @@ manifest text block 和 preview rich block 在 canonical source 中携带通用 
 
 不将“当前 provider 能否直接看懂附件”误当成“附件是否存在”。rich block 投影失败时，只跳过该可选 block，manifest 不被移除，并在请求/trace 的投影诊断中记录失败原因。若原件保存或路径解析失败，则按本地代理的快速失败原则返回带会话、file id 和阶段的详细错误。
 
-### 5. canonical rich block 与 provider wire block 分离
+### 5. canonical rich block、LiteLLM 请求输入与 provider wire block 分离
 
 canonical 用户 content 使用项目已有的 LangChain/LiteLLM 兼容 block 形状，并保留未知字段；不在 canonical source 中嵌入 `litellm_payload` 或某个 provider 的顶层包装。附件 block 的 canonical `metadata` 只属于 source，不属于 provider wire protocol。`UserContentBuilder` 生成 source 后，provider adapter 只做临时投影；`InternalMessageFactory` 生成的内部字符串消息不进入这个用户附件构造流程。
 
-模型请求时按以下优先级投影：
+应用层的 provider request projection 只生成 LiteLLM API 的输入对象，不生成并发送 provider SDK 的最终对象。模型请求统一使用以下入口和 block 约束：
 
-1. 先由 LiteLLM 处理目标 provider 能统一的 text/image content；
-2. 对 Responses 的 `input_text`/`input_image`、Chat Completions 的 `text`/`image_url`、Anthropic Messages 的相应 text/image 形状使用目标 adapter 的最小转换；
-3. 根据 `image_input` 等已有能力决定是否发送 preview rich block；不支持时保留 manifest 文本并输出 `not_sent`/`projection_failed` 诊断；
-4. 不为 PDF 或其它通用文件建立新的应用 modality。若具体 provider 原生接受 document/file block，adapter 可在请求边界做 MIME 驱动的转换；否则只发送 manifest，source 仍完整保留。
+1. Chat Completions 和 Anthropic Messages 使用 `litellm.acompletion`。应用侧传给 LiteLLM 的图片 block 使用 Chat Completions 兼容形状：
+   ```json
+   {
+     "type": "image_url",
+     "image_url": {"url": "data:image/webp;base64,..."}
+   }
+   ```
+2. Responses 使用 `litellm.aresponses`。应用侧传给 LiteLLM 的图片 block 使用 Responses 形状：
+   ```json
+   {
+     "type": "input_image",
+     "image_url": "data:image/webp;base64,..."
+   }
+   ```
+3. Anthropic 的应用层输入仍使用 LiteLLM 可接受的 `image_url` 兼容形状；应用层不得构造 Anthropic 原生的 `{"type":"image","source":...}` block。`image/source` 的 base64 转换只能由 LiteLLM 在 provider 边界内部完成。
+4. 根据 `image_input` 等已有能力决定是否发送 preview rich block；不支持时保留 manifest 文本并输出 `not_sent`/`projection_failed` 诊断，且不得绕过 LiteLLM 直连 provider SDK。
+5. 不为 PDF 或其它通用文件建立新的应用 modality。若 LiteLLM 和目标 provider 共同支持 document/file block，应用 adapter 只能生成 LiteLLM 入口接受的输入；否则只发送 manifest，source 仍完整保留。
 
-provider 投影结果是短生命周期的请求对象，不回写 `HumanMessage`、checkpoint、rollout 或附件元数据。目标 provider 切换只改变投影，不改变 source。
+LiteLLM 是所有 provider 的最终发送边界：应用层不得调用 `ChatAnthropic`、`langchain-anthropic` 或目标 provider 原生 HTTP API。provider-specific mapper 可以处理协议入口所需的 `messages`/`input` 结构、能力判断、流式结果归一化和投影诊断，但不能承担最终网络发送。LiteLLM 不支持目标 provider 或某个 rich block 时，保留 manifest 并返回明确诊断；不得为了“兼容”新增直连回退路径。provider 投影结果是短生命周期的请求对象，不回写 `HumanMessage`、checkpoint、rollout 或附件元数据。目标 provider 切换只改变投影，不改变 source。
 
 ### 6. checkpoint/history 明确保留 preview base64，但 Web 不拿它当正文
 
@@ -109,7 +123,7 @@ SQLite 只建立可定位的消息/content block 坐标、附件身份和有界 
 ## Risks / Trade-offs
 
 - [preview base64 增大 checkpoint/rollout] → 只保存最长边不超过 512 的 preview，不把原图塞入 message；SQLite 不复制正文，并在历史 API 上继续使用 projection/detail/full 的边界。
-- [不同 provider 对 image/document block 的语义不一致] → canonical source 不绑定单一 wire schema；LiteLLM 处理共通部分，目标 adapter 按能力显式投影，未发送与失败状态可诊断。
+- [不同 provider 对 image/document block 的语义不一致] → canonical source 不绑定单一 wire schema；应用只生成 LiteLLM 入口接受的 Chat/Responses 形状，LiteLLM 负责 Anthropic 等目标 wire 转换，未发送与失败状态可诊断且不允许直连回退。
 - [结构化用户 content 被整体序列化] → reader 只按 canonical block 提取文本；未知 block 不进入正文，也不对无法可靠解析的内容做启发式字符串反解析。
 - [预览文件与原件生命周期不一致] → 以稳定 file id 和 variant 记录绑定原件/预览，删除、清理和读取均经过附件存储层；任何缺失 variant 都返回状态而不是空图片。
 - [Web 与模型需要不同数据量] → 保持 `content`、`attachments`、full checkpoint 三种边界；Web renderer 永不接触 full content，模型恢复也不依赖 Web DTO。

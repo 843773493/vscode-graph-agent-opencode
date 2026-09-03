@@ -14,10 +14,12 @@
 
 ## 3. LiteLLM 与 provider 请求投影
 
-- [x] 3.1 实现用户 content 的不可变 provider projection，按目标 provider 能力分别决定 text、manifest 和 rich block 的发送结果，并输出可诊断的 `not_sent`/`projection_failed` 信息。
-- [x] 3.2 接入 LiteLLM 可统一的 Chat Completions 内容转换，并补齐 Responses 的 `input_text`/`input_image` 与 Anthropic Messages 对应用户 block 的最小目标适配。
-- [x] 3.3 将用户图片 preview 的能力判断接入现有 capability routing；对不支持 rich block 的 provider 保留相对路径文本，不新增附件工具或应用级 PDF modality。
-- [x] 3.4 添加跨 provider 的请求快照与 source immutability 测试，验证支持图像输入、不支持图像输入、通用文件和未知 block 的投影差异及重复读取确定性。
+- [x] 3.1 将用户 content 的不可变 provider projection 收敛为 LiteLLM 请求投影，按目标 provider 能力分别决定 text、manifest 和 rich block 的发送结果，并输出可诊断的 `not_sent`/`projection_failed` 信息；不得提供 provider SDK 直连回退。
+- [x] 3.2 统一 Chat Completions 和 Anthropic Messages 的 `litellm.acompletion` 发送入口，并确保应用侧图片 block 使用 `image_url` 兼容形状；Anthropic 原生 `image/source` 转换只能由 LiteLLM 完成。
+- [x] 3.3 统一 Responses 的 `litellm.aresponses` 发送入口，并确保应用侧图片 block 使用 `input_text`/`input_image` 形状；保持 canonical source 与 LiteLLM 请求投影不可变分离。
+- [x] 3.4 迁移 Anthropic provider 构造和发送路径，移除 `ChatAnthropic`/`BoxteamAnthropicMessagesModel` 作为最终发送客户端；provider-specific mapper 只能构造 LiteLLM 输入和归一化响应。
+- [x] 3.5 将用户图片 preview 的能力判断接入现有 capability routing；对不支持 rich block 的 provider 保留相对路径文本，不新增附件工具或应用级 PDF modality。
+- [x] 3.6 添加跨 provider 的请求入口、请求快照与 source immutability 测试，验证 Chat Completions、Responses、Anthropic、无图像能力和 LiteLLM 不支持 rich block 时的投影差异及重复读取确定性。
 
 ## 4. Rollout 与历史 display projection
 
@@ -36,8 +38,8 @@
 
 ## 6. 验证、迁移与交付
 
-- [x] 6.1 增加 block walker、附件变体、历史 user projection、provider projection 和错误诊断的单元测试，覆盖中文文本、混合 block、未知 block 与异常输入。
+- [x] 6.1 增加 block walker、附件变体、历史 user projection、LiteLLM provider projection 和错误诊断的单元测试，覆盖中文文本、混合 block、未知 block、Anthropic 不直连和异常输入。
 - [x] 6.2 使用 `out/tests/<对应测试路径>/workspace/` 或 `out/tests/temp/<task_name>/workspace/` 的隔离工作区增加 checkpoint/rollout/历史 API 集成测试，禁止修改 fixture 源目录。
 - [x] 6.3 增加确定性 Web 组件/API 测试，验证用户正文不出现 `image_url` JSON/base64、缩略图渐进加载、附件失败态和右侧资源跳转。
-- [x] 6.4 对变更涉及的 Python 模块运行静态分析和 pytest；修改 `src/clients/web` 后运行 `bun run --cwd src/clients/web build`，并通过 8011 经 Gateway 验证真实 API 链路。
+- [ ] 6.4 对变更涉及的 Python 模块运行静态分析和 pytest；修改 `src/clients/web` 后运行 `bun run --cwd src/clients/web build`，并通过 8011 经 Gateway 验证真实 API 链路及 LiteLLM 请求边界。
 - [x] 6.5 完成 canonical checkpoint/rollout 不重写检查、OpenSpec 验证和变更产物清单，确认无 reference_repo 测试被执行、无临时二进制写入项目根目录。

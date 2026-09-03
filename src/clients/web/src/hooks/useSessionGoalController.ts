@@ -28,15 +28,17 @@ export function useSessionGoalController({
   apiPort,
   currentSessionId,
   currentWorkspaceId,
-  currentActiveJobId,
   setState,
 }: {
   apiPort: number;
   currentSessionId: string | null;
   currentWorkspaceId: string | null;
-  currentActiveJobId: string | null;
   setState: Dispatch<SetStateAction<AppState>>;
 }) {
+  const inFlightGoalRequestsRef = useRef<Map<string, Promise<SessionGoal | null>>>(
+    new Map(),
+  );
+
   const refreshGoal = useCallback(async (
     target: GoalTarget = {
       sessionId: currentSessionId ?? "",
@@ -61,39 +63,57 @@ export function useSessionGoalController({
         goalError: null,
       }));
     }
-    try {
-      const goal = await apiGetSessionGoal(
-        apiPort,
-        target.sessionId,
-        target.workspaceId,
-      );
-      setState((previous) => {
-        if (previous.currentSession?.session_id !== target.sessionId) {
-          return previous;
-        }
-        return {
-          ...previous,
-          currentGoal: goal,
-          currentGoalSessionId: target.sessionId,
-          goalLoading: false,
-          goalError: null,
-        };
-      });
-      return goal;
-    } catch (error) {
-      const message = errorMessage(error);
-      setState((previous) => {
-        if (previous.currentSession?.session_id !== target.sessionId) {
-          return previous;
-        }
-        return {
-          ...previous,
-          goalLoading: false,
-          goalError: message,
-        };
-      });
-      throw error;
+    const requestKey = `${apiPort}:${target.workspaceId ?? ""}:${target.sessionId}`;
+    const inFlight = inFlightGoalRequestsRef.current.get(requestKey);
+    if (inFlight) {
+      return inFlight;
     }
+    const request = (async (): Promise<SessionGoal | null> => {
+      try {
+        const goal = await apiGetSessionGoal(
+          apiPort,
+          target.sessionId,
+          target.workspaceId,
+        );
+        setState((previous) => {
+          if (previous.currentSession?.session_id !== target.sessionId) {
+            return previous;
+          }
+          return {
+            ...previous,
+            currentGoal: goal,
+            currentGoalSessionId: target.sessionId,
+            goalLoading: false,
+            goalError: null,
+          };
+        });
+        return goal;
+      } catch (error) {
+        const message = errorMessage(error);
+        setState((previous) => {
+          if (previous.currentSession?.session_id !== target.sessionId) {
+            return previous;
+          }
+          return {
+            ...previous,
+            goalLoading: false,
+            goalError: message,
+          };
+        });
+        throw error;
+      }
+    })();
+    inFlightGoalRequestsRef.current.set(requestKey, request);
+    void request.then(() => {
+      if (inFlightGoalRequestsRef.current.get(requestKey) === request) {
+        inFlightGoalRequestsRef.current.delete(requestKey);
+      }
+    }, () => {
+      if (inFlightGoalRequestsRef.current.get(requestKey) === request) {
+        inFlightGoalRequestsRef.current.delete(requestKey);
+      }
+    });
+    return request;
   }, [apiPort, currentSessionId, currentWorkspaceId, setState]);
 
   const reconcileAfterFailure = useCallback(async (
@@ -146,12 +166,6 @@ export function useSessionGoalController({
       return reconcileAfterFailure(target, error);
     }
   }, [apiPort, currentSessionId, currentWorkspaceId, reconcileAfterFailure, setState]);
-
-  const previousGoalScopeRef = useRef<{
-    sessionId: string | null;
-    workspaceId: string | null;
-    activeJobId: string | null;
-  } | null>(null);
 
   const clearGoal = useCallback(async (
     target: GoalTarget = {
@@ -219,34 +233,6 @@ export function useSessionGoalController({
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [currentSessionId, refreshGoal]);
-
-  useEffect(() => {
-    const previousScope = previousGoalScopeRef.current;
-    const sessionChanged = previousScope !== null
-      && (
-        previousScope.sessionId !== currentSessionId
-        || previousScope.workspaceId !== currentWorkspaceId
-      );
-    const activeJobChanged = previousScope !== null
-      && previousScope.activeJobId !== currentActiveJobId;
-    previousGoalScopeRef.current = {
-      sessionId: currentSessionId,
-      workspaceId: currentWorkspaceId,
-      activeJobId: currentActiveJobId,
-    };
-    if (
-      !currentSessionId
-      || !currentActiveJobId
-      || previousScope === null
-      || sessionChanged
-      || !activeJobChanged
-    ) {
-      return;
-    }
-    void refreshGoal(undefined, { silent: true }).catch(() => {
-      // Job 状态由 SSE 推动；Goal 校准失败会显示在卡片中。
-    });
-  }, [currentActiveJobId, currentSessionId, currentWorkspaceId, refreshGoal]);
 
   return { refreshGoal, updateGoal, clearGoal };
 }

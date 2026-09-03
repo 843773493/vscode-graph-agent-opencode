@@ -32,10 +32,54 @@ export function useAgentStateSnapshotLoader({
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
+  type AgentStateSnapshot = Awaited<ReturnType<typeof getAgentStateMessages>>;
+  const snapshotRef = useRef<{
+    sessionId: string;
+    workspaceId: string | null;
+    snapshot: AgentStateSnapshot;
+  } | null>(null);
+  const snapshotRequestRef = useRef<{
+    key: string;
+    promise: Promise<AgentStateSnapshot>;
+  } | null>(null);
 
   const invalidateAgentState = useCallback(() => {
     requestIdRef.current += 1;
+    snapshotRef.current = null;
+    snapshotRequestRef.current = null;
   }, []);
+
+  const loadSnapshot = useCallback((sessionId: string, force: boolean) => {
+    const requestKey = `${workspaceId ?? ""}:${sessionId}`;
+    const inFlight = snapshotRequestRef.current;
+    if (inFlight?.key === requestKey) {
+      return inFlight.promise;
+    }
+    if (
+      !force
+      && snapshotRef.current?.sessionId === sessionId
+      && snapshotRef.current.workspaceId === workspaceId
+    ) {
+      return Promise.resolve(snapshotRef.current.snapshot);
+    }
+    const promise = getAgentStateMessages(apiPort, sessionId, workspaceId).then(
+      (snapshot) => {
+        snapshotRef.current = { sessionId, workspaceId, snapshot };
+        return snapshot;
+      },
+    );
+    snapshotRequestRef.current = { key: requestKey, promise };
+    void promise.then(() => {
+      if (snapshotRequestRef.current?.promise === promise) {
+        snapshotRequestRef.current = null;
+      }
+    }, () => {
+      if (snapshotRequestRef.current?.promise === promise) {
+        snapshotRequestRef.current = null;
+      }
+    });
+    return promise;
+  }, [apiPort, workspaceId]);
 
   const refreshAgentStateSnapshot = useCallback(
     async (sessionId: string) => {
@@ -50,7 +94,7 @@ export function useAgentStateSnapshotLoader({
       }));
 
       try {
-        const snapshot = await getAgentStateMessages(apiPort, sessionId, workspaceId);
+        const snapshot = await loadSnapshot(sessionId, true);
         setState((prev) => {
           if (
             requestId !== requestIdRef.current ||
@@ -90,14 +134,14 @@ export function useAgentStateSnapshotLoader({
         });
       }
     },
-    [apiPort, workspaceId, setState],
+    [loadSnapshot, setState],
   );
 
   const loadAgentStateMessageRawContent = useCallback(async (
     sessionId: string,
     messageId: string,
   ): Promise<string> => {
-    const snapshot = await getAgentStateMessages(apiPort, sessionId, workspaceId);
+    const snapshot = await loadSnapshot(sessionId, false);
     if (snapshot.session_id !== sessionId) {
       throw new Error(
         `Agent State 会话不匹配: 请求 ${sessionId}，响应 ${snapshot.session_id}`,
@@ -108,7 +152,7 @@ export function useAgentStateSnapshotLoader({
       throw new Error(`Agent State 中找不到消息原文: message_id=${messageId}`);
     }
     return content;
-  }, [apiPort, workspaceId]);
+  }, [loadSnapshot]);
 
   return {
     invalidateAgentState,

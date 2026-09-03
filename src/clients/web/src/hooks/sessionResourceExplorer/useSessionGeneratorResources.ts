@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createSessionGenerator,
   deleteSessionGenerator,
@@ -18,12 +18,15 @@ import type {
   SessionGeneratorList,
 } from "../../types/backend";
 
-export function useSessionGeneratorResources(apiPort: number) {
+export function useSessionGeneratorResources(apiPort: number, enabled = true) {
   const [generators, setGenerators] = useState<SessionGeneratorList | null>(null);
   const [generationRuns, setGenerationRuns] = useState<Map<string, GenerationRun[]>>(
     new Map(),
   );
   const [generatorError, setGeneratorError] = useState<string | null>(null);
+  const generationRunRequestsRef = useRef<Map<string, Promise<GenerationRun[]>>>(
+    new Map(),
+  );
 
   const refreshGenerators = useCallback(async () => {
     try {
@@ -46,13 +49,31 @@ export function useSessionGeneratorResources(apiPort: number) {
   }, [apiPort, refreshGenerators]);
 
   const refreshGenerationRuns = useCallback(async (generatorId: string) => {
-    const result = await listSessionGeneratorRuns(apiPort, generatorId);
-    setGenerationRuns((previous) => {
-      const next = new Map(previous);
-      next.set(generatorId, result.items);
-      return next;
+    const requestKey = `${apiPort}:${generatorId}`;
+    const inFlight = generationRunRequestsRef.current.get(requestKey);
+    if (inFlight) {
+      return inFlight;
+    }
+    const request = (async (): Promise<GenerationRun[]> => {
+      const result = await listSessionGeneratorRuns(apiPort, generatorId);
+      setGenerationRuns((previous) => {
+        const next = new Map(previous);
+        next.set(generatorId, result.items);
+        return next;
+      });
+      return result.items;
+    })();
+    generationRunRequestsRef.current.set(requestKey, request);
+    void request.then(() => {
+      if (generationRunRequestsRef.current.get(requestKey) === request) {
+        generationRunRequestsRef.current.delete(requestKey);
+      }
+    }, () => {
+      if (generationRunRequestsRef.current.get(requestKey) === request) {
+        generationRunRequestsRef.current.delete(requestKey);
+      }
     });
-    return result.items;
+    return request;
   }, [apiPort]);
 
   const runGenerator = useCallback(async (generatorId: string): Promise<GenerationRun> => {
@@ -96,8 +117,11 @@ export function useSessionGeneratorResources(apiPort: number) {
   }, [apiPort]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     void refreshGenerators().catch(() => undefined);
-  }, [refreshGenerators]);
+  }, [enabled, refreshGenerators]);
 
   useEffect(() => {
     const activeGeneratorIds = [...generationRuns.entries()]

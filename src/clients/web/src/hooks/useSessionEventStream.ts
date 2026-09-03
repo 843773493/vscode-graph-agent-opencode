@@ -29,8 +29,6 @@ import {
   type SetAppState,
 } from "./sessionEventStream/sessionRefresh";
 
-export { planTurnRefreshes } from "./sessionEventStream/refreshPlan";
-
 export function useSessionEventStream({
   apiPort,
   sessionId,
@@ -39,7 +37,6 @@ export function useSessionEventStream({
   activeJobId,
   timelineReady,
   initialEventCursor,
-  refreshTurnDetails,
   refreshTurnHistory,
   setState,
 }: {
@@ -50,11 +47,6 @@ export function useSessionEventStream({
   activeJobId: string | null;
   timelineReady: boolean;
   initialEventCursor: string | null;
-  refreshTurnDetails: (
-    turnIds: string[],
-    requestIdentity?: string | null,
-    refreshAfterInFlight?: boolean,
-  ) => Promise<void>;
   refreshTurnHistory: () => void;
   setState: SetAppState;
 }) {
@@ -141,7 +133,6 @@ export function useSessionEventStream({
         sessionId,
         workspaceId: targetWorkspaceId,
         sessionCacheKey: targetSessionCacheKey,
-        refreshTurnDetails,
         setState,
       });
     };
@@ -247,7 +238,6 @@ export function useSessionEventStream({
     abortCurrentStream,
     apiPort,
     initialEventCursor,
-    refreshTurnDetails,
     refreshTurnHistory,
     sessionCacheKey,
     sessionId,
@@ -289,7 +279,6 @@ export function useSessionEventStream({
         workspaceId,
         sessionCacheKey,
         activeJobId,
-        (turnIds) => refreshTurnDetails(turnIds, null, true),
         setState,
         {
           afterCursor: lastEventCursorRef.current,
@@ -332,7 +321,6 @@ export function useSessionEventStream({
   }, [
     activeJobId,
     apiPort,
-    refreshTurnDetails,
     sessionCacheKey,
     sessionId,
     setState,

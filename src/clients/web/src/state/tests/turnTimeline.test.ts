@@ -14,7 +14,6 @@ import {
   decideTurnProjectionEpoch,
   dropTurn,
   markTurnsLoading,
-  turnIdsInvalidatedByEvents,
   upsertTurn,
   upsertTurns,
   writeTurnTimelineCache,
@@ -389,14 +388,6 @@ describe("Turn timeline revision 合并", () => {
 
     timeline = upsertTurn(timeline, summary("job_2", 2, 3));
     expect(timeline.orderedTurnIds).toEqual(["job_1"]);
-  });
-
-  test("job_completed 会让执行 Turn 详情失效并触发刷新", () => {
-    expect(turnIdsInvalidatedByEvents([
-      { type: "text_delta", job_id: "job_ignored" },
-      { type: "job_completed", job_id: "job_execution" },
-      { type: "text_end", job_id: "job_execution" },
-    ])).toEqual(["job_execution"]);
   });
 
   test("丢弃当前 view 已失效的 Turn，并阻止旧异步响应重新加入", () => {

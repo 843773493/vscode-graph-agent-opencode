@@ -502,8 +502,7 @@ export function writePendingSnapshot(
     );
   }
   // replay 的新 Job 可能尚未进入 bootstrap/pending-requests 快照，但后端已经
-  // 移除了旧上下文。保留乐观 replay，避免历史投影切换期间出现空聊天区；终态
-  // SSE 或 Job reconciliation 会在任务结束时移除它。
+  // 移除了旧上下文。保留乐观 replay，避免上下文切换期间出现空聊天区。
   const optimisticReplayConversations = existingPending.filter(
     (conversation) =>
       conversation.pending
@@ -511,13 +510,18 @@ export function writePendingSnapshot(
       && Boolean(conversation.jobId)
       && conversation.userMessage?.metadata?.source === "optimistic_replay",
   );
-  // 终态 SSE 可能早于 rollout 投影提交到达。此时历史详情返回 409，
-  // 仍需保留实时回合，直到详情成功回填；否则下一次 pending 快照会把新回合删掉。
+  // 终态回合仍由实时消息流或 Trace 提供当前视图；下一次 bootstrap 会用
+  // canonical 历史替换它，不能被空 pending 快照提前删掉。
   const terminalConversations = existingPending.filter(
     (conversation) =>
       conversation.source === "pending"
       && Boolean(conversation.jobId)
-      && hasJobTerminalTraceEvent(conversation.events),
+      && (
+        hasJobTerminalTraceEvent(conversation.events)
+        || ["completed", "succeeded", "failed", "cancelled", "timed_out"].includes(
+          conversation.turnStatus ?? "",
+        )
+      ),
   );
   for (const conversation of [
     ...optimisticReplayConversations,
@@ -680,29 +684,29 @@ export function preservePendingTerminalConversation(
   writePendingList(map, sessionId, next, mapKey);
 }
 
-/**
- * 在无法收到终止 SSE（例如浏览器恢复、连接重连或页面切换）时，按 Job
- * 身份立即移除实时 Turn。后续由历史 projection 重新建立 history 视图。
- */
-export function removePendingForJob(
+export function completePendingForJob(
   map: Map<string, ConversationView[]>,
   sessionId: string,
   jobId: string,
+  turnStatus: Extract<JobStatus, "completed" | "failed" | "cancelled" | "timed_out">,
   mapKey: string = sessionId,
 ): void {
-  if (!jobId) {
-    return;
-  }
+  if (!jobId) return;
   const pendingList = map.get(mapKey) ?? [];
-  if (pendingList.length === 0) {
-    return;
-  }
-  writePendingList(
-    map,
-    sessionId,
-    pendingList.filter((conversation) => conversation.jobId !== jobId),
-    mapKey,
+  const pendingIndex = pendingList.findIndex(
+    (conversation) => conversation.jobId === jobId,
   );
+  if (pendingIndex === -1) return;
+
+  const next = [...pendingList];
+  next[pendingIndex] = {
+    ...next[pendingIndex],
+    status: turnStatus === "completed" ? "done" : "error",
+    turnStatus,
+    pending: false,
+    activeJobOverlay: false,
+  };
+  writePendingList(map, sessionId, next, mapKey);
 }
 
 export function getConversationsForSession(

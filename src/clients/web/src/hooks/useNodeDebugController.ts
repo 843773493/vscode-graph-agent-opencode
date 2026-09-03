@@ -48,6 +48,32 @@ export function useNodeDebugController({
   const requestVersionRef = useRef(0);
   const actionInFlightRef = useRef(false);
   const syncChannelRef = useRef<ReturnType<typeof createNodeDebugSyncChannel> | null>(null);
+  const stateRequestsRef = useRef<Map<string, Promise<NodeDebugState>>>(new Map());
+
+  const loadState = useCallback((force = false): Promise<NodeDebugState> => {
+    if (!sessionId) {
+      return Promise.reject(new Error("当前没有可读取调试状态的会话"));
+    }
+    const requestKey = `${apiPort}:${workspaceId ?? ""}:${sessionId}`;
+    if (!force) {
+      const inFlight = stateRequestsRef.current.get(requestKey);
+      if (inFlight) {
+        return inFlight;
+      }
+    }
+    const request = getNodeDebugState(apiPort, sessionId, workspaceId);
+    stateRequestsRef.current.set(requestKey, request);
+    void request.then(() => {
+      if (stateRequestsRef.current.get(requestKey) === request) {
+        stateRequestsRef.current.delete(requestKey);
+      }
+    }, () => {
+      if (stateRequestsRef.current.get(requestKey) === request) {
+        stateRequestsRef.current.delete(requestKey);
+      }
+    });
+    return request;
+  }, [apiPort, sessionId, workspaceId]);
 
   const refresh = useCallback(async () => {
     if (!enabled || !sessionId) {
@@ -55,14 +81,14 @@ export function useNodeDebugController({
       return;
     }
     const requestVersion = requestVersionRef.current;
-    const nextState = await getNodeDebugState(apiPort, sessionId, workspaceId);
+    const nextState = await loadState();
     if (
       requestVersion === requestVersionRef.current
       && !actionInFlightRef.current
     ) {
       setState(nextState);
     }
-  }, [apiPort, enabled, sessionId, workspaceId]);
+  }, [enabled, loadState, sessionId]);
 
   useEffect(() => {
     const channel = createNodeDebugSyncChannel(
@@ -97,7 +123,7 @@ export function useNodeDebugController({
       try {
         const [nextState, nextCapabilities] = await Promise.all([
           sessionId
-            ? getNodeDebugState(apiPort, sessionId, workspaceId)
+            ? loadState()
             : Promise.resolve(null),
           getNodeDebugCapabilities(apiPort, workspaceId),
         ]);
@@ -119,7 +145,7 @@ export function useNodeDebugController({
     void poll();
     const intervalId = window.setInterval(() => {
       if (!sessionId) return;
-      void getNodeDebugState(apiPort, sessionId, workspaceId)
+      void loadState()
         .then((nextState) => {
           if (
             !disposed
@@ -140,7 +166,7 @@ export function useNodeDebugController({
       disposed = true;
       window.clearInterval(intervalId);
     };
-  }, [apiPort, enabled, sessionId, workspaceId]);
+  }, [apiPort, enabled, loadState, sessionId, workspaceId]);
 
   const runAction = useCallback(async (
     action: NodeDebugActionRequest["action"],
@@ -166,7 +192,7 @@ export function useNodeDebugController({
       setError(message);
       onStatusChange(`源码调试动作失败: ${message}`);
       try {
-        const authoritativeState = await getNodeDebugState(apiPort, sessionId, workspaceId);
+        const authoritativeState = await loadState(true);
         if (actionVersion === requestVersionRef.current) setState(authoritativeState);
       } catch (refreshCause: unknown) {
         const refreshMessage = refreshCause instanceof Error
@@ -182,7 +208,7 @@ export function useNodeDebugController({
         requestVersionRef.current += 1;
       }
     }
-  }, [apiPort, enabled, onStatusChange, publishStateChange, sessionId, workspaceId]);
+  }, [apiPort, enabled, loadState, onStatusChange, publishStateChange, sessionId, workspaceId]);
 
   const start = useCallback(async ({
     path,

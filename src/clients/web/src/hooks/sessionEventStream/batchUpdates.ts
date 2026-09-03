@@ -18,8 +18,6 @@ import {
   fileChangesFromTraceEvents,
 } from "../../state/workspaceFileTreeEvents";
 import type { SessionStreamEvent } from "../../types/backend";
-import { refreshTerminalSession } from "../sessionJobReconciliation";
-import { planTurnRefreshes } from "./refreshPlan";
 import {
   refreshSessionMetadata,
   refreshWorkspaceSessionList,
@@ -31,11 +29,6 @@ export interface SessionStreamBatchContext {
   sessionId: string;
   workspaceId: string | null;
   sessionCacheKey: string;
-  refreshTurnDetails: (
-    turnIds: string[],
-    requestIdentity?: string | null,
-    refreshAfterInFlight?: boolean,
-  ) => Promise<void>;
   setState: SetAppState;
 }
 
@@ -176,31 +169,6 @@ export function flushSessionStreamEventBatch(
       });
     }).catch((error: unknown) => {
       setRefreshError(context.setState, "刷新待处理消息失败", error);
-    });
-  }
-  const { genericTurnIds, terminalEventIndex } = planTurnRefreshes(events);
-  for (let index = 0; index < genericTurnIds.length; index += 4) {
-    void context.refreshTurnDetails(
-      genericTurnIds.slice(index, index + 4),
-      null,
-      true,
-    ).catch(
-      () => {
-        // Turn hook 已把详情错误写入时间线，SSE 只负责发出失效信号。
-      },
-    );
-  }
-  if (terminalEventIndex !== -1) {
-    void refreshTerminalSession(
-      context.apiPort,
-      context.sessionId,
-      context.workspaceId,
-      context.sessionCacheKey,
-      traceEvents[terminalEventIndex] ?? null,
-      (turnIds) => context.refreshTurnDetails(turnIds, null, true),
-      context.setState,
-    ).catch((error: unknown) => {
-      setRefreshError(context.setState, "刷新失败", error);
     });
   }
 }

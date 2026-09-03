@@ -42,6 +42,33 @@ describe("工作区文件树根节点", () => {
     expect(html).not.toContain("文件系统");
   });
 
+  test("文件树加载提示位于整个目录之后，不推移目录行", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceFileTree
+        active
+        apiPort={8014}
+        workspaceId="gw_workspace"
+        workspaceName="project"
+        workspaceRoot="/workspace/project"
+        sessionId="ses_file_tree"
+        activeFilePath={null}
+        searchOpen={false}
+        collapseVersion={0}
+        expandedPaths={[]}
+        onExpandedPathsChange={() => {}}
+        onCloseSearch={() => {}}
+        onOpenFile={() => {}}
+        onStatusChange={() => {}}
+      />,
+    );
+
+    const treeIndex = html.indexOf('role="tree"');
+    const loadingIndex = html.indexOf("正在加载工作区文件");
+
+    expect(treeIndex).toBeGreaterThanOrEqual(0);
+    expect(loadingIndex).toBeGreaterThan(treeIndex);
+  });
+
   test("解析纯路径、file URI 和多文件剪贴板", () => {
     expect(parseClipboardFilePaths("/home/hyf/.cache/model.bin")).toEqual([
       "/home/hyf/.cache/model.bin",

@@ -1,75 +1,129 @@
 from __future__ import annotations
 
-import pytest
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from typing import Any
 
-from app.agents.providers.anthropic_messages import BoxteamAnthropicMessagesModel
-from app.core.model_delta_context import (
-    reset_current_model_delta_sink,
-    set_current_model_delta_sink,
-)
+import pytest
+from langchain_core.messages import HumanMessage
+
+from app.agents.agent_factory import build_model_from_provider
+from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+
+
+def _provider() -> dict[str, Any]:
+    return {
+        "id": "anthropic-test",
+        "endpoint": "https://example.com/anthropic",
+        "model": "claude-test",
+        "api_key": "test-key",
+        "custom_llm_provider": "anthropic",
+        "api_mode": {
+            "protocol": "anthropic_messages",
+            "model_info": {
+                "supports_reasoning": True,
+                "supports_vision": True,
+            },
+            "supports_reasoning": {
+                "thinking_blocks": {
+                    "thinking": True,
+                    "redacted_thinking": True,
+                }
+            },
+        },
+    }
+
+
+def test_anthropic_messages_mode_uses_litellm_chat_model() -> None:
+    model = build_model_from_provider(_provider(), {})
+
+    assert isinstance(model, BoxteamLiteLLMChatModel)
+    assert model.custom_llm_provider == "anthropic"
+    assert model.api_base == "https://example.com/anthropic"
+    assert model.thinking_blocks_replay is True
+    assert model.image_input_replay is True
 
 
 @pytest.mark.asyncio
-async def test_anthropic_semantic_delta_reaches_hook_before_langchain_yield(
+async def test_anthropic_messages_stream_uses_litellm_acompletion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class RawStream:
-        def __init__(self) -> None:
-            self._read = False
-            self.closed = False
+    captured: dict[str, Any] = {}
 
-        def __aiter__(self):
+    class RawStream:
+        received_finish_reason = "stop"
+        intermittent_finish_reason = None
+
+        def __init__(self) -> None:
+            self._chunks = iter(
+                [
+                    {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": "完成"},
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                ]
+            )
+
+        def __aiter__(self) -> RawStream:
             return self
 
-        async def __anext__(self):
-            if self._read:
-                raise StopAsyncIteration
-            self._read = True
-            return object()
+        async def __anext__(self) -> dict[str, Any]:
+            try:
+                return next(self._chunks)
+            except StopIteration as error:
+                raise StopAsyncIteration from error
 
-        async def close(self) -> None:
-            self.closed = True
+    async def fake_acompletion_with_retry(
+        _self: BoxteamLiteLLMChatModel,
+        **kwargs: Any,
+    ) -> RawStream:
+        captured.update(kwargs)
+        return RawStream()
 
-    raw_stream = RawStream()
-
-    async def fake_acreate(_self, _payload):
-        return raw_stream
-
-    def fake_convert(_self, _event, **kwargs):
-        return (
-            AIMessageChunk(content=[{"type": "text", "text": "完成"}]),
-            kwargs.get("block_start_event"),
-        )
-
-    monkeypatch.setattr(ChatAnthropic, "_acreate", fake_acreate)
     monkeypatch.setattr(
-        ChatAnthropic,
-        "_make_message_chunk_from_anthropic_event",
-        fake_convert,
+        BoxteamLiteLLMChatModel,
+        "acompletion_with_retry",
+        fake_acompletion_with_retry,
     )
-    model = BoxteamAnthropicMessagesModel(
-        model="claude-test",
-        api_key="test-key",
-        streaming=True,
-    )
-    observed: list[str] = []
+    model = build_model_from_provider(_provider(), {})
 
-    class RecordingSink:
-        async def accept_message_chunk(self, chunk: AIMessageChunk) -> None:
-            del chunk
-            observed.append("hook")
+    chunks = [
+        chunk
+        async for chunk in model._astream(
+            [
+                HumanMessage(
+                    content=[
+                        {"type": "text", "text": "请看图"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/webp;base64,preview"
+                            },
+                        },
+                    ]
+                )
+            ]
+        )
+    ]
 
-    token = set_current_model_delta_sink(RecordingSink())
-    try:
-        chunks = []
-        async for chunk in model._astream([HumanMessage(content="hi")]):
-            observed.append("yield")
-            chunks.append(chunk)
-    finally:
-        reset_current_model_delta_sink(token)
-
-    assert observed == ["hook", "yield"]
-    assert len(chunks) == 1
-    assert raw_stream.closed is True
+    assert chunks
+    assert captured["custom_llm_provider"] == "anthropic"
+    assert captured["messages"][0]["content"] == [
+        {"type": "text", "text": "请看图"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/webp;base64,preview"},
+        },
+    ]

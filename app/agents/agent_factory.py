@@ -222,22 +222,12 @@ def build_model_from_provider(
             request_options=request_options,
             prompt_cache_key=prompt_cache_key,
         )
-    if api_mode.protocol == "anthropic_messages":
-        if custom_llm_provider != "anthropic":
-            raise ValueError(
-                "Anthropic Messages provider 必须配置 "
-                "custom_llm_provider='anthropic'"
-            )
-        from app.agents.providers.anthropic_messages import (
-            build_anthropic_messages_model,
+    if api_mode.protocol == "anthropic_messages" and custom_llm_provider != "anthropic":
+        raise ValueError(
+            "Anthropic Messages provider 必须配置 "
+            "custom_llm_provider='anthropic'"
         )
-
-        return build_anthropic_messages_model(
-            provider=provider,
-            runtime_config=runtime_config,
-            request_options=request_options,
-        )
-    if api_mode.protocol != "chat_completions":
+    if api_mode.protocol not in {"chat_completions", "anthropic_messages"}:
         raise ValueError(f"provider.api_mode.protocol 不受支持: {api_mode.protocol!r}")
 
     from app.agents.providers.litellm_chat import build_litellm_chat_model

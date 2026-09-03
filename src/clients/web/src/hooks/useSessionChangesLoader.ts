@@ -4,8 +4,32 @@ import {
   getSessionChangesets,
   reviewSessionChangeFile as apiReviewSessionChangeFile,
 } from "../api";
-import type { Session, SessionFileChange } from "../types/backend";
+import type {
+  Session,
+  SessionChangesetList,
+  SessionFileChange,
+} from "../types/backend";
 import type { SetAppState } from "./contentViewLoaderTypes";
+
+export type SessionChangesRefreshOptions = {
+  refreshList?: boolean;
+};
+
+const SESSION_CHANGESET_CACHE_LIMIT = 16;
+
+function writeChangesetCache(
+  cache: Map<string, SessionChangesetList>,
+  key: string,
+  value: SessionChangesetList,
+): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > SESSION_CHANGESET_CACHE_LIMIT) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey !== "string") break;
+    cache.delete(oldestKey);
+  }
+}
 
 export function useSessionChangesLoader({
   apiPort,
@@ -19,13 +43,56 @@ export function useSessionChangesLoader({
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
+  const changesetsCacheRef = useRef(new Map<string, SessionChangesetList>());
+  const changesetsRequestRef = useRef(new Map<string, Promise<SessionChangesetList>>());
 
   const invalidateSessionChanges = useCallback(() => {
     requestIdRef.current += 1;
   }, []);
 
+  const loadSessionChangesets = useCallback(
+    async (
+      sessionId: string,
+      force: boolean = false,
+    ): Promise<SessionChangesetList> => {
+      const key = `${workspaceId ?? ""}:${sessionId}`;
+      const inFlight = changesetsRequestRef.current.get(key);
+      if (inFlight) {
+        return await inFlight;
+      }
+      const cached = changesetsCacheRef.current.get(key);
+      if (!force && cached) {
+        changesetsCacheRef.current.delete(key);
+        changesetsCacheRef.current.set(key, cached);
+        return cached;
+      }
+      const promise = getSessionChangesets(apiPort, sessionId, workspaceId).then(
+        (value) => {
+          writeChangesetCache(changesetsCacheRef.current, key, value);
+          return value;
+        },
+      );
+      changesetsRequestRef.current.set(key, promise);
+      void promise.then(() => {
+        if (changesetsRequestRef.current.get(key) === promise) {
+          changesetsRequestRef.current.delete(key);
+        }
+      }, () => {
+        if (changesetsRequestRef.current.get(key) === promise) {
+          changesetsRequestRef.current.delete(key);
+        }
+      });
+      return await promise;
+    },
+    [apiPort, workspaceId],
+  );
+
   const refreshSessionChanges = useCallback(
-    async (sessionId: string, changesetId?: string | null) => {
+    async (
+      sessionId: string,
+      changesetId?: string | null,
+      options: SessionChangesRefreshOptions = {},
+    ) => {
       const requestId = requestIdRef.current + 1;
       requestIdRef.current = requestId;
       setState((prev) => ({
@@ -37,7 +104,10 @@ export function useSessionChangesLoader({
       }));
 
       try {
-        const list = await getSessionChangesets(apiPort, sessionId, workspaceId);
+        const list = await loadSessionChangesets(
+          sessionId,
+          options.refreshList === true,
+        );
         const selectedId =
           changesetId ||
           list.items.find((item) => item.is_default)?.changeset_id ||
@@ -87,7 +157,7 @@ export function useSessionChangesLoader({
         });
       }
     },
-    [apiPort, workspaceId, setState],
+    [loadSessionChangesets, setState],
   );
 
   const reviewSessionChangeFile = useCallback(
@@ -137,6 +207,7 @@ export function useSessionChangesLoader({
 
   return {
     invalidateSessionChanges,
+    loadSessionChangesets,
     refreshSessionChanges,
     reviewSessionChangeFile,
   };

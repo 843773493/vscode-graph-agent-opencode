@@ -37,84 +37,106 @@ export function useSessionResourceLoader({
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
+  const inFlightRefreshRef = useRef<{
+    key: string;
+    promise: Promise<void>;
+  } | null>(null);
   const userAccessRecoveryRef = useRef<Promise<Awaited<ReturnType<typeof ensureGatewayUserAccess>> | null> | null>(null);
 
   const invalidateSessionResources = useCallback(() => {
     requestIdRef.current += 1;
+    inFlightRefreshRef.current = null;
   }, []);
 
   const refreshSessionResources = useCallback(
     async (sessionId: string, options: RefreshOptions = {}) => {
+      const requestKey = `${workspaceId ?? ""}:${sessionId}`;
+      const existing = inFlightRefreshRef.current;
+      if (existing?.key === requestKey) {
+        await existing.promise;
+        return;
+      }
       const silent = options.silent === true;
       const requestId = requestIdRef.current + 1;
       requestIdRef.current = requestId;
-      setState((prev) => ({
-        ...prev,
-        sessionResourcesLoading: silent ? prev.sessionResourcesLoading : true,
-        sessionResourcesError: null,
-        status: silent ? prev.status : "正在读取后台连接",
-      }));
 
-      try {
-        const loadResources = async () => {
-          try {
-            return await getSessionResources(apiPort, sessionId, workspaceId);
-          } catch (error: unknown) {
-            if (!isExpiredGatewayUserAccess(error)) {
-              throw error;
-            }
-            const pendingRecovery = userAccessRecoveryRef.current ?? ensureGatewayUserAccess(apiPort);
-            userAccessRecoveryRef.current = pendingRecovery;
-            const userAccess = await pendingRecovery.finally(() => {
-              if (userAccessRecoveryRef.current === pendingRecovery) {
-                userAccessRecoveryRef.current = null;
+      const request = (async () => {
+        setState((prev) => ({
+          ...prev,
+          sessionResourcesLoading: silent ? prev.sessionResourcesLoading : true,
+          sessionResourcesError: null,
+          status: silent ? prev.status : "正在读取后台连接",
+        }));
+
+        try {
+          const loadResources = async () => {
+            try {
+              return await getSessionResources(apiPort, sessionId, workspaceId);
+            } catch (error: unknown) {
+              if (!isExpiredGatewayUserAccess(error)) {
+                throw error;
               }
-            });
-            setState((prev) => ({ ...prev, gatewayUserAccess: userAccess }));
-            return await getSessionResources(apiPort, sessionId, workspaceId);
-          }
-        };
-        const resources = await loadResources();
-        setState((prev) => {
-          if (
-            requestId !== requestIdRef.current ||
-            prev.currentSession?.session_id !== sessionId
-          ) {
-            return prev;
-          }
-          const previousCount = prev.sessionResources.length;
-          const nextCount = resources.items.length;
-          const status =
-            silent && previousCount === nextCount
-              ? prev.status
-              : silent
-                ? `后台连接已更新 (${nextCount} 个)`
-                : `后台连接已加载 (${nextCount} 个)`;
-          return {
-            ...prev,
-            sessionResources: resources.items,
-            sessionResourcesLoadedAt: new Date().toISOString(),
-            sessionResourcesLoading: false,
-            sessionResourcesError: null,
-            status,
+              const pendingRecovery = userAccessRecoveryRef.current ?? ensureGatewayUserAccess(apiPort);
+              userAccessRecoveryRef.current = pendingRecovery;
+              const userAccess = await pendingRecovery.finally(() => {
+                if (userAccessRecoveryRef.current === pendingRecovery) {
+                  userAccessRecoveryRef.current = null;
+                }
+              });
+              setState((prev) => ({ ...prev, gatewayUserAccess: userAccess }));
+              return await getSessionResources(apiPort, sessionId, workspaceId);
+            }
           };
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => {
-          if (
-            requestId !== requestIdRef.current ||
-            prev.currentSession?.session_id !== sessionId
-          ) {
-            return prev;
-          }
-          return {
-            ...prev,
-            sessionResourcesLoading: false,
-            sessionResourcesError: message,
-            status: silent ? prev.status : `后台连接加载失败: ${message}`,
-          };
-        });
+          const resources = await loadResources();
+          setState((prev) => {
+            if (
+              requestId !== requestIdRef.current ||
+              prev.currentSession?.session_id !== sessionId
+            ) {
+              return prev;
+            }
+            const previousCount = prev.sessionResources.length;
+            const nextCount = resources.items.length;
+            const status =
+              silent && previousCount === nextCount
+                ? prev.status
+                : silent
+                  ? `后台连接已更新 (${nextCount} 个)`
+                  : `后台连接已加载 (${nextCount} 个)`;
+            return {
+              ...prev,
+              sessionResources: resources.items,
+              sessionResourcesLoadedAt: new Date().toISOString(),
+              sessionResourcesLoading: false,
+              sessionResourcesError: null,
+              status,
+            };
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setState((prev) => {
+            if (
+              requestId !== requestIdRef.current ||
+              prev.currentSession?.session_id !== sessionId
+            ) {
+              return prev;
+            }
+            return {
+              ...prev,
+              sessionResourcesLoading: false,
+              sessionResourcesError: message,
+              status: silent ? prev.status : `后台连接加载失败: ${message}`,
+            };
+          });
+        }
+      })();
+      inFlightRefreshRef.current = { key: requestKey, promise: request };
+      try {
+        await request;
+      } finally {
+        if (inFlightRefreshRef.current?.promise === request) {
+          inFlightRefreshRef.current = null;
+        }
       }
     },
     [apiPort, workspaceId, setState],

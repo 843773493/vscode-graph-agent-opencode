@@ -2,7 +2,6 @@ from copy import deepcopy
 
 from langchain_core.messages import HumanMessage
 
-from app.agents.providers.anthropic_messages import BoxteamAnthropicMessagesModel
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 
@@ -84,20 +83,22 @@ def test_responses_projects_input_text_and_input_image():
     }
 
 
-def test_anthropic_projects_user_image_as_standard_image_url():
+def test_anthropic_messages_uses_litellm_chat_projection():
     message = _message()
-    model = BoxteamAnthropicMessagesModel(
+    model = BoxteamLiteLLMChatModel(
         model="claude-test",
         api_key="test-key",
-        base_url="https://example.com",
+        api_base="https://example.com",
+        custom_llm_provider="anthropic",
         provider_id="anthropic-test",
         image_input_replay=True,
     )
 
-    projected = model._project_messages([message])
+    projected = model._convert_messages_to_dicts([message])[0]
 
-    assert projected[0].content[0] == {"type": "text", "text": "请看图片"}
-    assert projected[0].content[2] == {
+    assert projected["role"] == "user"
+    assert projected["content"][0] == {"type": "text", "text": "请看图片"}
+    assert projected["content"][2] == {
         "type": "image_url",
         "image_url": {"url": "data:image/webp;base64,preview"},
     }

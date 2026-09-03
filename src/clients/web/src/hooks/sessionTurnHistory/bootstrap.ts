@@ -46,6 +46,7 @@ export function useTurnBootstrap({
   sessionCacheKey,
   reloadNonce,
   manualReloadNonce,
+  getCurrentTimeline,
   generationRef,
   invalidatedTurnIdsRef,
   setState,
@@ -57,6 +58,7 @@ export function useTurnBootstrap({
   sessionCacheKey: string | null;
   reloadNonce: number;
   manualReloadNonce: number;
+  getCurrentTimeline: () => SessionTurnTimeline | null;
   generationRef: MutableRefObject<number>;
   invalidatedTurnIdsRef: MutableRefObject<Set<string>>;
   setState: SetAppState;
@@ -83,20 +85,30 @@ export function useTurnBootstrap({
     const previousManualReloadNonce = lastManualReloadNonceByScopeRef.current.get(
       sessionCacheKey,
     );
-    const shouldLoadInitialHistory = !hasVisitedScope
-      || (
-        previousReloadNonce !== undefined
-        && previousReloadNonce !== reloadNonce
-      )
-      || (
-        previousManualReloadNonce !== undefined
-        && previousManualReloadNonce !== manualReloadNonce
-      );
+    const isInitialScope = lastScopeKeyRef.current === null;
+    const cachedTimeline = getCurrentTimeline();
+    const hasReadyCachedTimeline = cachedTimeline?.scopeKey === sessionCacheKey
+      && cachedTimeline.phase === "ready"
+      && cachedTimeline.projectionState === "ready";
+    const reloadRequested = (
+      previousReloadNonce !== undefined
+      && previousReloadNonce !== reloadNonce
+    ) || (
+      previousManualReloadNonce !== undefined
+      && previousManualReloadNonce !== manualReloadNonce
+    );
+    const shouldLoadInitialHistory = !hasReadyCachedTimeline || reloadRequested;
+    const canReuseCachedTimeline = isNewScope
+      && !isInitialScope
+      && hasReadyCachedTimeline
+      && !reloadRequested;
     lastReloadNonceByScopeRef.current.set(sessionCacheKey, reloadNonce);
     lastManualReloadNonceByScopeRef.current.set(sessionCacheKey, manualReloadNonce);
     if (isNewScope) {
       invalidatedTurnIdsRef.current.clear();
-      lastProjectionEpochRef.current = null;
+      lastProjectionEpochRef.current = canReuseCachedTimeline
+        ? cachedTimeline?.projectionEpoch ?? null
+        : null;
       lastScopeKeyRef.current = sessionCacheKey;
     }
     visitedScopeKeysRef.current.add(sessionCacheKey);
@@ -109,6 +121,27 @@ export function useTurnBootstrap({
     setState((previous) => {
       // 显式刷新/重载必须丢弃旧的上下文窗口。旧窗口中的 Turn 可能已经
       // 不属于当前 context view，继续拿它们请求详情会被后端正确拒绝为 409。
+      // 已成功加载过的会话切换时直接复用完整 timeline；事件流会从缓存
+      // 的 event cursor 增量追赶，bootstrap 只用于首次进入和需要校准的场景。
+      if (canReuseCachedTimeline) {
+        const timeline = timelineForScope(
+          previous.turnTimelinesBySession,
+          sessionCacheKey,
+        );
+        return {
+          ...previous,
+          turnTimelinesBySession: writeTurnTimelineCache(
+            previous.turnTimelinesBySession,
+            sessionCacheKey,
+            {
+              ...timeline,
+              generation: targetGeneration,
+              error: null,
+            },
+          ),
+          status: "已从本地缓存恢复会话",
+        };
+      }
       const timeline = shouldLoadInitialHistory
         ? createSessionTurnTimeline(sessionCacheKey)
         : isNewScope && !hasVisitedScope
@@ -336,6 +369,12 @@ export function useTurnBootstrap({
       }
     };
 
+    if (canReuseCachedTimeline) {
+      return () => {
+        if (pollTimer !== null) globalThis.clearTimeout(pollTimer);
+        controller.abort();
+      };
+    }
     void requestBootstrap(0);
     return () => {
       if (pollTimer !== null) globalThis.clearTimeout(pollTimer);
@@ -347,6 +386,7 @@ export function useTurnBootstrap({
     invalidatedTurnIdsRef,
     loadInitialTurns,
     manualReloadNonce,
+    getCurrentTimeline,
     reloadNonce,
     sessionCacheKey,
     sessionId,

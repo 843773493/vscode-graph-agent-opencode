@@ -26,7 +26,6 @@ describe("useSessionEventStream readiness", () => {
         activeJobId: null,
         timelineReady: false,
         initialEventCursor: null,
-        refreshTurnDetails: async () => undefined,
         refreshTurnHistory: () => undefined,
         setState: (update) => {
           void update;

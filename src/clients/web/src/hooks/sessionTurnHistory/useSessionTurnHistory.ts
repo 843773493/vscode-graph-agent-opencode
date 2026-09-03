@@ -127,6 +127,7 @@ export function useSessionTurnHistory({
     sessionCacheKey,
     reloadNonce,
     manualReloadNonce,
+    getCurrentTimeline,
     generationRef,
     invalidatedTurnIdsRef,
     setState,

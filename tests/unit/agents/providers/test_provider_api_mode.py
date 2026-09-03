@@ -35,6 +35,7 @@ def _provider(api_mode: str) -> dict[str, object]:
             "model_info": {
                 "supports_function_calling": True,
                 "supports_reasoning": True,
+                "supports_vision": True,
             },
             "supports_reasoning": {
                 "reasoning_items": {"summary": True, "encrypted_content": True}
@@ -228,11 +229,7 @@ def test_chat_completions_thinking_blocks_configures_model_projection():
     assert model.thinking_blocks_replay is True
 
 
-def test_anthropic_messages_mode_uses_anthropic_adapter():
-    from app.agents.providers.anthropic_messages import (
-        BoxteamAnthropicMessagesModel,
-    )
-
+def test_anthropic_messages_mode_uses_litellm_chat_model():
     provider = {
         "id": "anthropic-test",
         "endpoint": "https://example.com/anthropic",
@@ -253,26 +250,23 @@ def test_anthropic_messages_mode_uses_anthropic_adapter():
 
     model = build_model_from_provider(provider, {})
 
-    assert isinstance(model, BoxteamAnthropicMessagesModel)
+    assert isinstance(model, BoxteamLiteLLMChatModel)
+    assert model.custom_llm_provider == "anthropic"
     assert model.thinking_blocks_replay is True
-    assert model.redacted_thinking_replay is True
 
 
 def test_anthropic_history_projects_direct_content_to_thinking_blocks():
     from langchain_core.messages import AIMessage
 
-    from app.agents.providers.anthropic_messages import (
-        BoxteamAnthropicMessagesModel,
-    )
     from app.agents.providers.litellm_content import build_ai_message_content
 
-    model = BoxteamAnthropicMessagesModel(
-        model_name="claude-test",
+    model = BoxteamLiteLLMChatModel(
+        model="claude-test",
         api_key="test-key",
-        base_url="https://example.com/anthropic",
+        api_base="https://example.com/anthropic",
+        custom_llm_provider="anthropic",
         provider_id="anthropic-test",
         thinking_blocks_replay=True,
-        redacted_thinking_replay=True,
     )
     message = AIMessage(
         content=build_ai_message_content(
@@ -286,29 +280,24 @@ def test_anthropic_history_projects_direct_content_to_thinking_blocks():
         response_metadata={"provider_id": "anthropic-test"},
     )
 
-    projected = model._project_ai_message(message)
+    projected = model._convert_messages_to_dicts([message])[0]
 
-    assert projected.content == [
+    assert projected["content"] == [{"type": "text", "text": "最终回答"}]
+    assert projected["thinking_blocks"] == [
         {"type": "thinking", "thinking": "分析"},
-        {"type": "redacted_thinking", "data": "sealed"},
-        {"type": "text", "text": "最终回答"},
     ]
 
 
 def test_anthropic_history_drops_reasoning_for_unsupported_target():
     from langchain_core.messages import AIMessage
 
-    from app.agents.providers.anthropic_messages import (
-        BoxteamAnthropicMessagesModel,
-    )
-
-    model = BoxteamAnthropicMessagesModel(
-        model_name="claude-test",
+    model = BoxteamLiteLLMChatModel(
+        model="claude-test",
         api_key="test-key",
-        base_url="https://example.com/anthropic",
+        api_base="https://example.com/anthropic",
+        custom_llm_provider="anthropic",
         provider_id="target-provider",
         thinking_blocks_replay=False,
-        redacted_thinking_replay=False,
     )
     message = AIMessage(
         content=[
@@ -329,10 +318,19 @@ def test_anthropic_history_drops_reasoning_for_unsupported_target():
         response_metadata={"provider_id": "source-provider"},
     )
 
-    projected = model._project_ai_message(message)
+    projected = model._convert_messages_to_dicts([message])[0]
 
-    assert projected.content == [{"type": "text", "text": "可见回答"}]
-    assert projected.tool_calls == message.tool_calls
+    assert projected["content"] == [{"type": "text", "text": "可见回答"}]
+    assert projected["tool_calls"] == [
+        {
+            "type": "function",
+            "id": "call-1",
+            "function": {
+                "name": "read_file",
+                "arguments": '{"path": "a.txt"}',
+            },
+        }
+    ]
 
 
 def test_responses_mode_uses_encrypted_reasoning_and_stable_cache_key():
@@ -499,7 +497,11 @@ def test_responses_payload_final_boundary_drops_reintroduced_reasoning_content(
         ),
         HumanMessage(content="继续执行只读检查"),
     ]
-    monkeypatch.setattr(model, "_history_messages", lambda _messages: legacy_history)
+    monkeypatch.setattr(
+        model,
+        "_history_messages",
+        lambda _messages, *, deadline=None: legacy_history,
+    )
 
     payload = model._responses_payload([HumanMessage(content="当前请求")], None, {})
 

@@ -609,7 +609,11 @@ export function useSessionLifecycleActions({
             const nextSession = remainingSessions[0] ?? null;
             next.currentSession = nextSession;
             next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
-            next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+            if (!deletingCurrent) {
+              // 删除非当前会话时，级联删除可能移除了当前会话；这时才需要
+              // 为新选中的会话触发一次历史加载。
+              next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+            }
             next.traceEvents = [];
             next.llmRequestLogs = [];
             next.llmRequestLogsLoadedAt = null;

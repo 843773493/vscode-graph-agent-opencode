@@ -9,7 +9,7 @@ import type {
   GatewayUserViewState,
 } from "../types/backend";
 import type { ConversationView } from "../types/frontend";
-import { conversationTurnKey } from "../state/session/turnDetailHydration";
+import { conversationTurnKey } from "../state/session/turnIdentity";
 import type { TurnProjectionState } from "../state/session/turnTimeline";
 import { isLiveConversationView } from "../state/trace/traceAggregation";
 import ChatHistoryEmptyState from "./chat/ChatHistoryEmptyState";
@@ -17,7 +17,6 @@ import ChatHistoryPageHeader from "./chat/ChatHistoryPageHeader";
 import ChatTurn from "./chat/ChatTurn";
 import ChatTurnErrorBoundary from "./chat/ChatTurnErrorBoundary";
 import { useTurnVirtualScroller } from "./chat/useTurnVirtualScroller";
-import { useVisibleTurnDetailHydration } from "./chat/useVisibleTurnDetailHydration";
 
 export function transcriptConversationsForDisplay(
   conversations: readonly ConversationView[],
@@ -39,13 +38,10 @@ export default function ChatPanel({
   loadingOlderMessages,
   historyLoading,
   projectionState,
-  timelineGeneration,
-  projectionEpoch,
   historyError,
   onLoadAroundTurn,
   onLoadNewerMessages,
   onLoadOlderMessages,
-  loadingDetailTurnIds,
   onLoadTurnDetails,
   onLoadToolDetails,
   onLoadAgentStateMessageRawContent,
@@ -73,13 +69,10 @@ export default function ChatPanel({
   loadingOlderMessages: boolean;
   historyLoading: boolean;
   projectionState: TurnProjectionState;
-  timelineGeneration: number;
-  projectionEpoch: number | null;
   historyError: string | null;
   onLoadAroundTurn: (anchorTurnId: string) => Promise<void>;
   onLoadNewerMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
-  loadingDetailTurnIds: readonly string[];
   onLoadTurnDetails: (
     turnIds: string[],
     requestIdentity?: string | null,
@@ -156,19 +149,6 @@ export default function ChatPanel({
     onViewStateChange,
     onViewStateRestoreStatus,
   });
-  const {
-    detailHydrationError,
-    clearDetailHydrationError,
-    hydrateVisibleTurns,
-  } = useVisibleTurnDetailHydration({
-    sessionId,
-    timelineGeneration,
-    projectionEpoch,
-    conversations: transcriptConversations,
-    firstItemIndex,
-    loadingTurnIds: loadingDetailTurnIds,
-    onLoadTurnDetails,
-  });
   const sessionBusy = conversations.some(
     (conversation) => isLiveConversationView(conversation)
       && (conversation.status === "running" || conversation.status === "queued"),
@@ -232,9 +212,8 @@ export default function ChatPanel({
     () => changePendingPolicy(messageId, policy),
   ), [changePendingPolicy, runPendingAction]);
   const retryHistory = React.useCallback(() => {
-    clearDetailHydrationError();
     onRetryHistory();
-  }, [clearDetailHydrationError, onRetryHistory]);
+  }, [onRetryHistory]);
 
   return (
     <section className="chat-stream-shell">
@@ -272,14 +251,13 @@ export default function ChatPanel({
         endReached={handleEndReached}
         followOutput={followOutput}
         atBottomStateChange={handleAtBottomChange}
-        rangeChanged={hydrateVisibleTurns}
         components={{
           Header: () => (
             <ChatHistoryPageHeader
               projectionState={projectionState}
               hasOlderMessages={hasOlderMessages}
               loadingOlderMessages={loadingOlderMessages}
-              error={historyError ?? detailHydrationError}
+              error={historyError}
               onRetry={retryHistory}
             />
           ),

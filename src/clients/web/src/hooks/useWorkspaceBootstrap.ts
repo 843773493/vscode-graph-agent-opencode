@@ -33,6 +33,7 @@ type WorkspaceBootstrapPayload = {
 };
 
 const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 5000];
+const INITIAL_BOOTSTRAP_DELAY_MS = 120;
 
 export function isRetryableWorkspaceBootstrapError(error: unknown): boolean {
   return (
@@ -480,12 +481,18 @@ export function useWorkspaceBootstrap({
   }, [apiPort, setState]);
 
   useEffect(() => {
-    void refreshSessions(undefined, {
-      restorePersistedWorkspace: true,
-      checkGatewayWorkspaceHealth: true,
-    }).catch(() => {
-      // 错误详情已经写入全局状态；这里只处理 effect Promise，避免未处理拒绝。
-    });
+    // React.StrictMode 的开发探测会先 cleanup 再重新执行 effect；延迟首个
+    // bootstrap 可以让探测阶段在发出网络请求前结束，避免同一组工作区读取被
+    // 启动两次。生产环境只会等待这一次短延迟。
+    const timerId = window.setTimeout(() => {
+      void refreshSessions(undefined, {
+        restorePersistedWorkspace: true,
+        checkGatewayWorkspaceHealth: true,
+      }).catch(() => {
+        // 错误详情已经写入全局状态；这里只处理 effect Promise，避免未处理拒绝。
+      });
+    }, INITIAL_BOOTSTRAP_DELAY_MS);
+    return () => window.clearTimeout(timerId);
   }, [refreshSessions]);
 
   return {

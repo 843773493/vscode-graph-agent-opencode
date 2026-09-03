@@ -12,12 +12,10 @@ import {
   type MessageStreamState,
 } from "../state/messageStream";
 import { cloneMaps } from "../state/appStateMaps";
-import { removePendingForJob } from "../state/conversations";
+import { completePendingForJob } from "../state/conversations";
 import type { SetAppState } from "./sessionEventStream/sessionRefresh";
 import { sessionStreamReconnectDelay } from "./sessionEventStreamPolicy";
 import { waitForReconnect } from "./waitForReconnect";
-
-export type MessageStreamTerminalHandler = (turnId: string) => void;
 
 export function useSessionMessageStream({
   apiPort,
@@ -25,7 +23,6 @@ export function useSessionMessageStream({
   turnId,
   workspaceId,
   sessionCacheKey,
-  onTerminal,
   setState,
 }: {
   apiPort: number | null;
@@ -33,12 +30,9 @@ export function useSessionMessageStream({
   turnId: string | null;
   workspaceId: string | null;
   sessionCacheKey: string | null;
-  onTerminal?: MessageStreamTerminalHandler;
   setState: SetAppState;
 }) {
   const streamAbortRef = useRef<AbortController | null>(null);
-  const onTerminalRef = useRef(onTerminal);
-  onTerminalRef.current = onTerminal;
 
   useEffect(() => {
     streamAbortRef.current?.abort();
@@ -54,7 +48,7 @@ export function useSessionMessageStream({
     let lastEventSeq = 0;
     let turnStreamId: string | null = null;
     let terminalSeen = false;
-    let terminalHandlerCalled = false;
+    let terminalStateApplied = false;
     let terminalStatus: MessageStreamState["streamStatus"] = "open";
     let terminalFailure: MessageStreamState["failure"] = null;
     let reconnectAttempt = 0;
@@ -95,31 +89,31 @@ export function useSessionMessageStream({
     };
 
     const notifyTerminal = () => {
-      if (terminalSeen && !terminalHandlerCalled) {
-        terminalHandlerCalled = true;
-        setState((previous) => {
-          if (
-            previous.activeJobIdsBySession.get(sessionCacheKey) !== targetTurnId
-          ) {
-            return previous;
-          }
-          const next = cloneMaps(previous);
+      if (!terminalSeen || terminalStateApplied) return;
+      terminalStateApplied = true;
+      setState((previous) => {
+        const next = cloneMaps(previous);
+        if (previous.activeJobIdsBySession.get(sessionCacheKey) === targetTurnId) {
           next.activeJobIdsBySession.delete(sessionCacheKey);
-          removePendingForJob(
-            next.pendingConversations,
-            targetSessionId,
-            targetTurnId,
-            sessionCacheKey,
-          );
-          if (terminalStatus === "failed" && terminalFailure?.message) {
-            next.status = `任务失败: ${terminalFailure.message}`;
-          } else if (terminalStatus === "interrupted") {
-            next.status = "任务已取消";
-          }
-          return next;
-        });
-        onTerminalRef.current?.(targetTurnId);
-      }
+        }
+        completePendingForJob(
+          next.pendingConversations,
+          targetSessionId,
+          targetTurnId,
+          terminalStatus === "completed"
+            ? "completed"
+            : terminalStatus === "interrupted"
+              ? "cancelled"
+              : "failed",
+          sessionCacheKey,
+        );
+        if (terminalStatus === "failed" && terminalFailure?.message) {
+          next.status = `任务失败: ${terminalFailure.message}`;
+        } else if (terminalStatus === "interrupted") {
+          next.status = "任务已取消";
+        }
+        return next;
+      });
     };
 
     // 先建立消息流展示镜像；聊天主时间线在消息流尚未连接时只显示连接状态。
@@ -208,8 +202,8 @@ export function useSessionMessageStream({
               onEvent: applyEvent,
             },
           );
-          // 先让 fetch/SSE 完整消费终态帧，再清理活动 Job。否则终态回调
-          // 触发 React effect cleanup 时，会把最后一个正常响应记录成 ERR_ABORTED。
+          // 先让 fetch/SSE 完整消费终态帧，再清理活动 Job，避免最后一个
+          // 正常响应被流清理误判为 ERR_ABORTED。
           notifyTerminal();
         } catch (error) {
           if (controller.signal.aborted) return;

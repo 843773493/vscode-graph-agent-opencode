@@ -1,24 +1,16 @@
 import { useEffect } from "react";
 import type { ConversationContentView } from "../types/frontend";
-import type { RefreshOptions } from "./contentViewLoaderTypes";
 
 export function useContentViewEffects({
   contentView,
   sessionId,
-  userAccessReady,
   refreshLLMRequestLogs,
   refreshSessionChanges,
-  refreshSessionResources,
 }: {
   contentView: ConversationContentView;
   sessionId: string | null;
-  userAccessReady: boolean;
   refreshLLMRequestLogs: (sessionId: string) => Promise<void>;
   refreshSessionChanges: (sessionId: string) => Promise<void>;
-  refreshSessionResources: (
-    sessionId: string,
-    options?: RefreshOptions,
-  ) => Promise<void>;
 }) {
   useEffect(() => {
     if (contentView !== "requests" || !sessionId) {
@@ -48,43 +40,5 @@ export function useContentViewEffects({
     contentView,
     refreshSessionChanges,
     sessionId,
-  ]);
-
-  useEffect(() => {
-    if (contentView !== "resources" || !sessionId || !userAccessReady) {
-      return;
-    }
-
-    let disposed = false;
-    let pollInFlight = false;
-    const poll = async (silent: boolean) => {
-      if (disposed || pollInFlight || document.visibilityState !== "visible") {
-        return;
-      }
-      pollInFlight = true;
-      try {
-        await refreshSessionResources(sessionId, { silent });
-      } finally {
-        pollInFlight = false;
-      }
-    };
-
-    const initialTimerId = window.setTimeout(() => {
-      void poll(false);
-    }, 120);
-    const timerId = window.setInterval(() => {
-      void poll(true);
-    }, 5000);
-
-    return () => {
-      disposed = true;
-      window.clearTimeout(initialTimerId);
-      window.clearInterval(timerId);
-    };
-  }, [
-    contentView,
-    refreshSessionResources,
-    sessionId,
-    userAccessReady,
   ]);
 }

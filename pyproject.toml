@@ -34,7 +34,6 @@ dependencies = [
     "pillow>=12.3.0",
     "croniter>=6.0.0",
     "tzdata>=2024.1; sys_platform == 'win32'",
-    "langchain-anthropic>=1.4.3",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +45,8 @@ dev = [
 addopts = ["--import-mode=importlib"]
 asyncio_mode = "auto"
 pythonpath = ["."]
+testpaths = ["tests"]
+norecursedirs = ["out"]
 markers = [
     "unit: 单元测试",
     "contract: 跨进程或跨语言公开协议契约测试",

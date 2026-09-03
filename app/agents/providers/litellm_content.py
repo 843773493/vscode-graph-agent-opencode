@@ -192,12 +192,18 @@ def project_user_message_content(
     target_format: str,
     image_input: bool,
 ) -> dict[str, Any]:
-    """把 canonical HumanMessage content 投影为目标 provider 的临时 blocks。
+    """把 canonical HumanMessage content 投影为 LiteLLM 的临时 blocks。
 
     ``metadata``、preview 状态和其它 canonical-only 字段不会越过请求边界；
     source content 保持不变。不可选的 rich block 失败只影响该 block，manifest
     文本和附件路径仍会发送，并通过 diagnostics 暴露原因。
     """
+
+    if target_format not in {"chat_completions", "responses"}:
+        raise ValueError(
+            "用户 content 投影只接受 LiteLLM 的 chat_completions 或 responses 形状，"
+            f"不支持: {target_format!r}"
+        )
 
     source_blocks = _content_blocks(content)
     projected: list[dict[str, Any]] = []
@@ -271,12 +277,16 @@ def project_user_message_content(
                 continue
             projected.append({"type": "input_image", "image_url": image_url})
             continue
-        if block_type == "image" and isinstance(source.get("source"), Mapping):
-            projected.append(
+        if block_type == "image":
+            diagnostics.append(
                 {
-                    key: copy.deepcopy(value)
-                    for key, value in source.items()
-                    if key != "metadata"
+                    "block_index": index,
+                    "block_type": block_type,
+                    "status": "projection_failed",
+                    "detail": (
+                        "应用层不接受 provider 原生 image/source block；"
+                        "canonical 用户图片必须使用 image_url 形状"
+                    ),
                 }
             )
             continue

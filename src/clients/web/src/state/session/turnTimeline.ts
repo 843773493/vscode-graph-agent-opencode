@@ -392,24 +392,6 @@ export function upsertTurns(
   };
 }
 
-const TURN_INVALIDATING_EVENT_TYPES = new Set([
-  "text_end",
-  "tool_call_end",
-  "job_completed",
-  "job_cancelled",
-  "job_failed",
-]);
-
-export function turnIdsInvalidatedByEvents(
-  events: ReadonlyArray<{ type: string; job_id: string }>,
-): string[] {
-  return [...new Set(events.flatMap((event) =>
-    TURN_INVALIDATING_EVENT_TYPES.has(event.type) && event.job_id
-      ? [event.job_id]
-      : [],
-  ))];
-}
-
 function replaceProjection(
   timeline: SessionTurnTimeline,
   projectionEpoch: number,

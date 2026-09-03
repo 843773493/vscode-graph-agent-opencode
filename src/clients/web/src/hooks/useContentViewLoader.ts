@@ -37,6 +37,7 @@ export function useContentViewLoader({
   });
   const {
     invalidateSessionChanges,
+    loadSessionChangesets,
     refreshSessionChanges,
     reviewSessionChangeFile,
   } = useSessionChangesLoader({
@@ -210,6 +211,7 @@ export function useContentViewLoader({
     controlSessionResource,
     invalidateAgentState,
     loadAgentStateMessageRawContent,
+    loadSessionChangesets,
     refreshSessionChanges,
     refreshAgentStateSnapshot,
     refreshLLMRequestLogs,

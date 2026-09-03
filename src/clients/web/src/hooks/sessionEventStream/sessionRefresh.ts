@@ -55,11 +55,16 @@ export async function refreshWorkspaceSessionList(
   apiPort: number,
   workspaceId: string | null,
   setState: SetAppState,
+  options: { force?: boolean } = {},
 ): Promise<void> {
   if (!workspaceId) {
     throw new Error("刷新委派子会话时缺少 workspace_id");
   }
-  const snapshot = await fetchWorkspaceSessionListSnapshot(apiPort, workspaceId);
+  const snapshot = await fetchWorkspaceSessionListSnapshot(
+    apiPort,
+    workspaceId,
+    options,
+  );
   if (!isCurrentWorkspaceSessionListSnapshot(snapshot)) {
     return;
   }
@@ -69,7 +74,19 @@ export async function refreshWorkspaceSessionList(
     }
     const previousWorkspaceSessions =
       previous.sessionsByWorkspace.get(workspaceId) ?? [];
-    if (sessionListsMatch(previousWorkspaceSessions, snapshot.sessions)) {
+    const currentSessionIsInWorkspace =
+      previous.activeGatewayWorkspaceId === workspaceId
+      || previous.currentSessionWorkspaceId === workspaceId;
+    const currentSessionId = previous.currentSession?.session_id;
+    const currentSessionRemoved = Boolean(
+      currentSessionIsInWorkspace
+      && currentSessionId
+      && !snapshot.sessions.some((session) => session.session_id === currentSessionId),
+    );
+    if (
+      sessionListsMatch(previousWorkspaceSessions, snapshot.sessions)
+      && !currentSessionRemoved
+    ) {
       return previous;
     }
     const next = cloneMaps(previous);
@@ -80,11 +97,13 @@ export async function refreshWorkspaceSessionList(
         workspaceId,
       );
     }
-    if (
-      previous.activeGatewayWorkspaceId === workspaceId
-      || previous.currentSessionWorkspaceId === workspaceId
-    ) {
+    if (currentSessionIsInWorkspace) {
       next.sessions = snapshot.sessions;
+      if (currentSessionRemoved) {
+        const nextSession = snapshot.sessions[0] ?? null;
+        next.currentSession = nextSession;
+        next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
+      }
     }
     return next;
   });

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { getJob } from "../api";
 import { listPendingRequests } from "../pendingRequestsApi";
 import { cloneMaps } from "../state/appStateMaps";
@@ -44,6 +44,15 @@ export function useBackgroundSessionActivity({
   currentSessionCacheKey: string | null;
   setState: SetAppState;
 }): void {
+  const trackedJobSignature = useMemo(
+    () => [...activeJobIdsBySession.entries()]
+      .filter(([sessionCacheKey]) => sessionCacheKey !== currentSessionCacheKey)
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      .map(([sessionCacheKey, jobId]) => `${sessionCacheKey}\u0000${jobId}`)
+      .join("\u0001"),
+    [activeJobIdsBySession, currentSessionCacheKey],
+  );
+
   useEffect(() => {
     if (!apiPort) {
       return;
@@ -127,9 +136,9 @@ export function useBackgroundSessionActivity({
       window.clearInterval(intervalId);
     };
   }, [
-    activeJobIdsBySession,
     apiPort,
     currentSessionCacheKey,
     setState,
+    trackedJobSignature,
   ]);
 }

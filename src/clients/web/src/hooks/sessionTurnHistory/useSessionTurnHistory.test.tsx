@@ -101,6 +101,100 @@ describe("useSessionTurnHistory partial bootstrap", () => {
     act(() => renderer!.unmount());
   });
 
+  test("切换到已就绪的历史缓存不再请求 bootstrap", async () => {
+    const apiPort = 9116;
+    const cachedWorkspaceId = "workspace_cached_history";
+    const cachedScopeKey = `${cachedWorkspaceId}::${SESSION_ID}`;
+    installWindow(apiPort);
+    let currentScopeKey = SCOPE_KEY;
+    let currentState = appState();
+    let bootstrapCalls = 0;
+    currentState.turnTimelinesBySession.set(
+      cachedScopeKey,
+      {
+        ...upsertTurns(
+          createSessionTurnTimeline(cachedScopeKey),
+          [turnDetail(1)],
+        ),
+        phase: "ready",
+        eventCursor: "event-cached",
+        projectionEpoch: 1,
+        projectionState: "ready",
+      },
+    );
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const path = new URL(String(input), `http://127.0.0.1:${apiPort}`).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_credential_cached_history",
+            data: { token: "turn-history-cached-token" },
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_current_cached_history",
+            data: { kind: "guest", user_id: null },
+          });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
+          bootstrapCalls += 1;
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_bootstrap_cached_history",
+            data: { ...bootstrap("ready", 1), latest_turn: null },
+          });
+        }
+        throw new Error(`缓存命中测试收到未预期请求: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    function Harness({ scopeKey, workspaceId }: {
+      scopeKey: string;
+      workspaceId: string;
+    }): React.ReactNode {
+      useSessionTurnHistory({
+        apiPort,
+        sessionId: SESSION_ID,
+        workspaceId,
+        sessionCacheKey: scopeKey,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(currentScopeKey) ?? null,
+        reloadNonce: 0,
+        setState: (update) => {
+          currentState = typeof update === "function" ? update(currentState) : update;
+        },
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness scopeKey={SCOPE_KEY} workspaceId={WORKSPACE_ID} />);
+      await wait(80);
+    });
+    expect(bootstrapCalls).toBe(1);
+
+    currentScopeKey = cachedScopeKey;
+    await act(async () => {
+      renderer!.update(
+        <Harness scopeKey={cachedScopeKey} workspaceId={cachedWorkspaceId} />,
+      );
+      await wait(80);
+    });
+
+    expect(bootstrapCalls).toBe(1);
+    expect(currentState.turnTimelinesBySession.get(cachedScopeKey)?.phase).toBe("ready");
+    expect(currentState.status).toBe("已从本地缓存恢复会话");
+    act(() => renderer!.unmount());
+  });
+
   test("轮询直到 ready，且 epoch 切换会重新水合相同 revision 的最新 Turn", async () => {
     const apiPort = 9107;
     installWindow(apiPort);

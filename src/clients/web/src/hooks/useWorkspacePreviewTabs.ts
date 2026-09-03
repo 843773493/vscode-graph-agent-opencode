@@ -66,6 +66,33 @@ export function useWorkspacePreviewTabs({
   const persistLayoutRef = useRef(onPersistLayout);
   const persistedPreviewLayoutKeyRef = useRef(previewLayoutKey(restoredLayout));
   const previewWorkspaceIdRef = useRef<string | null | undefined>(undefined);
+  const fileContentRequestsRef = useRef(
+    new Map<string, Promise<WorkspaceFileContent>>(),
+  );
+
+  const loadWorkspaceFileContent = useCallback((path: string) => {
+    const requestKey = [apiPort ?? DEFAULT_BACKEND_PORT, workspaceId ?? "", path].join(":");
+    const existing = fileContentRequestsRef.current.get(requestKey);
+    if (existing) {
+      return existing;
+    }
+    const request = getWorkspaceFileContent(
+      apiPort ?? DEFAULT_BACKEND_PORT,
+      path,
+      workspaceId,
+    );
+    fileContentRequestsRef.current.set(requestKey, request);
+    void request.then(() => {
+      if (fileContentRequestsRef.current.get(requestKey) === request) {
+        fileContentRequestsRef.current.delete(requestKey);
+      }
+    }, () => {
+      if (fileContentRequestsRef.current.get(requestKey) === request) {
+        fileContentRequestsRef.current.delete(requestKey);
+      }
+    });
+    return request;
+  }, [apiPort, workspaceId]);
 
   useEffect(() => {
     persistLayoutRef.current = onPersistLayout;
@@ -129,11 +156,7 @@ export function useWorkspacePreviewTabs({
     setTabs(placeholderTabs);
     setActivePath(restoredActivePath);
     setLoadingPath(restoredActivePath);
-    void getWorkspaceFileContent(
-      apiPort ?? DEFAULT_BACKEND_PORT,
-      restoredActivePath,
-      workspaceId,
-    )
+    void loadWorkspaceFileContent(restoredActivePath)
       .then((content) => {
         if (cancelled) {
           return;
@@ -165,7 +188,7 @@ export function useWorkspacePreviewTabs({
     return () => {
       cancelled = true;
     };
-  }, [apiPort, settingsLoaded, workspaceId, workspaceRoot]);
+  }, [loadWorkspaceFileContent, settingsLoaded, workspaceId, workspaceRoot]);
 
   const persistedFilePaths = tabs
     .filter((tab) =>
@@ -260,11 +283,7 @@ export function useWorkspacePreviewTabs({
     }
     setLoadingPath(path);
     onStatusChange(`正在读取文件: ${path}`);
-    void getWorkspaceFileContent(
-      apiPort ?? DEFAULT_BACKEND_PORT,
-      path,
-      workspaceId,
-    )
+    void loadWorkspaceFileContent(path)
       .then((content) => openWorkspaceFileContent(content, null))
       .catch((openError: unknown) => {
         const message = openError instanceof Error ? openError.message : String(openError);
@@ -272,7 +291,7 @@ export function useWorkspacePreviewTabs({
         onStatusChange(`文件读取失败: ${message}`);
       })
       .finally(() => setLoadingPath(null));
-  }, [apiPort, onStatusChange, openWorkspaceFileContent, tabs, workspaceId]);
+  }, [loadWorkspaceFileContent, onStatusChange, openWorkspaceFileContent, tabs]);
 
   const openWorkspaceFilePath = useCallback(async (path: string) => {
     if (!isWorkspaceTextFilePath(path)) {
@@ -308,11 +327,7 @@ export function useWorkspacePreviewTabs({
     onStatusChange(`正在读取文件: ${path}`);
 
     try {
-      const content = await getWorkspaceFileContent(
-        apiPort ?? DEFAULT_BACKEND_PORT,
-        path,
-        workspaceId,
-      );
+      const content = await loadWorkspaceFileContent(path);
       openWorkspaceFileContent(content, null);
     } catch (openError) {
       const message = openError instanceof Error ? openError.message : String(openError);
@@ -322,12 +337,11 @@ export function useWorkspacePreviewTabs({
       setLoadingPath(null);
     }
   }, [
-    apiPort,
+    loadWorkspaceFileContent,
     onStatusChange,
     openWorkspaceFileContent,
     selectWorkspacePreviewTab,
     tabs,
-    workspaceId,
   ]);
 
   const openWorkspaceFilePreview = (node: WorkspaceFileNode) => {

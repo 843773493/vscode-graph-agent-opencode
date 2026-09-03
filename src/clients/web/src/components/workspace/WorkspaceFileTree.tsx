@@ -1411,12 +1411,6 @@ export default function WorkspaceFileTree({
           ) : null}
         </div>
       ) : null}
-      {fileTreeLoading ? (
-        <div className="files-tree-loading-status" role="status">
-          <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
-          <span>正在加载工作区文件…</span>
-        </div>
-      ) : null}
       <div className="files-tree-root" role="tree" aria-label="工作区文件树" aria-busy={fileTreeLoading}>
         {visibleRows.length > FILE_TREE_VIRTUALIZATION_THRESHOLD ? (
           <Virtuoso
@@ -1509,6 +1503,12 @@ export default function WorkspaceFileTree({
           </>
         )}
       </div>
+      {fileTreeLoading ? (
+        <div className="files-tree-loading-status" role="status">
+          <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
+          <span>正在加载工作区文件…</span>
+        </div>
+      ) : null}
       <input
         ref={uploadInputRef}
         type="file"

@@ -57,6 +57,14 @@ describe("发送消息状态更新", () => {
             data: { token: "test-local-token" },
           });
         }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_current_user",
+            data: { kind: "guest", user_id: null },
+          });
+        }
         if (
           path ===
           `/api/v1/sessions/${currentSession.session_id}/messages`
@@ -117,6 +125,7 @@ describe("发送消息状态更新", () => {
 
     const cacheKey = "gw_send_regression::ses_send_regression";
     expect(currentState.status).toBe("已发送，等待生成");
+    expect(currentState.sessionHistoryReloadNonce).toBe(0);
     expect(currentState.activeJobIdsBySession.get(cacheKey)).toBe(
       "job_send_regression",
     );
@@ -144,6 +153,14 @@ describe("发送消息状态更新", () => {
             message: "ok",
             request_id: "req_interrupt_credential",
             data: { token: "test-interrupt-token" },
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_interrupt_current_user",
+            data: { kind: "guest", user_id: null },
           });
         }
         if (path === `/api/v1/sessions/${currentSession.session_id}/interrupt`) {
@@ -205,6 +222,14 @@ describe("发送消息状态更新", () => {
             message: "ok",
             request_id: "req_replay_credential",
             data: { token: "test-replay-token" },
+          });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_replay_current_user",
+            data: { kind: "guest", user_id: null },
           });
         }
         if (

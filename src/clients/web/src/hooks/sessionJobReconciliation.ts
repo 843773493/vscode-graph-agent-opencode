@@ -2,11 +2,9 @@ import { getJob, getSession } from "../api";
 import { listPendingRequests } from "../pendingRequestsApi";
 import {
   preservePendingTerminalConversation,
-  removePendingForJob,
   writePendingSnapshot,
 } from "../state/conversations";
 import {
-  isJobTerminalTraceType,
   terminalStatusTextForEvent,
 } from "../state/traceEvents";
 import { cloneMaps } from "../state/appStateMaps";
@@ -30,13 +28,16 @@ const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
   "timed_out",
 ]);
 
-const TERMINAL_RECONCILIATION_RETRY_DELAYS_MS = [
-  0,
-  100,
-  250,
-  500,
-  1_000,
-] as const;
+const terminalSessionRefreshes = new Map<string, Promise<void>>();
+
+function terminalSessionRefreshKey(
+  apiPort: number,
+  sessionId: string,
+  workspaceId: string | null,
+  turnId: string,
+): string {
+  return `${apiPort}:${workspaceId ?? ""}:${sessionId}:${turnId}`;
+}
 
 export interface ActiveJobReconciliationResult {
   jobStatus: JobStatus;
@@ -155,14 +156,8 @@ function preserveTerminalTurnFallback(
     turnStatus,
     sessionCacheKey,
   );
-  // Job API 已确认终态后，实时 pending 镜像不再代表可运行任务。
-  // 历史详情可以继续异步回填，但不能让该镜像在回填期间继续触发转圈。
-  removePendingForJob(
-    next.pendingConversations,
-    sessionId,
-    terminalEvent.job_id,
-    sessionCacheKey,
-  );
+  // Job API 已确认终态后，实时镜像不再代表可运行任务，但要保留它作为
+  // 当前视图的已完成回合；下一次 bootstrap 会用 canonical 历史替换它。
   next.activeJobIdsBySession.delete(sessionCacheKey);
   const timeline = next.turnTimelinesBySession.get(sessionCacheKey);
   const turn = timeline?.turnsById[terminalEvent.job_id];
@@ -204,35 +199,25 @@ function latestSessionMatches(state: AppState, sessionId: string): boolean {
   return state.currentSession?.session_id === sessionId;
 }
 
-export async function refreshTerminalSession(
+async function refreshTerminalSessionInternal(
   apiPort: number,
   sessionId: string,
   workspaceId: string | null,
   sessionCacheKey: string,
   terminalTraceEvent: TraceEvent | null,
-  refreshTurnDetails: (turnIds: string[]) => Promise<void>,
   setState: SetAppState,
   knownPendingSnapshot?: PendingRequestList,
   knownTerminalJob?: Job,
 ) {
   const terminalTurnId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
-  const shouldRefreshTurnDetails = Boolean(
-    terminalTurnId
-    && (
-      (terminalTraceEvent && isJobTerminalTraceType(terminalTraceEvent.type))
-      || (!terminalTraceEvent
-        && knownTerminalJob
-        && TERMINAL_JOB_STATUSES.has(knownTerminalJob.status))
-    ),
-  );
   const effectiveTerminalEvent = terminalTraceEvent
     ?? (knownTerminalJob ? terminalEventForJob(knownTerminalJob) : null);
   const terminalTurnStatus = effectiveTerminalEvent
     ? turnStatusForEvent(effectiveTerminalEvent)
     : null;
 
-  // 终态先从 pending live 镜像移除，避免历史详情回填期间继续显示“正在生成”。
-  // 已存在的 timeline Turn 仍会立即写入终态；历史详情完成后再补齐完整内容。
+  // 终态先把 live 镜像标记为完成，避免继续显示“正在生成”。
+  // 当前视图保留这个回合，下一次 bootstrap 再用 canonical 历史替换它。
   setState((latest) => {
     if (workspaceId && latest.currentSessionWorkspaceId !== workspaceId) {
       return latest;
@@ -247,10 +232,7 @@ export async function refreshTerminalSession(
     );
   });
 
-  const [, updatedSession, fetchedPendingSnapshot] = await Promise.all([
-    shouldRefreshTurnDetails && terminalTurnId
-      ? refreshTurnDetails([terminalTurnId])
-      : Promise.resolve(),
+  const [updatedSession, fetchedPendingSnapshot] = await Promise.all([
     getSession(apiPort, sessionId, workspaceId),
     knownPendingSnapshot
       ? Promise.resolve(knownPendingSnapshot)
@@ -281,15 +263,7 @@ export async function refreshTerminalSession(
       pendingSnapshot,
       sessionCacheKey,
     );
-    // 再次按 Job 精确清理，覆盖详情回读期间迟到的 pending 快照。
-    if (terminalTurnId) {
-      removePendingForJob(
-        latestNext.pendingConversations,
-        sessionId,
-        terminalTurnId,
-        sessionCacheKey,
-      );
-    }
+    // 保留已完成的 live 回合，直到下一次 bootstrap 以 canonical Turn 替换它。
     if (
       !pendingSnapshot.active_job_id
       && (pendingSnapshot.requests?.length ?? 0) === 0
@@ -312,13 +286,65 @@ export async function refreshTerminalSession(
   });
 }
 
+export function refreshTerminalSession(
+  apiPort: number,
+  sessionId: string,
+  workspaceId: string | null,
+  sessionCacheKey: string,
+  terminalTraceEvent: TraceEvent | null,
+  setState: SetAppState,
+  knownPendingSnapshot?: PendingRequestList,
+  knownTerminalJob?: Job,
+): Promise<void> {
+  const terminalTurnId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
+  if (!terminalTurnId) {
+    return refreshTerminalSessionInternal(
+      apiPort,
+      sessionId,
+      workspaceId,
+      sessionCacheKey,
+      terminalTraceEvent,
+      setState,
+      knownPendingSnapshot,
+      knownTerminalJob,
+    );
+  }
+
+  const key = terminalSessionRefreshKey(
+    apiPort,
+    sessionId,
+    workspaceId,
+    terminalTurnId,
+  );
+  const existing = terminalSessionRefreshes.get(key);
+  if (existing) {
+    return existing;
+  }
+  const request = refreshTerminalSessionInternal(
+    apiPort,
+    sessionId,
+    workspaceId,
+    sessionCacheKey,
+    terminalTraceEvent,
+    setState,
+    knownPendingSnapshot,
+    knownTerminalJob,
+  );
+  const trackedRequest = request.finally(() => {
+    if (terminalSessionRefreshes.get(key) === trackedRequest) {
+      terminalSessionRefreshes.delete(key);
+    }
+  });
+  terminalSessionRefreshes.set(key, trackedRequest);
+  return trackedRequest;
+}
+
 export async function reconcileActiveJob(
   apiPort: number,
   sessionId: string,
   workspaceId: string | null,
   sessionCacheKey: string,
   activeJobId: string,
-  refreshTurnDetails: (turnIds: string[]) => Promise<void>,
   setState: SetAppState,
   options?: {
     afterCursor?: string | null;
@@ -346,7 +372,6 @@ export async function reconcileActiveJob(
     workspaceId,
     sessionCacheKey,
     null,
-    refreshTurnDetails,
     setState,
     normalizedPendingSnapshot,
     job,
@@ -356,54 +381,4 @@ export async function reconcileActiveJob(
     lastEventCursor: options?.afterCursor ?? null,
     recoveredEventCount: 0,
   };
-}
-
-/**
- * 消息流先于会话 Trace 进入终态时，等待 Job 槽位和 pending 队列完成同一
- * 次收尾提交，再回填历史。这样不会因为一个稍早到达的 stream.completed
- * 误把仍在提交中的会话判定为可发送，也不会依赖低频 stale probe。
- */
-export async function reconcileTerminalJob(
-  apiPort: number,
-  sessionId: string,
-  workspaceId: string | null,
-  sessionCacheKey: string,
-  activeJobId: string,
-  refreshTurnDetails: (turnIds: string[]) => Promise<void>,
-  setState: SetAppState,
-): Promise<ActiveJobReconciliationResult> {
-  let lastResult: ActiveJobReconciliationResult | null = null;
-  let lastError: unknown = null;
-
-  for (const delayMs of TERMINAL_RECONCILIATION_RETRY_DELAYS_MS) {
-    if (delayMs > 0) {
-      await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, delayMs);
-      });
-    }
-    try {
-      lastResult = await reconcileActiveJob(
-        apiPort,
-        sessionId,
-        workspaceId,
-        sessionCacheKey,
-        activeJobId,
-        refreshTurnDetails,
-        setState,
-      );
-      if (TERMINAL_JOB_STATUSES.has(lastResult.jobStatus)) {
-        return lastResult;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  if (lastError !== null) {
-    throw lastError;
-  }
-  if (lastResult === null) {
-    throw new Error(`终态 Job 对账未执行: job_id=${activeJobId}`);
-  }
-  return lastResult;
 }

@@ -37,6 +37,9 @@ describe("工作区会话列表快照", () => {
       if (url.includes("/api/gateway/auth/local-credential")) {
         return apiResponse({ token: "local-test-token" });
       }
+      if (url.includes("/api/gateway/users/current")) {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
       if (url.includes("/api/v1/sessions?") || url.endsWith("/api/v1/sessions")) {
         return apiResponse({ items: [], next_cursor: null, has_more: false });
       }
@@ -67,5 +70,73 @@ describe("工作区会话列表快照", () => {
     expect(result.sessions).toEqual([session]);
     expect(requestedUrls.some((url) => url.includes("/session-catalog/children"))).toBe(true);
     expect(requestedUrls.some((url) => url.endsWith(`/sessions/${session.session_id}`))).toBe(true);
+  });
+
+  test("并发读取同一工作区时共享同一个会话列表请求", async () => {
+    const requestedUrls: string[] = [];
+    let releaseListRequest!: () => void;
+    const listRequestReleased = new Promise<void>((resolve) => {
+      releaseListRequest = resolve;
+    });
+    let sessionListRequestCount = 0;
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      requestedUrls.push(url);
+      if (url.includes("/api/gateway/auth/local-credential")) {
+        return apiResponse({ token: "local-coalesce-token" });
+      }
+      if (url.includes("/api/gateway/users/current")) {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      if (url.includes("/api/v1/sessions")) {
+        sessionListRequestCount += 1;
+        await listRequestReleased;
+        return apiResponse({ items: [session], next_cursor: null, has_more: false });
+      }
+      throw new Error(`测试收到未声明请求: ${url}`);
+    }, { preconnect: originalFetch.preconnect });
+
+    const first = fetchWorkspaceSessionListSnapshot(49_402, "ws-coalesce");
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    const second = fetchWorkspaceSessionListSnapshot(49_402, "ws-coalesce");
+    releaseListRequest();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(sessionListRequestCount).toBe(1);
+    expect(firstResult.sessions).toEqual([session]);
+    expect(secondResult.sessions).toEqual([session]);
+    expect(requestedUrls.filter((url) => url.includes("/api/v1/sessions"))).toHaveLength(1);
+  });
+
+  test("显式刷新等待已有请求后再读取，多个显式刷新不并发", async () => {
+    const releases: Array<() => void> = [];
+    let sessionListRequestCount = 0;
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("/api/gateway/auth/local-credential")) {
+        return apiResponse({ token: "local-force-token" });
+      }
+      if (url.includes("/api/gateway/users/current")) {
+        return apiResponse({ kind: "guest", user_id: null });
+      }
+      if (url.includes("/api/v1/sessions")) {
+        sessionListRequestCount += 1;
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return apiResponse({ items: [session], next_cursor: null, has_more: false });
+      }
+      throw new Error(`测试收到未声明请求: ${url}`);
+    }, { preconnect: originalFetch.preconnect });
+
+    const first = fetchWorkspaceSessionListSnapshot(49_403, "ws-force");
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    const forcedFirst = fetchWorkspaceSessionListSnapshot(49_403, "ws-force", { force: true });
+    const forcedSecond = fetchWorkspaceSessionListSnapshot(49_403, "ws-force", { force: true });
+    expect(sessionListRequestCount).toBe(1);
+
+    releases.shift()!();
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(sessionListRequestCount).toBe(2);
+    releases.shift()!();
+    await Promise.all([first, forcedFirst, forcedSecond]);
   });
 });

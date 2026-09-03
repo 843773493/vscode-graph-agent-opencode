@@ -275,9 +275,8 @@ export function useSessionRunActions({
         }
         next.status =
           accepted.status === "queued" ? "已排队，等待当前任务结束" : "已发送，等待生成";
-        // 新回合改变了当前上下文；让历史 bootstrap 清掉旧窗口并读取
-        // 最新 context view，避免中断/旧附件回放继续触发 stale 409。
-        next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+        // 普通发送只是向当前历史追加一个回合，不改变 context view。
+        // 保留已有时间线，由 pending 镜像、SSE 和目标 Turn 详情增量补齐。
         next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
         return next;
       });

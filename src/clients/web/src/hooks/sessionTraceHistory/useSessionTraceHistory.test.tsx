@@ -157,6 +157,56 @@ describe("useSessionTraceHistory", () => {
     renderer!.unmount();
   });
 
+  test("切回已完成的事件历史缓存不再请求 Trace", async () => {
+    const port = 49_304;
+    installWindow(port);
+    let traceFetchCount = 0;
+    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+      const path = new URL(String(args[0])).pathname;
+      if (path === "/api/gateway/auth/local-credential") {
+        return Response.json({ request_id: "req_token", data: { token: "trace-token" } });
+      }
+      if (path.endsWith("/traces")) traceFetchCount += 1;
+      return tracePage("session-cached", `event-${traceFetchCount}`);
+    }, { preconnect: originalFetch.preconnect });
+
+    function Harness({ active }: { active: boolean }): React.ReactNode {
+      const [current, setCurrent] = React.useState(state);
+      const scopeKey = "workspace-a::session-cached";
+      useSessionTraceHistory({
+        apiPort: port,
+        currentSession: session("session-cached"),
+        workspaceId: "workspace-a",
+        scopeKey,
+        active,
+        history: current.sessionTraceHistoryBySession.get(scopeKey) ?? null,
+        setState: setCurrent,
+      });
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness active />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(traceFetchCount).toBe(1);
+
+    await act(async () => {
+      renderer!.update(<Harness active={false} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.update(<Harness active />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(traceFetchCount).toBe(1);
+    renderer!.unmount();
+  });
+
   test("使用服务端 next_cursor 前插更旧页且不写入 live event queue", async () => {
     const port = 49_303;
     installWindow(port);
