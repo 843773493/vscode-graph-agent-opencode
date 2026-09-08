@@ -271,7 +271,7 @@ run_module() {
   shift || true
   (($# == 0)) || die 'run-module 不接受额外参数，模块必须保持结构化' dispatch 64
   case "$module" in
-    js-platform|backend-js|web-build|webview-build|extension|package-windows-x64)
+    js-platform|backend-js|web-build|package-windows-x64)
       bootstrap_js
       ;;
     *)

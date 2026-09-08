@@ -33,10 +33,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.agents.providers.anthropic_messages import BoxteamAnthropicMessagesModel
+
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.core.session_paths import SessionPathResolver
 from app.testing.model_stream import (
     ModelStreamHTTPTransport,
@@ -456,7 +459,7 @@ def _write_session_manifest(
                 "created_at": stamp,
                 "updated_at": stamp,
                 "session_id": session_id,
-                "workspace_id": "ws_custom_tool_fixture",
+                "workspace_id": "ws_local",
                 "title": title,
                 "title_source": "user",
                 "current_agent_id": "default",

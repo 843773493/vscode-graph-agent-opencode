@@ -13,19 +13,18 @@ import type {
 function information(): SessionInformationSnapshot {
   return {
     kind: SESSION_INFORMATION_KIND,
-    schema_version: 1,
+    schema_version: 2,
     generated_at: "2026-07-15T12:00:00Z",
     session: {
       session_id: "ses_test",
       workspace_id: "ws_local",
       title: "会话信息测试",
-      title_source: "user",
       current_agent_id: "default",
+      kind: "normal",
       parent_session_id: null,
       created_at: "2026-07-15T11:00:00Z",
       updated_at: "2026-07-15T12:00:00Z",
     },
-    child_session_ids: [],
     workspace: {
       workspace_id: "ws_local",
       name: "project",
@@ -39,12 +38,26 @@ function information(): SessionInformationSnapshot {
       last_error: null,
     },
     trace: {
-      event_count: 0,
+      observed_event_count: 0,
       last_event_id: null,
       last_event_type: null,
       last_event_at: null,
+      truncated: false,
     },
-    resources: [],
+    relations: {
+      child_count: 0,
+      child_ids: [],
+      child_ids_truncated: false,
+    },
+    resources: {
+      active: [],
+      recent_closed: [],
+      active_count: 0,
+      recent_closed_count: 0,
+      active_truncated: false,
+      recent_closed_truncated: false,
+      historical_omitted: true,
+    },
     recent_errors: [],
   };
 }
@@ -104,6 +117,8 @@ describe("通用会话信息", () => {
     expect(text).not.toContain('"host"');
     expect(text).not.toContain('"ssh"');
     expect(text).toContain('"connection_error": null');
+    expect(text).toContain('"historical_omitted": true');
+    expect(text).not.toContain('"child_session_ids"');
   });
 
   test("远程 Gateway 工作区输出联邦连接信息", () => {
@@ -127,6 +142,15 @@ describe("通用会话信息", () => {
     expect(() =>
       buildSessionInformationDump(information(), invalidWorkspace),
     ).toThrow("远程 Gateway 工作区信息缺少连接摘要");
+  });
+
+  test("会话与当前后端工作区标识不一致时明确失败", () => {
+    const mismatched = information();
+    mismatched.session.workspace_id = "workspace_from_persisted_session";
+
+    expect(() =>
+      buildSessionInformationDump(mismatched, gatewayWorkspace("local")),
+    ).toThrow("会话信息中的工作区 ID 不一致");
   });
 
   test("粘贴纯会话 ID 时直接返回 ID", () => {

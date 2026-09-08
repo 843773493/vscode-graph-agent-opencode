@@ -190,6 +190,11 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
         normalized["status"] = enum_maps["status"].get(
             normalized["status"], normalized["status"]
         )
+    if event_type == "stream.completed":
+        # auto_closed_blocks 是存储层在终态原子收口时使用的内部标记，
+        # 公共 message.v1 的 StreamCompleted 只表达终态 status。
+        # 不得把内部控制字段泄漏给严格 protobuf schema。
+        normalized.pop("auto_closed_blocks", None)
     if (
         event_type in {"model.completed", "model.failed"}
         and isinstance(normalized.get("outcome"), str)
@@ -205,6 +210,10 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
     # status 属于内部 tool-call 聚合状态，ToolCallDelta 只承载参数增量。
     if event_type == "tool_call.delta":
         normalized.pop("status", None)
+    if event_type == "tool_call.completed":
+        # ToolCallCompleted 是参数生命周期事件，公共 message.v1 没有 error
+        # 字段；失败原因由对应的 ToolCompleted/StreamFailure 承载。
+        normalized.pop("error", None)
     if event_type == "tool.completed" and isinstance(normalized.get("status"), str):
         if normalized["status"] == "outcome_unknown":
             normalized["status"] = "completed"

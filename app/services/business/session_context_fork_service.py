@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.schemas.internal_v2.session import SessionDTO, SessionGenerationOriginDTO
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 
 
 class SessionContextForkService:
@@ -38,6 +40,19 @@ class SessionContextForkService:
         checkpoint_ns: str = "",
     ) -> SessionDTO:
         source_session = await self._session_service.get(source_session_id)
+        # context/history fork 的规范要求在创建目标 session/catalog 之前
+        # 拒绝运行态 Turn、无 completed anchor 和非法 source checkpoint。
+        # 预检只读 source，不创建 target journal；afork 随后会再次解析并在
+        # target-local materialization 中提交同一份 source 合同。
+        await self._checkpointer.preflight_fork(
+            source_session_id=source_session_id,
+            mode=mode,
+            turn_id=turn_id,
+            anchor_mode=anchor_mode,
+            checkpoint_id=checkpoint_id,
+            anchor=anchor,
+            checkpoint_ns=checkpoint_ns,
+        )
         physical_parent_node_id = (
             source_session_id if place_under_source else parent_node_id
         )

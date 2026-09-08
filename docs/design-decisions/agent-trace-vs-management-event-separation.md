@@ -34,7 +34,7 @@
 - [`app/agents/agent_middleware.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\agents\agent_middleware.py) 的 `ExecutionTraceMiddleware` 会写入 `trace_{session_id}.jsonl`
 - [`app/services/business/session_service.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\services\business\session_service.py) 已经可以读取轨迹文件
 - [`app/api/sessions.py`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\app\api\sessions.py) 已经暴露了 `GET /sessions/{session_id}/traces`
-- [`src/webview-ui/src/types/protocol.ts`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\src\webview-ui\src\types\protocol.ts) 已经预留了 `traceEvents`
+- [`src/clients/web/src/types/frontend.ts`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\src\clients\web\src\types\frontend.ts) 已经预留了 `traceEvents`
 
 因此，本次设计不是重做一套新系统，而是把已有能力整理成两条清晰的数据通道。
 
@@ -291,7 +291,7 @@ error
 
 当前协议已经有：
 
-- [`src/webview-ui/src/types/protocol.ts`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\src\webview-ui\src\types\protocol.ts)
+- [`src/clients/web/src/types/frontend.ts`](c:\Users\kunlunmeta\code\20260430_copilot_workspace\vscode-graph-agent-opencode\src\clients\web\src\types\frontend.ts)
 
 其中的 `traceEvents` 可以直接承接新的轨迹 DTO，无需另起一套主协议。
 

@@ -19,6 +19,7 @@ import {
   resolveServiceLogPath,
   SERVICE_LOG_CAPTURED_ENV,
 } from "../packages/launcher/src/service-log.mjs";
+import { requestGatewayHandoff } from "../packages/launcher/src/gateway-supervisor.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
@@ -229,11 +230,20 @@ function writeDevelopmentManifest() {
   return manifestPath;
 }
 
-async function waitForHttpOk(url, label) {
+async function waitForHttpOk(url, label, processHandle = null) {
   const timeoutMs = 90_000;
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
+    if (
+      processHandle !== null &&
+      (processHandle.exitCode !== null || processHandle.signalCode !== null)
+    ) {
+      throw new Error(
+        `${label}就绪前进程退出: exit=${String(processHandle.exitCode)} ` +
+          `signal=${String(processHandle.signalCode)}`,
+      );
+    }
     try {
       const response = await fetch(url);
       if (response.ok) {
@@ -451,6 +461,9 @@ async function main() {
   );
   installDevelopmentConfiguration(environment);
   const processes = [];
+  const pendingGatewayRestart =
+    environment.BOXTEAM_CONFIG_CANDIDATE_REF?.trim() !== "";
+  let gatewayProcess = null;
   if (serviceMode === "backend") {
     processes.push(
       spawnProcess(
@@ -515,22 +528,22 @@ async function main() {
         ),
       );
     }
-    processes.push(
-      spawnProcess(
-        nodeBin,
-        [
-          launcherEntry,
-          "start",
-          "--runtime-manifest",
-          runtimeManifest,
-          "--no-open",
-        ],
-        projectRoot,
-        environment,
-      ),
+    gatewayProcess = spawnProcess(
+      nodeBin,
+      [
+        launcherEntry,
+        "start",
+        "--runtime-manifest",
+        runtimeManifest,
+        "--no-open",
+      ],
+      projectRoot,
+      environment,
     );
+    processes.push(gatewayProcess);
   }
 
+  let gatewayReady = serviceMode === "backend" || serviceMode === "web";
   try {
     if (serviceMode === "backend") {
       await waitForHttpOk(
@@ -543,7 +556,9 @@ async function main() {
       await waitForHttpOk(
         `http://${host}:${ports.gateway}/api/gateway/health`,
         "gateway",
+        gatewayProcess,
       );
+      gatewayReady = true;
       if (serviceMode === "all") {
         await Promise.all([
           waitForHttpOk(
@@ -568,15 +583,70 @@ async function main() {
       );
     }
   } catch (error) {
-    for (const child of processes) {
+    if (pendingGatewayRestart && !gatewayReady && gatewayProcess !== null) {
+      process.stdout.write(
+        `[dev] pending Gateway 启动失败，尝试恢复 active snapshot: ${String(error)}\n`,
+      );
       try {
-        child.kill();
-      } catch {
-        // 失败进程可能已经退出；其余进程仍必须继续清理。
+        if (
+          gatewayProcess.exitCode === null &&
+          gatewayProcess.signalCode === null
+        ) {
+          gatewayProcess.kill();
+        }
+        await gatewayProcess.exited;
+        const fallbackEnvironment = { ...environment };
+        for (const variable of [
+          "BOXTEAM_CONFIG_CANDIDATE_REF",
+          "BOXTEAM_CONFIG_GENERATION",
+          "BOXTEAM_CONFIG_FENCING_TOKEN",
+        ]) {
+          delete fallbackEnvironment[variable];
+        }
+        const fallbackGatewayProcess = spawnProcess(
+          nodeBin,
+          [
+            launcherEntry,
+            "start",
+            "--runtime-manifest",
+            runtimeManifest,
+            "--no-open",
+          ],
+          projectRoot,
+          fallbackEnvironment,
+        );
+        processes[processes.indexOf(gatewayProcess)] = fallbackGatewayProcess;
+        gatewayProcess = fallbackGatewayProcess;
+        await waitForHttpOk(
+          `http://${host}:${ports.gateway}/api/gateway/health`,
+          "gateway active fallback",
+          fallbackGatewayProcess,
+        );
+        gatewayReady = true;
+      } catch (fallbackError) {
+        for (const child of processes) {
+          try {
+            child.kill();
+          } catch {
+            // 失败进程可能已经退出；其余进程仍必须继续清理。
+          }
+        }
+        await Promise.allSettled(processes.map((child) => child.exited));
+        throw new Error(
+          `Gateway pending 启动失败，且 active fallback 也失败: ${String(fallbackError)}`,
+        );
       }
+    } else {
+      for (const child of processes) {
+        try {
+          child.kill();
+        } catch {
+          // 失败进程可能已经退出；其余进程仍必须继续清理。
+        }
+      }
+      await Promise.allSettled(processes.map((child) => child.exited));
+      throw error;
     }
-    await Promise.allSettled(processes.map((child) => child.exited));
-    throw error;
   }
 
   let stopping = false;
@@ -613,6 +683,20 @@ async function main() {
 if (onlyLaunch) {
   if (restartDelayMs > 0) {
     await Bun.sleep(restartDelayMs);
+  }
+  if (process.env.BOXTEAM_CONFIG_CANDIDATE_REF?.trim() !== "") {
+    const handoff = await requestGatewayHandoff({
+      boxteamHome,
+      environment: process.env,
+    });
+    if (handoff.handled) {
+      process.stdout.write(
+        `[dev] Gateway pending handoff 已交给现有 supervisor: ` +
+          `${JSON.stringify(handoff.data)}\n`,
+      );
+      process.exitCode = 0;
+      process.exit();
+    }
   }
   await launchDetachedManager();
 } else {

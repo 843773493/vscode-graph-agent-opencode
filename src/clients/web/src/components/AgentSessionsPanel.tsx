@@ -8,12 +8,6 @@ import type {
 import type { SessionAttachmentSummary } from '../types/frontend';
 import type { AgentSessionsPreferences } from '../state/uiSettings/preferences';
 import { stableUiSettingIds } from '../state/uiSettings/preferences';
-import AgentSessionsCustomizations, {
-  CUSTOMIZATIONS_COLLAPSED_HEIGHT,
-  CUSTOMIZATIONS_DEFAULT_HEIGHT,
-  CUSTOMIZATIONS_RESIZING_CLASS,
-  clampCustomizationsHeight,
-} from './agentSessions/AgentSessionsCustomizations';
 import AgentSessionsContextMenus, {
   type SessionContextMenu,
   type WorkspaceContextMenu,
@@ -116,10 +110,6 @@ interface AgentSessionsPanelProps {
       current: WebUiSessionSidebarSettings,
     ) => Partial<WebUiSessionSidebarSettings>,
   ) => void;
-  customizationsCollapsed: boolean;
-  customizationsHeight: number;
-  onCustomizationsCollapsedChange: (collapsed: boolean) => void;
-  onCustomizationsHeightChange: (height: number, commit: boolean) => void;
   generatorResources: SessionGeneratorResourcesController;
 }
 
@@ -165,10 +155,6 @@ export default function AgentSessionsPanel({
   flexRatio,
   preferences,
   onPreferencesChange,
-  customizationsCollapsed,
-  customizationsHeight,
-  onCustomizationsCollapsedChange,
-  onCustomizationsHeightChange,
   generatorResources,
 }: AgentSessionsPanelProps) {
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
@@ -205,9 +191,7 @@ export default function AgentSessionsPanel({
     preferences,
     onPreferencesChange,
   });
-  const [customizationNotice, setCustomizationNotice] = useState('');
   const filterButtonRef = useRef<HTMLButtonElement | null>(null);
-  const cleanupCustomizationsResizeRef = useRef<(() => void) | null>(null);
   const handleStartWorkspace = async (workspaceId: string) => {
     setStartingWorkspaceIds((previous) => new Set(previous).add(workspaceId));
     try {
@@ -296,12 +280,6 @@ export default function AgentSessionsPanel({
     }
   }, [isOpen]);
 
-  useEffect(() => {
-    return () => {
-      cleanupCustomizationsResizeRef.current?.();
-    };
-  }, []);
-
   const openSessionMenu = (
     session: Session,
     workspaceId: string,
@@ -333,19 +311,16 @@ export default function AgentSessionsPanel({
     });
   };
   const applyFilterMode = (mode: SessionFilterMode, label: string) => {
-    setCustomizationNotice('');
     onPreferencesChange(() => ({ filter_mode: mode }));
     setFilterMenuOpen(false);
     onStatusChange(`已筛选会话: ${label}`);
   };
   const applySortMode = (mode: SessionSortMode, label: string) => {
-    setCustomizationNotice('');
     onPreferencesChange(() => ({ sort_mode: mode }));
     setFilterMenuOpen(false);
     onStatusChange(`已排序会话: ${label}`);
   };
   const applyGroupingMode = (mode: SessionGroupingMode, label: string) => {
-    setCustomizationNotice('');
     onPreferencesChange(() => ({ grouping_mode: mode }));
     setFilterMenuOpen(false);
     onStatusChange(`已分组会话: ${label}`);
@@ -378,44 +353,6 @@ export default function AgentSessionsPanel({
     setFilterMenuOpen(false);
     onStatusChange('已折叠全部会话分组');
   };
-  const showCustomizationNotice = (label: string) => {
-    const message = `${label} 需要桌面运行时提供，当前 Web 端暂未接入`;
-    setCustomizationNotice(message);
-    onStatusChange(message);
-  };
-  const startCustomizationsResize = (event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    cleanupCustomizationsResizeRef.current?.();
-
-    const startY = event.clientY;
-    const startHeight = customizationsHeight;
-    let latestHeight = startHeight;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      const deltaY = moveEvent.clientY - startY;
-      latestHeight = clampCustomizationsHeight(startHeight - deltaY);
-      onCustomizationsHeightChange(latestHeight, false);
-    };
-
-    const finishResize = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishResize);
-      window.removeEventListener('pointercancel', finishResize);
-      document.body.classList.remove(CUSTOMIZATIONS_RESIZING_CLASS);
-      cleanupCustomizationsResizeRef.current = null;
-      onCustomizationsHeightChange(latestHeight, true);
-    };
-
-    document.body.classList.add(CUSTOMIZATIONS_RESIZING_CLASS);
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', finishResize);
-    window.addEventListener('pointercancel', finishResize);
-    cleanupCustomizationsResizeRef.current = finishResize;
-  };
-  const displayedCustomizationsHeight = customizationsCollapsed
-    ? CUSTOMIZATIONS_COLLAPSED_HEIGHT
-    : customizationsHeight;
-
   return (
     <aside
       className={`agent-sessions-panel${isOpen ? '' : ' preserve-mounted-hidden'}`}
@@ -511,7 +448,7 @@ export default function AgentSessionsPanel({
               className="agent-sessions-nav-row"
               aria-disabled="true"
               title="已固定：Web 端暂未接入固定会话"
-              onClick={() => showCustomizationNotice('已固定')}
+              onClick={() => onStatusChange('已固定：Web 端暂未接入固定会话')}
             >
               <span className="codicon codicon-pinned agent-sessions-nav-icon" aria-hidden="true" />
               <span>已固定</span>
@@ -642,26 +579,6 @@ export default function AgentSessionsPanel({
             </section>
           ) : null}
         </div>
-        {!customizationsCollapsed ? (
-          <button
-            type="button"
-            className="agent-sessions-customizations-resize-sash"
-            title="拖拽调整会话列表和自定义区域大小，双击还原"
-            aria-label="调整会话列表和自定义区域大小"
-            onPointerDown={startCustomizationsResize}
-            onDoubleClick={() =>
-              onCustomizationsHeightChange(CUSTOMIZATIONS_DEFAULT_HEIGHT, true)
-            }
-          />
-        ) : null}
-        <AgentSessionsCustomizations
-          collapsed={customizationsCollapsed}
-          height={displayedCustomizationsHeight}
-          sessionCount={sessions.length}
-          notice={customizationNotice}
-          onCollapsedChange={onCustomizationsCollapsedChange}
-          onShowNotice={showCustomizationNotice}
-        />
         <AgentSessionsContextMenus
           sessionMenu={contextMenu}
           workspaceMenu={workspaceContextMenu}

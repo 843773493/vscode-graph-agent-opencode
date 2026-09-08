@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "kind": "model_stream_cassette",
+  "metadata": {
+    "source": "handwritten",
+    "asset_id": "basic-chat-tool-loop",
+    "protocol": "openai_chat_sse",
+    "provider": "openai_compatible",
+    "model": "big-pickle"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user"]
+        }
+      },
+      "replay": { "sequence_id": "basic-chat-tool-loop", "step": 0 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning_content": "先读取 README.md，核对工具结果后再回复。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "确认内容后，再发起明确的 README.md 工具调用。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "工具返回后，我会给出首轮确认。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "现在开始读取 README.md。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "id": "basic-chat-tool-call", "type": "function", "function": { "name": "read_file", "arguments": "{\"path\":" } }] }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": "\"README" } }] }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-1", "object": "chat.completion.chunk", "created": 1, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": ".md\"}" } }] }, "finish_reason": "tool_calls" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "tool"]
+        }
+      },
+      "replay": { "sequence_id": "basic-chat-tool-loop", "step": 1 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning_content": "工具已经返回，我先核对 README.md 的结果。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "确认工具调用成功后，再给出首轮结论。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "首轮结果确认后，再整理最终答复。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "首轮" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "工具调用已完成。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-2", "object": "chat.completion.chunk", "created": 2, "model": "big-pickle", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "tool", "assistant", "assistant", "user"]
+        }
+      },
+      "replay": { "sequence_id": "basic-chat-tool-loop", "step": 2 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning_content": "复用历史上下文，再读取 README.md 进行确认。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "先确认第二轮请求仍然携带历史结果。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "确认后再发起第二次 README.md 工具调用。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "现在执行第二次文件读取。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "id": "basic-chat-tool-call-2", "type": "function", "function": { "name": "read_file", "arguments": "{\"path\":" } }] }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": "\"README" } }] }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-3", "object": "chat.completion.chunk", "created": 3, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": ".md\"}" } }] }, "finish_reason": "tool_calls" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": {
+          "model": "big-pickle",
+          "stream": true,
+          "message_roles": ["system", "user", "assistant", "tool", "assistant", "assistant", "user", "assistant", "tool"]
+        }
+      },
+      "replay": { "sequence_id": "basic-chat-tool-loop", "step": 3 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning_content": "工具已经返回，我先确认历史上下文仍然有效。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "确认第二次工具调用成功后，再给出最终结论。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "reasoning_content": "现在整理第二轮最终答复。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "第二轮" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "工具调用也已完成。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "basic-chat-tool-loop-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    }
+  ]
+}

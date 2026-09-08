@@ -3,7 +3,7 @@ import type {
   SessionInformationSnapshot,
 } from "../../types/backend";
 
-export const SESSION_INFORMATION_KIND = "boxteam_session_information" as const;
+export const SESSION_INFORMATION_KIND = "session_diagnostic_snapshot" as const;
 
 interface LocalSessionConnection {
   kind: "local";
@@ -36,11 +36,12 @@ export interface SessionInformationDump {
     agent_id: string;
     backend_workspace_id: string;
     parent_session_id: string | null;
-    child_session_ids: string[];
+    title_truncated: boolean;
     created_at: string;
     updated_at: string;
     storage_path: string;
   };
+  relations: SessionInformationSnapshot["relations"];
   workspace: {
     id: string;
     backend_workspace_id: string;
@@ -115,7 +116,7 @@ export function buildSessionInformationDump(
 
   return {
     kind: information.kind,
-    schema_version: information.schema_version ?? 1,
+    schema_version: information.schema_version ?? 2,
     generated_at: information.generated_at,
     session: {
       id: information.session.session_id,
@@ -123,11 +124,12 @@ export function buildSessionInformationDump(
       agent_id: information.session.current_agent_id,
       backend_workspace_id: information.session.workspace_id,
       parent_session_id: information.session.parent_session_id ?? null,
-      child_session_ids: information.child_session_ids ?? [],
+      title_truncated: information.session.title_truncated ?? false,
       created_at: information.session.created_at,
       updated_at: information.session.updated_at,
       storage_path: information.storage_path,
     },
+    relations: information.relations,
     workspace: {
       id: gatewayWorkspace.workspace_id,
       backend_workspace_id: information.workspace.workspace_id,
@@ -139,7 +141,7 @@ export function buildSessionInformationDump(
     },
     execution: information.execution,
     trace: information.trace,
-    resources: information.resources ?? [],
+    resources: information.resources,
     recent_errors: information.recent_errors ?? [],
   };
 }

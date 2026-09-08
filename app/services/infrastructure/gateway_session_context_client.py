@@ -32,6 +32,9 @@ class GatewaySessionContextClient:
         timeout_seconds: float | None = None,
         config_service: ConfigService | None = None,
     ) -> None:
+        self._config_service = config_service
+        self._gateway_url_from_config = gateway_url is None and config_service is not None
+        self._timeout_from_config = timeout_seconds is None and config_service is not None
         resolved_gateway_url = (
             gateway_url
             if gateway_url is not None
@@ -105,8 +108,8 @@ class GatewaySessionContextClient:
             else None
         )
         async with httpx.AsyncClient(
-            base_url=self._gateway_url,
-            timeout=self._timeout_seconds,
+            base_url=self._resolve_gateway_url(),
+            timeout=self._resolve_timeout_seconds(),
             headers=headers,
         ) as client:
             try:
@@ -128,5 +131,15 @@ class GatewaySessionContextClient:
             raise RuntimeError(message)
         payload = response.json()
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
-            raise RuntimeError(f"Gateway 上下文查询响应缺少 data object: path={path}")
+            raise TypeError(f"Gateway 上下文查询响应缺少 data object: path={path}")
         return response_type.model_validate(payload["data"])
+
+    def _resolve_gateway_url(self) -> str:
+        if self._gateway_url_from_config and self._config_service is not None:
+            return self._config_service.get_gateway_connection_url().rstrip("/")
+        return self._gateway_url
+
+    def _resolve_timeout_seconds(self) -> float:
+        if self._timeout_from_config and self._config_service is not None:
+            return self._config_service.get_gateway_connection_timeout_seconds()
+        return self._timeout_seconds

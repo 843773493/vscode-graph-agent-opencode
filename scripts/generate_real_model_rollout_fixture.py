@@ -24,11 +24,13 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.agent_factory import build_model_from_provider
 from app.agents.provider_api_mode import parse_provider_api_mode
-from app.agents.providers.litellm_content import visible_text
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.mapping.itemized.provider_history import visible_text
 
 SESSION_ID = "ses_8128d7f0a4b64aa0b3f1c9e7d2a65018"
 
@@ -88,7 +90,7 @@ def _session_manifest(
         '  "created_at": "2026-08-17T00:00:00+00:00",\n'
         '  "updated_at": "2026-08-17T00:00:00+00:00",\n'
         f'  "session_id": "{session_id}",\n'
-        '  "workspace_id": "ws_custom_tool_fixture",\n'
+        '  "workspace_id": "ws_local",\n'
         '  "title": "真实模型 128 Turn checkpoint 压测",\n'
         '  "title_source": "user",\n'
         '  "current_agent_id": "default",\n'

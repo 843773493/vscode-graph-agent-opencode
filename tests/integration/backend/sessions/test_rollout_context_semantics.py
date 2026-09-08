@@ -10,8 +10,11 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
-from app.core.rollout_storage import RolloutStorage
+from app.domain.itemized.errors import FormatDispatchError
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 
 
 def _checkpoint(
@@ -99,7 +102,12 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
         json.loads(line)
         for line in (root / "rollout.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert {record["role"] for record in records} <= {"user", "assistant", "tool"}
+    assert {record["wire_role"] for record in records} <= {
+        "user",
+        "assistant",
+        "tool",
+    }
+    assert all(record["record_type"] == "item" for record in records)
     assert all("kind" not in record for record in records)
 
     rewind_config = saver.rewind(
@@ -244,7 +252,8 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
     assert isinstance(restored_result, ToolMessage)
     assert restored_call.tool_calls[0]["id"] == restored_result.tool_call_id
 
-    # 旧版本已落盘的 checkpoint 没有 parent range，读取兼容路径也必须恢复。
+    # v2 checkpoint 缺少 parent range 时必须明确拒绝，不能把损坏索引当成
+    # 可兼容的旧路径继续投影。
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         view_id = connection.execute(
             "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'checkpoint-tool-result'"
@@ -254,12 +263,8 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
             (view_id,),
         )
         connection.commit()
-    restored_legacy = saver.get_tuple(build_checkpoint_config("session_1"))
-    assert restored_legacy is not None
-    assert [
-        message.id
-        for message in restored_legacy.checkpoint["channel_values"]["messages"]
-    ] == ["user-tool-call", "assistant-tool-call", "tool-result"]
+    with pytest.raises(FormatDispatchError, match="parent range"):
+        saver.get_tuple(build_checkpoint_config("session_1"))
 
 
 def test_parallel_tool_continuation_restores_all_call_declarations(
@@ -346,8 +351,8 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
             (child_view,),
         ).fetchone()[0] == "view"
 
-        # 再现 WEB-GW-057 中旧运行时落下的形态：child 没有 parent range，
-        # parent range 漏掉并行 AI 声明但仍保留四个 ToolMessage 结果。
+        # 损坏的 v2 view 不能退回旧的 message range 猜测路径；即使 SQLite
+        # 里仍残留 ToolMessage 结果，也必须暴露 parent range 缺失。
         connection.execute(
             "DELETE FROM context_view_ranges WHERE view_id = ? AND source_kind = 'view'",
             (child_view,),
@@ -365,20 +370,8 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
         )
         connection.commit()
 
-    restored_legacy = saver.get_tuple(build_checkpoint_config("session_1"))
-    assert restored_legacy is not None
-    assert [
-        message.id
-        for message in restored_legacy.checkpoint["channel_values"]["messages"]
-    ] == [
-        "user-parallel",
-        "assistant-parallel",
-        "result-parallel-0",
-        "result-parallel-1",
-        "result-parallel-2",
-        "result-parallel-3",
-        "user-continuation",
-    ]
+    with pytest.raises(FormatDispatchError, match="parent range"):
+        saver.get_tuple(build_checkpoint_config("session_1"))
 
 
 def test_context_view_validation_accepts_single_message_range(
@@ -695,7 +688,7 @@ def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
         )
 
 
-def test_offline_jsonl_compaction_reclaims_only_pruned_branch_messages(
+def test_pruning_preserves_all_canonical_bytes_and_item_offsets(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
@@ -747,17 +740,18 @@ def test_offline_jsonl_compaction_reclaims_only_pruned_branch_messages(
         {"source": "compaction-test", "step": 3},
         {"messages": "3"},
     )
+    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
+    rollout_path = root / "rollout" / "rollout.jsonl"
+    before = rollout_path.read_bytes()
+    with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
+        catalog_before = connection.execute(
+            "SELECT item_id, item_sequence, jsonl_offset, jsonl_length FROM item_catalog ORDER BY item_sequence"
+        ).fetchall()
     plan = saver.plan_pruning("session_1", retain_checkpoint_ids=("cp-1",))
     assert {candidate.checkpoint_id for candidate in plan.candidates} == {"cp-2"}
     saver.execute_pruning("session_1", plan)
-
-    root = get_session_path_resolver(sessions_dir).resolve_session_node("session_1")
-    rollout_path = root / "rollout" / "rollout.jsonl"
-    before = rollout_path.stat().st_size
-    result = saver.compact_jsonl_offline("session_1")
-    assert result.removed_message_count == 2
-    assert result.retained_message_count == 4
-    assert result.bytes_after < before
+    assert rollout_path.read_bytes() == before
+    assert not hasattr(saver, "compact_jsonl_offline")
     assert not list((root / "rollout").glob(".*compaction-*"))
 
     current = saver.get_tuple(build_checkpoint_config("session_1"))
@@ -772,10 +766,13 @@ def test_offline_jsonl_compaction_reclaims_only_pruned_branch_messages(
     ]
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 4
+        assert connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 6
+        assert connection.execute(
+            "SELECT item_id, item_sequence, jsonl_offset, jsonl_length FROM item_catalog ORDER BY item_sequence"
+        ).fetchall() == catalog_before
         assert (
             connection.execute(
                 "SELECT COUNT(*) FROM control_events WHERE control_kind = 'offline_compaction'"
             ).fetchone()[0]
-            == 1
+            == 0
         )

@@ -399,7 +399,7 @@ async def test_start_recovers_executing_run_with_same_session_message_and_job_id
     now = datetime.now(timezone.utc)
     session = SessionDTO(
         session_id="ses_restart_child",
-        workspace_id="gw_restart",
+        workspace_id="ws_local",
         title=payload.title,
         current_agent_id="default",
         generation_origin=SessionGenerationOriginDTO(

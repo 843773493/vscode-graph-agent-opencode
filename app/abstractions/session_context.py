@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from typing import Protocol, TypedDict
+from typing import TYPE_CHECKING, Protocol, TypedDict
+
+if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
+
+    from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+    from app.domain.itemized.request_plan import ContextRequestPlan
 
 from app.schemas.gateway import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session import (
@@ -44,6 +50,29 @@ class AgentContextState(TypedDict):
 
 class SessionContextMessageSourceProtocol(Protocol):
     async def get_agent_context_state(self, session_id: str) -> AgentContextState: ...
+
+
+class SessionContextAssemblySourceProtocol(Protocol):
+    """上下文检查面只消费 Saver 冻结的 assembly 和 history diagnostics。"""
+
+    def list_context_assemblies(
+        self, session_id: str, *, turn_id: str | None = None
+    ) -> tuple[ContextAssemblySnapshot, ...]: ...
+
+    def get_context_assembly(
+        self,
+        session_id: str,
+        *,
+        assembly_id: str,
+    ) -> ContextAssemblySnapshot: ...
+
+    def project_context_plan_to_history_with_diagnostics(
+        self,
+        session_id: str,
+        plan: ContextRequestPlan,
+        *,
+        checkpoint_ns: str = "",
+    ) -> tuple[list[BaseMessage], tuple[str, ...]]: ...
 
 
 class SessionLookupProtocol(Protocol):

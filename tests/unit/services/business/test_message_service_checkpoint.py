@@ -6,10 +6,12 @@ import json
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
 
@@ -51,7 +53,7 @@ async def test_message_service_loads_history_from_checkpoint(
                 ),
             ],
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-1",
     }
@@ -59,7 +61,7 @@ async def test_message_service_loads_history_from_checkpoint(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -102,12 +104,12 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
         config,
         {
             "channel_values": {"messages": raw_messages},
-            "channel_versions": {"messages": 1},
+            "channel_versions": {"messages": "1"},
             "updated_channels": ["messages"],
             "id": "ckpt-paged",
         },
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -133,6 +135,29 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
         "回答 3",
     ]
     assert older.has_more is True
+
+    # 游标属于会话和 checkpoint 版本，不能接受畸形或跨会话输入。
+    with pytest.raises(ValueError, match="游标格式无效"):
+        await service.list("sess_paged", limit=4, cursor="!" + latest.next_cursor)
+    with pytest.raises(ValueError, match="limit 必须为正整数"):
+        await service.list("sess_paged", limit=True)
+
+    other_saver, _ = _create_saver(tmp_path, session_bundle_factory, "sess_other")
+    await other_saver.aput(
+        {"configurable": {"thread_id": "sess_other", "checkpoint_ns": ""}},
+        {
+            "id": "ckpt-other",
+            "channel_values": {"messages": [HumanMessage(content="另一个会话")]},
+            "channel_versions": {"messages": "1"},
+            "updated_channels": ["messages"],
+        },
+        {"source": "test", "step": 1, "writes": {}},
+        {"messages": "1"},
+    )
+    with pytest.raises(ValueError, match="消息历史已更新"):
+        await MessageService(checkpointer=other_saver).list(
+            "sess_other", cursor=latest.next_cursor
+        )
 
 
 @pytest.mark.asyncio
@@ -176,12 +201,12 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
                     )
                 ]
             },
-            "channel_versions": {"messages": 1},
+            "channel_versions": {"messages": "1"},
             "updated_channels": ["messages"],
             "id": "ckpt-media-projection",
         },
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     page = await MessageService(checkpointer=saver).list(
@@ -274,7 +299,7 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
                 ),
             ],
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-delegated",
     }
@@ -282,7 +307,7 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     messages = await MessageService(checkpointer=saver).list(
@@ -340,7 +365,7 @@ async def test_message_service_restores_identity_from_rollout_index(
     }
     checkpoint = {
         "channel_values": {"messages": [HumanMessage(content="hi")]},
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-invalid-message",
     }
@@ -348,7 +373,7 @@ async def test_message_service_restores_identity_from_rollout_index(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     messages = await MessageService(checkpointer=saver).list(
@@ -385,7 +410,7 @@ async def test_agent_context_state_applies_summarization_event(
                 "file_path": "/conversation_history/sess_compacted.md",
             },
         },
-        "channel_versions": {"messages": 1, "_summarization_event": 1},
+        "channel_versions": {"messages": "1", "_summarization_event": "1"},
         "updated_channels": ["_summarization_event"],
         "id": "ckpt-compacted",
     }
@@ -393,7 +418,7 @@ async def test_agent_context_state_applies_summarization_event(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1, "_summarization_event": 1},
+        {"messages": "1", "_summarization_event": "1"},
     )
 
     state = await MessageService(checkpointer=saver).get_agent_context_state(
@@ -446,7 +471,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
                 "file_path": "/conversation_history/sess_cache_compacted.md",
             },
         },
-        "channel_versions": {"messages": 1, "_summarization_event": 1},
+        "channel_versions": {"messages": "1", "_summarization_event": "1"},
         "updated_channels": ["_summarization_event"],
         "id": "ckpt-cache-compacted",
     }
@@ -454,7 +479,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1, "_summarization_event": 1},
+        {"messages": "1", "_summarization_event": "1"},
     )
 
     state = await MessageService(checkpointer=saver).get_agent_context_state(
@@ -493,7 +518,7 @@ async def test_message_service_preserves_distinct_canonical_message_ids(
                 ),
             ],
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-dedupe",
     }
@@ -501,7 +526,7 @@ async def test_message_service_preserves_distinct_canonical_message_ids(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -540,7 +565,7 @@ async def test_agent_state_preserves_distinct_canonical_message_records(
                 ),
             ],
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-state-dedupe",
     }
@@ -548,7 +573,7 @@ async def test_agent_state_preserves_distinct_canonical_message_records(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -589,7 +614,7 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(
                 reasoning_msg,
             ]
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-r",
     }
@@ -597,7 +622,7 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -650,7 +675,7 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(
                 reasoning_msg,
             ]
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-tool-reasoning",
     }
@@ -658,7 +683,7 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -717,7 +742,7 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(
                 final_message,
             ]
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-tool-hidden",
     }
@@ -725,7 +750,7 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -765,7 +790,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
     )
     checkpoint = {
         "channel_values": {"messages": [user_message]},
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-image",
     }
@@ -773,7 +798,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -835,7 +860,7 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
     )
     checkpoint = {
         "channel_values": {"messages": [user_message]},
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-video-display",
     }
@@ -843,7 +868,7 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)
@@ -912,7 +937,7 @@ async def test_message_service_refusal_block(tmp_path, session_bundle_factory):
                 msg,
             ]
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-rf",
     }
@@ -920,7 +945,7 @@ async def test_message_service_refusal_block(tmp_path, session_bundle_factory):
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     service = MessageService(checkpointer=saver)

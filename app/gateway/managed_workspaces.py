@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.schemas.gateway import GatewayManagedWorkspaceDTO
 from app.gateway.workspace_ids import build_managed_local_workspace_id
+from app.schemas.gateway import GatewayManagedWorkspaceDTO
 
 
 async def list_direct_managed_workspaces(
@@ -62,6 +62,7 @@ async def create_direct_managed_workspace(
         root_path=str(workspace_root),
         backend_url="",
         connection_kind="local",
+        owner="manual",
         managed=True,
     )
     registry.upsert(target, activate=False)
@@ -84,4 +85,4 @@ def remove_direct_managed_workspace(
     ]
     if len(direct_managed_targets) == 1:
         raise ValueError("Gateway 至少需要保留一个直接托管工作区")
-    registry.remove(workspace_id)
+    registry.remove(workspace_id, owner="manual_crud")

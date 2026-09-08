@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Send
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
+from app.domain.itemized.records import CanonicalItemRecord
 from app.prompting import internal_message_factory
 from app.schemas.event import ModelTokenUsagePayload
 from app.services.business.message_service import MessageService
@@ -16,29 +16,64 @@ from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
     persist_user_message_checkpoint,
 )
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.mapping.itemized.message_reasoning_merge import (
+    merge_canonical_reasoning,
+)
 
 MESSAGE_TIME = datetime(2026, 7, 14, tzinfo=UTC)
+
+
+@pytest.fixture
+def accept_previous_message():
+    """先建立真实已提交 root；空库不能伪造一个有 commit 的 checkpoint。"""
+    def accept(saver: RolloutCheckpointSaver, session_id: str) -> HumanMessage:
+        message = HumanMessage(
+            id="msg_previous",
+            content="上一条已接受的输入",
+            response_metadata={
+                "message_id": "msg_previous",
+                "created_at": MESSAGE_TIME.isoformat(),
+                "updated_at": MESSAGE_TIME.isoformat(),
+                "message_metadata": {"turn_id": "turn_previous"},
+            },
+        )
+        saver.accept_turn(
+            session_id,
+            accepted_ingress_id="msg_previous",
+            acceptance_idempotency_key="message:msg_previous",
+            payload=message.content,
+            turn_id="turn_previous",
+            root_item_id="item-msg_previous",
+        )
+        return message
+
+    return accept
 
 
 @pytest.mark.asyncio
 async def test_persist_user_message_checkpoint_is_idempotent(
     tmp_path,
     session_bundle_factory,
+    accept_previous_message,
 ):
     session_id = "sess_user_checkpoint"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    previous_message = accept_previous_message(saver, session_id)
     config = build_checkpoint_config(session_id)
     await saver.aput(
         config,
         {
-            "channel_values": {"messages": []},
-            "channel_versions": {"messages": 1},
+            "channel_values": {"messages": [previous_message]},
+            "channel_versions": {"messages": "1"},
             "updated_channels": ["messages"],
             "id": "ckpt-user-input",
         },
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
     message = HumanMessage(
         content="失败后也必须可重试",
@@ -63,7 +98,7 @@ async def test_persist_user_message_checkpoint_is_idempotent(
     assert latest is not None
     messages = latest.checkpoint["channel_values"]["messages"]
     assert [item.response_metadata["message_id"] for item in messages] == [
-        "msg_user_checkpoint"
+        "msg_previous", "msg_user_checkpoint"
     ]
 
 
@@ -71,10 +106,12 @@ async def test_persist_user_message_checkpoint_is_idempotent(
 async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
     tmp_path,
     session_bundle_factory,
+    accept_previous_message,
 ):
     session_id = "sess_checkpoint_stale_tasks"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    previous_message = accept_previous_message(saver, session_id)
     config = build_checkpoint_config(session_id)
     stale_send = Send(
         "tools",
@@ -88,16 +125,16 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
         config,
         {
             "channel_values": {
-                "messages": [],
+                "messages": [previous_message],
                 "__pregel_tasks": [stale_send],
             },
-            "channel_versions": {"messages": 1, "__pregel_tasks": 2},
+            "channel_versions": {"messages": "1", "__pregel_tasks": "2"},
             "updated_channels": ["__pregel_tasks"],
             "pending_sends": [stale_send],
             "id": "ckpt-stale-task",
         },
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1, "__pregel_tasks": 2},
+        {"messages": "1", "__pregel_tasks": "2"},
     )
     message = HumanMessage(
         content="失败后重新开始",
@@ -121,6 +158,10 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
     assert "__pregel_tasks" not in checkpoint["channel_versions"]
     assert checkpoint["updated_channels"] == ["messages"]
     assert checkpoint["pending_sends"] == []
+    assert [
+        item.response_metadata["message_id"]
+        for item in checkpoint["channel_values"]["messages"]
+    ] == ["msg_previous", "msg_after_stale_task"]
 
 
 @pytest.mark.asyncio
@@ -156,7 +197,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
                     ),
             ],
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-mixed",
     }
@@ -164,7 +205,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     changed = persist_standard_assistant_checkpoint(
@@ -210,6 +251,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     assert assistant.response_metadata["updated_at"] == assistant.response_metadata[
         "created_at"
     ]
+    assert assistant.tool_calls == []
     assert assistant.content == [
         {
             "type": "reasoning_content",
@@ -235,7 +277,11 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     state_assistant = records[-1]
     assert state_assistant["role"] == "assistant"
     assert state_assistant["response_metadata"]["phase"] == "final_answer"
-    assert state_assistant["content"] == [{"type": "text", "text": final_text}]
+    # design 5.2：诊断快照保留 reasoning/text carrier，展示文本由历史投影提供。
+    assert state_assistant["content"] == [
+        {"type": "reasoning", "reasoning": reasoning_text},
+        {"type": "text", "text": final_text},
+    ]
 
 
 @pytest.mark.asyncio
@@ -253,12 +299,12 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
             "channel_values": {
                 "messages": [HumanMessage(content="问题"), AIMessage(content="回答")]
             },
-            "channel_versions": {"messages": 1},
+            "channel_versions": {"messages": "1"},
             "updated_channels": ["messages"],
             "id": "ckpt-encrypted",
         },
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
     reasoning_item = {
         "type": "reasoning",
@@ -361,7 +407,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
                 final_message,
             ],
         },
-        "channel_versions": {"messages": 1},
+        "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
         "id": "ckpt-reminder",
     }
@@ -369,7 +415,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
         config,
         checkpoint,
         {"source": "test", "step": 1, "writes": {}},
-        {"messages": 1},
+        {"messages": "1"},
     )
 
     changed = persist_standard_assistant_checkpoint(
@@ -403,7 +449,10 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     assert records[3]["role"] == "user"
     assert "<system_reminder>" in records[3]["content"]
     assert reminder in records[3]["content"]
-    assert records[-1]["content"] == [{"type": "text", "text": final_text}]
+    assert records[-1]["content"] == [
+        {"type": "reasoning", "reasoning": final_reasoning},
+        {"type": "text", "text": final_text},
+    ]
     assert first_reasoning not in json.dumps(records[-1], ensure_ascii=False)
 
     visible_messages = await MessageService(checkpointer=saver).list(
@@ -411,3 +460,106 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
         limit=10,
     )
     assert all("<system_reminder>" not in item.content for item in visible_messages.items)
+
+
+@pytest.fixture
+def reasoning_items():
+    """输入顺序来自已提交 selection；物理 sequence 故意与它不同。"""
+    def make(*indices: int) -> list[CanonicalItemRecord]:
+        items = [
+            CanonicalItemRecord.create(
+                item_sequence=10 - position,
+                item_id=f"reasoning-{index}",
+                semantic_kind="reasoning",
+                payload_kind="text",
+                status="completed",
+                producer_ref={
+                    "producer_kind": "model",
+                    "producer_id": "test-model",
+                    "invocation_id": "model-call-1",
+                },
+                payload=f"思考 {index}",
+                created_at=MESSAGE_TIME.isoformat(),
+                metadata={"block_id": f"reasoning-{index}", "block_index": index},
+                turn_id="turn-1",
+                turn_scope="turn_member",
+            )
+            for position, index in enumerate(indices)
+        ]
+        items.append(CanonicalItemRecord.create(
+            item_sequence=11,
+            item_id="tool-call-item",
+            semantic_kind="tool_call",
+            payload_kind="tool_call",
+            status="completed",
+            producer_ref={
+                "producer_kind": "model",
+                "producer_id": "test-model",
+                "invocation_id": "model-call-1",
+            },
+            payload={"tool_calls": [{"id": "call-1", "name": "read", "args": {}}]},
+            created_at=MESSAGE_TIME.isoformat(),
+            turn_id="turn-1",
+            turn_scope="turn_member",
+        ))
+        return items
+
+    return make
+
+
+def test_agent_state_reasoning_merge_preserves_selection_order(reasoning_items):
+    items = reasoning_items(0, 2)
+    message = AIMessage(
+        content="",
+        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
+    )
+    result = merge_canonical_reasoning([message], items)
+    assert [block["id"] for block in result[0].content] == [
+        "reasoning-0", "reasoning-2",
+    ]
+    assert message.content == ""
+    assert [item.item_sequence for item in items] == [10, 9, 11]
+    assert result[0].tool_calls == message.tool_calls
+
+
+def test_agent_state_reasoning_merge_preserves_text_and_protected_carrier(reasoning_items):
+    protected = {
+        "type": "reasoning", "id": "reasoning-0", "index": 0,
+        "reasoning": "思考 0", "signature": "protected-signature",
+        "extras": {"opaque": "不得丢失"},
+    }
+    text = {"type": "text", "text": "调用前说明", "index": 1, "id": "text-1"}
+    message = AIMessage(
+        content=[protected, text],
+        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
+    )
+    items = reasoning_items(0, 2)
+    original_items = [item.to_dict() for item in items]
+    result = merge_canonical_reasoning([message], items)
+    assert result[0].content == [protected, text, {
+        "type": "reasoning", "reasoning": "思考 2", "id": "reasoning-2", "index": 2,
+    }]
+    assert message.content == [protected, text]
+    assert [item.to_dict() for item in items] == original_items
+    assert merge_canonical_reasoning(result, items)[0].content == result[0].content
+
+
+@pytest.mark.parametrize("indices", [(0, 2), (2, 0)])
+def test_agent_state_reasoning_merge_rejects_ambiguous_part_order(reasoning_items, indices):
+    message = AIMessage(
+        content="缺少 content-part 顺序的正文",
+        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
+    )
+    with pytest.raises(ValueError, match="缺少 content-part 顺序"):
+        merge_canonical_reasoning([message], reasoning_items(*indices))
+    assert message.content == "缺少 content-part 顺序的正文"
+
+
+def test_agent_state_reasoning_merge_rejects_conflicting_part_order(reasoning_items):
+    message = AIMessage(
+        content=[{"type": "text", "text": "调用前说明", "index": 1}],
+        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
+    )
+    with pytest.raises(ValueError, match="canonical 顺序与 content-part 顺序冲突"):
+        merge_canonical_reasoning([message], reasoning_items(2, 0))
+    assert message.content == [{"type": "text", "text": "调用前说明", "index": 1}]

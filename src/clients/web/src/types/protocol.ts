@@ -233,9 +233,15 @@ export type SessionCompactResult = Omit<WorkspaceProtocol.SessionCompactResultDT
   strategy?: "cache_preserving" | "cache_replacement" | null;
   compacted_at?: string | null;
 };
-export type SessionInformationSnapshot = Omit<WorkspaceProtocol.SessionInformationSnapshotDTO, "generated_at" | "session" | "workspace" | "execution" | "trace" | "resources" | "recent_errors"> & {
+export type SessionInformationSnapshot = Omit<WorkspaceProtocol.SessionInformationSnapshotDTO, "generated_at" | "session" | "workspace" | "execution" | "trace" | "relations" | "resources" | "recent_errors"> & {
   generated_at: string;
-  session: Session;
+  session: Omit<WorkspaceProtocol.SessionInformationSessionDTO, "created_at" | "updated_at" | "current_provider_id" | "parent_session_id" | "context_source_session_id"> & {
+    created_at: string;
+    updated_at: string;
+    current_provider_id?: string | null;
+    parent_session_id?: string | null;
+    context_source_session_id?: string | null;
+  };
   workspace: WorkspaceProtocol.SessionInformationWorkspaceDTO;
   execution: Omit<WorkspaceProtocol.SessionInformationExecutionDTO, "job_id" | "status" | "current_tool" | "last_error"> & {
     job_id?: string | null;
@@ -248,7 +254,11 @@ export type SessionInformationSnapshot = Omit<WorkspaceProtocol.SessionInformati
     last_event_type?: string | null;
     last_event_at?: string | null;
   };
-  resources?: WorkspaceProtocol.SessionInformationResourceDTO[];
+  relations: WorkspaceProtocol.SessionInformationRelationsDTO;
+  resources: Omit<WorkspaceProtocol.SessionInformationResourceSummaryDTO, "active_count" | "recent_closed_count"> & {
+    active_count?: number;
+    recent_closed_count?: number;
+  };
   recent_errors?: WorkspaceProtocol.SessionInformationErrorDTO[];
 };
 export type InterruptSessionResult = Omit<WorkspaceProtocol.SessionInterruptResultDTO, "tool_name" | "interrupted_at"> & {

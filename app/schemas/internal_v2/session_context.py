@@ -4,13 +4,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 SessionContextView = Literal[
     "overview",
     "messages",
     "records",
     "information",
     "inventory",
+    "assembly",
+    "assemblies",
 ]
 SessionContextInclude = Literal[
     "visible_text",
@@ -32,7 +33,10 @@ SessionContextMatchMode = Literal["literal", "regex"]
 class SessionContextReadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resource: str = Field(min_length=1)
+    resource: str = Field(
+        min_length=1,
+        description="session/workspace 资源；冻结 assembly 使用 #assembly=<assembly_id> 和 assembly view",
+    )
     view: SessionContextView = "overview"
     include: list[SessionContextInclude] = Field(
         default_factory=lambda: ["visible_text", "tool_summary"]

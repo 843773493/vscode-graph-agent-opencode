@@ -11,8 +11,8 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import build_remote_gateway_connection_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.remote_gateway import (
+    reconcile_configured_remote_gateways,
     reconnect_remote_gateway,
-    register_remote_gateway,
 )
 from app.gateway.runtime.local_workspace import start_managed_local_workspace_runtime
 from app.gateway.workspace_ids import (
@@ -68,6 +68,7 @@ async def _restore_managed_local_runtimes(
     gateway_config: GatewayConfig | None = None,
     only_workspace_ids: set[str] | None = None,
     exclude_workspace_ids: set[str] | None = None,
+    preserve_existing_managed_runtimes: bool = False,
 ) -> None:
     resolved_gateway_config = gateway_config or load_gateway_config()
     for persisted_target in registry.targets():
@@ -87,13 +88,20 @@ async def _restore_managed_local_runtimes(
         ):
             continue
         target = registry.resolve(persisted_target.workspace_id)
-        # 没有运行时的目标不会通过 resolve_service_url 转发；保留地址用于
-        # 校验 Gateway 重启后仍存活的旧后端，并在瞬时失败时继续重试接管。
-        reusable_backend_url = target.backend_url or None
-        target.connection_error = "Gateway 正在恢复工作区运行时"
-        registry.upsert(target, activate=False)
-        workspace_root = Path(target.root_path).expanduser().resolve()
+        logger.info(
+            "Gateway 恢复托管 Workspace: workspace_id=%s, desired_running=%s, "
+            "backend_url=%s",
+            target.workspace_id,
+            target.desired_running,
+            target.backend_url,
+        )
         try:
+            # 没有运行时的目标不会通过 resolve_service_url 转发；保留地址用于
+            # 校验 Gateway 重启后仍存活的旧后端，并在瞬时失败时继续重试接管。
+            reusable_backend_url = target.backend_url or None
+            target.connection_error = "Gateway 正在恢复工作区运行时"
+            registry.upsert(target, activate=False, mutation_owner="system")
+            workspace_root = Path(target.root_path).expanduser().resolve()
             if not workspace_root.is_dir():
                 raise FileNotFoundError(f"工作区目录不存在: {workspace_root}")
             runtime = await start_managed_local_workspace_runtime(
@@ -101,7 +109,7 @@ async def _restore_managed_local_runtimes(
                 workspace_root=workspace_root,
                 log_dir=gateway_root / "logs",
                 reusable_backend_url=reusable_backend_url,
-                adopt_existing_backend=False,
+                adopt_existing_backend=preserve_existing_managed_runtimes,
                 reusable_service_urls=target.local_service_urls,
                 health_request_timeout_seconds=(
                     resolved_gateway_config.gateway_process_health_request_timeout_seconds
@@ -113,27 +121,47 @@ async def _restore_managed_local_runtimes(
                     resolved_gateway_config.gateway_process_connection_drain_timeout_seconds
                 ),
                 default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
+                preserve_adopted_processes_on_failure=(
+                    preserve_existing_managed_runtimes
+                ),
             )
         except Exception as error:
             target.connection_error = (
                 "Gateway 启动时恢复托管工作区失败: "
                 f"workspace_id={target.workspace_id}: {error}"
             )
-            registry.upsert(target, activate=False)
+            registry.upsert(target, activate=False, mutation_owner="system")
             logger.exception(target.connection_error)
             continue
+        except BaseException:
+            logger.exception(
+                "Gateway 托管 Workspace 恢复任务异常结束: workspace_id=%s",
+                target.workspace_id,
+            )
+            raise
         target.backend_url = runtime.service_urls["workspace_api"]
         target.local_service_urls = {
             "terminal_manager": runtime.service_urls["terminal_manager"],
             "browser_manager": runtime.service_urls["browser_manager"]
         }
         target.connection_error = None
-        registry.upsert(target, runtime=runtime, activate=False)
+        registry.upsert(
+            target,
+            runtime=runtime,
+            activate=False,
+            mutation_owner="system",
+        )
+        logger.info(
+            "Gateway 托管 Workspace 恢复完成: workspace_id=%s, backend_url=%s",
+            target.workspace_id,
+            target.backend_url,
+        )
 
 
 async def create_registry(
     gateway_config: GatewayConfig | None = None,
     state_store: GatewayStateStore | None = None,
+    preserve_existing_managed_runtimes: bool = False,
 ) -> GatewayWorkspaceRegistry:
     gateway_root = get_gateway_root()
     resolved_gateway_config = gateway_config or load_gateway_config()
@@ -172,7 +200,7 @@ async def create_registry(
                 if persisted_default is not None and persisted_default.backend_url
                 else None
             ),
-            adopt_existing_backend=False,
+            adopt_existing_backend=preserve_existing_managed_runtimes,
             reusable_service_urls=(
                 persisted_default.local_service_urls
                 if persisted_default is not None
@@ -188,6 +216,9 @@ async def create_registry(
                 resolved_gateway_config.gateway_process_connection_drain_timeout_seconds
             ),
             default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
+            preserve_adopted_processes_on_failure=(
+                preserve_existing_managed_runtimes
+            ),
         )
         backend_url = default_runtime.service_urls["workspace_api"]
         local_service_urls = {
@@ -217,6 +248,7 @@ async def create_registry(
             root_path=root_path,
             backend_url=backend_url,
             connection_kind="local",
+            owner="system",
             managed=managed,
             removable=False,
             system_default=True,
@@ -228,42 +260,46 @@ async def create_registry(
     registry.remove_system_default_aliases(
         keep_workspace_id=default_workspace_id,
     )
-    # TODO: Gateway 配置热重载需要先为 registry 目标增加 config/manual/system
-    # 来源归属、原子 batch commit 与代理 runtime lease。否则删除配置可能误删手动
-    # 目标，或在 HTTP/SSE/WebSocket 仍使用旧 SSH 隧道时提前关闭它。
     configured_active_workspace_id: str | None = None
-    for configured_workspace in resolved_gateway_config.workspaces:
-        projected = await register_remote_gateway(
-            registry=registry,
-            log_dir=gateway_root / "logs",
-            name=configured_workspace.name,
-            host=configured_workspace.host,
-            port=configured_workspace.port,
-            username=configured_workspace.username,
-            private_key_path=configured_workspace.private_key_path,
-            ssh_config_host=configured_workspace.ssh_config_host,
-            remote_gateway_port=configured_workspace.remote_gateway_port,
-            remote_pair_command=configured_workspace.remote_pair_command,
-            activate=configured_workspace.activate,
-            health_request_timeout_seconds=(
-                resolved_gateway_config.gateway_process_health_request_timeout_seconds
-            ),
-            health_poll_interval_seconds=(
-                resolved_gateway_config.gateway_process_health_poll_interval_seconds
-            ),
-        )
-        if configured_workspace.activate and projected:
-            configured_active_workspace_id = projected[0].workspace_id
-
+    await reconcile_configured_remote_gateways(
+        registry=registry,
+        configured_workspaces=resolved_gateway_config.workspaces,
+        log_dir=gateway_root / "logs",
+        health_request_timeout_seconds=(
+            resolved_gateway_config.gateway_process_health_request_timeout_seconds
+        ),
+        health_poll_interval_seconds=(
+            resolved_gateway_config.gateway_process_health_poll_interval_seconds
+        ),
+    )
     configured_connection_ids = {
-        build_remote_gateway_connection_id(
+        item.connection_id
+        or build_remote_gateway_connection_id(
             host=item.host,
             port=item.port,
             username=item.username,
             remote_gateway_port=item.remote_gateway_port,
         )
-            for item in resolved_gateway_config.workspaces
+        for item in resolved_gateway_config.workspaces
     }
+    configured_active_connection_ids = {
+        item.connection_id
+        or build_remote_gateway_connection_id(
+            host=item.host,
+            port=item.port,
+            username=item.username,
+            remote_gateway_port=item.remote_gateway_port,
+        )
+        for item in resolved_gateway_config.workspaces
+        if item.activate
+    }
+    for target in registry.targets():
+        if (
+            target.remote_gateway_connection_id in configured_active_connection_ids
+        ):
+            configured_active_workspace_id = target.workspace_id
+            break
+
     for connection in registry.remote_gateway_connections():
         if connection.connection_id in configured_connection_ids:
             continue

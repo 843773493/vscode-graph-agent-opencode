@@ -1,0 +1,5 @@
+{
+  "scenario_id": "basic-chat-tool-loop",
+  "asset": "handwritten/openai_chat/basic-chat-tool-loop.json",
+  "business_assertion": "web-basic-chat-tool-loop"
+}

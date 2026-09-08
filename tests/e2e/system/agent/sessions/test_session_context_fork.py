@@ -9,7 +9,9 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 
 
 @pytest.mark.asyncio

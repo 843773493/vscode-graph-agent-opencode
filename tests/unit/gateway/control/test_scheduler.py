@@ -17,6 +17,19 @@ class _UnusedCoordinator:
     pass
 
 
+def test_scheduler_runtime_config_updates_next_poll_and_wakes_loop(tmp_path: Path) -> None:
+    store = SessionGeneratorStore(root=tmp_path)
+    scheduler = SessionGeneratorScheduler(
+        store=store,
+        coordinator=_UnusedCoordinator(),  # type: ignore[arg-type]
+    )
+
+    scheduler.update_runtime_config(poll_interval_seconds=2.5)
+
+    assert scheduler._poll_interval_seconds == 2.5
+    assert scheduler._wake_event.is_set()
+
+
 def _definition(
     root: Path,
     *,

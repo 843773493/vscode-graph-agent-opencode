@@ -8,7 +8,6 @@ from langchain_core.messages import HumanMessage
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.services.business.message_service import MessageService
 from app.services.business.session_resource_actions import (
     browser_available_actions,
@@ -25,6 +24,9 @@ from app.services.business.session_resource_registry import (
 from app.services.business.session_resource_service import SessionResourceService
 from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
 
@@ -260,8 +262,15 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
         "created_at": "2026-07-05T01:02:03+00:00",
         "updated_at": "2026-07-05T01:02:04+00:00",
     }
+    terminated_terminal = {
+        **terminal,
+        "terminal_id": "term_closed",
+        "status": "terminated",
+    }
     provider = TerminalResourceProvider(
-        terminal_manager=FakeTerminalManagerClient(terminals=[terminal]),
+        terminal_manager=FakeTerminalManagerClient(
+            terminals=[terminal, terminated_terminal]
+        ),
         historical_reader=FakeHistoricalTerminalRecordReader(),
         message_service=FailingHistoryMessageService(),
         resource_mapper=_resource_mapper(),
@@ -271,6 +280,34 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
 
     assert [resource.resource_id for resource in resources] == ["term_live"]
     assert resources[0].status == "running"
+
+
+@pytest.mark.asyncio
+async def test_browser_fast_listing_excludes_closed_state_records() -> None:
+    browser = {
+        "browser_id": "browser_live",
+        "session_id": "ses_test",
+        "status": "running",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+        "title": "Live",
+        "url": "https://example.com",
+    }
+    closed_browser = {
+        **browser,
+        "browser_id": "browser_closed",
+        "status": "closed",
+    }
+    provider = BrowserResourceProvider(
+        browser_manager=FakeBrowserManagerClient(
+            browsers=[browser, closed_browser]
+        ),
+        resource_mapper=_resource_mapper(),
+    )
+
+    resources = await provider.list_resources("ses_test", include_history=False)
+
+    assert [resource.resource_id for resource in resources] == ["browser_live"]
 
 
 @pytest.mark.asyncio

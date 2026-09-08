@@ -11,22 +11,30 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import ScopeCancelledError
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.message_stream_store import MessageStreamTerminalError
-from app.services.orchestration.agent_event_stream_processor import (
-    STREAM_JOB_ID_METADATA_KEY,
-    STREAM_SESSION_ID_METADATA_KEY,
+from app.services.orchestration.agent_execution_service import (
+    AgentExecutionService,
+)
+from app.services.orchestration.event_stream.contracts import (
     AgentEventStreamResult,
     SuccessfulToolCall,
 )
-from app.services.orchestration.agent_execution_service import (
-    AgentExecutionService,
-    _has_valid_delegated_report,
-    _has_valid_session_question_reply,
+from app.services.orchestration.event_stream.identity import (
+    STREAM_JOB_ID_METADATA_KEY,
+    STREAM_SESSION_ID_METADATA_KEY,
 )
+from app.services.orchestration.execution_step.reminders import (
+    has_valid_delegated_report as _has_valid_delegated_report,
+)
+from app.services.orchestration.execution_step.reminders import (
+    has_valid_session_question_reply as _has_valid_session_question_reply,
+)
+from tests.harness.python.run_context import TestRunContext
 
 
 @pytest.fixture
-def mock_dependencies():
+def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     """创建一组共用的 mock 依赖。"""
     config_service = MagicMock()
     config_service.get_snapshot.return_value = object()
@@ -61,7 +69,49 @@ def mock_dependencies():
     dependency_provider.get_message_service.return_value = MagicMock()
     dependency_provider.get_session_service.return_value = MagicMock()
     dependency_provider.get_session_orchestrator.return_value = MagicMock()
-    dependency_provider.get_checkpointer.return_value = None
+    # 此处只测编排，Saver 端口和 checkpoint 业务写入由显式 fake 替代。
+    # 生产依赖始终包含 checkpointer，不能用 None 隐式关闭整个 v2 生命周期。
+    saver = MagicMock(spec=[
+        "append_items", "register_model_call", "consume_prepared_context_for_dispatch",
+        "update_model_call_outcome", "execution_for_turn", "get_canonical_item",
+        "converge_execution", "mark_execution_lost",
+    ])
+    saver.consume_prepared_context_for_dispatch.return_value = {
+        "assembly_id": "assembly_test", "execution_id": "execution_test",
+    }
+    saver.execution_for_turn.return_value = "execution_test"
+    saved_items: dict[str, CanonicalItemRecord] = {}
+
+    def persist_final(*, message_id, turn_id, final_text, **_kwargs):
+        if not final_text:
+            return False
+        item = CanonicalItemRecord.create(
+            item_sequence=1, item_id=f"item-{message_id}",
+            semantic_kind="assistant_output", payload_kind="text", status="completed",
+            producer_ref={"producer_kind": "provider", "producer_id": "model_test"},
+            payload=final_text, turn_id=turn_id, turn_scope="turn_member",
+        )
+        saved_items[item.item_id] = item
+        return True
+
+    saver.get_canonical_item.side_effect = (
+        lambda _session_id, *, item_id, checkpoint_ns: saved_items.get(item_id)
+    )
+    monkeypatch.setattr(
+        "app.services.orchestration.execution_step.runner.persist_user_message_checkpoint",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "app.services.orchestration.execution_step.runner.persist_standard_assistant_checkpoint",
+        persist_final,
+    )
+    monkeypatch.setattr(
+        "app.services.orchestration.execution_step.runner.persist_intermediate_assistant_reasoning_checkpoint",
+        MagicMock(return_value=True),
+    )
+    dependency_provider.get_checkpointer.return_value = saver
+    workspace_root = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
+    workspace_root.mkdir(parents=True, exist_ok=True)
 
     message_stream_writer = MagicMock()
     message_stream_writer.turn_stream_id = "strm_test"
@@ -84,7 +134,27 @@ def mock_dependencies():
         "tool_selection_store": tool_selection_store,
         "dependency_provider": dependency_provider,
         "message_stream_store": message_stream_store,
+        "workspace_root": workspace_root,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [None, "register_model_call", "mark_execution_lost"])
+async def test_step_requires_v2_owner_before_opening_stream(mock_dependencies, missing):
+    provider = mock_dependencies["dependency_provider"]
+    if missing is None:
+        provider.get_checkpointer.return_value = None
+    else:
+        setattr(provider.get_checkpointer.return_value, missing, None)
+    service = _make_service(mock_dependencies)
+    with pytest.raises((TypeError, RuntimeError), match="checkpointer|缺少可调用端口"):
+        await service.run_step(
+            session_id="ses_missing", message="用户输入", agent_id="test_agent",
+            job_id="turn_missing", message_id="msg_missing",
+            message_created_at="2026-07-20T00:00:00+00:00",
+        )
+    mock_dependencies["message_stream_store"].open.assert_not_awaited()
+    mock_dependencies["job_event_bus"].publish.assert_not_awaited()
 
 
 def create_chunk(
@@ -141,7 +211,7 @@ def _make_service(deps):
         session_changes_service=deps["session_changes_service"],
         tool_selection_store=deps["tool_selection_store"],
         message_stream_store=deps["message_stream_store"],
-        workspace_root=Path.cwd(),
+        workspace_root=deps["workspace_root"],
     )
 
 
@@ -190,23 +260,48 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
 
     mock_dependencies["config_service"].use_snapshot.side_effect = use_snapshot
 
-    async def fake_run_step_with_snapshot(*_args, **_kwargs):
+    built_agent = object()
+
+    def fake_build_agent(**kwargs):
         assert active_snapshots == [snapshot]
+        assert kwargs["config_service"] is mock_dependencies["config_service"]
+        assert kwargs["workspace_root"] == mock_dependencies["workspace_root"]
+        return built_agent
+
+    async def fake_process_events(**kwargs):
+        assert active_snapshots == [snapshot]
+        assert kwargs["agent"] is built_agent
+        assert kwargs["session_changes_service"] is mock_dependencies["session_changes_service"]
+        assert kwargs["workspace_root"] == mock_dependencies["workspace_root"]
         await asyncio.sleep(0)
         # 模拟模型返回后进入异步工具阶段，snapshot 仍必须固定。
         assert active_snapshots == [snapshot]
-        return "ok"
+        return AgentEventStreamResult(
+            final_text="ok",
+            latest_model_content_blocks=({"type": "text", "text": "ok"},),
+            last_tool_result_text="",
+        )
 
-    service._run_step_with_snapshot = fake_run_step_with_snapshot
-
-    result = await service.run_step(
-        session_id="ses_test",
-        message="test",
-        agent_id="test_agent",
-        job_id="job_test",
-        message_id="msg_test",
-        message_created_at="2026-07-19T00:00:00+00:00",
-    )
+    with (
+        patch(
+            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            side_effect=fake_build_agent,
+        ) as build_agent,
+        patch(
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
+            side_effect=fake_process_events,
+        ) as process_events,
+    ):
+        result = await service.run_step(
+            session_id="ses_test",
+            message="test",
+            agent_id="test_agent",
+            job_id="job_test",
+            message_id="msg_test",
+            message_created_at="2026-07-19T00:00:00+00:00",
+        )
+    build_agent.assert_called_once()
+    process_events.assert_awaited_once()
 
     assert result == "ok"
     assert active_snapshots == []
@@ -292,7 +387,7 @@ async def test_delegated_report_is_not_enforced_by_default(mock_dependencies):
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             new=AsyncMock(return_value=stream_result),
         ) as process,
     ):
@@ -336,7 +431,7 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             new=AsyncMock(side_effect=stream_results),
         ) as process,
     ):
@@ -393,7 +488,7 @@ async def test_delegated_progress_only_cannot_replace_final_result(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             new=AsyncMock(side_effect=stream_results),
         ),
     ):
@@ -452,7 +547,7 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_side_effect,
         ),
     ):
@@ -519,7 +614,7 @@ async def test_delegated_child_relays_cross_session_updates_to_its_parent(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             new=AsyncMock(return_value=stream_result),
         ),
     ):
@@ -874,7 +969,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
             "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
         ) as mock_build,
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream"
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream"
         ) as mock_process,
     ):
         mock_build.return_value = MagicMock()
@@ -1269,7 +1364,7 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_with_retry,
         ),
     ):
@@ -1329,7 +1424,7 @@ async def test_interrupt_wins_when_completion_races_with_persisted_request(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_success,
         ),
     ):
@@ -1362,11 +1457,11 @@ async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_a
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_cancelled,
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.persist_interrupt_checkpoint",
+            "app.services.orchestration.execution_step.failures.persist_interrupt_checkpoint",
         ) as persist_checkpoint,
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -1404,11 +1499,11 @@ async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_job_timeout,
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.persist_interrupt_checkpoint",
+            "app.services.orchestration.execution_step.failures.persist_interrupt_checkpoint",
         ),
         pytest.raises(asyncio.CancelledError),
     ):
@@ -1444,11 +1539,11 @@ async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_scope_deadline,
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.persist_interrupt_checkpoint",
+            "app.services.orchestration.execution_step.failures.persist_interrupt_checkpoint",
         ) as persist_checkpoint,
         pytest.raises(ScopeCancelledError, match="scope_deadline_exceeded"),
     ):
@@ -1502,11 +1597,11 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_cancelled,
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.persist_interrupt_checkpoint",
+            "app.services.orchestration.execution_step.failures.persist_interrupt_checkpoint",
         ),
         pytest.raises(asyncio.CancelledError),
     ):
@@ -1545,7 +1640,7 @@ async def test_job_timeout_cancel_closes_stream_as_timed_out(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_timed_out,
         ),
         pytest.raises(asyncio.CancelledError),
@@ -1588,7 +1683,7 @@ async def test_cancelled_after_user_interrupt_closes_as_interrupted(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_user_cancelled,
         ),
     ):
@@ -1622,7 +1717,7 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.orchestration.agent_execution_service.process_agent_event_stream",
+            "app.services.orchestration.execution_step.retry.process_agent_event_stream",
             side_effect=process_failed,
         ),
     ):

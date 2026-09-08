@@ -30,7 +30,7 @@
 | 运行测试 | `uv run pytest` |
 | 运行 lint | `uv run ruff check .` |
 
-> 当前只开发 `src/clients/web/` 纯 Web 客户端。Electron、React Native 和新的 VS Code 客户端均为 TODO；现存 `src/webview-ui/` 不随纯 Web 功能同步。首次运行请分别执行根目录 `bun install` 与 `bun install --cwd src/clients/web`。
+> 当前只开发 `src/clients/web/` 纯 Web 客户端。Electron、React Native 及其 parity 客户端仅保留清晰的运行面边界。首次运行请分别执行根目录 `bun install` 与 `bun install --cwd src/clients/web`。
 
 ## 测试分层
 

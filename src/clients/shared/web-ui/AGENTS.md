@@ -2,11 +2,11 @@
 
 ## 目录用途
 
-预留纯 Web 与未来 Electron renderer 可复用的 React DOM 组件和展示逻辑。
+存放浏览器 `web` 与 Electron renderer `electron-web` 共享的桌面布局 React DOM 组件和展示逻辑。
 
 ## 可修改内容
 
-- 已证明跨 React DOM 客户端复用的组件、Hooks 和样式。
+- 已证明跨 `web` 与 `electron-web` 复用的桌面组件、Hooks 和样式。
 
 ## 不可修改内容
 
@@ -15,5 +15,5 @@
 
 ## 规范
 
-- 可以依赖 `../core` 和 `src/shared`，不得反向依赖 `clients/web`。
-- 当前没有第二个 React DOM 调用方时，优先留在纯 Web 客户端。
+- 可以依赖 `../core` 和 `src/shared`，不得反向依赖 `clients/web` 或 `clients/electron-web`。
+- `web` 与 `electron-web` 的应用入口、路由和运行时适配不放入本目录。

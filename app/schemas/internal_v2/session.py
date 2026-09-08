@@ -96,48 +96,96 @@ class SessionInformationWorkspaceDTO(BaseModel):
     root_path: str
 
 
+class SessionInformationSessionDTO(BaseModel):
+    session_id: str
+    workspace_id: str
+    title: str = Field(max_length=512)
+    current_agent_id: str
+    current_provider_id: Optional[str] = None
+    parent_session_id: Optional[str] = None
+    context_source_session_id: Optional[str] = None
+    kind: SessionKind
+    created_at: datetime
+    updated_at: datetime
+    title_truncated: bool = False
+
+
 class SessionInformationExecutionDTO(BaseModel):
     job_id: Optional[str] = None
     status: str = "idle"
     current_tool: Optional[str] = None
     last_error: Optional[str] = None
+    last_error_truncated: bool = False
 
 
 class SessionInformationTraceDTO(BaseModel):
-    event_count: int = 0
+    observed_event_count: int = 0
     last_event_id: Optional[str] = None
     last_event_type: Optional[str] = None
     last_event_at: Optional[datetime] = None
+    truncated: bool = False
 
 
 class SessionInformationResourceDTO(BaseModel):
-    resource_id: str
+    resource_id: str = Field(max_length=256)
     kind: SessionResourceKind
-    name: str
-    status: str
+    name: str = Field(max_length=512)
+    status: str = Field(max_length=128)
     updated_at: datetime
+    ended_at: Optional[datetime] = None
+    name_truncated: bool = False
+
+
+class SessionInformationResourceSummaryDTO(BaseModel):
+    active: list[SessionInformationResourceDTO] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+    recent_closed: list[SessionInformationResourceDTO] = Field(
+        default_factory=list,
+        max_length=16,
+    )
+    active_count: int = 0
+    recent_closed_count: int = 0
+    active_truncated: bool = False
+    recent_closed_truncated: bool = False
+    historical_omitted: bool = True
+
+
+class SessionInformationRelationsDTO(BaseModel):
+    child_count: int = 0
+    child_ids: list[str] = Field(default_factory=list, max_length=32)
+    child_ids_truncated: bool = False
 
 
 class SessionInformationErrorDTO(BaseModel):
     event_id: str
     job_id: str
     type: str
-    message: str
+    message: str = Field(max_length=2048)
     timestamp: datetime
+    message_truncated: bool = False
 
 
 class SessionInformationSnapshotDTO(BaseModel):
-    kind: Literal["boxteam_session_information"] = "boxteam_session_information"
-    schema_version: int = 1
+    kind: Literal["session_diagnostic_snapshot"] = "session_diagnostic_snapshot"
+    schema_version: int = 2
     generated_at: datetime
-    session: SessionDTO
-    child_session_ids: list[str] = Field(default_factory=list)
+    session: SessionInformationSessionDTO
     workspace: SessionInformationWorkspaceDTO
     storage_path: str
     execution: SessionInformationExecutionDTO
     trace: SessionInformationTraceDTO
-    resources: list[SessionInformationResourceDTO] = Field(default_factory=list)
-    recent_errors: list[SessionInformationErrorDTO] = Field(default_factory=list)
+    relations: SessionInformationRelationsDTO = Field(
+        default_factory=SessionInformationRelationsDTO
+    )
+    resources: SessionInformationResourceSummaryDTO = Field(
+        default_factory=SessionInformationResourceSummaryDTO
+    )
+    recent_errors: list[SessionInformationErrorDTO] = Field(
+        default_factory=list,
+        max_length=5,
+    )
 
 
 class DeleteSessionResultDTO(BaseModel):

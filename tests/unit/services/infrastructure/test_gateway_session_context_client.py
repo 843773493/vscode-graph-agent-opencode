@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import httpx
 import pytest
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
-from app.services.infrastructure.gateway_session_context_client import (
-    GatewaySessionContextClient,
-)
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
+)
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.gateway_session_context_client import (
+    GatewaySessionContextClient,
 )
 
 
@@ -145,3 +148,52 @@ async def test_gateway_internal_server_error_still_fails_fast(
         )
 
     assert not isinstance(captured.value, WorkspaceSessionContextAccessError)
+
+
+@pytest.mark.asyncio
+async def test_gateway_url_is_resolved_from_current_config_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_service = Mock(spec=ConfigService)
+    current_url = ["http://gateway-a"]
+    config_service.get_gateway_connection_url.side_effect = lambda: current_url[0]
+    config_service.get_gateway_connection_timeout_seconds.return_value = 30
+    captured_urls: list[str] = []
+
+    async def capture_request(
+        client: httpx.AsyncClient,
+        method: str,
+        path: str,
+        **_kwargs: object,
+    ) -> httpx.Response:
+        captured_urls.append(f"{client.base_url}{path}")
+        request = httpx.Request(method, f"{client.base_url}{path}")
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "data": {
+                    "resource": "boxteam://workspace/gw_target/session/ses_target",
+                    "view": "overview",
+                    "revision": "rev-1",
+                }
+            },
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", capture_request)
+    client = GatewaySessionContextClient(config_service=config_service)
+
+    await client.read_context_in_workspace(
+        "gw_target",
+        _read_request("gw_target"),
+    )
+    current_url[0] = "http://gateway-b"
+    await client.read_context_in_workspace(
+        "gw_target",
+        _read_request("gw_target"),
+    )
+
+    assert captured_urls == [
+        "http://gateway-a/api/v1/context/read",
+        "http://gateway-b/api/v1/context/read",
+    ]

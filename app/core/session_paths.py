@@ -781,6 +781,42 @@ class SessionPathResolver(SessionPathMutationSupport):
             ]
 
     @session_tree_operation_locked
+    def child_session_summary(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> tuple[int, list[str], bool]:
+        """在物理索引上统计直接逻辑子会话，避免重新读取全部 session.json。"""
+        if limit < 1:
+            raise ValueError("子会话摘要 limit 必须大于 0")
+        with self._lock:
+            self._ensure_loaded()
+            self._refresh_if_navigation_changed_locked()
+            self._raise_if_physical_tree_invalid_locked()
+            node = self._nodes.get(session_id)
+            if node is None or node.kind != "session":
+                raise KeyError(f"物理会话节点不存在: {session_id}")
+
+            child_count = 0
+            child_ids: list[str] = []
+            for candidate in self._nodes.values():
+                if candidate.kind != "session":
+                    continue
+                if (
+                    nearest_session_ancestor_from_nodes(
+                        candidate.parent_node_id,
+                        self._nodes,
+                    )
+                    != session_id
+                ):
+                    continue
+                child_count += 1
+                if len(child_ids) < limit:
+                    child_ids.append(candidate.node_id)
+            return child_count, child_ids, child_count > len(child_ids)
+
+    @session_tree_operation_locked
     def descendant_session_ids(self, node_id: str, *, include_self: bool = False) -> list[str]:
         with self._lock:
             self._ensure_loaded()

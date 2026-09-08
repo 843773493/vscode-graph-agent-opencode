@@ -994,6 +994,7 @@ export interface SessionInformationErrorDTO {
   type: string;
   message: string;
   timestamp: string | undefined;
+  message_truncated?: boolean | undefined;
 }
 
 export interface SessionInformationExecutionDTO {
@@ -1001,6 +1002,7 @@ export interface SessionInformationExecutionDTO {
   status?: string | undefined;
   current_tool?: string | undefined;
   last_error?: string | undefined;
+  last_error_truncated?: boolean | undefined;
 }
 
 export interface SessionInformationResourceDTO {
@@ -1009,27 +1011,60 @@ export interface SessionInformationResourceDTO {
   name: string;
   status: string;
   updated_at: string | undefined;
+  ended_at?: string | undefined;
+  name_truncated?: boolean | undefined;
+}
+
+export interface SessionInformationSessionDTO {
+  session_id: string;
+  workspace_id: string;
+  title: string;
+  current_agent_id: string;
+  current_provider_id?: string | undefined;
+  parent_session_id?: string | undefined;
+  context_source_session_id?: string | undefined;
+  kind: string;
+  created_at: string | undefined;
+  updated_at: string | undefined;
+  title_truncated?: boolean | undefined;
+}
+
+export interface SessionInformationResourceSummaryDTO {
+  active: SessionInformationResourceDTO[];
+  recent_closed: SessionInformationResourceDTO[];
+  active_count?: number | undefined;
+  recent_closed_count?: number | undefined;
+  active_truncated?: boolean | undefined;
+  recent_closed_truncated?: boolean | undefined;
+  historical_omitted?: boolean | undefined;
+}
+
+export interface SessionInformationRelationsDTO {
+  child_count?: number | undefined;
+  child_ids: string[];
+  child_ids_truncated?: boolean | undefined;
 }
 
 export interface SessionInformationSnapshotDTO {
   kind?: string | undefined;
   schema_version?: number | undefined;
   generated_at: string | undefined;
-  session: SessionDTO | undefined;
-  child_session_ids: string[];
+  session: SessionInformationSessionDTO | undefined;
   workspace: SessionInformationWorkspaceDTO | undefined;
   storage_path: string;
   execution: SessionInformationExecutionDTO | undefined;
   trace: SessionInformationTraceDTO | undefined;
-  resources: SessionInformationResourceDTO[];
+  relations: SessionInformationRelationsDTO | undefined;
+  resources: SessionInformationResourceSummaryDTO | undefined;
   recent_errors: SessionInformationErrorDTO[];
 }
 
 export interface SessionInformationTraceDTO {
-  event_count?: number | undefined;
+  observed_event_count?: number | undefined;
   last_event_id?: string | undefined;
   last_event_type?: string | undefined;
   last_event_at?: string | undefined;
+  truncated?: boolean | undefined;
 }
 
 export interface SessionInformationWorkspaceDTO {
@@ -8271,7 +8306,7 @@ export const SessionGoalSetRequest: MessageFns<SessionGoalSetRequest> = {
 };
 
 function createBaseSessionInformationErrorDTO(): SessionInformationErrorDTO {
-  return { event_id: "", job_id: "", type: "", message: "", timestamp: undefined };
+  return { event_id: "", job_id: "", type: "", message: "", timestamp: undefined, message_truncated: undefined };
 }
 
 export const SessionInformationErrorDTO: MessageFns<SessionInformationErrorDTO> = {
@@ -8282,6 +8317,7 @@ export const SessionInformationErrorDTO: MessageFns<SessionInformationErrorDTO> 
       type: isSet(object.type) ? globalThis.String(object.type) : "",
       message: isSet(object.message) ? globalThis.String(object.message) : "",
       timestamp: isSet(object.timestamp) ? globalThis.String(object.timestamp) : undefined,
+      message_truncated: isSet(object.message_truncated) ? globalThis.Boolean(object.message_truncated) : undefined,
     };
   },
 
@@ -8302,6 +8338,9 @@ export const SessionInformationErrorDTO: MessageFns<SessionInformationErrorDTO> 
     if (message.timestamp !== undefined) {
       obj.timestamp = message.timestamp;
     }
+    if (message.message_truncated !== undefined) {
+      obj.message_truncated = message.message_truncated;
+    }
     return obj;
   },
 
@@ -8315,12 +8354,19 @@ export const SessionInformationErrorDTO: MessageFns<SessionInformationErrorDTO> 
     message.type = object.type ?? "";
     message.message = object.message ?? "";
     message.timestamp = object.timestamp ?? undefined;
+    message.message_truncated = object.message_truncated ?? undefined;
     return message;
   },
 };
 
 function createBaseSessionInformationExecutionDTO(): SessionInformationExecutionDTO {
-  return { job_id: undefined, status: undefined, current_tool: undefined, last_error: undefined };
+  return {
+    job_id: undefined,
+    status: undefined,
+    current_tool: undefined,
+    last_error: undefined,
+    last_error_truncated: undefined,
+  };
 }
 
 export const SessionInformationExecutionDTO: MessageFns<SessionInformationExecutionDTO> = {
@@ -8330,6 +8376,9 @@ export const SessionInformationExecutionDTO: MessageFns<SessionInformationExecut
       status: isSet(object.status) ? globalThis.String(object.status) : undefined,
       current_tool: isSet(object.current_tool) ? globalThis.String(object.current_tool) : undefined,
       last_error: isSet(object.last_error) ? globalThis.String(object.last_error) : undefined,
+      last_error_truncated: isSet(object.last_error_truncated)
+        ? globalThis.Boolean(object.last_error_truncated)
+        : undefined,
     };
   },
 
@@ -8347,6 +8396,9 @@ export const SessionInformationExecutionDTO: MessageFns<SessionInformationExecut
     if (message.last_error !== undefined) {
       obj.last_error = message.last_error;
     }
+    if (message.last_error_truncated !== undefined) {
+      obj.last_error_truncated = message.last_error_truncated;
+    }
     return obj;
   },
 
@@ -8361,12 +8413,21 @@ export const SessionInformationExecutionDTO: MessageFns<SessionInformationExecut
     message.status = object.status ?? undefined;
     message.current_tool = object.current_tool ?? undefined;
     message.last_error = object.last_error ?? undefined;
+    message.last_error_truncated = object.last_error_truncated ?? undefined;
     return message;
   },
 };
 
 function createBaseSessionInformationResourceDTO(): SessionInformationResourceDTO {
-  return { resource_id: "", kind: "", name: "", status: "", updated_at: undefined };
+  return {
+    resource_id: "",
+    kind: "",
+    name: "",
+    status: "",
+    updated_at: undefined,
+    ended_at: undefined,
+    name_truncated: undefined,
+  };
 }
 
 export const SessionInformationResourceDTO: MessageFns<SessionInformationResourceDTO> = {
@@ -8377,6 +8438,8 @@ export const SessionInformationResourceDTO: MessageFns<SessionInformationResourc
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      ended_at: isSet(object.ended_at) ? globalThis.String(object.ended_at) : undefined,
+      name_truncated: isSet(object.name_truncated) ? globalThis.Boolean(object.name_truncated) : undefined,
     };
   },
 
@@ -8397,6 +8460,12 @@ export const SessionInformationResourceDTO: MessageFns<SessionInformationResourc
     if (message.updated_at !== undefined) {
       obj.updated_at = message.updated_at;
     }
+    if (message.ended_at !== undefined) {
+      obj.ended_at = message.ended_at;
+    }
+    if (message.name_truncated !== undefined) {
+      obj.name_truncated = message.name_truncated;
+    }
     return obj;
   },
 
@@ -8412,6 +8481,227 @@ export const SessionInformationResourceDTO: MessageFns<SessionInformationResourc
     message.name = object.name ?? "";
     message.status = object.status ?? "";
     message.updated_at = object.updated_at ?? undefined;
+    message.ended_at = object.ended_at ?? undefined;
+    message.name_truncated = object.name_truncated ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionInformationSessionDTO(): SessionInformationSessionDTO {
+  return {
+    session_id: "",
+    workspace_id: "",
+    title: "",
+    current_agent_id: "",
+    current_provider_id: undefined,
+    parent_session_id: undefined,
+    context_source_session_id: undefined,
+    kind: "",
+    created_at: undefined,
+    updated_at: undefined,
+    title_truncated: undefined,
+  };
+}
+
+export const SessionInformationSessionDTO: MessageFns<SessionInformationSessionDTO> = {
+  fromJSON(object: any): SessionInformationSessionDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : "",
+      current_agent_id: isSet(object.current_agent_id) ? globalThis.String(object.current_agent_id) : "",
+      current_provider_id: isSet(object.current_provider_id)
+        ? globalThis.String(object.current_provider_id)
+        : undefined,
+      parent_session_id: isSet(object.parent_session_id) ? globalThis.String(object.parent_session_id) : undefined,
+      context_source_session_id: isSet(object.context_source_session_id)
+        ? globalThis.String(object.context_source_session_id)
+        : undefined,
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      title_truncated: isSet(object.title_truncated) ? globalThis.Boolean(object.title_truncated) : undefined,
+    };
+  },
+
+  toJSON(message: SessionInformationSessionDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.title !== "") {
+      obj.title = message.title;
+    }
+    if (message.current_agent_id !== "") {
+      obj.current_agent_id = message.current_agent_id;
+    }
+    if (message.current_provider_id !== undefined) {
+      obj.current_provider_id = message.current_provider_id;
+    }
+    if (message.parent_session_id !== undefined) {
+      obj.parent_session_id = message.parent_session_id;
+    }
+    if (message.context_source_session_id !== undefined) {
+      obj.context_source_session_id = message.context_source_session_id;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.updated_at !== undefined) {
+      obj.updated_at = message.updated_at;
+    }
+    if (message.title_truncated !== undefined) {
+      obj.title_truncated = message.title_truncated;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionInformationSessionDTO>, I>>(base?: I): SessionInformationSessionDTO {
+    return SessionInformationSessionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionInformationSessionDTO>, I>>(object: I): SessionInformationSessionDTO {
+    const message = createBaseSessionInformationSessionDTO();
+    message.session_id = object.session_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.title = object.title ?? "";
+    message.current_agent_id = object.current_agent_id ?? "";
+    message.current_provider_id = object.current_provider_id ?? undefined;
+    message.parent_session_id = object.parent_session_id ?? undefined;
+    message.context_source_session_id = object.context_source_session_id ?? undefined;
+    message.kind = object.kind ?? "";
+    message.created_at = object.created_at ?? undefined;
+    message.updated_at = object.updated_at ?? undefined;
+    message.title_truncated = object.title_truncated ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionInformationResourceSummaryDTO(): SessionInformationResourceSummaryDTO {
+  return {
+    active: [],
+    recent_closed: [],
+    active_count: undefined,
+    recent_closed_count: undefined,
+    active_truncated: undefined,
+    recent_closed_truncated: undefined,
+    historical_omitted: undefined,
+  };
+}
+
+export const SessionInformationResourceSummaryDTO: MessageFns<SessionInformationResourceSummaryDTO> = {
+  fromJSON(object: any): SessionInformationResourceSummaryDTO {
+    return {
+      active: globalThis.Array.isArray(object?.active)
+        ? object.active.map((e: any) => SessionInformationResourceDTO.fromJSON(e))
+        : [],
+      recent_closed: globalThis.Array.isArray(object?.recent_closed)
+        ? object.recent_closed.map((e: any) => SessionInformationResourceDTO.fromJSON(e))
+        : [],
+      active_count: isSet(object.active_count) ? globalThis.Number(object.active_count) : undefined,
+      recent_closed_count: isSet(object.recent_closed_count)
+        ? globalThis.Number(object.recent_closed_count)
+        : undefined,
+      active_truncated: isSet(object.active_truncated) ? globalThis.Boolean(object.active_truncated) : undefined,
+      recent_closed_truncated: isSet(object.recent_closed_truncated)
+        ? globalThis.Boolean(object.recent_closed_truncated)
+        : undefined,
+      historical_omitted: isSet(object.historical_omitted) ? globalThis.Boolean(object.historical_omitted) : undefined,
+    };
+  },
+
+  toJSON(message: SessionInformationResourceSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.active?.length) {
+      obj.active = message.active.map((e) => SessionInformationResourceDTO.toJSON(e));
+    }
+    if (message.recent_closed?.length) {
+      obj.recent_closed = message.recent_closed.map((e) => SessionInformationResourceDTO.toJSON(e));
+    }
+    if (message.active_count !== undefined) {
+      obj.active_count = Math.round(message.active_count);
+    }
+    if (message.recent_closed_count !== undefined) {
+      obj.recent_closed_count = Math.round(message.recent_closed_count);
+    }
+    if (message.active_truncated !== undefined) {
+      obj.active_truncated = message.active_truncated;
+    }
+    if (message.recent_closed_truncated !== undefined) {
+      obj.recent_closed_truncated = message.recent_closed_truncated;
+    }
+    if (message.historical_omitted !== undefined) {
+      obj.historical_omitted = message.historical_omitted;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionInformationResourceSummaryDTO>, I>>(
+    base?: I,
+  ): SessionInformationResourceSummaryDTO {
+    return SessionInformationResourceSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionInformationResourceSummaryDTO>, I>>(
+    object: I,
+  ): SessionInformationResourceSummaryDTO {
+    const message = createBaseSessionInformationResourceSummaryDTO();
+    message.active = object.active?.map((e) => SessionInformationResourceDTO.fromPartial(e)) || [];
+    message.recent_closed = object.recent_closed?.map((e) => SessionInformationResourceDTO.fromPartial(e)) || [];
+    message.active_count = object.active_count ?? undefined;
+    message.recent_closed_count = object.recent_closed_count ?? undefined;
+    message.active_truncated = object.active_truncated ?? undefined;
+    message.recent_closed_truncated = object.recent_closed_truncated ?? undefined;
+    message.historical_omitted = object.historical_omitted ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionInformationRelationsDTO(): SessionInformationRelationsDTO {
+  return { child_count: undefined, child_ids: [], child_ids_truncated: undefined };
+}
+
+export const SessionInformationRelationsDTO: MessageFns<SessionInformationRelationsDTO> = {
+  fromJSON(object: any): SessionInformationRelationsDTO {
+    return {
+      child_count: isSet(object.child_count) ? globalThis.Number(object.child_count) : undefined,
+      child_ids: globalThis.Array.isArray(object?.child_ids)
+        ? object.child_ids.map((e: any) => globalThis.String(e))
+        : [],
+      child_ids_truncated: isSet(object.child_ids_truncated)
+        ? globalThis.Boolean(object.child_ids_truncated)
+        : undefined,
+    };
+  },
+
+  toJSON(message: SessionInformationRelationsDTO): unknown {
+    const obj: any = {};
+    if (message.child_count !== undefined) {
+      obj.child_count = Math.round(message.child_count);
+    }
+    if (message.child_ids?.length) {
+      obj.child_ids = message.child_ids;
+    }
+    if (message.child_ids_truncated !== undefined) {
+      obj.child_ids_truncated = message.child_ids_truncated;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionInformationRelationsDTO>, I>>(base?: I): SessionInformationRelationsDTO {
+    return SessionInformationRelationsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionInformationRelationsDTO>, I>>(
+    object: I,
+  ): SessionInformationRelationsDTO {
+    const message = createBaseSessionInformationRelationsDTO();
+    message.child_count = object.child_count ?? undefined;
+    message.child_ids = object.child_ids?.map((e) => e) || [];
+    message.child_ids_truncated = object.child_ids_truncated ?? undefined;
     return message;
   },
 };
@@ -8422,12 +8712,12 @@ function createBaseSessionInformationSnapshotDTO(): SessionInformationSnapshotDT
     schema_version: undefined,
     generated_at: undefined,
     session: undefined,
-    child_session_ids: [],
     workspace: undefined,
     storage_path: "",
     execution: undefined,
     trace: undefined,
-    resources: [],
+    relations: undefined,
+    resources: undefined,
     recent_errors: [],
   };
 }
@@ -8438,19 +8728,13 @@ export const SessionInformationSnapshotDTO: MessageFns<SessionInformationSnapsho
       kind: isSet(object.kind) ? globalThis.String(object.kind) : undefined,
       schema_version: isSet(object.schema_version) ? globalThis.Number(object.schema_version) : undefined,
       generated_at: isSet(object.generated_at) ? globalThis.String(object.generated_at) : undefined,
-      session: isSet(object.session) ? SessionDTO.fromJSON(object.session) : undefined,
-      child_session_ids: globalThis.Array.isArray(object?.child_session_ids)
-        ? object.child_session_ids.map((e: any) => globalThis.String(e))
-        : [],
+      session: isSet(object.session) ? SessionInformationSessionDTO.fromJSON(object.session) : undefined,
       workspace: isSet(object.workspace) ? SessionInformationWorkspaceDTO.fromJSON(object.workspace) : undefined,
       storage_path: isSet(object.storage_path) ? globalThis.String(object.storage_path) : "",
       execution: isSet(object.execution) ? SessionInformationExecutionDTO.fromJSON(object.execution) : undefined,
       trace: isSet(object.trace) ? SessionInformationTraceDTO.fromJSON(object.trace) : undefined,
-      resources: globalThis.Array.isArray(object?.resources)
-        ? object.resources.map((e: any) =>
-          SessionInformationResourceDTO.fromJSON(e)
-        )
-        : [],
+      relations: isSet(object.relations) ? SessionInformationRelationsDTO.fromJSON(object.relations) : undefined,
+      resources: isSet(object.resources) ? SessionInformationResourceSummaryDTO.fromJSON(object.resources) : undefined,
       recent_errors: globalThis.Array.isArray(object?.recent_errors)
         ? object.recent_errors.map((e: any) => SessionInformationErrorDTO.fromJSON(e))
         : [],
@@ -8469,10 +8753,7 @@ export const SessionInformationSnapshotDTO: MessageFns<SessionInformationSnapsho
       obj.generated_at = message.generated_at;
     }
     if (message.session !== undefined) {
-      obj.session = SessionDTO.toJSON(message.session);
-    }
-    if (message.child_session_ids?.length) {
-      obj.child_session_ids = message.child_session_ids;
+      obj.session = SessionInformationSessionDTO.toJSON(message.session);
     }
     if (message.workspace !== undefined) {
       obj.workspace = SessionInformationWorkspaceDTO.toJSON(message.workspace);
@@ -8486,8 +8767,11 @@ export const SessionInformationSnapshotDTO: MessageFns<SessionInformationSnapsho
     if (message.trace !== undefined) {
       obj.trace = SessionInformationTraceDTO.toJSON(message.trace);
     }
-    if (message.resources?.length) {
-      obj.resources = message.resources.map((e) => SessionInformationResourceDTO.toJSON(e));
+    if (message.relations !== undefined) {
+      obj.relations = SessionInformationRelationsDTO.toJSON(message.relations);
+    }
+    if (message.resources !== undefined) {
+      obj.resources = SessionInformationResourceSummaryDTO.toJSON(message.resources);
     }
     if (message.recent_errors?.length) {
       obj.recent_errors = message.recent_errors.map((e) => SessionInformationErrorDTO.toJSON(e));
@@ -8506,9 +8790,8 @@ export const SessionInformationSnapshotDTO: MessageFns<SessionInformationSnapsho
     message.schema_version = object.schema_version ?? undefined;
     message.generated_at = object.generated_at ?? undefined;
     message.session = (object.session !== undefined && object.session !== null)
-      ? SessionDTO.fromPartial(object.session)
+      ? SessionInformationSessionDTO.fromPartial(object.session)
       : undefined;
-    message.child_session_ids = object.child_session_ids?.map((e) => e) || [];
     message.workspace = (object.workspace !== undefined && object.workspace !== null)
       ? SessionInformationWorkspaceDTO.fromPartial(object.workspace)
       : undefined;
@@ -8519,30 +8802,44 @@ export const SessionInformationSnapshotDTO: MessageFns<SessionInformationSnapsho
     message.trace = (object.trace !== undefined && object.trace !== null)
       ? SessionInformationTraceDTO.fromPartial(object.trace)
       : undefined;
-    message.resources = object.resources?.map((e) => SessionInformationResourceDTO.fromPartial(e)) || [];
+    message.relations = (object.relations !== undefined && object.relations !== null)
+      ? SessionInformationRelationsDTO.fromPartial(object.relations)
+      : undefined;
+    message.resources = (object.resources !== undefined && object.resources !== null)
+      ? SessionInformationResourceSummaryDTO.fromPartial(object.resources)
+      : undefined;
     message.recent_errors = object.recent_errors?.map((e) => SessionInformationErrorDTO.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseSessionInformationTraceDTO(): SessionInformationTraceDTO {
-  return { event_count: undefined, last_event_id: undefined, last_event_type: undefined, last_event_at: undefined };
+  return {
+    observed_event_count: undefined,
+    last_event_id: undefined,
+    last_event_type: undefined,
+    last_event_at: undefined,
+    truncated: undefined,
+  };
 }
 
 export const SessionInformationTraceDTO: MessageFns<SessionInformationTraceDTO> = {
   fromJSON(object: any): SessionInformationTraceDTO {
     return {
-      event_count: isSet(object.event_count) ? globalThis.Number(object.event_count) : undefined,
+      observed_event_count: isSet(object.observed_event_count)
+        ? globalThis.Number(object.observed_event_count)
+        : undefined,
       last_event_id: isSet(object.last_event_id) ? globalThis.String(object.last_event_id) : undefined,
       last_event_type: isSet(object.last_event_type) ? globalThis.String(object.last_event_type) : undefined,
       last_event_at: isSet(object.last_event_at) ? globalThis.String(object.last_event_at) : undefined,
+      truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : undefined,
     };
   },
 
   toJSON(message: SessionInformationTraceDTO): unknown {
     const obj: any = {};
-    if (message.event_count !== undefined) {
-      obj.event_count = Math.round(message.event_count);
+    if (message.observed_event_count !== undefined) {
+      obj.observed_event_count = Math.round(message.observed_event_count);
     }
     if (message.last_event_id !== undefined) {
       obj.last_event_id = message.last_event_id;
@@ -8553,6 +8850,9 @@ export const SessionInformationTraceDTO: MessageFns<SessionInformationTraceDTO> 
     if (message.last_event_at !== undefined) {
       obj.last_event_at = message.last_event_at;
     }
+    if (message.truncated !== undefined) {
+      obj.truncated = message.truncated;
+    }
     return obj;
   },
 
@@ -8561,10 +8861,11 @@ export const SessionInformationTraceDTO: MessageFns<SessionInformationTraceDTO> 
   },
   fromPartial<I extends Exact<DeepPartial<SessionInformationTraceDTO>, I>>(object: I): SessionInformationTraceDTO {
     const message = createBaseSessionInformationTraceDTO();
-    message.event_count = object.event_count ?? undefined;
+    message.observed_event_count = object.observed_event_count ?? undefined;
     message.last_event_id = object.last_event_id ?? undefined;
     message.last_event_type = object.last_event_type ?? undefined;
     message.last_event_at = object.last_event_at ?? undefined;
+    message.truncated = object.truncated ?? undefined;
     return message;
   },
 };

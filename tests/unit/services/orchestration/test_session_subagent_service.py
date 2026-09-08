@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
-from app.schemas.internal_v2.message import MessageRunAccepted
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
-from app.schemas.internal_v2.session import SessionDTO, SessionDelegationDTO
+from app.schemas.internal_v2.message import MessageRunAccepted
+from app.schemas.internal_v2.session import SessionDelegationDTO, SessionDTO
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )
@@ -14,7 +14,7 @@ from app.services.orchestration.session_subagent_service import (
 
 class _SessionService:
     def __init__(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.parent = SessionDTO(
             session_id="ses_parent",
             workspace_id="ws_local",
@@ -33,7 +33,7 @@ class _SessionService:
 
     async def create_delegated(self, **request: str) -> SessionDTO:
         self.created_requests.append(request)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.child = SessionDTO(
             session_id="ses_child",
             workspace_id="ws_local",

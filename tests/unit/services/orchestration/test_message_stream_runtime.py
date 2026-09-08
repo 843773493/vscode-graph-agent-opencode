@@ -7,8 +7,8 @@ from langchain_core.messages import AIMessageChunk
 from app.core.job_event_bus import EventType
 from app.services.orchestration.message_stream_runtime import (
     MessageStreamRuntime,
-    MessageStreamTraceObserver,
 )
+from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,7 @@ async def test_interruption_finalizes_partial_blocks_calls_and_unknown_tool_resu
     assert calls[5][1]["status"] == "completed"
     assert calls[5][1]["completion_reason"] == "tool_started"
     assert calls[7][1]["status"] == "completed"
-    assert calls[7][1]["outcome"] == "outcome_unknown"
+    assert calls[7][1]["outcome"] == "unknown"
     assert calls[8][1]["outcome"] == "user_interrupt"
     assert calls[8][1]["retryable"] is False
 

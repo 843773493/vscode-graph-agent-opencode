@@ -27,7 +27,6 @@ $robocopyArguments = @(
     "Z:\out",
     "Z:\node_modules",
     "Z:\src\clients\web\node_modules",
-    "Z:\src\webview-ui\node_modules",
     "Z:\tools\ssh",
     "Z:\tools\windows-vm\runtime-cache",
     "Z:\reference_repo",
@@ -55,12 +54,9 @@ function Invoke-Bun([string[]]$Arguments) {
 
 Invoke-Bun @("install", "--frozen-lockfile", "--backend=copyfile")
 Invoke-Bun @("install", "--cwd", "src/clients/web", "--frozen-lockfile", "--backend=copyfile")
-Invoke-Bun @("install", "--cwd", "src/webview-ui", "--frozen-lockfile", "--backend=copyfile")
-
 foreach ($dependency in @(
     (Join-Path $localRoot "node_modules\ajv"),
-    (Join-Path $localRoot "src\clients\web\node_modules\vite"),
-    (Join-Path $localRoot "src\webview-ui\node_modules\vite")
+    (Join-Path $localRoot "src\clients\web\node_modules\vite")
 )) {
     if (-not (Test-Path -LiteralPath $dependency)) {
         throw "Expected Bun dependency was not installed: $dependency"

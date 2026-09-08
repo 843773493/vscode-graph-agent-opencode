@@ -17,7 +17,9 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,

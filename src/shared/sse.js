@@ -101,6 +101,12 @@ function assertEventStreamResponse(response) {
   }
 }
 
+function yieldBetweenEvents() {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, 0);
+  });
+}
+
 export async function consumeSseResponse(response, options) {
   assertEventStreamResponse(response);
   const reader = response.body.getReader();
@@ -147,6 +153,9 @@ export async function consumeSseResponse(response, options) {
         dispatchBlock(buffer.slice(0, boundaryIndex));
         buffer = buffer.slice(boundaryIndex + 2);
         boundaryIndex = buffer.indexOf('\n\n');
+        if (boundaryIndex !== -1 && options.yieldBetweenEvents) {
+          await yieldBetweenEvents();
+        }
       }
       if (done) {
         reachedEnd = true;

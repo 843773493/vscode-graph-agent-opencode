@@ -53,13 +53,6 @@
       "todo": "等待 Electron 客户端独立 OpenSpec"
     },
     {
-      "id": "e2e-vscode",
-      "layer": "e2e",
-      "client": "vscode",
-      "enabled": false,
-      "todo": "等待 VS Code 客户端迁移 OpenSpec"
-    },
-    {
       "id": "e2e-mobile-native",
       "layer": "e2e",
       "client": "mobile",

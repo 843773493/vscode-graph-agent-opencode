@@ -1,0 +1,976 @@
+{
+  "schema": "itemized-hash-golden:v1",
+  "source": "https://www.rfc-editor.org/rfc/rfc8785.html#appendix-B",
+  "serialization": [
+    {
+      "id": "rfc8785-0000000000000000",
+      "input_kind": "binary64",
+      "input": "0000000000000000",
+      "canonical": "0",
+      "hash": "sha256:jcs:v1:5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "id": "rfc8785-8000000000000000",
+      "input_kind": "binary64",
+      "input": "8000000000000000",
+      "canonical": "0",
+      "hash": "sha256:jcs:v1:5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "id": "rfc8785-0000000000000001",
+      "input_kind": "binary64",
+      "input": "0000000000000001",
+      "canonical": "5e-324",
+      "hash": "sha256:jcs:v1:c46e7ca1be4c8734f373a56530787288fa2058d73d07855e9247e949f811a42a"
+    },
+    {
+      "id": "rfc8785-8000000000000001",
+      "input_kind": "binary64",
+      "input": "8000000000000001",
+      "canonical": "-5e-324",
+      "hash": "sha256:jcs:v1:046f4049d09944fcb2efbf2ddb0ea8f05e0204591d6d02c9106efc88190fa7f9"
+    },
+    {
+      "id": "rfc8785-7fefffffffffffff",
+      "input_kind": "binary64",
+      "input": "7fefffffffffffff",
+      "canonical": "1.7976931348623157e+308",
+      "hash": "sha256:jcs:v1:c2784e1abd6317452708f3fbf9641c16b959561bc621a1d408c23a20aa2cb585"
+    },
+    {
+      "id": "rfc8785-ffefffffffffffff",
+      "input_kind": "binary64",
+      "input": "ffefffffffffffff",
+      "canonical": "-1.7976931348623157e+308",
+      "hash": "sha256:jcs:v1:f0347276b171ff0c36491c912285a2833de7313d1a103a4b1be0274bfe7c021f"
+    },
+    {
+      "id": "rfc8785-4340000000000000",
+      "input_kind": "binary64",
+      "input": "4340000000000000",
+      "canonical": "9007199254740992",
+      "hash": "sha256:jcs:v1:c681da39d7273a6a24c15c9cac3a75526ff2ecf8ba4ee60346a0c70c8163bdb2"
+    },
+    {
+      "id": "rfc8785-c340000000000000",
+      "input_kind": "binary64",
+      "input": "c340000000000000",
+      "canonical": "-9007199254740992",
+      "hash": "sha256:jcs:v1:83e109bfd7fb4984b47a46f363627c18dbbd7e57e36b05a04cd162d304df72e9"
+    },
+    {
+      "id": "rfc8785-4430000000000000",
+      "input_kind": "binary64",
+      "input": "4430000000000000",
+      "canonical": "295147905179352830000",
+      "hash": "sha256:jcs:v1:7933ef1b34c194c7a327ef424e54282dd2872bc7bda27812f9edf7882ca340c0"
+    },
+    {
+      "id": "rfc8785-7fffffffffffffff",
+      "input_kind": "binary64",
+      "input": "7fffffffffffffff",
+      "error": true
+    },
+    {
+      "id": "rfc8785-7ff0000000000000",
+      "input_kind": "binary64",
+      "input": "7ff0000000000000",
+      "error": true
+    },
+    {
+      "id": "rfc8785-44b52d02c7e14af5",
+      "input_kind": "binary64",
+      "input": "44b52d02c7e14af5",
+      "canonical": "9.999999999999997e+22",
+      "hash": "sha256:jcs:v1:143eadc1fc2fe10a563df313c717399d1835652d710fa189119ff2e1d5cde33d"
+    },
+    {
+      "id": "rfc8785-44b52d02c7e14af6",
+      "input_kind": "binary64",
+      "input": "44b52d02c7e14af6",
+      "canonical": "1e+23",
+      "hash": "sha256:jcs:v1:0b1af6b73e932475817f8eb620deecf21ad7570df3400a23db5c79a9001597f7"
+    },
+    {
+      "id": "rfc8785-44b52d02c7e14af7",
+      "input_kind": "binary64",
+      "input": "44b52d02c7e14af7",
+      "canonical": "1.0000000000000001e+23",
+      "hash": "sha256:jcs:v1:de7cb5db5ee06bf7ef5b74ebcf94cd9d7efda28125905f7ff590724953173c7b"
+    },
+    {
+      "id": "rfc8785-444b1ae4d6e2ef4e",
+      "input_kind": "binary64",
+      "input": "444b1ae4d6e2ef4e",
+      "canonical": "999999999999999700000",
+      "hash": "sha256:jcs:v1:dcabf7269f6bb6ec5ba8b9530825cd7ffe215d4dd26e0a237f9d753513792c07"
+    },
+    {
+      "id": "rfc8785-444b1ae4d6e2ef4f",
+      "input_kind": "binary64",
+      "input": "444b1ae4d6e2ef4f",
+      "canonical": "999999999999999900000",
+      "hash": "sha256:jcs:v1:914b4f8b4bbe2f6e7c36ad7791fc842a7516d149e694b3a71b78cee465ff6d7a"
+    },
+    {
+      "id": "rfc8785-444b1ae4d6e2ef50",
+      "input_kind": "binary64",
+      "input": "444b1ae4d6e2ef50",
+      "canonical": "1e+21",
+      "hash": "sha256:jcs:v1:241c4643fa70b1dcde1205b71be4e3bebb17e9f880c8e1a33d0ead6c27271d3c"
+    },
+    {
+      "id": "rfc8785-3eb0c6f7a0b5ed8c",
+      "input_kind": "binary64",
+      "input": "3eb0c6f7a0b5ed8c",
+      "canonical": "9.999999999999997e-7",
+      "hash": "sha256:jcs:v1:2ace34b29d30d300aeacd4f2bb83367fa186f11a3f02ed461f35f00fd741a242"
+    },
+    {
+      "id": "rfc8785-3eb0c6f7a0b5ed8d",
+      "input_kind": "binary64",
+      "input": "3eb0c6f7a0b5ed8d",
+      "canonical": "0.000001",
+      "hash": "sha256:jcs:v1:159fb29a827ad04b260aa6c8ab6d8637f8f2b38af5c4f3cb49d6a21205e040f8"
+    },
+    {
+      "id": "rfc8785-41b3de4355555553",
+      "input_kind": "binary64",
+      "input": "41b3de4355555553",
+      "canonical": "333333333.3333332",
+      "hash": "sha256:jcs:v1:0fdb7bafaf219ccaf278cd0c0a580473db01c774a0baafe72a07d01230ac5c6d"
+    },
+    {
+      "id": "rfc8785-41b3de4355555554",
+      "input_kind": "binary64",
+      "input": "41b3de4355555554",
+      "canonical": "333333333.33333325",
+      "hash": "sha256:jcs:v1:bcbe1777b7d3c91c19c7f90100c595a9b3f1d9b395567da4258baf7ac655d403"
+    },
+    {
+      "id": "rfc8785-41b3de4355555555",
+      "input_kind": "binary64",
+      "input": "41b3de4355555555",
+      "canonical": "333333333.3333333",
+      "hash": "sha256:jcs:v1:6bd9be1c141028789cc35db62f1b43e80d5d4ee24d6d542e775deb16799ff4c7"
+    },
+    {
+      "id": "rfc8785-41b3de4355555556",
+      "input_kind": "binary64",
+      "input": "41b3de4355555556",
+      "canonical": "333333333.3333334",
+      "hash": "sha256:jcs:v1:1e099031ca0cb3cf4054688f7e2e8c95fc72828de5fa7605ce3f729e6cf79d43"
+    },
+    {
+      "id": "rfc8785-41b3de4355555557",
+      "input_kind": "binary64",
+      "input": "41b3de4355555557",
+      "canonical": "333333333.33333343",
+      "hash": "sha256:jcs:v1:cf68ab5e198a77538aafd967fb122a305ba1df95c9348b1fe3dff453c7f7215f"
+    },
+    {
+      "id": "rfc8785-becbf647612f3696",
+      "input_kind": "binary64",
+      "input": "becbf647612f3696",
+      "canonical": "-0.0000033333333333333333",
+      "hash": "sha256:jcs:v1:4e703d4e0928e4f339d03e1fb5454ddc33db657ad735b02530d98123b4fd4b61"
+    },
+    {
+      "id": "rfc8785-43143ff3c1cb0959",
+      "input_kind": "binary64",
+      "input": "43143ff3c1cb0959",
+      "canonical": "1424953923781206.2",
+      "hash": "sha256:jcs:v1:e1547479d27f057e3197d49417a1dcbe19dd8781b34fa9f83b789925943d00cb"
+    },
+    {
+      "id": "negative-infinity",
+      "input_kind": "binary64",
+      "input": "fff0000000000000",
+      "error": true
+    },
+    {
+      "id": "ecmascript-sample",
+      "input_kind": "json",
+      "input": "{\"numbers\":[333333333.33333329,1E30,4.50,2e-3,0.000000000000000000000000001],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\",\"literals\":[null,true,false]}",
+      "canonical": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}",
+      "hash": "sha256:jcs:v1:2d5e01a318d0f0879ab568c4be289c8b1f64ef8921a53c6277d5e069978baacb"
+    },
+    {
+      "id": "utf16-properties",
+      "input_kind": "json",
+      "input": "{\"€\":1,\"\\r\":2,\"דּ\":3,\"1\":4,\"😀\":5,\"\\u0080\":6,\"ö\":7}",
+      "canonical": "{\"\\r\":2,\"1\":4,\"\":6,\"ö\":7,\"€\":1,\"😀\":5,\"דּ\":3}",
+      "hash": "sha256:jcs:v1:0d922ac8e15a6d17d5d50fab064983e86009ebae7b5998cbfc4ed172e6ff74a9"
+    },
+    {
+      "id": "integer-like-properties-and-arrays",
+      "input_kind": "json",
+      "input": "{\"2\":\"two\",\"10\":\"ten\",\"a\":[{\"\\uffff\":-0.0,\"𐀀\":1e-7},2,1]}",
+      "canonical": "{\"10\":\"ten\",\"2\":\"two\",\"a\":[{\"𐀀\":1e-7,\"￿\":0},2,1]}",
+      "hash": "sha256:jcs:v1:236b4cc5b324558d456b5b456af0f3d1d5af61a6193f86d91d545b1d4f433c6c"
+    },
+    {
+      "id": "unicode-preserved",
+      "input_kind": "json",
+      "input": "{\"text\":\" é é 中文 😀 \\r\\n\\t\\u0000\\u001f\\\"\\\\/ \"}",
+      "canonical": "{\"text\":\" é é 中文 😀 \\r\\n\\t\\u0000\\u001f\\\"\\\\/ \"}",
+      "hash": "sha256:jcs:v1:c122547ead61af9e033266dcf0db05ef967e807af5246f5a0abc1c767afa7694"
+    },
+    {
+      "id": "exponent-thresholds",
+      "input_kind": "json",
+      "input": "[1e20,1e21,1e-6,1e-7,-0.0]",
+      "canonical": "[100000000000000000000,1e+21,0.000001,1e-7,0]",
+      "hash": "sha256:jcs:v1:da50adf7a4b78b658fbb8d75afdf04079ca2dab41bdf2d659da1962bf8b2134f"
+    },
+    {
+      "id": "integer-safe",
+      "input_kind": "integer",
+      "input": "9007199254740991",
+      "canonical": "9007199254740991",
+      "hash": "sha256:jcs:v1:f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"
+    },
+    {
+      "id": "integer-exact-binary64",
+      "input_kind": "integer",
+      "input": "9007199254740992",
+      "canonical": "9007199254740992",
+      "hash": "sha256:jcs:v1:c681da39d7273a6a24c15c9cac3a75526ff2ecf8ba4ee60346a0c70c8163bdb2"
+    },
+    {
+      "id": "integer-jcs-recovery",
+      "input_kind": "integer",
+      "input": "295147905179352830000",
+      "canonical": "295147905179352830000",
+      "hash": "sha256:jcs:v1:7933ef1b34c194c7a327ef424e54282dd2872bc7bda27812f9edf7882ca340c0"
+    },
+    {
+      "id": "integer-precision-loss",
+      "input_kind": "integer",
+      "input": "9007199254740993",
+      "error": true
+    },
+    {
+      "id": "integer-noncanonical-loss",
+      "input_kind": "integer",
+      "input": "295147905179352830001",
+      "error": true
+    },
+    {
+      "id": "integer-overflow",
+      "input_kind": "integer",
+      "input": "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "error": true
+    },
+    {
+      "id": "invalid-unicode-0",
+      "input_kind": "json",
+      "input": "\"\\ud800\"",
+      "error": true
+    },
+    {
+      "id": "invalid-unicode-1",
+      "input_kind": "json",
+      "input": "\"\\udfff\"",
+      "error": true
+    },
+    {
+      "id": "invalid-unicode-2",
+      "input_kind": "json",
+      "input": "{\"\\ud800\":1}",
+      "error": true
+    },
+    {
+      "id": "invalid-unicode-3",
+      "input_kind": "json",
+      "input": "{\"x\":[\"\\udfff\"]}",
+      "error": true
+    },
+    {
+      "id": "invalid-number-nested",
+      "input_kind": "json",
+      "input": "{\"x\":[1e999]}",
+      "error": true
+    }
+  ],
+  "scenario": {
+    "session_id": "session-golden-jcs",
+    "item": {
+      "format_version": 2,
+      "record_type": "item",
+      "item_sequence": 1,
+      "item_id": "item-golden-jcs",
+      "semantic_kind": "user_input",
+      "payload_kind": "structured_content",
+      "status": "completed",
+      "producer_ref": {
+        "producer_kind": "user",
+        "producer_id": "ingress-golden"
+      },
+      "payload": {
+        "￿": 0,
+        "𐀀": 1e-7,
+        "numbers": [
+          333333333.3333333,
+          1e+21,
+          100000000000000000000
+        ],
+        "parts": [
+          {
+            "text": " é é 中文 😀 \r\n",
+            "ordinal": 0
+          }
+        ]
+      },
+      "created_at": "2026-09-08T00:00:00Z",
+      "metadata": {
+        "source_revision": "revision-golden"
+      },
+      "turn_id": "turn-golden",
+      "turn_scope": "turn_root",
+      "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59"
+    },
+    "plan_id": "plan-golden-jcs",
+    "assembly_id": "assembly-golden-jcs",
+    "tools": [
+      {
+        "tool_id": "read_file",
+        "description": "读取",
+        "parameters": {
+          "𐀀": 1e-7,
+          "￿": 0
+        }
+      },
+      {
+        "tool_id": "write_file",
+        "description": "写入"
+      }
+    ],
+    "wire_request": {
+      "model": "model-golden",
+      "messages": [
+        {
+          "role": "user",
+          "content": {
+            "￿": 0,
+            "𐀀": 1e-7,
+            "numbers": [
+              333333333.3333333,
+              1e+21,
+              100000000000000000000
+            ],
+            "parts": [
+              {
+                "text": " é é 中文 😀 \r\n",
+                "ordinal": 0
+              }
+            ]
+          }
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "read_file"
+        }
+      ],
+      "sampling": {
+        "temperature": 0.1
+      }
+    },
+    "provider": "provider-golden",
+    "projector_id": "golden-projector",
+    "projector_version": "v1",
+    "target_format": "native"
+  },
+  "preimages": [
+    {
+      "id": "content",
+      "preimage": {
+        "payload_kind": "structured_content",
+        "payload": {
+          "￿": 0,
+          "𐀀": 1e-7,
+          "numbers": [
+            333333333.3333333,
+            1e+21,
+            100000000000000000000
+          ],
+          "parts": [
+            {
+              "text": " é é 中文 😀 \r\n",
+              "ordinal": 0
+            }
+          ]
+        }
+      },
+      "canonical": "{\"payload\":{\"numbers\":[333333333.3333333,1e+21,100000000000000000000],\"parts\":[{\"ordinal\":0,\"text\":\" é é 中文 😀 \\r\\n\"}],\"𐀀\":1e-7,\"￿\":0},\"payload_kind\":\"structured_content\"}",
+      "hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59"
+    },
+    {
+      "id": "content-text",
+      "preimage": {
+        "payload_kind": "text",
+        "payload": " é é 中文 😀 \r\n"
+      },
+      "canonical": "{\"payload\":\" é é 中文 😀 \\r\\n\",\"payload_kind\":\"text\"}",
+      "hash": "sha256:jcs:v1:2edae827658171b6cdc7ec0e3fc150416f9a60a06b84afa549d83e75fc0a0283"
+    },
+    {
+      "id": "contribution",
+      "preimage": {
+        "contribution_kind": "prompt",
+        "body": {
+          "￿": 0,
+          "𐀀": 1e-7,
+          "numbers": [
+            333333333.3333333,
+            1e+21,
+            100000000000000000000
+          ],
+          "parts": [
+            {
+              "text": " é é 中文 😀 \r\n",
+              "ordinal": 0
+            }
+          ]
+        }
+      },
+      "canonical": "{\"body\":{\"numbers\":[333333333.3333333,1e+21,100000000000000000000],\"parts\":[{\"ordinal\":0,\"text\":\" é é 中文 😀 \\r\\n\"}],\"𐀀\":1e-7,\"￿\":0},\"contribution_kind\":\"prompt\"}",
+      "hash": "sha256:jcs:v1:040f747f268272af3d4f2607608e60a3d1e8659129fad59da170f50336772a5a"
+    },
+    {
+      "id": "tool-manifest",
+      "preimage": {
+        "tool_set_schema": "example.tools",
+        "tool_set_schema_version": "v1",
+        "tool_policy_version": "v1",
+        "tools": [
+          {
+            "tool_id": "read_file",
+            "description": "读取",
+            "parameters": {
+              "𐀀": 1e-7,
+              "￿": 0
+            }
+          },
+          {
+            "tool_id": "write_file",
+            "description": "写入"
+          }
+        ],
+        "tool_policy": {
+          "mode": "allow"
+        }
+      },
+      "canonical": "{\"tool_policy\":{\"mode\":\"allow\"},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tools\":[{\"description\":\"读取\",\"parameters\":{\"𐀀\":1e-7,\"￿\":0},\"tool_id\":\"read_file\"},{\"description\":\"写入\",\"tool_id\":\"write_file\"}]}",
+      "hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8"
+    },
+    {
+      "id": "plan",
+      "preimage": {
+        "schema": "context-plan-hash:v2",
+        "format_version": 2,
+        "active_view_id": "view-golden",
+        "history_view_revision": 3,
+        "source_overlay_epoch": 0,
+        "selection_policy": "active_view",
+        "refs": [
+          {
+            "ref_id": "item-golden-jcs",
+            "ref_type": "canonical_item",
+            "semantic_kind": "user_input",
+            "payload_kind": "structured_content",
+            "status": "completed",
+            "item_sequence": 1,
+            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+            "redacted_stable_digest": null,
+            "content_length": 137,
+            "source_revision": "revision-golden",
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "session_id": "session-golden-jcs",
+            "plan_id": null
+          }
+        ],
+        "selection": [
+          {
+            "plan_ordinal": 0,
+            "selection_kind": "canonical_history",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "revision-golden",
+            "content_length": 137,
+            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": null,
+            "contribution_id": null,
+            "ref": {
+              "ref_type": "canonical_item",
+              "ref_id": "item-golden-jcs",
+              "source_revision": "revision-golden",
+              "content_length": 137,
+              "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+              "redacted_stable_digest": null,
+              "overlay_from_revision": null,
+              "overlay_to_revision": null,
+              "overlay_diff_hash": null,
+              "session_id": "session-golden-jcs",
+              "plan_id": null
+            }
+          },
+          {
+            "plan_ordinal": 1,
+            "selection_kind": "tool_set",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "tools-rev-golden",
+            "content_length": 264,
+            "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": null,
+            "contribution_id": null,
+            "ref": {
+              "ref_type": "tool_set",
+              "ref_id": "tools-golden",
+              "source_revision": "tools-rev-golden",
+              "content_length": 264,
+              "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
+              "redacted_stable_digest": null,
+              "overlay_from_revision": null,
+              "overlay_to_revision": null,
+              "overlay_diff_hash": null,
+              "session_id": "session-golden-jcs",
+              "plan_id": "plan-golden-jcs"
+            }
+          }
+        ],
+        "tool_set_refs": [
+          {
+            "tool_set_snapshot_id": "tools-golden",
+            "source_revision": "tools-rev-golden",
+            "content_length": 264,
+            "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
+            "redacted_stable_digest": null,
+            "tool_set_schema": "example.tools",
+            "tool_set_schema_version": "v1",
+            "tool_policy_version": "v1",
+            "tool_policy": {
+              "mode": "allow"
+            },
+            "session_id": "session-golden-jcs",
+            "plan_id": "plan-golden-jcs"
+          }
+        ],
+        "contributions": [],
+        "compiler_version": "itemized-context-v1"
+      },
+      "canonical": "{\"active_view_id\":\"view-golden\",\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":3,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"item_sequence\":1,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"structured_content\",\"plan_id\":null,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden-jcs\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"status\":\"completed\"}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":null,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"revision-golden\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"visibility\":\"internal\"},{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":1,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":\"plan-golden-jcs\",\"redacted_stable_digest\":null,\"ref_id\":\"tools-golden\",\"ref_type\":\"tool_set\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"tools-rev-golden\"},\"selection_kind\":\"tool_set\",\"source_overlay_epoch\":null,\"source_revision\":\"tools-rev-golden\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"source_overlay_epoch\":0,\"tool_set_refs\":[{\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"plan_id\":\"plan-golden-jcs\",\"redacted_stable_digest\":null,\"session_id\":\"session-golden-jcs\",\"source_revision\":\"tools-rev-golden\",\"tool_policy\":{\"mode\":\"allow\"},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tool_set_snapshot_id\":\"tools-golden\"}]}",
+      "hash": "sha256:jcs:v1:9259b8f55b00f39810f03391054039a6ad30158a822697c7127d06690a76776c"
+    },
+    {
+      "id": "request",
+      "preimage": {
+        "plan_hash": "sha256:jcs:v1:9259b8f55b00f39810f03391054039a6ad30158a822697c7127d06690a76776c",
+        "provider": "provider-golden",
+        "projector_id": "golden-projector",
+        "projector_version": "v1",
+        "target_format": "native",
+        "refs": [
+          {
+            "ref_id": "item-golden-jcs",
+            "ref_type": "canonical_item",
+            "semantic_kind": "user_input",
+            "payload_kind": "structured_content",
+            "status": "completed",
+            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+            "redacted_stable_digest": null,
+            "content_length": 137,
+            "source_revision": "revision-golden",
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null
+          }
+        ],
+        "contributions": [],
+        "tool_set_refs": [
+          {
+            "tool_set_snapshot_id": "tools-golden",
+            "source_revision": "tools-rev-golden",
+            "content_length": 264,
+            "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
+            "redacted_stable_digest": null,
+            "tool_set_schema": "example.tools",
+            "tool_set_schema_version": "v1",
+            "tool_policy_version": "v1",
+            "tool_policy": {
+              "mode": "allow"
+            }
+          }
+        ],
+        "selection": [
+          {
+            "plan_ordinal": 0,
+            "selection_kind": "canonical_history",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "revision-golden",
+            "content_length": 137,
+            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": null,
+            "contribution_id": null,
+            "ref": {
+              "ref_type": "canonical_item",
+              "ref_id": "item-golden-jcs",
+              "source_revision": "revision-golden",
+              "content_length": 137,
+              "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+              "redacted_stable_digest": null
+            }
+          },
+          {
+            "plan_ordinal": 1,
+            "selection_kind": "tool_set",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "tools-rev-golden",
+            "content_length": 264,
+            "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": null,
+            "contribution_id": null,
+            "ref": {
+              "ref_type": "tool_set",
+              "ref_id": "tools-golden",
+              "source_revision": "tools-rev-golden",
+              "content_length": 264,
+              "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
+              "redacted_stable_digest": null
+            }
+          }
+        ],
+        "tool_snapshot": [],
+        "wire_request": {
+          "model": "model-golden",
+          "messages": [
+            {
+              "role": "user",
+              "content": {
+                "￿": 0,
+                "𐀀": 1e-7,
+                "numbers": [
+                  333333333.3333333,
+                  1e+21,
+                  100000000000000000000
+                ],
+                "parts": [
+                  {
+                    "text": " é é 中文 😀 \r\n",
+                    "ordinal": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "name": "read_file"
+            }
+          ],
+          "sampling": {
+            "temperature": 0.1
+          }
+        }
+      },
+      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:9259b8f55b00f39810f03391054039a6ad30158a822697c7127d06690a76776c\",\"projector_id\":\"golden-projector\",\"projector_version\":\"v1\",\"provider\":\"provider-golden\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"structured_content\",\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"status\":\"completed\"}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"source_revision\":\"revision-golden\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"visibility\":\"internal\"},{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":1,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"redacted_stable_digest\":null,\"ref_id\":\"tools-golden\",\"ref_type\":\"tool_set\",\"source_revision\":\"tools-rev-golden\"},\"selection_kind\":\"tool_set\",\"source_overlay_epoch\":null,\"source_revision\":\"tools-rev-golden\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[{\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"redacted_stable_digest\":null,\"source_revision\":\"tools-rev-golden\",\"tool_policy\":{\"mode\":\"allow\"},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tool_set_snapshot_id\":\"tools-golden\"}],\"tool_snapshot\":[],\"wire_request\":{\"messages\":[{\"content\":{\"numbers\":[333333333.3333333,1e+21,100000000000000000000],\"parts\":[{\"ordinal\":0,\"text\":\" é é 中文 😀 \\r\\n\"}],\"𐀀\":1e-7,\"￿\":0},\"role\":\"user\"}],\"model\":\"model-golden\",\"sampling\":{\"temperature\":0.1},\"tools\":[{\"name\":\"read_file\",\"type\":\"function\"}]}}",
+      "hash": "sha256:jcs:v1:e04d17ee4ad27037c2a02b3c5ab436d9c74e40bc2c3ce0d52e9ef79d8644b389"
+    },
+    {
+      "id": "idempotency",
+      "preimage": {
+        "execution_id": "execution-golden",
+        "final_item_id": "item-golden-jcs",
+        "coordinates": {
+          "￿": 0,
+          "𐀀": 1e-7,
+          "numbers": [
+            333333333.3333333,
+            1e+21,
+            100000000000000000000
+          ],
+          "parts": [
+            {
+              "text": " é é 中文 😀 \r\n",
+              "ordinal": 0
+            }
+          ]
+        }
+      },
+      "canonical": "{\"coordinates\":{\"numbers\":[333333333.3333333,1e+21,100000000000000000000],\"parts\":[{\"ordinal\":0,\"text\":\" é é 中文 😀 \\r\\n\"}],\"𐀀\":1e-7,\"￿\":0},\"execution_id\":\"execution-golden\",\"final_item_id\":\"item-golden-jcs\"}",
+      "hash": "sha256:jcs:v1:573ea07b6fb92847d6be23734813eea580b01715277066af85db6e946a59c7c7"
+    },
+    {
+      "id": "legacy-message",
+      "preimage": {
+        "source_session_id": "legacy-source-golden",
+        "message_sequence": 1,
+        "message_id": "legacy-user-golden",
+        "role": "user",
+        "message": {
+          "type": "human",
+          "data": {
+            "type": "human",
+            "id": "legacy-user-golden",
+            "content": " é é 中文 😀 \r\n",
+            "additional_kwargs": {
+              "￿": 0,
+              "𐀀": 1e-7,
+              "numbers": [
+                333333333.3333333,
+                1e+21,
+                100000000000000000000
+              ],
+              "parts": [
+                {
+                  "text": " é é 中文 😀 \r\n",
+                  "ordinal": 0
+                }
+              ]
+            }
+          }
+        }
+      },
+      "canonical": "{\"message\":{\"data\":{\"additional_kwargs\":{\"numbers\":[333333333.3333333,1e+21,100000000000000000000],\"parts\":[{\"ordinal\":0,\"text\":\" é é 中文 😀 \\r\\n\"}],\"𐀀\":1e-7,\"￿\":0},\"content\":\" é é 中文 😀 \\r\\n\",\"id\":\"legacy-user-golden\",\"type\":\"human\"},\"type\":\"human\"},\"message_id\":\"legacy-user-golden\",\"message_sequence\":1,\"role\":\"user\",\"source_session_id\":\"legacy-source-golden\"}",
+      "hash": "sha256:jcs:v1:96011cbc891e99109307120c758b988023bac936c404455e9af868ea894c1aac"
+    },
+    {
+      "id": "legacy-seed",
+      "preimage": {
+        "source_session_id": "legacy-source-golden",
+        "message_sequence": 1,
+        "message_id": "legacy-user-golden",
+        "legacy_message_hash": "sha256:jcs:v1:96011cbc891e99109307120c758b988023bac936c404455e9af868ea894c1aac"
+      },
+      "canonical": "{\"legacy_message_hash\":\"sha256:jcs:v1:96011cbc891e99109307120c758b988023bac936c404455e9af868ea894c1aac\",\"message_id\":\"legacy-user-golden\",\"message_sequence\":1,\"source_session_id\":\"legacy-source-golden\"}",
+      "hash": "sha256:jcs:v1:c5753ae0e4472336143a94231521b758dc23e6054706cf4b19826aef76b38ba9"
+    },
+    {
+      "id": "core-plan",
+      "preimage": {
+        "schema": "context-plan-hash:v2",
+        "format_version": 2,
+        "active_view_id": null,
+        "history_view_revision": 0,
+        "source_overlay_epoch": 0,
+        "selection_policy": "active_view",
+        "refs": [
+          {
+            "ref_id": "item-golden-1",
+            "ref_type": "canonical_item",
+            "semantic_kind": "user_input",
+            "payload_kind": "text",
+            "status": "completed",
+            "item_sequence": 1,
+            "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
+            "redacted_stable_digest": null,
+            "content_length": 12,
+            "source_revision": "rev-golden",
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "session_id": "session-golden",
+            "plan_id": null
+          }
+        ],
+        "selection": [
+          {
+            "plan_ordinal": 0,
+            "selection_kind": "canonical_history",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "rev-golden",
+            "content_length": 12,
+            "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": null,
+            "contribution_id": null,
+            "ref": {
+              "ref_type": "canonical_item",
+              "ref_id": "item-golden-1",
+              "source_revision": "rev-golden",
+              "content_length": 12,
+              "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
+              "redacted_stable_digest": null,
+              "overlay_from_revision": null,
+              "overlay_to_revision": null,
+              "overlay_diff_hash": null,
+              "session_id": "session-golden",
+              "plan_id": null
+            }
+          }
+        ],
+        "tool_set_refs": [],
+        "contributions": [],
+        "compiler_version": "itemized-context-v1"
+      },
+      "canonical": "{\"active_view_id\":null,\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":0,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"item_sequence\":1,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"plan_id\":null,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\"}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":null,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"source_overlay_epoch\":0,\"tool_set_refs\":[]}",
+      "hash": "sha256:jcs:v1:54235083645472c82c225312b9e61e68f74b6f8499f9d01536d40059d0e1e6cb"
+    },
+    {
+      "id": "core-request",
+      "preimage": {
+        "plan_hash": "sha256:jcs:v1:54235083645472c82c225312b9e61e68f74b6f8499f9d01536d40059d0e1e6cb",
+        "provider": "provider-golden",
+        "projector_id": "itemized-context-provider",
+        "projector_version": "v1",
+        "target_format": "native",
+        "refs": [
+          {
+            "ref_id": "item-golden-1",
+            "ref_type": "canonical_item",
+            "semantic_kind": "user_input",
+            "payload_kind": "text",
+            "status": "completed",
+            "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
+            "redacted_stable_digest": null,
+            "content_length": 12,
+            "source_revision": "rev-golden",
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null
+          }
+        ],
+        "contributions": [],
+        "tool_set_refs": [],
+        "selection": [
+          {
+            "plan_ordinal": 0,
+            "selection_kind": "canonical_history",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "rev-golden",
+            "content_length": 12,
+            "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": null,
+            "contribution_id": null,
+            "ref": {
+              "ref_type": "canonical_item",
+              "ref_id": "item-golden-1",
+              "source_revision": "rev-golden",
+              "content_length": 12,
+              "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
+              "redacted_stable_digest": null
+            }
+          }
+        ],
+        "tool_snapshot": [],
+        "wire_request": {
+          "target_format": "native",
+          "selection": [
+            {
+              "plan_ordinal": 0,
+              "selection_kind": "canonical_history",
+              "included": true,
+              "omission_reason": null,
+              "loss": [],
+              "source_revision": "rev-golden",
+              "content_length": 12,
+              "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
+              "redacted_stable_digest": null,
+              "base_delta_role": "none",
+              "source_overlay_epoch": null,
+              "overlay_from_revision": null,
+              "overlay_to_revision": null,
+              "overlay_diff_hash": null,
+              "contribution_ordinal": null,
+              "detail_ref": null,
+              "contribution_id": null,
+              "ref_type": "canonical_item",
+              "ref_id": "item-golden-1"
+            }
+          ]
+        }
+      },
+      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:54235083645472c82c225312b9e61e68f74b6f8499f9d01536d40059d0e1e6cb\",\"projector_id\":\"itemized-context-provider\",\"projector_version\":\"v1\",\"provider\":\"provider-golden\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\"}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"source_revision\":\"rev-golden\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[],\"tool_snapshot\":[],\"wire_request\":{\"selection\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\"}],\"target_format\":\"native\"}}",
+      "hash": "sha256:jcs:v1:d760fb43aa98a10a76c8de910e2b535488155dcefabcc9ac3f2c8f9d19feb06c"
+    }
+  ],
+  "idempotency": {
+    "commit_kind": "terminal_convergence",
+    "subject_id": "turn-golden",
+    "outcome": "completed",
+    "key": "terminal_convergence:turn-golden:completed:sha256:jcs:v1:573ea07b6fb92847d6be23734813eea580b01715277066af85db6e946a59c7c7"
+  }
+}

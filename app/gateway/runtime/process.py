@@ -27,8 +27,21 @@ GATEWAY_PROCESS_READY_TIMEOUT_SECONDS = 120
 WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS = 2
 DEFAULT_SSH_TUNNEL_PORT_MIN = 41000
 DEFAULT_SSH_TUNNEL_PORT_MAX = 41999
+_GATEWAY_STARTUP_ENVIRONMENT_KEYS = (
+    "BOXTEAM_CONFIG_CANDIDATE_REF",
+    "BOXTEAM_CONFIG_GENERATION",
+    "BOXTEAM_CONFIG_FENCING_TOKEN",
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _local_child_environment() -> dict[str, str]:
+    """构造本地子进程环境，隔离 Gateway 自身的 pending 启动契约。"""
+    environment = os.environ.copy()
+    for key in _GATEWAY_STARTUP_ENVIRONMENT_KEYS:
+        environment.pop(key, None)
+    return environment
 
 
 # TODO: Uvicorn 的命令行参数只接受整数秒；配置模型允许小数时向上取整，避免 Windows 启动时被 CLI 拒绝。
@@ -77,6 +90,8 @@ def _windows_process_is_alive(pid: int) -> bool:
 
 
 class ManagedProcessHandle(Protocol):
+    def is_alive(self) -> bool: ...
+
     def request_terminate(self) -> None: ...
 
     def close(self, *, timeout_seconds: float = 8) -> None: ...
@@ -88,6 +103,9 @@ class ManagedProcessHandle(Protocol):
 class ManagedProcess:
     process: subprocess.Popen[str]
     log_file: object
+
+    def is_alive(self) -> bool:
+        return self.process.poll() is None
 
     def request_terminate(self) -> None:
         if self.process.poll() is not None:
@@ -149,6 +167,9 @@ class AdoptedManagedProcess:
     def __post_init__(self) -> None:
         if self.pid <= 0:
             raise ValueError(f"接管进程 PID 必须为正整数: {self.pid}")
+
+    def is_alive(self) -> bool:
+        return self._is_alive()
 
     def request_terminate(self) -> None:
         if not self._is_alive():
@@ -338,7 +359,7 @@ def start_local_backend_process(
     ),
 ) -> ManagedProcess:
     python_executable = resolve_python_executable(project_root)
-    env = os.environ.copy()
+    env = _local_child_environment()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["PYTHONUNBUFFERED"] = "1"
@@ -415,7 +436,7 @@ def start_local_node_service_process(
     log_store = ProcessLogStore(log_dir)
     log_path = log_store.path_for(f"local-{service}-{port}.log")
     log_file = log_store.open(log_path.name)
-    env = os.environ.copy()
+    env = _local_child_environment()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     process = _spawn_logged_process(

@@ -7,7 +7,7 @@ from datetime import datetime
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from app.agents.providers.litellm_content import canonicalize_ai_message
+from app.agents.providers.response_normalization import canonicalize_ai_message
 from app.core.checkpoint_config import build_checkpoint_config
 from app.schemas.event import ModelTokenUsagePayload
 
@@ -62,6 +62,28 @@ def _build_assistant_content(
     return content
 
 
+def _content_part_refs(
+    content_blocks: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """保存流式 part 的稳定引用，避免 provider canonicalizer 丢失临时字段。"""
+    refs: list[dict[str, object]] = []
+    for index, block in enumerate(content_blocks):
+        part_id = block.get("id")
+        part_index = block.get("index", index)
+        if not isinstance(part_id, str) or not part_id:
+            continue
+        if not isinstance(part_index, int) or isinstance(part_index, bool):
+            raise TypeError("assistant content part index 必须是整数")
+        refs.append(
+            {
+                "id": part_id,
+                "index": part_index,
+                "type": block.get("type"),
+            }
+        )
+    return refs
+
+
 def _latest_final_assistant_index(messages: list[object]) -> int:
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
@@ -81,6 +103,8 @@ def _rewrite_latest_assistant_message(
     message_id: str,
     message_created_at: datetime,
     token_usage: ModelTokenUsagePayload | None,
+    turn_id: str | None,
+    preserve_content_part_refs: bool,
 ) -> bool:
     latest = next(
         (
@@ -98,8 +122,27 @@ def _rewrite_latest_assistant_message(
     response_metadata["message_id"] = message_id
     response_metadata["created_at"] = message_created_at.isoformat()
     response_metadata["updated_at"] = message_created_at.isoformat()
+    if turn_id is not None:
+        raw_message_metadata = response_metadata.get("message_metadata")
+        message_metadata = (
+            dict(raw_message_metadata)
+            if isinstance(raw_message_metadata, Mapping)
+            else {}
+        )
+        # compaction/runtime 的内部消息可能成为当前 checkpoint 中的
+        # latest AIMessage。最终可见 assistant 必须重新绑定到本次真实
+        # Turn，不能继承 internal-* 的临时归属，否则 finalization 会把
+        # 已写入的消息从目标 Turn 中排除。
+        message_metadata.pop("internal", None)
+        message_metadata["turn_id"] = turn_id
+        message_metadata["job_id"] = turn_id
+        response_metadata["message_metadata"] = message_metadata
     if token_usage is not None and token_usage.reported_model_calls > 0:
         response_metadata["token_usage"] = token_usage.model_dump(mode="json")
+    if preserve_content_part_refs:
+        refs = _content_part_refs(content_blocks)
+        if refs:
+            response_metadata["content_part_refs"] = refs
     messages.append(
         latest.model_copy(
             update={
@@ -123,6 +166,7 @@ def persist_standard_assistant_checkpoint(
     message_id: str,
     message_created_at: datetime,
     token_usage: ModelTokenUsagePayload | None = None,
+    preserve_content_part_refs: bool = False,
 ) -> bool:
     """把本轮最终 assistant 消息保存为 LangChain 标准 content blocks。"""
     if not message_id:
@@ -153,6 +197,8 @@ def persist_standard_assistant_checkpoint(
         message_id=message_id,
         message_created_at=message_created_at,
         token_usage=token_usage,
+        turn_id=turn_id,
+        preserve_content_part_refs=preserve_content_part_refs,
     )
     if not changed:
         return False
@@ -175,7 +221,10 @@ def persist_standard_assistant_checkpoint(
         new_versions={"messages": messages_version},
     )
     finalize_turn = getattr(checkpointer, "finalize_turn", None)
-    if turn_id is not None:
+    itemized_convergence = callable(
+        getattr(checkpointer, "converge_execution", None)
+    ) and callable(getattr(checkpointer, "append_items", None))
+    if turn_id is not None and not itemized_convergence:
         if not callable(finalize_turn):
             raise RuntimeError("当前 checkpoint saver 不支持 Turn finalization")
         finalize_turn(
@@ -183,6 +232,114 @@ def persist_standard_assistant_checkpoint(
             turn_id=turn_id,
             final_message_id=message_id,
         )
+    return True
+
+
+def persist_intermediate_assistant_reasoning_checkpoint(
+    *,
+    checkpointer: BaseCheckpointSaver,
+    session_id: str,
+    model_content_blocks: Sequence[Sequence[Mapping[str, object]]],
+) -> bool:
+    """把带工具调用的中间模型 reasoning 补入 checkpoint 兼容视图。
+
+    事件流 sink 已将同一份 reasoning 写入 canonical item。这里仅更新
+    LangGraph 的兼容 checkpoint，使 Agent State 能观察到模型在工具分派前的
+    reasoning；不创建 item，也不把兼容消息反向作为 canonical 来源。
+    """
+    if not model_content_blocks:
+        return False
+    config = build_checkpoint_config(session_id)
+    tup = checkpointer.get_tuple(config)
+    if tup is None:
+        return False
+    checkpoint = tup.checkpoint.copy()
+    channel_values = dict(checkpoint.get("channel_values", {}))
+    raw_messages = channel_values.get("messages", [])
+    if not isinstance(raw_messages, list):
+        raise TypeError(
+            f"LangGraph checkpoint messages 应为 list，实际类型: {type(raw_messages).__name__}"
+        )
+
+    tool_message_indexes = [
+        index
+        for index, message in enumerate(raw_messages)
+        if isinstance(message, AIMessage) and bool(getattr(message, "tool_calls", None))
+    ]
+    changed = False
+    messages = list(raw_messages)
+    for message_index, blocks in zip(tool_message_indexes, model_content_blocks):
+        reasoning_blocks = [
+            dict(block)
+            for block in blocks
+            if isinstance(block, Mapping)
+            and block.get("type")
+            in {
+                "reasoning",
+                "reasoning_content",
+                "reasoning_items",
+                "thinking",
+                "redacted_thinking",
+            }
+        ]
+        if not reasoning_blocks:
+            continue
+        message = messages[message_index]
+        if not isinstance(message, AIMessage):
+            continue
+        existing_content = message.content
+        existing_blocks = (
+            [dict(block) for block in existing_content if isinstance(block, Mapping)]
+            if isinstance(existing_content, list)
+            else []
+        )
+        existing_keys = {
+            (
+                block.get("id"),
+                block.get("type"),
+                block.get("index"),
+            )
+            for block in existing_blocks
+        }
+        merged_blocks = [
+            *existing_blocks,
+            *[
+                block
+                for block in reasoning_blocks
+                if (block.get("id"), block.get("type"), block.get("index"))
+                not in existing_keys
+            ],
+        ]
+        if merged_blocks == existing_blocks:
+            continue
+        response_metadata = dict(message.response_metadata or {})
+        response_metadata["reasoning_source"] = "canonical_item_stream"
+        response_metadata["phase"] = "commentary"
+        messages[message_index] = message.model_copy(
+            update={
+                "content": merged_blocks,
+                "response_metadata": response_metadata,
+            }
+        )
+        changed = True
+
+    if not changed:
+        return False
+    channel_values["messages"] = messages
+    checkpoint["channel_values"] = channel_values
+    checkpoint["id"] = str(uuid.uuid4())
+    channel_versions = dict(checkpoint.get("channel_versions", {}))
+    messages_version = checkpointer.get_next_version(
+        channel_versions.get("messages"), None
+    )
+    channel_versions["messages"] = messages_version
+    checkpoint["channel_versions"] = channel_versions
+    checkpointer.put(
+        config=tup.config,
+        checkpoint=checkpoint,
+        metadata={"source": "canonical_item_reasoning_projection", "step": -1, "writes": {}},
+        new_versions={"messages": messages_version},
+    )
     return True
 
 
@@ -198,9 +355,42 @@ def persist_user_message_checkpoint(
     if not isinstance(message_id, str) or not message_id:
         raise ValueError("用户消息缺少持久化 message_id")
 
+    # RolloutCheckpointSaver 在 acceptance-time 先建立 root/Turn/execution，
+    # 随后的 LangGraph checkpoint 只负责把同一个 root 投影回 messages channel。
+    # 旧 saver 没有该 owner API 时继续走其只读兼容路径。
+    accept_turn = getattr(checkpointer, "accept_turn", None)
+    if callable(accept_turn):
+        message_metadata = response_metadata.get("message_metadata")
+        turn_id = (
+            message_metadata.get("turn_id")
+            if isinstance(message_metadata, Mapping)
+            else None
+        )
+        if not isinstance(turn_id, str) or not turn_id:
+            # 旧调用方没有把 job id 放入 message_metadata 时，使用稳定的
+            # ingress-derived id；这仍然在 acceptance-time 创建真实 Turn，
+            # 不从 wire role 或物理邻接猜测。
+            turn_id = f"turn-{message_id}"
+        accepted = accept_turn(
+            session_id,
+            accepted_ingress_id=message_id,
+            acceptance_idempotency_key=f"message:{message_id}",
+            payload=message.content,
+            payload_kind=(
+                "text" if isinstance(message.content, str) else "structured_content"
+            ),
+            turn_id=turn_id,
+            root_item_id=f"item-{message_id}",
+            acceptance_metadata={"message_created_at": response_metadata.get("created_at")},
+        )
+        if not isinstance(accepted, Mapping):
+            raise TypeError("RolloutCheckpointSaver.accept_turn 返回值非法")
+
     config = build_checkpoint_config(session_id)
     tup = checkpointer.get_tuple(config)
     if tup is None:
+        # acceptance 已经先于 provider dispatch 固化；旧 LangGraph saver
+        # 可能尚未建立 tuple，调用方仍可继续执行并由后续 checkpoint 建立它。
         return False
 
     checkpoint = tup.checkpoint.copy()

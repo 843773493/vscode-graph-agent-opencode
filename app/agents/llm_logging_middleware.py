@@ -13,7 +13,14 @@ from langchain_core.tools import BaseTool
 from langgraph.runtime import Runtime
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter
 
-from app.agents.request_replay_middleware import read_prompt_replay_components
+from app.agents.request_replay_middleware import (
+    RequestReplaySnapshot,
+    discard_request_replay_snapshot,
+    publish_request_replay_snapshot,
+    read_prompt_replay_components,
+    reset_active_request_snapshot,
+    set_active_request_snapshot,
+)
 from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
@@ -368,6 +375,15 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
         session_id = self._get_session_id(request.runtime)
+        request_snapshot_token = set_active_request_snapshot(request)
+        turn_id = self._get_job_id(request.runtime)
+        request_replay_snapshot: RequestReplaySnapshot | None = None
+        if turn_id is not None:
+            request_replay_snapshot = publish_request_replay_snapshot(
+                session_id,
+                turn_id,
+                request,
+            )
         capture_token = begin_upstream_capture()
         try:
             response = handler(request)
@@ -382,8 +398,17 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 error,
             )
             raise
-        self._save_log(session_id, request, response, upstream_attempts)
-        return response
+        else:
+            self._save_log(session_id, request, response, upstream_attempts)
+            return response
+        finally:
+            if turn_id is not None and request_replay_snapshot is not None:
+                discard_request_replay_snapshot(
+                    session_id,
+                    turn_id,
+                    request_replay_snapshot,
+                )
+            reset_active_request_snapshot(request_snapshot_token)
 
     async def awrap_model_call(
         self,
@@ -393,6 +418,15 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
         session_id = self._get_session_id(request.runtime)
+        request_snapshot_token = set_active_request_snapshot(request)
+        turn_id = self._get_job_id(request.runtime)
+        request_replay_snapshot: RequestReplaySnapshot | None = None
+        if turn_id is not None:
+            request_replay_snapshot = publish_request_replay_snapshot(
+                session_id,
+                turn_id,
+                request,
+            )
         capture_token = begin_upstream_capture()
         try:
             response = await handler(request)
@@ -407,5 +441,14 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 error,
             )
             raise
-        self._save_log(session_id, request, response, upstream_attempts)
-        return response
+        else:
+            self._save_log(session_id, request, response, upstream_attempts)
+            return response
+        finally:
+            if turn_id is not None and request_replay_snapshot is not None:
+                discard_request_replay_snapshot(
+                    session_id,
+                    turn_id,
+                    request_replay_snapshot,
+                )
+            reset_active_request_snapshot(request_snapshot_token)

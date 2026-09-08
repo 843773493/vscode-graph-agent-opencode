@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
+from uuid import uuid4
 
 import httpx
 from fastapi import (
     Depends,
     FastAPI,
     File,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -19,11 +25,15 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.core.env import get_project_root, load_boxteam_env
 from app.core.logging_config import configure_application_logging
-from app.core.path_utils import get_gateway_root
+from app.core.path_utils import (
+    get_gateway_root,
+    get_user_gateway_config_path,
+    get_user_gateway_local_config_path,
+)
 from app.core.trace_middleware import TraceMiddleware, get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -33,7 +43,14 @@ from app.gateway.auth import (
     verify_gateway_token,
 )
 from app.gateway.auxiliary_proxy import router as auxiliary_proxy_router
-from app.gateway.config import GatewayConfig, load_gateway_config
+from app.gateway.config import (
+    REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
+    GatewayConfig,
+    GatewayConfigReloadService,
+    GatewayConfigRuntimeRollback,
+    load_gateway_config,
+    record_gateway_restart_startup_failure,
+)
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -73,6 +90,12 @@ from app.gateway.registry import (
 from app.gateway.remote_gateway import (
     refresh_remote_gateway_projections,
     register_remote_gateway,
+)
+from app.gateway.runtime.consumer_protocol import (
+    GatewayRuntimeConsumerStage,
+    GatewayRuntimeConsumerTransaction,
+    GatewayRuntimeHealthProof,
+    runtime_fencing_token_digest,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.development_restart import (
@@ -131,6 +154,11 @@ from app.schemas.gateway import (
     FederationProtocolManifestDTO,
     FederationWorkspaceDTO,
     FederationWorkspaceListDTO,
+    GatewayConfigEventDTO,
+    GatewayConfigEventsDTO,
+    GatewayConfigPendingDiscardRequest,
+    GatewayConfigPendingHealthProofRequest,
+    GatewayConfigReloadStatusDTO,
     GatewayConfigSourceDTO,
     GatewayConfigSourcesDTO,
     GatewayDiagnosticsDTO,
@@ -160,63 +188,18 @@ from app.schemas.gateway import (
     WebUISettingsUpdateDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
+from app.services.infrastructure.config.policy import gateway_config_policy
+from app.services.infrastructure.config.state import (
+    ConfigConflictError,
+    ConfigEventCursorGoneError,
+    build_secret_binding_summary,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _gateway_root() -> Path:
     return get_gateway_root()
-
-
-def _preserve_browser_managers_on_shutdown() -> bool:
-    raw = (
-        os.environ.get(
-            "BOXTEAM_GATEWAY_PRESERVE_BROWSER_MANAGERS_ON_SHUTDOWN",
-            "true",
-        )
-        .strip()
-        .lower()
-    )
-    if raw not in {"true", "false"}:
-        raise RuntimeError(
-            "BOXTEAM_GATEWAY_PRESERVE_BROWSER_MANAGERS_ON_SHUTDOWN "
-            f"必须是 true 或 false，实际为 {raw!r}"
-        )
-    return raw == "true"
-
-
-def _preserve_terminal_managers_on_shutdown() -> bool:
-    raw = (
-        os.environ.get(
-            "BOXTEAM_GATEWAY_PRESERVE_TERMINAL_MANAGERS_ON_SHUTDOWN",
-            "true",
-        )
-        .strip()
-        .lower()
-    )
-    if raw not in {"true", "false"}:
-        raise RuntimeError(
-            "BOXTEAM_GATEWAY_PRESERVE_TERMINAL_MANAGERS_ON_SHUTDOWN "
-            f"必须是 true 或 false，实际为 {raw!r}"
-        )
-    return raw == "true"
-
-
-def _preserve_workspace_backends_on_shutdown() -> bool:
-    raw = (
-        os.environ.get(
-            "BOXTEAM_GATEWAY_PRESERVE_WORKSPACE_BACKENDS_ON_SHUTDOWN",
-            "false",
-        )
-        .strip()
-        .lower()
-    )
-    if raw not in {"true", "false"}:
-        raise RuntimeError(
-            "BOXTEAM_GATEWAY_PRESERVE_WORKSPACE_BACKENDS_ON_SHUTDOWN "
-            f"必须是 true 或 false，实际为 {raw!r}"
-        )
-    return raw == "true"
 
 
 async def _cleanup_user_access_periodically(service: UserAccessService) -> None:
@@ -229,6 +212,19 @@ async def _cleanup_user_access_periodically(service: UserAccessService) -> None:
                 expired_leases,
                 expired_guests,
             )
+
+
+def _report_managed_runtime_restore_task(task: asyncio.Task[None]) -> None:
+    """记录后台恢复任务的取消或未处理异常，避免列表静默显示 offline。"""
+    if task.cancelled():
+        logger.error("Gateway 托管 Workspace 恢复任务被取消")
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error(
+            "Gateway 托管 Workspace 恢复任务未处理异常",
+            exc_info=(type(error), error, error.__traceback__),
+        )
 
 
 def _resolve_local_directory(raw_path: str | None) -> Path:
@@ -365,22 +361,633 @@ def _remote_http_error_detail(error: httpx.HTTPStatusError) -> str:
     return error.response.text[:1000]
 
 
+async def _apply_gateway_runtime_config(
+    app: FastAPI,
+    candidate: GatewayConfig,
+    previous: GatewayConfig,
+    fencing_token: str | None = None,
+    fence_check: Callable[[], None] | None = None,
+) -> GatewayConfigRuntimeRollback:
+    """更新可安全即时读取的 Gateway 快照和下一轮调度参数。"""
+    await _set_gateway_runtime_config(
+        app,
+        candidate,
+        fencing_token=fencing_token,
+        fence_check=fence_check,
+    )
+
+    async def rollback() -> None:
+        await _set_gateway_runtime_config(
+            app,
+            previous,
+            fencing_token=fencing_token,
+            fence_check=fence_check,
+        )
+
+    return rollback
+
+
+def _gateway_runtime_consumer_stages(
+    app: FastAPI,
+    candidate: GatewayConfig,
+    previous: GatewayConfig,
+    fencing_token: str | None = None,
+    fence_check: Callable[[], None] | None = None,
+) -> tuple[GatewayRuntimeConsumerStage, ...]:
+    """构造可热更新 Gateway 消费者的完整协议阶段。"""
+    # 配置 digest 只能标识内容，不能标识一次运行时切换；A→B→A 时也必须
+    # 使用不同 generation，避免旧 apply 的 proof 与新 apply 混淆。
+    generation = f"gateway-runtime:{candidate.revision}:{uuid4().hex}"
+    fencing_token_digest = runtime_fencing_token_digest(fencing_token)
+    stages: list[GatewayRuntimeConsumerStage] = []
+    catalog_search_service = getattr(
+        app.state,
+        "session_catalog_search_service",
+        None,
+    )
+    if isinstance(catalog_search_service, GatewaySessionCatalogSearchService):
+        stages.append(
+            GatewayRuntimeConsumerStage(
+                consumer_id="session-catalog",
+                generation=generation,
+                prepare=lambda: catalog_search_service.prepare_runtime_config(
+                    refresh_interval_seconds=(
+                        candidate.session_catalog_refresh_interval_seconds
+                    ),
+                    max_concurrency=candidate.session_catalog_max_concurrency,
+                    request_timeout_seconds=(
+                        candidate.session_catalog_request_timeout_seconds
+                    ),
+                ),
+                apply=lambda: catalog_search_service.update_runtime_config(
+                    refresh_interval_seconds=(
+                        candidate.session_catalog_refresh_interval_seconds
+                    ),
+                    max_concurrency=candidate.session_catalog_max_concurrency,
+                    request_timeout_seconds=(
+                        candidate.session_catalog_request_timeout_seconds
+                    ),
+                ),
+                health=lambda: catalog_search_service.runtime_health_proof(
+                    generation=generation,
+                    fencing_token_digest=fencing_token_digest,
+                ),
+                promote=lambda: None,
+                rollback=lambda: catalog_search_service.update_runtime_config(
+                    refresh_interval_seconds=(
+                        previous.session_catalog_refresh_interval_seconds
+                    ),
+                    max_concurrency=previous.session_catalog_max_concurrency,
+                    request_timeout_seconds=(
+                        previous.session_catalog_request_timeout_seconds
+                    ),
+                ),
+                fencing_token_digest=fencing_token_digest,
+                fence_check=fence_check,
+            )
+        )
+
+    scheduler = getattr(app.state, "session_generator_scheduler", None)
+    if isinstance(scheduler, SessionGeneratorScheduler):
+        stages.append(
+            GatewayRuntimeConsumerStage(
+                consumer_id="session-generator-scheduler",
+                generation=generation,
+                prepare=lambda: scheduler.prepare_runtime_config(
+                    poll_interval_seconds=(
+                        candidate.session_generator_poll_interval_seconds
+                    )
+                ),
+                apply=lambda: scheduler.update_runtime_config(
+                    poll_interval_seconds=(
+                        candidate.session_generator_poll_interval_seconds
+                    )
+                ),
+                health=lambda: scheduler.runtime_health_proof(
+                    generation=generation,
+                    fencing_token_digest=fencing_token_digest,
+                ),
+                promote=lambda: None,
+                rollback=lambda: scheduler.update_runtime_config(
+                    poll_interval_seconds=(
+                        previous.session_generator_poll_interval_seconds
+                    )
+                ),
+                fencing_token_digest=fencing_token_digest,
+                fence_check=fence_check,
+            )
+        )
+
+    runtime_controller = getattr(app.state, "workspace_runtime_controller", None)
+    if isinstance(runtime_controller, GatewayWorkspaceRuntimeController):
+        stages.append(
+            GatewayRuntimeConsumerStage(
+                consumer_id="health-controller",
+                generation=generation,
+                prepare=lambda: runtime_controller.prepare_health_controller_config(
+                    request_timeout_seconds=(
+                        candidate.gateway_process_health_request_timeout_seconds
+                    ),
+                    poll_interval_seconds=(
+                        candidate.gateway_process_health_poll_interval_seconds
+                    ),
+                ),
+                apply=lambda: runtime_controller.update_health_controller_config(
+                    request_timeout_seconds=(
+                        candidate.gateway_process_health_request_timeout_seconds
+                    ),
+                    poll_interval_seconds=(
+                        candidate.gateway_process_health_poll_interval_seconds
+                    ),
+                ),
+                health=lambda: runtime_controller.runtime_health_proof(
+                    generation=generation,
+                    fencing_token_digest=fencing_token_digest,
+                ),
+                promote=lambda: None,
+                rollback=lambda: runtime_controller.update_health_controller_config(
+                    request_timeout_seconds=(
+                        previous.gateway_process_health_request_timeout_seconds
+                    ),
+                    poll_interval_seconds=(
+                        previous.gateway_process_health_poll_interval_seconds
+                    ),
+                ),
+                fencing_token_digest=fencing_token_digest,
+                fence_check=fence_check,
+            )
+        )
+    return tuple(stages)
+
+
+async def _set_gateway_runtime_config(
+    app: FastAPI,
+    candidate: GatewayConfig,
+    *,
+    fencing_token: str | None = None,
+    fence_check: Callable[[], None] | None = None,
+) -> None:
+    """按消费者协议 apply，并在任一阶段失败时逆序回滚。"""
+    previous = app.state.gateway_config
+    transaction = GatewayRuntimeConsumerTransaction(
+        _gateway_runtime_consumer_stages(
+            app,
+            candidate,
+            previous,
+            fencing_token=fencing_token,
+            fence_check=fence_check,
+        )
+    )
+    try:
+        result = await transaction.apply()
+        app.state.gateway_config = candidate
+        await result.promote()
+    except BaseException as error:
+        app.state.gateway_config = previous
+        # transaction.apply 已负责 apply/health 阶段的补偿；promotion hook
+        # 失败时 result 仍然可用，必须再次尝试补偿已经 prepare 的消费者。
+        if "result" in locals():
+            try:
+                await result.rollback()
+            except Exception as rollback_error:  # noqa: BLE001
+                raise RuntimeError(
+                    "Gateway runtime consumer promotion 失败且回滚不完整: "
+                    f"{rollback_error}"
+                ) from error
+        raise
+
+
+def _runtime_health_proof_digest(
+    proofs: tuple[GatewayRuntimeHealthProof, ...],
+) -> str:
+    payload = [
+        {
+            "consumer_id": proof.consumer_id,
+            "generation": proof.generation,
+            "state": proof.state,
+            "details": proof.details,
+            "fencing_token_digest": proof.fencing_token_digest,
+        }
+        for proof in sorted(proofs, key=lambda item: item.consumer_id)
+    ]
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _gateway_pending_consumer_health_digests(
+    app: FastAPI,
+    *,
+    generation: str,
+    fencing_token_digest: str,
+) -> dict[str, str]:
+    """收集 Gateway pending 启动的六类 consumer proof 摘要。"""
+
+    registry = getattr(app.state, "registry", None)
+    if not isinstance(registry, GatewayWorkspaceRegistry):
+        raise RuntimeError("Gateway pending proof 缺少 registry")
+    catalog = getattr(app.state, "session_catalog_search_service", None)
+    if not isinstance(catalog, GatewaySessionCatalogSearchService):
+        raise RuntimeError("Gateway pending proof 缺少 session catalog consumer")
+    scheduler = getattr(app.state, "session_generator_scheduler", None)
+    if not isinstance(scheduler, SessionGeneratorScheduler):
+        raise RuntimeError("Gateway pending proof 缺少 generator scheduler consumer")
+    controller = getattr(app.state, "workspace_runtime_controller", None)
+    if not isinstance(controller, GatewayWorkspaceRuntimeController):
+        raise RuntimeError("Gateway pending proof 缺少 health controller consumer")
+    port_forward_manager = getattr(app.state, "port_forward_manager", None)
+    if not isinstance(port_forward_manager, SshPortForwardManager):
+        raise RuntimeError("Gateway pending proof 缺少 SSH tunnel consumer")
+
+    catalog_proof = catalog.runtime_health_proof(
+        generation=generation,
+        fencing_token_digest=fencing_token_digest,
+    )
+    scheduler_proof = scheduler.runtime_health_proof(
+        generation=generation,
+        fencing_token_digest=fencing_token_digest,
+    )
+    digests = {
+        "catalog-generator-scheduler": _runtime_health_proof_digest(
+            (catalog_proof, scheduler_proof)
+        ),
+        "health-controller": _runtime_health_proof_digest(
+            (
+                controller.runtime_health_proof(
+                    generation=generation,
+                    fencing_token_digest=fencing_token_digest,
+                ),
+            )
+        ),
+        "registry-batch": _runtime_health_proof_digest(
+            (
+                registry.runtime_health_proof(
+                    consumer_id="registry-batch",
+                    generation=generation,
+                    fencing_token_digest=fencing_token_digest,
+                ),
+            )
+        ),
+        "ssh-tunnel-proxy": _runtime_health_proof_digest(
+            (
+                port_forward_manager.runtime_health_proof(
+                    generation=generation,
+                    fencing_token_digest=fencing_token_digest,
+                ),
+            )
+        ),
+        "workspace-process": _runtime_health_proof_digest(
+            (
+                registry.runtime_health_proof(
+                    consumer_id="workspace-process",
+                    generation=generation,
+                    fencing_token_digest=fencing_token_digest,
+                ),
+            )
+        ),
+        "remote-projection": _runtime_health_proof_digest(
+            (
+                registry.runtime_health_proof(
+                    consumer_id="remote-projection",
+                    generation=generation,
+                    fencing_token_digest=fencing_token_digest,
+                ),
+            )
+        ),
+    }
+    if set(digests) != REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS:
+        raise RuntimeError(
+            "Gateway pending consumer proof 集合不完整: "
+            f"actual={sorted(digests)}, "
+            f"expected={sorted(REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS)}"
+        )
+    return digests
+
+
+def _gateway_pending_runtime_consumer_stages(
+    app: FastAPI,
+    *,
+    generation: str,
+    fencing_token_digest: str,
+    fence_check: Callable[[], None],
+) -> tuple[GatewayRuntimeConsumerStage, ...]:
+    """构造 pending successor 的 registry/tunnel/process/projection 阶段。"""
+
+    registry = getattr(app.state, "registry", None)
+    if not isinstance(registry, GatewayWorkspaceRegistry):
+        raise RuntimeError("Gateway pending consumer protocol 缺少 registry")
+    port_forward_manager = getattr(app.state, "port_forward_manager", None)
+    if not isinstance(port_forward_manager, SshPortForwardManager):
+        raise RuntimeError("Gateway pending consumer protocol 缺少 SSH tunnel consumer")
+
+    previous_registry_generation: str | None = None
+    previous_workspace_generations: dict[str, str | None] = {}
+    previous_remote_generations: dict[str, str | None] = {}
+
+    def prepare_registry_batch() -> None:
+        nonlocal previous_registry_generation
+        previous_registry_generation = registry.prepare_runtime_generation(generation)
+
+    def apply_registry_batch() -> None:
+        nonlocal previous_registry_generation
+        previous_registry_generation = registry.apply_runtime_generation(generation)
+
+    def rollback_registry_batch() -> None:
+        registry.rollback_runtime_generation(
+            generation,
+            previous_registry_generation,
+        )
+
+    def prepare_ssh_tunnel() -> None:
+        port_forward_manager.prepare_runtime_generation(generation)
+
+    previous_ssh_generation: str | None = None
+
+    def apply_ssh_tunnel() -> None:
+        nonlocal previous_ssh_generation
+        previous_ssh_generation = port_forward_manager.apply_runtime_generation(
+            generation
+        )
+
+    def promote_ssh_tunnel() -> None:
+        port_forward_manager.promote_runtime_generation(generation)
+
+    def rollback_ssh_tunnel() -> None:
+        port_forward_manager.rollback_runtime_generation(
+            generation,
+            previous_ssh_generation,
+        )
+
+    def prepare_workspace_process() -> None:
+        previous_workspace_generations.clear()
+        previous_workspace_generations.update(
+            registry.prepare_workspace_process_generation(generation)
+        )
+
+    def apply_workspace_process() -> None:
+        previous_workspace_generations.clear()
+        previous_workspace_generations.update(
+            registry.apply_workspace_process_generation(generation)
+        )
+
+    def promote_workspace_process() -> None:
+        registry.promote_workspace_process_generation(generation)
+
+    def rollback_workspace_process() -> None:
+        registry.rollback_workspace_process_generation(
+            generation,
+            previous_workspace_generations,
+        )
+
+    def prepare_remote_projection() -> None:
+        previous_remote_generations.clear()
+        previous_remote_generations.update(
+            registry.prepare_remote_projection_generation(generation)
+        )
+
+    def apply_remote_projection() -> None:
+        previous_remote_generations.clear()
+        previous_remote_generations.update(
+            registry.apply_remote_projection_generation(generation)
+        )
+
+    def promote_remote_projection() -> None:
+        registry.promote_remote_projection_generation(generation)
+
+    def rollback_remote_projection() -> None:
+        registry.rollback_remote_projection_generation(
+            generation,
+            previous_remote_generations,
+        )
+
+    return (
+        GatewayRuntimeConsumerStage(
+            consumer_id="registry-batch",
+            generation=generation,
+            prepare=prepare_registry_batch,
+            apply=apply_registry_batch,
+            health=lambda: registry.runtime_health_proof(
+                consumer_id="registry-batch",
+                generation=generation,
+                fencing_token_digest=fencing_token_digest,
+            ),
+            promote=lambda: registry.promote_runtime_generation(generation),
+            rollback=rollback_registry_batch,
+            fencing_token_digest=fencing_token_digest,
+            fence_check=fence_check,
+        ),
+        GatewayRuntimeConsumerStage(
+            consumer_id="ssh-tunnel-proxy",
+            generation=generation,
+            prepare=prepare_ssh_tunnel,
+            apply=apply_ssh_tunnel,
+            health=lambda: port_forward_manager.runtime_health_proof(
+                generation=generation,
+                fencing_token_digest=fencing_token_digest,
+            ),
+            promote=promote_ssh_tunnel,
+            rollback=rollback_ssh_tunnel,
+            fencing_token_digest=fencing_token_digest,
+            fence_check=fence_check,
+        ),
+        GatewayRuntimeConsumerStage(
+            consumer_id="workspace-process",
+            generation=generation,
+            prepare=prepare_workspace_process,
+            apply=apply_workspace_process,
+            health=lambda: registry.runtime_health_proof(
+                consumer_id="workspace-process",
+                generation=generation,
+                fencing_token_digest=fencing_token_digest,
+            ),
+            promote=promote_workspace_process,
+            rollback=rollback_workspace_process,
+            fencing_token_digest=fencing_token_digest,
+            fence_check=fence_check,
+        ),
+        GatewayRuntimeConsumerStage(
+            consumer_id="remote-projection",
+            generation=generation,
+            prepare=prepare_remote_projection,
+            apply=apply_remote_projection,
+            health=lambda: registry.runtime_health_proof(
+                consumer_id="remote-projection",
+                generation=generation,
+                fencing_token_digest=fencing_token_digest,
+            ),
+            promote=promote_remote_projection,
+            rollback=rollback_remote_projection,
+            fencing_token_digest=fencing_token_digest,
+            fence_check=fence_check,
+        ),
+    )
+
+
+def _should_preserve_gateway_generation_for_handoff(
+    *,
+    gateway_state: GatewayStateStore,
+    gateway_config_reload: GatewayConfigReloadService,
+    startup_candidate_ref: str | None,
+    generation_id: str,
+) -> bool:
+    """判断旧 Gateway 是否正在等待新 pending generation 接管监听。"""
+
+    generation = gateway_state.get_gateway_runtime_generation(
+        generation_id=generation_id
+    )
+    if generation is not None and (
+        startup_candidate_ref is not None
+        and generation.state == "failed"
+        and generation.listener_state == "closed"
+    ):
+        # Pending generation 启动失败时，它可能已经接管了旧 Workspace
+        # 进程句柄；这些句柄必须脱离而不能终止旧 active 的真实进程。
+        return True
+    if generation is not None and (
+        startup_candidate_ref is None
+        and generation.state == "active"
+        and generation.listener_state == "draining"
+    ):
+        # Promotion 先把旧 generation 标记为 draining，旧进程随后才收到
+        # supervisor 的停止信号。此时不能让旧 Gateway 关闭新 generation
+        # 已接管的 Workspace 进程。
+        active_generation = gateway_state.active_gateway_runtime_generation()
+        return bool(
+            active_generation is not None
+            and active_generation.generation_id != generation_id
+        )
+    if startup_candidate_ref is not None:
+        return False
+    status = gateway_config_reload.status()
+    if status.candidate_ref is None or status.state not in {
+        "pending_restart",
+        "applying",
+    }:
+        return False
+    intent = gateway_state.get_gateway_restart_intent(
+        candidate_ref=status.candidate_ref
+    )
+    return bool(
+        intent is not None
+        and intent.state in {"pending", "applying"}
+        and intent.old_generation == generation_id
+    )
+
+
+def _record_owned_gateway_startup_failure(
+    *,
+    gateway_state: GatewayStateStore,
+    gateway_id: str,
+    candidate_ref: str,
+    error: str,
+) -> bool:
+    """仅记录当前 Gateway、未过期且 token 完整匹配的启动早期失败。"""
+
+    intent = gateway_state.get_gateway_restart_intent(candidate_ref=candidate_ref)
+    if intent is None or intent.gateway_id != gateway_id:
+        return False
+    if intent.state not in {"pending", "applying"}:
+        return False
+    if intent.expires_at is None or intent.expires_at <= datetime.now(timezone.utc):
+        return False
+    generation = os.environ.get("BOXTEAM_CONFIG_GENERATION")
+    fencing_token = os.environ.get("BOXTEAM_CONFIG_FENCING_TOKEN")
+    if (
+        not generation
+        or not fencing_token
+        or intent.target_generation != generation
+        or intent.fencing_token != fencing_token
+    ):
+        return False
+    record_gateway_restart_startup_failure(
+        state_store=gateway_state,
+        candidate_ref=candidate_ref,
+        error=f"Gateway pending generation 启动失败: {error}",
+        gateway_id=gateway_id,
+        target_generation=generation,
+        fencing_token=fencing_token,
+    )
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_application_logging()
     load_boxteam_env()
     get_gateway_local_token()
     logger.info("Gateway 日志已初始化: gateway_root=%s", _gateway_root())
-    gateway_state = GatewayStateStore(path=_gateway_root() / "gateway.sqlite")
+    startup_candidate_ref = os.environ.get("BOXTEAM_CONFIG_CANDIDATE_REF")
+    gateway_state = GatewayStateStore(
+        path=_gateway_root() / "gateway.sqlite",
+        allow_shared_processes=bool(
+            startup_candidate_ref and startup_candidate_ref.strip()
+        ),
+    )
+    gateway_id = load_or_create_gateway_id(_gateway_root() / "identity.json")
     app.state.gateway_state = gateway_state
+    app.state.gateway_id = gateway_id
     app.state.user_access_service = UserAccessService(state=gateway_state)
     app.state.user_profile_store = UserProfileStore(gateway_root=_gateway_root())
     app.state.user_view_state_store = UserViewStateStore(state=gateway_state)
     app.state.user_access_service.cleanup_expired()
-    gateway_config = load_gateway_config(state_store=gateway_state)
-    registry = await create_registry(gateway_config, state_store=gateway_state)
+    startup_generation = (
+        os.environ.get("BOXTEAM_CONFIG_GENERATION") or f"gateway_runtime_{os.getpid()}"
+    )
+    startup_fencing_token = os.environ.get("BOXTEAM_CONFIG_FENCING_TOKEN")
+    try:
+        gateway_config = load_gateway_config(
+            state_store=gateway_state,
+            startup=True,
+            gateway_id=gateway_id,
+        )
+    except Exception as error:
+        recovery_error: Exception | None = None
+        if startup_candidate_ref:
+            try:
+                _record_owned_gateway_startup_failure(
+                    gateway_state=gateway_state,
+                    gateway_id=gateway_id,
+                    candidate_ref=startup_candidate_ref,
+                    error=str(error),
+                )
+            except Exception as failure_error:
+                recovery_error = failure_error
+        gateway_state.close()
+        if recovery_error is not None:
+            raise RuntimeError(
+                "Gateway pending generation 启动失败，且早期恢复状态写入失败: "
+                f"{recovery_error}"
+            ) from recovery_error
+        raise
+    registry = await create_registry(
+        gateway_config,
+        state_store=gateway_state,
+        preserve_existing_managed_runtimes=startup_candidate_ref is not None,
+    )
     app.state.registry = registry
     app.state.gateway_config = gateway_config
+    gateway_config_reload = GatewayConfigReloadService(
+        state_store=gateway_state,
+        config=gateway_config,
+        config_path=get_user_gateway_config_path(),
+        local_config_path=get_user_gateway_local_config_path(),
+        on_runtime_config=lambda candidate, previous, fencing_token, fence_check: (
+            _apply_gateway_runtime_config(
+                app,
+                candidate,
+                previous,
+                fencing_token,
+                fence_check,
+            )
+        ),
+        gateway_id=gateway_id,
+    )
+    app.state.gateway_config_reload = gateway_config_reload
     app.state.port_forward_manager = SshPortForwardManager(
         registry=registry,
         storage_path=_gateway_root() / "port-forwards.json",
@@ -454,11 +1061,7 @@ async def lifespan(app: FastAPI):
         _cleanup_user_access_periodically(app.state.user_access_service)
     )
     default_workspace_id = next(
-        (
-            target.workspace_id
-            for target in registry.targets()
-            if target.system_default
-        ),
+        (target.workspace_id for target in registry.targets() if target.system_default),
         "",
     )
     active_workspace_id = registry.active_workspace_id
@@ -466,6 +1069,19 @@ async def lifespan(app: FastAPI):
         registry.resolve(active_workspace_id)
         if active_workspace_id is not None and registry.has_target(active_workspace_id)
         else None
+    )
+    logger.info(
+        "Gateway 启动恢复计划: active_workspace_id=%s, target=%s, managed=%s, "
+        "desired_running=%s, has_runtime=%s",
+        active_workspace_id,
+        active_workspace_target.workspace_id if active_workspace_target else None,
+        active_workspace_target.managed if active_workspace_target else None,
+        active_workspace_target.desired_running if active_workspace_target else None,
+        (
+            registry.has_runtime(active_workspace_target.workspace_id)
+            if active_workspace_target is not None
+            else None
+        ),
     )
     active_runtime_restore_task: asyncio.Task[None] | None = None
     if (
@@ -486,7 +1102,11 @@ async def lifespan(app: FastAPI):
                 gateway_root=_gateway_root(),
                 gateway_config=gateway_config,
                 only_workspace_ids={active_workspace_target.workspace_id},
+                preserve_existing_managed_runtimes=startup_candidate_ref is not None,
             )
+        )
+        active_runtime_restore_task.add_done_callback(
+            _report_managed_runtime_restore_task
         )
     managed_runtime_restore_task = asyncio.create_task(
         _restore_managed_local_runtimes(
@@ -499,7 +1119,11 @@ async def lifespan(app: FastAPI):
                 if active_workspace_target is not None
                 else None
             ),
+            preserve_existing_managed_runtimes=startup_candidate_ref is not None,
         )
+    )
+    managed_runtime_restore_task.add_done_callback(
+        _report_managed_runtime_restore_task
     )
     managed_runtime_restore_tasks: dict[str, asyncio.Task[None]] = {}
     if active_runtime_restore_task is not None and active_workspace_target is not None:
@@ -523,7 +1147,15 @@ async def lifespan(app: FastAPI):
             )
     app.state.managed_runtime_restore_tasks = managed_runtime_restore_tasks
     app.state.managed_runtime_restore_task = managed_runtime_restore_task
+    logger.info(
+        "Gateway 托管 Workspace 恢复任务已登记: workspace_ids=%s",
+        sorted(managed_runtime_restore_tasks),
+    )
+    runtime_generation_record = None
+    pending = None
+    pending_promotion_committed = False
     try:
+        await gateway_config_reload.start()
         await app.state.session_generator_coordinator.start()
         coordinator_started = True
         await app.state.session_catalog_search_service.start()
@@ -540,8 +1172,292 @@ async def lifespan(app: FastAPI):
                 "http://127.0.0.1:8016",
             ).rstrip("/"),
         }
+        active_snapshot = gateway_state.get_active_config_snapshot("gateway")
+        if active_snapshot is None:
+            raise RuntimeError("Gateway 启动后缺少 active config snapshot")
+        secret_bindings = build_secret_binding_summary(gateway_config.payload)
+        secret_binding_digest = hashlib.sha256(
+            json.dumps(
+                secret_bindings,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        pending_candidate_id = None
+        pending_revision = None
+        loaded_source = "active"
+        pending_apply_claim = None
+        if startup_candidate_ref:
+            intent = gateway_state.get_gateway_restart_intent(
+                candidate_ref=startup_candidate_ref
+            )
+            if intent is None:
+                raise RuntimeError(
+                    f"Gateway pending 启动缺少 restart intent: {startup_candidate_ref}"
+                )
+            pending_candidate_id = intent.candidate_id
+            pending = gateway_state.get_pending_config_candidate(
+                config_domain="gateway",
+                candidate_id=intent.candidate_id,
+            )
+            if pending is None:
+                raise RuntimeError(
+                    f"Gateway pending 启动缺少 candidate: {intent.candidate_id}"
+                )
+            pending = gateway_config_reload.begin_pending_restart(
+                candidate_ref=startup_candidate_ref
+            )
+            pending_apply_claim = gateway_state.get_config_apply_claim(
+                config_domain="gateway"
+            )
+            if pending_apply_claim is None:
+                raise RuntimeError("Gateway pending 启动缺少 apply claim")
+            pending_apply_journal = gateway_state.get_config_apply_journal(
+                apply_id=pending_apply_claim.apply_id
+            )
+            if (
+                pending_apply_journal is None
+                or pending_apply_journal.registry_revision is None
+            ):
+                raise RuntimeError("Gateway pending 启动缺少 registry CAS 基线")
+            pending_revision = pending.pending_revision
+            loaded_source = "pending"
+        runtime_generation_record = gateway_state.record_gateway_runtime_generation(
+            generation_id=startup_generation,
+            process_id=os.getpid(),
+            loaded_source=loaded_source,
+            candidate_id=pending_candidate_id,
+            active_revision=active_snapshot.active_revision,
+            pending_revision=pending_revision,
+            candidate_digest=(
+                pending.candidate_digest
+                if startup_candidate_ref and pending is not None
+                else None
+            ),
+            effective_digest=gateway_config.revision,
+            secret_binding_digest=secret_binding_digest,
+            fencing_token=None,
+            listener_state="reserved",
+            state="starting",
+        )
+        if startup_candidate_ref:
+            await _wait_for_managed_runtime_restore_tasks(
+                getattr(app.state, "managed_runtime_restore_tasks", {})
+            )
+            if pending_apply_journal is None:
+                raise RuntimeError("Gateway pending 启动缺少 apply journal")
+            if pending_apply_journal.registry_revision is None:
+                raise RuntimeError("Gateway pending 启动缺少 registry CAS 基线")
+            gateway_state.rebase_config_apply_registry_revision(
+                apply_id=pending_apply_claim.apply_id,
+                expected_registry_revision=pending_apply_journal.registry_revision,
+            )
+            def assert_pending_apply_claim() -> None:
+                gateway_state.assert_config_apply_claim(
+                    config_domain="gateway",
+                    apply_id=pending_apply_claim.apply_id,
+                    fencing_token=pending_apply_claim.fencing_token,
+                )
+
+            pending_consumer_result = None
+            try:
+                pending_consumer_transaction = GatewayRuntimeConsumerTransaction(
+                    _gateway_pending_runtime_consumer_stages(
+                        app,
+                        generation=startup_generation,
+                        fencing_token_digest=(
+                            runtime_fencing_token_digest(
+                                pending_apply_claim.fencing_token
+                            )
+                            or ""
+                        ),
+                        fence_check=assert_pending_apply_claim,
+                    )
+                )
+                pending_consumer_result = (
+                    await pending_consumer_transaction.apply()
+                )
+                await pending_consumer_result.promote()
+                for consumer_id in (
+                    "registry-batch",
+                    "ssh-tunnel-proxy",
+                    "workspace-process",
+                    "remote-projection",
+                ):
+                    gateway_state.append_config_apply_side_effect(
+                        apply_id=pending_apply_claim.apply_id,
+                        side_effect={
+                            "resource": consumer_id,
+                            "action": "generation_handoff",
+                            "status": "succeeded",
+                            "generation": startup_generation,
+                        },
+                    )
+                gateway_state.rebase_config_apply_registry_revision(
+                    apply_id=pending_apply_claim.apply_id,
+                    expected_registry_revision=pending_apply_journal.registry_revision,
+                )
+            except BaseException as error:
+                if pending_consumer_result is not None:
+                    try:
+                        await pending_consumer_result.rollback()
+                    except Exception as rollback_error:
+                        raise RuntimeError(
+                            "Gateway pending consumer protocol 回退不完整: "
+                            f"{rollback_error}"
+                        ) from error
+                raise
+            registry.assert_runtime_consumers_healthy()
+            app.state.port_forward_manager.assert_healthy()
+            if isinstance(
+                app.state.session_catalog_search_service,
+                GatewaySessionCatalogSearchService,
+            ):
+                app.state.session_catalog_search_service.assert_healthy()
+            if isinstance(
+                app.state.session_generator_scheduler,
+                SessionGeneratorScheduler,
+            ):
+                app.state.session_generator_scheduler.assert_healthy()
+            if isinstance(
+                app.state.workspace_runtime_controller,
+                GatewayWorkspaceRuntimeController,
+            ):
+                app.state.workspace_runtime_controller.assert_health_controller_healthy()
+            claim = pending_apply_claim
+            if claim is None:
+                raise RuntimeError("Gateway pending health proof 缺少 apply claim")
+            consumer_health_digests = _gateway_pending_consumer_health_digests(
+                app,
+                generation=startup_generation,
+                fencing_token_digest=(
+                    runtime_fencing_token_digest(claim.fencing_token) or ""
+                ),
+            )
+            health_proof = gateway_config_reload.build_pending_restart_health_proof(
+                candidate_ref=startup_candidate_ref,
+                generation=startup_generation,
+                consumer_health_digests=consumer_health_digests,
+            )
+            runtime_generation_record = gateway_state.record_gateway_runtime_generation(
+                generation_id=startup_generation,
+                process_id=os.getpid(),
+                loaded_source="pending",
+                candidate_id=pending_candidate_id,
+                active_revision=active_snapshot.active_revision,
+                pending_revision=pending_revision,
+                candidate_digest=(
+                    pending.candidate_digest if pending is not None else None
+                ),
+                effective_digest=gateway_config.revision,
+                secret_binding_digest=secret_binding_digest,
+                fencing_token=claim.fencing_token,
+                listener_state="reserved",
+                state="healthy",
+                health_proof=health_proof,
+            )
+            try:
+                gateway_config_reload.record_pending_restart_proof(
+                    candidate_ref=startup_candidate_ref,
+                    health_proof=health_proof,
+                    runtime_generation_id=startup_generation,
+                    old_generation_id=intent.old_generation,
+                )
+                pending_promotion_committed = True
+                runtime_generation_record = (
+                    gateway_state.get_gateway_runtime_generation(
+                        generation_id=startup_generation
+                    )
+                )
+                if runtime_generation_record is None:
+                    raise RuntimeError(
+                        "Gateway pending promotion 后缺少 runtime generation"
+                    )
+            except Exception:
+                if pending_promotion_committed:
+                    raise
+                if runtime_generation_record is not None:
+                    try:
+                        gateway_state.close_gateway_runtime_generation(
+                            generation_id=startup_generation,
+                            expected_states=("starting", "healthy"),
+                            fencing_token=claim.fencing_token,
+                        )
+                    except Exception as rollback_error:
+                        raise RuntimeError(
+                            "Gateway pending generation 失败，且新 generation "
+                            "关闭失败: "
+                            f"{rollback_error}"
+                        ) from rollback_error
+                raise
+        else:
+            runtime_generation_record = gateway_state.update_gateway_runtime_generation(
+                generation_id=startup_generation,
+                expected_state="starting",
+                state="active",
+                listener_state="serving",
+            )
         yield
+    except Exception as error:
+        recovery_error: Exception | None = None
+        if startup_candidate_ref and not pending_promotion_committed:
+            try:
+                gateway_config_reload.record_pending_restart_failure(
+                    candidate_ref=startup_candidate_ref,
+                    target_generation=startup_generation,
+                    fencing_token=startup_fencing_token or "",
+                    error=f"Gateway pending generation 启动失败: {error}",
+                )
+            except Exception as failure_error:
+                recovery_error = failure_error
+        if runtime_generation_record is not None:
+            runtime_generation_record = gateway_state.update_gateway_runtime_generation(
+                generation_id=startup_generation,
+                expected_state=runtime_generation_record.state,
+                state="failed",
+                listener_state="closed",
+            )
+        if recovery_error is not None:
+            raise RuntimeError(
+                "Gateway pending generation 启动失败，且恢复状态写入失败: "
+                f"{recovery_error}"
+            ) from recovery_error
+        raise
     finally:
+        if (
+            runtime_generation_record is not None
+            and runtime_generation_record.state
+            in {
+                "starting",
+                "healthy",
+                "active",
+            }
+        ):
+            if (
+                runtime_generation_record.state == "active"
+                and _should_preserve_gateway_generation_for_handoff(
+                    gateway_state=gateway_state,
+                    gateway_config_reload=gateway_config_reload,
+                    startup_candidate_ref=startup_candidate_ref,
+                    generation_id=startup_generation,
+                )
+            ):
+                runtime_generation_record = (
+                    gateway_state.update_gateway_runtime_generation(
+                        generation_id=startup_generation,
+                        expected_state="active",
+                        state="active",
+                        listener_state="draining",
+                    )
+                )
+            else:
+                gateway_state.update_gateway_runtime_generation(
+                    generation_id=startup_generation,
+                    expected_state=runtime_generation_record.state,
+                    state="closed",
+                    listener_state="closed",
+                )
         if active_runtime_restore_task is not None:
             active_runtime_restore_task.cancel()
         managed_runtime_restore_task.cancel()
@@ -571,17 +1487,33 @@ async def lifespan(app: FastAPI):
             shutdown_errors.append(error)
             logger.exception("Gateway 关闭 SSH 端口转发失败")
         logger.info("Gateway 正在关闭托管工作区运行时")
+        preserve_runtime_for_handoff = _should_preserve_gateway_generation_for_handoff(
+            gateway_state=gateway_state,
+            gateway_config_reload=gateway_config_reload,
+            startup_candidate_ref=startup_candidate_ref,
+            generation_id=startup_generation,
+        )
         try:
             registry.close(
-                preserve_browser_managers=(_preserve_browser_managers_on_shutdown()),
-                preserve_terminal_managers=(_preserve_terminal_managers_on_shutdown()),
-                preserve_workspace_backends=(
-                    _preserve_workspace_backends_on_shutdown()
-                ),
+                preserve_browser_managers=preserve_runtime_for_handoff,
+                preserve_terminal_managers=preserve_runtime_for_handoff,
+                preserve_workspace_backends=preserve_runtime_for_handoff,
             )
+            if (
+                preserve_runtime_for_handoff
+                and runtime_generation_record is not None
+                and runtime_generation_record.state == "active"
+            ):
+                gateway_state.update_gateway_runtime_generation(
+                    generation_id=startup_generation,
+                    expected_state="active",
+                    state="closed",
+                    listener_state="closed",
+                )
         except Exception as error:
             shutdown_errors.append(error)
             logger.exception("Gateway 关闭托管工作区运行时失败")
+        await gateway_config_reload.stop()
         gateway_state.close()
         if shutdown_errors:
             raise RuntimeError(
@@ -632,6 +1564,48 @@ def get_registry(request: Request) -> GatewayWorkspaceRegistry:
     if not isinstance(registry, GatewayWorkspaceRegistry):
         raise RuntimeError("Gateway registry 尚未初始化")
     return registry
+
+
+async def _wait_for_managed_runtime_restore_tasks(restore_tasks: object) -> None:
+    """等待托管 Workspace 恢复任务完成，并保留明确的超时状态。"""
+    if not isinstance(restore_tasks, dict):
+        return
+    pending_tasks = {
+        task
+        for task in restore_tasks.values()
+        if isinstance(task, asyncio.Task) and not task.done()
+    }
+    logger.info(
+        "Gateway 等待托管 Workspace 恢复: task_count=%s, pending_count=%s",
+        len(restore_tasks),
+        len(pending_tasks),
+    )
+    for task in pending_tasks:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=120.0)
+        except TimeoutError:
+            # 启动恢复超时不是隐藏错误；list_dtos 会返回 connection_error，
+            # 让调用方看到工作区仍未就绪以及具体的恢复状态。
+            return
+
+
+async def _wait_for_managed_runtime_restores(request: Request) -> None:
+    """让工作区列表在启动恢复完成后反映真实的运行时状态。"""
+    restore_tasks = getattr(
+        getattr(request.app, "state", None),
+        "managed_runtime_restore_tasks",
+        {},
+    )
+    await _wait_for_managed_runtime_restore_tasks(restore_tasks)
+
+
+def get_gateway_config_reload_service(
+    request: Request,
+) -> GatewayConfigReloadService:
+    service = getattr(request.app.state, "gateway_config_reload", None)
+    if not isinstance(service, GatewayConfigReloadService):
+        raise RuntimeError("Gateway 配置重载服务尚未初始化")
+    return service
 
 
 def get_user_access_service(request: Request) -> UserAccessService:
@@ -800,9 +1774,36 @@ async def restart_development_runtime(
     command = resolve_development_restart_command()
     if command is None:
         raise HTTPException(status_code=409, detail="当前不是可重启的源码开发环境")
+    restart_environment: dict[str, str] = {}
+    gateway_state = getattr(app.state, "gateway_state", None)
+    gateway_reload = getattr(app.state, "gateway_config_reload", None)
+    if isinstance(gateway_state, GatewayStateStore) and isinstance(
+        gateway_reload, GatewayConfigReloadService
+    ):
+        candidate_ref = gateway_reload.status().candidate_ref
+        if candidate_ref:
+            intent = gateway_state.get_gateway_restart_intent(
+                candidate_ref=candidate_ref
+            )
+            if intent is None or intent.state not in {"pending", "applying"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Gateway pending restart intent 已不可恢复",
+                )
+            if intent.expires_at is None or intent.expires_at <= datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Gateway pending restart intent 已过期，请先显式 retry",
+                )
+            restart_environment = {
+                "BOXTEAM_CONFIG_CANDIDATE_REF": intent.candidate_ref,
+                "BOXTEAM_CONFIG_GENERATION": intent.target_generation,
+                "BOXTEAM_CONFIG_FENCING_TOKEN": intent.fencing_token,
+            }
     helper_process_id = start_development_restart(
         command,
         log_path=_gateway_root() / "logs" / "development-restart.log",
+        environment=restart_environment,
     )
     return APIResponse(
         data=DevelopmentRuntimeRestartDTO(
@@ -825,7 +1826,10 @@ async def gateway_config_sources(
     try:
         gateway_state = getattr(app.state, "gateway_state", None)
         config = (
-            load_gateway_config(state_store=gateway_state)
+            load_gateway_config(
+                state_store=gateway_state,
+                persist_migrations=False,
+            )
             if isinstance(gateway_state, GatewayStateStore)
             else load_gateway_config()
         )
@@ -843,12 +1847,292 @@ async def gateway_config_sources(
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,
+                    source_key=source.source_key,
+                    presence=source.presence,
+                    layer_revision=source.layer_revision,
+                    layer_digest=source.layer_digest,
+                    source_generation=source.source_generation,
                 )
                 for source in config.source_details
             ],
+            policy_manifest=list(gateway_config_policy().policy_manifest()),
         ),
         request_id=request_id,
     )
+
+
+def _gateway_config_event_dto(event) -> GatewayConfigEventDTO:
+    return GatewayConfigEventDTO(
+        event_seq=event.event_seq,
+        event_id=event.event_id,
+        config_domain=event.config_domain,
+        candidate_id=event.candidate_id,
+        attempt_id=event.attempt_id,
+        apply_id=event.apply_id,
+        idempotency_key=event.idempotency_key,
+        commit_revision=event.commit_revision,
+        active_revision=event.active_revision,
+        pending_revision=event.pending_revision,
+        source=event.source,
+        result=event.result,
+        activation_scope=event.activation_scope,
+        changed_paths=list(event.changed_paths),
+        applied_paths=list(event.applied_paths),
+        deferred_paths=list(event.deferred_paths),
+        error=event.error,
+        occurred_at=event.occurred_at.isoformat(),
+    )
+
+
+@app.get(
+    "/api/gateway/config/reload-status",
+    response_model=APIResponse[GatewayConfigReloadStatusDTO],
+)
+async def gateway_config_reload_status(
+    request: Request,
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    status = get_gateway_config_reload_service(request).status()
+    return APIResponse(
+        data=GatewayConfigReloadStatusDTO(
+            available=True,
+            healthy=status.healthy,
+            revision=status.revision,
+            restart_required=status.restart_required,
+            reason=status.reason,
+            changed_sections=list(status.changed_sections),
+            last_error=status.last_error,
+            state=status.state,
+            active_revision=status.active_revision,
+            pending_revision=status.pending_revision,
+            candidate_id=status.candidate_id,
+            candidate_ref=status.candidate_ref,
+            attempt_id=status.attempt_id,
+            apply_id=status.apply_id,
+            layer_digests=status.layer_digests or {},
+            applied_paths=list(status.applied_paths),
+            deferred_paths=list(status.deferred_paths),
+        ),
+        request_id=request_id,
+    )
+
+
+@app.post(
+    "/api/gateway/config/retry-restart",
+    response_model=APIResponse[GatewayConfigReloadStatusDTO],
+)
+async def retry_gateway_config_restart(
+    request: Request,
+    candidate_ref: str = Query(..., min_length=1),
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    try:
+        status = get_gateway_config_reload_service(request).retry_pending_restart(
+            candidate_ref=candidate_ref,
+            requested_by=f"gateway-api:{request_id}",
+        )
+    except (ConfigConflictError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(
+        data=GatewayConfigReloadStatusDTO(
+            available=True,
+            healthy=status.healthy,
+            revision=status.revision,
+            restart_required=status.restart_required,
+            reason=status.reason,
+            changed_sections=list(status.changed_sections),
+            last_error=status.last_error,
+            state=status.state,
+            active_revision=status.active_revision,
+            pending_revision=status.pending_revision,
+            candidate_id=status.candidate_id,
+            candidate_ref=status.candidate_ref,
+            attempt_id=status.attempt_id,
+            apply_id=status.apply_id,
+            layer_digests=status.layer_digests or {},
+            applied_paths=list(status.applied_paths),
+            deferred_paths=list(status.deferred_paths),
+        ),
+        request_id=request_id,
+    )
+
+
+@app.post(
+    "/api/gateway/config/resolve-restart",
+    response_model=APIResponse[GatewayConfigReloadStatusDTO],
+)
+async def resolve_gateway_config_restart(
+    request: Request,
+    payload: GatewayConfigPendingHealthProofRequest,
+    candidate_ref: str = Query(..., min_length=1),
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    try:
+        status = get_gateway_config_reload_service(request).resolve_pending_restart(
+            candidate_ref=candidate_ref,
+            health_proof=payload.model_dump(exclude_none=True),
+        )
+    except (ConfigConflictError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(
+        data=GatewayConfigReloadStatusDTO(
+            available=True,
+            healthy=status.healthy,
+            revision=status.revision,
+            restart_required=status.restart_required,
+            reason=status.reason,
+            changed_sections=list(status.changed_sections),
+            last_error=status.last_error,
+            state=status.state,
+            active_revision=status.active_revision,
+            pending_revision=status.pending_revision,
+            candidate_id=status.candidate_id,
+            candidate_ref=status.candidate_ref,
+            attempt_id=status.attempt_id,
+            apply_id=status.apply_id,
+            layer_digests=status.layer_digests or {},
+            applied_paths=list(status.applied_paths),
+            deferred_paths=list(status.deferred_paths),
+        ),
+        request_id=request_id,
+    )
+
+
+@app.post(
+    "/api/gateway/config/discard-restart",
+    response_model=APIResponse[GatewayConfigReloadStatusDTO],
+)
+async def discard_gateway_config_restart(
+    request: Request,
+    payload: GatewayConfigPendingDiscardRequest,
+    candidate_ref: str = Query(..., min_length=1),
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    try:
+        status = get_gateway_config_reload_service(request).discard_pending_restart(
+            candidate_ref=candidate_ref,
+            expected_active_revision=payload.expected_active_revision,
+            expected_active_digest=payload.expected_active_digest,
+        )
+    except (ConfigConflictError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(
+        data=GatewayConfigReloadStatusDTO(
+            available=True,
+            healthy=status.healthy,
+            revision=status.revision,
+            restart_required=status.restart_required,
+            reason=status.reason,
+            changed_sections=list(status.changed_sections),
+            last_error=status.last_error,
+            state=status.state,
+            active_revision=status.active_revision,
+            pending_revision=status.pending_revision,
+            candidate_id=status.candidate_id,
+            candidate_ref=status.candidate_ref,
+            attempt_id=status.attempt_id,
+            apply_id=status.apply_id,
+            layer_digests=status.layer_digests or {},
+            applied_paths=list(status.applied_paths),
+            deferred_paths=list(status.deferred_paths),
+        ),
+        request_id=request_id,
+    )
+
+
+@app.get(
+    "/api/gateway/config/events",
+    response_model=APIResponse[GatewayConfigEventsDTO],
+)
+async def gateway_config_events(
+    request: Request,
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=2000),
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    service = get_gateway_config_reload_service(request)
+    try:
+        events = service.list_events(after=after, limit=limit)
+    except ConfigEventCursorGoneError as error:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "snapshot_required",
+                "message": str(error),
+                "first_available": error.first_available,
+            },
+        ) from error
+    return APIResponse(
+        data=GatewayConfigEventsDTO(
+            cursor=events[-1].event_seq if events else after,
+            events=[_gateway_config_event_dto(event) for event in events],
+            has_more=len(events) == limit,
+        ),
+        request_id=request_id,
+    )
+
+
+@app.get(
+    "/api/gateway/config/events/stream",
+    response_class=StreamingResponse,
+)
+async def gateway_config_event_stream(
+    request: Request,
+    after: int = Query(default=0, ge=0),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    _: str = Depends(verify_gateway_token),
+):
+    if last_event_id is not None:
+        try:
+            header_cursor = int(last_event_id)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400, detail="Last-Event-ID 必须是整数游标"
+            ) from error
+        if after and after != header_cursor:
+            raise HTTPException(status_code=409, detail="after 与 Last-Event-ID 不一致")
+        after = header_cursor
+    service = get_gateway_config_reload_service(request)
+    try:
+        service.ensure_event_cursor(after=after)
+    except ConfigEventCursorGoneError as error:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "snapshot_required",
+                "message": str(error),
+                "first_available": error.first_available,
+            },
+        ) from error
+
+    async def event_generator():
+        cursor = after
+        consumer_id = f"gateway-config-sse:{uuid4().hex}"
+        while not await request.is_disconnected():
+            events = service.claim_events_for_consumer(
+                after=cursor,
+                consumer_id=consumer_id,
+                limit=2000,
+            )
+            if events:
+                for event in events:
+                    cursor = event.event_seq
+                    dto = _gateway_config_event_dto(event)
+                    yield f"id: {cursor}\nevent: config\ndata: {dto.model_dump_json()}\n\n"
+                    service.mark_event_delivered_for_consumer(
+                        event_id=event.event_id,
+                        consumer_id=consumer_id,
+                    )
+            else:
+                yield ": config-heartbeat\n\n"
+                await asyncio.sleep(1)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/api/gateway/auth/local-credential")
@@ -926,7 +2210,9 @@ async def create_gateway_user(
     except (OSError, ValueError) as error:
         # 用户记录没有租约，创建 profile 失败时可以安全回滚，避免产生半成品用户。
         service.delete_user(user.user_id)
-        raise HTTPException(status_code=500, detail=f"用户 profile 初始化失败: {error}") from error
+        raise HTTPException(
+            status_code=500, detail=f"用户 profile 初始化失败: {error}"
+        ) from error
     return APIResponse(
         data=GatewayUserDTO(
             user_id=user.user_id,
@@ -961,11 +2247,16 @@ async def delete_gateway_user(
     try:
         profiles.delete_user(user_id=user_id)
     except OSError as error:
-        raise HTTPException(status_code=500, detail=f"用户 profile 删除失败: {error}") from error
+        raise HTTPException(
+            status_code=500, detail=f"用户 profile 删除失败: {error}"
+        ) from error
     return APIResponse(data={"user_id": user_id}, request_id=request_id)
 
 
-@app.post("/api/gateway/users/{user_id}/access", response_model=APIResponse[GatewayUserAccessDTO])
+@app.post(
+    "/api/gateway/users/{user_id}/access",
+    response_model=APIResponse[GatewayUserAccessDTO],
+)
 async def acquire_gateway_user(
     user_id: str,
     payload: AcquireGatewayUserRequest,
@@ -999,7 +2290,10 @@ async def acquire_gateway_user(
     )
 
 
-@app.post("/api/gateway/users/{user_id}/takeover", response_model=APIResponse[GatewayUserAccessDTO])
+@app.post(
+    "/api/gateway/users/{user_id}/takeover",
+    response_model=APIResponse[GatewayUserAccessDTO],
+)
 async def takeover_gateway_user(
     user_id: str,
     payload: AcquireGatewayUserRequest,
@@ -1047,10 +2341,15 @@ async def acquire_gateway_guest(
 async def current_gateway_user(
     request: Request,
     response: Response,
-    _: str = Depends(verify_gateway_token),
+    x_local_token: str | None = Header(default=None),
     request_id: str = Depends(get_request_id),
     service: UserAccessService = Depends(get_user_access_service),
 ):
+    # 首次页面加载会在拿到本地凭据前探测当前用户；本机没有 cookie 时应直接
+    # 建立游客态，而不是让浏览器产生一个无意义的 401 资源错误。若调用方
+    # 主动带 token，仍必须经过同一凭据校验，不能借此放宽已认证请求。
+    if x_local_token is not None and x_local_token != get_gateway_local_token():
+        raise HTTPException(status_code=401, detail="invalid local token")
     context = service.resolve_cookie(request.cookies.get(USER_ACCESS_COOKIE_NAME))
     if context is None:
         # 本机 Web 首次加载默认进入游客态，避免业务初始化先看到一次无意义的 401。
@@ -1062,7 +2361,10 @@ async def current_gateway_user(
     )
 
 
-@app.post("/api/gateway/users/current/heartbeat", response_model=APIResponse[GatewayUserAccessDTO])
+@app.post(
+    "/api/gateway/users/current/heartbeat",
+    response_model=APIResponse[GatewayUserAccessDTO],
+)
 async def heartbeat_gateway_user(
     request: Request,
     _: str = Depends(verify_gateway_token),
@@ -1170,6 +2472,7 @@ async def put_gateway_user_view_state(
 
 @app.get("/api/gateway/workspaces", response_model=APIResponse[GatewayWorkspaceListDTO])
 async def list_workspaces(
+    request: Request,
     check_health: bool = Query(
         default=True,
         description="是否探测所有工作区及其附属服务的健康状态",
@@ -1177,6 +2480,7 @@ async def list_workspaces(
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
+    await _wait_for_managed_runtime_restores(request)
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
@@ -1191,9 +2495,15 @@ async def list_workspaces(
     response_model=APIResponse[FederationProtocolManifestDTO],
 )
 async def federation_manifest(
+    request: Request,
     _: object = Depends(verify_federation_token),
     request_id: str = Depends(get_request_id),
 ):
+    gateway_state = getattr(request.app.state, "gateway_state", None)
+    if not isinstance(gateway_state, GatewayStateStore):
+        raise RuntimeError("Gateway state 尚未初始化")
+    config_status = get_gateway_config_reload_service(request).status()
+    _, config_event_cursor = gateway_state.config_event_bounds(config_domain="gateway")
     return APIResponse(
         data=FederationProtocolManifestDTO(
             protocol_version=FEDERATION_PROTOCOL_VERSION,
@@ -1206,6 +2516,10 @@ async def federation_manifest(
                 "managed_backend_restart",
                 "managed_workspace_admin",
             ],
+            config_event_cursor=config_event_cursor,
+            config_reload_state=config_status.state,
+            config_reload_restart_required=config_status.restart_required,
+            config_reload_candidate_ref=config_status.candidate_ref,
         ),
         request_id=request_id,
     )
@@ -1977,6 +3291,7 @@ async def add_local_workspace(
                 root_path=str(workspace_root),
                 backend_url=backend_url,
                 connection_kind="local",
+                owner="manual",
                 managed=False,
             ),
             runtime=WorkspaceRuntime(service_urls={"workspace_api": backend_url}),
@@ -2339,7 +3654,7 @@ async def remove_workspace(
 ):
     try:
         await port_forward_manager.remove_workspace(workspace_id)
-        registry.remove(workspace_id)
+        registry.remove(workspace_id, owner="manual_crud")
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except KeyError as error:

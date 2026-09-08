@@ -10,8 +10,6 @@ param(
         "js-platform",
         "backend-js",
         "web-build",
-        "webview-build",
-        "extension",
         "full-python",
         "package-windows-x64",
         "verify-windows-x64-cross",
@@ -120,7 +118,7 @@ $windowsRuntimeRoot = Join-Path $env:LOCALAPPDATA "boxteam-windows"
 New-Item -ItemType Directory -Force -Path $windowsRuntimeRoot | Out-Null
 $env:UV_PROJECT_ENVIRONMENT = Join-Path $windowsRuntimeRoot "venv"
 $env:UV_LINK_MODE = "copy"
-$localModules = @("runtime", "python-unit", "python-static", "gateway-unit", "terminal-powershell", "dev-windows", "js-platform", "backend-js", "web-build", "webview-build", "extension", "full-python", "package-windows-x64", "verify-windows-x64-cross", "verify-windows-installer")
+$localModules = @("runtime", "python-unit", "python-static", "gateway-unit", "terminal-powershell", "dev-windows", "js-platform", "backend-js", "web-build", "full-python", "package-windows-x64", "verify-windows-x64-cross", "verify-windows-installer")
 $projectRoot = if ($localModules -contains $Module) {
     $localRoot = Join-Path $windowsRuntimeRoot "source"
     if (-not (Test-Path -LiteralPath $localRoot)) {
@@ -281,8 +279,6 @@ switch ($Module) {
     "js-platform" { Invoke-Native "bun" @("test", "scripts/cross-platform-development-target.test.mjs") }
     "backend-js" { Invoke-Native "bun" @("test", "src/shared", "src/workspace-services/browser", "src/workspace-services/terminal") }
     "web-build" { Invoke-Native "bun" @("run", "--cwd", "src/clients/web", "build") }
-    "webview-build" { Invoke-Native "bun" @("run", "--cwd", "src/webview-ui", "build") }
-    "extension" { Invoke-Native "bun" @("run", "test:extension") }
     "full-python" { Invoke-Native "uv" @("run", "pytest") }
     "package-windows-x64" {
         $pythonCacheRoot = Join-Path $env:LOCALAPPDATA "boxteam-windows\packaging-cache\python"

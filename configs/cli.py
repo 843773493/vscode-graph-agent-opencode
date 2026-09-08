@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from app.core.path_utils import resolve_boxteam_home
 from app.core.storage_migration import migrate_user_storage_layout
+from configs.diagnostics import diagnose_configuration
 from configs.gateway_development_assets import install_gateway_development_assets
 from configs.installer import (
     install_source_development_configuration,
@@ -92,7 +93,13 @@ def main() -> None:
     parser.add_argument(
         "action",
         nargs="?",
-        choices=("initialize", "install-source-development", "migrate", "doctor"),
+        choices=(
+            "initialize",
+            "install-source-development",
+            "migrate",
+            "doctor",
+            "diagnose",
+        ),
         default="initialize",
     )
     parser.add_argument("--project-root", type=Path)
@@ -113,6 +120,46 @@ def main() -> None:
         if args.project_root is not None
         else None
     )
+    if args.action in {"doctor", "diagnose"}:
+        gateway_schema_source, workspace_schema_source = _layout_schema_sources(
+            project_root
+        )
+        print(
+            json.dumps(
+                diagnose_configuration(
+                    config_root=config_root,
+                    gateway_inline_path=resolve_config_resource_source(
+                        "gateway_inline.jsonc", project_root=project_root
+                    ),
+                    gateway_schema_path=(
+                        config_root / "gateway_schema.jsonc"
+                        if (config_root / "gateway_schema.jsonc").is_file()
+                        else gateway_schema_source
+                    ),
+                    workspace_inline_path=resolve_config_resource_source(
+                        "workspace_inline.jsonc", project_root=project_root
+                    ),
+                    workspace_schema_path=(
+                        config_root / "workspace_schema.jsonc"
+                        if (config_root / "workspace_schema.jsonc").is_file()
+                        else workspace_schema_source
+                    ),
+                    gateway_sqlite_path=(
+                        Path(os.environ["BOXTEAM_GATEWAY_ROOT"])
+                        if os.environ.get("BOXTEAM_GATEWAY_ROOT")
+                        else boxteam_home / "state" / "gateway"
+                    )
+                    / "gateway.sqlite",
+                    workspace_root=(
+                        args.workspace.expanduser().resolve()
+                        if args.workspace is not None
+                        else None
+                    ),
+                ),
+                ensure_ascii=False,
+            )
+        )
+        return
     if args.action == "install-source-development":
         if project_root is None:
             raise ValueError("安装源码开发配置必须提供 --project-root")

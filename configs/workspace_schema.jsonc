@@ -21,6 +21,16 @@
 
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://boxteam.dev/schemas/workspace-config-v1.json",
+  "x-boxteam-config-domain": "workspace",
+  "x-boxteam-policy-manifest": [
+    { "pattern": "/ui/*", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
+    { "pattern": "/runtime/agent/run/timeout_seconds", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/runtime/agent/run/mode", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
+    { "pattern": "/runtime/auxiliary_services/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/runtime/gateway/connection/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
+    { "pattern": "/logger", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null }
+  ],
   "title": "BoxTeam Workspace Config Schema",
   "type": "object",
   "additionalProperties": false,

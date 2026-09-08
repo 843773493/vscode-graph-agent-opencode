@@ -9,14 +9,11 @@ from typing import Literal
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 
-
 _SESSION_RESOURCE = re.compile(r"^boxteam://session/([^/]+)$")
 _WORKSPACE_SESSION_RESOURCE = re.compile(
     r"^boxteam://workspace/([^/]+)/session/([^/]+)$"
 )
-_WORKSPACE_SESSIONS_RESOURCE = re.compile(
-    r"^boxteam://workspace/([^/]+)/sessions$"
-)
+_WORKSPACE_SESSIONS_RESOURCE = re.compile(r"^boxteam://workspace/([^/]+)/sessions$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,11 +34,18 @@ def parse_session_context_resource(resource: str) -> ParsedSessionContextResourc
     if separator and not (
         selector == "information"
         or (
+            selector.startswith("assembly=")
+            and bool(selector.removeprefix("assembly="))
+            and not any(character in selector for character in "#/?\\")
+        )
+        or (
             selector.startswith("record=")
             and selector.removeprefix("record=").isdigit()
         )
     ):
-        raise ValueError("resource locator 只支持 #record={index} 或 #information")
+        raise ValueError(
+            "resource locator 只支持 #record={index}、#information 或 #assembly={id}"
+        )
     match = _SESSION_RESOURCE.fullmatch(base)
     if match is not None:
         return ParsedSessionContextResource(
@@ -85,6 +89,15 @@ def validate_session_context_read_view(
     resource: ParsedSessionContextResource,
     view: str,
 ) -> None:
+    is_assembly = resource.selector is not None and resource.selector.startswith(
+        "assembly="
+    )
+    if (view == "assembly") != is_assembly:
+        raise ValueError(
+            "assembly view 必须与显式 #assembly=<assembly_id> selector 一起使用"
+        )
+    if view == "assemblies" and (resource.kind != "session" or resource.selector):
+        raise ValueError("assemblies view 只接受 session 资源根")
     if resource.kind == "workspace_sessions" and view != "inventory":
         raise ValueError("workspace sessions 资源只支持 inventory view")
     if resource.kind == "session" and view == "inventory":
@@ -145,7 +158,7 @@ class SessionContextCursorCodec:
         ) as error:
             raise ValueError("cursor 格式无效") from error
         if not isinstance(payload, dict):
-            raise ValueError("cursor payload 必须是对象")
+            raise TypeError("cursor payload 必须是对象")
         cursor_revision = payload.get("revision")
         if cursor_revision != revision:
             raise SessionContextRevisionChangedError(

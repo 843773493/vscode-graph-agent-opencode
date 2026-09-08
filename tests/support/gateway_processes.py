@@ -105,8 +105,9 @@ def start_gateway_process(
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_HOME"] = str(boxteam_home)
+    # 测试 Gateway 的全局状态必须跟随隔离的 BOXTEAM_HOME，不能继承宿主环境的路径。
+    env.pop("BOXTEAM_GATEWAY_ROOT", None)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
-    env["BOXTEAM_GATEWAY_ROOT"] = str(workspace_root / ".boxteam" / "gateway")
     env["BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
     if _is_running_backend(default_backend_url):
@@ -117,9 +118,8 @@ def start_gateway_process(
     if node_executable is None:
         raise RuntimeError("Gateway 测试需要 PATH 中存在 node")
     env["BOXTEAM_NODE_BIN"] = node_executable
-    credential_path = (
-        workspace_root / ".boxteam" / "gateway" / "credentials" / "local-token"
-    )
+    gateway_root = boxteam_home / "state" / "gateway"
+    credential_path = gateway_root / "credentials" / "local-token"
     credential_path.parent.mkdir(parents=True, exist_ok=True)
     credential_path.write_text("local-dev-token\n", encoding="utf-8")
     credential_path.chmod(0o600)

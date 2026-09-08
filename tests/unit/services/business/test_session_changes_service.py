@@ -14,8 +14,8 @@ from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.session_changes_store import SessionChangesStore
+from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
 @pytest.fixture
@@ -25,6 +25,7 @@ def session_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionS
     return SessionService(
         config_service=ConfigService(),
         trace_event_store=TraceEventStore(sessions_dir=get_sessions_dir()),
+        workspace_id="00000000-0000-4000-8000-000000000001",
     )
 
 

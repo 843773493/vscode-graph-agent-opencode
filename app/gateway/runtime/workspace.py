@@ -11,11 +11,22 @@ class WorkspaceRuntime:
     service_urls: dict[GatewayServiceName, str]
     processes: dict[str, ManagedProcessHandle] = field(default_factory=dict)
     backend_debug_port: int | None = None
+    gateway_generation: str | None = None
 
     def set_process(self, name: str, process: ManagedProcessHandle) -> None:
         if name in self.processes:
             raise ValueError(f"工作区运行时服务已存在: {name}")
         self.processes[name] = process
+
+    def assert_healthy(self) -> None:
+        """确认运行时服务地址和 Gateway 所有的进程仍可服务。"""
+
+        for service, url in self.service_urls.items():
+            if not isinstance(url, str) or not url.strip():
+                raise RuntimeError(f"运行时服务地址为空: service={service}")
+        for name, process in self.processes.items():
+            if not process.is_alive():
+                raise RuntimeError(f"运行时进程已退出: process={name}")
 
     def close_process(self, name: str, *, timeout_seconds: float = 8) -> None:
         process = self.processes.pop(name, None)

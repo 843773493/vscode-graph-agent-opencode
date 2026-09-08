@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
@@ -110,10 +110,18 @@ def _proxy_response_headers(response: httpx.Response) -> dict[str, str]:
     }
 
 
-async def _stream_response(response: httpx.Response) -> AsyncIterator[bytes]:
-    async for chunk in response.aiter_bytes():
-        yield chunk
-    await response.aclose()
+async def _stream_response(
+    response: httpx.Response,
+    on_close: Callable[[], None],
+) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in response.aiter_bytes():
+            yield chunk
+    finally:
+        try:
+            await response.aclose()
+        finally:
+            on_close()
 
 
 @router.api_route(
@@ -143,22 +151,34 @@ async def proxy_auxiliary_http(
             status_code=400,
             detail="bounded federation 禁止代理嵌套远程辅助服务",
         )
+    client = _http_client(request.app)
+    registry.acquire_route_reference(workspace_id, streaming=False)
+    route_reference_released = False
+
+    def release_route_reference() -> None:
+        nonlocal route_reference_released
+        if route_reference_released:
+            return
+        route_reference_released = True
+        registry.release_route_reference(workspace_id, streaming=False)
+
     try:
         service_url = registry.resolve_service_url(workspace_id, service)
     except (LookupError, ValueError) as error:
+        release_route_reference()
         raise HTTPException(status_code=503, detail=str(error)) from error
     target_url = f"{service_url.rstrip('/')}/{path}"
-    client = _http_client(request.app)
-    forwarded = client.build_request(
-        request.method,
-        target_url,
-        params=request.query_params,
-        content=await request.body(),
-        headers=_proxy_request_headers(request, target),
-    )
     try:
+        forwarded = client.build_request(
+            request.method,
+            target_url,
+            params=request.query_params,
+            content=await request.body(),
+            headers=_proxy_request_headers(request, target),
+        )
         response = await client.send(forwarded, stream=True)
     except httpx.RequestError as error:
+        release_route_reference()
         raise HTTPException(
             status_code=502,
             detail=(
@@ -166,17 +186,25 @@ async def proxy_auxiliary_http(
                 f"service={service}: {error}"
             ),
         ) from error
+    except BaseException:
+        release_route_reference()
+        raise
     media_type = response.headers.get("content-type")
     if media_type and "text/event-stream" in media_type:
         return StreamingResponse(
-            _stream_response(response),
+            _stream_response(response, release_route_reference),
             status_code=response.status_code,
             media_type=media_type,
             headers=_proxy_response_headers(response),
         )
-    content = await response.aread()
-    headers = _proxy_response_headers(response)
-    await response.aclose()
+    try:
+        content = await response.aread()
+        headers = _proxy_response_headers(response)
+    finally:
+        try:
+            await response.aclose()
+        finally:
+            release_route_reference()
     return Response(
         content=content,
         status_code=response.status_code,
@@ -240,26 +268,40 @@ async def _proxy_auxiliary_websocket(
                 raise PermissionError("bounded federation 禁止代理嵌套远程辅助服务")
         elif websocket.query_params.get("token") != get_gateway_local_token():
             raise PermissionError("invalid local token")
-        service_url = registry.resolve_service_url(workspace_id, service)
     except (LookupError, PermissionError, ValueError) as error:
         await websocket.close(code=1008, reason=str(error)[:120])
         return
     except RuntimeError as error:
         await websocket.close(code=1011, reason=str(error)[:120])
         return
-    await websocket.accept()
-    target_url = _websocket_target(service_url, socket_path)
-    upstream_headers: dict[str, str] = {}
-    if target.connection_kind == "remote_gateway":
-        connection_id = target.remote_gateway_connection_id
-        if connection_id is None:
-            await websocket.close(code=1011, reason="远程投影工作区缺少连接")
+    registry.acquire_route_reference(workspace_id, streaming=True)
+    route_reference_released = False
+
+    def release_route_reference() -> None:
+        nonlocal route_reference_released
+        if route_reference_released:
             return
-        credential = FederationCredentialStore(
-            storage_path=get_gateway_root() / "credentials" / "federation.json"
-        ).get(connection_id)
-        upstream_headers["X-BoxTeam-Federation-Token"] = credential.token
+        route_reference_released = True
+        registry.release_route_reference(workspace_id, streaming=True)
+
     try:
+        try:
+            service_url = registry.resolve_service_url(workspace_id, service)
+        except (LookupError, ValueError) as error:
+            await websocket.close(code=1008, reason=str(error)[:120])
+            return
+        await websocket.accept()
+        target_url = _websocket_target(service_url, socket_path)
+        upstream_headers: dict[str, str] = {}
+        if target.connection_kind == "remote_gateway":
+            connection_id = target.remote_gateway_connection_id
+            if connection_id is None:
+                await websocket.close(code=1011, reason="远程投影工作区缺少连接")
+                return
+            credential = FederationCredentialStore(
+                storage_path=get_gateway_root() / "credentials" / "federation.json"
+            ).get(connection_id)
+            upstream_headers["X-BoxTeam-Federation-Token"] = credential.token
         browser_stream = service == "browser_manager"
         async with connect(
             target_url,
@@ -285,6 +327,8 @@ async def _proxy_auxiliary_websocket(
         return
     except Exception as error:
         await websocket.close(code=1011, reason=str(error)[:120])
+    finally:
+        release_route_reference()
 
 
 @router.websocket(

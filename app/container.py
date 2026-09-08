@@ -21,9 +21,10 @@ from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import (
     get_session_path_resolver,
+    get_user_config_root,
     get_workspace_root,
 )
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
@@ -71,6 +72,7 @@ from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
 )
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.services.infrastructure.config import WorkspaceSourceOwner
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.context_history_store import ContextHistoryStore
 from app.services.infrastructure.file_tree_settings_service import (
@@ -95,6 +97,9 @@ from app.services.infrastructure.pending_request_store import PendingRequestStor
 from app.services.infrastructure.resource_manager import ResourceManager
 from app.services.infrastructure.rollout_checkpoint_runtime import (
     RolloutCheckpointRuntime,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_attachment_store import SessionAttachmentStore
@@ -254,6 +259,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 @dataclass(slots=True)
 class AppContainer:
     config_service: ConfigService
+    workspace_source_owner: WorkspaceSourceOwner
     agent_service: AgentService
     artifact_service: ArtifactService
     event_service: EventService
@@ -313,6 +319,10 @@ def build_app_container(
     )
     resolved_boxteam_root = resolved_workspace_root / ".boxteam"
     resolved_sessions_root = resolved_boxteam_root / "sessions"
+    workspace_source_owner = WorkspaceSourceOwner(
+        path=get_user_config_root() / "workspace-source.sqlite",
+    )
+    workspace_id = load_or_create_workspace_id(resolved_workspace_root)
     workspace_activity_service = WorkspaceActivityService(
         workspace_root=resolved_workspace_root,
     )
@@ -335,6 +345,12 @@ def build_app_container(
     config_service = ConfigService(
         workspace_root=resolved_workspace_root,
         workspace_state_store=workspace_activity_service.store,
+        source_owner=workspace_source_owner,
+        source_owner_workspace_id=workspace_id,
+    )
+    workspace_service = WorkspaceService(
+        config_service=config_service,
+        workspace_root=resolved_workspace_root,
     )
     terminal_manager_client = TerminalManagerClient(config_service=config_service)
     browser_manager_client = BrowserManagerClient(config_service=config_service)
@@ -361,10 +377,12 @@ def build_app_container(
     message_service = MessageService(
         checkpointer=checkpointer,
         attachment_store=session_attachment_store,
+        canonical_item_reader=checkpointer.read_canonical_items,
     )
     session_service = SessionService(
         config_service=config_service,
         trace_event_store=trace_event_store,
+        workspace_id=workspace_service.workspace_id,
         path_resolver=session_path_resolver,
         fork_relationship_checker=checkpointer,
     )
@@ -383,6 +401,7 @@ def build_app_container(
     session_context_query_service = SessionContextQueryService(
         message_source=message_service,
         session_lookup=session_service,
+        assembly_source=checkpointer,
     )
     session_target_resolver = SessionTargetResolver(
         session_service=session_service,
@@ -444,6 +463,7 @@ def build_app_container(
         job_executor=job_executor,
         pending_request_store=pending_request_store,
         job_timeout_seconds=config_service.get_agent_run_timeout_seconds(),
+        job_timeout_seconds_provider=config_service.get_agent_run_timeout_seconds,
         terminal_status_writer=checkpointer,
     )
     session_service.bind_job_service(job_service)
@@ -517,6 +537,8 @@ def build_app_container(
     artifact_service = ArtifactService()
     event_service = EventService(bus=job_event_bus)
     runtime_service = RuntimeService(
+        workspace_id=workspace_service.workspace_id,
+        workspace_root=resolved_workspace_root,
         job_service=job_service,
         background_task_registry=background_task_registry,
         trace_event_store=trace_event_store,
@@ -564,7 +586,6 @@ def build_app_container(
         provider_registry=session_resource_provider_registry,
     )
     session_catalog_service.bind_session_resource_service(session_resource_service)
-    workspace_service = WorkspaceService(config_service=config_service)
     workspace_file_watch_service = WorkspaceFileWatchService(
         workspace_root=resolved_workspace_root,
     )
@@ -619,6 +640,7 @@ def build_app_container(
     )
     return AppContainer(
         config_service=config_service,
+        workspace_source_owner=workspace_source_owner,
         agent_service=agent_service,
         artifact_service=artifact_service,
         event_service=event_service,

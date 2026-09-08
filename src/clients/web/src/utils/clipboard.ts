@@ -47,6 +47,48 @@ export async function copyTextToClipboard(text: string): Promise<void> {
   }
 }
 
+/**
+ * 在用户点击仍然有效时启动剪贴板写入，内容本身可以异步生成。
+ * 浏览器会在 ClipboardItem 内部等待文本 Promise，避免网络请求结束后
+ * 才调用 Clipboard API 导致用户手势失效。
+ */
+export async function copyTextToClipboardFromPromise(
+  textPromise: Promise<string>,
+): Promise<void> {
+  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+    let resolvedText: string | null = null;
+    const blobPromise = textPromise.then((text) => {
+      resolvedText = text;
+      return new Blob([text], { type: "text/plain" });
+    });
+    try {
+      const item = new ClipboardItem({ "text/plain": blobPromise });
+      await navigator.clipboard.write([item]);
+      lastWrittenText = resolvedText ?? await textPromise;
+      return;
+    } catch (clipboardError) {
+      const text = await textPromise;
+      try {
+        fallbackCopyText(text);
+        lastWrittenText = text;
+        return;
+      } catch (fallbackError) {
+        const clipboardMessage = clipboardError instanceof Error
+          ? clipboardError.message
+          : String(clipboardError);
+        const fallbackMessage = fallbackError instanceof Error
+          ? fallbackError.message
+          : String(fallbackError);
+        throw new Error(
+          `Clipboard API 失败：${clipboardMessage}；兼容复制失败：${fallbackMessage}`,
+        );
+      }
+    }
+  }
+
+  await copyTextToClipboard(await textPromise);
+}
+
 export async function readTextFromClipboard(): Promise<string> {
   let clipboardError: unknown = null;
   if (navigator.clipboard?.readText) {

@@ -151,6 +151,7 @@ export async function streamSessionMessageEvents(
   await consumeSseResponse(response, {
     signal: options.signal,
     onActivity: options.onActivity,
+    yieldBetweenEvents: true,
     events: {
       "*": defineSseEvent(
         (data, frame) => {

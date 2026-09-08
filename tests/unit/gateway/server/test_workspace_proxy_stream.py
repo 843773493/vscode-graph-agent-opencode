@@ -181,9 +181,6 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
         ),
-        runtime=WorkspaceRuntime(
-            service_urls={"workspace_api": "http://127.0.0.1:41001"}
-        ),
         activate=False,
     )
 
@@ -197,9 +194,6 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
                     root_path="/tmp/workspace",
                     backend_url="http://127.0.0.1:41002",
                     connection_kind="local",
-                ),
-                runtime=WorkspaceRuntime(
-                    service_urls={"workspace_api": "http://127.0.0.1:41002"}
                 ),
                 activate=False,
             )

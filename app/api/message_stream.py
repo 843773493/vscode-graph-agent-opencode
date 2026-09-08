@@ -223,6 +223,7 @@ async def stream_message_events(
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
             "X-Message-Stream-ID": writer.turn_stream_id,
             "X-Request-ID": request_id,
         },

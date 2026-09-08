@@ -14,6 +14,10 @@ from app.core.exceptions import NotFoundError
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_paths import SessionPathResolver, SessionPhysicalNode
+from app.core.workspace_identity import (
+    LEGACY_BACKEND_WORKSPACE_IDS,
+    validate_workspace_id,
+)
 from app.schemas.internal_v2.common import CursorPage
 from app.schemas.internal_v2.session import (
     DeleteSessionResultDTO,
@@ -47,20 +51,42 @@ class SessionService:
         *,
         config_service: ConfigService,
         trace_event_store: TraceEventStore,
+        workspace_id: str,
         path_resolver: SessionPathResolver | None = None,
         fork_relationship_checker: ForkRelationshipChecker | None = None,
     ):
+        self._workspace_id = validate_workspace_id(workspace_id)
         self._config_service = config_service
         self._trace_event_store = trace_event_store
         self._path_resolver = path_resolver or get_session_path_resolver()
         self._fork_relationship_checker = fork_relationship_checker
         self._path_resolver.initialize()
+        self._migrate_legacy_workspace_ids()
         self._job_service: JobServiceProtocol | None = None
         self._change_listeners: list[Callable[[str, str], None]] = []
 
     @property
     def path_resolver(self) -> SessionPathResolver:
         return self._path_resolver
+
+    @property
+    def workspace_id(self) -> str:
+        return self._workspace_id
+
+    def _migrate_legacy_workspace_ids(self) -> None:
+        """把已知固定后端 ID 的历史 manifest 迁移到当前工作区 UUID。"""
+
+        for node in self._path_resolver.list_authoritative_nodes():
+            if node.kind != "session":
+                continue
+            session_file = node.path / "session.json"
+            session = SessionDTO.model_validate(
+                json.loads(session_file.read_text(encoding="utf-8"))
+            )
+            if session.workspace_id not in LEGACY_BACKEND_WORKSPACE_IDS:
+                continue
+            session.workspace_id = self._workspace_id
+            self._write_session_file(session_file, session)
 
     def register_change_listener(self, listener: Callable[[str, str], None]) -> None:
         self._change_listeners.append(listener)
@@ -71,6 +97,15 @@ class SessionService:
     def _notify_changed(self, action: str, session_id: str) -> None:
         for listener in tuple(self._change_listeners):
             listener(action, session_id)
+
+    def _assert_workspace_binding(self, session: SessionDTO) -> None:
+        if session.workspace_id != self._workspace_id:
+            raise RuntimeError(
+                "会话与当前工作区后端标识不一致: "
+                f"session_id={session.session_id}, "
+                f"session_workspace_id={session.workspace_id}, "
+                f"backend_workspace_id={self._workspace_id}"
+            )
 
     @classmethod
     def _infer_created_title_source(
@@ -100,6 +135,7 @@ class SessionService:
         )
 
         session = SessionDTO.model_validate(data)
+        self._assert_workspace_binding(session)
         if session.current_provider_id is None:
             session.current_provider_id = (
                 self._config_service.resolve_agent_provider_id(session.current_agent_id)
@@ -128,6 +164,7 @@ class SessionService:
                 await asyncio.to_thread(session_file.read_text, encoding="utf-8")
             )
             session = SessionDTO.model_validate(data)
+            self._assert_workspace_binding(session)
             if session.current_provider_id is None:
                 session.current_provider_id = (
                     self._config_service.resolve_agent_provider_id(
@@ -140,6 +177,19 @@ class SessionService:
         paginated = sessions[skip : skip + limit]
 
         return SessionListResultDTO(items=paginated, total=len(sessions), cursor=None)
+
+    async def child_session_summary(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> tuple[int, list[str], bool]:
+        """读取有界的逻辑子会话摘要，不为诊断快照加载全部会话详情。"""
+        await self.get(session_id)
+        return self._path_resolver.child_session_summary(
+            session_id,
+            limit=limit,
+        )
 
     async def create(self, session: SessionCreateRequest) -> SessionDTO:
         return await self._create(
@@ -236,7 +286,7 @@ class SessionService:
         )
         await self._validate_parent_session(
             session_id=session_id,
-            workspace_id="ws_local",
+            workspace_id=self._workspace_id,
             parent_session_id=parent_session_id,
         )
 
@@ -259,7 +309,7 @@ class SessionService:
 
         session_data = SessionDTO(
             session_id=session_id,
-            workspace_id="ws_local",
+            workspace_id=self._workspace_id,
             title=title or "新会话",
             title_source=self._infer_created_title_source(
                 title,

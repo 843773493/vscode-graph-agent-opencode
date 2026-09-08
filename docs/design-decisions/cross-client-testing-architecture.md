@@ -5,7 +5,7 @@
 
 ## 1. 当前开发范围
 
-当前唯一开发、构建和验证的客户端是 `src/clients/web/`。Electron、React Native 和新的 VS Code 客户端只预留目录与依赖方向，都是 TODO；当前功能不需要同步到这些客户端，也不修改现存 `src/extension.js`、`src/backend/`、`src/webview/` 或 `src/webview-ui/`。
+当前唯一开发、构建和验证的客户端是 `src/clients/web/`。Electron、Electron renderer parity、React Native 和移动 Web parity 只预留目录与依赖方向，都是 TODO；当前功能不要求同步实现这些客户端。
 
 纯 Web 代码仍需考虑未来兼容性：跨进程协议和纯业务模型不得无故绑定浏览器全局对象。但兼容性只约束边界设计，不代表要提前编写 Electron preload、React Native adapter 或 VS Code bridge。
 
@@ -16,20 +16,17 @@ src/
 ├── clients/
 │   ├── shared/
 │   │   ├── core/                  # 纯 TypeScript；无 UI/平台运行时依赖
-│   │   └── web-ui/                # 可复用 React DOM 层
+│   │   ├── web-ui/                # 可复用桌面 React DOM 层
+│   │   └── mobile-web-ui/         # 可复用移动 React DOM 层
 │   ├── web/                        # 当前唯一维护的客户端
 │   ├── electron/                   # TODO
 │   ├── mobile/                     # TODO
-│   └── vscode/                     # TODO，现存实现尚未迁移
+│   ├── electron-web/               # TODO，Electron renderer 浏览器 parity
+│   └── mobile-web/                 # TODO，移动布局浏览器 parity
 ├── workspace-services/
 │   ├── browser/
 │   └── terminal/
-├── shared/                         # 跨进程协议、传输、常量
-├── extension.js                    # 阶段性保留的旧 VS Code 实现
-├── backend/
-├── webview/
-├── webview-ui/
-└── test/
+└── shared/                         # 跨进程协议、传输、常量
 ```
 
 依赖方向固定为：
@@ -68,7 +65,7 @@ src/clients/web
 - mini MCP、替代 Gateway 下游或替代网页服务；
 - 固定场景响应；
 - `page.route().fulfill()` 或修改产品依赖响应；
-- 模拟 Electron bridge、VS Code host；
+- 模拟 Electron bridge；
 - React Native Web 替代原生运行面。
 
 浏览器本身是真的、Gateway/后端大部分是真的，均不能抵消关键链路存在替身这一事实。
@@ -125,14 +122,15 @@ tests/
 └── unit/
 ```
 
-## 5. 四类客户端的验证面
+## 5. 五类客户端运行面的验证面
 
 | 产品客户端 | 当前状态 | 浏览器测试的含义 | 未来真实 E2E |
 |---|---|---|---|
 | 纯 Web | 正在开发 | 真实客户端运行面 | Node Playwright |
 | Electron | TODO | Web 组件 parity/Integration | Playwright Electron，真实 main/preload/renderer |
-| VS Code | 旧实现暂留，新增开发 TODO | Webview 预览/Integration | VS Code Extension Host |
-| React Native | TODO | RN Web parity/Integration | 真实模拟器或设备驱动 |
+| Electron renderer Web | TODO | 浏览器 parity/Integration | Playwright Electron，真实 renderer |
+| React Native | TODO | 移动 Web parity/Integration | 真实模拟器或设备驱动 |
+| Mobile Web | TODO | 移动布局 parity/Integration | 浏览器移动视口；不等同真机 |
 
 统一的是场景意图、资源生命周期、产物格式和结果状态，不是强迫所有平台使用同一种驱动语言。
 

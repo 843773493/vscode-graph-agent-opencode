@@ -19,7 +19,6 @@ from langchain_core.tools import BaseTool
 
 from app.agents.cache_preserving_summarization import (
     CachePreservingSummarizationToolMiddleware,
-    CompactConversationSchema,
     create_cache_preserving_summarization_middleware,
 )
 from app.agents.custom_tool_confirmation_middleware import (
@@ -146,9 +145,6 @@ def _build_summarization_middleware(
         summarization,
         system_prompt=COMPACT_CONVERSATION_SYSTEM_PROMPT,
     )
-    for tool in tool_middleware.tools:
-        if getattr(tool, "name", "") == "compact_conversation":
-            tool.args_schema = CompactConversationSchema
     return [
         summarization,
         tool_middleware,

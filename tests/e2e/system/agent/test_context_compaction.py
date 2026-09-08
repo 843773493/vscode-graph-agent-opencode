@@ -30,8 +30,10 @@ from app.agents.upstream_request_trace import (
 )
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from tests.support.api_waiters import wait_for_job_done
 
 

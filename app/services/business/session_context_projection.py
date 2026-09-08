@@ -4,10 +4,6 @@ import hashlib
 import json
 
 from app.prompting.validation import internal_prompt_metadata
-from app.agents.providers.litellm_content import (
-    reasoning_projection_rows,
-    visible_text as litellm_visible_text,
-)
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextInclude,
@@ -16,6 +12,10 @@ from app.schemas.internal_v2.session_context import (
     SessionContextReadResultDTO,
 )
 from app.services.business.session_context_resource import SessionContextCursorCodec
+from app.services.mapping.itemized.provider_history import reasoning_projection_rows
+from app.services.mapping.itemized.provider_history import (
+    visible_text as litellm_visible_text,
+)
 
 
 def public_session_data(session: SessionDTO) -> dict[str, object]:

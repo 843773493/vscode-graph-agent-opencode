@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 from dataclasses import dataclass
 
 from app.abstractions.session_context import (
+    SessionContextAssemblySourceProtocol,
     SessionContextMessageSourceProtocol,
     SessionInformationSourceProtocol,
     SessionLookupProtocol,
@@ -66,9 +68,11 @@ class SessionContextQueryService:
         *,
         message_source: SessionContextMessageSourceProtocol,
         session_lookup: SessionLookupProtocol,
+        assembly_source: SessionContextAssemblySourceProtocol,
     ) -> None:
         self._message_source = message_source
         self._session_lookup = session_lookup
+        self._assembly_source = assembly_source
         self._information_source: SessionInformationSourceProtocol | None = None
 
     def bind_information_source(
@@ -85,6 +89,11 @@ class SessionContextQueryService:
     ) -> SessionContextReadResultDTO:
         resource = parse_session_context_resource(request.resource)
         validate_session_context_read_view(resource, request.view)
+
+        if request.view == "assembly":
+            return await self._read_assembly(resource, request)
+        if request.view == "assemblies":
+            return await self._read_assemblies(resource, request)
 
         if resource.kind == "workspace_sessions":
             return await self._read_inventory(resource, request)
@@ -124,6 +133,178 @@ class SessionContextQueryService:
             effective_record_count=len(snapshot.records),
         )
 
+    async def _read_assemblies(
+        self,
+        resource: ParsedSessionContextResource,
+        request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO:
+        """只列 Saver 已封存快照；列表顺序不改变快照内部 selection。"""
+        if resource.session_id is None:
+            raise ValueError("assemblies 查询缺少 session")
+        session = await self._session_lookup.get(resource.session_id)
+        if (
+            resource.workspace_id is not None
+            and session.workspace_id != resource.workspace_id
+        ):
+            raise ValueError("source-mismatch: context resource 不属于当前 workspace")
+        snapshots = await asyncio.to_thread(
+            self._assembly_source.list_context_assemblies, resource.session_id
+        )
+        revision = (
+            "assemblies:"
+            + hashlib.sha256(
+                json.dumps(
+                    [
+                        (snapshot.assembly_id, snapshot.plan_hash)
+                        for snapshot in snapshots
+                    ]
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+        require_session_context_revision(request.expected_revision, revision)
+        offset, char_offset = SessionContextCursorCodec.decode(
+            request.cursor,
+            resource=resource.canonical,
+            revision=revision,
+            operation="read:assemblies",
+        )
+        items = [
+            SessionContextItemDTO(
+                kind="assembly",
+                locator=f"{resource.base}#assembly={snapshot.assembly_id}",
+                data={
+                    "session_id": snapshot.session_id,
+                    "assembly_id": snapshot.assembly_id,
+                    "plan_id": snapshot.plan_id,
+                    "plan_hash": snapshot.plan_hash,
+                    "history_view_revision": snapshot.history_view_revision,
+                    "source_overlay_epoch": snapshot.source_overlay_epoch,
+                    "selection_count": len(snapshot.selection),
+                    "target_format": snapshot.target_format,
+                },
+            )
+            for snapshot in reversed(snapshots)
+        ]
+        return paginate_read_items(
+            request=request,
+            resource=resource.canonical,
+            revision=revision,
+            items=items,
+            offset=offset,
+            char_offset=char_offset,
+            effective_record_count=len(items),
+        )
+
+    async def _read_assembly(
+        self,
+        resource: ParsedSessionContextResource,
+        request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO:
+        """冻结检查面不读取 active view，也不物化 request-only 正文。"""
+        if resource.session_id is None or resource.selector is None:
+            raise ValueError("assembly 查询缺少 session/assembly selector")
+        session = await self._session_lookup.get(resource.session_id)
+        if (
+            resource.workspace_id is not None
+            and session.workspace_id != resource.workspace_id
+        ):
+            raise ValueError("source-mismatch: context resource 不属于当前 workspace")
+        snapshot = await asyncio.to_thread(
+            self._assembly_source.get_context_assembly,
+            resource.session_id,
+            assembly_id=resource.selector.removeprefix("assembly="),
+        )
+        plan = snapshot.as_sealed_plan()
+        # include 属于 projection 参数；不能用另一 include 的 cursor 跳过记录。
+        include_hash = hashlib.sha256(
+            json.dumps(sorted(set(request.include))).encode("utf-8")
+        ).hexdigest()
+        revision = (
+            f"assembly:{snapshot.assembly_id}:{snapshot.plan_hash}:{include_hash}"
+        )
+        require_session_context_revision(request.expected_revision, revision)
+        offset, char_offset = SessionContextCursorCodec.decode(
+            request.cursor,
+            resource=resource.canonical,
+            revision=revision,
+            operation="read:assembly",
+        )
+        messages, losses = await asyncio.to_thread(
+            self._assembly_source.project_context_plan_to_history_with_diagnostics,
+            resource.session_id,
+            plan,
+        )
+        records = [message.model_dump(mode="json") for message in messages]
+        items = [
+            SessionContextItemDTO(
+                kind="assembly",
+                locator=resource.canonical,
+                data={
+                    "session_id": snapshot.session_id,
+                    "assembly_id": snapshot.assembly_id,
+                    "plan_id": snapshot.plan_id,
+                    "plan_hash": snapshot.plan_hash,
+                    "request_hash": snapshot.request_hash,
+                    "compiler_version": snapshot.compiler_version,
+                    "provider_version": snapshot.provider_version,
+                    "projector_id": snapshot.projector_id,
+                    "projector_version": snapshot.projector_version,
+                    "target_format": snapshot.target_format,
+                    "history_view_revision": snapshot.history_view_revision,
+                    "source_overlay_epoch": snapshot.source_overlay_epoch,
+                    "selection_count": len(snapshot.selection),
+                    "history_message_count": len(messages),
+                    "history_loss_count": len(losses),
+                    "assembly_loss_count": len(snapshot.loss),
+                    "projection": "history",
+                },
+            )
+        ]
+        # selection 完整保留 tagged ref / omission / loss / typed detail owner；
+        # ToolSet manifest 只是检查数据，不生成 history 工具定义 message。
+        items.extend(
+            SessionContextItemDTO(
+                kind="selection",
+                locator=resource.canonical,
+                record_index=entry.plan_ordinal,
+                data=entry.to_dict(),
+            )
+            for entry in snapshot.selection
+        )
+        for item in project_record_items(
+            resource=resource.base,
+            records=records,
+            include=set(request.include),
+            messages_only=True,
+        ):
+            if item.record_index is None:
+                raise RuntimeError("history projection 缺少 message record_index")
+            item.locator = resource.canonical
+            item.data = {
+                "projection": "history",
+                "message_id": records[item.record_index]["id"],
+            }
+            items.append(item)
+        items.extend(
+            SessionContextItemDTO(
+                kind="loss",
+                locator=resource.canonical,
+                data={"projection": projection, "ordinal": ordinal, "loss": loss},
+            )
+            for projection, values in (("assembly", snapshot.loss), ("history", losses))
+            for ordinal, loss in enumerate(values)
+        )
+        return paginate_read_items(
+            request=request,
+            resource=resource.canonical,
+            revision=revision,
+            items=items,
+            offset=offset,
+            char_offset=char_offset,
+            effective_record_count=len(snapshot.selection),
+            raw_message_count=len(messages),
+        )
+
     async def _selected_locator_items(
         self,
         snapshot: _SessionContextSnapshot,
@@ -154,7 +335,9 @@ class SessionContextQueryService:
     ) -> SessionContextSearchResultDTO:
         resource = parse_session_context_resource(request.resource)
         if resource.selector is not None:
-            raise ValueError("search_context 的 resource 必须是资源根，不接受 record locator")
+            raise ValueError(
+                "search_context 的 resource 必须是资源根，不接受 record locator"
+            )
         candidates, revision = await self._search_candidates(resource, request.sources)
         require_session_context_revision(request.expected_revision, revision)
         query_hash = hashlib.sha256(
@@ -184,7 +367,7 @@ class SessionContextQueryService:
             if match is not None:
                 found.append((candidate, match))
 
-        selected = found[offset:offset + request.max_results]
+        selected = found[offset : offset + request.max_results]
         matches: list[SessionContextSearchMatchDTO] = []
         budget_truncated = False
         for candidate, match in selected:
@@ -362,7 +545,9 @@ class SessionContextQueryService:
         )
         items.extend(record_items)
         if self._information_source is not None:
-            information = await self._information_source.get_information(snapshot.session_id)
+            information = await self._information_source.get_information(
+                snapshot.session_id
+            )
             items.append(
                 SessionContextItemDTO(
                     kind="execution",
@@ -380,7 +565,9 @@ class SessionContextQueryService:
             raise RuntimeError(
                 "SessionContextQueryService 尚未绑定 information source，无法读取 information view"
             )
-        information = await self._information_source.get_information(snapshot.session_id)
+        information = await self._information_source.get_information(
+            snapshot.session_id
+        )
         return SessionContextItemDTO(
             kind="information",
             locator=f"{snapshot.resource}#information",
@@ -555,8 +742,14 @@ class SessionContextQueryService:
         )
 
     @staticmethod
-    def _compile_search_expression(request: SessionContextSearchRequest) -> re.Pattern[str]:
-        pattern = re.escape(request.query) if request.match_mode == "literal" else request.query
+    def _compile_search_expression(
+        request: SessionContextSearchRequest,
+    ) -> re.Pattern[str]:
+        pattern = (
+            re.escape(request.query)
+            if request.match_mode == "literal"
+            else request.query
+        )
         flags = 0 if request.case_sensitive else re.IGNORECASE
         try:
             return re.compile(pattern, flags)

@@ -2,7 +2,7 @@
   "created_at": "2026-08-27T00:00:00+00:00",
   "updated_at": "2026-08-27T00:00:00+00:00",
   "session_id": "ses_6b2d4f8a0c1e4937b5d9f1a3c7e24680",
-  "workspace_id": "ws_custom_tool_fixture",
+  "workspace_id": "ws_local",
   "title": "独立历史分支示例（handwritten SSE）",
   "title_source": "user",
   "current_agent_id": "default",

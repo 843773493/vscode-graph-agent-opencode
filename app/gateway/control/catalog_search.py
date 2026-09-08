@@ -16,6 +16,7 @@ from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.schemas.gateway_control import (
     GatewaySessionSearchMatchDTO,
     GatewaySessionSearchResultsDTO,
@@ -57,7 +58,68 @@ class GatewaySessionCatalogSearchService:
         self._workspace_errors: dict[str, str] = {}
         self._sync_locks: dict[str, asyncio.Lock] = {}
         self._stop_event = asyncio.Event()
+        self._wake_event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+
+    def update_runtime_config(
+        self,
+        *,
+        refresh_interval_seconds: float,
+        max_concurrency: int,
+        request_timeout_seconds: float,
+    ) -> None:
+        """更新下一轮目录同步使用的 Gateway 配置。"""
+
+        self.prepare_runtime_config(
+            refresh_interval_seconds=refresh_interval_seconds,
+            max_concurrency=max_concurrency,
+            request_timeout_seconds=request_timeout_seconds,
+        )
+        self._refresh_interval_seconds = refresh_interval_seconds
+        self._max_concurrency = max_concurrency
+        self._request_timeout_seconds = request_timeout_seconds
+        self._wake_event.set()
+
+    def prepare_runtime_config(
+        self,
+        *,
+        refresh_interval_seconds: float,
+        max_concurrency: int,
+        request_timeout_seconds: float,
+    ) -> None:
+        """只校验目录消费者参数，不改变当前运行时。"""
+
+        if refresh_interval_seconds <= 0:
+            raise ValueError("会话目录 refresh_interval_seconds 必须大于 0")
+        if max_concurrency < 1:
+            raise ValueError("会话目录 max_concurrency 必须至少为 1")
+        if request_timeout_seconds <= 0:
+            raise ValueError("会话目录 request_timeout_seconds 必须大于 0")
+
+    def runtime_health_proof(
+        self,
+        *,
+        generation: str,
+        fencing_token_digest: str | None = None,
+    ) -> GatewayRuntimeHealthProof:
+        self.assert_healthy()
+        return GatewayRuntimeHealthProof(
+            consumer_id="session-catalog",
+            generation=generation,
+            state="healthy",
+            details={
+                "refresh_interval_seconds": self._refresh_interval_seconds,
+                "max_concurrency": self._max_concurrency,
+                "request_timeout_seconds": self._request_timeout_seconds,
+            },
+            fencing_token_digest=fencing_token_digest,
+        )
+
+    def assert_healthy(self) -> None:
+        """确认目录消费者仍有可运行的同步循环。"""
+
+        if self._task is None or self._task.done():
+            raise RuntimeError("Gateway 会话目录索引同步器未运行")
 
     async def start(self) -> None:
         if self._task is not None:
@@ -67,6 +129,7 @@ class GatewaySessionCatalogSearchService:
             if snapshot is not None:
                 self._snapshots[target.workspace_id] = snapshot
         self._stop_event.clear()
+        self._wake_event.clear()
         self._task = asyncio.create_task(
             self._run_loop(),
             name="gateway-session-catalog-index-sync",
@@ -77,6 +140,7 @@ class GatewaySessionCatalogSearchService:
         if task is None:
             return
         self._stop_event.set()
+        self._wake_event.set()
         task.cancel()
         try:
             await task
@@ -174,11 +238,12 @@ class GatewaySessionCatalogSearchService:
             await self._sync_all()
             try:
                 await asyncio.wait_for(
-                    self._stop_event.wait(),
+                    self._wake_event.wait(),
                     timeout=self._refresh_interval_seconds,
                 )
             except TimeoutError:
                 continue
+            self._wake_event.clear()
 
     async def _sync_all(self) -> None:
         semaphore = asyncio.Semaphore(self._max_concurrency)

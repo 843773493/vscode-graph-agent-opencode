@@ -15,6 +15,32 @@ class _FailingHttpClient:
         raise AssertionError("backend_url 为空时不应发出 HTTP 请求")
 
 
+def test_catalog_runtime_config_updates_next_sync_and_wakes_loop(tmp_path: Path) -> None:
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
+    )
+    service = GatewaySessionCatalogSearchService(
+        registry=registry,
+        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
+        cache_dir=tmp_path / "indexes",
+        navigation_store=WorkspaceNavigationStore(
+            storage_path=tmp_path / "navigation.json"
+        ),
+    )
+
+    service.update_runtime_config(
+        refresh_interval_seconds=3,
+        max_concurrency=2,
+        request_timeout_seconds=4,
+    )
+
+    assert service._refresh_interval_seconds == 3
+    assert service._max_concurrency == 2
+    assert service._request_timeout_seconds == 4
+    assert service._wake_event.is_set()
+
+
 def _offline_target() -> WorkspaceTarget:
     return WorkspaceTarget(
         workspace_id="gw_offline_without_backend",

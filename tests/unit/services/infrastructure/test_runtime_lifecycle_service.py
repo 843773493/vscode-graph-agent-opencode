@@ -73,6 +73,8 @@ def build_runtime(
         job_executor=NeverFinishExecutor(),
     )
     runtime = RuntimeService(
+        workspace_id="00000000-0000-4000-8000-000000000001",
+        workspace_root=tmp_path,
         job_service=jobs,
         background_task_registry=BackgroundTaskRegistry(
             history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
@@ -84,6 +86,17 @@ def build_runtime(
         terminal_status_writer=terminal_status_writer,
     )
     return runtime, jobs
+
+
+@pytest.mark.asyncio
+async def test_status_reports_the_injected_workspace_uuid_and_root(tmp_path: Path) -> None:
+    runtime, _ = build_runtime(tmp_path)
+
+    status = await runtime.status()
+
+    assert status.workspace_id == "00000000-0000-4000-8000-000000000001"
+    assert status.storage.root == str(tmp_path)
+    assert status.storage.log_dir == str(tmp_path / ".boxteam" / "logs")
 
 
 @pytest.mark.asyncio

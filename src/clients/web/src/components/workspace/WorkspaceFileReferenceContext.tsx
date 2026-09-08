@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import {
   DEFAULT_BACKEND_PORT,
+  HttpRequestError,
   getWorkspaceFileContent,
   getWorkspaceFiles,
 } from "../../api";
@@ -46,6 +47,11 @@ type WorkspaceFilePathLookup =
 
 const MAX_FILE_TREE_DIRECTORIES = 256;
 
+function isProtectedWorkspaceMetadataPath(path: string): boolean {
+  const normalizedPath = path.replace(/\\/g, "/").replace(/^\.\//, "");
+  return normalizedPath === ".boxteam" || normalizedPath.startsWith(".boxteam/");
+}
+
 async function findUniqueWorkspaceFilePath(
   apiPort: number,
   workspaceId: string | null,
@@ -67,14 +73,27 @@ async function findUniqueWorkspaceFilePath(
 
     let cursor: string | null = null;
     do {
-      const listing = await getWorkspaceFiles(
-        apiPort,
-        directory.path,
-        workspaceId,
-        undefined,
-        cursor,
-      );
+      let listing;
+      try {
+        listing = await getWorkspaceFiles(
+          apiPort,
+          directory.path,
+          workspaceId,
+          undefined,
+          cursor,
+        );
+      } catch (error: unknown) {
+        // 会话运行时目录可能在递归查找期间被创建、压缩或回收；已经消失的
+        // 目录不是工作区文件引用错误。其它 HTTP/网络错误仍交给调用方展示。
+        if (error instanceof HttpRequestError && error.status === 404) {
+          break;
+        }
+        throw error;
+      }
       for (const node of (listing.items ?? []) as WorkspaceFileNode[]) {
+        if (isProtectedWorkspaceMetadataPath(node.path)) {
+          continue;
+        }
         if (node.kind === "directory") {
           if (directory.depth < 12) {
             directories.push({ path: node.path, depth: directory.depth + 1 });

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from io import BytesIO
 from typing import Self
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 import pytest
@@ -12,6 +12,7 @@ from app.services.infrastructure.browser_manager_client import (
     BrowserManagerClient,
     BrowserManagerRequestError,
 )
+from app.services.infrastructure.config_service import ConfigService
 
 
 class _Response:
@@ -129,6 +130,27 @@ def test_non_playwright_request_keeps_short_default_timeout() -> None:
         client._json_request_sync("GET", "/api/browsers/browser_1/read", None)
 
     assert mocked_urlopen.call_args.kwargs["timeout"] == 30
+
+
+def test_browser_backend_url_is_resolved_from_current_config_snapshot() -> None:
+    config_service = Mock(spec=ConfigService)
+    current_url = ["http://browser-a"]
+    config_service.get_browser_backend_url.side_effect = lambda: current_url[0]
+    client = BrowserManagerClient(config_service=config_service)
+    with patch(
+        "app.services.infrastructure.browser_manager_client.urlopen",
+        return_value=_Response({"data": {"summary": "ok"}}),
+    ) as mocked_urlopen:
+        client._json_request_sync("GET", "/api/browsers", None)
+        current_url[0] = "http://browser-b"
+        client._json_request_sync("GET", "/api/browsers", None)
+
+    assert [
+        call.args[0].full_url for call in mocked_urlopen.call_args_list
+    ] == [
+        "http://browser-a/api/browsers",
+        "http://browser-b/api/browsers",
+    ]
 
 
 @pytest.mark.asyncio

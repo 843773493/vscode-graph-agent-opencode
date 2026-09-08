@@ -146,8 +146,6 @@ function Invoke-TargetAction([string[]]$Arguments) {
                 if ($LASTEXITCODE -ne 0) { Fail-Target "node-pty Windows 原生模块不可用" }
                 bun install --cwd src/clients/web --frozen-lockfile
                 Assert-NativeCommand "Web bun install"
-                bun install --cwd src/webview-ui --frozen-lockfile
-                Assert-NativeCommand "Webview bun install"
                 bun x playwright install chromium
                 Assert-NativeCommand "Playwright Chromium install"
                 $Python = Join-Path $Repository ".venv\Scripts\python.exe"

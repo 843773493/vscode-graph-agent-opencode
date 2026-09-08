@@ -1,0 +1,23 @@
+{
+  "$schema": "./model_stream_schema.jsonc",
+  "config_version": 1,
+  "model_stream": {
+    "transport": {
+      "mode": "replay",
+      "scenario_id": "basic-chat-tool-loop",
+      "fixture_root": "tests/fixtures/model_stream",
+      "matching": {
+        "policy": "strict"
+      },
+      "replay": {
+        "policy": "request_reusable"
+      },
+      "timing": {
+        "mode": "none"
+      },
+      "recording": {
+        "artifact_root": "out/tests/e2e/clients/web/test_basic_chat_tool_loop/artifacts/model-stream"
+      }
+    }
+  }
+}

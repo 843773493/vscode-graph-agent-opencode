@@ -15,6 +15,7 @@ from app.gateway.remote_gateway import (
     reconnect_remote_gateway,
     refresh_remote_gateway_projections,
 )
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.gateway.runtime.local_workspace import (
     restart_managed_workspace_backend,
     start_managed_local_workspace_runtime,
@@ -100,6 +101,60 @@ class GatewayWorkspaceRuntimeController:
             self._registry.upsert(target, runtime=runtime, activate=False)
             return await self._state_result(workspace_id, "started")
 
+    def update_health_controller_config(
+        self,
+        *,
+        request_timeout_seconds: float,
+        poll_interval_seconds: float,
+    ) -> None:
+        """切换下一轮 Gateway 健康探测使用的 controller 参数。"""
+
+        self.prepare_health_controller_config(
+            request_timeout_seconds=request_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        self._health_request_timeout_seconds = request_timeout_seconds
+        self._health_poll_interval_seconds = poll_interval_seconds
+
+    def prepare_health_controller_config(
+        self,
+        *,
+        request_timeout_seconds: float,
+        poll_interval_seconds: float,
+    ) -> None:
+        """只校验 health controller 参数，不改变当前探测窗口。"""
+
+        if request_timeout_seconds <= 0:
+            raise ValueError("Gateway 健康探测 request_timeout_seconds 必须大于 0")
+        if poll_interval_seconds <= 0:
+            raise ValueError("Gateway 健康探测 poll_interval_seconds 必须大于 0")
+
+    def runtime_health_proof(
+        self,
+        *,
+        generation: str,
+        fencing_token_digest: str | None = None,
+    ) -> GatewayRuntimeHealthProof:
+        self.assert_health_controller_healthy()
+        return GatewayRuntimeHealthProof(
+            consumer_id="health-controller",
+            generation=generation,
+            state="healthy",
+            details={
+                "request_timeout_seconds": self._health_request_timeout_seconds,
+                "poll_interval_seconds": self._health_poll_interval_seconds,
+            },
+            fencing_token_digest=fencing_token_digest,
+        )
+
+    def assert_health_controller_healthy(self) -> None:
+        """确认健康控制器当前参数仍满足探测边界。"""
+
+        if self._health_request_timeout_seconds <= 0:
+            raise RuntimeError("Gateway 健康控制器 request_timeout_seconds 无效")
+        if self._health_poll_interval_seconds <= 0:
+            raise RuntimeError("Gateway 健康控制器 poll_interval_seconds 无效")
+
     async def stop_managed_backend(
         self,
         workspace_id: str,
@@ -130,6 +185,7 @@ class GatewayWorkspaceRuntimeController:
                     request_id=request_id,
                 )
                 blockers = self._parse_blockers(runtime_status.get("blockers"))
+                blockers.extend(self._route_reference_blockers(workspace_id))
                 if not blockers:
                     break
                 if asyncio.get_running_loop().time() >= deadline:
@@ -162,6 +218,10 @@ class GatewayWorkspaceRuntimeController:
                     forced=False,
                 )
             target, runtime = self._managed_local_target(workspace_id)
+            startup_contract = await self._pending_startup_contract(
+                target.backend_url,
+                request_id=request_id,
+            )
             await self._runtime_action(
                 target.backend_url,
                 "/api/v1/runtime/drain",
@@ -177,6 +237,7 @@ class GatewayWorkspaceRuntimeController:
                     request_id=request_id,
                 )
                 blockers = self._parse_blockers(runtime_status.get("blockers"))
+                blockers.extend(self._route_reference_blockers(workspace_id))
                 if not blockers:
                     break
                 if asyncio.get_running_loop().time() >= deadline:
@@ -193,7 +254,12 @@ class GatewayWorkspaceRuntimeController:
                     )
                 await asyncio.sleep(self._drain_poll_interval_seconds)
 
-            await self._restart_backend(target, runtime)
+            await self._restart_backend(
+                target,
+                runtime,
+                startup_contract=startup_contract,
+                request_id=request_id,
+            )
             return await self._restart_result(
                 workspace_id=workspace_id,
                 status="restarted",
@@ -215,6 +281,10 @@ class GatewayWorkspaceRuntimeController:
                     forced=True,
                 )
             target, runtime = self._managed_local_target(workspace_id)
+            startup_contract = await self._pending_startup_contract(
+                target.backend_url,
+                request_id=request_id,
+            )
             await self._runtime_action(
                 target.backend_url,
                 "/api/v1/runtime/drain",
@@ -230,7 +300,12 @@ class GatewayWorkspaceRuntimeController:
                 "/api/v1/runtime/drain/force",
                 request_id=request_id,
             )
-            await self._restart_backend(target, runtime)
+            await self._restart_backend(
+                target,
+                runtime,
+                startup_contract=startup_contract,
+                request_id=request_id,
+            )
             return await self._restart_result(
                 workspace_id=workspace_id,
                 status="restarted",
@@ -251,20 +326,92 @@ class GatewayWorkspaceRuntimeController:
         self,
         target: WorkspaceTarget,
         runtime: WorkspaceRuntime,
+        *,
+        startup_contract: dict[str, object] | None = None,
+        request_id: str,
     ) -> None:
-        await restart_managed_workspace_backend(
-            runtime=runtime,
-            project_root=self._project_root,
-            workspace_root=Path(target.root_path),
-            log_dir=self._log_dir,
-            health_request_timeout_seconds=self._health_request_timeout_seconds,
-            health_poll_interval_seconds=self._health_poll_interval_seconds,
-            connection_drain_timeout_seconds=self._connection_drain_timeout_seconds,
-            default_skill_groups=self._default_skill_groups,
-        )
+        previous_backend_url = target.backend_url
+        try:
+            await restart_managed_workspace_backend(
+                runtime=runtime,
+                project_root=self._project_root,
+                workspace_root=Path(target.root_path),
+                log_dir=self._log_dir,
+                health_request_timeout_seconds=self._health_request_timeout_seconds,
+                health_poll_interval_seconds=self._health_poll_interval_seconds,
+                connection_drain_timeout_seconds=self._connection_drain_timeout_seconds,
+                default_skill_groups=self._default_skill_groups,
+                config_candidate_ref=(
+                    str(startup_contract["candidate_ref"])
+                    if startup_contract is not None
+                    else None
+                ),
+                config_generation=(
+                    str(startup_contract["target_generation"])
+                    if startup_contract is not None
+                    else None
+                ),
+                config_fencing_token=(
+                    str(startup_contract["fencing_token"])
+                    if startup_contract is not None
+                    else None
+                ),
+                config_startup_contract=startup_contract,
+            )
+        except Exception as error:
+            old_runtime_recovered = False
+            recovery_error: Exception | None = None
+            try:
+                await self._runtime_action(
+                    previous_backend_url,
+                    "/api/v1/runtime/drain/cancel",
+                    request_id=request_id,
+                )
+                old_runtime_recovered = True
+            except Exception as cancel_error:
+                recovery_error = cancel_error
+            if startup_contract is not None:
+                try:
+                    await self._record_pending_restart_failure(
+                        previous_backend_url,
+                        candidate_ref=str(startup_contract["candidate_ref"]),
+                        error=str(error),
+                        old_runtime_recovered=old_runtime_recovered,
+                        request_id=request_id,
+                    )
+                except Exception as record_error:
+                    recovery_error = recovery_error or record_error
+            if recovery_error is not None:
+                raise RuntimeError(
+                    "Workspace pending 重启失败，且旧 generation 恢复协议失败: "
+                    f"restart={error}; recovery={recovery_error}"
+                ) from recovery_error
+            raise
         self._registry.invalidate_route(target.workspace_id)
+        target.backend_url = runtime.service_urls["workspace_api"]
         target.connection_error = None
         self._registry.upsert(target, activate=False)
+
+    async def _record_pending_restart_failure(
+        self,
+        backend_url: str,
+        *,
+        candidate_ref: str,
+        error: str,
+        old_runtime_recovered: bool,
+        request_id: str,
+    ) -> None:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{backend_url.rstrip('/')}/api/v1/config/pending/restart-failed",
+                params={"candidate_ref": candidate_ref},
+                json={
+                    "error": error,
+                    "old_runtime_recovered": old_runtime_recovered,
+                },
+                headers=self._backend_headers(request_id),
+            )
+            response.raise_for_status()
 
     async def _runtime_status(
         self,
@@ -279,6 +426,64 @@ class GatewayWorkspaceRuntimeController:
             )
             response.raise_for_status()
         return self._response_data(response)
+
+    async def _pending_startup_contract(
+        self,
+        backend_url: str,
+        *,
+        request_id: str,
+    ) -> dict[str, object] | None:
+        async with httpx.AsyncClient(timeout=10) as client:
+            status_response = await client.get(
+                f"{backend_url.rstrip('/')}/api/v1/config/reload-status",
+                headers=self._backend_headers(request_id),
+            )
+        status_response.raise_for_status()
+        status = self._response_data(status_response)
+        if status.get("state") == "recovery_required":
+            candidate_ref = status.get("candidate_ref")
+            if not isinstance(candidate_ref, str) or not candidate_ref:
+                raise RuntimeError(
+                    "Workspace 报告 recovery_required，但缺少 candidate_ref"
+                )
+            async with httpx.AsyncClient(timeout=10) as client:
+                retry_response = await client.post(
+                    f"{backend_url.rstrip('/')}/api/v1/config/pending/retry",
+                    params={"candidate_ref": candidate_ref},
+                    headers=self._backend_headers(request_id),
+                )
+                retry_response.raise_for_status()
+            status = self._response_data(retry_response)
+        if status.get("restart_required") is not True:
+            return None
+        candidate_ref = status.get("candidate_ref")
+        if not isinstance(candidate_ref, str) or not candidate_ref:
+            raise RuntimeError(
+                "Workspace 报告 restart_required，但缺少 candidate_ref"
+            )
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                f"{backend_url.rstrip('/')}/api/v1/config/pending/startup-contract",
+                params={"candidate_ref": candidate_ref},
+                headers=self._backend_headers(request_id),
+            )
+            response.raise_for_status()
+        contract = self._response_data(response)
+        for field in (
+            "candidate_ref",
+            "candidate_id",
+            "pending_revision",
+            "candidate_digest",
+            "effective_digest",
+            "target_generation",
+            "fencing_token",
+            "secret_binding_digest",
+        ):
+            if field not in contract:
+                raise TypeError(f"Workspace 启动契约缺少字段: {field}")
+        if contract["candidate_ref"] != candidate_ref:
+            raise RuntimeError("Workspace 启动契约 candidate_ref 回显不匹配")
+        return contract
 
     async def _runtime_action(
         self,
@@ -317,6 +522,36 @@ class GatewayWorkspaceRuntimeController:
         if not isinstance(value, list):
             raise TypeError("Workspace API 生命周期响应缺少 blockers 数组")
         return [GatewayRuntimeBlockerDTO.model_validate(item) for item in value]
+
+    def _route_reference_blockers(
+        self,
+        workspace_id: str,
+    ) -> list[GatewayRuntimeBlockerDTO]:
+        request_count, stream_count = self._registry.route_reference_counts(
+            workspace_id
+        )
+        blockers: list[GatewayRuntimeBlockerDTO] = []
+        if request_count:
+            blockers.append(
+                GatewayRuntimeBlockerDTO(
+                    kind="proxy_request",
+                    resource_id=f"{workspace_id}:requests",
+                    session_id="gateway-proxy",
+                    status="active",
+                    detail=f"{request_count} 个代理请求仍在使用旧路由",
+                )
+            )
+        if stream_count:
+            blockers.append(
+                GatewayRuntimeBlockerDTO(
+                    kind="proxy_stream",
+                    resource_id=f"{workspace_id}:streams",
+                    session_id="gateway-proxy",
+                    status="active",
+                    detail=f"{stream_count} 个 SSE/WebSocket/流响应仍在使用旧路由",
+                )
+            )
+        return blockers
 
     async def _restart_result(
         self,

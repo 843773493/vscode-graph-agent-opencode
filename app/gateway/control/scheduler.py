@@ -10,8 +10,8 @@ from croniter import croniter
 from app.core.identifier import create_prefixed_id
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
 from app.gateway.control.generators import SessionGeneratorStore
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.schemas.gateway_control import GeneratorDefinitionDTO
-
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +29,43 @@ class SessionGeneratorScheduler:
         self._poll_interval_seconds = poll_interval_seconds
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
+        self._wake_event = asyncio.Event()
         self._fatal_error: BaseException | None = None
         self._definition_errors: dict[str, str] = {}
+
+    def update_runtime_config(self, *, poll_interval_seconds: float) -> None:
+        """更新下一轮生成器调度使用的轮询间隔。"""
+
+        self.prepare_runtime_config(poll_interval_seconds=poll_interval_seconds)
+        self._poll_interval_seconds = poll_interval_seconds
+        self._wake_event.set()
+
+    def prepare_runtime_config(self, *, poll_interval_seconds: float) -> None:
+        """只校验调度器参数，不改变当前轮询间隔。"""
+
+        if poll_interval_seconds <= 0:
+            raise ValueError("生成器 poll_interval_seconds 必须大于 0")
+
+    def runtime_health_proof(
+        self,
+        *,
+        generation: str,
+        fencing_token_digest: str | None = None,
+    ) -> GatewayRuntimeHealthProof:
+        self.assert_healthy()
+        return GatewayRuntimeHealthProof(
+            consumer_id="session-generator-scheduler",
+            generation=generation,
+            state="healthy",
+            details={"poll_interval_seconds": self._poll_interval_seconds},
+            fencing_token_digest=fencing_token_digest,
+        )
 
     async def start(self) -> None:
         if self._task is not None:
             raise RuntimeError("会话生成器调度器已经启动")
         self._stop_event.clear()
+        self._wake_event.clear()
         self._fatal_error = None
         self._task = asyncio.create_task(
             self._run_loop(),
@@ -48,6 +78,7 @@ class SessionGeneratorScheduler:
         if task is None:
             return
         self._stop_event.set()
+        self._wake_event.set()
         task.cancel()
         try:
             await task
@@ -89,11 +120,12 @@ class SessionGeneratorScheduler:
             await self._run_due(datetime.now(timezone.utc))
             try:
                 await asyncio.wait_for(
-                    self._stop_event.wait(),
+                    self._wake_event.wait(),
                     timeout=self._poll_interval_seconds,
                 )
             except TimeoutError:
                 continue
+            self._wake_event.clear()
 
     async def _run_due(self, now: datetime) -> None:
         for definition in self._store.list_definitions().items:

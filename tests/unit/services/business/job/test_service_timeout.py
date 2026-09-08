@@ -243,6 +243,44 @@ async def test_job_timeout_marks_job_terminal_and_releases_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_job_timeout_provider_is_read_for_each_new_job() -> None:
+    configured_timeout = [0.01]
+    bus = _RecordingBus()
+    service = JobService(
+        job_event_bus=bus,
+        job_executor=_NeverFinishExecutor(),
+        job_timeout_seconds=10.0,
+        job_timeout_seconds_provider=lambda: configured_timeout[0],
+        execution_cancel_timeout_seconds=0.01,
+    )
+    job = JobState(
+        job_id="job_dynamic_timeout",
+        session_id="session_dynamic_timeout",
+        message="读取最新 timeout",
+        message_id="msg_dynamic_timeout",
+        message_created_at="2026-08-31T00:00:00+00:00",
+        agent_id="default",
+        status=JobStatus.queued,
+    )
+    service._jobs[job.job_id] = job
+    service._pending_queue.append(job.session_id, job.job_id, "after_turn")
+
+    assert await service._start_next_pending(job.session_id) is True
+    await job.task
+
+    assert job.status == JobStatus.timed_out
+    timeout_events = [
+        event
+        for event in bus.events
+        if event.get("event_type") == EventType.JOB_FAILED
+    ]
+    assert timeout_events
+    payload = timeout_events[-1]["payload"]
+    assert isinstance(payload, dict)
+    assert payload["timeout_seconds"] == 0.01
+
+
+@pytest.mark.asyncio
 async def test_job_timeout_does_not_wait_for_uncooperative_executor() -> None:
     service = JobService(
         job_event_bus=_RecordingBus(),

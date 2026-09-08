@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import create_autospec
 
 import pytest
 
-from app.abstractions.session_context import SessionContextRevisionChangedError
+from app.abstractions.session_context import (
+    SessionContextAssemblySourceProtocol,
+    SessionContextRevisionChangedError,
+)
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionInformationExecutionDTO,
+    SessionInformationSessionDTO,
     SessionInformationSnapshotDTO,
     SessionInformationTraceDTO,
     SessionInformationWorkspaceDTO,
@@ -61,7 +66,7 @@ class _FakeSessionLookup:
             if workspace_id is None or item.workspace_id == workspace_id
         ]
         return SessionListResultDTO(
-            items=items[skip:skip + limit],
+            items=items[skip : skip + limit],
             total=len(items),
         )
 
@@ -112,15 +117,23 @@ class _FakeInformationSource:
         session = await _FakeSessionLookup().get(session_id)
         return SessionInformationSnapshotDTO(
             generated_at=timestamp,
-            session=session,
+            session=SessionInformationSessionDTO(
+                session_id=session.session_id,
+                workspace_id=session.workspace_id,
+                title=session.title,
+                current_agent_id=session.current_agent_id,
+                parent_session_id=session.parent_session_id,
+                kind=session.kind,
+                created_at=session.created_at,
+                updated_at=session.updated_at,
+            ),
             workspace=SessionInformationWorkspaceDTO(
                 workspace_id="ws_one",
                 name="测试工作区",
                 root_path="/workspace",
             ),
             storage_path=(
-                "/workspace/.boxteam/sessions/项目会话--12345678/"
-                "目标会话--87654321"
+                "/workspace/.boxteam/sessions/项目会话--12345678/目标会话--87654321"
             ),
             execution=SessionInformationExecutionDTO(
                 status="running",
@@ -130,17 +143,36 @@ class _FakeInformationSource:
         )
 
 
-def _service(message_source: _FakeMessageSource) -> SessionContextQueryService:
-    service = SessionContextQueryService(
-        message_source=message_source,
-        session_lookup=_FakeSessionLookup(),
+@pytest.fixture
+def _service():
+    assembly_source = create_autospec(
+        SessionContextAssemblySourceProtocol, spec_set=True
     )
-    service.bind_information_source(_FakeInformationSource())
-    return service
+    assembly_source.get_context_assembly.side_effect = AssertionError(
+        "active view 不得读取上一请求的 assembly"
+    )
+    assembly_source.project_context_plan_to_history_with_diagnostics.side_effect = (
+        AssertionError("active view 不得裁剪为 assembly selection")
+    )
+
+    def create_service(
+        message_source: _FakeMessageSource,
+    ) -> SessionContextQueryService:
+        service = SessionContextQueryService(
+            message_source=message_source,
+            session_lookup=_FakeSessionLookup(),
+            assembly_source=assembly_source,
+        )
+        service.bind_information_source(_FakeInformationSource())
+        return service
+
+    return create_service
 
 
 @pytest.mark.asyncio
-async def test_overview_defaults_to_initial_goal_recent_three_rounds_and_safe_content():
+async def test_overview_defaults_to_initial_goal_recent_three_rounds_and_safe_content(
+    _service,
+):
     result = await _service(_FakeMessageSource()).read_context(
         SessionContextReadRequest(resource="boxteam://session/ses_target")
     )
@@ -161,7 +193,7 @@ async def test_overview_defaults_to_initial_goal_recent_three_rounds_and_safe_co
 
 
 @pytest.mark.asyncio
-async def test_overview_handles_fewer_user_rounds_than_default_window():
+async def test_overview_handles_fewer_user_rounds_than_default_window(_service):
     message_source = _FakeMessageSource()
     message_source.records = [
         {"role": "user", "content": "唯一问题"},
@@ -178,7 +210,7 @@ async def test_overview_handles_fewer_user_rounds_than_default_window():
 
 
 @pytest.mark.asyncio
-async def test_records_can_explicitly_include_detailed_fields():
+async def test_records_can_explicitly_include_detailed_fields(_service):
     result = await _service(_FakeMessageSource()).read_context(
         SessionContextReadRequest(
             resource="boxteam://session/ses_target",
@@ -204,7 +236,7 @@ async def test_records_can_explicitly_include_detailed_fields():
 
 
 @pytest.mark.asyncio
-async def test_read_cursor_is_opaque_and_fails_when_revision_changes():
+async def test_read_cursor_is_opaque_and_fails_when_revision_changes(_service):
     source = _FakeMessageSource()
     service = _service(source)
     first = await service.read_context(
@@ -246,7 +278,9 @@ async def test_read_cursor_is_opaque_and_fails_when_revision_changes():
 
 
 @pytest.mark.asyncio
-async def test_search_literal_by_default_regex_explicit_and_locator_can_be_read():
+async def test_search_literal_by_default_regex_explicit_and_locator_can_be_read(
+    _service,
+):
     service = _service(_FakeMessageSource())
     literal = await service.search_context(
         SessionContextSearchRequest(
@@ -281,7 +315,7 @@ async def test_search_literal_by_default_regex_explicit_and_locator_can_be_read(
 
 
 @pytest.mark.asyncio
-async def test_inventory_information_and_output_budget():
+async def test_inventory_information_and_output_budget(_service):
     service = _service(_FakeMessageSource())
     inventory = await service.read_context(
         SessionContextReadRequest(
@@ -317,7 +351,7 @@ async def test_inventory_information_and_output_budget():
 
 
 @pytest.mark.asyncio
-async def test_overview_complete_dto_respects_budget_and_cursor_advances():
+async def test_overview_complete_dto_respects_budget_and_cursor_advances(_service):
     service = _service(_FakeMessageSource())
     cursor = None
     seen_cursors: set[str] = set()
@@ -343,7 +377,7 @@ async def test_overview_complete_dto_respects_budget_and_cursor_advances():
 
 
 @pytest.mark.asyncio
-async def test_oversized_single_record_can_be_reassembled_through_cursor():
+async def test_oversized_single_record_can_be_reassembled_through_cursor(_service):
     message_source = _FakeMessageSource()
     oversized_text = "分段内容" * 20_000 + "-END"
     message_source.records = [

@@ -32,15 +32,15 @@
 ### 执行和质量
 
 1. 每次编写代码文件时，都运行静态分析。
-2. 每次修改浏览器 UI（`src/clients/web/`）后，都要执行 `bun run --cwd src/clients/web build`；现存 `src/webview-ui/` 属于暂不维护的旧 VS Code 客户端，只有用户明确要求修改它时才执行其构建。
+2. 每次修改浏览器 UI（`src/clients/web/`）后，都要执行 `bun run --cwd src/clients/web build`。
 
 ### 代码组织
 
 1. 如果 `package.json` 中的命令过长，将其移到 `scripts/` 下的 `.mjs` 脚本中。
 2. 仓库中的 JavaScript 代码必须始终使用 ESM（ES 模块）通过 `import`/`export`，避免使用 CommonJS。
-3. `src/clients/web` 是当前唯一开发和维护的客户端，负责页面、交互、状态、API 调用以及少量展示逻辑；可复用的纯客户端核心和 React DOM 组件分别预留在 `src/clients/shared/core`、`src/clients/shared/web-ui`。
+3. `src/clients/` 按运行面组织客户端：`web` 是浏览器中的桌面布局，`electron` 是 Electron 的 main/preload 原生宿主，`electron-web` 是 Electron renderer 的浏览器可运行 parity 客户端，`mobile` 是 React Native 客户端，`mobile-web` 是移动布局的浏览器 parity 客户端；可复用的纯客户端核心和桌面 DOM 组件分别位于 `src/clients/shared/core`、`src/clients/shared/web-ui`，移动 Web DOM 组件可放入 `src/clients/shared/mobile-web-ui`。
 4. `app/` 中除 `app/gateway/` 外的工作区后端模块负责 Agent 业务规则、会话状态和核心计算；`app/gateway/` 只负责工作区路由和代理。
-5. **UI 只开发 `src/clients/web`（浏览器前端 8011，端口以 `scripts/dev.mjs` 的 `frontendPort` 为准）。Electron、React Native、VS Code 新客户端当前都只是预留 TODO；不要同步或修改它们的代码。用户说“UI”默认指纯 Web。**
+5. **当前已实现的页面功能仍只在 `src/clients/web` 开发（浏览器前端 8011，端口以 `scripts/dev.mjs` 的 `frontendPort` 为准）。** `electron-web` 和 `mobile-web` 只承载对应原生端约 90% 的非原生 UI parity 测试，不能替代 Electron、React Native 真机或模拟器测试；`electron/main`、`electron/preload` 和 `mobile` 的原生实现必须通过各自的 OpenSpec 变更进入。用户未指定客户端时，现阶段“UI”仍指 `src/clients/web`。
 6. 编写纯 Web 代码时应保持共享协议和纯业务模型不绑定浏览器全局对象，但不要为尚未实现的客户端预写 adapter、bridge 或兼容层。
 
 ### 提交和目录规范
@@ -71,7 +71,7 @@
 
 ### 目标
 
-1. 这是一个在用户本地工作区运行的 AI 编程助手，由 FastAPI 工作区后端、Workspace Gateway、浏览器前端和 VS Code 扩展共同提供 IDE 级自主编码体验。
+1. 这是一个在用户本地工作区运行的 AI 编程助手，由 FastAPI 工作区后端、Workspace Gateway 和客户端运行面共同提供 IDE 级自主编码体验。
 
 ### 界面术语
 

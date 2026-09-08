@@ -20,6 +20,8 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 class TestSessionService:
     """测试会话服务功能"""
 
+    workspace_id = "00000000-0000-4000-8000-000000000001"
+
     def setup_method(self):
         """每个测试前设置临时会话目录"""
         self.temp_dir = tempfile.mkdtemp()
@@ -33,6 +35,7 @@ class TestSessionService:
         self.service = SessionService(
             config_service=ConfigService(),
             trace_event_store=self.trace_event_store,
+            workspace_id=self.workspace_id,
         )
 
     def teardown_method(self):
@@ -54,6 +57,7 @@ class TestSessionService:
 
         assert session.session_id.startswith("ses_")
         assert len(session.session_id) == 36
+        assert session.workspace_id == self.workspace_id
         assert session.title == "Test Session"
         assert session.title_source == "user"
         assert isinstance(session.current_agent_id, str)
@@ -67,6 +71,7 @@ class TestSessionService:
 
         data = json.loads(session_file.read_text(encoding="utf-8"))
         assert data["session_id"] == session.session_id
+        assert data["workspace_id"] == self.workspace_id
         assert data["title"] == "Test Session"
         assert data["title_source"] == "user"
         assert data["current_agent_id"] == session.current_agent_id
@@ -130,6 +135,7 @@ class TestSessionService:
         service = SessionService(
             config_service=config_service,
             trace_event_store=self.trace_event_store,
+            workspace_id=self.workspace_id,
         )
         created = await service.create(SessionCreateRequest(title="模型持久化"))
 
@@ -142,6 +148,7 @@ class TestSessionService:
         restarted_service = SessionService(
             config_service=config_service,
             trace_event_store=self.trace_event_store,
+            workspace_id=self.workspace_id,
         )
         restored = await restarted_service.get(created.session_id)
         assert restored.current_provider_id == "backup"
@@ -206,6 +213,7 @@ class TestSessionService:
         service = SessionService(
             config_service=config_service,
             trace_event_store=self.trace_event_store,
+            workspace_id=self.workspace_id,
         )
         existing = await service.create(SessionCreateRequest(title="Existing"))
 
@@ -311,6 +319,27 @@ class TestSessionService:
         assert retrieved.session_id == created.session_id
         assert retrieved.title == created.title
         assert retrieved.created_at == created.created_at
+
+    @pytest.mark.asyncio
+    async def test_legacy_workspace_id_is_migrated_to_current_workspace_uuid(self):
+        session = await self.service.create(SessionCreateRequest(title="迁移旧 ID"))
+        session_file = get_session_file(session.session_id)
+        data = json.loads(session_file.read_text(encoding="utf-8"))
+        data["workspace_id"] = "ws_local"
+        session_file.write_text(json.dumps(data), encoding="utf-8")
+
+        restarted_service = SessionService(
+            config_service=ConfigService(),
+            trace_event_store=self.trace_event_store,
+            workspace_id=self.workspace_id,
+        )
+
+        restored = await restarted_service.get(session.session_id)
+
+        assert restored.workspace_id == self.workspace_id
+        assert json.loads(session_file.read_text(encoding="utf-8"))["workspace_id"] == (
+            self.workspace_id
+        )
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_session(self):

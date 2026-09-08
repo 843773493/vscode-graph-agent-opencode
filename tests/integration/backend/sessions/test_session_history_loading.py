@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -12,10 +14,17 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
-from app.core.rollout_context_reader import RolloutContextReader
-from app.core.rollout_storage import RolloutStorage
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.checkpoint.reader import (
+    RolloutContextReader,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
 
@@ -241,16 +250,13 @@ async def test_history_loads_rollout_summary_and_tool_details(
     assert all(item["raw"] == {} for item in latest["items"])
     assert "encrypted-0024" not in json.dumps(latest, ensure_ascii=False)
 
-    storage = RolloutStorage(
+    # 重启恢复通过 Saver 注入 message codec；storage 不装配 LangChain 投影。
+    saver = RolloutCheckpointSaver(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     )
-    checkpoint = storage.latest_checkpoint(session_id, "", None)
+    checkpoint = await saver.aget_tuple(build_checkpoint_config(session_id))
     assert checkpoint is not None
-    restored_messages = storage.materialize_messages(
-        session_id,
-        "",
-        checkpoint.message_sequence,
-    )
+    restored_messages = checkpoint.checkpoint["channel_values"]["messages"]
     restored_tool_message = next(
         message
         for message in restored_messages
@@ -423,11 +429,9 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
     assert "data:image" not in serialized
     assert "history-preview-only" not in serialized
 
-    restored = RolloutStorage(sessions_dir).materialize_messages(
-        session_id,
-        "",
-        2,
-    )
+    checkpoint = await saver.aget_tuple(build_checkpoint_config(session_id))
+    assert checkpoint is not None
+    restored = checkpoint.checkpoint["channel_values"]["messages"]
     restored_user = restored[0]
     assert isinstance(restored_user, HumanMessage)
     assert restored_user.content[2]["image_url"]["url"].endswith(
@@ -449,7 +453,8 @@ async def test_history_tool_selector_only_materializes_requested_tool(
         tool_count=2,
     )
     storage = RolloutStorage(
-        Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions",
+        message_codec=LangChainMessageCodec(),
     )
     reader = RolloutHistoryReader(RolloutContextReader(storage))
     read_sequences: list[list[int]] = []
@@ -459,10 +464,14 @@ async def test_history_tool_selector_only_materializes_requested_tool(
         thread_id: str,
         checkpoint_ns: str,
         rows: Iterable[tuple[int, str, int, int]],
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> list[dict[str, object]]:
         indexed_rows = list(rows)
         read_sequences.append([int(row[0]) for row in indexed_rows])
-        return original_read(thread_id, checkpoint_ns, indexed_rows)
+        return original_read(
+            thread_id, checkpoint_ns, indexed_rows, connection=connection
+        )
 
     monkeypatch.setattr(storage, "_read_record_envelopes", capture_read)
     reader.load(
@@ -731,7 +740,9 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
     )
 
     reader = RolloutHistoryReader(
-        RolloutContextReader(RolloutStorage(sessions_dir))
+        RolloutContextReader(
+            RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
+        )
     )
     page = reader.load(session_id, TurnHistoryLoadRequest(direction="tail"))
     assert page.items[0].final_response == "标记的最终响应"
@@ -765,12 +776,33 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     )
     # 故意不调用 finalize_turn，模拟最终消息 JSONL 已提交但控制记录尚未提交。
     page = RolloutHistoryReader(
-        RolloutContextReader(RolloutStorage(sessions_dir))
+        RolloutContextReader(
+            RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
+        )
     ).load(
         session_id,
         TurnHistoryLoadRequest(direction="tail"),
     )
-    assert page.items[0].final_response == "仍可恢复的最终响应"
+    # 已提交正文不等于已收敛的 final pointer；不能从最后一个 AIMessage 猜 final。
+    assert page.items[0].final_response == ""
+    restored = await saver.aget_tuple(config)
+    assert restored is not None
+    restored_final = next(
+        message
+        for message in restored.checkpoint["channel_values"]["messages"]
+        if isinstance(message, AIMessage) and message.id == final.id
+    )
+    assert restored_final.content == "仍可恢复的最终响应"
+
+    saver.finalize_turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        final_message_id=final.id,
+    )
+    finalized = saver.load_history(
+        session_id, TurnHistoryLoadRequest(direction="tail")
+    )
+    assert finalized.items[0].final_response == "仍可恢复的最终响应"
 
 
 @pytest.mark.asyncio
@@ -787,7 +819,8 @@ async def test_bounded_history_uses_sqlite_turn_spans_without_materializing_all_
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=128)
 
     storage = RolloutStorage(
-        Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions",
+        message_codec=LangChainMessageCodec(),
     )
     reader = RolloutHistoryReader(RolloutContextReader(storage))
 
@@ -863,7 +896,8 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
     reader = RolloutHistoryReader(
         RolloutContextReader(
             RolloutStorage(
-                Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+                Path(integration_workspace_root_path) / ".boxteam" / "sessions",
+                message_codec=LangChainMessageCodec(),
             )
         )
     )
@@ -886,7 +920,8 @@ async def test_history_detail_enforces_per_item_budget(
     )
 
     storage = RolloutStorage(
-        Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions",
+        message_codec=LangChainMessageCodec(),
     )
     reader = RolloutHistoryReader(RolloutContextReader(storage))
 
@@ -944,3 +979,129 @@ async def test_history_tool_summary_truncates_long_turn_without_response_400(
     assert detail_item["tool_summary_truncated"] is True
     assert detail_item["detail_truncated"] is True
     assert len(detail_item["items"]) == 66
+
+
+@pytest.mark.asyncio
+async def test_history_final_summary_never_reads_final_jsonl_body(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = await _create_session(integration_client, "final 有界读取")
+    sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+    saver = RolloutCheckpointSaver(sessions_dir)
+    messages = _turn_messages(1)
+    final_text = "最终正文" * 30_000
+    messages[-1] = messages[-1].model_copy(update={"content": final_text})
+    saver.put(
+        build_checkpoint_config(session_id),
+        _checkpoint("bounded-final", messages, channel_version=1),
+        {"source": "bounded-final-test"},
+        {"messages": "1"},
+    )
+    saver.finalize_turn(
+        session_id=session_id,
+        turn_id="job-0001",
+        final_message_id="assistant-final-0001",
+    )
+    storage = RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
+    jsonl_path = storage.jsonl_path(session_id)
+    committed_bytes = jsonl_path.read_bytes()
+    original_read = storage._read_record_envelopes
+    read_sequences: list[int] = []
+
+    def bounded_read(thread_id, checkpoint_ns, rows, *, connection=None):
+        rows = list(rows)
+        sequences = [row[0] for row in rows]
+        assert all(sequence == 1 for sequence in sequences)
+        read_sequences.extend(sequences)
+        return original_read(thread_id, checkpoint_ns, rows, connection=connection)
+
+    monkeypatch.setattr(storage, "_read_record_envelopes", bounded_read)
+    reader = RolloutHistoryReader(RolloutContextReader(storage))
+    page = reader.load(
+        session_id,
+        TurnHistoryLoadRequest(turn_ids=["job-0001"], include=["final_response"]),
+    )
+    assert read_sequences == []
+    detail = page.items[0]
+    assert detail.final_response
+    assert final_text.startswith(detail.final_response)
+    assert len(detail.final_response) < len(final_text)
+    assert detail.detail_truncated is True
+    assert detail.response_parts
+    assert all(part.kind == "final_text" for part in detail.response_parts)
+    latest, _, _ = reader.bootstrap(session_id)
+    assert latest is not None
+    assert latest.ordinal == 1
+    assert read_sequences == [1]
+    assert jsonl_path.read_bytes() == committed_bytes
+
+
+@pytest.fixture
+def history_catalog_copy():
+    """仅在内存副本注入索引差异，不改写正式 fixture 的已提交数据。"""
+    connection = sqlite3.connect(":memory:")
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation,expected", [
+    ("UPDATE messages SET role = 'assistant'", 1),
+    ("UPDATE context_view_items SET visible = 0", 0),
+    ("UPDATE context_view_turns SET root_input_item_id = 'absent-root'", 0),
+])
+async def test_history_turn_visibility_uses_canonical_root_membership(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    history_catalog_copy,
+    mutation: str,
+    expected: int,
+) -> None:
+    session_id = await _create_session(integration_client, "canonical root 可见性")
+    _seed_rollout(Path(integration_workspace_root_path), session_id, count=1)
+    storage = RolloutStorage(
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions",
+        message_codec=LangChainMessageCodec(),
+    )
+    with storage.open_read_snapshot(session_id) as snapshot:
+        snapshot.connection.backup(history_catalog_copy)
+        history_catalog_copy.execute(mutation)
+        copied = replace(snapshot, connection=history_catalog_copy)
+        view_id = history_catalog_copy.execute(
+            "SELECT head_view_id FROM branches WHERE status = 'active'"
+        ).fetchone()[0]
+        assert storage.context_turn_count(copied, view_id) == expected
+        rows, has_more = storage.read_context_turn_page(
+            copied, view_id, direction="tail", anchor_ordinal=None, limit=1,
+        )
+        assert len(rows) == expected
+        assert has_more is False
+        assert len(storage.read_context_turn_ids(copied, view_id, ["job-0001"])) == expected
+
+
+@pytest.mark.asyncio
+async def test_history_bounded_final_rejects_mismatched_canonical_pointer(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    history_catalog_copy,
+) -> None:
+    session_id = await _create_session(integration_client, "final pointer 必须一致")
+    _seed_rollout(Path(integration_workspace_root_path), session_id, count=1)
+    storage = RolloutStorage(
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions",
+        message_codec=LangChainMessageCodec(),
+    )
+    jsonl_bytes = storage.jsonl_path(session_id).read_bytes()
+    with storage.open_read_snapshot(session_id) as snapshot:
+        snapshot.connection.backup(history_catalog_copy)
+        history_catalog_copy.execute(
+            "UPDATE turns SET final_message_sequence = 2, final_message_id = 'assistant-tool-0001'"
+        )
+        copied = replace(snapshot, connection=history_catalog_copy)
+        with pytest.raises(RuntimeError, match="final projection 与 canonical Turn/item 指针不一致"):
+            storage.read_turn_projections(copied, ["job-0001"])
+    assert storage.jsonl_path(session_id).read_bytes() == jsonl_bytes

@@ -602,6 +602,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     apiPort: state.apiPort,
     setState,
     settings: state.uiSettings,
+    isGuestView: state.gatewayUserAccess?.kind === "guest",
   });
 
   useEffect(() => {

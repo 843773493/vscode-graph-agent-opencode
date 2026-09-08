@@ -5,6 +5,7 @@ import {
   updateGatewayUiSettings,
 } from "../gatewayApi";
 import { writeCachedUiSettings } from "../state/storage";
+import { mergeGuestWebUiSettings } from "../state/uiSettings/preferences";
 import type { WebUiSettings, WebUiSettingsUpdate } from "../types/backend";
 import type { SetAppState } from "./contentViewLoaderTypes";
 import { loadAndApplyResolvedGatewayTheme } from "../theme";
@@ -34,17 +35,21 @@ export function useUiSettingsController({
   apiPort,
   setState,
   settings,
+  isGuestView,
 }: {
   apiPort: number | null;
   setState: SetAppState;
   settings: WebUiSettings;
+  isGuestView: boolean;
 }) {
   const updateQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestSettingsRef = useRef(settings);
+  const latestIsGuestViewRef = useRef(isGuestView);
 
   useEffect(() => {
     latestSettingsRef.current = settings;
-  }, [settings]);
+    latestIsGuestViewRef.current = isGuestView;
+  }, [isGuestView, settings]);
 
   return useCallback((
     input: WebUiSettingsUpdate | ((current: WebUiSettings) => WebUiSettingsUpdate),
@@ -56,15 +61,25 @@ export function useUiSettingsController({
         : input;
       try {
         const updatedSettings = await updateGatewayUiSettings(resolvedApiPort, payload);
-        latestSettingsRef.current = updatedSettings;
-        writeCachedUiSettings(updatedSettings);
-        await applyUiSettings(setState, updatedSettings);
+        const settingsToApply = latestIsGuestViewRef.current
+          ? mergeGuestWebUiSettings(
+              latestSettingsRef.current,
+              updatedSettings,
+              payload,
+            )
+          : updatedSettings;
+        latestSettingsRef.current = settingsToApply;
+        writeCachedUiSettings(settingsToApply);
+        await applyUiSettings(setState, settingsToApply);
       } catch (updateError) {
         try {
           const reloadedSettings = await getGatewayUiSettings(resolvedApiPort);
-          latestSettingsRef.current = reloadedSettings;
-          writeCachedUiSettings(reloadedSettings);
-          await applyUiSettings(setState, reloadedSettings);
+          const settingsToApply = latestIsGuestViewRef.current
+            ? latestSettingsRef.current
+            : reloadedSettings;
+          latestSettingsRef.current = settingsToApply;
+          writeCachedUiSettings(settingsToApply);
+          await applyUiSettings(setState, settingsToApply);
         } catch (reloadError) {
           throw new Error(
             `页面设置保存失败，且重新读取 Gateway 设置失败：保存错误=${String(updateError)}；读取错误=${String(reloadError)}`,

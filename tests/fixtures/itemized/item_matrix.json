@@ -1,0 +1,328 @@
+{
+  "source": "openspec/changes/add-itemized-rollout-context/design.md",
+  "rows": [
+    {
+      "semantic_kind": "user_input",
+      "allowed_payloads": [
+        "text",
+        "structured_content"
+      ],
+      "allowed_statuses": [
+        "completed"
+      ],
+      "examples": {
+        "text": "真实用户输入",
+        "structured_content": {
+          "parts": [
+            {
+              "text": "输入",
+              "ordinal": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "semantic_kind": "assistant_output",
+      "allowed_payloads": [
+        "text",
+        "structured_content"
+      ],
+      "allowed_statuses": [
+        "completed",
+        "partial",
+        "incomplete",
+        "cancelled",
+        "failed",
+        "unknown"
+      ],
+      "examples": {
+        "text": "回答",
+        "structured_content": {
+          "parts": [
+            {
+              "text": "回答",
+              "ordinal": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "semantic_kind": "reasoning",
+      "allowed_payloads": [
+        "text",
+        "summary",
+        "opaque",
+        "extension"
+      ],
+      "allowed_statuses": [
+        "completed",
+        "partial",
+        "incomplete",
+        "cancelled",
+        "failed",
+        "unknown"
+      ],
+      "examples": {
+        "text": "推理",
+        "summary": {
+          "summary": "摘要"
+        },
+        "opaque": {
+          "encoding": "base64url",
+          "value": "cHJvdGVjdGVk",
+          "wire_type": "example.encrypted",
+          "schema_version": "v1",
+          "protection": {
+            "visibility": "private",
+            "mode": "opaque"
+          }
+        },
+        "extension": {
+          "encoding": "json",
+          "value": {
+            "𐀀": 1e-7,
+            "￿": 0
+          },
+          "wire_type": "example.encrypted",
+          "schema_version": "v1",
+          "protection": {
+            "visibility": "private",
+            "mode": "opaque"
+          },
+          "extension_schema": "example.reasoning",
+          "extension_version": "v1"
+        }
+      }
+    },
+    {
+      "semantic_kind": "tool_call",
+      "allowed_payloads": [
+        "tool_call",
+        "structured_content"
+      ],
+      "allowed_statuses": [
+        "completed",
+        "partial",
+        "incomplete",
+        "cancelled",
+        "failed",
+        "unknown"
+      ],
+      "examples": {
+        "tool_call": {
+          "tool_call_id": "call-1",
+          "name": "read_file",
+          "args": {}
+        },
+        "structured_content": {
+          "tool_calls": [
+            {
+              "id": "call-1",
+              "name": "read_file",
+              "args": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "semantic_kind": "tool_result",
+      "metadata_by_payload": {
+        "text": {
+          "tool_call_id": "call-1",
+          "result_id": "result-1",
+          "execution_confirmed": true
+        }
+      },
+      "allowed_payloads": [
+        "text",
+        "structured_content",
+        "tool_result",
+        "opaque",
+        "extension"
+      ],
+      "allowed_statuses": [
+        "completed",
+        "partial",
+        "incomplete",
+        "cancelled",
+        "failed",
+        "unknown"
+      ],
+      "examples": {
+        "text": "result",
+        "structured_content": {
+          "tool_call_id": "call-1",
+          "result_id": "result-1",
+          "content": "result",
+          "tool_outcome": "unknown"
+        },
+        "tool_result": {
+          "tool_call_id": "call-1",
+          "result_id": "result-1",
+          "content": "result",
+          "tool_outcome": "unknown"
+        },
+        "opaque": {
+          "encoding": "base64url",
+          "value": "cHJvdGVjdGVk",
+          "wire_type": "example.encrypted",
+          "schema_version": "v1",
+          "protection": {
+            "visibility": "private",
+            "mode": "opaque"
+          },
+          "tool_call_id": "call-1",
+          "result_id": "result-1",
+          "tool_outcome": "unknown"
+        },
+        "extension": {
+          "encoding": "json",
+          "value": {
+            "𐀀": 1e-7,
+            "￿": 0
+          },
+          "wire_type": "example.encrypted",
+          "schema_version": "v1",
+          "protection": {
+            "visibility": "private",
+            "mode": "opaque"
+          },
+          "extension_schema": "example.reasoning",
+          "extension_version": "v1",
+          "tool_call_id": "call-1",
+          "result_id": "result-1",
+          "tool_outcome": "unknown"
+        }
+      }
+    },
+    {
+      "semantic_kind": "runtime_notice",
+      "allowed_payloads": [
+        "text",
+        "structured_content",
+        "opaque",
+        "extension"
+      ],
+      "allowed_statuses": [
+        "completed"
+      ],
+      "examples": {
+        "text": "运行时提醒",
+        "structured_content": {
+          "text": "提醒"
+        },
+        "opaque": {
+          "encoding": "base64url",
+          "value": "cHJvdGVjdGVk",
+          "wire_type": "example.encrypted",
+          "schema_version": "v1",
+          "protection": {
+            "visibility": "private",
+            "mode": "opaque"
+          }
+        },
+        "extension": {
+          "encoding": "json",
+          "value": {
+            "𐀀": 1e-7,
+            "￿": 0
+          },
+          "wire_type": "example.encrypted",
+          "schema_version": "v1",
+          "protection": {
+            "visibility": "private",
+            "mode": "opaque"
+          },
+          "extension_schema": "example.reasoning",
+          "extension_version": "v1"
+        }
+      }
+    },
+    {
+      "semantic_kind": "compaction_summary",
+      "allowed_payloads": [
+        "summary",
+        "structured_content"
+      ],
+      "allowed_statuses": [
+        "completed"
+      ],
+      "examples": {
+        "summary": {
+          "summary_id": "summary-1",
+          "view_revision": "view-3",
+          "summary": "摘要"
+        },
+        "structured_content": {
+          "summary_id": "summary-1",
+          "view_revision": "view-3",
+          "parts": []
+        }
+      }
+    },
+    {
+      "semantic_kind": "attachment",
+      "allowed_payloads": [
+        "attachment_ref"
+      ],
+      "allowed_statuses": [
+        "completed"
+      ],
+      "examples": {
+        "attachment_ref": {
+          "ref": "attachment-1",
+          "length": 3,
+          "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "availability": "available"
+        }
+      }
+    },
+    {
+      "semantic_kind": "extension",
+      "allowed_payloads": [
+        "extension",
+        "opaque"
+      ],
+      "allowed_statuses": [
+        "completed",
+        "partial",
+        "incomplete",
+        "cancelled",
+        "failed",
+        "unknown"
+      ],
+      "examples": {
+        "extension": {
+          "encoding": "json",
+          "value": {
+            "𐀀": 1e-7,
+            "￿": 0
+          },
+          "wire_type": "example.encrypted",
+          "schema_version": "v1",
+          "protection": {
+            "visibility": "private",
+            "mode": "opaque"
+          },
+          "extension_schema": "example.reasoning",
+          "extension_version": "v1"
+        },
+        "opaque": {
+          "encoding": "base64url",
+          "value": "cHJvdGVjdGVk",
+          "wire_type": "example.encrypted",
+          "schema_version": "v1",
+          "protection": {
+            "visibility": "private",
+            "mode": "opaque"
+          },
+          "extension_schema": "example.opaque",
+          "extension_version": "v1"
+        }
+      }
+    }
+  ]
+}

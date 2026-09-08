@@ -19,11 +19,11 @@
 - **THEN** 该组件可以进入 `src/clients/shared/web-ui/`，并且不得导入具体客户端应用入口
 
 ### Requirement: 本阶段只维护纯 Web 客户端
-本变更 SHALL 只迁移、开发和验证纯 Web 客户端。`src/clients/electron/`、`src/clients/mobile/` 与 `src/clients/vscode/` SHALL 作为未来边界保留 TODO 和目录规范；本变更不得要求修改、迁移或验证现存非 Web 客户端实现。
+本变更 SHALL 只迁移、开发和验证纯 Web 客户端。`src/clients/electron/`、`src/clients/electron-web/`、`src/clients/mobile/` 与 `src/clients/mobile-web/` SHALL 作为未来边界保留 TODO 和目录规范；本变更不得要求实现或验证现存非 Web 客户端。
 
-#### Scenario: 遇到非 Web 客户端代码
-- **WHEN** 目录迁移发现现存 VS Code 扩展或 Webview 代码
-- **THEN** 该代码保持原路径和行为，本变更仅在架构文档中记录后续迁移 TODO
+#### Scenario: 遇到未实现的客户端运行面
+- **WHEN** 目录迁移发现 Electron 或 React Native 运行面尚未实现
+- **THEN** 保留对应目录规范，不复制纯 Web 代码，也不为其添加无调用方的适配层
 
 #### Scenario: 设计共享接口
 - **WHEN** 当前纯 Web 代码定义可能被未来客户端复用的协议或状态模型
@@ -87,10 +87,9 @@ Python 测试分区名称 SHALL 使用可导入的 `workspace_services`；源码
 受影响的源码与测试目录 SHALL 提供匹配当前结构的 `AGENTS.md`，并在根级架构文档中明确当前只开发纯 Web、其他客户端是 TODO。所有新增源码子目录 SHALL 包含“目录用途”“可修改内容”“不可修改内容”和“规范”四部分。
 
 #### Scenario: 代理进入预留客户端目录
-- **WHEN** 开发代理读取 Electron、Mobile 或 VS Code 预留目录的 `AGENTS.md`
+- **WHEN** 开发代理读取 Electron、Electron Web、Mobile 或 Mobile Web 预留目录的 `AGENTS.md`
 - **THEN** 文档明确禁止在本阶段实现该客户端，并将新增工作指向独立 OpenSpec 变更
 
 #### Scenario: 代理修改纯 Web UI
 - **WHEN** 开发代理修改 `src/clients/web/` 中的 UI
 - **THEN** 最近的目录说明要求运行该 Web 工程的静态分析和生产构建
-

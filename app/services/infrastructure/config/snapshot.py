@@ -13,6 +13,9 @@ ConfigReloadFailureReason = Literal[
     "invalid_config",
     "restart_required",
     "apply_failed",
+    "conflict",
+    "rejected",
+    "recovery_required",
 ]
 
 
@@ -42,6 +45,16 @@ class ConfigReloadStatus:
     restart_required: bool = False
     reason: ConfigReloadFailureReason | None = None
     changed_sections: tuple[str, ...] = ()
+    state: str | None = None
+    active_revision: int | None = None
+    pending_revision: int | None = None
+    candidate_id: str | None = None
+    candidate_ref: str | None = None
+    attempt_id: str | None = None
+    apply_id: str | None = None
+    layer_digests: dict[str, str | None] | None = None
+    applied_paths: tuple[str, ...] = ()
+    deferred_paths: tuple[str, ...] = ()
 
 
 class ConfigRestartRequiredError(RuntimeError):

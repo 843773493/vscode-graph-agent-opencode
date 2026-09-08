@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import copy
-import json
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
 
 from langchain_core.callbacks import (
@@ -14,13 +11,7 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
-    ChatMessage,
-    FunctionMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
 )
-from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_litellm import ChatLiteLLM
 
@@ -35,282 +26,32 @@ from app.agents.providers._format_check import (
     check_history_messages_accepted,
     validate_provider_format,
 )
-from app.agents.providers.litellm_content import (
+from app.agents.providers.litellm_history_projection import (
+    LiteLLMHistoryProjectionMixin,
+)
+from app.agents.providers.litellm_stream_types import (
+    _as_dict,
+    _close_sync_stream,
+    _create_usage_metadata,
+    _message_chunk_token,
+    _streamed_response_payload,
+    _StreamPartState,
+)
+from app.agents.providers.output_normalization import (
     MISSING,
     build_ai_message_content,
-    canonicalize_ai_message,
-    project_ai_message_content,
-    project_user_message_content,
-    reasoning_projection_rows,
 )
+from app.agents.providers.response_normalization import canonicalize_ai_message
 from app.agents.upstream_request_trace import (
     attach_upstream_trace_callback,
     record_upstream_response,
 )
 from app.core.cancelable_stream import CancelableStream
-from app.core.identifier import create_prefixed_id
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.turn_execution_scope import get_current_turn_execution_scope
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return copy.deepcopy(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump()
-        if isinstance(dumped, dict):
-            return copy.deepcopy(dumped)
-    return {}
-
-
-def _usage_value(usage: Any, key: str) -> Any:
-    if isinstance(usage, dict):
-        return usage.get(key)
-    return getattr(usage, key, None)
-
-
-def _first_usage_value(usage: Any, *keys: str) -> Any:
-    for key in keys:
-        value = _usage_value(usage, key)
-        if value is not None:
-            return value
-    return None
-
-
-def _create_usage_metadata(usage: Any) -> UsageMetadata:
-    input_tokens = int(_usage_value(usage, "prompt_tokens") or 0)
-    output_tokens = int(_usage_value(usage, "completion_tokens") or 0)
-    raw_total = _usage_value(usage, "total_tokens")
-    total_tokens = (
-        int(raw_total) if raw_total is not None else input_tokens + output_tokens
-    )
-    metadata: UsageMetadata = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-    }
-    prompt_details = _usage_value(usage, "prompt_tokens_details")
-    cached_tokens = _first_usage_value(
-        prompt_details,
-        "cached_tokens",
-    )
-    if cached_tokens is None:
-        cached_tokens = _first_usage_value(
-            usage,
-            "cache_read_input_tokens",
-            "prompt_cache_hit_tokens",
-        )
-    cache_creation_tokens = _first_usage_value(
-        prompt_details,
-        "cache_creation_tokens",
-        "cache_write_tokens",
-    )
-    if cache_creation_tokens is None:
-        cache_creation_tokens = _usage_value(usage, "cache_creation_input_tokens")
-
-    input_details: InputTokenDetails = {}
-    if cached_tokens is not None:
-        input_details["cache_read"] = int(cached_tokens)
-    if cache_creation_tokens is not None:
-        input_details["cache_creation"] = int(cache_creation_tokens)
-    if input_details:
-        metadata["input_token_details"] = input_details
-    return metadata
-
-
-def _message_chunk_token(message: AIMessageChunk) -> str:
-    text_attr = getattr(message, "text", "")
-    if isinstance(text_attr, str):
-        return text_attr
-    if callable(text_attr):
-        return text_attr()
-    return ""
-
-
-def _streamed_response_payload(
-    chunks: Sequence[AIMessageChunk],
-) -> dict[str, object]:
-    """从已解析的 Chat SDK chunks 构造可审查的 upstream response 摘要。"""
-
-    reasoning_parts: list[str] = []
-    text_parts: list[str] = []
-    tool_calls: dict[int, dict[str, str]] = {}
-    for message in chunks:
-        content = getattr(message, "content", "")
-        blocks = content if isinstance(content, list) else [content]
-        for block in blocks:
-            if isinstance(block, str):
-                text_parts.append(block)
-                continue
-            if not isinstance(block, Mapping):
-                continue
-            block_type = block.get("type")
-            if block_type == "reasoning_content":
-                reasoning = block.get("reasoning_content")
-                if isinstance(reasoning, str):
-                    reasoning_parts.append(reasoning)
-            elif block_type in {"text", "output_text"}:
-                text = block.get("text")
-                if isinstance(text, str):
-                    text_parts.append(text)
-
-        for fallback_index, raw_tool_call in enumerate(
-            getattr(message, "tool_call_chunks", []) or []
-        ):
-            if not isinstance(raw_tool_call, Mapping):
-                continue
-            raw_index = raw_tool_call.get("index")
-            index = raw_index if isinstance(raw_index, int) else fallback_index
-            current = tool_calls.setdefault(index, {})
-            for key in ("id", "name"):
-                value = raw_tool_call.get(key)
-                if isinstance(value, str) and value:
-                    current[key] = value
-            arguments = raw_tool_call.get("args")
-            if isinstance(arguments, str):
-                current["arguments"] = current.get("arguments", "") + arguments
-
-    message_payload: dict[str, object] = {
-        "role": "assistant",
-        "content": "".join(text_parts) or None,
-    }
-    reasoning = "".join(reasoning_parts)
-    if reasoning:
-        message_payload["reasoning_content"] = reasoning
-    if tool_calls:
-        message_payload["tool_calls"] = [
-            {
-                "id": call.get("id"),
-                "type": "function",
-                "function": {
-                    "name": call.get("name"),
-                    "arguments": call.get("arguments", ""),
-                },
-            }
-            for _index, call in sorted(tool_calls.items())
-        ]
-    return {
-        "choices": [
-            {
-                "index": 0,
-                "message": message_payload,
-            }
-        ]
-    }
-
-
-def _close_sync_stream(raw_stream: Any) -> None:
-    close = getattr(raw_stream, "close", None)
-    if close is not None:
-        close()
-
-
-def _openai_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "id": tool_call["id"],
-        "function": {
-            "name": tool_call["name"],
-            "arguments": json.dumps(tool_call.get("args") or {}, ensure_ascii=False),
-        },
-    }
-
-
-@dataclass(slots=True)
-class _StreamPartState:
-    """为单次模型响应分配稳定的 LangChain content part 身份。"""
-
-    next_index: int = 0
-    active_kind: str | None = None
-    active_part_id: str | None = None
-    active_index: int | None = None
-    active_provider_part_id: str | None = None
-    fallback_item_ids: dict[int, str] | None = None
-    reasoning_summary_provider_ids: set[str] = field(default_factory=set)
-    responses_tool_call_ids_by_item_id: dict[str, str] = field(default_factory=dict)
-    responses_tool_call_ids_by_output_index: dict[int, str] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        self.fallback_item_ids = {}
-
-    def close(self) -> None:
-        self.active_kind = None
-        self.active_part_id = None
-        self.active_index = None
-        self.active_provider_part_id = None
-
-    def item_id(self, index: int) -> str:
-        """为缺少 provider ID 的 reasoning item 保留稳定的本地身份。"""
-        if self.fallback_item_ids is None:
-            self.fallback_item_ids = {}
-        item_id = self.fallback_item_ids.get(index)
-        if item_id is None:
-            item_id = f"reasoning-item:{index}"
-            self.fallback_item_ids[index] = item_id
-        return item_id
-
-    def decorate(self, block: dict[str, Any]) -> dict[str, Any]:
-        block_type = block.get("type")
-        if block_type in {
-            "reasoning",
-            "reasoning_content",
-            "reasoning_items",
-            "thinking",
-            "redacted_thinking",
-        } or block_type in {"text", "output_text", "refusal"}:
-            pass
-        else:
-            self.close()
-            return block
-
-        provider_part_id = block.get("id")
-        extras = block.get("extras")
-        if not isinstance(provider_part_id, str) and isinstance(extras, dict):
-            raw_provider_part_id = extras.get("id") or extras.get("provider_part_id")
-            if isinstance(raw_provider_part_id, str):
-                provider_part_id = raw_provider_part_id
-        if not isinstance(provider_part_id, str) and block_type == "reasoning_items":
-            items = block.get("reasoning_items")
-            first_item = items[0] if isinstance(items, list) and items else None
-            item_id = first_item.get("id") if isinstance(first_item, dict) else None
-            if isinstance(item_id, str):
-                provider_part_id = item_id
-
-        provider_changed = (
-            isinstance(provider_part_id, str)
-            and self.active_provider_part_id is not None
-            and provider_part_id != self.active_provider_part_id
-        )
-        part_changed = self.active_kind != block_type or provider_changed
-        if part_changed:
-            self.active_kind = block_type
-            self.active_part_id = create_prefixed_id("part")
-            self.active_index = self.next_index
-            self.active_provider_part_id = (
-                provider_part_id if isinstance(provider_part_id, str) else None
-            )
-            self.next_index += 1
-        elif isinstance(provider_part_id, str) and self.active_provider_part_id is None:
-            self.active_provider_part_id = provider_part_id
-
-        if self.active_part_id is None or self.active_index is None:
-            raise RuntimeError("模型流 content part 状态未初始化")
-
-        decorated = dict(block)
-        # LangChain 合并同一个 index 的 block 时，会把未知字符串字段拼接起来。
-        # provider_part_id 只在 part 首次出现时写入，避免连续 reasoning delta
-        # 变成 ``rs_1rs_1``，同时保留最终 canonicalizer 恢复 provider ID 的依据。
-        if isinstance(provider_part_id, str) and part_changed:
-            decorated_extras = dict(extras) if isinstance(extras, dict) else {}
-            decorated_extras.pop("id", None)
-            decorated_extras["provider_part_id"] = provider_part_id
-            decorated["extras"] = decorated_extras
-        decorated["id"] = self.active_part_id
-        decorated["index"] = self.active_index
-        return decorated
-
-
-class BoxteamLiteLLMChatModel(ChatLiteLLM):
+class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     """LiteLLM 模型包装层，统一输出 LangChain 标准 content blocks。"""
 
     provider_id: str | None = None
@@ -344,285 +85,6 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             f"provider={provider}，model={model}，已尝试 {attempts} 次。"
             "已经收到的半截 delta 不会静默重试，AgentLoop 必须将本次调用标记为失败。"
         )
-
-    @staticmethod
-    def normalize_history_content(content: Any) -> Any:
-        """把 checkpoint 历史消息转换为 LiteLLM/OpenAI-compatible 可接受内容。"""
-        if not isinstance(content, list):
-            return content
-
-        normalized: list[dict[str, Any] | Any] = []
-        changed = False
-        for block in content:
-            if isinstance(block, str):
-                normalized.append({"type": "text", "text": block})
-                changed = True
-                continue
-            if not isinstance(block, dict):
-                normalized.append({"type": "text", "text": str(block)})
-                changed = True
-                continue
-
-            block_type = block.get("type")
-            # LangChain 合并流式 content block 时，重复 delta 可能把 type
-            # 拼成 ``reasoningreasoningreasoning``。这些块仍然是内部思考，
-            # 不能作为 Chat Completions 正文透传给不支持该类型的目标模型。
-            if isinstance(block_type, str) and block_type.startswith(
-                ("reasoning", "thinking", "redacted_thinking")
-            ):
-                changed = True
-                continue
-            if block_type == "output_text":
-                text = block.get("text")
-                if isinstance(text, str):
-                    normalized.append({"type": "text", "text": text})
-                changed = True
-                continue
-            if block_type == "text":
-                text = block.get("text")
-                if isinstance(text, str):
-                    normalized.append({"type": "text", "text": text})
-                    if set(block) != {"type", "text"}:
-                        changed = True
-                else:
-                    changed = True
-                continue
-
-            fallback_text = block.get("text")
-            if isinstance(fallback_text, str):
-                normalized.append({"type": "text", "text": fallback_text})
-                changed = True
-                continue
-            normalized.append(block)
-
-        if not normalized:
-            return ""
-        if not changed:
-            return content
-        return normalized
-
-    @staticmethod
-    def normalize_output_content(content: Any) -> Any:
-        """把 LiteLLM 输出中的 thinking/output_text 等方言转为标准块。"""
-        if content is None:
-            return ""
-        if isinstance(content, str):
-            return [{"type": "text", "text": content}] if content else ""
-        if not isinstance(content, list):
-            return [{"type": "text", "text": str(content)}]
-
-        normalized: list[dict[str, Any]] = []
-        for block in content:
-            if isinstance(block, str):
-                if block:
-                    normalized.append({"type": "text", "text": block})
-                continue
-            if not isinstance(block, dict):
-                normalized.append({"type": "text", "text": str(block)})
-                continue
-
-            block_type = block.get("type")
-            if block_type in {
-                "reasoning",
-                "reasoning_content",
-                "reasoning_items",
-                "thinking",
-                "redacted_thinking",
-            }:
-                # LiteLLM 已经给出标准 block 时整体复制，不能在这里按字段
-                # 白名单重建，否则 provider 新增的字段会在历史中丢失。
-                normalized.append(copy.deepcopy(block))
-                continue
-            if block_type in {"text", "output_text"}:
-                text = block.get("text")
-                if isinstance(text, str):
-                    normalized.append({"type": "text", "text": text})
-                continue
-            if block_type in {"tool_call", "tool_call_chunk"}:
-                continue
-            if isinstance(block_type, str):
-                normalized.append(copy.deepcopy(block))
-                continue
-
-            fallback_text = block.get("text")
-            if isinstance(fallback_text, str):
-                normalized.append({"type": "text", "text": fallback_text})
-
-        return normalized or ""
-
-    def _normalize_history_content(self, content: Any) -> Any:
-        return self.normalize_history_content(content)
-
-    @staticmethod
-    def _history_reasoning_content(content: Any) -> str | None:
-        """从直接 reasoning block 提取 Chat Completions 所需的思考文本。"""
-        parts = [
-            str(row["text"])
-            for row in reasoning_projection_rows(content)
-            if row.get("kind") in {"reasoning", "summary"}
-            and isinstance(row.get("text"), str)
-            and row["text"]
-        ]
-        return "\n".join(parts) or None
-
-    def _apply_reasoning_content_replay(
-        self,
-        message_dict: dict[str, Any],
-        *,
-        content: Any,
-    ) -> None:
-        if not self.reasoning_content_replay and not self.thinking_blocks_replay:
-            message_dict.pop("reasoning_content", None)
-            message_dict.pop("thinking_blocks", None)
-            return
-        target_capabilities: set[str] = set()
-        if self.reasoning_content_replay:
-            target_capabilities.add("reasoning_content_replay")
-        if self.thinking_blocks_replay:
-            target_capabilities.add("thinking_blocks")
-        projection = project_ai_message_content(
-            content,
-            target_provider=self.provider_id,
-            target_capabilities=target_capabilities,
-        )
-        if self.reasoning_content_replay:
-            reasoning = projection.get("reasoning_content")
-            if not isinstance(reasoning, str) or not reasoning:
-                reasoning = self._history_reasoning_content(content)
-            if reasoning:
-                message_dict["reasoning_content"] = reasoning
-        if self.thinking_blocks_replay and "thinking_blocks" in projection:
-            message_dict["thinking_blocks"] = projection["thinking_blocks"]
-
-    def _convert_messages_to_dicts(
-        self, messages: Sequence[BaseMessage | dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        for message in messages:
-            if isinstance(message, dict):
-                item = dict(message)
-                role = item.get("role")
-                if role == "human":
-                    item["role"] = "user"
-                elif role == "ai":
-                    item["role"] = "assistant"
-                original_content = item.get("content")
-                if item.get("role") == "user":
-                    item.pop("response_metadata", None)
-                    item.pop("additional_kwargs", None)
-                    user_projection = project_user_message_content(
-                        original_content,
-                        target_format="chat_completions",
-                        image_input=self.image_input_replay,
-                    )
-                    item["content"] = user_projection["content"]
-                    result.append(item)
-                    continue
-                projection = project_ai_message_content(
-                    original_content,
-                    target_provider=self.provider_id,
-                    target_capabilities=(
-                        {
-                            *(
-                                {"reasoning_content_replay"}
-                                if self.reasoning_content_replay
-                                else set()
-                            ),
-                            *(
-                                {"thinking_blocks"}
-                                if self.thinking_blocks_replay
-                                else set()
-                            ),
-                        }
-                    ),
-                )
-                item["content"] = self.normalize_history_content(
-                    projection["content"]
-                )
-                if item.get("role") == "assistant":
-                    self._apply_reasoning_content_replay(
-                        item,
-                        content=original_content,
-                    )
-                result.append(item)
-                continue
-
-            if isinstance(message, HumanMessage):
-                user_projection = project_user_message_content(
-                    message.content,
-                    target_format="chat_completions",
-                    image_input=self.image_input_replay,
-                )
-                message_dict = {
-                    "content": user_projection["content"],
-                    "role": "user",
-                }
-                if message.name:
-                    message_dict["name"] = message.name
-                result.append(message_dict)
-                continue
-
-            projection = project_ai_message_content(
-                message.content,
-                target_provider=self.provider_id,
-                target_capabilities=(
-                    {
-                        *(
-                            {"reasoning_content_replay"}
-                            if self.reasoning_content_replay
-                            else set()
-                        ),
-                        *(
-                            {"thinking_blocks"}
-                            if self.thinking_blocks_replay
-                            else set()
-                        ),
-                    }
-                ),
-                response_metadata=message.response_metadata,
-            )
-            message_dict: dict[str, Any] = {
-                "content": self.normalize_history_content(projection["content"]),
-            }
-            if isinstance(message, ChatMessage):
-                message_dict["role"] = message.role
-            elif isinstance(message, HumanMessage):
-                message_dict["role"] = "user"
-            elif isinstance(message, AIMessage):
-                message_dict["role"] = "assistant"
-                if message.tool_calls:
-                    message_dict["tool_calls"] = [
-                        _openai_tool_call(tool_call) for tool_call in message.tool_calls
-                    ]
-                elif "tool_calls" in message.additional_kwargs:
-                    message_dict["tool_calls"] = message.additional_kwargs["tool_calls"]
-                if "function_call" in message.additional_kwargs:
-                    message_dict["function_call"] = message.additional_kwargs[
-                        "function_call"
-                    ]
-                self._apply_reasoning_content_replay(
-                    message_dict,
-                    content=message.content,
-                )
-            elif isinstance(message, SystemMessage):
-                message_dict["role"] = "system"
-            elif isinstance(message, FunctionMessage):
-                message_dict["role"] = "function"
-                message_dict["name"] = message.name
-            elif isinstance(message, ToolMessage):
-                message_dict["role"] = "tool"
-                message_dict["tool_call_id"] = message.tool_call_id
-                if message.name:
-                    message_dict["name"] = message.name
-            else:
-                raise TypeError(
-                    f"未知 LangChain message 类型: {type(message).__name__}"
-                )
-
-            if message.name and "name" not in message_dict:
-                message_dict["name"] = message.name
-            result.append(message_dict)
-        return result
 
     def _create_message_dicts(
         self,
@@ -910,9 +372,7 @@ class BoxteamLiteLLMChatModel(ChatLiteLLM):
             if scope is not None:
                 scope.raise_if_cancelled()
             if self._has_real_stream_termination(raw_stream):
-                record_upstream_response(
-                    _streamed_response_payload(streamed_chunks)
-                )
+                record_upstream_response(_streamed_response_payload(streamed_chunks))
                 return
             if semantic_delta_seen:
                 raise self._incomplete_stream_error(attempt)

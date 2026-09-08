@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import shutil
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -186,6 +187,63 @@ async def test_stream_events_do_not_duplicate_full_checkpoint_on_disk(
 
 
 @pytest.mark.asyncio
+async def test_fanout_does_not_wait_for_slow_state_snapshot(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, turn_id="job_snapshot_fanout")
+    subscription = await store.subscribe(writer.turn_stream_id)
+    monkeypatch.setattr(
+        message_stream_store_module,
+        "MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS",
+        1,
+    )
+
+    snapshot_started = threading.Event()
+    release_snapshot = threading.Event()
+    original_write_snapshot = store._write_state_snapshot
+
+    def slow_write_snapshot(
+        snapshot_session_id: str,
+        turn_stream_id: str,
+        state: dict[str, object],
+    ) -> None:
+        snapshot_started.set()
+        if not release_snapshot.wait(timeout=2):
+            raise TimeoutError("模拟状态快照阻塞")
+        original_write_snapshot(snapshot_session_id, turn_stream_id, state)
+
+    monkeypatch.setattr(store, "_write_state_snapshot", slow_write_snapshot)
+    release_timer = threading.Timer(0.5, release_snapshot.set)
+    release_timer.start()
+    commit_task = asyncio.create_task(
+        writer.commit(
+            "block.delta",
+            {
+                "block_id": "block_1",
+                "carrier_type": "text",
+                "operation": "append",
+                "text": "即时",
+            },
+            block_id="block_1",
+        )
+    )
+    try:
+        await asyncio.wait_for(asyncio.to_thread(snapshot_started.wait, 1), 2)
+        event = await asyncio.wait_for(subscription.get(), 0.2)
+        assert event.event["type"] == "block.delta"
+        assert not release_snapshot.is_set()
+        assert commit_task.done()
+        await commit_task
+    finally:
+        release_snapshot.set()
+        release_timer.cancel()
+        if not commit_task.done():
+            await commit_task
+
+
+@pytest.mark.asyncio
 async def test_oversized_stream_retains_tail_and_recovers_from_snapshot(
     message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
     monkeypatch: pytest.MonkeyPatch,
@@ -231,6 +289,126 @@ async def test_oversized_stream_retains_tail_and_recovers_from_snapshot(
     restarted_state = await restarted.get_state(restarted_writer.turn_stream_id)
     assert restarted_state["snapshot_seq"] == 13
     assert restarted_state["blocks"][0]["text"].endswith("event-11")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "error_pattern"),
+    [
+        ("gap", "事件序号不连续"),
+        ("duplicate_event_id", "重复 event_id"),
+        ("foreign_stream", "事件关联键不匹配"),
+    ],
+)
+async def test_restart_rejects_corrupt_event_log_identity_and_order(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+    mutation: str,
+    error_pattern: str,
+) -> None:
+    store, resolver, session_id = message_stream_store
+    writer = await store.open(
+        session_id=session_id,
+        turn_id=f"job_corrupt_message_stream_{mutation}",
+    )
+    await writer.commit(
+        "block.delta",
+        {
+            "block_id": "block_1",
+            "carrier_type": "text",
+            "operation": "append",
+            "text": "已持久化",
+        },
+        block_id="block_1",
+    )
+    stream_path = (
+        resolver.resolve_session_node(session_id)
+        / "message_streams"
+        / f"{writer.turn_stream_id}.jsonl"
+    )
+    records = [json.loads(line) for line in stream_path.read_text().splitlines()]
+    if mutation == "gap":
+        records[1]["event"]["event_seq"] = 4
+    elif mutation == "duplicate_event_id":
+        records[1]["event"]["event_id"] = records[0]["event"]["event_id"]
+    else:
+        records[1]["event"]["turn_stream_id"] = "strm_foreign_message_stream"
+    stream_path.write_text(
+        "".join(
+            f"{json.dumps(record, ensure_ascii=False, separators=(',', ':'))}\n"
+            for record in records
+        ),
+        encoding="utf-8",
+    )
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    with pytest.raises(MessageStreamError, match=error_pattern):
+        await restarted.open_existing(
+            session_id=session_id,
+            turn_id=writer.turn_id,
+            turn_stream_id=writer.turn_stream_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_restart_rejects_state_snapshot_with_foreign_identity(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    writer = await store.open(
+        session_id=session_id,
+        turn_id="job_foreign_message_stream_snapshot",
+    )
+    snapshot_task = store._snapshot_tasks.get(writer.turn_stream_id)
+    if snapshot_task is not None:
+        await snapshot_task
+    stream_path = (
+        resolver.resolve_session_node(session_id)
+        / "message_streams"
+        / f"{writer.turn_stream_id}.jsonl"
+    )
+    state_path = stream_path.with_suffix(".state.json")
+    state = await store.get_state(writer.turn_stream_id)
+    state["turn_stream_id"] = "strm_foreign_message_stream"
+    state_path.write_text(
+        json.dumps(state, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    with pytest.raises(MessageStreamError, match="状态快照关联键不匹配"):
+        await restarted.open_existing(
+            session_id=session_id,
+            turn_id=writer.turn_id,
+            turn_stream_id=writer.turn_stream_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_restart_rejects_damaged_state_snapshot(
+    message_stream_store: tuple[MessageStreamStore, SessionPathResolver, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    writer = await store.open(
+        session_id=session_id,
+        turn_id="job_damaged_message_stream_snapshot",
+    )
+    snapshot_task = store._snapshot_tasks.get(writer.turn_stream_id)
+    if snapshot_task is not None:
+        await snapshot_task
+    state_path = (
+        resolver.resolve_session_node(session_id)
+        / "message_streams"
+        / f"{writer.turn_stream_id}.state.json"
+    )
+    state_path.write_text("{ damaged snapshot", encoding="utf-8")
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    with pytest.raises(MessageStreamError, match="状态快照损坏"):
+        await restarted.open_existing(
+            session_id=session_id,
+            turn_id=writer.turn_id,
+            turn_stream_id=writer.turn_stream_id,
+        )
 
 
 @pytest.mark.asyncio

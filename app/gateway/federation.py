@@ -47,6 +47,11 @@ class RemoteGatewayConnection:
     protocol_version: int
     connection_error: str | None = None
     remote_pair_command: str | None = None
+    source_owner: Literal["config", "manual", "legacy"] = "legacy"
+    remote_config_event_cursor: int | None = None
+    remote_config_state: str | None = None
+    remote_restart_required: bool = False
+    remote_candidate_ref: str | None = None
 
 
 def build_remote_gateway_connection_id(

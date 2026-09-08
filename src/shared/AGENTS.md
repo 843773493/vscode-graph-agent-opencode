@@ -1,38 +1,24 @@
 # src/shared
 
-## 目录作用
+## 目录用途
 
-前端各模块共享的常量、API 客户端和通信协议定义。后端的 HTTP API 封装、SSE 事件流解析、VS Code Webview 消息类型定义集中于此。
+存放客户端和工作区辅助服务之间共享的跨进程传输定义。目前这里主要提供 SSE 字节流解析、帧边界处理、取消/超时语义和运行时校验。
 
-如果你主要会后端，可以把这里理解成“前端和扩展 Host 都要一起看的公共说明书”：
+## 可修改内容
 
-- `constants.js` 放默认值和常量
-- `api.js` 负责怎么跟本地后端 HTTP/SSE 通信
-- `sse.js` 负责标准 SSE 字节流、帧边界和取消/超时语义
-- `sseRuntime.js` 与生成的 validator 负责后端 SSE DTO 运行时校验
-- `protocol.js` 负责 Webview 和扩展 Host 之间能发哪些消息
+- `sse.js`、`sseRuntime.js`：共享 SSE 传输和运行时 DTO 校验。
+- `sseRuntimeValidators.js`：由协议生成流程维护的校验器。
+- 与上述 JavaScript 实现对应的 `*.d.ts` 类型声明。
 
-## 可以修改
+## 不可修改内容
 
-- `api.js`：后端 API 调用函数
-- `sse.js`、`sseRuntime.js`：共享 SSE 传输与 DTO 校验
-- `*.d.ts`：与共享 JavaScript 实现对应的 TypeScript 类型入口
-- `constants.js`：常量和默认配置
-- `protocol.js`：Webview 与 Host 之间的消息协议类型
+- 不要在此目录添加页面、组件或平台宿主代码。
+- 不要在此目录添加 Workspace 后端业务逻辑。
+- 不要重新引入已经移除的 VS Code extension、Webview API 或旧客户端协议。
 
-## 不要修改
+## 规范
 
-- 不要在此目录添加 UI 渲染代码
-- 不要在此目录添加后端进程管理代码
-- 不要包含环境变量硬编码（如 token 仅用于本地开发）
-
-## 约定
-
-- 所有常量使用 `export const` 命名导出
-- API 函数统一通过 `requestJson` 封装，自动处理 headers、错误和 JSON 解析
-- SSE 字节流统一由 `consumeSseResponse` 消费，帧统一由 `parseSseFrameBlock` 解析；业务 API 不得再维护第二套分帧逻辑
-- SSE JSON 必须通过 `sseRuntime.js` 中由后端 Pydantic schema 生成的 validator 校验，不能只靠 TypeScript 类型断言
-- 生成文件 `sseRuntimeValidators.js` 与 `sseRuntimeValidators.d.ts` 只能由 `bun run gen:protocol` 覆盖
-- 协议类型分为 `HostToWebviewMessageType` 和 `WebviewToHostMessageType` 两组
-- 新增 API 或消息类型时，必须同步更新此目录
-- 这里不放 UI，不放扩展生命周期管理，只放“共享定义”
+- SSE 字节流统一由 `sse.js` 消费，业务模块不得维护第二套分帧逻辑。
+- SSE JSON 必须通过 `sseRuntime.js` 中的运行时校验器校验，不能只依赖 TypeScript 类型断言。
+- 生成文件 `sseRuntimeValidators.js` 和对应声明只能由协议生成流程覆盖。
+- 共享模块不得依赖具体客户端入口；新增源码子目录必须包含四段式 `AGENTS.md`。

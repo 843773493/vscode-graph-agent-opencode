@@ -5,10 +5,13 @@ import json
 import os
 import shutil
 import tempfile
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 
@@ -16,6 +19,7 @@ from app.core.path_utils import get_gateway_root
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.service_types import GatewayServiceName
 from app.gateway.workspace_ids import (
@@ -31,9 +35,11 @@ from app.schemas.gateway import (
     GatewayServiceStatusDTO,
     GatewayWorkspaceDTO,
 )
+from app.services.infrastructure.config.state import ConfigConflictError
 
-_REGISTRY_SCHEMA_VERSION = 9
+_REGISTRY_SCHEMA_VERSION = 10
 _UNSET = object()
+RegistryTargetOwner = Literal["config", "manual", "system", "remote_projection"]
 
 
 @dataclass(slots=True)
@@ -44,6 +50,13 @@ class WorkspaceTarget:
     backend_url: str
     connection_kind: GatewayConnectionKind
     parent_workspace_id: str | None = None
+    owner: RegistryTargetOwner = "manual"
+    target_namespace: str = "gateway"
+    connection_id: str | None = None
+    target_generation: str = ""
+    runtime_lease_id: str | None = None
+    active_request_count: int = 0
+    active_stream_count: int = 0
     name_customized: bool = False
     managed: bool = False
     removable: bool = True
@@ -51,6 +64,7 @@ class WorkspaceTarget:
     desired_running: bool = False
     remote_gateway_connection_id: str | None = None
     remote_workspace_id: str | None = None
+    remote_config_event_cursor: int | None = None
     remote_service_names: tuple[GatewayServiceName, ...] = ()
     local_service_urls: dict[str, str] = field(default_factory=dict)
     connection_error: str | None = None
@@ -67,6 +81,52 @@ class WorkspaceRouteLease:
         return f"{self.workspace_id}:{self.revision}"
 
 
+@dataclass(slots=True)
+class GatewayRegistryBatchHandle:
+    """一次 registry batch 的 promotion/rollback 句柄。"""
+
+    registry: GatewayWorkspaceRegistry
+    previous_snapshot: dict[str, object]
+    previous_signatures: dict[str, tuple[object, ...]]
+    previous_remote_runtimes: dict[str, WorkspaceRuntime]
+    previous_retired_remote_runtimes: dict[str, list[WorkspaceRuntime]]
+    staged_runtimes: dict[str, WorkspaceRuntime]
+    retired_runtimes: tuple[tuple[str, WorkspaceRuntime], ...]
+    committed_revision: int
+    deferred_retirement: bool
+    finished: bool = False
+
+    def promote(self) -> None:
+        """在所有消费者 proof 和最终 CAS 成功后关闭旧 remote runtime。"""
+
+        if self.finished:
+            return
+        if self.deferred_retirement:
+            errors: list[str] = []
+            for connection_id, runtime in self.retired_runtimes:
+                if self.registry._has_route_references_for_connection(connection_id):
+                    continue
+                try:
+                    runtime.close()
+                except Exception as error:
+                    errors.append(f"{connection_id}: {error}")
+            if errors:
+                raise RuntimeError(
+                    "Gateway registry batch promotion 关闭旧 remote runtime 失败: "
+                    + "; ".join(errors)
+                )
+            self.registry._remove_retired_runtime_instances(self.retired_runtimes)
+        self.finished = True
+
+    def rollback(self) -> None:
+        """恢复 batch 前的 registry 和 tunnel 句柄。"""
+
+        if self.finished:
+            return
+        self.registry._rollback_registry_batch(self)
+        self.finished = True
+
+
 class GatewayWorkspaceRegistry:
     def __init__(
         self,
@@ -78,22 +138,33 @@ class GatewayWorkspaceRegistry:
         self._state_store = state_store
         self._targets: dict[str, WorkspaceTarget] = {}
         self._active_workspace_id: str | None = None
+        self._registry_revision = 0
         self._order_customized = False
         self._runtimes: dict[str, WorkspaceRuntime] = {}
         self._remote_gateway_connections: dict[str, RemoteGatewayConnection] = {}
         self._remote_gateway_runtimes: dict[str, WorkspaceRuntime] = {}
+        self._retired_remote_gateway_runtimes: dict[str, list[WorkspaceRuntime]] = {}
+        self._runtime_generation: str | None = None
         self._route_revisions: dict[str, int] = {}
         self._route_change_events: dict[str, asyncio.Event] = {}
+        self._route_reference_counts: dict[str, tuple[int, int]] = {}
+        self._route_reference_connections: dict[str, set[str]] = {}
         self._route_signatures: dict[str, tuple[object, ...]] = {}
         self._load()
         self._route_signatures = {
             workspace_id: self._route_signature(target)
             for workspace_id, target in self._targets.items()
         }
+        self._last_committed_snapshot = self._capture_registry_state()
 
     @property
     def active_workspace_id(self) -> str | None:
         return self._active_workspace_id
+
+    @property
+    def registry_revision(self) -> int:
+        """返回最近一次持久化成功的 registry revision。"""
+        return self._registry_revision
 
     def close(
         self,
@@ -108,6 +179,11 @@ class GatewayWorkspaceRegistry:
 
         local_runtimes = list(self._runtimes.items())
         remote_runtimes = list(self._remote_gateway_runtimes.items())
+        retired_remote_runtimes = [
+            (connection_id, runtime)
+            for connection_id, runtimes in self._retired_remote_gateway_runtimes.items()
+            for runtime in runtimes
+        ]
         if preserve_browser_managers:
             for _, runtime in local_runtimes:
                 runtime.detach_process("browser_manager")
@@ -120,13 +196,21 @@ class GatewayWorkspaceRegistry:
                 if target is not None and target.managed:
                     runtime.detach_process("workspace_api")
 
-        for runtime_id, runtime in (*local_runtimes, *remote_runtimes):
+        for runtime_id, runtime in (
+            *local_runtimes,
+            *remote_runtimes,
+            *retired_remote_runtimes,
+        ):
             try:
                 runtime.request_terminate()
             except Exception as error:
                 errors.append(f"{runtime_id} 发送终止信号失败: {error}")
 
-        for runtime_id, runtime in (*local_runtimes, *remote_runtimes):
+        for runtime_id, runtime in (
+            *local_runtimes,
+            *remote_runtimes,
+            *retired_remote_runtimes,
+        ):
             try:
                 runtime.wait_closed()
             except Exception as error:
@@ -142,13 +226,60 @@ class GatewayWorkspaceRegistry:
         *,
         runtime: WorkspaceRuntime | None = None,
         activate: bool = True,
+        mutation_owner: str | None = None,
     ) -> WorkspaceTarget:
+        if mutation_owner is not None and mutation_owner not in {
+            "config",
+            "config_batch",
+            "manual",
+            "manual_crud",
+            "remote_projection",
+            "system",
+            "registry",
+        }:
+            raise ValueError(f"Gateway registry mutation owner 非法: {mutation_owner}")
+        existing = self._targets.get(target.workspace_id)
+        preserve_generation = False
+        self._validate_target_identity(target)
+        if existing is not None:
+            if runtime is not None and self._has_route_references(
+                target.workspace_id
+            ):
+                runtime.close()
+                raise RuntimeError(
+                    "Gateway 不能替换仍有代理引用的工作区运行时，请先完成排空: "
+                    f"workspace_id={target.workspace_id}"
+                )
+            # TODO: 旧内存夹具和早期注册记录可能只设置 system_default，未同步写入 system owner；仅允许默认目标完成这一次规范化。
+            legacy_system_owner_migration = (
+                existing.owner == "manual"
+                and target.owner == "system"
+                and existing.system_default
+                and target.system_default
+            )
+            if target.owner != existing.owner and not legacy_system_owner_migration:
+                raise PermissionError(
+                    "Gateway registry 不允许通过 upsert 改变 target owner: "
+                    f"workspace_id={target.workspace_id}, "
+                    f"current={existing.owner}, requested={target.owner}"
+                )
+            if target.target_generation == "":
+                target.target_generation = existing.target_generation
+                preserve_generation = True
+            if target.runtime_lease_id is None:
+                target.runtime_lease_id = existing.runtime_lease_id
+        if target.target_generation == "":
+            target.target_generation = f"target_generation_{uuid4().hex}"
         route_signature = self._route_signature(target)
         route_changed = (
             target.workspace_id not in self._targets
             or runtime is not None
             or self._route_signatures.get(target.workspace_id) != route_signature
         )
+        if route_changed and existing is not None and preserve_generation:
+            target.target_generation = f"target_generation_{uuid4().hex}"
+        if runtime is not None:
+            target.runtime_lease_id = f"runtime_lease_{uuid4().hex}"
         self._targets[target.workspace_id] = target
         if runtime is not None:
             if target.connection_kind == "local" and target.managed:
@@ -176,8 +307,53 @@ class GatewayWorkspaceRegistry:
             self.invalidate_route(target.workspace_id)
         if activate or self._active_workspace_id is None:
             self._active_workspace_id = target.workspace_id
-        self._save()
+        self._save(owner=mutation_owner or target.owner)
         return target
+
+    @staticmethod
+    def _validate_target_identity(target: WorkspaceTarget) -> None:
+        if target.owner not in {"config", "manual", "system", "remote_projection"}:
+            raise ValueError(f"Gateway registry target owner 非法: {target.owner}")
+        if not target.target_namespace.strip():
+            raise ValueError("Gateway registry target namespace 不能为空")
+        if target.connection_id is not None and not target.connection_id.strip():
+            raise ValueError("Gateway registry target connection_id 不能为空")
+        if target.owner == "remote_projection" and (
+            target.connection_id is None
+            or target.remote_workspace_id is None
+        ):
+            raise ValueError(
+                "remote_projection target 必须包含 connection_id 和 remote_workspace_id"
+            )
+        if target.active_request_count < 0 or target.active_stream_count < 0:
+            raise ValueError("Gateway registry 活动引用计数不能为负数")
+
+    def _capture_registry_state(self) -> dict[str, object]:
+        return {
+            "targets": deepcopy(self._targets),
+            "active_workspace_id": self._active_workspace_id,
+            "order_customized": self._order_customized,
+            "remote_gateway_connections": deepcopy(self._remote_gateway_connections),
+            "registry_revision": self._registry_revision,
+            "runtime_generation": self._runtime_generation,
+        }
+
+    def _restore_registry_state(self, snapshot: dict[str, object]) -> None:
+        self._targets = deepcopy(snapshot["targets"])
+        self._active_workspace_id = snapshot["active_workspace_id"]
+        self._order_customized = bool(snapshot["order_customized"])
+        self._remote_gateway_connections = deepcopy(
+            snapshot["remote_gateway_connections"]
+        )
+        self._registry_revision = int(snapshot["registry_revision"])
+        runtime_generation = snapshot.get("runtime_generation")
+        if runtime_generation is not None and not isinstance(runtime_generation, str):
+            raise TypeError("Gateway registry runtime_generation 必须是字符串或 null")
+        self._runtime_generation = runtime_generation
+        self._route_signatures = {
+            workspace_id: self._route_signature(target)
+            for workspace_id, target in self._targets.items()
+        }
 
     def managed_runtime(self, workspace_id: str) -> WorkspaceRuntime:
         target = self.resolve(workspace_id)
@@ -198,12 +374,288 @@ class GatewayWorkspaceRegistry:
         runtime = self._runtimes.get(workspace_id)
         return dict(runtime.service_urls) if runtime is not None else {}
 
+    def assert_runtime_consumers_healthy(self) -> None:
+        """确认 Workspace process 与配置驱动 remote projection 已可服务。"""
+
+        errors: list[str] = []
+        for workspace_id, runtime in self._runtimes.items():
+            try:
+                runtime.assert_healthy()
+            except RuntimeError as error:
+                errors.append(f"workspace_id={workspace_id}: {error}")
+
+        for connection in self._remote_gateway_connections.values():
+            if connection.source_owner != "config":
+                continue
+            runtime = self._remote_gateway_runtimes.get(connection.connection_id)
+            if runtime is None:
+                errors.append(
+                    f"connection_id={connection.connection_id}: remote Gateway runtime 未连接"
+                )
+                continue
+            try:
+                runtime.assert_healthy()
+            except RuntimeError as error:
+                errors.append(f"connection_id={connection.connection_id}: {error}")
+            projection_errors = [
+                target.workspace_id
+                for target in self._targets.values()
+                if target.remote_gateway_connection_id == connection.connection_id
+                and target.connection_error is not None
+            ]
+            if projection_errors:
+                errors.append(
+                    f"connection_id={connection.connection_id}: projection 不健康，"
+                    f"workspace_id={','.join(sorted(projection_errors))}"
+                )
+        if errors:
+            raise RuntimeError("Gateway runtime consumer 健康检查失败: " + "; ".join(errors))
+
+    def runtime_health_proof(
+        self,
+        *,
+        consumer_id: Literal[
+            "registry-batch",
+            "workspace-process",
+            "remote-projection",
+        ],
+        generation: str,
+        fencing_token_digest: str | None = None,
+    ) -> GatewayRuntimeHealthProof:
+        """为 registry 相关消费者生成不含地址和秘密的健康证明。"""
+
+        if consumer_id == "registry-batch":
+            for target in self._targets.values():
+                self._validate_target_identity(target)
+            if self._runtime_generation not in {None, generation}:
+                raise RuntimeError(
+                    "Gateway registry runtime generation 不匹配: "
+                    f"expected={generation}, actual={self._runtime_generation}"
+                )
+            details = {
+                "registry_revision": self._registry_revision,
+                "target_count": len(self._targets),
+                "runtime_generation": self._runtime_generation,
+            }
+        elif consumer_id == "workspace-process":
+            runtimes = 0
+            for workspace_id, runtime in self._runtimes.items():
+                target = self.resolve(workspace_id)
+                if target.connection_kind != "local":
+                    continue
+                runtime.assert_healthy()
+                if runtime.gateway_generation not in {None, generation}:
+                    raise RuntimeError(
+                        "Gateway Workspace runtime generation 不匹配: "
+                        f"workspace_id={workspace_id}, "
+                        f"expected={generation}, actual={runtime.gateway_generation}"
+                    )
+                runtimes += 1
+            details = {"local_runtime_count": runtimes}
+        else:
+            remote_targets = 0
+            remote_runtimes = 0
+            for connection in self._remote_gateway_connections.values():
+                if connection.source_owner != "config":
+                    continue
+                remote_runtimes += 1
+                runtime = self._remote_gateway_runtimes.get(connection.connection_id)
+                if runtime is None:
+                    raise RuntimeError(
+                        "Gateway remote projection runtime 未连接: "
+                        f"connection_id={connection.connection_id}"
+                    )
+                runtime.assert_healthy()
+                if runtime.gateway_generation not in {None, generation}:
+                    raise RuntimeError(
+                        "Gateway remote runtime generation 不匹配: "
+                        f"connection_id={connection.connection_id}, "
+                        f"expected={generation}, actual={runtime.gateway_generation}"
+                    )
+                for target in self._targets.values():
+                    if (
+                        target.remote_gateway_connection_id
+                        == connection.connection_id
+                    ):
+                        remote_targets += 1
+                        if target.connection_error is not None:
+                            raise RuntimeError(
+                                "Gateway remote projection 不健康: "
+                                f"workspace_id={target.workspace_id}"
+                            )
+            details = {
+                "config_remote_runtime_count": remote_runtimes,
+                "remote_projection_target_count": remote_targets,
+            }
+        return GatewayRuntimeHealthProof(
+            consumer_id=consumer_id,
+            generation=generation,
+            state="healthy",
+            details=details,
+            fencing_token_digest=fencing_token_digest,
+        )
+
+    @property
+    def runtime_generation(self) -> str | None:
+        """返回当前 registry runtime lease 所属的 Gateway generation。"""
+
+        return self._runtime_generation
+
+    def prepare_runtime_generation(self, generation: str) -> str | None:
+        """校验 registry batch 可绑定到新的 Gateway generation。"""
+
+        if not generation.strip():
+            raise ValueError("Gateway registry generation 不能为空")
+        for target in self._targets.values():
+            self._validate_target_identity(target)
+        return self._runtime_generation
+
+    def apply_runtime_generation(self, generation: str) -> str | None:
+        """持久化 registry batch 的 generation lease。"""
+
+        previous_generation = self.prepare_runtime_generation(generation)
+        self._runtime_generation = generation
+        self._save(owner="system")
+        return previous_generation
+
+    def promote_runtime_generation(self, generation: str) -> None:
+        if self._runtime_generation != generation:
+            raise RuntimeError(
+                "Gateway registry generation promotion 不匹配: "
+                f"expected={generation}, actual={self._runtime_generation}"
+            )
+
+    def rollback_runtime_generation(
+        self,
+        generation: str,
+        previous_generation: str | None,
+    ) -> None:
+        if self._runtime_generation == previous_generation:
+            return
+        if self._runtime_generation != generation:
+            raise RuntimeError(
+                "Gateway registry generation 回退发现当前 lease 已被替换: "
+                f"expected={generation}, actual={self._runtime_generation}"
+            )
+        self._runtime_generation = previous_generation
+        self._save(owner="system")
+
+    def prepare_workspace_process_generation(
+        self,
+        generation: str,
+    ) -> dict[str, str | None]:
+        if not generation.strip():
+            raise ValueError("Workspace process generation 不能为空")
+        previous: dict[str, str | None] = {}
+        for workspace_id, runtime in self._runtimes.items():
+            target = self.resolve(workspace_id)
+            if target.connection_kind != "local":
+                continue
+            runtime.assert_healthy()
+            previous[workspace_id] = runtime.gateway_generation
+        return previous
+
+    def apply_workspace_process_generation(
+        self,
+        generation: str,
+    ) -> dict[str, str | None]:
+        previous = self.prepare_workspace_process_generation(generation)
+        for workspace_id in previous:
+            self._runtimes[workspace_id].gateway_generation = generation
+        return previous
+
+    def promote_workspace_process_generation(self, generation: str) -> None:
+        for workspace_id, runtime in self._runtimes.items():
+            target = self.resolve(workspace_id)
+            if (
+                target.connection_kind == "local"
+                and runtime.gateway_generation != generation
+            ):
+                raise RuntimeError(
+                    "Workspace process generation promotion 不匹配: "
+                    f"workspace_id={workspace_id}, expected={generation}, "
+                    f"actual={runtime.gateway_generation}"
+                )
+
+    def rollback_workspace_process_generation(
+        self,
+        generation: str,
+        previous: dict[str, str | None],
+    ) -> None:
+        for workspace_id, previous_generation in previous.items():
+            runtime = self._runtimes.get(workspace_id)
+            if runtime is None:
+                raise RuntimeError(
+                    "Workspace process generation 回退发现 runtime 已被替换: "
+                    f"workspace_id={workspace_id}"
+                )
+            if runtime.gateway_generation == previous_generation:
+                continue
+            if runtime.gateway_generation != generation:
+                raise RuntimeError(
+                    "Workspace process generation 回退发现 runtime 已被替换: "
+                    f"workspace_id={workspace_id}"
+                )
+            runtime.gateway_generation = previous_generation
+
+    def prepare_remote_projection_generation(
+        self,
+        generation: str,
+    ) -> dict[str, str | None]:
+        if not generation.strip():
+            raise ValueError("Remote projection generation 不能为空")
+        previous: dict[str, str | None] = {}
+        for connection_id, runtime in self._remote_gateway_runtimes.items():
+            runtime.assert_healthy()
+            previous[connection_id] = runtime.gateway_generation
+        return previous
+
+    def apply_remote_projection_generation(
+        self,
+        generation: str,
+    ) -> dict[str, str | None]:
+        previous = self.prepare_remote_projection_generation(generation)
+        for connection_id in previous:
+            self._remote_gateway_runtimes[connection_id].gateway_generation = generation
+        return previous
+
+    def promote_remote_projection_generation(self, generation: str) -> None:
+        for connection_id, runtime in self._remote_gateway_runtimes.items():
+            if runtime.gateway_generation != generation:
+                raise RuntimeError(
+                    "Remote projection generation promotion 不匹配: "
+                    f"connection_id={connection_id}, expected={generation}, "
+                    f"actual={runtime.gateway_generation}"
+                )
+
+    def rollback_remote_projection_generation(
+        self,
+        generation: str,
+        previous: dict[str, str | None],
+    ) -> None:
+        for connection_id, previous_generation in previous.items():
+            runtime = self._remote_gateway_runtimes.get(connection_id)
+            if runtime is None:
+                raise RuntimeError(
+                    "Remote projection generation 回退发现 runtime 已被替换: "
+                    f"connection_id={connection_id}"
+                )
+            if runtime.gateway_generation == previous_generation:
+                continue
+            if runtime.gateway_generation != generation:
+                raise RuntimeError(
+                    "Remote projection generation 回退发现 runtime 已被替换: "
+                    f"connection_id={connection_id}"
+                )
+            runtime.gateway_generation = previous_generation
+
     def stop_managed_runtime(self, workspace_id: str) -> None:
         target = self.resolve(workspace_id)
         if target.connection_kind != "local" or not target.managed:
             raise ValueError(f"工作区不属于当前 Gateway 的本地托管目标: {workspace_id}")
         if target.system_default or not target.removable:
             raise PermissionError(f"默认工作区不能关闭: {target.name}")
+        self._assert_route_references_drained(workspace_id)
         runtime = self._runtimes.pop(workspace_id, None)
         if runtime is None:
             raise ValueError(f"工作区后端尚未启动: {target.name}")
@@ -213,14 +665,24 @@ class GatewayWorkspaceRegistry:
         target.connection_error = None
         if self._active_workspace_id == workspace_id:
             self._active_workspace_id = self._default_workspace_id()
-        self._save()
+        self._save(owner=target.owner)
 
-    def remove(self, workspace_id: str) -> None:
+    def remove(self, workspace_id: str, *, owner: str | None = None) -> None:
         target = self._targets.get(workspace_id)
         if target is None:
             raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
         if not target.removable or target.system_default:
             raise PermissionError(f"默认工作区不能删除: {target.name}")
+        mutation_owner = owner or target.owner
+        scope_owner = self._owner_scope(mutation_owner)
+        if scope_owner is not None and scope_owner != target.owner:
+            raise PermissionError(
+                "Gateway registry 删除不能越过 target owner: "
+                f"workspace_id={workspace_id}, current={target.owner}, "
+                f"requested={scope_owner}"
+            )
+        if target.connection_kind == "local":
+            self._assert_route_references_drained(workspace_id)
         self.invalidate_route(workspace_id)
         runtime = self._runtimes.pop(workspace_id, None)
         if runtime is not None:
@@ -233,10 +695,17 @@ class GatewayWorkspaceRegistry:
         self._close_unused_remote_gateway(target.remote_gateway_connection_id)
         if self._active_workspace_id == workspace_id:
             self._active_workspace_id = self._default_workspace_id()
-        self._save()
+        self._save(owner=mutation_owner)
 
     def remove_backend_aliases(self, *, backend_url: str, keep_workspace_id: str) -> None:
         normalized_backend_url = backend_url.rstrip("/")
+        for workspace_id, target in self._targets.items():
+            if (
+                workspace_id != keep_workspace_id
+                and target.connection_kind == "local"
+                and target.backend_url.rstrip("/") == normalized_backend_url
+            ):
+                self._assert_route_references_drained(workspace_id)
         changed = False
         for workspace_id, target in list(self._targets.items()):
             if workspace_id == keep_workspace_id:
@@ -254,9 +723,16 @@ class GatewayWorkspaceRegistry:
             self._active_workspace_id = self._default_workspace_id()
             changed = True
         if changed:
-            self._save()
+            self._save(owner="system")
 
     def remove_system_default_aliases(self, *, keep_workspace_id: str) -> None:
+        for workspace_id, target in self._targets.items():
+            if (
+                workspace_id != keep_workspace_id
+                and target.system_default
+                and target.connection_kind == "local"
+            ):
+                self._assert_route_references_drained(workspace_id)
         changed = False
         for workspace_id, target in list(self._targets.items()):
             if workspace_id == keep_workspace_id or not target.system_default:
@@ -272,7 +748,7 @@ class GatewayWorkspaceRegistry:
             self._active_workspace_id = keep_workspace_id
             changed = True
         if changed:
-            self._save()
+            self._save(owner="system")
 
     def ensure_default_workspace_first(self) -> None:
         if self._order_customized:
@@ -291,7 +767,7 @@ class GatewayWorkspaceRegistry:
                 if workspace_id != default_workspace_id
             },
         }
-        self._save()
+        self._save(owner="system")
 
     def reorder(self, workspace_ids: list[str]) -> None:
         if len(workspace_ids) != len(set(workspace_ids)):
@@ -309,13 +785,13 @@ class GatewayWorkspaceRegistry:
             for workspace_id in workspace_ids
         }
         self._order_customized = True
-        self._save()
+        self._save(owner="manual_crud")
 
     def activate(self, workspace_id: str) -> None:
         if workspace_id not in self._targets:
             raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
         self._active_workspace_id = workspace_id
-        self._save()
+        self._save(owner="manual_crud")
 
     def rename(self, workspace_id: str, name: str) -> WorkspaceTarget:
         return self.update(workspace_id, name=name)
@@ -340,6 +816,13 @@ class GatewayWorkspaceRegistry:
         target = self._targets.get(workspace_id)
         if target is None:
             raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
+        if target.owner not in {"manual", "system"} or (
+            target.owner == "system" and not target.system_default
+        ):
+            raise PermissionError(
+                "Gateway manual CRUD 只能修改 manual target 或 system default target: "
+                f"workspace_id={workspace_id}, owner={target.owner}"
+            )
 
         normalized_name: str | None = None
         if name is not _UNSET:
@@ -377,7 +860,7 @@ class GatewayWorkspaceRegistry:
             target.name_customized = True
         if parent_workspace_id is not _UNSET:
             target.parent_workspace_id = normalized_parent_workspace_id
-        self._save()
+        self._save(owner="manual_crud")
         return target
 
     def resolve(self, workspace_id: str | None = None) -> WorkspaceTarget:
@@ -411,6 +894,74 @@ class GatewayWorkspaceRegistry:
             invalidated=invalidated,
         )
 
+    def acquire_route_reference(
+        self,
+        workspace_id: str,
+        *,
+        streaming: bool,
+    ) -> WorkspaceRouteLease:
+        """为代理请求保留路由引用，直到响应体或长连接真正结束。"""
+
+        lease = self.route_lease(workspace_id)
+        requests, streams = self._route_reference_counts.get(workspace_id, (0, 0))
+        if streaming:
+            streams += 1
+        else:
+            requests += 1
+        self._route_reference_counts[workspace_id] = (requests, streams)
+        target_connection_id = self.resolve(workspace_id).remote_gateway_connection_id
+        if target_connection_id is not None:
+            self._route_reference_connections.setdefault(workspace_id, set()).add(
+                target_connection_id
+            )
+        return lease
+
+    def release_route_reference(
+        self,
+        workspace_id: str,
+        *,
+        streaming: bool,
+    ) -> None:
+        """释放代理请求引用；计数不写入 registry 持久化快照。"""
+
+        requests, streams = self._route_reference_counts.get(workspace_id, (0, 0))
+        if streaming:
+            if streams == 0:
+                raise RuntimeError(f"Gateway 流引用重复释放: {workspace_id}")
+            streams -= 1
+        else:
+            if requests == 0:
+                raise RuntimeError(f"Gateway 请求引用重复释放: {workspace_id}")
+            requests -= 1
+        if requests or streams:
+            self._route_reference_counts[workspace_id] = (requests, streams)
+        else:
+            self._route_reference_counts.pop(workspace_id, None)
+            connection_ids = self._route_reference_connections.pop(workspace_id, set())
+            for connection_id in connection_ids:
+                self._cleanup_remote_gateway_if_unused(connection_id)
+
+    def route_reference_counts(self, workspace_id: str) -> tuple[int, int]:
+        """返回当前 Gateway 代理持有的普通请求数与长连接数。"""
+
+        self.resolve(workspace_id)
+        return self._route_reference_counts.get(workspace_id, (0, 0))
+
+    def _has_route_references(self, workspace_id: str) -> bool:
+        return any(self._route_reference_counts.get(workspace_id, (0, 0)))
+
+    def _assert_route_references_drained(self, workspace_id: str) -> None:
+        request_count, stream_count = self._route_reference_counts.get(
+            workspace_id,
+            (0, 0),
+        )
+        if request_count or stream_count:
+            raise RuntimeError(
+                "Gateway 不能关闭仍有代理引用的工作区运行时，请先完成排空: "
+                f"workspace_id={workspace_id}, requests={request_count}, "
+                f"streams={stream_count}"
+            )
+
     def invalidate_route(self, workspace_id: str) -> None:
         """使现有代理租约失效，强制长连接重新解析当前工作区路由。"""
         self._route_revisions[workspace_id] = (
@@ -427,11 +978,37 @@ class GatewayWorkspaceRegistry:
         *,
         runtime: WorkspaceRuntime | None = None,
     ) -> None:
+        existing_connection = self._remote_gateway_connections.get(
+            connection.connection_id
+        )
+        if (
+            existing_connection is not None
+            and existing_connection.source_owner != "legacy"
+            and existing_connection.source_owner != connection.source_owner
+        ):
+            raise PermissionError(
+                "Gateway 远程连接 source owner 不允许通过 upsert 改变: "
+                f"connection_id={connection.connection_id}, "
+                f"current={existing_connection.source_owner}, "
+                f"requested={connection.source_owner}"
+            )
         self._remote_gateway_connections[connection.connection_id] = connection
         if runtime is not None:
             previous = self._remote_gateway_runtimes.pop(connection.connection_id, None)
             if previous is not None:
-                previous.close()
+                if self._has_route_references_for_connection(connection.connection_id):
+                    self._retired_remote_gateway_runtimes.setdefault(
+                        connection.connection_id,
+                        [],
+                    ).append(previous)
+                else:
+                    try:
+                        previous.close()
+                    except Exception:
+                        self._retired_remote_gateway_runtimes.setdefault(
+                            connection.connection_id,
+                            [],
+                        ).append(previous)
             self._remote_gateway_runtimes[connection.connection_id] = runtime
             for target in self._targets.values():
                 if (
@@ -439,7 +1016,478 @@ class GatewayWorkspaceRegistry:
                     == connection.connection_id
                 ):
                     self.invalidate_route(target.workspace_id)
-        self._save()
+        self._save(owner="remote_projection")
+
+    def validate_remote_projection_cursor(
+        self,
+        connection_id: str,
+        incoming_cursor: int | None,
+    ) -> None:
+        """拒绝旧远端快照覆盖新投影；跳跃值只能来自完整快照。"""
+
+        if incoming_cursor is None:
+            return
+        if (
+            isinstance(incoming_cursor, bool)
+            or not isinstance(incoming_cursor, int)
+            or incoming_cursor < 0
+        ):
+            raise ValueError("远程 Gateway 配置事件游标必须是非负整数")
+        existing = self._remote_gateway_connections.get(connection_id)
+        if existing is None or existing.remote_config_event_cursor is None:
+            return
+        if incoming_cursor < existing.remote_config_event_cursor:
+            raise ConfigConflictError(
+                "远程 Gateway 配置快照游标回退，保留当前投影: "
+                f"connection_id={connection_id}, "
+                f"current={existing.remote_config_event_cursor}, "
+                f"incoming={incoming_cursor}"
+            )
+
+    def apply_remote_projection_snapshot(
+        self,
+        *,
+        connection: RemoteGatewayConnection,
+        projections: tuple[WorkspaceTarget, ...],
+        runtime: WorkspaceRuntime | None = None,
+        activate: bool = False,
+    ) -> None:
+        """以一次 registry CAS 应用单个远程 Gateway 的完整快照。"""
+
+        self.validate_remote_projection_cursor(
+            connection.connection_id,
+            connection.remote_config_event_cursor,
+        )
+        if connection.source_owner not in {"config", "manual", "legacy"}:
+            raise PermissionError("远程 Gateway 连接 source owner 非法")
+        previous_snapshot = self._capture_registry_state()
+        previous_signatures = dict(self._route_signatures)
+        previous_runtime = self._remote_gateway_runtimes.get(
+            connection.connection_id
+        )
+        existing_connection = self._remote_gateway_connections.get(
+            connection.connection_id
+        )
+        if (
+            existing_connection is not None
+            and existing_connection.source_owner != "legacy"
+            and existing_connection.source_owner != connection.source_owner
+        ):
+            raise PermissionError(
+                "Gateway 远程连接 source owner 不允许通过快照改变: "
+                f"connection_id={connection.connection_id}, "
+                f"current={existing_connection.source_owner}, "
+                f"requested={connection.source_owner}"
+            )
+        staged_targets: dict[str, WorkspaceTarget] = {}
+        for target in projections:
+            self._validate_target_identity(target)
+            if (
+                target.owner != "remote_projection"
+                or target.remote_gateway_connection_id != connection.connection_id
+            ):
+                raise PermissionError(
+                    "远程快照只能提交对应 connection 的 remote_projection target"
+                )
+            if target.workspace_id in staged_targets:
+                raise ValueError(
+                    "远程 Gateway 快照包含重复 workspace_id: "
+                    f"{target.workspace_id}"
+                )
+            existing = self._targets.get(target.workspace_id)
+            if existing is not None and existing.owner != "remote_projection":
+                raise PermissionError(
+                    "远程快照不能越过现有 target owner: "
+                    f"workspace_id={target.workspace_id}, current={existing.owner}"
+                )
+            if existing is not None:
+                if self._has_route_references(target.workspace_id) and (
+                    self._route_signature(existing) != self._route_signature(target)
+                ):
+                    raise RuntimeError(
+                        "远程快照不能替换仍有引用的 route: "
+                        f"workspace_id={target.workspace_id}"
+                    )
+                if not target.target_generation:
+                    target.target_generation = existing.target_generation
+                if target.runtime_lease_id is None:
+                    target.runtime_lease_id = existing.runtime_lease_id
+                if self._route_signature(existing) != self._route_signature(target):
+                    target.target_generation = f"target_generation_{uuid4().hex}"
+                    target.runtime_lease_id = f"runtime_lease_{uuid4().hex}"
+            else:
+                target.target_generation = (
+                    target.target_generation or f"target_generation_{uuid4().hex}"
+                )
+                target.runtime_lease_id = (
+                    target.runtime_lease_id or f"runtime_lease_{uuid4().hex}"
+                )
+            staged_targets[target.workspace_id] = target
+
+        stale_workspace_ids = {
+            target.workspace_id
+            for target in self._targets.values()
+            if target.owner == "remote_projection"
+            and target.remote_gateway_connection_id == connection.connection_id
+            and target.workspace_id not in staged_targets
+        }
+        blocked_stale = {
+            workspace_id
+            for workspace_id in stale_workspace_ids
+            if self._has_route_references(workspace_id)
+        }
+        if blocked_stale:
+            raise RuntimeError(
+                "远程快照不能删除仍有引用的 route: "
+                + ", ".join(sorted(blocked_stale))
+            )
+
+        self._targets = {
+            workspace_id: target
+            for workspace_id, target in self._targets.items()
+            if workspace_id not in stale_workspace_ids
+            and not (
+                target.owner == "remote_projection"
+                and target.remote_gateway_connection_id == connection.connection_id
+                and workspace_id in staged_targets
+            )
+        }
+        self._targets.update(staged_targets)
+        self._remote_gateway_connections[connection.connection_id] = connection
+        if activate and staged_targets:
+            self._active_workspace_id = next(iter(staged_targets))
+        elif self._active_workspace_id not in self._targets:
+            self._active_workspace_id = self._default_workspace_id()
+        self._validate_parent_graph()
+        try:
+            self._save(owner="remote_projection")
+        except Exception:
+            self._restore_registry_state(previous_snapshot)
+            self._route_signatures = previous_signatures
+            raise
+
+        new_signatures = {
+            workspace_id: self._route_signature(target)
+            for workspace_id, target in self._targets.items()
+        }
+        for workspace_id, signature in new_signatures.items():
+            if previous_signatures.get(workspace_id) != signature:
+                self.invalidate_route(workspace_id)
+        for workspace_id in previous_signatures:
+            if workspace_id not in new_signatures:
+                self.invalidate_route(workspace_id)
+        self._route_signatures = new_signatures
+
+        if runtime is not None:
+            self._remote_gateway_runtimes[connection.connection_id] = runtime
+            if previous_runtime is not None and previous_runtime is not runtime:
+                if self._has_route_references_for_connection(connection.connection_id):
+                    self._retired_remote_gateway_runtimes.setdefault(
+                        connection.connection_id,
+                        [],
+                    ).append(previous_runtime)
+                else:
+                    try:
+                        previous_runtime.close()
+                    except Exception:
+                        self._retired_remote_gateway_runtimes.setdefault(
+                            connection.connection_id,
+                            [],
+                        ).append(previous_runtime)
+
+    def apply_remote_projection_batch(
+        self,
+        *,
+        connections: tuple[RemoteGatewayConnection, ...],
+        runtimes: dict[str, WorkspaceRuntime],
+        projections: dict[str, tuple[WorkspaceTarget, ...]],
+        activate_connection_ids: tuple[str, ...] = (),
+        defer_retiring_runtimes: bool = False,
+    ) -> GatewayRegistryBatchHandle:
+        """一次性提交配置驱动的远程投影，并保留旧 tunnel 直到可安全切换。
+
+        连接建立和远端健康探测必须在调用方完成；本方法只负责本地
+        registry batch 的 owner/identity/route lease/CAS 边界。任何仍有代理
+        引用的 route 都不允许被配置 batch 替换或删除。
+        """
+
+        configured_connection_by_id = {
+            connection.connection_id: connection for connection in connections
+        }
+        if len(configured_connection_by_id) != len(connections):
+            raise ValueError("Gateway registry 配置 batch 包含重复 connection_id")
+        if any(
+            connection.source_owner != "config" for connection in connections
+        ):
+            raise PermissionError("Gateway 配置 batch 只能提交 config source owner")
+        if set(configured_connection_by_id) != set(projections) or set(
+            configured_connection_by_id
+        ) != set(runtimes):
+            raise ValueError(
+                "Gateway registry 配置 batch 的 connection、runtime、projection 集合不一致"
+            )
+
+        previous_snapshot = self._capture_registry_state()
+        previous_signatures = dict(self._route_signatures)
+        previous_remote_runtimes = dict(self._remote_gateway_runtimes)
+        previous_retired_remote_runtimes = {
+            connection_id: list(runtimes)
+            for connection_id, runtimes in self._retired_remote_gateway_runtimes.items()
+        }
+        previous_connections = dict(self._remote_gateway_connections)
+        for connection in connections:
+            self.validate_remote_projection_cursor(
+                connection.connection_id,
+                connection.remote_config_event_cursor,
+            )
+        manual_connections = {
+            connection_id: connection
+            for connection_id, connection in previous_connections.items()
+            if connection.source_owner in {"manual", "legacy"}
+            and connection_id not in configured_connection_by_id
+        }
+        if set(manual_connections) & set(configured_connection_by_id):
+            raise ValueError(
+                "Gateway 配置 batch 的 connection_id 与人工远程连接冲突"
+            )
+        connection_by_id = {
+            **manual_connections,
+            **configured_connection_by_id,
+        }
+        staged_targets: dict[str, WorkspaceTarget] = {
+            workspace_id: target
+            for workspace_targets in projections.values()
+            for target in workspace_targets
+            for workspace_id in (target.workspace_id,)
+        }
+        if len(staged_targets) != sum(len(items) for items in projections.values()):
+            raise ValueError("Gateway registry 配置 batch 包含重复 projected workspace_id")
+
+        def is_config_projection(target: WorkspaceTarget) -> bool:
+            connection = previous_connections.get(
+                target.remote_gateway_connection_id
+            )
+            return (
+                target.owner == "remote_projection"
+                and connection is not None
+                and (
+                    connection.source_owner == "config"
+                    or (
+                        connection.source_owner == "legacy"
+                        and target.remote_gateway_connection_id
+                        in configured_connection_by_id
+                    )
+                )
+            )
+
+        for target in staged_targets.values():
+            self._validate_target_identity(target)
+            if target.owner != "remote_projection":
+                raise PermissionError(
+                    "配置 batch 只能提交 remote_projection target: "
+                    f"workspace_id={target.workspace_id}, owner={target.owner}"
+                )
+            existing = self._targets.get(target.workspace_id)
+            if existing is not None and existing.owner != target.owner:
+                raise PermissionError(
+                    "配置 batch 不能越过现有 target owner: "
+                    f"workspace_id={target.workspace_id}, current={existing.owner}"
+                )
+            if existing is not None:
+                if self._has_route_references(target.workspace_id) and (
+                    self._route_signature(existing) != self._route_signature(target)
+                ):
+                    raise RuntimeError(
+                        "Gateway registry 配置 batch 不能替换仍有引用的 route: "
+                        f"workspace_id={target.workspace_id}"
+                    )
+                if not target.target_generation:
+                    target.target_generation = existing.target_generation
+                if target.runtime_lease_id is None:
+                    target.runtime_lease_id = existing.runtime_lease_id
+                if self._route_signature(existing) != self._route_signature(target):
+                    target.target_generation = f"target_generation_{uuid4().hex}"
+                    target.runtime_lease_id = f"runtime_lease_{uuid4().hex}"
+            else:
+                target.target_generation = (
+                    target.target_generation or f"target_generation_{uuid4().hex}"
+                )
+                target.runtime_lease_id = (
+                    target.runtime_lease_id or f"runtime_lease_{uuid4().hex}"
+                )
+
+        stale_workspace_ids = {
+            target.workspace_id
+            for target in self._targets.values()
+            if is_config_projection(target)
+            and target.workspace_id not in staged_targets
+        }
+        blocked_stale = {
+            workspace_id
+            for workspace_id in stale_workspace_ids
+            if self._has_route_references(workspace_id)
+        }
+        if blocked_stale:
+            raise RuntimeError(
+                "Gateway registry 配置 batch 不能删除仍有引用的 remote route: "
+                + ", ".join(sorted(blocked_stale))
+            )
+
+        self._targets = {
+            workspace_id: target
+            for workspace_id, target in self._targets.items()
+            if not is_config_projection(target) or workspace_id in staged_targets
+        }
+        self._targets.update(staged_targets)
+        self._remote_gateway_connections = dict(connection_by_id)
+        self._active_workspace_id = self._select_batch_active_workspace(
+            activate_connection_ids=activate_connection_ids,
+        )
+        self._validate_parent_graph()
+        try:
+            self._save(owner="config_batch")
+        except Exception:
+            self._restore_registry_state(previous_snapshot)
+            self._route_signatures = previous_signatures
+            raise
+
+        new_signatures = {
+            workspace_id: self._route_signature(target)
+            for workspace_id, target in self._targets.items()
+        }
+        for workspace_id, signature in new_signatures.items():
+            if previous_signatures.get(workspace_id) != signature:
+                self.invalidate_route(workspace_id)
+        for workspace_id in previous_signatures:
+            if workspace_id not in new_signatures:
+                self.invalidate_route(workspace_id)
+        self._route_signatures = new_signatures
+
+        for connection_id, runtime in runtimes.items():
+            previous_runtime = previous_remote_runtimes.get(connection_id)
+            self._remote_gateway_runtimes[connection_id] = runtime
+            if previous_runtime is not None and previous_runtime is not runtime:
+                if defer_retiring_runtimes or self._has_route_references_for_connection(
+                    connection_id
+                ):
+                    self._retired_remote_gateway_runtimes.setdefault(
+                        connection_id,
+                        [],
+                    ).append(previous_runtime)
+                else:
+                    try:
+                        previous_runtime.close()
+                    except Exception:
+                        # 新 route 已经通过 registry CAS 提交；旧 tunnel 不能
+                        # 影响新 runtime 的可用性，保留到 Gateway 关闭时再收尾。
+                        self._retired_remote_gateway_runtimes.setdefault(
+                            connection_id,
+                            [],
+                        ).append(previous_runtime)
+        for connection_id, previous_runtime in previous_remote_runtimes.items():
+            if connection_id in runtimes:
+                continue
+            connection = previous_connections.get(connection_id)
+            if connection is not None and connection.source_owner in {
+                "manual",
+                "legacy",
+            }:
+                continue
+            if defer_retiring_runtimes or self._has_route_references_for_connection(
+                connection_id
+            ):
+                self._retired_remote_gateway_runtimes.setdefault(
+                    connection_id,
+                    [],
+                ).append(previous_runtime)
+            else:
+                try:
+                    previous_runtime.close()
+                except Exception:
+                    self._retired_remote_gateway_runtimes.setdefault(
+                        connection_id,
+                        [],
+                    ).append(previous_runtime)
+
+        retired_runtimes = tuple(
+            (connection_id, runtime)
+            for connection_id, runtime_items in (
+                self._retired_remote_gateway_runtimes.items()
+            )
+            for runtime in runtime_items
+            if not any(
+                runtime is previous_runtime
+                for previous_runtime in previous_retired_remote_runtimes.get(
+                    connection_id,
+                    [],
+                )
+            )
+        )
+        return GatewayRegistryBatchHandle(
+            registry=self,
+            previous_snapshot=previous_snapshot,
+            previous_signatures=previous_signatures,
+            previous_remote_runtimes=previous_remote_runtimes,
+            previous_retired_remote_runtimes=previous_retired_remote_runtimes,
+            staged_runtimes=dict(runtimes),
+            retired_runtimes=retired_runtimes,
+            committed_revision=self._registry_revision,
+            deferred_retirement=defer_retiring_runtimes,
+        )
+
+    def _remove_retired_runtime_instances(
+        self,
+        runtimes: tuple[tuple[str, WorkspaceRuntime], ...],
+    ) -> None:
+        for connection_id, runtime in runtimes:
+            retained = [
+                item
+                for item in self._retired_remote_gateway_runtimes.get(
+                    connection_id,
+                    [],
+                )
+                if item is not runtime
+            ]
+            if retained:
+                self._retired_remote_gateway_runtimes[connection_id] = retained
+            else:
+                self._retired_remote_gateway_runtimes.pop(connection_id, None)
+
+    def _rollback_registry_batch(self, handle: GatewayRegistryBatchHandle) -> None:
+        """补偿已提交 batch；CAS 失败时保留 recovery_required 所需证据。"""
+
+        for connection_id, runtime in handle.staged_runtimes.items():
+            if self._remote_gateway_runtimes.get(connection_id) is runtime:
+                runtime.close()
+        self._restore_registry_state(handle.previous_snapshot)
+        self._remote_gateway_runtimes = dict(handle.previous_remote_runtimes)
+        self._retired_remote_gateway_runtimes = {
+            connection_id: list(runtimes)
+            for connection_id, runtimes in (
+                handle.previous_retired_remote_runtimes.items()
+            )
+        }
+        self._route_signatures = dict(handle.previous_signatures)
+        # registry revision 已在 batch 提交后递增；补偿写入必须以当前 revision
+        # 为 CAS 基线，不能把持久 revision 伪造回旧值。
+        self._registry_revision = handle.committed_revision
+        self._save(owner="config_batch")
+
+    def _select_batch_active_workspace(
+        self,
+        *,
+        activate_connection_ids: tuple[str, ...],
+    ) -> str | None:
+        for connection_id in activate_connection_ids:
+            for target in self._targets.values():
+                if (
+                    target.owner == "remote_projection"
+                    and target.remote_gateway_connection_id == connection_id
+                ):
+                    return target.workspace_id
+        if self._active_workspace_id in self._targets:
+            return self._active_workspace_id
+        return self._default_workspace_id()
 
     def remote_gateway_connection(
         self,
@@ -467,6 +1515,17 @@ class GatewayWorkspaceRegistry:
             for target in self._targets.values()
         ):
             return
+        self._cleanup_remote_gateway_if_unused(connection_id)
+
+    def _cleanup_remote_gateway_if_unused(self, connection_id: str) -> None:
+        if self._has_route_references_for_connection(connection_id):
+            return
+        self._close_retired_remote_gateway_runtimes(connection_id)
+        if any(
+            target.remote_gateway_connection_id == connection_id
+            for target in self._targets.values()
+        ):
+            return
         runtime = self._remote_gateway_runtimes.pop(connection_id, None)
         if runtime is not None:
             runtime.close()
@@ -474,6 +1533,22 @@ class GatewayWorkspaceRegistry:
         FederationCredentialStore(
             storage_path=get_gateway_root() / "credentials" / "federation.json"
         ).remove(connection_id)
+
+    def _has_route_references_for_connection(self, connection_id: str) -> bool:
+        return any(
+            connection_id in referenced_connection_ids
+            and any(self._route_reference_counts.get(workspace_id, (0, 0)))
+            for workspace_id, referenced_connection_ids in (
+                self._route_reference_connections.items()
+            )
+        )
+
+    def _close_retired_remote_gateway_runtimes(self, connection_id: str) -> None:
+        if self._has_route_references_for_connection(connection_id):
+            return
+        retired = self._retired_remote_gateway_runtimes.pop(connection_id, [])
+        for runtime in retired:
+            runtime.close()
 
     def resolve_service_url(
         self,
@@ -529,7 +1604,7 @@ class GatewayWorkspaceRegistry:
     def mark_connection_error(self, workspace_id: str, error: str) -> None:
         target = self.resolve(workspace_id)
         target.connection_error = error
-        self._save()
+        self._save(owner=target.owner)
 
     async def list_dtos(self, *, check_health: bool = True) -> list[GatewayWorkspaceDTO]:
         targets = list(self._targets.values())
@@ -740,6 +1815,12 @@ class GatewayWorkspaceRegistry:
                             username=remote_connection.username,
                             ssh_config_host=remote_connection.ssh_config_host,
                             remote_gateway_port=remote_connection.remote_gateway_port,
+                            config_event_cursor=(
+                                remote_connection.remote_config_event_cursor
+                            ),
+                            config_reload_state=remote_connection.remote_config_state,
+                            restart_required=remote_connection.remote_restart_required,
+                            candidate_ref=remote_connection.remote_candidate_ref,
                         )
                         if target.connection_kind == "remote_gateway"
                         and remote_connection is not None
@@ -811,6 +1892,7 @@ class GatewayWorkspaceRegistry:
         migrated_to_sqlite = state_payload is None and self._state_store is not None
         if state_payload is not None:
             payload = state_payload
+            self._registry_revision = int(payload.get("registry_revision", 0))
         elif not self._storage_path.exists():
             return
         else:
@@ -826,6 +1908,10 @@ class GatewayWorkspaceRegistry:
                 "Gateway registry 版本高于当前程序支持范围: "
                 f"version={schema_version}, supported={_REGISTRY_SCHEMA_VERSION}"
             )
+        runtime_generation = payload.get("runtime_generation")
+        if runtime_generation is not None and not isinstance(runtime_generation, str):
+            raise ValueError("Gateway registry runtime_generation 必须是字符串或 null")
+        self._runtime_generation = runtime_generation
         raw_remote_connections = payload.get("remote_gateway_connections", [])
         if not isinstance(raw_remote_connections, list):
             raise ValueError("Gateway registry remote_gateway_connections 必须是数组")
@@ -860,6 +1946,11 @@ class GatewayWorkspaceRegistry:
                     str(item["remote_pair_command"])
                     if item.get("remote_pair_command") is not None
                     else None
+                ),
+                source_owner=(
+                    item.get("source_owner")
+                    if item.get("source_owner") in {"config", "manual", "legacy"}
+                    else "legacy"
                 ),
             )
             self._remote_gateway_connections[connection.connection_id] = connection
@@ -949,6 +2040,43 @@ class GatewayWorkspaceRegistry:
                 root_path=root_path,
                 backend_url=backend_url,
                 connection_kind=connection_kind,
+                owner=(
+                    item.get("owner")
+                    if item.get("owner") in {
+                        "config",
+                        "manual",
+                        "system",
+                        "remote_projection",
+                    }
+                    else (
+                        "remote_projection"
+                        if connection_kind == "remote_gateway"
+                        else "system"
+                        if system_default
+                        else "manual"
+                    )
+                ),
+                target_namespace=str(item.get("target_namespace", "gateway")),
+                connection_id=(
+                    str(item["connection_id"])
+                    if item.get("connection_id") is not None
+                    else (
+                        str(item["remote_gateway_connection_id"])
+                        if connection_kind == "remote_gateway"
+                        and item.get("remote_gateway_connection_id") is not None
+                        else None
+                    )
+                ),
+                target_generation=str(
+                    item.get("target_generation") or "target_generation_legacy"
+                ),
+                runtime_lease_id=(
+                    str(item["runtime_lease_id"])
+                    if item.get("runtime_lease_id") is not None
+                    else None
+                ),
+                active_request_count=int(item.get("active_request_count", 0)),
+                active_stream_count=int(item.get("active_stream_count", 0)),
                 # TODO: 所有 schema<4 的 Registry 完成一次性迁移后，在下一个持久化格式大版本移除默认值。
                 name_customized=bool(item.get("name_customized", False)),
                 managed=managed,
@@ -965,6 +2093,11 @@ class GatewayWorkspaceRegistry:
                     if item.get("remote_workspace_id") is not None
                     else None
                 ),
+                remote_config_event_cursor=(
+                    int(item["remote_config_event_cursor"])
+                    if item.get("remote_config_event_cursor") is not None
+                    else None
+                ),
                 remote_service_names=tuple(item.get("remote_service_names", ())),
                 local_service_urls={
                     str(name): str(url)
@@ -976,6 +2109,7 @@ class GatewayWorkspaceRegistry:
                     else None
                 ),
             )
+            self._validate_target_identity(target)
             if target.connection_kind == "remote_gateway":
                 if (
                     target.remote_gateway_connection_id is None
@@ -1040,11 +2174,24 @@ class GatewayWorkspaceRegistry:
                 visited.add(current_id)
                 current_id = self._targets[current_id].parent_workspace_id
 
-    def _save(self) -> None:
+    @staticmethod
+    def _owner_scope(owner: str) -> str | None:
+        return {
+            "config": "config",
+            "config_batch": "config",
+            "manual": "manual",
+            "manual_crud": "manual",
+            "system": "system",
+            "remote_projection": "remote_projection",
+        }.get(owner)
+
+    def _save(self, *, owner: str = "registry") -> None:
+        previous_state = getattr(self, "_last_committed_snapshot", None)
         payload = {
             "schema_version": _REGISTRY_SCHEMA_VERSION,
             "active_workspace_id": self._active_workspace_id,
             "order_customized": self._order_customized,
+            "runtime_generation": self._runtime_generation,
             "remote_gateway_connections": [
                 asdict(connection)
                 for connection in self._remote_gateway_connections.values()
@@ -1052,7 +2199,17 @@ class GatewayWorkspaceRegistry:
             "targets": [asdict(target) for target in self._targets.values()],
         }
         if self._state_store is not None:
-            self._state_store.replace_workspace_registry(payload)
+            try:
+                self._registry_revision = self._state_store.replace_workspace_registry(
+                    payload,
+                    expected_revision=self._registry_revision,
+                    owner=owner,
+                )
+            except Exception:
+                if previous_state is not None:
+                    self._restore_registry_state(previous_state)
+                raise
+            self._last_committed_snapshot = self._capture_registry_state()
             return
         self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
@@ -1072,3 +2229,4 @@ class GatewayWorkspaceRegistry:
             os.replace(temporary_path, self._storage_path)
         finally:
             temporary_path.unlink(missing_ok=True)
+        self._last_committed_snapshot = self._capture_registry_state()

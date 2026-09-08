@@ -74,6 +74,31 @@ describe("通用 SSE 传输层", () => {
     expect(received).toEqual(["job.updated"]);
   });
 
+  test("可在同一网络 chunk 的多帧之间让出事件循环", async () => {
+    const order: string[] = [];
+    await consumeSseResponse(
+      streamResponse([
+        "event: trace\ndata: {\"value\":1}\n\nevent: trace\ndata: {\"value\":2}\n\n",
+      ]),
+      {
+        yieldBetweenEvents: true,
+        events: {
+          trace: defineSseEvent(
+            decodeJsonSseData,
+            (value) => {
+              const numericValue = (value as { value: number }).value;
+              order.push(`event-${numericValue}`);
+              if (numericValue === 1) {
+                queueMicrotask(() => order.push("microtask"));
+              }
+            },
+          ),
+        },
+      },
+    );
+    expect(order).toEqual(["event-1", "microtask", "event-2"]);
+  });
+
   test("保留 data 字段中协议允许的首尾空格", () => {
     expect(parseSseFrameBlock("data:  value ")).toEqual({
       event: "message",

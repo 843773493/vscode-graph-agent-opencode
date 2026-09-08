@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-`src/clients/web/` 是当前唯一开发、构建和验证的客户端，是一个可直接在浏览器中运行的独立 React + Vite + TypeScript 工程。它不依赖 VS Code webview、Electron 或 React Native 运行环境。
+`src/clients/web/` 是当前已经实现的浏览器桌面客户端，是一个可直接运行的 React + Vite + TypeScript 工程。它不依赖 VS Code webview、Electron 或 React Native 运行环境；未来桌面 DOM 复用应下沉到 `../shared/web-ui`，而不是复制到 `electron-web`。
 
 通过根目录 `bun run dev` 启动时，本工程由 `scripts/dev.mjs` 拉起，浏览器前端端口为 `8011`。
 
@@ -41,7 +41,7 @@ src/clients/web/
 
 - 不要在这里引入 VS Code webview 专用依赖
 - 不要依赖扩展宿主传消息来驱动核心功能
-- 不要为了预留客户端同步修改 `src/webview-ui/`，也不要预写 Electron、React Native 或 VS Code adapter
+- 不要在本目录实现 Electron main/preload、React Native 或其他客户端 adapter
 
 ## 规范
 

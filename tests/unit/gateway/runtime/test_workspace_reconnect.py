@@ -14,6 +14,7 @@ from app.gateway.runtime.local_workspace import (
     _adopt_workspace_backend,
     restart_managed_workspace_backend,
     start_managed_local_workspace_runtime,
+    workspace_config_proof_expectation,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
@@ -97,6 +98,28 @@ async def test_runtime_controller_rejects_restart_for_external_backend(
         await controller.safe_restart_managed_backend(
             "gw_external",
             request_id="req_test",
+        )
+
+
+def test_runtime_controller_updates_health_controller_config(tmp_path: Path) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    controller = GatewayWorkspaceRuntimeController(
+        registry=registry,
+        project_root=tmp_path,
+        log_dir=tmp_path / "logs",
+    )
+
+    controller.update_health_controller_config(
+        request_timeout_seconds=4,
+        poll_interval_seconds=1.5,
+    )
+
+    assert controller._health_request_timeout_seconds == 4
+    assert controller._health_poll_interval_seconds == 1.5
+    with pytest.raises(ValueError, match="request_timeout_seconds"):
+        controller.update_health_controller_config(
+            request_timeout_seconds=0,
+            poll_interval_seconds=1,
         )
 
 
@@ -209,6 +232,54 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(
 
 
 @pytest.mark.asyncio
+async def test_runtime_controller_blocks_stop_for_gateway_proxy_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="gw_streaming",
+            name="Streaming",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:41000",
+            connection_kind="local",
+            managed=True,
+        ),
+        runtime=WorkspaceRuntime(
+            service_urls={"workspace_api": "http://127.0.0.1:41000"}
+        ),
+    )
+    controller = GatewayWorkspaceRuntimeController(
+        registry=registry,
+        project_root=tmp_path,
+        log_dir=tmp_path / "logs",
+        drain_timeout_seconds=0,
+    )
+
+    async def fake_runtime_action(*_: object, **__: object) -> dict[str, object]:
+        return {"blockers": []}
+
+    async def fake_runtime_status(*_: object, **__: object) -> dict[str, object]:
+        return {"blockers": []}
+
+    monkeypatch.setattr(controller, "_runtime_action", fake_runtime_action)
+    monkeypatch.setattr(controller, "_runtime_status", fake_runtime_status)
+
+    registry.acquire_route_reference("gw_streaming", streaming=True)
+    blocked = await controller.stop_managed_backend(
+        "gw_streaming",
+        request_id="req_streaming",
+    )
+
+    assert blocked.status == "blocked"
+    assert blocked.blockers[0].kind == "proxy_stream"
+    assert blocked.blockers[0].resource_id == "gw_streaming:streams"
+    assert registry.has_runtime("gw_streaming") is True
+    registry.release_route_reference("gw_streaming", streaming=True)
+
+
+@pytest.mark.asyncio
 async def test_runtime_controller_serializes_managed_restarts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -252,6 +323,14 @@ async def test_runtime_controller_serializes_managed_restarts(
         project_root=tmp_path,
         log_dir=tmp_path / "logs",
     )
+    async def fake_pending_startup_contract(*_: object, **__: object):
+        return None
+
+    monkeypatch.setattr(
+        controller,
+        "_pending_startup_contract",
+        fake_pending_startup_contract,
+    )
     monkeypatch.setattr(controller, "_runtime_action", fake_runtime_action)
     monkeypatch.setattr(controller, "_runtime_status", fake_runtime_status)
 
@@ -269,6 +348,127 @@ async def test_runtime_controller_serializes_managed_restarts(
     assert peak == 1
 
 
+@pytest.mark.asyncio
+async def test_runtime_controller_records_restart_failure_after_old_runtime_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    controller = GatewayWorkspaceRuntimeController(
+        registry=registry,
+        project_root=tmp_path,
+        log_dir=tmp_path / "logs",
+    )
+    target = WorkspaceTarget(
+        workspace_id="gw_recovery",
+        name="Recovery",
+        root_path=str(tmp_path),
+        backend_url="http://127.0.0.1:41000",
+        connection_kind="local",
+        managed=True,
+    )
+    runtime = WorkspaceRuntime(
+        service_urls={
+            "workspace_api": target.backend_url,
+            "terminal_manager": "http://127.0.0.1:41001",
+            "browser_manager": "http://127.0.0.1:41002",
+        }
+    )
+    recorded: dict[str, object] = {}
+
+    async def fail_restart(**_: object) -> None:
+        raise RuntimeError("新 generation 启动失败")
+
+    async def recover_old_runtime(*_: object, **__: object) -> dict[str, object]:
+        recorded["old_runtime_cancelled"] = True
+        return {}
+
+    async def record_failure(_backend_url: str, **kwargs: object) -> None:
+        recorded.update(kwargs)
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.controller.restart_managed_workspace_backend",
+        fail_restart,
+    )
+    monkeypatch.setattr(controller, "_runtime_action", recover_old_runtime)
+    monkeypatch.setattr(controller, "_record_pending_restart_failure", record_failure)
+
+    with pytest.raises(RuntimeError, match="新 generation 启动失败"):
+        await controller._restart_backend(
+            target,
+            runtime,
+            startup_contract={
+                "candidate_ref": "candidate-ref",
+                "target_generation": "generation-new",
+                "fencing_token": "fencing-token",
+            },
+            request_id="request-recovery",
+        )
+
+    assert recorded["old_runtime_cancelled"] is True
+    assert recorded["old_runtime_recovered"] is True
+    assert recorded["candidate_ref"] == "candidate-ref"
+
+
+@pytest.mark.asyncio
+async def test_runtime_controller_enters_recovery_when_old_runtime_cannot_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    controller = GatewayWorkspaceRuntimeController(
+        registry=registry,
+        project_root=tmp_path,
+        log_dir=tmp_path / "logs",
+    )
+    target = WorkspaceTarget(
+        workspace_id="gw_recovery_failed",
+        name="Recovery failed",
+        root_path=str(tmp_path),
+        backend_url="http://127.0.0.1:41000",
+        connection_kind="local",
+        managed=True,
+    )
+    runtime = WorkspaceRuntime(
+        service_urls={
+            "workspace_api": target.backend_url,
+            "terminal_manager": "http://127.0.0.1:41001",
+            "browser_manager": "http://127.0.0.1:41002",
+        }
+    )
+    recorded: dict[str, object] = {}
+
+    async def fail_restart(**_: object) -> None:
+        raise RuntimeError("新 generation 启动失败")
+
+    async def fail_recovery(*_: object, **__: object) -> dict[str, object]:
+        raise RuntimeError("旧 generation 无法恢复")
+
+    async def record_failure(_backend_url: str, **kwargs: object) -> None:
+        recorded.update(kwargs)
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.controller.restart_managed_workspace_backend",
+        fail_restart,
+    )
+    monkeypatch.setattr(controller, "_runtime_action", fail_recovery)
+    monkeypatch.setattr(controller, "_record_pending_restart_failure", record_failure)
+
+    with pytest.raises(RuntimeError, match="旧 generation 恢复协议失败"):
+        await controller._restart_backend(
+            target,
+            runtime,
+            startup_contract={
+                "candidate_ref": "candidate-ref",
+                "target_generation": "generation-new",
+                "fencing_token": "fencing-token",
+            },
+            request_id="request-recovery-failed",
+        )
+
+    assert recorded["old_runtime_recovered"] is False
+
+
 class _RuntimeProcess:
     def __init__(self) -> None:
         self.closed = False
@@ -284,6 +484,27 @@ class _RuntimeProcess:
 
     def detach(self) -> None:
         self.detached = True
+
+
+def test_workspace_config_proof_expectation_redacts_fencing_token() -> None:
+    expectation = workspace_config_proof_expectation(
+        {
+            "candidate_id": "candidate-1",
+            "pending_revision": 4,
+            "candidate_digest": "candidate-digest",
+            "effective_digest": "effective-digest",
+            "target_generation": "generation-2",
+            "fencing_token": "fence-secret",
+            "secret_binding_digest": "binding-digest",
+        }
+    )
+
+    assert expectation["loaded_source"] == "pending"
+    assert expectation["candidate_id"] == "candidate-1"
+    assert expectation["loaded_commit_revision"] == 4
+    assert expectation["generation_id"] == "generation-2"
+    assert expectation["fencing_token_digest"] != "fence-secret"
+    assert "fencing_token" not in expectation
 
 
 def test_runtime_replacement_hands_off_reused_browser_manager(tmp_path: Path) -> None:
@@ -378,6 +599,110 @@ async def test_backend_restart_preserves_terminal_and_browser(
     assert runtime.processes["workspace_api"] is new_backend
     assert runtime.processes["terminal_manager"] is terminal
     assert runtime.processes["browser_manager"] is browser
+
+
+@pytest.mark.asyncio
+async def test_backend_restart_failure_keeps_old_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_backend = _RuntimeProcess()
+    new_backend = _RuntimeProcess()
+    runtime = WorkspaceRuntime(
+        service_urls={
+            "workspace_api": "http://127.0.0.1:41000",
+            "terminal_manager": "http://127.0.0.1:41001",
+            "browser_manager": "http://127.0.0.1:41002",
+        },
+        processes={"workspace_api": old_backend},
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.allocate_local_port",
+        lambda: 42000,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.start_local_backend_process",
+        lambda **_: new_backend,
+    )
+
+    async def not_ready(*_: object, **__: object) -> None:
+        raise RuntimeError("candidate backend unhealthy")
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_http_ok",
+        not_ready,
+    )
+
+    with pytest.raises(RuntimeError, match="candidate backend unhealthy"):
+        await restart_managed_workspace_backend(
+            runtime=runtime,
+            project_root=tmp_path,
+            workspace_root=tmp_path,
+            log_dir=tmp_path / "logs",
+        )
+
+    assert old_backend.closed is False
+    assert new_backend.closed is True
+    assert runtime.processes["workspace_api"] is old_backend
+    assert runtime.service_urls["workspace_api"] == "http://127.0.0.1:41000"
+
+
+@pytest.mark.asyncio
+async def test_backend_restart_requires_matching_config_proof_before_old_shutdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_backend = _RuntimeProcess()
+    new_backend = _RuntimeProcess()
+    runtime = WorkspaceRuntime(
+        service_urls={
+            "workspace_api": "http://127.0.0.1:41000",
+            "terminal_manager": "http://127.0.0.1:41001",
+            "browser_manager": "http://127.0.0.1:41002",
+        },
+        processes={"workspace_api": old_backend},
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.allocate_local_port",
+        lambda: 42000,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.start_local_backend_process",
+        lambda **_: new_backend,
+    )
+
+    async def mismatched_proof(*_: object, **__: object) -> None:
+        raise RuntimeError("config proof mismatch")
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_workspace_config_proof",
+        mismatched_proof,
+    )
+    startup_contract = {
+        "candidate_id": "candidate-1",
+        "pending_revision": 2,
+        "candidate_digest": "candidate-digest",
+        "effective_digest": "effective-digest",
+        "target_generation": "generation-2",
+        "fencing_token": "fence-2",
+        "secret_binding_digest": "binding-digest",
+    }
+
+    with pytest.raises(RuntimeError, match="config proof mismatch"):
+        await restart_managed_workspace_backend(
+            runtime=runtime,
+            project_root=tmp_path,
+            workspace_root=tmp_path,
+            log_dir=tmp_path / "logs",
+            config_candidate_ref="candidate-ref",
+            config_generation="generation-2",
+            config_fencing_token="fence-2",
+            config_startup_contract=startup_contract,
+        )
+
+    assert old_backend.closed is False
+    assert new_backend.closed is True
+    assert runtime.processes["workspace_api"] is old_backend
 
 
 def test_gateway_restart_detaches_browser_and_closes_other_services() -> None:

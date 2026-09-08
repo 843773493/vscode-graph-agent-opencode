@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.agents import router as agents_router
@@ -35,6 +35,8 @@ from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
 )
+from app.services.infrastructure.config.policy import workspace_config_policy
+from app.services.infrastructure.config.state import changed_json_paths
 from app.testing.model_stream import install_model_stream_from_environment
 
 load_boxteam_env()
@@ -114,11 +116,14 @@ async def lifespan(_: FastAPI):
         ) -> None:
             previous_config = container.config_service.config_from_snapshot(previous)
             candidate_config = container.config_service.config_from_snapshot(candidate)
+            changed_paths = changed_json_paths(previous_config, candidate_config)
+            restart_paths = workspace_config_policy().restart_paths(changed_paths)
             restart_sections = tuple(
-                section
-                for section in ("mcp", "logger")
-                if previous_config.get(section, {}) != candidate_config.get(section, {})
+                path.strip("/").split("/")[0]
+                for path in restart_paths
+                if path != "/"
             )
+            restart_sections = tuple(dict.fromkeys(restart_sections))
             if restart_sections:
                 # TODO: MCP session 的 AnyIO cancel scope 要求在创建它的同一 Task
                 # 中关闭。后续应引入带 generation lease 的专属 supervisor，
@@ -203,6 +208,7 @@ async def lifespan(_: FastAPI):
             container.workspace_activity_service.close()
     finally:
         await container.mcp_runtime_manager.shutdown()
+        container.workspace_source_owner.close()
         if _model_stream_controller is not None:
             await _model_stream_controller.aclose()
         _.state.container = None
@@ -232,12 +238,19 @@ app.add_middleware(
 
 
 @app.get("/api/v1/health", summary="健康检查")
-async def health():
+async def health(request: Request):
     # Gateway 重启时据此校验旧 Workspace API 仍属于同一个工作区，再安全接管。
+    container = getattr(request.app.state, "container", None)
+    config_proof = (
+        container.config_service.get_loaded_config_proof()
+        if container is not None
+        else None
+    )
     return {
         "status": "ok",
         "process_id": os.getpid(),
         "workspace_root": str(get_runtime_workspace_root()),
+        "config_proof": config_proof,
     }
 
 

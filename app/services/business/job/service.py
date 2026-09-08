@@ -115,6 +115,7 @@ class JobService:
         job_executor: JobExecutorProtocol,
         pending_request_store: PendingRequestStoreProtocol | None = None,
         job_timeout_seconds: float = 600.0,
+        job_timeout_seconds_provider: Callable[[], float] | None = None,
         job_startup_timeout_seconds: float = 30.0,
         job_finalization_grace_seconds: float | None = None,
         execution_cancel_timeout_seconds: float = 5.0,
@@ -151,11 +152,13 @@ class JobService:
         self._accepting_jobs = True
         self._job_executor = job_executor
         self._job_timeout_seconds = job_timeout_seconds
+        self._job_timeout_seconds_provider = job_timeout_seconds_provider
         self._job_startup_timeout_seconds = job_startup_timeout_seconds
         self._execution_cancel_timeout_seconds = execution_cancel_timeout_seconds
         # 总预算到点时，最后一个模型响应可能已经完成工具阶段、只差落盘/收尾。
         # 默认给一个有界的收尾窗口；生产最多额外 60 秒，避免浏览器工具
         # 刚返回就被总预算硬切，同时不会把真正卡住的任务变成无限运行。
+        self._configured_job_finalization_grace_seconds = job_finalization_grace_seconds
         self._job_finalization_grace_seconds = (
             job_finalization_grace_seconds
             if job_finalization_grace_seconds is not None
@@ -177,6 +180,23 @@ class JobService:
             dispatch_lock=self._dispatch_lock,
             start_job_task=lambda job: self._start_job_task(job),
         )
+
+    def _resolve_job_timeout_seconds(self) -> float:
+        value = (
+            self._job_timeout_seconds_provider()
+            if self._job_timeout_seconds_provider is not None
+            else self._job_timeout_seconds
+        )
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(
+                "Job timeout provider 必须返回大于 0 的数字"
+            )
+        return float(value)
+
+    def _resolve_finalization_grace_seconds(self, job_timeout_seconds: float) -> float:
+        if self._configured_job_finalization_grace_seconds is not None:
+            return self._configured_job_finalization_grace_seconds
+        return min(60.0, max(0.1, job_timeout_seconds * 0.1))
 
     def assert_accepting_jobs(self) -> None:
         if not self._accepting_jobs:
@@ -1017,6 +1037,8 @@ class JobService:
 
     async def _run_job_background(self, job_id: str, session_id: str, message: str):
         job = self._jobs[job_id]
+        job_timeout_seconds = self._job_timeout_seconds
+        finalization_grace_seconds = self._job_finalization_grace_seconds
         logger.info(
             "[job_service] _run_job_background begin: "
             "job_id=%s session_id=%s agent_id=%s message_length=%s",
@@ -1029,6 +1051,10 @@ class JobService:
         startup_ready = asyncio.Event()
 
         try:
+            job_timeout_seconds = self._resolve_job_timeout_seconds()
+            finalization_grace_seconds = self._resolve_finalization_grace_seconds(
+                job_timeout_seconds
+            )
             transition_job_status(job, JobStatus.running)
             job.progress = max(job.progress, 1)
             job.current_step = "agent_execution"
@@ -1103,7 +1129,7 @@ class JobService:
                 context=contextvars.Context(),
             )
             timeout_task = asyncio.create_task(
-                asyncio.sleep(self._job_timeout_seconds),
+                asyncio.sleep(job_timeout_seconds),
                 context=contextvars.Context(),
             )
             startup_timeout_task = asyncio.create_task(
@@ -1142,6 +1168,8 @@ class JobService:
                         result = await self._await_finalizing_execution(
                             execution_task,
                             job,
+                            job_timeout_seconds=job_timeout_seconds,
+                            finalization_grace_seconds=finalization_grace_seconds,
                         )
                 else:
                     await self._cancel_execution_task(
@@ -1220,7 +1248,7 @@ class JobService:
                         "timeout_seconds": (
                             self._job_startup_timeout_seconds
                             if isinstance(error, JobStartupTimeoutError)
-                            else self._job_timeout_seconds
+                            else job_timeout_seconds
                         ),
                     },
                     agent_id="job_service",
@@ -1257,6 +1285,9 @@ class JobService:
         self,
         execution_task: asyncio.Task,
         job: JobState,
+        *,
+        job_timeout_seconds: float,
+        finalization_grace_seconds: float,
     ) -> object:
         """给已启动 AgentLoop 的任务一个有限收尾窗口。
 
@@ -1281,11 +1312,11 @@ class JobService:
             "job_id=%s current_step=%s grace_seconds=%s",
             job.job_id,
             current_step,
-            self._job_finalization_grace_seconds,
+            finalization_grace_seconds,
         )
         done, _ = await asyncio.wait(
             {execution_task},
-            timeout=self._job_finalization_grace_seconds,
+            timeout=finalization_grace_seconds,
         )
         if execution_task in done:
             return execution_task.result()
@@ -1298,8 +1329,8 @@ class JobService:
         raise JobExecutionTimeoutError(
             "Job 执行超过总超时上限（含最终响应收尾窗口）: "
             f"job_id={job.job_id}, session_id={job.session_id}, "
-            f"timeout_seconds={self._job_timeout_seconds:g}, "
-            f"finalization_grace_seconds={self._job_finalization_grace_seconds:g}"
+            f"timeout_seconds={job_timeout_seconds:g}, "
+            f"finalization_grace_seconds={finalization_grace_seconds:g}"
         )
 
     async def _cancel_execution_task(

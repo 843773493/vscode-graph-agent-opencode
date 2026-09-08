@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import os
+import threading
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,10 +19,11 @@ from app.core.session_paths import SessionPathResolver
 logger = logging.getLogger(__name__)
 
 TERMINAL_STREAM_STATUSES = frozenset({"completed", "interrupted", "failed"})
-_LAST_RECORD_READ_CHUNK_BYTES = 1024 * 1024
 MESSAGE_STREAM_EVENT_MAX_PAYLOAD_BYTES = 256 * 1024
 MESSAGE_STREAM_MAX_BYTES = 64 * 1024 * 1024
 MESSAGE_STREAM_RETAINED_BYTES = 8 * 1024 * 1024
+# 消息事件日志逐事件持久化；状态快照只是恢复加速索引，不需要逐 token 写入。
+MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS = 32
 INTERRUPTING_ALLOWED_EVENT_TYPES = frozenset(
     {
         "block.completed",
@@ -174,6 +176,9 @@ class MessageStreamStore:
         self._subscriber_queue_size = subscriber_queue_size
         self._locks: dict[str, asyncio.Lock] = {}
         self._index_locks: dict[str, asyncio.Lock] = {}
+        self._snapshot_locks: dict[str, asyncio.Lock] = {}
+        self._snapshot_tasks: dict[str, asyncio.Task[None]] = {}
+        self._snapshot_file_lock = threading.Lock()
         self._states: dict[str, dict[str, Any]] = {}
         self._subscriptions: dict[str, set[MessageStreamSubscription]] = {}
         self._event_ids: dict[str, dict[str, dict[str, Any]]] = {}
@@ -184,6 +189,66 @@ class MessageStreamStore:
 
     def _index_lock_for(self, session_id: str) -> asyncio.Lock:
         return self._index_locks.setdefault(session_id, asyncio.Lock())
+
+    def _snapshot_lock_for(self, turn_stream_id: str) -> asyncio.Lock:
+        return self._snapshot_locks.setdefault(turn_stream_id, asyncio.Lock())
+
+    async def _persist_state_snapshot(
+        self,
+        session_id: str,
+        turn_stream_id: str,
+        state: Mapping[str, Any],
+    ) -> None:
+        # 同一 Turn 的快照必须按提交顺序写入，避免较旧快照覆盖较新快照。
+        async with self._snapshot_lock_for(turn_stream_id):
+            await asyncio.to_thread(
+                self._write_state_snapshot,
+                session_id,
+                turn_stream_id,
+                state,
+            )
+
+    def _on_snapshot_task_done(
+        self,
+        turn_stream_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        if self._snapshot_tasks.get(turn_stream_id) is task:
+            self._snapshot_tasks.pop(turn_stream_id, None)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            # 事件日志已经是恢复事实；快照失败不能静默吞掉，后续恢复会重放
+            # 快照尾部事件，同时把具体异常保留在后端日志中。
+            logger.exception(
+                "消息流状态快照异步写入失败: turn_stream_id=%s",
+                turn_stream_id,
+            )
+
+    def _schedule_state_snapshot(
+        self,
+        session_id: str,
+        turn_stream_id: str,
+        state: Mapping[str, Any],
+    ) -> None:
+        task = asyncio.create_task(
+            self._persist_state_snapshot(
+                session_id,
+                turn_stream_id,
+                # next_state 后续只会被整体替换，不会原地修改，可以避免在事件
+                # 循环中再次复制完整的 blocks/tool_executions。
+                state,
+            )
+        )
+        self._snapshot_tasks[turn_stream_id] = task
+        task.add_done_callback(
+            lambda finished: self._on_snapshot_task_done(
+                turn_stream_id,
+                finished,
+            )
+        )
 
     def _stream_dir(self, session_id: str) -> Path:
         return (
@@ -231,10 +296,68 @@ class MessageStreamStore:
             "resumable": True,
         }
 
-    def _read_records(self, path: Path) -> list[MessageStreamRecord]:
+    @staticmethod
+    def _validate_event_record(
+        event: Mapping[str, Any],
+        *,
+        path: Path,
+        expected_session_id: str | None = None,
+        expected_turn_id: str | None = None,
+        expected_turn_stream_id: str | None = None,
+    ) -> tuple[str, str, str, int, str]:
+        event_id = event.get("event_id")
+        session_id = event.get("session_id")
+        turn_id = event.get("turn_id")
+        turn_stream_id = event.get("turn_stream_id")
+        event_seq = event.get("event_seq")
+        event_type = event.get("type")
+        payload = event.get("payload")
+        if not isinstance(event_id, str) or not event_id:
+            raise MessageStreamError(f"消息流事件缺少 event_id: path={path}")
+        if not isinstance(session_id, str) or not session_id:
+            raise MessageStreamError(f"消息流事件缺少 session_id: path={path}")
+        if not isinstance(turn_id, str) or not turn_id:
+            raise MessageStreamError(f"消息流事件缺少 turn_id: path={path}")
+        if not isinstance(turn_stream_id, str) or not turn_stream_id:
+            raise MessageStreamError(f"消息流事件缺少 turn_stream_id: path={path}")
+        if (
+            isinstance(event_seq, bool)
+            or not isinstance(event_seq, int)
+            or event_seq <= 0
+        ):
+            raise MessageStreamError(f"消息流事件序号非法: path={path}")
+        if not isinstance(event_type, str) or not event_type:
+            raise MessageStreamError(f"消息流事件缺少 type: path={path}")
+        if not isinstance(payload, dict):
+            raise MessageStreamError(
+                f"消息流事件 payload 必须是对象: path={path} type={event_type}"
+            )
+        expected_values = (
+            ("session_id", session_id, expected_session_id),
+            ("turn_id", turn_id, expected_turn_id),
+            ("turn_stream_id", turn_stream_id, expected_turn_stream_id),
+        )
+        for field_name, actual, expected in expected_values:
+            if expected is not None and actual != expected:
+                raise MessageStreamError(
+                    "消息流事件关联键不匹配: "
+                    f"path={path} field={field_name} expected={expected} actual={actual}"
+                )
+        return event_id, session_id, turn_id, event_seq, turn_stream_id
+
+    def _read_records(
+        self,
+        path: Path,
+        *,
+        expected_session_id: str | None = None,
+        expected_turn_stream_id: str | None = None,
+    ) -> list[MessageStreamRecord]:
         if not path.is_file():
             return []
         records: list[MessageStreamRecord] = []
+        seen_event_ids: set[str] = set()
+        expected_turn_id: str | None = None
+        previous_event_seq: int | None = None
         valid_offset = 0
         with path.open("rb") as stream:
             for line in stream:
@@ -261,12 +384,32 @@ class MessageStreamStore:
                     raise MessageStreamError(
                         f"消息流记录缺少 event/checkpoint: path={path}"
                     )
+                event_id, _, event_turn_id, event_seq, _ = self._validate_event_record(
+                    event,
+                    path=path,
+                    expected_session_id=expected_session_id,
+                    expected_turn_id=expected_turn_id,
+                    expected_turn_stream_id=expected_turn_stream_id,
+                )
+                if expected_turn_id is None:
+                    expected_turn_id = event_turn_id
+                if previous_event_seq is not None and event_seq != previous_event_seq + 1:
+                    raise MessageStreamError(
+                        "消息流事件序号不连续: "
+                        f"path={path} previous={previous_event_seq} current={event_seq}"
+                    )
+                if event_id in seen_event_ids:
+                    raise MessageStreamError(
+                        f"消息流日志包含重复 event_id: path={path} event_id={event_id}"
+                    )
                 records.append(
                     MessageStreamRecord(
                         event=event,
                         checkpoint=checkpoint,
                     )
                 )
+                seen_event_ids.add(event_id)
+                previous_event_seq = event_seq
                 valid_offset = next_offset
         return records
 
@@ -278,10 +421,47 @@ class MessageStreamStore:
         path = self._state_path(session_id, turn_stream_id)
         if not path.is_file():
             return None
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise MessageStreamError(f"消息流状态快照损坏: path={path}") from error
         if not isinstance(raw, dict):
             raise MessageStreamError(f"消息流状态快照必须是对象: path={path}")
         return raw
+
+    @staticmethod
+    def _validate_state_snapshot(
+        state: Mapping[str, Any],
+        *,
+        path: Path,
+        session_id: str,
+        turn_id: str,
+        turn_stream_id: str,
+        last_event_seq: int,
+    ) -> int:
+        for field_name, expected in (
+            ("session_id", session_id),
+            ("turn_id", turn_id),
+            ("turn_stream_id", turn_stream_id),
+        ):
+            if state.get(field_name) != expected:
+                raise MessageStreamError(
+                    "消息流状态快照关联键不匹配: "
+                    f"path={path} field={field_name} expected={expected} "
+                    f"actual={state.get(field_name)}"
+                )
+        snapshot_seq = state.get("snapshot_seq")
+        if (
+            isinstance(snapshot_seq, bool)
+            or not isinstance(snapshot_seq, int)
+            or snapshot_seq < 0
+            or snapshot_seq > last_event_seq
+        ):
+            raise MessageStreamError(
+                "消息流状态快照序号非法: "
+                f"path={path} snapshot_seq={snapshot_seq} last_event_seq={last_event_seq}"
+            )
+        return snapshot_seq
 
     def _write_state_snapshot(
         self,
@@ -289,51 +469,24 @@ class MessageStreamStore:
         turn_stream_id: str,
         state: Mapping[str, Any],
     ) -> None:
-        path = self._state_path(session_id, turn_stream_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(".state.tmp")
-        with temp_path.open("w", encoding="utf-8") as stream:
-            json.dump(dict(state), stream, ensure_ascii=False, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        temp_path.replace(path)
-
-    def _read_last_record(self, path: Path) -> MessageStreamRecord | None:
-        """只读取 JSONL 尾部记录，避免启动恢复扫描整个长消息流。"""
-        with path.open("rb") as stream:
-            end = stream.seek(0, os.SEEK_END)
-            pending = b""
-            while end > 0:
-                start = max(0, end - _LAST_RECORD_READ_CHUNK_BYTES)
-                stream.seek(start)
-                pending = stream.read(end - start) + pending
-                candidate_end = len(pending)
-                while candidate_end > 0 and pending[candidate_end - 1] in b"\r\n":
-                    candidate_end -= 1
-                if candidate_end == 0:
-                    end = start
-                    continue
-                candidate_start = pending.rfind(b"\n", 0, candidate_end) + 1
-                if candidate_start == 0 and start > 0:
-                    end = start
-                    continue
-                raw_line = pending[candidate_start:candidate_end]
-                try:
-                    raw = json.loads(raw_line)
-                except json.JSONDecodeError as error:
+        with self._snapshot_file_lock:
+            path = self._state_path(session_id, turn_stream_id)
+            snapshot_seq = int(state.get("snapshot_seq", 0))
+            if path.is_file():
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(existing, dict):
                     raise MessageStreamError(
-                        f"消息流日志尾部记录损坏: path={path}"
-                    ) from error
-                if not isinstance(raw, dict):
-                    raise MessageStreamError(f"消息流记录必须是对象: path={path}")
-                event = raw.get("event")
-                checkpoint = raw.get("checkpoint")
-                if not isinstance(event, dict) or not isinstance(checkpoint, dict):
-                    raise MessageStreamError(
-                        f"消息流记录缺少 event/checkpoint: path={path}"
+                        f"消息流状态快照必须是对象: path={path}"
                     )
-                return MessageStreamRecord(event=event, checkpoint=checkpoint)
-        return None
+                if int(existing.get("snapshot_seq", 0)) > snapshot_seq:
+                    return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_suffix(".state.tmp")
+            with temp_path.open("w", encoding="utf-8") as stream:
+                json.dump(dict(state), stream, ensure_ascii=False, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            temp_path.replace(path)
 
     def _write_index(self, session_id: str, mapping: Mapping[str, str]) -> None:
         index_path = self._index_path(session_id)
@@ -392,6 +545,43 @@ class MessageStreamStore:
             retained_bytes,
         )
 
+    def _append_durable_event(
+        self,
+        session_id: str,
+        path: Path,
+        encoded: bytes,
+        turn_stream_id: str,
+        state: Mapping[str, Any],
+    ) -> None:
+        """在线程中完成事件追加，确保 fsync 不阻塞消息流事件循环。"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        needs_compaction = (
+            path.is_file()
+            and path.stat().st_size + len(encoded) > MESSAGE_STREAM_MAX_BYTES
+        )
+        with path.open("ab") as stream:
+            stream.write(encoded)
+            stream.flush()
+            # 事件日志是消息流的崩溃恢复边界；fanout 必须在这里之后。
+            os.fsync(stream.fileno())
+        if needs_compaction:
+            # 先让当前事件成为恢复事实，再写入同序号快照，最后才能裁剪旧
+            # 事件；否则后台快照尚未执行时，裁剪可能移除 stream.opened。
+            self._write_state_snapshot(session_id, turn_stream_id, state)
+            self._compact_stream_log(path, turn_stream_id)
+
+    @staticmethod
+    def _should_write_state_snapshot(event_type: str, event_seq: int) -> bool:
+        return (
+            event_type == "stream.opened"
+            or event_type in {
+                "stream.completed",
+                "stream.interrupted",
+                "stream.failed",
+            }
+            or event_seq % MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS == 0
+        )
+
     def _read_index(self, session_id: str) -> dict[str, str]:
         path = self._index_path(session_id)
         if not path.is_file():
@@ -416,17 +606,66 @@ class MessageStreamStore:
         turn_stream_id: str,
     ) -> dict[str, Any]:
         path = self._stream_path(session_id, turn_stream_id)
-        records = self._read_records(path)
+        records = self._read_records(
+            path,
+            expected_session_id=session_id,
+            expected_turn_stream_id=turn_stream_id,
+        )
         if not records:
             raise MessageStreamNotFoundError(
                 f"消息流不存在: session_id={session_id} turn_stream_id={turn_stream_id}"
             )
         state = self._read_state_snapshot(session_id, turn_stream_id)
         if state is None:
-            # 兼容旧版每条记录都内嵌完整 checkpoint 的 JSONL。
-            state = copy.deepcopy(records[-1].checkpoint)
+            if int(records[0].event["event_seq"]) != 1:
+                raise MessageStreamError(
+                    "消息流状态快照缺失且事件日志已经被裁剪: "
+                    f"session_id={session_id} turn_stream_id={turn_stream_id}"
+                )
+            # TODO: 迁移完成后删除旧版内嵌 checkpoint 的读取分支；当前仅用于读取既有消息流。
+            # 兼容旧版每条记录都内嵌完整 checkpoint 的 JSONL。新格式的
+            # checkpoint 字段为空，需要从已 fsync 的事件日志重放恢复。
+            legacy_checkpoint = records[-1].checkpoint
+            if legacy_checkpoint:
+                state = copy.deepcopy(legacy_checkpoint)
+            else:
+                first_event = records[0].event
+                if first_event.get("type") != "stream.opened":
+                    raise MessageStreamError(
+                        "消息流状态快照缺失且事件日志不是完整流: "
+                        f"session_id={session_id} turn_stream_id={turn_stream_id}"
+                    )
+                state = self._empty_state(
+                    session_id=session_id,
+                    turn_id=str(first_event["turn_id"]),
+                    turn_stream_id=turn_stream_id,
+                    job_id=(
+                        str(first_event["job_id"])
+                        if first_event.get("job_id") is not None
+                        else None
+                    ),
+                )
+                for record in records:
+                    state = self._apply_event(state, record.event)
+                    state["snapshot_seq"] = int(record.event["event_seq"])
         else:
-            snapshot_seq = int(state.get("snapshot_seq", 0))
+            snapshot_seq = self._validate_state_snapshot(
+                state,
+                path=self._state_path(session_id, turn_stream_id),
+                session_id=session_id,
+                turn_id=str(records[0].event["turn_id"]),
+                turn_stream_id=turn_stream_id,
+                last_event_seq=int(records[-1].event["event_seq"]),
+            )
+            if (
+                int(records[-1].event["event_seq"]) > snapshot_seq
+                and int(records[0].event["event_seq"]) > snapshot_seq + 1
+            ):
+                raise MessageStreamError(
+                    "消息流状态快照与事件日志之间存在不可恢复间隙: "
+                    f"session_id={session_id} turn_stream_id={turn_stream_id} "
+                    f"snapshot_seq={snapshot_seq} first_event_seq={records[0].event['event_seq']}"
+                )
             for record in records:
                 event_seq = int(record.event.get("event_seq", 0))
                 if event_seq > snapshot_seq:
@@ -443,7 +682,11 @@ class MessageStreamStore:
     def _load_event_ids_from_disk(self, session_id: str, turn_stream_id: str) -> None:
         if turn_stream_id in self._event_ids_loaded:
             return
-        records = self._read_records(self._stream_path(session_id, turn_stream_id))
+        records = self._read_records(
+            self._stream_path(session_id, turn_stream_id),
+            expected_session_id=session_id,
+            expected_turn_stream_id=turn_stream_id,
+        )
         self._event_ids[turn_stream_id] = {
             str(record.event["event_id"]): record.event for record in records
         }
@@ -624,7 +867,22 @@ class MessageStreamStore:
                         f"{turn_stream_id} status={current_status} type={event_type}"
                     )
             if event_type == "stream.completed":
-                self._validate_completed_state(state)
+                running_block_ids = [
+                    str(item.get("block_id"))
+                    for item in state.get("blocks", [])
+                    if isinstance(item, Mapping)
+                    and item.get("status") == "running"
+                    and isinstance(item.get("block_id"), str)
+                ]
+                if running_block_ids:
+                    # provider delta hook 与 LangChain callback event 可能在
+                    # model.completed 后仍有一个调度窗口。stream.completed
+                    # 是整条消息流的原子终态边界，允许并记录只针对 block 的
+                    # 最终闭合；model/tool/activity 仍由统一校验严格拒绝。
+                    payload = {
+                        **dict(payload),
+                        "auto_closed_blocks": running_block_ids,
+                    }
             next_seq = int(state["snapshot_seq"]) + 1
             event: dict[str, Any] = {
                 "event_id": event_id or create_prefixed_id("evt"),
@@ -646,28 +904,23 @@ class MessageStreamStore:
             if resolved_job_id is not None:
                 event["job_id"] = resolved_job_id
             next_state = self._apply_event(state, event)
+            if event_type == "stream.completed":
+                self._validate_completed_state(next_state)
             if resolved_job_id is not None:
                 next_state["job_id"] = resolved_job_id
             next_state["snapshot_seq"] = next_seq
             # checkpoint 只供进程内订阅者使用；磁盘只追加 event，并把最新状态
             # 原子写入单独快照，避免每个事件重复复制整个 blocks/tool_executions。
             record = MessageStreamRecord(event=event, checkpoint=next_state)
-            path = self._stream_path(str(state["session_id"]), turn_stream_id)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            session_id = str(state["session_id"])
+            path = self._stream_path(session_id, turn_stream_id)
             encoded = self._encode_event(event)
             try:
-                if (
-                    path.is_file()
-                    and path.stat().st_size + len(encoded) > MESSAGE_STREAM_MAX_BYTES
-                ):
-                    self._compact_stream_log(path, turn_stream_id)
-                with path.open("ab") as stream:
-                    stream.write(encoded)
-                    stream.flush()
-                    # 本地工作区没有消息队列，fsync 是 event/checkpoint 的提交边界。
-                    os.fsync(stream.fileno())
-                self._write_state_snapshot(
-                    str(state["session_id"]),
+                await asyncio.to_thread(
+                    self._append_durable_event,
+                    session_id,
+                    path,
+                    encoded,
                     turn_stream_id,
                     next_state,
                 )
@@ -678,7 +931,7 @@ class MessageStreamStore:
                 self._states.pop(turn_stream_id, None)
                 self._event_ids.pop(turn_stream_id, None)
                 self._event_ids_loaded.discard(turn_stream_id)
-                self._load_state_from_disk(str(state["session_id"]), turn_stream_id)
+                self._load_state_from_disk(session_id, turn_stream_id)
                 raise
             self._states[turn_stream_id] = next_state
             self._event_ids.setdefault(turn_stream_id, {})[event["event_id"]] = event
@@ -702,6 +955,12 @@ class MessageStreamStore:
                 logger.error(
                     "消息流订阅队列溢出并关闭: turn_stream_id=%s",
                     turn_stream_id,
+                )
+            if self._should_write_state_snapshot(event_type, next_seq):
+                self._schedule_state_snapshot(
+                    session_id,
+                    turn_stream_id,
+                    next_state,
                 )
             return copy.deepcopy(event)
 
@@ -940,6 +1199,27 @@ class MessageStreamStore:
                     "reason": payload.get("reason"),
                 }
         elif event_type == "stream.completed":
+            auto_closed_blocks = payload.get("auto_closed_blocks", ())
+            if auto_closed_blocks in (None, ()):
+                auto_closed_blocks = []
+            if not isinstance(auto_closed_blocks, list):
+                raise MessageStreamError(
+                    "stream.completed.auto_closed_blocks 必须是 list"
+                )
+            auto_closed_ids = {
+                str(block_id)
+                for block_id in auto_closed_blocks
+                if isinstance(block_id, str) and block_id
+            }
+            for block in next_state.get("blocks", []):
+                if (
+                    isinstance(block, dict)
+                    and block.get("block_id") in auto_closed_ids
+                    and block.get("status") == "running"
+                ):
+                    block["status"] = "completed"
+                    block["completion_reason"] = "stream_completed"
+                    block["partial"] = False
             next_state["stream_status"] = "completed"
             next_state["agent_loop_status"] = "completed"
             next_state["resumable"] = False
@@ -1464,13 +1744,34 @@ class MessageStreamStore:
             if not stream_dir.is_dir():
                 continue
             for path in sorted(stream_dir.glob("*.jsonl")):
-                record = self._read_last_record(path)
-                if record is None:
+                records = self._read_records(
+                    path,
+                    expected_session_id=str(node.node_id),
+                    expected_turn_stream_id=path.stem,
+                )
+                if not records:
                     continue
-                state = self._read_state_snapshot(
+                record = records[-1]
+                turn_stream_id = str(record.event["turn_stream_id"])
+                state_snapshot = self._read_state_snapshot(
                     str(node.node_id),
-                    str(record.event["turn_stream_id"]),
-                ) or copy.deepcopy(record.checkpoint)
+                    turn_stream_id,
+                )
+                snapshot_seq = (
+                    int(state_snapshot.get("snapshot_seq", 0))
+                    if state_snapshot is not None
+                    else 0
+                )
+                last_seq = int(record.event["event_seq"])
+                if state_snapshot is not None and snapshot_seq >= last_seq:
+                    state = copy.deepcopy(state_snapshot)
+                else:
+                    # 启动恢复必须重放快照之后已经 fsync 的事件尾部，不能只看
+                    # JSONL 最后一条记录中为空的 checkpoint 字段。
+                    state = self._load_state_from_disk(
+                        str(node.node_id),
+                        turn_stream_id,
+                    )
                 turn_stream_id = str(state["turn_stream_id"])
                 self._states[turn_stream_id] = state
                 self._event_ids[turn_stream_id] = {
@@ -1507,7 +1808,11 @@ class MessageStreamStore:
     ) -> list[dict[str, Any]]:
         state = await self.get_state(turn_stream_id)
         path = self._stream_path(session_id, turn_stream_id)
-        records = self._read_records(path)
+        records = self._read_records(
+            path,
+            expected_session_id=session_id,
+            expected_turn_stream_id=turn_stream_id,
+        )
         events = [
             copy.deepcopy(record.event)
             for record in records

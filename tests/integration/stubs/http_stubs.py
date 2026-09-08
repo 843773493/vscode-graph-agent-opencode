@@ -346,3 +346,157 @@ def openai_chat_stub(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+@contextmanager
+def openai_chat_tool_loop_stub(port: int) -> Iterator[HTTPStubState]:
+    """提供一个确定性的 Chat Completions 工具循环 SSE 替身。"""
+
+    state = HTTPStubState()
+
+    def sse_response(handler: BaseHTTPRequestHandler, chunks: list[dict[str, object]]) -> None:
+        encoded = b"".join(
+            f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+            for chunk in chunks
+        ) + b"data: [DONE]\n\n"
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Cache-Control", "no-cache")
+        handler.send_header("Content-Length", str(len(encoded)))
+        handler.end_headers()
+        handler.wfile.write(encoded)
+        handler.wfile.flush()
+
+    def chunk(
+        *,
+        request_number: int,
+        delta: dict[str, object],
+        finish_reason: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "id": f"chatcmpl-browser-tool-loop-{request_number}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "browser-chat-tool-loop-stub",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish_reason,
+                }
+            ],
+        }
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+        def do_POST(self) -> None:
+            if not self.path.endswith("/chat/completions"):
+                _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
+                return
+            if self.headers.get("Authorization") != "Bearer e2e-local-model-key":
+                _json_response(self, {"detail": "模型 API key 无效"}, status=401)
+                return
+
+            payload = _request_json(self)
+            state.requests.append(
+                {"method": "POST", "path": self.path, "json": payload}
+            )
+            if payload.get("stream") is not True:
+                _json_response(
+                    self,
+                    {"error": {"message": "浏览器工具循环必须使用 stream=true"}},
+                    status=400,
+                )
+                return
+
+            messages = payload.get("messages")
+            roles = [
+                message.get("role")
+                for message in messages
+                if isinstance(message, dict)
+            ] if isinstance(messages, list) else []
+            request_number = len(state.requests)
+            if roles == ["system", "user"]:
+                sse_response(
+                    self,
+                    [
+                        chunk(
+                            request_number=request_number,
+                            delta={
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_browser_chat_tool_loop",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_file",
+                                            "arguments": '{"path":"',
+                                        },
+                                    }
+                                ]
+                            },
+                        ),
+                        chunk(
+                            request_number=request_number,
+                            delta={
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "function": {"arguments": "README.md\"}"},
+                                    }
+                                ]
+                            },
+                        ),
+                        chunk(
+                            request_number=request_number,
+                            delta={},
+                            finish_reason="tool_calls",
+                        ),
+                    ],
+                )
+                return
+
+            if roles == ["system", "user", "assistant", "tool"]:
+                sse_response(
+                    self,
+                    [
+                        chunk(
+                            request_number=request_number,
+                            delta={
+                                "role": "assistant",
+                                "content": "浏览器 SSE 工具调用已完成。",
+                            },
+                        ),
+                        chunk(
+                            request_number=request_number,
+                            delta={},
+                            finish_reason="stop",
+                        ),
+                    ],
+                )
+                return
+
+            _json_response(
+                self,
+                {
+                    "error": {
+                        "message": f"工具循环请求角色不符合预期: {roles}",
+                    }
+                },
+                status=400,
+            )
+
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield state
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

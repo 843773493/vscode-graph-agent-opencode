@@ -23,6 +23,9 @@ from app.services.business.session_resource_actions import (
 )
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
 
+_ACTIVE_TERMINAL_STATUSES = frozenset({"created", "running"})
+_CURRENT_BROWSER_STATUSES = frozenset({"created", "running", "frozen", "discarded"})
+
 
 class BackgroundTaskResourceProvider:
     kind: SessionResourceKind = "background_task"
@@ -161,7 +164,11 @@ class TerminalResourceProvider:
     ) -> list[SessionResourceDTO]:
         active_terminals = self._terminal_manager.list_terminals_from_state(session_id)
         if not include_history:
-            return [self._to_resource(terminal) for terminal in active_terminals]
+            return [
+                self._to_resource(terminal)
+                for terminal in active_terminals
+                if terminal.get("status") in _ACTIVE_TERMINAL_STATUSES
+            ]
         records = await self._message_service.list_agent_state_records(session_id)
         historical_terminals = self._historical_reader.read_records(
             session_id=session_id,
@@ -251,9 +258,16 @@ class BrowserResourceProvider:
         *,
         include_history: bool = True,
     ) -> list[SessionResourceDTO]:
+        browsers = self._browser_manager.list_browsers_from_state(session_id)
+        if not include_history:
+            browsers = [
+                browser
+                for browser in browsers
+                if browser.get("status") in _CURRENT_BROWSER_STATUSES
+            ]
         return [
             self._to_resource(dict(browser))
-            for browser in self._browser_manager.list_browsers_from_state(session_id)
+            for browser in browsers
             if browser.get("status") != "deleted"
         ]
 

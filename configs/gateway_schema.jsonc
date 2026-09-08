@@ -2,6 +2,15 @@
   // BoxTeam Gateway 控制面配置模式定义。
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://boxteam.dev/schemas/gateway-config-v1.json",
+  "x-boxteam-config-domain": "gateway",
+  "x-boxteam-policy-manifest": [
+    { "pattern": "/ui/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/features/session_catalog/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/features/session_generators/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/runtime/gateway/process/*", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
+    { "pattern": "/workspaces", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
+    { "pattern": "/workspaces/*", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": "connection_id" }
+  ],
   "title": "BoxTeam Gateway Config Schema",
   "type": "object",
   "additionalProperties": false,
@@ -15,11 +24,12 @@
     },
     "config_version": {
       "type": "integer",
-      "const": 1
+      "enum": [1, 2],
+      "description": "v1 允许缺少 connection_id；加载时先按 v1 校验并备份，再迁移为 v2。Gateway workspaces 变化属于 restart_gateway。"
     },
     "workspaces": {
       "type": "array",
-      "description": "Gateway 启动时通过 SSH 连接的远程 Gateway。",
+      "description": "Gateway 启动时通过 SSH 连接的远程 Gateway。元素增删改和连接身份变化属于 restart_gateway；v2 使用持久 connection_id。",
       "items": {
         "$ref": "#/$defs/remoteGateway"
       }
@@ -40,6 +50,24 @@
       "$ref": "#/$defs/runtimeConfig"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "config_version": { "const": 2 }
+        }
+      },
+      "then": {
+        "properties": {
+          "workspaces": {
+            "items": {
+              "required": ["connection_id"]
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "featuresConfig": {
       "type": "object",
@@ -262,6 +290,12 @@
         "private_key_path"
       ],
       "properties": {
+        "connection_id": {
+          "type": "string",
+          "description": "稳定的远程连接身份；host、username 或 key 变化时保留该 ID 并递增其 registry generation。",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
         "enabled": {
           "type": "boolean",
           "default": true

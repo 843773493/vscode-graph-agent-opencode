@@ -29,9 +29,14 @@ class TerminalManagerClient:
         workspace_id: str | None = None,
         config_service: ConfigService | None = None,
     ) -> None:
+        configured_backend_url = backend_url or os.environ.get(
+            "BOXTEAM_TERMINAL_BACKEND_URL"
+        )
+        self._config_service = (
+            config_service if configured_backend_url is None else None
+        )
         self._backend_url = (
-            backend_url
-            or os.environ.get("BOXTEAM_TERMINAL_BACKEND_URL")
+            configured_backend_url
             or (
                 config_service.get_terminal_backend_url()
                 if config_service is not None
@@ -52,6 +57,11 @@ class TerminalManagerClient:
 
     @property
     def backend_url(self) -> str:
+        return self._resolve_backend_url()
+
+    def _resolve_backend_url(self) -> str:
+        if self._config_service is not None:
+            return self._config_service.get_terminal_backend_url().rstrip("/")
         return self._backend_url
 
     def list_terminals_from_state(self, session_id: str) -> list[dict[str, Any]]:
@@ -231,7 +241,7 @@ class TerminalManagerClient:
     ) -> dict[str, Any]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         request = Request(
-            f"{self._backend_url}{path}",
+            f"{self._resolve_backend_url()}{path}",
             data=body,
             method=method,
             headers={"content-type": "application/json"},

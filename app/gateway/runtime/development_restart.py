@@ -50,6 +50,7 @@ def start_development_restart(
     command: DevelopmentRestartCommand,
     *,
     log_path: Path,
+    environment: dict[str, str] | None = None,
 ) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log_file:
@@ -64,7 +65,7 @@ def start_development_restart(
         process = subprocess.Popen(
             command.argv,
             cwd=command.cwd,
-            env=os.environ.copy(),
+            env={**os.environ, **(environment or {})},
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,

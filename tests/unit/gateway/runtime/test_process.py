@@ -241,6 +241,50 @@ def test_workspace_backend_has_bounded_connection_drain_timeout(
     ]
 
 
+def test_local_child_process_does_not_inherit_gateway_pending_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_environments: list[dict[str, str]] = []
+    process = _Process(timeout_once=False)
+
+    def fake_spawn(command: list[str], **kwargs: object) -> _Process:
+        environment = kwargs.get("env")
+        assert isinstance(environment, dict)
+        captured_environments.append(environment)
+        return process
+
+    monkeypatch.setenv("BOXTEAM_PYTHON_BIN", "/workspace/.venv/bin/python")
+    monkeypatch.setenv("BOXTEAM_CONFIG_CANDIDATE_REF", "gateway-candidate")
+    monkeypatch.setenv("BOXTEAM_CONFIG_GENERATION", "gateway-generation")
+    monkeypatch.setenv("BOXTEAM_CONFIG_FENCING_TOKEN", "gateway-fence")
+    monkeypatch.setattr(
+        "app.gateway.runtime.process._spawn_logged_process",
+        fake_spawn,
+    )
+
+    managed = start_local_backend_process(
+        project_root=tmp_path,
+        workspace_root=tmp_path / "workspace",
+        port=41001,
+        log_dir=tmp_path / "logs",
+        extra_env={"WORKSPACE_ONLY_SETTING": "present"},
+    )
+    managed.detach()
+
+    assert len(captured_environments) == 1
+    environment = captured_environments[0]
+    assert all(
+        key not in environment
+        for key in (
+            "BOXTEAM_CONFIG_CANDIDATE_REF",
+            "BOXTEAM_CONFIG_GENERATION",
+            "BOXTEAM_CONFIG_FENCING_TOKEN",
+        )
+    )
+    assert environment["WORKSPACE_ONLY_SETTING"] == "present"
+
+
 def test_workspace_ssh_port_forward_reuses_alias_and_long_lived_options(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

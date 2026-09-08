@@ -52,6 +52,66 @@ export function normalizeWebUiSettings(
   };
 }
 
+function mergeReturnedSection<T extends object>(
+  current: T,
+  returned: T,
+  patch: Partial<T> | null | undefined,
+): T {
+  if (patch === null || patch === undefined) {
+    return current;
+  }
+  const merged = { ...current };
+  for (const key of Object.keys(patch) as Array<keyof T>) {
+    if (patch[key] !== undefined) {
+      merged[key] = returned[key];
+    }
+  }
+  return merged;
+}
+
+/**
+ * 游客设置不写入 Gateway profile，因此要把接口返回的本次补丁合并回页面内存。
+ * 返回值仍以 Gateway 的归一化结果为准，未参与本次更新的设置继续沿用当前页面状态。
+ */
+export function mergeGuestWebUiSettings(
+  current: WebUiSettings,
+  returned: WebUiSettings,
+  patch: WebUiSettingsUpdate,
+): WebUiSettings {
+  const layout = mergeReturnedSection(current.layout, returned.layout, patch.layout);
+  const theme = patch.theme === null || patch.theme === undefined
+    ? current.theme
+    : {
+        ...mergeReturnedSection(current.theme, returned.theme, patch.theme),
+        resolved_theme: returned.theme.resolved_theme,
+      };
+  return {
+    ...current,
+    layout,
+    session_sidebar: mergeReturnedSection(
+      current.session_sidebar,
+      returned.session_sidebar,
+      patch.session_sidebar,
+    ),
+    workspace_file_tree: mergeReturnedSection(
+      current.workspace_file_tree,
+      returned.workspace_file_tree,
+      patch.workspace_file_tree,
+    ),
+    gateway_console: mergeReturnedSection(
+      current.gateway_console,
+      returned.gateway_console,
+      patch.gateway_console,
+    ),
+    theme,
+    recent_local_workspace_paths:
+      patch.recent_local_workspace_paths === null
+      || patch.recent_local_workspace_paths === undefined
+        ? current.recent_local_workspace_paths
+        : returned.recent_local_workspace_paths,
+  };
+}
+
 export interface AgentSessionsPreferences {
   filterMode: WebUiSessionSidebarSettings["filter_mode"];
   sortMode: WebUiSessionSidebarSettings["sort_mode"];

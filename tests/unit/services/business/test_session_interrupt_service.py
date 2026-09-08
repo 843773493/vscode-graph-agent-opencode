@@ -9,13 +9,15 @@ from langchain_core.messages import HumanMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.core.session_interrupt_state import SessionInterruptState
 from app.schemas.internal_v2.common import ControlAction, JobStatus, RunMode
 from app.schemas.internal_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO
 from app.services.business.message_service import MessageService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 
 
 class FakeJobService:

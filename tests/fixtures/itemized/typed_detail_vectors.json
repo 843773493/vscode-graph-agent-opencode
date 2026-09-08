@@ -1,0 +1,286 @@
+{
+  "scenario": {
+    "session_id": "session-detail",
+    "plan_id": "plan-detail",
+    "assembly_id": "assembly-final",
+    "ref_id": "request-detail",
+    "source_revision": "revision-detail",
+    "body": "body",
+    "source_ref": {
+      "session_id": "session-detail",
+      "assembly_id": "assembly-source",
+      "detail_id": "detail-source"
+    },
+    "detail_ref": {
+      "session_id": "session-detail",
+      "assembly_id": "assembly-final",
+      "detail_id": "detail-final"
+    },
+    "provider": "provider-detail",
+    "wire_request": {
+      "messages": [
+        {
+          "role": "system",
+          "content": "body"
+        }
+      ]
+    }
+  },
+  "serialization": [],
+  "preimages": [
+    {
+      "id": "typed-detail-plan",
+      "preimage": {
+        "schema": "context-plan-hash:v2",
+        "format_version": 2,
+        "active_view_id": null,
+        "history_view_revision": 0,
+        "source_overlay_epoch": 0,
+        "selection_policy": "active_view",
+        "refs": [
+          {
+            "session_id": "session-detail",
+            "plan_id": "plan-detail",
+            "ref_type": "request_only",
+            "ref_id": "request-detail",
+            "semantic_kind": null,
+            "payload_kind": "text",
+            "status": null,
+            "item_sequence": null,
+            "source_revision": "revision-detail",
+            "content_length": 4,
+            "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null
+          }
+        ],
+        "selection": [
+          {
+            "plan_ordinal": 0,
+            "selection_kind": "request_only",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "revision-detail",
+            "content_length": 4,
+            "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": {
+              "session_id": "session-detail",
+              "assembly_id": "assembly-final",
+              "detail_id": "detail-final"
+            },
+            "contribution_id": null,
+            "ref": {
+              "session_id": "session-detail",
+              "plan_id": "plan-detail",
+              "ref_type": "request_only",
+              "ref_id": "request-detail",
+              "source_revision": "revision-detail",
+              "content_length": 4,
+              "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+              "redacted_stable_digest": null,
+              "overlay_from_revision": null,
+              "overlay_to_revision": null,
+              "overlay_diff_hash": null
+            }
+          }
+        ],
+        "tool_set_refs": [],
+        "contributions": [],
+        "compiler_version": "itemized-context-v1"
+      },
+      "canonical": "{\"active_view_id\":null,\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":0,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"item_sequence\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"plan_id\":\"plan-detail\",\"redacted_stable_digest\":null,\"ref_id\":\"request-detail\",\"ref_type\":\"request_only\",\"semantic_kind\":null,\"session_id\":\"session-detail\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-detail\",\"status\":null}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":{\"assembly_id\":\"assembly-final\",\"detail_id\":\"detail-final\",\"session_id\":\"session-detail\"},\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":\"plan-detail\",\"redacted_stable_digest\":null,\"ref_id\":\"request-detail\",\"ref_type\":\"request_only\",\"session_id\":\"session-detail\",\"source_revision\":\"revision-detail\"},\"selection_kind\":\"request_only\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-detail\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"source_overlay_epoch\":0,\"tool_set_refs\":[]}",
+      "hash": "sha256:jcs:v1:444def9f616fecc92053508569b5750cced79e65ead75fa4f4594af2b25a5d56"
+    },
+    {
+      "id": "typed-detail-request-default",
+      "preimage": {
+        "plan_hash": "sha256:jcs:v1:444def9f616fecc92053508569b5750cced79e65ead75fa4f4594af2b25a5d56",
+        "provider": "provider-detail",
+        "projector_id": "itemized-context-provider",
+        "projector_version": "v1",
+        "target_format": "native",
+        "refs": [
+          {
+            "ref_type": "request_only",
+            "ref_id": "request-detail",
+            "semantic_kind": null,
+            "payload_kind": "text",
+            "status": null,
+            "source_revision": "revision-detail",
+            "content_length": 4,
+            "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null
+          }
+        ],
+        "contributions": [],
+        "tool_set_refs": [],
+        "selection": [
+          {
+            "plan_ordinal": 0,
+            "selection_kind": "request_only",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "revision-detail",
+            "content_length": 4,
+            "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": {
+              "session_id": "session-detail",
+              "assembly_id": "assembly-final",
+              "detail_id": "detail-final"
+            },
+            "contribution_id": null,
+            "ref": {
+              "ref_type": "request_only",
+              "ref_id": "request-detail",
+              "source_revision": "revision-detail",
+              "content_length": 4,
+              "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+              "redacted_stable_digest": null
+            }
+          }
+        ],
+        "tool_snapshot": [],
+        "wire_request": {
+          "target_format": "native",
+          "selection": [
+            {
+              "plan_ordinal": 0,
+              "ref_type": "request_only",
+              "ref_id": "request-detail",
+              "selection_kind": "request_only",
+              "included": true,
+              "source_revision": "revision-detail",
+              "content_length": 4,
+              "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+              "redacted_stable_digest": null,
+              "base_delta_role": "none",
+              "source_overlay_epoch": null,
+              "overlay_from_revision": null,
+              "overlay_to_revision": null,
+              "overlay_diff_hash": null,
+              "contribution_ordinal": null,
+              "detail_ref": {
+                "session_id": "session-detail",
+                "assembly_id": "assembly-final",
+                "detail_id": "detail-final"
+              },
+              "contribution_id": null,
+              "omission_reason": null,
+              "loss": []
+            }
+          ]
+        }
+      },
+      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:444def9f616fecc92053508569b5750cced79e65ead75fa4f4594af2b25a5d56\",\"projector_id\":\"itemized-context-provider\",\"projector_version\":\"v1\",\"provider\":\"provider-detail\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"redacted_stable_digest\":null,\"ref_id\":\"request-detail\",\"ref_type\":\"request_only\",\"semantic_kind\":null,\"source_overlay_epoch\":null,\"source_revision\":\"revision-detail\",\"status\":null}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":{\"assembly_id\":\"assembly-final\",\"detail_id\":\"detail-final\",\"session_id\":\"session-detail\"},\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"redacted_stable_digest\":null,\"ref_id\":\"request-detail\",\"ref_type\":\"request_only\",\"source_revision\":\"revision-detail\"},\"selection_kind\":\"request_only\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-detail\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[],\"tool_snapshot\":[],\"wire_request\":{\"selection\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":{\"assembly_id\":\"assembly-final\",\"detail_id\":\"detail-final\",\"session_id\":\"session-detail\"},\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"redacted_stable_digest\":null,\"ref_id\":\"request-detail\",\"ref_type\":\"request_only\",\"selection_kind\":\"request_only\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-detail\"}],\"target_format\":\"native\"}}",
+      "hash": "sha256:jcs:v1:360b69db89f0a2bfd9103ef0315067463317dfcff70331f40f36668bcee50e50"
+    },
+    {
+      "id": "typed-detail-request-wire",
+      "preimage": {
+        "plan_hash": "sha256:jcs:v1:444def9f616fecc92053508569b5750cced79e65ead75fa4f4594af2b25a5d56",
+        "provider": "provider-detail",
+        "projector_id": "itemized-context-provider",
+        "projector_version": "v1",
+        "target_format": "native",
+        "refs": [
+          {
+            "ref_type": "request_only",
+            "ref_id": "request-detail",
+            "semantic_kind": null,
+            "payload_kind": "text",
+            "status": null,
+            "source_revision": "revision-detail",
+            "content_length": 4,
+            "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null
+          }
+        ],
+        "contributions": [],
+        "tool_set_refs": [],
+        "selection": [
+          {
+            "plan_ordinal": 0,
+            "selection_kind": "request_only",
+            "included": true,
+            "omission_reason": null,
+            "loss": [],
+            "visibility": "internal",
+            "protection": "public",
+            "availability": "available",
+            "source_revision": "revision-detail",
+            "content_length": 4,
+            "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+            "redacted_stable_digest": null,
+            "base_delta_role": "none",
+            "source_overlay_epoch": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "overlay_diff_hash": null,
+            "contribution_ordinal": null,
+            "detail_ref": {
+              "session_id": "session-detail",
+              "assembly_id": "assembly-final",
+              "detail_id": "detail-final"
+            },
+            "contribution_id": null,
+            "ref": {
+              "ref_type": "request_only",
+              "ref_id": "request-detail",
+              "source_revision": "revision-detail",
+              "content_length": 4,
+              "content_hash": "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f",
+              "redacted_stable_digest": null
+            }
+          }
+        ],
+        "tool_snapshot": [],
+        "wire_request": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "body"
+            }
+          ]
+        }
+      },
+      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:444def9f616fecc92053508569b5750cced79e65ead75fa4f4594af2b25a5d56\",\"projector_id\":\"itemized-context-provider\",\"projector_version\":\"v1\",\"provider\":\"provider-detail\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"redacted_stable_digest\":null,\"ref_id\":\"request-detail\",\"ref_type\":\"request_only\",\"semantic_kind\":null,\"source_overlay_epoch\":null,\"source_revision\":\"revision-detail\",\"status\":null}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":{\"assembly_id\":\"assembly-final\",\"detail_id\":\"detail-final\",\"session_id\":\"session-detail\"},\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f\",\"content_length\":4,\"redacted_stable_digest\":null,\"ref_id\":\"request-detail\",\"ref_type\":\"request_only\",\"source_revision\":\"revision-detail\"},\"selection_kind\":\"request_only\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-detail\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[],\"tool_snapshot\":[],\"wire_request\":{\"messages\":[{\"content\":\"body\",\"role\":\"system\"}]}}",
+      "hash": "sha256:jcs:v1:505b2bc67d43a7263d084bf6e8466c3e4372f6439d0241bbb0e4fe8ed5d61359"
+    }
+  ]
+}

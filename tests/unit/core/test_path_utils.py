@@ -495,6 +495,79 @@ class TestPathUtils:
         with pytest.raises(RuntimeError, match="与权威索引父关系不一致"):
             resolver.refresh()
 
+    def test_child_session_summary_counts_logical_children_without_loading_manifests(
+        self,
+        tmp_path,
+    ):
+        sessions_root = tmp_path / ".boxteam" / "sessions"
+        resolver = SessionPathResolver(sessions_root)
+        resolver.initialize()
+        now = datetime.now(UTC).isoformat()
+
+        def create_session(
+            session_id: str,
+            title: str,
+            parent_node_id: str | None,
+            parent_session_id: str | None,
+        ) -> None:
+            session_dir = resolver.allocate_session_dir(
+                session_id=session_id,
+                title=title,
+                parent_node_id=parent_node_id,
+            )
+            (session_dir / "session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": session_id,
+                        "workspace_id": "ws_local",
+                        "title": title,
+                        "parent_session_id": parent_session_id,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            resolver.register_session(session_id, session_dir)
+
+        parent_id = "ses_summary_parent_12345678"
+        child_one_id = "ses_summary_child_one_12345678"
+        child_two_id = "ses_summary_child_two_12345678"
+        nested_child_id = "ses_summary_nested_child_12345678"
+        create_session(parent_id, "父会话", None, None)
+        first_folder = resolver.create_folder(
+            name="第一个子树",
+            parent_node_id=parent_id,
+        )
+        second_folder = resolver.create_folder(
+            name="第二个子树",
+            parent_node_id=parent_id,
+        )
+        create_session(child_one_id, "子会话一", first_folder.node_id, parent_id)
+        create_session(child_two_id, "子会话二", second_folder.node_id, parent_id)
+        nested_folder = resolver.create_folder(
+            name="孙会话目录",
+            parent_node_id=child_one_id,
+        )
+        create_session(
+            nested_child_id,
+            "孙会话",
+            nested_folder.node_id,
+            child_one_id,
+        )
+
+        child_count, child_ids, truncated = resolver.child_session_summary(
+            parent_id,
+            limit=1,
+        )
+
+        assert child_count == 2
+        assert len(child_ids) == 1
+        assert child_ids[0] in {child_one_id, child_two_id}
+        assert truncated is True
+        with pytest.raises(ValueError, match="limit 必须大于 0"):
+            resolver.child_session_summary(parent_id, limit=0)
+
     def test_runtime_session_resolution_ignores_unrelated_physical_drift(
         self,
         tmp_path,

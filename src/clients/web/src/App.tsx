@@ -248,18 +248,6 @@ export default function AppShell() {
   const [extensionDebugAreaRatios, setExtensionDebugAreaRatios] = useState(
     () => ({ ...DEFAULT_EXTENSION_DEBUG_AREA_RATIOS }),
   );
-  const [customizationsCollapsed, setCustomizationsCollapsed] = useState(
-    () => state.uiSettings.layout.customizations_collapsed ?? false,
-  );
-  const [customizationsHeight, setCustomizationsHeight] = useState(() =>
-    Math.min(
-      420,
-      Math.max(
-        129,
-        state.uiSettings.layout.customizations_height ?? 286,
-      ),
-    ),
-  );
   const [defaultViewChangesHint, setDefaultViewChangesHint] = useState<{
     sessionId: string;
     summary: SessionChangesSummary;
@@ -371,14 +359,6 @@ export default function AppShell() {
       setAuxiliaryTabOrder(resolveAuxiliaryTabOrder(layout.auxiliary_tab_order));
     }
     setMainAreaRatios(resolveMainAreaRatios(layout.main_area_ratios));
-    if (typeof layout.customizations_collapsed === "boolean") {
-      setCustomizationsCollapsed(layout.customizations_collapsed);
-    }
-    if (typeof layout.customizations_height === "number") {
-      setCustomizationsHeight(
-        Math.min(420, Math.max(129, layout.customizations_height)),
-      );
-    }
   }, [extensionWindowRequest?.kind, extensionWindowRequested, state.uiSettings]);
 
   useEffect(() => {
@@ -1455,6 +1435,10 @@ export default function AppShell() {
           hidden={contentView !== "agent"}
         >
         <AgentStatePanel
+          port={resolvedApiPort}
+          workspaceId={activeSessionWorkspaceId ?? ""}
+          sessionId={activeSession?.session_id ?? ""}
+          active={contentView === "agent"}
           jsonl={state.agentStateJsonl}
           messageCount={state.agentStateMessageCount}
           loadedAt={state.agentStateLoadedAt}
@@ -1639,18 +1623,6 @@ export default function AppShell() {
             persistUiSettings((current) => ({
               session_sidebar: updater(current.session_sidebar),
             }));
-          }}
-          customizationsCollapsed={customizationsCollapsed}
-          customizationsHeight={customizationsHeight}
-          onCustomizationsCollapsedChange={(collapsed) => {
-            setCustomizationsCollapsed(collapsed);
-            persistLayoutSettings({ customizations_collapsed: collapsed });
-          }}
-          onCustomizationsHeightChange={(height, commit) => {
-            setCustomizationsHeight(height);
-            if (commit) {
-              persistLayoutSettings({ customizations_height: height });
-            }
           }}
           generatorResources={generatorResources}
         />

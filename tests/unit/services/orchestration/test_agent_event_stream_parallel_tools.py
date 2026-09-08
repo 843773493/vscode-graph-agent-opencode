@@ -25,11 +25,17 @@ from app.core.turn_execution_scope import (
     get_current_turn_execution_scope,
 )
 from app.schemas.event import ModelTokenUsagePayload
-from app.services.orchestration.agent_event_stream_processor import (
+from app.services.orchestration.event_stream.contracts import (
     AgentEventStreamTimeoutError,
-    _activity_result_detail,
+)
+from app.services.orchestration.event_stream.model_events import (
     last_model_token_usage,
+)
+from app.services.orchestration.event_stream.processor import (
     process_agent_event_stream,
+)
+from app.services.orchestration.event_stream.tool_events import (
+    activity_result_detail,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
@@ -344,7 +350,7 @@ async def test_default_model_wait_after_start_uses_job_budget_not_idle_watchdog(
             yield {"event": "on_chat_model_end", "data": {}, **event_base}
 
     monkeypatch.setattr(
-        "app.services.orchestration.agent_event_stream_processor.DEFAULT_INITIAL_EVENT_TIMEOUT_SECONDS",
+        "app.services.orchestration.event_stream.reader.DEFAULT_INITIAL_EVENT_TIMEOUT_SECONDS",
         0.01,
     )
     result = await process_agent_event_stream(
@@ -1775,7 +1781,7 @@ async def test_resource_tool_is_projected_as_resource_activity(
 
 
 def test_retryable_resource_failure_projects_recovery_metadata() -> None:
-    detail = _activity_result_detail(
+    detail = activity_result_detail(
         json.dumps(
             {
                 "status": "error",

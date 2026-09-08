@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ class ConfigSnapshotStore:
         self._candidate_builder = candidate_builder
         self._snapshot: ConfigSnapshot | None = None
         self._status: ConfigReloadStatus | None = None
+        self._reload_lock = asyncio.Lock()
 
     def initialize(self, candidate: ConfigSnapshot | None = None) -> None:
         self._commit(candidate or self._candidate_builder())
@@ -47,31 +49,32 @@ class ConfigSnapshotStore:
         *,
         candidate_applier: ConfigCandidateApplier | None = None,
     ) -> bool:
-        previous = self.current()
-        try:
-            candidate = self._candidate_builder()
-        except Exception as error:
-            self._record_failure(error, reason="invalid_config")
-            raise
-        if candidate.revision == previous.revision:
-            self._commit(candidate)
-            return False
-        if candidate_applier is not None:
+        async with self._reload_lock:
+            previous = self.current()
             try:
-                await candidate_applier(previous, candidate)
+                candidate = self._candidate_builder()
             except Exception as error:
-                self._record_failure(
-                    error,
-                    reason=(
-                        "restart_required"
-                        if isinstance(error, ConfigRestartRequiredError)
-                        else "apply_failed"
-                    ),
-                )
+                self._record_failure(error, reason="invalid_config")
                 raise
-        self._commit(candidate)
-        logger.info("配置热重载成功: revision=%s", candidate.revision)
-        return True
+            if candidate.revision == previous.revision:
+                self._commit(candidate)
+                return False
+            if candidate_applier is not None:
+                try:
+                    await candidate_applier(previous, candidate)
+                except Exception as error:
+                    self._record_failure(
+                        error,
+                        reason=(
+                            "restart_required"
+                            if isinstance(error, ConfigRestartRequiredError)
+                            else "apply_failed"
+                        ),
+                    )
+                    raise
+            self._commit(candidate)
+            logger.info("配置热重载成功: revision=%s", candidate.revision)
+            return True
 
     def _record_failure(
         self,

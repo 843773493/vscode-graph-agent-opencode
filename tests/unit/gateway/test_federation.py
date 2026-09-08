@@ -11,7 +11,10 @@ import httpx
 import pytest
 from starlette.requests import Request
 
+import app.gateway.remote_gateway as remote_gateway_module
 from app.gateway.auth import get_gateway_local_token
+from app.gateway.config import ConfiguredRemoteGateway
+from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
 from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
@@ -23,9 +26,11 @@ from app.gateway.federation import (
 )
 from app.gateway.main import _inbound_gateway_access_list
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.remote_gateway import reconcile_configured_remote_gateways
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import _proxy_headers
+from app.services.infrastructure.config.state import ConfigConflictError
 
 
 def _response(data: dict[str, object]) -> httpx.Response:
@@ -93,9 +98,7 @@ async def test_inbound_access_excludes_credentials_held_for_outbound_gateways(
         connection_id=f"rgw_inbound:{local_gateway_id}",
         peer_gateway_id="gateway_external",
     )
-    registry = GatewayWorkspaceRegistry(
-        storage_path=gateway_root / "workspaces.json"
-    )
+    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
 
     async def list_dtos() -> list[SimpleNamespace]:
         return [
@@ -125,9 +128,7 @@ async def test_inbound_access_excludes_credentials_held_for_outbound_gateways(
 
     assert result.gateway_id == local_gateway_id
     assert [peer.peer_gateway_id for peer in result.peers] == ["gateway_external"]
-    assert [workspace.workspace_id for workspace in result.items] == [
-        "local_workspace"
-    ]
+    assert [workspace.workspace_id for workspace in result.items] == ["local_workspace"]
 
 
 def test_gateway_local_credential_is_generated_and_stable(
@@ -142,7 +143,9 @@ def test_gateway_local_credential_is_generated_and_stable(
     assert first == second
     assert first != "local-dev-token"
     if os.name != "nt":
-        assert (tmp_path / "credentials" / "local-token").stat().st_mode & 0o777 == 0o600
+        assert (
+            tmp_path / "credentials" / "local-token"
+        ).stat().st_mode & 0o777 == 0o600
 
 
 def test_pairing_does_not_read_global_docker_command(
@@ -287,6 +290,449 @@ def test_registry_persists_remote_gateway_without_federation_token(
 
 
 @pytest.mark.asyncio
+async def test_configured_remote_reconcile_stages_all_and_preserves_manual_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=state,
+    )
+    manual_connection = RemoteGatewayConnection(
+        connection_id="rgw_manual",
+        name="Manual",
+        host="manual.example.com",
+        port=22,
+        username="developer",
+        private_key_path=None,
+        ssh_config_host="manual",
+        remote_gateway_port=8014,
+        remote_gateway_id="manual-gateway",
+        protocol_version=FEDERATION_PROTOCOL_VERSION,
+        source_owner="manual",
+    )
+    registry.upsert_remote_gateway(manual_connection)
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="manual-projection",
+            name="Manual projection",
+            root_path="/manual/project",
+            backend_url="http://manual",
+            connection_kind="remote_gateway",
+            owner="remote_projection",
+            connection_id="rgw_manual",
+            remote_gateway_connection_id="rgw_manual",
+            remote_workspace_id="manual-workspace",
+        )
+    )
+    initial_revision = registry.registry_revision
+
+    async def prepare(
+        *,
+        configured: ConfiguredRemoteGateway,
+        **_: object,
+    ) -> tuple[RemoteGatewayConnection, WorkspaceRuntime, list[dict[str, object]]]:
+        connection = RemoteGatewayConnection(
+            connection_id=configured.connection_id,
+            name=configured.name or configured.host,
+            host=configured.host,
+            port=configured.port,
+            username=configured.username,
+            private_key_path=None,
+            ssh_config_host=configured.ssh_config_host,
+            remote_gateway_port=configured.remote_gateway_port,
+            remote_gateway_id=f"{configured.connection_id}-gateway",
+            protocol_version=FEDERATION_PROTOCOL_VERSION,
+            source_owner="config",
+            remote_config_event_cursor=7,
+            remote_config_state="pending_restart",
+            remote_restart_required=True,
+            remote_candidate_ref="remote-candidate-ref",
+        )
+        runtime = WorkspaceRuntime(
+            service_urls={"workspace_api": f"http://{configured.connection_id}"}
+        )
+        return (
+            connection,
+            runtime,
+            [
+                {
+                    "workspace_id": f"{configured.connection_id}-workspace",
+                    "name": configured.name or configured.connection_id,
+                    "root_path": f"/{configured.connection_id}",
+                    "managed": False,
+                    "services": ["workspace_api"],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(remote_gateway_module, "_prepare_remote_gateway", prepare)
+    await reconcile_configured_remote_gateways(
+        registry=registry,
+        configured_workspaces=(
+            ConfiguredRemoteGateway(
+                connection_id="rgw_config",
+                host="config.example.com",
+                username="developer",
+                private_key_path="/tmp/key",
+            ),
+        ),
+        log_dir=tmp_path / "logs",
+        health_request_timeout_seconds=2,
+        health_poll_interval_seconds=0.01,
+    )
+
+    assert registry.registry_revision == initial_revision + 1
+    assert registry.has_target("manual-projection")
+    assert registry.has_target(
+        build_projected_workspace_id("rgw_config", "rgw_config-workspace")
+    )
+    assert registry.remote_gateway_connection("rgw_manual").source_owner == "manual"
+    assert registry.remote_gateway_connection("rgw_config").source_owner == "config"
+    configured_connection = registry.remote_gateway_connection("rgw_config")
+    assert configured_connection.remote_config_event_cursor == 7
+    assert configured_connection.remote_config_state == "pending_restart"
+    assert configured_connection.remote_restart_required is True
+    assert configured_connection.remote_candidate_ref == "remote-candidate-ref"
+    assert (
+        registry.resolve(
+            build_projected_workspace_id("rgw_config", "rgw_config-workspace")
+        ).remote_config_event_cursor
+        == 7
+    )
+    registry.close()
+    state.close()
+
+
+def test_remote_projection_rejects_stale_cursor_and_accepts_full_snapshot_jump(
+    tmp_path: Path,
+) -> None:
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=state,
+    )
+
+    def connection(cursor: int) -> RemoteGatewayConnection:
+        return RemoteGatewayConnection(
+            connection_id="rgw_cursor",
+            name="Cursor remote",
+            host="cursor.example.com",
+            port=22,
+            username="developer",
+            private_key_path=None,
+            ssh_config_host="cursor",
+            remote_gateway_port=8014,
+            remote_gateway_id="cursor-gateway",
+            protocol_version=FEDERATION_PROTOCOL_VERSION,
+            source_owner="config",
+            remote_config_event_cursor=cursor,
+        )
+
+    def target(cursor: int) -> WorkspaceTarget:
+        return WorkspaceTarget(
+            workspace_id=build_projected_workspace_id("rgw_cursor", "workspace"),
+            name="Cursor workspace",
+            root_path="/cursor",
+            backend_url="http://cursor",
+            connection_kind="remote_gateway",
+            owner="remote_projection",
+            connection_id="rgw_cursor",
+            remote_gateway_connection_id="rgw_cursor",
+            remote_workspace_id="workspace",
+            remote_config_event_cursor=cursor,
+        )
+
+    registry.apply_remote_projection_snapshot(
+        connection=connection(5),
+        runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://cursor"}),
+        projections=(target(5),),
+    )
+    initial_revision = registry.registry_revision
+
+    with pytest.raises(ConfigConflictError, match="游标回退"):
+        registry.apply_remote_projection_snapshot(
+            connection=connection(4),
+            runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://stale"}),
+            projections=(target(4),),
+        )
+
+    assert registry.registry_revision == initial_revision
+    assert (
+        registry.remote_gateway_connection("rgw_cursor").remote_config_event_cursor == 5
+    )
+    assert registry.resolve(target(5).workspace_id).backend_url == "http://cursor"
+
+    registry.apply_remote_projection_snapshot(
+        connection=connection(9),
+        runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://resynced"}),
+        projections=(target(9),),
+    )
+    assert (
+        registry.remote_gateway_connection("rgw_cursor").remote_config_event_cursor == 9
+    )
+    assert registry.resolve(target(9).workspace_id).remote_config_event_cursor == 9
+    registry.close()
+    state.close()
+
+
+@pytest.mark.asyncio
+async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=state,
+    )
+    old_connection = RemoteGatewayConnection(
+        connection_id="rgw_configured",
+        name="Old remote",
+        host="old.example.com",
+        port=22,
+        username="developer",
+        private_key_path=None,
+        ssh_config_host="old",
+        remote_gateway_port=8014,
+        remote_gateway_id="old-gateway",
+        protocol_version=FEDERATION_PROTOCOL_VERSION,
+        source_owner="config",
+    )
+    registry.apply_remote_projection_batch(
+        connections=(old_connection,),
+        runtimes={
+            old_connection.connection_id: WorkspaceRuntime(
+                service_urls={"workspace_api": "http://old"}
+            )
+        },
+        projections={
+            old_connection.connection_id: (
+                WorkspaceTarget(
+                    workspace_id=build_projected_workspace_id(
+                        old_connection.connection_id,
+                        "old-workspace",
+                    ),
+                    name="Old workspace",
+                    root_path="/old",
+                    backend_url="http://old",
+                    connection_kind="remote_gateway",
+                    owner="remote_projection",
+                    connection_id=old_connection.connection_id,
+                    remote_gateway_connection_id=old_connection.connection_id,
+                    remote_workspace_id="old-workspace",
+                ),
+            )
+        },
+    )
+    initial_revision = registry.registry_revision
+    closed = False
+
+    class StagedRuntime:
+        service_urls = {"workspace_api": "http://new"}
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    async def prepare(
+        *,
+        configured: ConfiguredRemoteGateway,
+        **_: object,
+    ) -> tuple[RemoteGatewayConnection, StagedRuntime, list[dict[str, object]]]:
+        if configured.connection_id == "rgw_offline":
+            raise RuntimeError("远程 Gateway 离线")
+        return (
+            RemoteGatewayConnection(
+                connection_id=configured.connection_id,
+                name="New remote",
+                host="new.example.com",
+                port=22,
+                username="developer",
+                private_key_path=None,
+                ssh_config_host="new",
+                remote_gateway_port=8014,
+                remote_gateway_id="new-gateway",
+                protocol_version=FEDERATION_PROTOCOL_VERSION,
+                source_owner="config",
+            ),
+            StagedRuntime(),
+            [
+                {
+                    "workspace_id": "new-workspace",
+                    "name": "New workspace",
+                    "root_path": "/new",
+                    "managed": False,
+                    "services": ["workspace_api"],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(remote_gateway_module, "_prepare_remote_gateway", prepare)
+    with pytest.raises(RuntimeError, match="远程 Gateway 离线"):
+        await reconcile_configured_remote_gateways(
+            registry=registry,
+            configured_workspaces=(
+                ConfiguredRemoteGateway(
+                    connection_id="rgw_configured",
+                    host="new.example.com",
+                    username="developer",
+                    private_key_path="/tmp/key",
+                ),
+                ConfiguredRemoteGateway(
+                    connection_id="rgw_offline",
+                    host="offline.example.com",
+                    username="developer",
+                    private_key_path="/tmp/key",
+                ),
+            ),
+            log_dir=tmp_path / "logs",
+            health_request_timeout_seconds=2,
+            health_poll_interval_seconds=0.01,
+        )
+
+    assert closed is True
+    assert registry.registry_revision == initial_revision
+    assert (
+        registry.resolve(
+            build_projected_workspace_id("rgw_configured", "old-workspace")
+        ).backend_url
+        == "http://old"
+    )
+    assert not registry.has_target(
+        build_projected_workspace_id("rgw_configured", "new-workspace")
+    )
+    registry.close()
+    state.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunnel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway_root = tmp_path / "gateway"
+    monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(gateway_root))
+    credential_store = FederationCredentialStore(
+        storage_path=gateway_root / "credentials" / "federation.json"
+    )
+    credential_store.issue(
+        connection_id="rgw_reconnect",
+        peer_gateway_id="gateway_remote",
+    )
+    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
+    old_connection = RemoteGatewayConnection(
+        connection_id="rgw_reconnect",
+        name="Remote",
+        host="remote.example.com",
+        port=22,
+        username="developer",
+        private_key_path=None,
+        ssh_config_host="remote",
+        remote_gateway_port=8014,
+        remote_gateway_id="gateway_remote",
+        protocol_version=FEDERATION_PROTOCOL_VERSION,
+        source_owner="config",
+        remote_config_event_cursor=5,
+    )
+
+    class _Runtime:
+        def __init__(self, url: str) -> None:
+            self.service_urls = {"workspace_api": url}
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def request_terminate(self) -> None:
+            self.closed = True
+
+        def wait_closed(self) -> None:
+            self.closed = True
+
+    old_runtime = _Runtime("http://old")
+    new_runtime = _Runtime("http://new")
+    registry.apply_remote_projection_snapshot(
+        connection=old_connection,
+        runtime=old_runtime,
+        projections=(
+            WorkspaceTarget(
+                workspace_id=build_projected_workspace_id(
+                    "rgw_reconnect", "old-workspace"
+                ),
+                name="Old workspace",
+                root_path="/old",
+                backend_url="http://old",
+                connection_kind="remote_gateway",
+                owner="remote_projection",
+                connection_id="rgw_reconnect",
+                remote_gateway_connection_id="rgw_reconnect",
+                remote_workspace_id="old-workspace",
+                remote_config_event_cursor=5,
+            ),
+        ),
+    )
+
+    def pairing(**_: object):
+        return credential_store.get("rgw_reconnect")
+
+    async def start_tunnel(**_: object):
+        return new_runtime
+
+    async def discover(**_: object):
+        return (
+            {
+                "protocol_version": FEDERATION_PROTOCOL_VERSION,
+                "gateway_id": "gateway_remote",
+                "config_event_cursor": 8,
+                "config_reload_state": "active",
+                "config_reload_restart_required": False,
+            },
+            [
+                {
+                    "workspace_id": "new-workspace",
+                    "name": "New workspace",
+                    "root_path": "/new",
+                    "managed": True,
+                    "connection_kind": "local",
+                    "services": ["workspace_api"],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        remote_gateway_module, "obtain_pairing_credential_over_ssh", pairing
+    )
+    monkeypatch.setattr(
+        remote_gateway_module, "start_remote_gateway_tunnel", start_tunnel
+    )
+    monkeypatch.setattr(remote_gateway_module, "discover_remote_gateway", discover)
+
+    await remote_gateway_module.reconnect_remote_gateway(
+        registry=registry,
+        connection_id="rgw_reconnect",
+        log_dir=tmp_path / "logs",
+    )
+
+    connection = registry.remote_gateway_connection("rgw_reconnect")
+    assert connection.remote_config_event_cursor == 8
+    assert connection.remote_config_state == "active"
+    assert (
+        registry.resolve(
+            build_projected_workspace_id("rgw_reconnect", "new-workspace")
+        ).backend_url
+        == "http://new"
+    )
+    assert not registry.has_target(
+        build_projected_workspace_id("rgw_reconnect", "old-workspace")
+    )
+    assert old_runtime.closed is True
+    assert new_runtime.closed is False
+    registry.close()
+
+
+@pytest.mark.asyncio
 async def test_workspace_dto_exposes_safe_remote_connection_summary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -299,9 +745,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
         connection_id="rgw_test",
         peer_gateway_id="gateway_remote",
     )
-    registry = GatewayWorkspaceRegistry(
-        storage_path=gateway_root / "workspaces.json"
-    )
+    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
     registry.upsert_remote_gateway(
         RemoteGatewayConnection(
             connection_id="rgw_test",
@@ -577,9 +1021,7 @@ async def test_remote_restart_is_delegated_with_request_id(
         connection_id="rgw_test",
         peer_gateway_id="gateway_local",
     )
-    registry = GatewayWorkspaceRegistry(
-        storage_path=gateway_root / "workspaces.json"
-    )
+    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
     registry.upsert_remote_gateway(
         RemoteGatewayConnection(
             connection_id="rgw_test",
@@ -660,8 +1102,7 @@ async def test_remote_restart_is_delegated_with_request_id(
 
     assert result.status == "restarted"
     assert captured["url"] == (
-        "http://127.0.0.1:41000/api/gateway/workspaces/"
-        "remote_ws/runtime/restart-safe"
+        "http://127.0.0.1:41000/api/gateway/workspaces/remote_ws/runtime/restart-safe"
     )
     assert captured["headers"] == {
         "X-BoxTeam-Federation-Token": credential.token,

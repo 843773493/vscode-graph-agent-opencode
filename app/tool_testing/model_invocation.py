@@ -16,8 +16,8 @@ from litellm.exceptions import (
     Timeout,
 )
 
-from app.agents.providers.litellm_content import visible_text
 from app.prompting import internal_message_factory
+from app.services.mapping.itemized.provider_history import visible_text
 
 MAX_MODEL_CALLS_PER_ATTEMPT = 3
 MAX_TRANSIENT_RETRIES = 3

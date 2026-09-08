@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -7,6 +9,7 @@ import shutil
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +25,13 @@ from app.agents.policy import (
     resolve_tool_policy,
     resolve_tool_selectors,
 )
-from app.core.config_sources import ConfigSource
+from app.core.config_sources import (
+    ConfigSource,
+    config_revision,
+    parse_stable_config_file,
+    read_stable_config_file,
+    verify_stable_config_file,
+)
 from app.core.path_utils import (
     get_user_workspace_config_path,
     get_user_workspace_local_config_path,
@@ -31,11 +40,31 @@ from app.core.path_utils import (
 )
 from app.schemas.internal_v2.config import ConfigDTO, ConfigUpdateRequest
 from app.services.infrastructure.config import (
+    SHARED_USER_WORKSPACE_SOURCE_KEY,
     ConfigFileWatcher,
     ConfigReloadStatus,
+    ConfigRestartRequiredError,
     ConfigSnapshot,
     ConfigSnapshotStore,
+    WorkspaceSourceOwner,
     build_config_snapshot,
+)
+from app.services.infrastructure.config.policy import workspace_config_policy
+from app.services.infrastructure.config.state import (
+    ConfigActiveSnapshotRecord,
+    ConfigConflictError,
+    ConfigEventInput,
+    ConfigLifecycleState,
+    ConfigPendingCandidateRecord,
+    ConfigResult,
+    SecretReferenceRequiredError,
+    build_secret_binding_summary,
+    changed_json_paths,
+    dump_json,
+    new_config_id,
+    prepare_config_for_persistence,
+    redact_config_payload,
+    restore_environment_secret_references,
 )
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.installer import resolve_config_resource_source
@@ -50,6 +79,7 @@ ConfigCandidateApplier = Callable[[ConfigSnapshot, ConfigSnapshot], Awaitable[No
 class ConfigService:
     _WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION = 1
     _RUNTIME_OVERRIDE_CONFIG_KEY = "workspace_runtime_override"
+    _CONFIG_DOMAIN = "workspace"
 
     def __init__(
         self,
@@ -59,6 +89,8 @@ class ConfigService:
         workspace_root: str | Path | None = None,
         inline_config_path: str | Path | None = None,
         workspace_state_store: WorkspaceStateStore | None = None,
+        source_owner: WorkspaceSourceOwner | None = None,
+        source_owner_workspace_id: str | None = None,
     ) -> None:
         resolved_config_dir = (
             Path(config_dir).expanduser().resolve()
@@ -79,6 +111,16 @@ class ConfigService:
             Path(workspace_root).expanduser().resolve() if workspace_root else None
         )
         self._workspace_state_store = workspace_state_store
+        if (source_owner is None) != (source_owner_workspace_id is None):
+            raise ValueError(
+                "Workspace source owner 必须同时提供 owner 和 workspace_id"
+            )
+        self._source_owner = source_owner
+        self._source_owner_workspace_id = source_owner_workspace_id
+        if self._workspace_state_store is not None:
+            self._workspace_state_store.recover_expired_config_applies(
+                config_domain=self._CONFIG_DOMAIN
+            )
         runtime_override = (
             workspace_state_store.get_config(self._RUNTIME_OVERRIDE_CONFIG_KEY)
             if workspace_state_store is not None
@@ -96,6 +138,16 @@ class ConfigService:
             default=None,
         )
         self._watcher: ConfigFileWatcher | None = None
+        self._candidate_applier: ConfigCandidateApplier | None = None
+        self._loaded_source: str | None = None
+        self._runtime_generation = (
+            os.environ.get("BOXTEAM_CONFIG_GENERATION", "").strip()
+            or new_config_id("workspace_generation")
+        )
+
+    _CANDIDATE_REF_ENV = "BOXTEAM_CONFIG_CANDIDATE_REF"
+    _GENERATION_ENV = "BOXTEAM_CONFIG_GENERATION"
+    _FENCING_TOKEN_ENV = "BOXTEAM_CONFIG_FENCING_TOKEN"
 
     def _resolve_schema_path(self) -> Path:
         config_path = self._get_workspace_config_path()
@@ -160,17 +212,19 @@ class ConfigService:
                 precedence=0,
                 loaded=True,
             ),
+        ]
+        config = self._read_config_source(self._inline_config_path)
+        user_override = self._read_shared_override(
+            config_key="workspace_mutable_override",
+            path=config_path,
+        )
+        source_details.append(
             self._config_source(
                 path=config_path,
                 layer="user",
                 precedence=1,
                 config_key="workspace_mutable_override",
             )
-        ]
-        config = self._read_config_source(self._inline_config_path)
-        user_override = self._read_shared_override(
-            config_key="workspace_mutable_override",
-            path=config_path,
         )
         if user_override is not None:
             config = merge_json_objects(
@@ -180,24 +234,17 @@ class ConfigService:
             self._append_source_path(source_paths, config_path)
 
         local_config_path = self._get_workspace_local_config_path()
-        source_details.append(
-            ConfigSource(
-                path=(
-                    self._workspace_state_store.path
-                    if self._workspace_state_store is not None
-                    else local_config_path
-                ),
-                layer=("sqlite" if self._workspace_state_store is not None else "user_local"),
-                precedence=2,
-                loaded=self._has_shared_override(
-                    config_key="workspace_local_mutable_override",
-                    path=local_config_path,
-                ),
-            )
-        )
         local_override = self._read_shared_override(
             config_key="workspace_local_mutable_override",
             path=local_config_path,
+        )
+        source_details.append(
+            self._config_source(
+                path=local_config_path,
+                layer="user_local",
+                precedence=2,
+                config_key="workspace_local_mutable_override",
+            )
         )
         if local_override is not None:
             config = merge_json_objects(
@@ -212,6 +259,10 @@ class ConfigService:
                 workspace_schema_path=self._resolve_schema_path(),
             )
             workspace_path = get_workspace_config_path(self._workspace_root)
+            workspace_override = self._read_shared_override(
+                config_key="workspace_root_mutable_override",
+                path=workspace_path,
+            )
             source_details.append(
                 self._config_source(
                     path=workspace_path,
@@ -220,15 +271,121 @@ class ConfigService:
                     config_key="workspace_root_mutable_override",
                 )
             )
-            workspace_override = self._read_shared_override(
-                config_key="workspace_root_mutable_override",
-                path=workspace_path,
-            )
             if workspace_override is not None:
                 config = merge_json_objects(config, workspace_override)
                 self._append_source_path(source_paths, workspace_path)
+        if self._workspace_state_store is not None or self._runtime_config_overrides:
+            source_details.append(self._runtime_override_source())
+        if self._runtime_config_overrides:
+            config["ui"] = merge_json_objects(
+                config.get("ui", {})
+                if isinstance(config.get("ui", {}), dict)
+                else {},
+                self._runtime_config_overrides,
+            )
         self._validate_agent_tool_policies(config)
         return config, tuple(source_paths), tuple(source_details)
+
+    def _runtime_override_source(self) -> ConfigSource:
+        if self._workspace_state_store is None:
+            return ConfigSource(
+                path=self._config_dir / "workspace_runtime_override",
+                layer="sqlite",
+                precedence=4,
+                loaded=bool(self._runtime_config_overrides),
+                source_key=self._RUNTIME_OVERRIDE_CONFIG_KEY,
+                presence=("present" if self._runtime_config_overrides else "absent"),
+            )
+        source_record = self._workspace_state_store.get_source_layer(
+            self._RUNTIME_OVERRIDE_CONFIG_KEY
+        )
+        legacy_record = self._workspace_state_store.get_config(
+            self._RUNTIME_OVERRIDE_CONFIG_KEY
+        )
+        return ConfigSource(
+            path=self._workspace_state_store.path,
+            layer="sqlite",
+            precedence=4,
+            loaded=bool(self._runtime_config_overrides),
+            source_key=self._RUNTIME_OVERRIDE_CONFIG_KEY,
+            presence=(
+                source_record.presence
+                if source_record is not None
+                else ("present" if legacy_record is not None else "absent")
+            ),
+            layer_revision=(
+                source_record.layer_revision if source_record is not None else None
+            ),
+            layer_digest=(
+                source_record.layer_digest if source_record is not None else None
+            ),
+            source_generation=(
+                source_record.source_generation if source_record is not None else None
+            ),
+        )
+
+    def _sync_runtime_override_source(
+        self,
+        *,
+        updates: dict[str, Any] | None = None,
+        base_layer_revision: int | None = None,
+        base_layer_digest: str | None = None,
+        expected_active_revision: int | None = None,
+        expected_active_digest: str | None = None,
+    ) -> None:
+        if self._workspace_state_store is None:
+            if updates is not None:
+                for key, value in updates.items():
+                    if value is None:
+                        self._runtime_config_overrides.pop(key, None)
+                    else:
+                        self._runtime_config_overrides[key] = value
+            return
+        source_key = self._RUNTIME_OVERRIDE_CONFIG_KEY
+        current = self._workspace_state_store.get_source_layer(source_key)
+        next_overrides = dict(
+            current.payload
+            if current is not None and current.payload is not None
+            else self._runtime_config_overrides
+        )
+        if updates is not None:
+            for key, value in updates.items():
+                if value is None:
+                    next_overrides.pop(key, None)
+                else:
+                    next_overrides[key] = value
+        payload = next_overrides or None
+        record = self._workspace_state_store.sync_config_source(
+            config_key=source_key,
+            source_path=self._workspace_state_store.path,
+            config_version=1,
+            presence="present" if payload is not None else "absent",
+            payload=payload,
+            layer_digest=config_revision(payload) if payload is not None else None,
+            expected_layer_revision=base_layer_revision,
+            expected_layer_digest=base_layer_digest,
+            journal_origin="api",
+            config_domain=self._CONFIG_DOMAIN,
+            expected_active_revision=expected_active_revision,
+            expected_active_digest=expected_active_digest,
+            enforce_layer_cas=True,
+            enforce_active_cas=True,
+        )
+        self._runtime_config_overrides = dict(record.payload or {})
+        self._workspace_state_store.append_config_source_journal(
+            source_key=source_key,
+            source_event_id=f"{source_key}:layer:{record.layer_revision}",
+            source_path=Path(record.source_path),
+            presence=record.presence,
+            layer_revision=record.layer_revision,
+            layer_digest=record.layer_digest,
+            previous_digest=record.previous_digest,
+            origin="api",
+            fanout_id=f"fanout:{source_key}:event:{source_key}:layer:{record.layer_revision}",
+            expected_source_generation=self._workspace_state_store.source_generation_high_water_mark(
+                source_key=source_key
+            ),
+        )
 
     def _config_source(
         self,
@@ -244,13 +401,35 @@ class ConfigService:
                 layer=layer,  # type: ignore[arg-type]
                 precedence=precedence,
                 loaded=path.is_file(),
+                source_key=config_key,
+                presence="present" if path.is_file() else "absent",
             )
+        source_record = self._workspace_state_store.get_source_layer(config_key)
+        legacy_record = self._workspace_state_store.get_config(config_key)
         return ConfigSource(
             path=self._workspace_state_store.path,
             layer="sqlite",
             precedence=precedence,
-            loaded=self._workspace_state_store.get_config(config_key) is not None
-            or path.is_file(),
+            loaded=(
+                source_record.presence == "present"
+                if source_record is not None
+                else legacy_record is not None or path.is_file()
+            ),
+            presence=(
+                source_record.presence
+                if source_record is not None
+                else ("present" if legacy_record is not None or path.is_file() else "absent")
+            ),
+            source_key=config_key,
+            layer_revision=(
+                source_record.layer_revision if source_record is not None else None
+            ),
+            layer_digest=(
+                source_record.layer_digest if source_record is not None else None
+            ),
+            source_generation=(
+                source_record.source_generation if source_record is not None else None
+            ),
         )
 
     def _append_source_path(self, source_paths: list[Path], path: Path) -> None:
@@ -265,6 +444,9 @@ class ConfigService:
     def _has_shared_override(self, *, config_key: str, path: Path) -> bool:
         if self._workspace_state_store is None:
             return path.is_file()
+        source_record = self._workspace_state_store.get_source_layer(config_key)
+        if source_record is not None:
+            return source_record.presence == "present"
         return self._workspace_state_store.get_config(config_key) is not None or path.is_file()
 
     def _read_shared_override(
@@ -275,23 +457,217 @@ class ConfigService:
     ) -> dict[str, Any] | None:
         if self._workspace_state_store is None:
             return self._read_config_source(path) if path.is_file() else None
+        blocked = self._workspace_state_store.migrate_legacy_config_secrets(config_key)
+        if blocked:
+            raise SecretReferenceRequiredError(
+                "旧 Workspace SQLite secret 必须重新导入引用: "
+                + ", ".join(blocked)
+            )
         record = self._workspace_state_store.get_config(config_key)
-        if record is not None:
-            payload = dict(record.payload)
-            self._preflight_override(payload, source_path=self._workspace_state_store.path)
-            return payload
-        if not path.is_file():
+        source_record = self._workspace_state_store.get_source_layer(config_key)
+        previous_source_generation = (
+            source_record.source_generation if source_record is not None else 0
+        )
+        file_snapshot = read_stable_config_file(path)
+        journal_origin = (
+            None
+            if self._is_shared_user_source(config_key=config_key, path=path)
+            else "file-watcher"
+        )
+        if file_snapshot.presence == "absent":
+            if source_record is None and record is None:
+                return None
+            deleted_backup_path = path.with_name(f"{path.name}.deleted.bak")
+            if (
+                not deleted_backup_path.exists()
+                and record is not None
+            ):
+                deleted_backup_path.write_text(
+                    dump_json(redact_config_payload(record.payload)),
+                    encoding="utf-8",
+                )
+            verify_stable_config_file(file_snapshot)
+            source_record = self._workspace_state_store.sync_config_source(
+                config_key=config_key,
+                source_path=path,
+                config_version=(
+                    source_record.config_version
+                    if source_record is not None
+                    else record.config_version
+                ),
+                presence="absent",
+                payload=None,
+                layer_digest=None,
+                expected_layer_revision=(
+                    source_record.layer_revision if source_record is not None else None
+                ),
+                expected_layer_digest=(
+                    source_record.layer_digest if source_record is not None else None
+                ),
+                backup_path=deleted_backup_path if record is not None else None,
+                journal_origin=journal_origin,
+            )
+            self._record_source_journal(
+                source_record,
+                origin="file-watcher",
+                previous_source_generation=previous_source_generation,
+            )
             return None
-        payload = self._read_config_source(path)
+
+        if file_snapshot.digest is None:
+            raise RuntimeError(f"present 配置文件缺少 digest: {path}")
+        if (
+            source_record is not None
+            and source_record.presence == "present"
+            and source_record.layer_digest == file_snapshot.digest
+            and source_record.source_path == str(path.expanduser().resolve())
+        ):
+            payload = parse_stable_config_file(file_snapshot)
+            if payload is None:
+                raise RuntimeError(f"present 配置文件解析为空: {path}")
+            prepare_config_for_persistence(payload)
+            self._preflight_override(payload, source_path=self._workspace_state_store.path)
+            verify_stable_config_file(file_snapshot)
+            source_record = self._workspace_state_store.sync_config_source(
+                config_key=config_key,
+                source_path=path,
+                config_version=int(payload.get("config_version", 1)),
+                presence="present",
+                payload=payload,
+                layer_digest=file_snapshot.digest,
+                expected_layer_revision=source_record.layer_revision,
+                expected_layer_digest=source_record.layer_digest,
+                journal_origin=("loader" if journal_origin is not None else None),
+            )
+            self._record_source_journal(
+                source_record,
+                origin="loader",
+                previous_source_generation=previous_source_generation,
+            )
+            return dict(payload)
+
+        try:
+            payload = parse_stable_config_file(file_snapshot)
+        except Exception:
+            if record is not None and not self._snapshot_store.has_snapshot():
+                restored = restore_environment_secret_references(record.payload)
+                if not isinstance(restored, dict):
+                    raise TypeError("SQLite 兼容配置恢复结果必须是对象")
+                prepare_config_for_persistence(restored)
+                payload = restored
+            else:
+                raise
+        if payload is None:
+            raise RuntimeError(f"present 配置文件解析为空: {path}")
+        prepare_config_for_persistence(payload)
+        self._preflight_override(payload, source_path=path)
+        verify_stable_config_file(file_snapshot)
         backup_path = path.with_name(f"{path.name}.migrated.bak")
         if not backup_path.exists():
             shutil.copy2(path, backup_path)
-        self._workspace_state_store.set_config(
+        source_record = self._workspace_state_store.sync_config_source(
             config_key=config_key,
+            source_path=path,
             config_version=int(payload.get("config_version", 1)),
+            presence="present",
             payload=payload,
+            layer_digest=file_snapshot.digest,
+            expected_layer_revision=(
+                source_record.layer_revision if source_record is not None else None
+            ),
+            expected_layer_digest=(
+                source_record.layer_digest if source_record is not None else None
+            ),
+            backup_path=backup_path,
+            journal_origin=journal_origin,
+        )
+        self._record_source_journal(
+            source_record,
+            origin="file-watcher",
+            previous_source_generation=previous_source_generation,
         )
         return payload
+
+    def _record_source_journal(
+        self,
+        source_record,
+        *,
+        origin: str,
+        previous_source_generation: int = 0,
+    ) -> None:
+        if self._workspace_state_store is None:
+            return
+        source_key = source_record.config_key
+        if self._is_shared_user_source(
+            config_key=source_key,
+            path=Path(source_record.source_path),
+        ):
+            source_owner = self._source_owner
+            workspace_id = self._source_owner_workspace_id
+            if source_owner is None or workspace_id is None:
+                raise RuntimeError("共享 Workspace source 缺少 source owner 身份")
+            owner_record = source_owner.observe(
+                source_path=Path(source_record.source_path),
+                presence=source_record.presence,
+                layer_digest=source_record.layer_digest,
+                origin=origin,
+                source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+            )
+            materialized = self._workspace_state_store.update_source_generation(
+                config_key=source_key,
+                source_generation=owner_record.source_generation,
+                expected_layer_revision=source_record.layer_revision,
+                expected_layer_digest=source_record.layer_digest,
+            )
+            source_owner.prepare_fanout(
+                workspace_id=workspace_id,
+                source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                after_generation=previous_source_generation,
+            )
+            for prior in source_owner.list_journal(
+                source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                after_generation=previous_source_generation,
+            ):
+                is_current = prior.source_generation == owner_record.source_generation
+                source_owner.record_fanout(
+                    source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                    source_generation=prior.source_generation,
+                    workspace_id=workspace_id,
+                    status="applied" if is_current else "superseded",
+                    layer_revision=(materialized.layer_revision if is_current else None),
+                    layer_digest=(materialized.layer_digest if is_current else None),
+                    result="materialized" if is_current else "superseded",
+                )
+            if owner_record.source_generation <= previous_source_generation:
+                source_owner.record_fanout(
+                    source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                    source_generation=owner_record.source_generation,
+                    workspace_id=workspace_id,
+                    status="applied",
+                    layer_revision=materialized.layer_revision,
+                    layer_digest=materialized.layer_digest,
+                    result="materialized",
+                )
+            return
+        self._workspace_state_store.append_config_source_journal(
+            source_key=source_key,
+            source_event_id=f"{source_key}:layer:{source_record.layer_revision}",
+            source_path=Path(source_record.source_path),
+            presence=source_record.presence,
+            layer_revision=source_record.layer_revision,
+            layer_digest=source_record.layer_digest,
+            previous_digest=source_record.previous_digest,
+            origin=origin,
+            fanout_id=(
+                f"fanout:{source_key}:event:{source_key}:"
+                f"layer:{source_record.layer_revision}"
+            ),
+            expected_source_generation=(
+                self._workspace_state_store.source_generation_high_water_mark(
+                    source_key=source_key
+                )
+            ),
+        )
 
     @staticmethod
     def _preflight_override(payload: dict[str, Any], *, source_path: Path) -> None:
@@ -302,7 +678,10 @@ class ConfigService:
     def _read_config_source(
         path: Path,
     ) -> dict[str, Any]:
-        config = dict(read_jsonc_object(path))
+        config_snapshot = read_stable_config_file(path)
+        config = parse_stable_config_file(config_snapshot)
+        if config is None:
+            raise FileNotFoundError(f"配置文件不存在: {path}")
         ConfigService._preflight_custom_tool_factories(config, source_path=path)
         return config
 
@@ -322,6 +701,14 @@ class ConfigService:
                 override_path,
             )
         return base_config, None
+
+    def _is_shared_user_source(self, *, config_key: str, path: Path) -> bool:
+        return (
+            self._source_owner is not None
+            and self._source_owner_workspace_id is not None
+            and config_key == "workspace_mutable_override"
+            and path.expanduser().resolve() == self._get_workspace_config_path().resolve()
+        )
 
     def _get_workspace_local_config_path(self) -> Path:
         if self._config_path is None:
@@ -346,19 +733,611 @@ class ConfigService:
         return snapshot
 
     def validate_workspace_config(self) -> None:
-        self._snapshot_store.initialize()
+        snapshot = self._require_snapshot()
+        jsonschema.validate(snapshot.to_dict(), self._load_schema())
+        self._validate_agent_tool_policies(snapshot.to_dict())
+        if self._workspace_state_store is None:
+            return
+        active = self._workspace_state_store.get_active_config_snapshot(
+            self._CONFIG_DOMAIN
+        )
+        if active is None and self._loaded_source == "source":
+            self._persist_initial_active_snapshot()
 
     def _require_snapshot(self) -> ConfigSnapshot:
         pinned = self._pinned_snapshot.get()
         if pinned is not None:
             return pinned
         if not self._snapshot_store.has_snapshot():
-            # 普通 getter 保持只解析所需字段的既有语义；应用启动和热重载
-            # 都会显式走完整 Schema 校验后再提交候选。
-            self._snapshot_store.initialize(
-                self._build_candidate_snapshot(validate_schema=False),
-            )
+            candidate_ref = os.environ.get(self._CANDIDATE_REF_ENV, "").strip()
+            if candidate_ref:
+                self._snapshot_store.initialize(
+                    self._build_startup_pending_snapshot(candidate_ref),
+                )
+            elif self._workspace_state_store is not None:
+                blocked = self._workspace_state_store.migrate_legacy_active_snapshot_secrets(
+                    config_domain=self._CONFIG_DOMAIN
+                )
+                if blocked:
+                    raise SecretReferenceRequiredError(
+                        "旧 active snapshot 的 secret 必须重新导入引用: "
+                        + ", ".join(blocked)
+                    )
+                active = self._workspace_state_store.get_active_config_snapshot(
+                    self._CONFIG_DOMAIN
+                )
+                if active is not None:
+                    if active.state != "active":
+                        raise ConfigConflictError(
+                            "active snapshot 当前需要恢复，禁止从损坏记录启动: "
+                            f"state={active.state}, error={active.last_error}"
+                        )
+                    self._snapshot_store.initialize(
+                        self._build_persisted_snapshot(active, loaded_source="active")
+                    )
+                else:
+                    # 首次启动没有 active snapshot 时才从 JSONC/source layers
+                    # 建立初始快照；后续启动不得因为 source 已有 pending 就越过 active。
+                    self._loaded_source = "source"
+                    self._snapshot_store.initialize(
+                        self._build_candidate_snapshot(validate_schema=False),
+                    )
+            else:
+                self._loaded_source = "source"
+                self._snapshot_store.initialize(
+                    self._build_candidate_snapshot(validate_schema=False),
+                )
         return self._snapshot_store.current()
+
+    def _build_startup_pending_snapshot(self, candidate_ref: str) -> ConfigSnapshot:
+        if self._workspace_state_store is None:
+            raise ConfigConflictError(
+                "Workspace candidate_ref 只能由 Workspace-owned SQLite loader 处理"
+            )
+        pending = self._workspace_state_store.load_pending_config_candidate(
+            candidate_ref=candidate_ref
+        )
+        generation = os.environ.get(self._GENERATION_ENV, "").strip()
+        fencing_token = os.environ.get(self._FENCING_TOKEN_ENV, "").strip()
+        if not generation or not fencing_token:
+            raise ConfigConflictError(
+                "Workspace pending 启动缺少 generation 或 fencing token"
+            )
+        if pending.target_generation != generation:
+            raise ConfigConflictError(
+                "Workspace pending candidate 的 target generation 不匹配: "
+                f"expected={pending.target_generation}, actual={generation}"
+            )
+        if pending.fencing_token != fencing_token:
+            raise ConfigConflictError("Workspace pending candidate 的 fencing token 不匹配")
+        return self._build_persisted_snapshot(pending, loaded_source="pending")
+
+    def _build_persisted_snapshot(
+        self,
+        record: object,
+        *,
+        loaded_source: str,
+    ) -> ConfigSnapshot:
+        if not isinstance(record, (ConfigActiveSnapshotRecord, ConfigPendingCandidateRecord)):
+            raise TypeError("持久化配置记录类型无效")
+        prepare_config_for_persistence(
+            record.payload,
+            # 普通 active 恢复先保持旧运行时；只有用户确认的 pending
+            # generation 才必须在启动证明阶段解析全部 secret reference。
+            resolve_environment=loaded_source == "pending",
+        )
+        restored = restore_environment_secret_references(record.payload)
+        if not isinstance(restored, dict):
+            raise TypeError("持久化配置恢复结果必须是对象")
+        jsonschema.validate(restored, self._load_schema())
+        self._validate_agent_tool_policies(restored)
+        source_details, source_paths = self._persisted_source_details(
+            record.source_baseline
+        )
+        snapshot = build_config_snapshot(
+            restored,
+            source_paths=source_paths,
+            source_details=source_details,
+            schema_path=self._resolve_schema_path(),
+        )
+        expected_digest = record.effective_digest
+        if snapshot.revision != expected_digest:
+            raise ConfigConflictError(
+                "持久化配置 digest 校验失败: "
+                f"source={loaded_source}, expected={expected_digest}, actual={snapshot.revision}"
+            )
+        if (
+            isinstance(record, ConfigPendingCandidateRecord)
+            and record.candidate_digest != snapshot.revision
+        ):
+            raise ConfigConflictError("pending candidate digest 与 payload 不匹配")
+        self._loaded_source = loaded_source
+        return snapshot
+
+    @staticmethod
+    def _persisted_source_details(
+        baseline: dict[str, object],
+    ) -> tuple[tuple[ConfigSource, ...], tuple[Path, ...]]:
+        layer_names = {
+            "workspace_mutable_override": ("user", 1),
+            "workspace_local_mutable_override": ("user_local", 2),
+            "workspace_root_mutable_override": ("workspace", 3),
+            "workspace_runtime_override": ("sqlite", 4),
+        }
+        details: list[ConfigSource] = []
+        paths: list[Path] = []
+        for fallback_precedence, (source_key, raw_value) in enumerate(
+            sorted(baseline.items()),
+            start=1,
+        ):
+            if not isinstance(raw_value, dict):
+                raise TypeError(f"source baseline 必须是对象: key={source_key}")
+            raw_path = raw_value.get("path")
+            raw_presence = raw_value.get("presence")
+            if not isinstance(raw_path, str) or not raw_path:
+                raise ValueError(f"source baseline 缺少 path: key={source_key}")
+            if raw_presence not in {"present", "absent"}:
+                raise ValueError(f"source baseline presence 无效: key={source_key}")
+            layer, precedence = layer_names.get(
+                source_key,
+                ("sqlite", fallback_precedence),
+            )
+            source_path = Path(raw_path)
+            details.append(
+                ConfigSource(
+                    path=source_path,
+                    layer=layer,
+                    precedence=precedence,
+                    loaded=raw_presence == "present",
+                    source_key=source_key,
+                    presence=raw_presence,
+                    layer_revision=(
+                        int(raw_value["layer_revision"])
+                        if raw_value.get("layer_revision") is not None
+                        else None
+                    ),
+                    layer_digest=(
+                        str(raw_value["layer_digest"])
+                        if raw_value.get("layer_digest") is not None
+                        else None
+                    ),
+                    source_generation=(
+                        int(raw_value["source_generation"])
+                        if raw_value.get("source_generation") is not None
+                        else None
+                    ),
+                )
+            )
+            if source_path not in paths:
+                paths.append(source_path)
+        return tuple(details), tuple(paths)
+
+    def get_loaded_config_proof(self) -> dict[str, object]:
+        """返回可供 Gateway 校验的加载证明，不包含秘密或候选完整 payload。"""
+
+        snapshot = self._require_snapshot()
+        active = (
+            self._workspace_state_store.get_active_config_snapshot(self._CONFIG_DOMAIN)
+            if self._workspace_state_store is not None
+            else None
+        )
+        pending = (
+            self._workspace_state_store.get_pending_config_candidate(
+                config_domain=self._CONFIG_DOMAIN
+            )
+            if self._workspace_state_store is not None
+            else None
+        )
+        loaded_pending = (
+            pending
+            if self._loaded_source == "pending"
+            and pending is not None
+            and pending.candidate_ref
+            else None
+        )
+        secret_bindings = build_secret_binding_summary(
+            snapshot.to_dict(),
+            resolve_environment=True,
+        )
+        secret_binding_digest = hashlib.sha256(
+            json.dumps(
+                secret_bindings,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        fencing_token = (
+            loaded_pending.fencing_token if loaded_pending is not None else None
+        )
+        return {
+            "config_domain": self._CONFIG_DOMAIN,
+            "loaded_source": "pending" if loaded_pending is not None else "active",
+            "candidate_id": (
+                loaded_pending.candidate_id if loaded_pending is not None else None
+            ),
+            "loaded_commit_revision": (
+                loaded_pending.pending_revision
+                if loaded_pending is not None
+                else active.active_revision if active is not None else None
+            ),
+            "effective_digest": snapshot.revision,
+            "candidate_digest": (
+                loaded_pending.candidate_digest if loaded_pending is not None else None
+            ),
+            "secret_binding_digest": secret_binding_digest,
+            "generation_id": self._runtime_generation,
+            "fencing_token_digest": (
+                hashlib.sha256(fencing_token.encode("utf-8")).hexdigest()
+                if fencing_token
+                else None
+            ),
+        }
+
+    def get_pending_startup_contract(
+        self,
+        *,
+        candidate_ref: str,
+    ) -> dict[str, object]:
+        """只返回新 Workspace generation 所需的 pending 绑定元数据。"""
+
+        if self._workspace_state_store is None:
+            raise ConfigConflictError("当前 Workspace 没有 Workspace-owned 状态库")
+        pending = self._workspace_state_store.load_pending_config_candidate(
+            candidate_ref=candidate_ref
+        )
+        if not pending.target_generation or not pending.fencing_token:
+            raise ConfigConflictError(
+                "Workspace pending candidate 缺少 target generation 或 fencing token"
+            )
+        secret_bindings = build_secret_binding_summary(
+            pending.payload,
+            resolve_environment=True,
+        )
+        secret_binding_digest = hashlib.sha256(
+            json.dumps(
+                secret_bindings,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return {
+            "config_domain": self._CONFIG_DOMAIN,
+            "candidate_ref": candidate_ref,
+            "candidate_id": pending.candidate_id,
+            "pending_revision": pending.pending_revision,
+            "candidate_digest": pending.candidate_digest,
+            "effective_digest": pending.effective_digest,
+            "target_generation": pending.target_generation,
+            "fencing_token": pending.fencing_token,
+            "secret_binding_digest": secret_binding_digest,
+        }
+
+    def record_pending_restart_failure(
+        self,
+        *,
+        candidate_ref: str,
+        error: str,
+        old_runtime_recovered: bool = True,
+    ) -> ConfigReloadStatus:
+        """记录重启失败，并根据旧 generation 是否恢复选择恢复状态。"""
+
+        if not error:
+            raise ValueError("Workspace restart_failed 错误不能为空")
+        if self._workspace_state_store is None:
+            raise ConfigConflictError("当前 Workspace 没有 Workspace-owned 状态库")
+        pending = self._workspace_state_store.load_pending_config_candidate(
+            candidate_ref=candidate_ref
+        )
+        active = self._workspace_state_store.get_active_config_snapshot(
+            self._CONFIG_DOMAIN
+        )
+        target_state: ConfigLifecycleState = (
+            "pending_restart" if old_runtime_recovered else "recovery_required"
+        )
+        result: ConfigResult = (
+            "restart_failed" if old_runtime_recovered else "recovery_required"
+        )
+        self._workspace_state_store.update_pending_config_candidate_state(
+            config_domain=self._CONFIG_DOMAIN,
+            candidate_id=pending.candidate_id,
+            expected_state=pending.state,
+            state=target_state,
+            last_error=error,
+            event=ConfigEventInput(
+                event_id=f"config:{pending.candidate_id}:{result}",
+                config_domain=self._CONFIG_DOMAIN,
+                candidate_id=pending.candidate_id,
+                attempt_id=pending.last_attempt_id,
+                apply_id=pending.last_apply_id,
+                idempotency_key=pending.idempotency_key,
+                commit_revision=None,
+                active_revision=active.active_revision if active is not None else None,
+                pending_revision=pending.pending_revision,
+                source="gateway-runtime-controller",
+                result=result,
+                activation_scope="restart_workspace",
+                deferred_paths=(() if old_runtime_recovered else ()),
+                error=error,
+            ),
+        )
+        if pending.last_apply_id is not None:
+            journal = self._workspace_state_store.get_config_apply_journal(
+                apply_id=pending.last_apply_id
+            )
+            if journal is not None and journal.state == "applying":
+                self._workspace_state_store.update_config_apply_journal(
+                    apply_id=journal.apply_id,
+                    expected_state="applying",
+                    state=("failed" if old_runtime_recovered else "recovery_required"),
+                    last_error=error,
+                )
+        claim = self._workspace_state_store.get_config_apply_claim(
+            config_domain=self._CONFIG_DOMAIN
+        )
+        if claim is not None and claim.candidate_id == pending.candidate_id:
+            self._workspace_state_store.release_config_apply_claim(
+                config_domain=self._CONFIG_DOMAIN,
+                apply_id=claim.apply_id,
+                fencing_token=claim.fencing_token,
+            )
+        return self.get_reload_status()
+
+    def retry_pending_restart(self, *, candidate_ref: str) -> ConfigReloadStatus:
+        """为 Workspace pending candidate 创建新的受控重启 generation。"""
+
+        if self._workspace_state_store is None:
+            raise ConfigConflictError("当前 Workspace 没有 Workspace-owned 状态库")
+        self._workspace_state_store.retry_pending_config_restart(
+            candidate_ref=candidate_ref,
+            target_generation=new_config_id("workspace_generation"),
+        )
+        return self.get_reload_status()
+
+    def resolve_pending_restart(
+        self,
+        *,
+        candidate_ref: str,
+        health_proof: dict[str, object],
+    ) -> ConfigReloadStatus:
+        """用新 generation 的完整 proof 恢复并提升 recovery_required candidate。"""
+
+        if self._workspace_state_store is None:
+            raise ConfigConflictError("当前 Workspace 没有 Workspace-owned 状态库")
+        pending = self._workspace_state_store.load_pending_config_candidate(
+            candidate_ref=candidate_ref,
+            allow_recovery=True,
+        )
+        if pending.state != "recovery_required":
+            raise ConfigConflictError(
+                "Workspace pending resolve 只允许 recovery_required candidate: "
+                f"state={pending.state}"
+            )
+        expected_proof = self._pending_restart_health_proof(
+            candidate_ref=candidate_ref,
+            pending=pending,
+        )
+        if health_proof != expected_proof:
+            raise ConfigConflictError(
+                "Workspace pending resolve 的 health proof 与 candidate 不匹配"
+            )
+        if not pending.target_generation or not pending.fencing_token:
+            raise ConfigConflictError(
+                "Workspace recovery candidate 缺少 target generation 或 fencing token"
+            )
+        active = self._workspace_state_store.get_active_config_snapshot(
+            self._CONFIG_DOMAIN
+        )
+        if active is None or active.state != "active":
+            raise ConfigConflictError(
+                "Workspace pending resolve 缺少可确认的旧 active snapshot"
+            )
+
+        attempt_id = new_config_id("attempt")
+        apply_id = new_config_id("apply")
+        claim = self._workspace_state_store.begin_config_apply(
+            config_domain=self._CONFIG_DOMAIN,
+            candidate_id=pending.candidate_id,
+            attempt_id=attempt_id,
+            apply_id=apply_id,
+            owner="workspace-recovery-resolve",
+            base_active_revision=active.active_revision,
+            target_generation=pending.target_generation,
+            pending_revision=pending.pending_revision,
+            source_baseline=pending.source_baseline,
+            active_baseline=active.source_baseline,
+            expected_candidate_state="recovery_required",
+        )
+        baseline = pending.source_baseline
+        layer_revisions: dict[str, int] = {}
+        layer_digests: dict[str, str | None] = {}
+        source_generation = 0
+        for key, raw_detail in baseline.items():
+            if not isinstance(key, str) or not isinstance(raw_detail, dict):
+                raise TypeError("Workspace recovery source baseline 结构无效")
+            raw_revision = raw_detail.get("layer_revision")
+            if raw_revision is not None:
+                layer_revisions[key] = int(raw_revision)
+            raw_digest = raw_detail.get("layer_digest")
+            layer_digests[key] = str(raw_digest) if raw_digest is not None else None
+            raw_generation = raw_detail.get("source_generation")
+            if raw_generation is not None:
+                source_generation = max(source_generation, int(raw_generation))
+        changed_paths = changed_json_paths(active.payload, pending.payload)
+        try:
+            self._workspace_state_store.promote_active_config_snapshot(
+                config_domain=self._CONFIG_DOMAIN,
+                candidate_id=pending.candidate_id,
+                payload=prepare_config_for_persistence(pending.payload),
+                source_baseline=baseline,
+                source_generation=source_generation,
+                layer_revisions=layer_revisions,
+                layer_digests=layer_digests,
+                effective_digest=pending.effective_digest,
+                secret_bindings=build_secret_binding_summary(
+                    pending.payload,
+                    resolve_environment=True,
+                ),
+                schema_version=1,
+                promoted_generation=pending.target_generation,
+                promoted_apply_id=claim.apply_id,
+                expected_active_revision=active.active_revision,
+                expected_source_generation=(
+                    pending.source_generation
+                    if pending.source_generation is not None
+                    else source_generation
+                ),
+                expected_source_baseline=baseline,
+                expected_layer_revisions=layer_revisions,
+                expected_layer_digests=layer_digests,
+                expected_pending_revision=pending.pending_revision,
+                expected_pending_state="applying",
+                expected_fencing_token=claim.fencing_token,
+                event=ConfigEventInput(
+                    event_id=f"config:{pending.candidate_id}:recovery_active",
+                    config_domain=self._CONFIG_DOMAIN,
+                    candidate_id=pending.candidate_id,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    idempotency_key=pending.idempotency_key,
+                    commit_revision=None,
+                    active_revision=None,
+                    pending_revision=pending.pending_revision,
+                    source="workspace-recovery-resolve",
+                    result="applied",
+                    activation_scope=workspace_config_policy().activation_scope_for(
+                        changed_paths
+                    ),
+                    changed_paths=changed_paths,
+                    applied_paths=changed_paths,
+                ),
+            )
+        except Exception as error:
+            self._workspace_state_store.update_config_apply_journal(
+                apply_id=claim.apply_id,
+                expected_state="applying",
+                state="recovery_required",
+                last_error=str(error),
+            )
+            self._workspace_state_store.update_pending_config_candidate_state(
+                config_domain=self._CONFIG_DOMAIN,
+                candidate_id=pending.candidate_id,
+                expected_state="applying",
+                state="recovery_required",
+                last_error=str(error),
+                event=ConfigEventInput(
+                    event_id=f"config:{pending.candidate_id}:recovery_required",
+                    config_domain=self._CONFIG_DOMAIN,
+                    candidate_id=pending.candidate_id,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    idempotency_key=pending.idempotency_key,
+                    commit_revision=None,
+                    active_revision=active.active_revision,
+                    pending_revision=pending.pending_revision,
+                    source="workspace-recovery-resolve",
+                    result="recovery_required",
+                    activation_scope=workspace_config_policy().activation_scope_for(
+                        changed_paths
+                    ),
+                    changed_paths=changed_paths,
+                    deferred_paths=changed_paths,
+                    error=str(error),
+                ),
+            )
+            self._workspace_state_store.release_config_apply_claim(
+                config_domain=self._CONFIG_DOMAIN,
+                apply_id=claim.apply_id,
+                fencing_token=claim.fencing_token,
+            )
+            raise
+        self._workspace_state_store.release_config_apply_claim(
+            config_domain=self._CONFIG_DOMAIN,
+            apply_id=claim.apply_id,
+            fencing_token=claim.fencing_token,
+        )
+        return self.get_reload_status()
+
+    def discard_pending_restart(
+        self,
+        *,
+        candidate_ref: str,
+        expected_active_revision: int,
+        expected_active_digest: str,
+    ) -> ConfigReloadStatus:
+        """仅在旧 active/source 基线可证明安全时丢弃 pending。"""
+
+        if self._workspace_state_store is None:
+            raise ConfigConflictError("当前 Workspace 没有 Workspace-owned 状态库")
+        pending = self._workspace_state_store.load_pending_config_candidate(
+            candidate_ref=candidate_ref,
+            allow_recovery=True,
+            allow_discarded=True,
+        )
+        active = self._workspace_state_store.get_active_config_snapshot(
+            self._CONFIG_DOMAIN
+        )
+        if active is None:
+            raise ConfigConflictError("Workspace pending discard 缺少 active snapshot")
+        changed_paths = changed_json_paths(active.payload, pending.payload)
+        self._workspace_state_store.discard_pending_config_candidate(
+            candidate_ref=candidate_ref,
+            expected_active_revision=expected_active_revision,
+            expected_active_digest=expected_active_digest,
+            expected_source_baseline=pending.source_baseline,
+            reason="用户显式丢弃 Workspace pending candidate",
+            event=ConfigEventInput(
+                event_id=f"config:{pending.candidate_id}:discarded",
+                config_domain=self._CONFIG_DOMAIN,
+                candidate_id=pending.candidate_id,
+                attempt_id=pending.last_attempt_id,
+                apply_id=pending.last_apply_id,
+                idempotency_key=pending.idempotency_key,
+                commit_revision=None,
+                active_revision=active.active_revision,
+                pending_revision=pending.pending_revision,
+                source="workspace-config-api",
+                result="discarded",
+                activation_scope=workspace_config_policy().activation_scope_for(
+                    changed_paths
+                ),
+                changed_paths=changed_paths,
+            ),
+        )
+        return self.get_reload_status()
+
+    @staticmethod
+    def _pending_restart_health_proof(
+        *,
+        candidate_ref: str,
+        pending: ConfigPendingCandidateRecord,
+    ) -> dict[str, object]:
+        if not pending.target_generation or not pending.fencing_token:
+            raise ConfigConflictError(
+                "Workspace pending candidate 缺少 target generation 或 fencing token"
+            )
+        secret_bindings = build_secret_binding_summary(
+            pending.payload,
+            resolve_environment=True,
+        )
+        secret_binding_digest = hashlib.sha256(
+            dump_json(secret_bindings).encode("utf-8")
+        ).hexdigest()
+        del candidate_ref
+        return {
+            "config_domain": "workspace",
+            "loaded_source": "pending",
+            "candidate_id": pending.candidate_id,
+            "loaded_commit_revision": pending.pending_revision,
+            "effective_digest": pending.effective_digest,
+            "candidate_digest": pending.candidate_digest,
+            "secret_binding_digest": secret_binding_digest,
+            "generation_id": pending.target_generation,
+            "fencing_token_digest": hashlib.sha256(
+                pending.fencing_token.encode("utf-8")
+            ).hexdigest(),
+        }
 
     @contextmanager
     def use_snapshot(self, snapshot: ConfigSnapshot) -> Iterator[None]:
@@ -375,10 +1354,165 @@ class ConfigService:
         return self._require_snapshot().revision
 
     def get_reload_status(self) -> ConfigReloadStatus:
-        return self._snapshot_store.status()
+        status = self._snapshot_store.status()
+        if self._workspace_state_store is None:
+            return status
+        active = self._workspace_state_store.get_active_config_snapshot(
+            self._CONFIG_DOMAIN
+        )
+        pending = self._workspace_state_store.get_pending_config_candidate(
+            config_domain=self._CONFIG_DOMAIN
+        )
+        if active is None and pending is None:
+            return status
+        pending_state = pending.state if pending is not None else None
+        reason = status.reason
+        if pending_state == "discarded":
+            reason = None
+        elif pending_state in {"conflict", "rejected", "recovery_required"}:
+            reason = pending_state
+        elif pending_state == "pending_restart":
+            reason = "restart_required"
+        return replace(
+            status,
+            healthy=(
+                (status.healthy or pending_state == "discarded")
+                and pending_state
+                not in {"conflict", "rejected", "recovery_required"}
+            ),
+            restart_required=pending_state == "pending_restart",
+            reason=reason,
+            state=pending_state or ("active" if active is not None else None),
+            active_revision=active.active_revision if active is not None else None,
+            pending_revision=pending.pending_revision if pending is not None else None,
+            candidate_id=pending.candidate_id if pending is not None else None,
+            candidate_ref=pending.candidate_ref if pending is not None else None,
+            attempt_id=pending.last_attempt_id if pending is not None else None,
+            apply_id=pending.last_apply_id if pending is not None else None,
+            layer_digests=active.layer_digests if active is not None else None,
+            last_error=(
+                pending.last_error
+                if pending is not None and pending.last_error is not None
+                else status.last_error
+            ),
+        )
+
+    def list_config_events(
+        self,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ):
+        if self._workspace_state_store is None:
+            return ()
+        return self._workspace_state_store.list_config_events(
+            config_domain=self._CONFIG_DOMAIN,
+            after=after,
+            limit=limit,
+        )
+
+    def claim_config_events_for_consumer(
+        self,
+        *,
+        after: int,
+        consumer_id: str,
+        limit: int = 100,
+    ):
+        if self._workspace_state_store is None:
+            return ()
+        return self._workspace_state_store.claim_config_events_for_consumer(
+            config_domain=self._CONFIG_DOMAIN,
+            after=after,
+            consumer_id=consumer_id,
+            limit=limit,
+        )
+
+    def mark_config_event_delivered_for_consumer(
+        self,
+        *,
+        event_id: str,
+        consumer_id: str,
+    ):
+        if self._workspace_state_store is None:
+            raise RuntimeError("当前 Workspace 没有配置事件状态库")
+        return self._workspace_state_store.mark_config_event_delivered_for_consumer(
+            event_id=event_id,
+            consumer_id=consumer_id,
+        )
+
+    def ensure_config_event_cursor(self, *, after: int) -> None:
+        if self._workspace_state_store is None:
+            return
+        self._workspace_state_store.ensure_config_event_cursor(
+            config_domain=self._CONFIG_DOMAIN,
+            after=after,
+        )
 
     def get_source_details(self) -> tuple[ConfigSource, ...]:
         return self._require_snapshot().source_details
+
+    def get_source_diagnostics(
+        self,
+    ) -> tuple[str, Path, tuple[ConfigSource, ...]]:
+        """只读返回配置来源诊断，不初始化快照或迁移 source layer。"""
+
+        if self._snapshot_store.has_snapshot():
+            snapshot = self._snapshot_store.current()
+            return (
+                snapshot.revision,
+                snapshot.schema_path or self._resolve_schema_path(),
+                snapshot.source_details,
+            )
+        if self._workspace_state_store is not None:
+            active = self._workspace_state_store.get_active_config_snapshot(
+                self._CONFIG_DOMAIN
+            )
+            if active is not None:
+                source_details, _ = self._persisted_source_details(
+                    active.source_baseline
+                )
+                return (
+                    active.effective_digest,
+                    self._resolve_schema_path(),
+                    source_details,
+                )
+
+        source_details: list[ConfigSource] = [
+            ConfigSource(
+                path=self._inline_config_path,
+                layer="inline",
+                precedence=0,
+                loaded=True,
+            ),
+            self._config_source(
+                path=self._get_workspace_config_path(),
+                layer="user",
+                precedence=1,
+                config_key="workspace_mutable_override",
+            ),
+            self._config_source(
+                path=self._get_workspace_local_config_path(),
+                layer="user_local",
+                precedence=2,
+                config_key="workspace_local_mutable_override",
+            ),
+        ]
+        if self._workspace_root is not None:
+            source_details.append(
+                self._config_source(
+                    path=get_workspace_config_path(self._workspace_root),
+                    layer="workspace",
+                    precedence=3,
+                    config_key="workspace_root_mutable_override",
+                )
+            )
+        if self._workspace_state_store is not None or self._runtime_config_overrides:
+            source_details.append(self._runtime_override_source())
+        return (
+            "uninitialized",
+            self._resolve_schema_path(),
+            tuple(source_details),
+        )
 
     def get_schema_path(self) -> Path:
         snapshot = self._require_snapshot()
@@ -694,13 +1828,519 @@ class ConfigService:
             mcp_tool_names=mcp_tool_names,
         )
 
+    async def _renew_apply_claim(self, apply_id: str, fencing_token: str) -> None:
+        """在外部副作用期间续租 claim；claim 丢失由最终 CAS 明确暴露。"""
+
+        while True:
+            await asyncio.sleep(10)
+            if self._workspace_state_store is None:
+                return
+            await asyncio.to_thread(
+                self._workspace_state_store.renew_config_apply_claim,
+                config_domain=self._CONFIG_DOMAIN,
+                apply_id=apply_id,
+                fencing_token=fencing_token,
+                lease_seconds=30,
+            )
+
     async def reload(
         self,
         *,
         candidate_applier: ConfigCandidateApplier | None = None,
+        idempotency_key: str | None = None,
     ) -> bool:
+        async def persist_candidate(
+            previous: ConfigSnapshot,
+            candidate: ConfigSnapshot,
+        ) -> None:
+            pending = self._prepare_candidate(
+                previous,
+                candidate,
+                idempotency_key=idempotency_key,
+            )
+            changed_paths = changed_json_paths(previous.to_dict(), candidate.to_dict())
+            attempt_id = new_config_id("attempt")
+            apply_id = new_config_id("apply")
+            active = (
+                self._workspace_state_store.get_active_config_snapshot(
+                    self._CONFIG_DOMAIN
+                )
+                if self._workspace_state_store is not None
+                else None
+            )
+            base_active_revision = active.active_revision if active is not None else None
+            claim = None
+            claim_renewal_task: asyncio.Task[None] | None = None
+            if self._workspace_state_store is not None:
+                claim = self._workspace_state_store.begin_config_apply(
+                    config_domain=self._CONFIG_DOMAIN,
+                    candidate_id=pending.candidate_id,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    owner="workspace-config-service",
+                    base_active_revision=base_active_revision,
+                    target_generation=new_config_id("workspace_generation"),
+                    pending_revision=pending.pending_revision,
+                    source_baseline=pending.source_baseline,
+                    active_baseline=(
+                        active.source_baseline if active is not None else {}
+                    ),
+                )
+                claim_renewal_task = asyncio.create_task(
+                    self._renew_apply_claim(claim.apply_id, claim.fencing_token)
+                )
+            try:
+                if candidate_applier is not None:
+                    await candidate_applier(previous, candidate)
+                    if self._workspace_state_store is not None and claim is not None:
+                        self._workspace_state_store.append_config_apply_side_effect(
+                            apply_id=claim.apply_id,
+                            side_effect={
+                                "resource": "workspace-config-applier",
+                                "action": "apply",
+                                "candidate_id": pending.candidate_id,
+                                "changed_paths": list(changed_paths),
+                            },
+                        )
+            except ConfigRestartRequiredError as error:
+                self._finish_candidate(
+                    pending,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    state="pending_restart",
+                    result="restart_required",
+                    error=str(error),
+                    changed_paths=changed_paths,
+                    candidate_ref=new_config_id("candidate_ref"),
+                    target_generation=(claim.target_generation if claim else None),
+                    fencing_token=(claim.fencing_token if claim else None),
+                )
+                if self._workspace_state_store is not None and claim is not None:
+                    if claim_renewal_task is not None:
+                        claim_renewal_task.cancel()
+                        await asyncio.gather(
+                            claim_renewal_task,
+                            return_exceptions=True,
+                        )
+                    self._workspace_state_store.update_config_apply_journal(
+                        apply_id=claim.apply_id,
+                        expected_state="applying",
+                        state="failed",
+                        last_error=str(error),
+                    )
+                    self._workspace_state_store.release_config_apply_claim(
+                        config_domain=self._CONFIG_DOMAIN,
+                        apply_id=claim.apply_id,
+                        fencing_token=claim.fencing_token,
+                    )
+                raise
+            except ConfigConflictError as error:
+                self._finish_candidate(
+                    pending,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    state="conflict",
+                    result="conflict",
+                    error=str(error),
+                    changed_paths=changed_paths,
+                )
+                if self._workspace_state_store is not None and claim is not None:
+                    if claim_renewal_task is not None:
+                        claim_renewal_task.cancel()
+                        await asyncio.gather(
+                            claim_renewal_task,
+                            return_exceptions=True,
+                        )
+                    self._workspace_state_store.update_config_apply_journal(
+                        apply_id=claim.apply_id,
+                        expected_state="applying",
+                        state="failed",
+                        last_error=str(error),
+                    )
+                    self._workspace_state_store.release_config_apply_claim(
+                        config_domain=self._CONFIG_DOMAIN,
+                        apply_id=claim.apply_id,
+                        fencing_token=claim.fencing_token,
+                    )
+                raise
+            except Exception as error:
+                self._finish_candidate(
+                    pending,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    state="rejected",
+                    result="apply_failed",
+                    error=str(error),
+                    changed_paths=changed_paths,
+                )
+                if self._workspace_state_store is not None and claim is not None:
+                    if claim_renewal_task is not None:
+                        claim_renewal_task.cancel()
+                        await asyncio.gather(
+                            claim_renewal_task,
+                            return_exceptions=True,
+                        )
+                    self._workspace_state_store.update_config_apply_journal(
+                        apply_id=claim.apply_id,
+                        expected_state="applying",
+                        state="failed",
+                        last_error=str(error),
+                    )
+                    self._workspace_state_store.release_config_apply_claim(
+                        config_domain=self._CONFIG_DOMAIN,
+                        apply_id=claim.apply_id,
+                        fencing_token=claim.fencing_token,
+                    )
+                raise
+            try:
+                pending_layer_revisions = {
+                    str(key): int(detail["layer_revision"])
+                    for key, detail in pending.source_baseline.items()
+                    if isinstance(detail, dict)
+                    and detail.get("layer_revision") is not None
+                }
+                pending_layer_digests = {
+                    str(key): (
+                        str(detail.get("layer_digest"))
+                        if detail.get("layer_digest") is not None
+                        else None
+                    )
+                    for key, detail in pending.source_baseline.items()
+                    if isinstance(detail, dict)
+                    and detail.get("layer_revision") is not None
+                }
+                self._persist_active_snapshot(
+                    candidate,
+                    candidate_id=pending.candidate_id,
+                    expected_active_revision=base_active_revision,
+                    expected_pending_revision=pending.pending_revision,
+                    expected_pending_state="applying",
+                    expected_fencing_token=(claim.fencing_token if claim else None),
+                    expected_source_baseline=pending.source_baseline,
+                    expected_source_generation=pending.source_generation,
+                    expected_layer_revisions=pending_layer_revisions,
+                    expected_layer_digests=pending_layer_digests,
+                    apply_id=apply_id,
+                    event=ConfigEventInput(
+                        event_id=f"config:{pending.candidate_id}:active",
+                        config_domain=self._CONFIG_DOMAIN,
+                        candidate_id=pending.candidate_id,
+                        attempt_id=attempt_id,
+                        apply_id=apply_id,
+                        idempotency_key=pending.idempotency_key,
+                        commit_revision=None,
+                        active_revision=None,
+                        pending_revision=pending.pending_revision,
+                        source="workspace-config-service",
+                        result="applied",
+                        activation_scope=workspace_config_policy().activation_scope_for(
+                            changed_paths
+                        ),
+                        changed_paths=changed_paths,
+                        applied_paths=changed_paths,
+                    ),
+                )
+            except ConfigConflictError as error:
+                if self._workspace_state_store is not None and claim is not None:
+                    journal = self._workspace_state_store.get_config_apply_journal(
+                        apply_id=claim.apply_id
+                    )
+                    recovery_required = bool(journal and journal.side_effects)
+                    self._workspace_state_store.update_config_apply_journal(
+                        apply_id=claim.apply_id,
+                        expected_state="applying",
+                        state=("recovery_required" if recovery_required else "failed"),
+                        last_error=str(error),
+                    )
+                else:
+                    recovery_required = False
+                self._finish_candidate(
+                    pending,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    state=("recovery_required" if recovery_required else "conflict"),
+                    result=("recovery_required" if recovery_required else "conflict"),
+                    error=str(error),
+                    changed_paths=changed_paths,
+                )
+                raise
+            except Exception as error:
+                if self._workspace_state_store is not None and claim is not None:
+                    journal = self._workspace_state_store.get_config_apply_journal(
+                        apply_id=claim.apply_id
+                    )
+                    recovery_required = bool(journal and journal.side_effects)
+                    self._workspace_state_store.update_config_apply_journal(
+                        apply_id=claim.apply_id,
+                        expected_state="applying",
+                        state=("recovery_required" if recovery_required else "failed"),
+                        last_error=str(error),
+                    )
+                else:
+                    recovery_required = False
+                self._finish_candidate(
+                    pending,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    state=("recovery_required" if recovery_required else "rejected"),
+                    result=("recovery_required" if recovery_required else "apply_failed"),
+                    error=str(error),
+                    changed_paths=changed_paths,
+                )
+                raise
+            finally:
+                if claim_renewal_task is not None:
+                    claim_renewal_task.cancel()
+                    await asyncio.gather(
+                        claim_renewal_task,
+                        return_exceptions=True,
+                    )
+                if self._workspace_state_store is not None and claim is not None:
+                    self._workspace_state_store.release_config_apply_claim(
+                        config_domain=self._CONFIG_DOMAIN,
+                        apply_id=claim.apply_id,
+                        fencing_token=claim.fencing_token,
+                    )
+
         return await self._snapshot_store.reload(
-            candidate_applier=candidate_applier,
+            candidate_applier=persist_candidate,
+        )
+
+    def _prepare_candidate(
+        self,
+        previous: ConfigSnapshot,
+        snapshot: ConfigSnapshot,
+        *,
+        idempotency_key: str | None = None,
+    ) -> ConfigPendingCandidateRecord:
+        if self._workspace_state_store is None:
+            payload = redact_config_payload(snapshot.to_dict())
+            if not isinstance(payload, dict):
+                raise TypeError("脱敏配置候选必须是对象")
+            return ConfigPendingCandidateRecord(
+                config_domain=self._CONFIG_DOMAIN,
+                candidate_id=f"candidate_{snapshot.revision}",
+                idempotency_key=idempotency_key or f"reload:{snapshot.revision}",
+                pending_revision=0,
+                payload=payload,
+                source_baseline={},
+                candidate_digest=snapshot.revision,
+                effective_digest=snapshot.revision,
+                target_generation=None,
+                fencing_token=None,
+                state="candidate_validated",
+                last_error=None,
+                created_at=snapshot.loaded_at,
+            )
+        baseline, source_generation, _, _ = (
+            self._source_baseline(snapshot)
+        )
+        payload = prepare_config_for_persistence(snapshot.to_dict())
+        if not isinstance(payload, dict):
+            raise TypeError("脱敏配置候选必须是对象")
+        active = self._workspace_state_store.get_active_config_snapshot(
+            self._CONFIG_DOMAIN
+        )
+        candidate_id = f"candidate_{source_generation}_{snapshot.revision}"
+        pending = self._workspace_state_store.create_pending_config_candidate(
+            config_domain=self._CONFIG_DOMAIN,
+            candidate_id=candidate_id,
+            idempotency_key=(
+                idempotency_key or f"reload:{source_generation}:{snapshot.revision}"
+            ),
+            payload=payload,
+            source_baseline=baseline,
+            candidate_digest=snapshot.revision,
+            effective_digest=snapshot.revision,
+            target_generation="workspace-runtime",
+            fencing_token=None,
+            state="candidate_validated",
+            base_active_revision=(active.active_revision if active is not None else None),
+            source_generation=source_generation,
+        )
+        if pending.source_baseline != baseline:
+            raise ConfigConflictError(
+                "重复 candidate 的 source baseline 与当前候选不一致"
+            )
+        if pending.state in {"rejected", "conflict", "recovery_required"}:
+            pending = self._workspace_state_store.update_pending_config_candidate_state(
+                config_domain=self._CONFIG_DOMAIN,
+                candidate_id=pending.candidate_id,
+                expected_state=pending.state,
+                state="candidate_validated",
+                last_error=None,
+            )
+        elif pending.state != "candidate_validated":
+            raise ConfigConflictError(
+                "重复 candidate 已经处于不可自动重试状态: "
+                f"candidate={pending.candidate_id}, state={pending.state}"
+            )
+        return pending
+
+    def _finish_candidate(
+        self,
+        pending: ConfigPendingCandidateRecord,
+        *,
+        attempt_id: str,
+        apply_id: str,
+        state: ConfigLifecycleState,
+        result: ConfigResult,
+        error: str,
+        changed_paths: tuple[str, ...] = (),
+        candidate_ref: str | None = None,
+        target_generation: str | None = None,
+        fencing_token: str | None = None,
+    ) -> None:
+        if self._workspace_state_store is None:
+            return
+        event_id = f"config:{pending.candidate_id}:{result}"
+        active = self._workspace_state_store.get_active_config_snapshot(
+            self._CONFIG_DOMAIN
+        )
+        self._workspace_state_store.update_pending_config_candidate_state(
+            config_domain=self._CONFIG_DOMAIN,
+            candidate_id=pending.candidate_id,
+            expected_state="applying",
+            state=state,
+            last_error=error,
+            candidate_ref=candidate_ref,
+            target_generation=target_generation,
+            fencing_token=fencing_token,
+            event=ConfigEventInput(
+                event_id=event_id,
+                config_domain=self._CONFIG_DOMAIN,
+                candidate_id=pending.candidate_id,
+                attempt_id=attempt_id,
+                apply_id=apply_id,
+                idempotency_key=pending.idempotency_key,
+                commit_revision=None,
+                active_revision=active.active_revision if active is not None else None,
+                pending_revision=pending.pending_revision,
+                source="workspace-config-service",
+                result=result,
+                activation_scope=workspace_config_policy().activation_scope_for(
+                    changed_paths
+                ),
+                changed_paths=changed_paths,
+                deferred_paths=(
+                    changed_paths if result == "restart_required" else ()
+                ),
+                error=error,
+            ),
+        )
+
+    def _source_baseline(
+        self,
+        snapshot: ConfigSnapshot,
+    ) -> tuple[dict[str, object], int, dict[str, int], dict[str, str | None]]:
+        baseline: dict[str, object] = {}
+        layer_revisions: dict[str, int] = {}
+        layer_digests: dict[str, str | None] = {}
+        source_generation = 0
+        for source in snapshot.source_details:
+            layer_key = source.source_key or f"{source.layer}:{source.precedence}"
+            source_path = source.path
+            if self._workspace_state_store is not None and source.source_key is not None:
+                stored_source = self._workspace_state_store.get_source_layer(
+                    source.source_key
+                )
+                if stored_source is not None:
+                    source_path = Path(stored_source.source_path)
+            baseline[layer_key] = {
+                "path": str(source_path),
+                "presence": source.presence,
+                "layer_revision": source.layer_revision,
+                "layer_digest": source.layer_digest,
+                "source_generation": source.source_generation,
+            }
+            if source.layer_revision is not None:
+                layer_revisions[layer_key] = source.layer_revision
+            layer_digests[layer_key] = source.layer_digest
+            if source.source_generation is not None:
+                source_generation = max(source_generation, source.source_generation)
+        return baseline, source_generation, layer_revisions, layer_digests
+
+    def _persist_initial_active_snapshot(self) -> None:
+        if self._workspace_state_store is None:
+            return
+        snapshot = self.get_snapshot()
+        baseline, source_generation, layer_revisions, layer_digests = (
+            self._source_baseline(snapshot)
+        )
+        payload = prepare_config_for_persistence(snapshot.to_dict())
+        if not isinstance(payload, dict):
+            raise TypeError("脱敏配置快照必须是对象")
+        self._workspace_state_store.ensure_active_config_snapshot(
+            config_domain=self._CONFIG_DOMAIN,
+            payload=payload,
+            source_baseline=baseline,
+            source_generation=source_generation,
+            layer_revisions=layer_revisions,
+            layer_digests=layer_digests,
+            effective_digest=snapshot.revision,
+            secret_bindings=build_secret_binding_summary(snapshot.to_dict()),
+            schema_version=1,
+            promoted_generation="bootstrap",
+        )
+
+    def _persist_active_snapshot(
+        self,
+        snapshot: ConfigSnapshot,
+        *,
+        candidate_id: str | None = None,
+        expected_active_revision: int | None = None,
+        expected_pending_revision: int | None = None,
+        expected_pending_state: ConfigLifecycleState | None = None,
+        expected_fencing_token: str | None = None,
+        expected_source_baseline: dict[str, object] | None = None,
+        expected_source_generation: int | None = None,
+        expected_layer_revisions: dict[str, int] | None = None,
+        expected_layer_digests: dict[str, str | None] | None = None,
+        apply_id: str | None = None,
+        event: ConfigEventInput | None = None,
+    ) -> None:
+        if self._workspace_state_store is None:
+            return
+        baseline, source_generation, layer_revisions, layer_digests = (
+            self._source_baseline(snapshot)
+        )
+        payload = prepare_config_for_persistence(snapshot.to_dict())
+        if not isinstance(payload, dict):
+            raise TypeError("脱敏配置快照必须是对象")
+        self._workspace_state_store.promote_active_config_snapshot(
+            config_domain=self._CONFIG_DOMAIN,
+            candidate_id=candidate_id or f"candidate_{snapshot.revision}",
+            payload=payload,
+            source_baseline=baseline,
+            source_generation=source_generation,
+            layer_revisions=layer_revisions,
+            layer_digests=layer_digests,
+            effective_digest=snapshot.revision,
+            secret_bindings=build_secret_binding_summary(snapshot.to_dict()),
+            schema_version=1,
+            promoted_generation="workspace-runtime",
+            promoted_apply_id=apply_id,
+            expected_active_revision=expected_active_revision,
+            expected_source_generation=(
+                expected_source_generation
+                if expected_source_generation is not None
+                else source_generation
+            ),
+            expected_source_baseline=expected_source_baseline,
+            expected_layer_revisions=(
+                expected_layer_revisions
+                if expected_layer_revisions is not None
+                else layer_revisions
+            ),
+            expected_layer_digests=(
+                expected_layer_digests
+                if expected_layer_digests is not None
+                else layer_digests
+            ),
+            expected_pending_revision=expected_pending_revision,
+            expected_pending_state=expected_pending_state,
+            expected_fencing_token=expected_fencing_token,
+            event=event,
         )
 
     async def start_watching(
@@ -711,6 +2351,7 @@ class ConfigService:
         if self._watcher is not None:
             raise RuntimeError("配置文件监听器不允许重复启动")
         self._require_snapshot()
+        self._candidate_applier = candidate_applier
         directories = {self._get_workspace_config_path().parent}
         candidate_paths = {
             self._get_workspace_config_path(),
@@ -734,8 +2375,10 @@ class ConfigService:
         watcher = self._watcher
         self._watcher = None
         if watcher is None:
+            self._candidate_applier = None
             return
         await watcher.stop()
+        self._candidate_applier = None
 
     async def _reload_from_watcher(
         self,
@@ -755,24 +2398,92 @@ class ConfigService:
         return self._build_public_config()
 
     async def update(self, payload: ConfigUpdateRequest) -> ConfigDTO:
-        update_data = payload.model_dump(exclude_unset=True)
-        for key, value in update_data.items():
-            if value is None:
-                self._runtime_config_overrides.pop(key, None)
-            else:
-                self._runtime_config_overrides[key] = value
+        runtime_keys = frozenset(
+            {
+                "default_model",
+                "default_orchestration",
+                "max_concurrent_agents",
+                "allow_shell_tools",
+                "ignored_paths",
+                "auto_summarize",
+            }
+        )
+        update_data = {
+            key: value
+            for key, value in payload.model_dump(exclude_unset=True).items()
+            if key in runtime_keys
+        }
         if self._workspace_state_store is not None:
-            if self._runtime_config_overrides:
-                self._workspace_state_store.set_config(
-                    config_key=self._RUNTIME_OVERRIDE_CONFIG_KEY,
-                    config_version=1,
-                    payload=self._runtime_config_overrides,
+            required_cas_fields = {
+                "base_layer_revision",
+                "base_layer_digest",
+                "expected_active_revision",
+                "expected_active_digest",
+            }
+            missing_cas_fields = required_cas_fields.difference(
+                payload.model_fields_set
+            )
+            if missing_cas_fields:
+                raise ConfigConflictError(
+                    "配置 API/UI 写入必须声明完整 CAS 基线，缺少: "
+                    + ", ".join(sorted(missing_cas_fields))
                 )
-            else:
-                self._workspace_state_store.delete_config(
-                    self._RUNTIME_OVERRIDE_CONFIG_KEY
+            existing = self._workspace_state_store.get_pending_config_candidate(
+                config_domain=self._CONFIG_DOMAIN,
+                idempotency_key=payload.idempotency_key,
+            )
+            if (
+                existing is not None
+                and existing.state in {"active", "pending_restart"}
+                and self._is_replayed_runtime_update(
+                    existing,
+                    updates=update_data,
                 )
+            ):
+                return self._build_public_config()
+        self._sync_runtime_override_source(
+            updates=update_data,
+            base_layer_revision=payload.base_layer_revision,
+            base_layer_digest=payload.base_layer_digest,
+            expected_active_revision=payload.expected_active_revision,
+            expected_active_digest=payload.expected_active_digest,
+        )
+        if self._snapshot_store.has_snapshot():
+            await self.reload(
+                candidate_applier=self._candidate_applier,
+                idempotency_key=payload.idempotency_key,
+            )
         return self._build_public_config()
+
+    def _is_replayed_runtime_update(
+        self,
+        pending: ConfigPendingCandidateRecord,
+        *,
+        updates: dict[str, Any],
+    ) -> bool:
+        """只对同一 source 基线和同一 runtime payload 的重试做幂等短路。"""
+
+        if self._workspace_state_store is None:
+            return False
+        baseline = pending.source_baseline.get(self._RUNTIME_OVERRIDE_CONFIG_KEY)
+        source = self._workspace_state_store.get_source_layer(
+            self._RUNTIME_OVERRIDE_CONFIG_KEY
+        )
+        if not isinstance(baseline, dict) or source is None:
+            return False
+        if (
+            baseline.get("path") != source.source_path
+            or baseline.get("presence") != source.presence
+            or baseline.get("layer_revision") != source.layer_revision
+            or baseline.get("layer_digest") != source.layer_digest
+            or baseline.get("source_generation") != source.source_generation
+        ):
+            return False
+        current_payload = source.payload or {}
+        return all(
+            key not in current_payload if value is None else current_payload.get(key) == value
+            for key, value in updates.items()
+        )
 
     def _build_public_config(self) -> ConfigDTO:
         config = self._get_effective_config()
@@ -812,9 +2523,17 @@ class ConfigService:
                         "layer": source.layer,
                         "precedence": source.precedence,
                         "loaded": source.loaded,
+                        "source_key": source.source_key,
+                        "presence": source.presence,
+                        "layer_revision": source.layer_revision,
+                        "layer_digest": source.layer_digest,
+                        "source_generation": source.source_generation,
                     }
                     for source in snapshot.source_details
                 ],
+                "policy_manifest": list(
+                    workspace_config_policy().policy_manifest()
+                ),
                 "reload": {
                     "healthy": reload_status.healthy,
                     "restart_required": reload_status.restart_required,
@@ -823,6 +2542,15 @@ class ConfigService:
                     "last_success_at": reload_status.last_success_at.isoformat(),
                     "last_attempt_at": reload_status.last_attempt_at.isoformat(),
                     "last_error": reload_status.last_error,
+                    "state": reload_status.state,
+                    "active_revision": reload_status.active_revision,
+                    "pending_revision": reload_status.pending_revision,
+                    "candidate_id": reload_status.candidate_id,
+                    "attempt_id": reload_status.attempt_id,
+                    "apply_id": reload_status.apply_id,
+                    "layer_digests": reload_status.layer_digests or {},
+                    "applied_paths": list(reload_status.applied_paths),
+                    "deferred_paths": list(reload_status.deferred_paths),
                 },
             },
         )

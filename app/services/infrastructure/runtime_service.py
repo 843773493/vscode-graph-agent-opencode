@@ -3,16 +3,12 @@ from __future__ import annotations
 import os
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
-from app.core.path_utils import (
-    get_artifacts_dir,
-    get_cache_dir,
-    get_logs_dir,
-    get_workspace_root,
-)
+from app.core.workspace_identity import validate_workspace_id
 from app.schemas.event import Event, SessionInterruptedEvent, SessionInterruptedPayload
 from app.schemas.internal_v2.runtime import (
     RuntimeDrainBlockerDTO,
@@ -48,26 +44,29 @@ def is_job_timeout_event(event: Event) -> bool:
 
 
 class RuntimeService:
-    _start_time = None
-
     def __init__(
         self,
         *,
+        workspace_id: str,
+        workspace_root: Path,
         job_service: JobService,
         background_task_registry: BackgroundTaskRegistry,
         trace_event_store: TraceEventStore,
         message_stream_store: MessageStreamStore,
         terminal_status_writer: TurnTerminalStatusWriter | None = None,
     ) -> None:
+        self._workspace_id = validate_workspace_id(workspace_id)
+        self._workspace_root = workspace_root.expanduser().resolve()
         self._job_service = job_service
         self._background_task_registry = background_task_registry
         self._trace_event_store = trace_event_store
         self._message_stream_store = message_stream_store
         self._terminal_status_writer = terminal_status_writer
         self._lifecycle_state: RuntimeLifecycleState = "ready"
+        self._start_time: float | None = None
 
-    def get_log_dir(self):
-        return get_workspace_root() / ".boxteam" / "logs"
+    def get_log_dir(self) -> Path:
+        return self._workspace_root / ".boxteam" / "logs"
 
     async def status(self) -> RuntimeInfoDTO:
         if self._start_time is None:
@@ -77,17 +76,17 @@ class RuntimeService:
         return RuntimeInfoDTO(
             pid=os.getpid(),
             uptime_seconds=int(time.time() - self._start_time),
-            workspace_id="ws_local",
+            workspace_id=self._workspace_id,
             active_jobs=sum(1 for blocker in blockers if blocker.kind == "job"),
             lifecycle_state=self._lifecycle_state,
             accepting_jobs=self._job_service.accepting_jobs,
             blockers=blockers,
             loaded_agents=["planner", "executor", "reviewer", "summarizer"],
             storage=RuntimeStorageDTO(
-                root=str(get_workspace_root()),
-                artifact_dir=str(get_artifacts_dir()),
-                log_dir=str(get_logs_dir()),
-                cache_dir=str(get_cache_dir()),
+                root=str(self._workspace_root),
+                artifact_dir=str(self._workspace_root / ".boxteam" / "artifacts"),
+                log_dir=str(self._workspace_root / ".boxteam" / "logs"),
+                cache_dir=str(self._workspace_root / ".boxteam" / "cache"),
             ),
         )
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -164,6 +164,7 @@ async def _stream_proxy_response(
     response: httpx.Response,
     route_lease: WorkspaceRouteLease,
     user_access: UserAccessContext | None,
+    on_close: Callable[[], None] | None = None,
 ) -> AsyncIterator[bytes]:
     iterator = response.aiter_bytes()
     next_chunk = asyncio.create_task(anext(iterator))
@@ -204,15 +205,26 @@ async def _stream_proxy_response(
         if user_session_changed is not None:
             pending_tasks.append(user_session_changed)
         await asyncio.gather(*pending_tasks, return_exceptions=True)
-        await response.aclose()
+        try:
+            await response.aclose()
+        finally:
+            if on_close is not None:
+                on_close()
 
 
-async def _stream_proxy_body(response: httpx.Response) -> AsyncIterator[bytes]:
+async def _stream_proxy_body(
+    response: httpx.Response,
+    on_close: Callable[[], None] | None = None,
+) -> AsyncIterator[bytes]:
     try:
         async for chunk in response.aiter_bytes():
             yield chunk
     finally:
-        await response.aclose()
+        try:
+            await response.aclose()
+        finally:
+            if on_close is not None:
+                on_close()
 
 
 async def _wait_for_workspace_runtime(
@@ -319,28 +331,59 @@ async def _proxy_workspace_request(
     )
     response: httpx.Response | None = None
     target_url = ""
-    route_lease = registry.route_lease(target.workspace_id)
+    route_lease = registry.acquire_route_reference(
+        target.workspace_id,
+        streaming=False,
+    )
+    reference_streaming = False
+    route_reference_released = False
+
+    def release_route_reference() -> None:
+        nonlocal route_reference_released
+        if route_reference_released:
+            return
+        route_reference_released = True
+        registry.release_route_reference(
+            target.workspace_id,
+            streaming=reference_streaming,
+        )
+
     for attempt in range(len(retry_delays) + 1):
         if attempt > 0:
             await asyncio.sleep(retry_delays[attempt - 1])
             target = registry.resolve(target.workspace_id)
-            route_lease = registry.route_lease(target.workspace_id)
+            release_route_reference()
+            route_lease = registry.acquire_route_reference(
+                target.workspace_id,
+                streaming=False,
+            )
+            reference_streaming = False
+            route_reference_released = False
         if (
             target.connection_kind == "remote_gateway"
             and target.remote_gateway_connection_id is not None
         ):
-            target_url = (
-                f"{registry.remote_gateway_url(target.remote_gateway_connection_id)}"
-                f"/api/v1/{path}"
-            )
+            try:
+                target_url = (
+                    f"{registry.remote_gateway_url(target.remote_gateway_connection_id)}"
+                    f"/api/v1/{path}"
+                )
+            except LookupError:
+                release_route_reference()
+                raise
         else:
-            await _wait_for_workspace_runtime(request, target)
+            try:
+                await _wait_for_workspace_runtime(request, target)
+            except HTTPException:
+                release_route_reference()
+                raise
             try:
                 backend_url = registry.resolve_service_url(
                     target.workspace_id,
                     "workspace_api",
                 )
             except LookupError as error:
+                release_route_reference()
                 raise HTTPException(
                     status_code=503,
                     detail=(
@@ -384,11 +427,13 @@ async def _proxy_workspace_request(
                 response = None
             if retry_upstream and attempt < len(retry_delays):
                 continue
+            release_route_reference()
             raise HTTPException(
                 status_code=502,
                 detail=f"无法连接工作区后端 {target_url}: {error}",
             ) from error
     if response is None:
+        release_route_reference()
         raise HTTPException(
             status_code=502,
             detail=f"工作区 availability 请求未获得响应: {target_url}",
@@ -397,8 +442,20 @@ async def _proxy_workspace_request(
     if media_type and "text/event-stream" in media_type:
         headers = _response_headers(response)
         headers["X-BoxTeam-Route-Revision"] = route_lease.token
+        release_route_reference()
+        route_lease = registry.acquire_route_reference(
+            target.workspace_id,
+            streaming=True,
+        )
+        reference_streaming = True
+        route_reference_released = False
         return StreamingResponse(
-            _stream_proxy_response(response, route_lease, user_access),
+            _stream_proxy_response(
+                response,
+                route_lease,
+                user_access,
+                release_route_reference,
+            ),
             status_code=response.status_code,
             media_type=media_type,
             headers=headers,
@@ -407,6 +464,7 @@ async def _proxy_workspace_request(
         body = response.content
         headers = _response_headers(response)
         await response.aclose()
+        release_route_reference()
         return Response(
             content=body,
             status_code=response.status_code,
@@ -415,7 +473,7 @@ async def _proxy_workspace_request(
         )
     headers = _response_headers(response)
     return StreamingResponse(
-        _stream_proxy_body(response),
+        _stream_proxy_body(response, release_route_reference),
         status_code=response.status_code,
         headers=headers,
         media_type=media_type,

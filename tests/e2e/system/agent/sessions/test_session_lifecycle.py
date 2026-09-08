@@ -33,8 +33,8 @@ async def test_session_information_uses_backend_authoritative_paths(
 
     expected_root = str(Path(e2e_workspace_root_path).resolve())
     assert payload["request_id"]
-    assert information["kind"] == "boxteam_session_information"
-    assert information["schema_version"] == 1
+    assert information["kind"] == "session_diagnostic_snapshot"
+    assert information["schema_version"] == 2
     assert information["session"]["session_id"] == session["session_id"]
     assert information["session"]["parent_session_id"] is None
     assert information["workspace"]["root_path"] == expected_root
@@ -49,14 +49,29 @@ async def test_session_information_uses_backend_authoritative_paths(
         "status": "idle",
         "current_tool": None,
         "last_error": None,
+        "last_error_truncated": False,
     }
     assert information["trace"] == {
-        "event_count": 0,
+        "observed_event_count": 0,
         "last_event_id": None,
         "last_event_type": None,
         "last_event_at": None,
+        "truncated": False,
     }
-    assert information["resources"] == []
+    assert information["relations"] == {
+        "child_count": 0,
+        "child_ids": [],
+        "child_ids_truncated": False,
+    }
+    assert information["resources"] == {
+        "active": [],
+        "recent_closed": [],
+        "active_count": 0,
+        "recent_closed_count": 0,
+        "active_truncated": False,
+        "recent_closed_truncated": False,
+        "historical_omitted": True,
+    }
     assert information["recent_errors"] == []
 
 

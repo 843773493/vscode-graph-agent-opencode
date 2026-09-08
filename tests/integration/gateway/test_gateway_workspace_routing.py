@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import shutil
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,12 +18,23 @@ from app.agents.tools.session_history import (
     create_search_context_tool,
 )
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
+from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
+from app.gateway.federation import (
+    FEDERATION_PROTOCOL_VERSION,
+    RemoteGatewayConnection,
+)
+from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.remote_gateway import refresh_remote_gateway_projections
+from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
 )
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -65,6 +78,8 @@ async def _write_session_context_checkpoint(
     saver = RolloutCheckpointSaver(
         sessions_dir=workspace_root / ".boxteam" / "sessions"
     )
+
+
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -102,6 +117,26 @@ async def _write_session_context_checkpoint(
         checkpoint,
         {"source": "e2e_fixture", "step": 1, "writes": {}},
         {"messages": 1},
+    )
+
+
+async def _wait_for_gateway_pending_restart(
+    client: httpx.AsyncClient,
+) -> dict[str, object]:
+    deadline = time.monotonic() + 60
+    last_data: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        response = await client.get("/api/gateway/config/reload-status")
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert isinstance(data, dict)
+        last_data = data
+        if data.get("state") == "pending_restart" and data.get("candidate_ref"):
+            return data
+        await asyncio.sleep(0.25)
+    raise AssertionError(
+        "Gateway 未在 60 秒内生成 pending restart: "
+        f"{last_data}"
     )
 
 
@@ -582,6 +617,15 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             timeout=60,
         ) as client:
             await acquire_gateway_guest(client)
+            existing_response = await client.get("/api/gateway/workspaces")
+            assert existing_response.status_code == 200, existing_response.text
+            for existing_item in existing_response.json()["data"]["items"]:
+                if Path(existing_item["root_path"]).resolve() != managed_workspace:
+                    continue
+                cleanup_response = await client.delete(
+                    f"/api/gateway/workspaces/{existing_item['workspace_id']}"
+                )
+                assert cleanup_response.status_code == 200, cleanup_response.text
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={"root_path": str(managed_workspace), "name": "managed-local"},
@@ -627,6 +671,744 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             assert restored_item["status"] == "ready"
             assert restored_item["connection_error"] is None
             assert restored_list["active_workspace_id"] == managed_workspace_id
+            cleanup_response = await restarted_client.delete(
+                f"/api/gateway/workspaces/{managed_workspace_id}"
+            )
+            assert cleanup_response.status_code == 200, cleanup_response.text
     finally:
         close_gateway_process(gateway)
         close_backend_process(primary_backend)
+
+
+@pytest.mark.asyncio
+async def test_gateway_pending_restart_is_loaded_by_new_gateway_process(
+    request: pytest.FixtureRequest,
+    integration_workspace_root_path: str,
+):
+    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    primary_workspace = Path(integration_workspace_root_path).resolve()
+    primary_backend = start_backend_process(
+        workspace_root=str(primary_workspace),
+        port=port_block.port(10),
+        log_name="gateway-pending-primary-backend",
+    )
+    gateway = start_gateway_process(
+        workspace_root=primary_workspace,
+        default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+        port=port_block.port(11),
+    )
+    gateway_config_path = (
+        primary_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
+    )
+    gateway_state_path = (
+        primary_workspace / ".boxteam" / "gateway" / "gateway.sqlite"
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as client:
+            await acquire_gateway_guest(client)
+            document = gateway_config_path.read_text(encoding="utf-8")
+            changed_document = document.replace(
+                '"poll_interval_seconds": 0.5',
+                '"poll_interval_seconds": 0.75',
+                1,
+            )
+            assert changed_document != document
+            gateway_config_path.write_text(changed_document, encoding="utf-8")
+            pending_status = await _wait_for_gateway_pending_restart(client)
+
+        close_gateway_process(gateway)
+        gateway = None
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            candidate_ref = pending_status["candidate_ref"]
+            assert isinstance(candidate_ref, str)
+            intent = state.get_gateway_restart_intent(candidate_ref=candidate_ref)
+            assert intent is not None
+            pending = state.get_pending_config_candidate(
+                config_domain="gateway",
+                candidate_id=intent.candidate_id,
+            )
+            assert pending is not None
+        finally:
+            state.close()
+
+        gateway = start_gateway_process(
+            workspace_root=primary_workspace,
+            default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+            port=port_block.port(11),
+            extra_env={
+                "BOXTEAM_CONFIG_CANDIDATE_REF": intent.candidate_ref,
+                "BOXTEAM_CONFIG_GENERATION": intent.target_generation,
+                "BOXTEAM_CONFIG_FENCING_TOKEN": intent.fencing_token,
+            },
+        )
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as restarted_client:
+            await acquire_gateway_guest(restarted_client)
+            status_response = await restarted_client.get(
+                "/api/gateway/config/reload-status"
+            )
+            assert status_response.status_code == 200, status_response.text
+            status = status_response.json()["data"]
+            assert status["state"] == "active"
+            assert status["restart_required"] is False
+            assert status["candidate_ref"] is None
+            assert status["pending_revision"] is None
+            assert status["candidate_id"] is None
+            assert status["attempt_id"] is None
+            assert status["apply_id"] is None
+
+        close_gateway_process(gateway)
+        gateway = None
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            active_snapshot = state.get_active_config_snapshot("gateway")
+            assert active_snapshot is not None
+            assert (
+                active_snapshot.payload["runtime"]["gateway"]["process"]["health"][
+                    "poll_interval_seconds"
+                ]
+                == 0.75
+            )
+            new_generation = state.get_gateway_runtime_generation(
+                generation_id=intent.target_generation
+            )
+            old_generation = state.get_gateway_runtime_generation(
+                generation_id=intent.old_generation
+            )
+            assert new_generation is not None
+            assert new_generation.state == "closed"
+            assert new_generation.listener_state == "closed"
+            assert old_generation is not None
+            assert old_generation.state == "active"
+            assert old_generation.listener_state == "draining"
+        finally:
+            state.close()
+    finally:
+        if gateway is not None:
+            close_gateway_process(gateway)
+        close_backend_process(primary_backend)
+
+
+@pytest.mark.asyncio
+async def test_gateway_expired_pending_requires_explicit_retry_before_startup(
+    request: pytest.FixtureRequest,
+    integration_workspace_root_path: str,
+):
+    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    primary_workspace = Path(integration_workspace_root_path).resolve()
+    primary_backend = start_backend_process(
+        workspace_root=str(primary_workspace),
+        port=port_block.port(12),
+        log_name="gateway-expired-pending-backend",
+    )
+    gateway = start_gateway_process(
+        workspace_root=primary_workspace,
+        default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+        port=port_block.port(13),
+    )
+    gateway_config_path = (
+        primary_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
+    )
+    gateway_state_path = (
+        primary_workspace / ".boxteam" / "gateway" / "gateway.sqlite"
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as client:
+            await acquire_gateway_guest(client)
+            document = gateway_config_path.read_text(encoding="utf-8")
+            changed_document = document
+            for old_value in (0.5, 0.75, 0.8):
+                changed_document = document.replace(
+                    f'"poll_interval_seconds": {old_value}',
+                    '"poll_interval_seconds": 0.85',
+                    1,
+                )
+                if changed_document != document:
+                    break
+            assert changed_document != document
+            gateway_config_path.write_text(changed_document, encoding="utf-8")
+            pending_status = await _wait_for_gateway_pending_restart(client)
+
+        close_gateway_process(gateway)
+        gateway = None
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            candidate_ref = pending_status["candidate_ref"]
+            assert isinstance(candidate_ref, str)
+            intent = state.get_gateway_restart_intent(candidate_ref=candidate_ref)
+            assert intent is not None
+            with state.connection() as connection:
+                connection.execute(
+                    "UPDATE gateway_restart_intent SET expires_at = ? "
+                    "WHERE candidate_ref = ?",
+                    ("1970-01-01T00:00:00+00:00", candidate_ref),
+                )
+                connection.commit()
+        finally:
+            state.close()
+
+        with pytest.raises(RuntimeError, match="Gateway 提前退出"):
+            start_gateway_process(
+                workspace_root=primary_workspace,
+                default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+                port=port_block.port(13),
+                extra_env={
+                    "BOXTEAM_CONFIG_CANDIDATE_REF": intent.candidate_ref,
+                    "BOXTEAM_CONFIG_GENERATION": intent.target_generation,
+                    "BOXTEAM_CONFIG_FENCING_TOKEN": intent.fencing_token,
+                },
+            )
+
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            retried = state.retry_gateway_restart(
+                candidate_ref=intent.candidate_ref,
+                target_generation="gateway-generation-expired-retry",
+                requested_by="integration-test-retry",
+            )
+        finally:
+            state.close()
+
+        gateway = start_gateway_process(
+            workspace_root=primary_workspace,
+            default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+            port=port_block.port(13),
+            extra_env={
+                "BOXTEAM_CONFIG_CANDIDATE_REF": retried.candidate_ref,
+                "BOXTEAM_CONFIG_GENERATION": retried.target_generation,
+                "BOXTEAM_CONFIG_FENCING_TOKEN": retried.fencing_token,
+            },
+        )
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as client:
+            await acquire_gateway_guest(client)
+            status_response = await client.get("/api/gateway/config/reload-status")
+            assert status_response.status_code == 200, status_response.text
+            status = status_response.json()["data"]
+            assert status["state"] == "active"
+            assert status["pending_revision"] is None
+            assert status["candidate_id"] is None
+            assert status["candidate_ref"] is None
+            assert status["attempt_id"] is None
+            assert status["apply_id"] is None
+    finally:
+        if gateway is not None:
+            close_gateway_process(gateway)
+        close_backend_process(primary_backend)
+
+
+@pytest.mark.asyncio
+async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable(
+    request: pytest.FixtureRequest,
+    integration_workspace_root_path: str,
+):
+    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    primary_workspace = Path(integration_workspace_root_path).resolve()
+    primary_backend = start_backend_process(
+        workspace_root=str(primary_workspace),
+        port=port_block.port(14),
+        log_name="gateway-pending-startup-failure-backend",
+    )
+    gateway = start_gateway_process(
+        workspace_root=primary_workspace,
+        default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+        port=port_block.port(15),
+    )
+    gateway_config_path = (
+        primary_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
+    )
+    gateway_state_path = (
+        primary_workspace / ".boxteam" / "gateway" / "gateway.sqlite"
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as client:
+            await acquire_gateway_guest(client)
+            document = gateway_config_path.read_text(encoding="utf-8")
+            changed_document = document.replace(
+                '"poll_interval_seconds": 0.5',
+                '"poll_interval_seconds": 0.9',
+                1,
+            )
+            assert changed_document != document
+            gateway_config_path.write_text(changed_document, encoding="utf-8")
+            pending_status = await _wait_for_gateway_pending_restart(client)
+
+        close_gateway_process(gateway)
+        gateway = None
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            candidate_ref = pending_status["candidate_ref"]
+            assert isinstance(candidate_ref, str)
+            intent = state.get_gateway_restart_intent(candidate_ref=candidate_ref)
+            assert intent is not None
+            pending = state.get_pending_config_candidate(
+                config_domain="gateway",
+                candidate_id=intent.candidate_id,
+            )
+            assert pending is not None
+            active_before = state.get_active_config_snapshot("gateway")
+            assert active_before is not None
+            active_poll_interval = active_before.payload["runtime"]["gateway"][
+                "process"
+            ]["health"]["poll_interval_seconds"]
+            with state.connection() as connection:
+                connection.execute(
+                    "UPDATE config_pending_candidate SET payload_json = ? "
+                    "WHERE config_domain = 'gateway' AND candidate_id = ?",
+                    (
+                        json.dumps(
+                            {"runtime": {"gateway": {"process": "invalid"}}},
+                            ensure_ascii=False,
+                        ),
+                        pending.candidate_id,
+                    ),
+                )
+                connection.commit()
+        finally:
+            state.close()
+
+        with pytest.raises(RuntimeError, match="Gateway 提前退出"):
+            start_gateway_process(
+                workspace_root=primary_workspace,
+                default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+                port=port_block.port(15),
+                extra_env={
+                    "BOXTEAM_CONFIG_CANDIDATE_REF": intent.candidate_ref,
+                    "BOXTEAM_CONFIG_GENERATION": intent.target_generation,
+                    "BOXTEAM_CONFIG_FENCING_TOKEN": intent.fencing_token,
+                },
+            )
+
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            failed_intent = state.get_gateway_restart_intent(
+                candidate_ref=intent.candidate_ref
+            )
+            failed_pending = state.get_pending_config_candidate(
+                config_domain="gateway",
+                candidate_id=intent.candidate_id,
+            )
+            active_snapshot = state.get_active_config_snapshot("gateway")
+            assert failed_intent is not None
+            assert failed_intent.state == "recovery_required"
+            assert failed_intent.last_error is not None
+            assert failed_pending is not None
+            assert failed_pending.state == "recovery_required"
+            assert active_snapshot is not None
+            assert active_snapshot.state == "active"
+            assert (
+                active_snapshot.payload["runtime"]["gateway"]["process"]["health"][
+                    "poll_interval_seconds"
+                ]
+                == active_poll_interval
+            )
+        finally:
+            state.close()
+
+        gateway = start_gateway_process(
+            workspace_root=primary_workspace,
+            default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+            port=port_block.port(15),
+        )
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as recovered_client:
+            await acquire_gateway_guest(recovered_client)
+            status_response = await recovered_client.get(
+                "/api/gateway/config/reload-status"
+            )
+            assert status_response.status_code == 200, status_response.text
+            status = status_response.json()["data"]
+            assert status["state"] == "recovery_required"
+            assert status["restart_required"] is False
+            assert status["candidate_ref"] == intent.candidate_ref
+            assert status["pending_revision"] == pending.pending_revision
+    finally:
+        if gateway is not None:
+            close_gateway_process(gateway)
+        close_backend_process(primary_backend)
+
+
+@pytest.mark.asyncio
+async def test_gateway_stale_pending_startup_cannot_mutate_restart_state(
+    request: pytest.FixtureRequest,
+    integration_workspace_root_path: str,
+):
+    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    primary_workspace = Path(integration_workspace_root_path).resolve()
+    primary_backend = start_backend_process(
+        workspace_root=str(primary_workspace),
+        port=port_block.port(16),
+        log_name="gateway-stale-pending-backend",
+    )
+    gateway = start_gateway_process(
+        workspace_root=primary_workspace,
+        default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+        port=port_block.port(17),
+    )
+    gateway_config_path = (
+        primary_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
+    )
+    gateway_state_path = (
+        primary_workspace / ".boxteam" / "gateway" / "gateway.sqlite"
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as client:
+            await acquire_gateway_guest(client)
+            document = gateway_config_path.read_text(encoding="utf-8")
+            changed_document = document.replace(
+                '"poll_interval_seconds": 0.5',
+                '"poll_interval_seconds": 0.95',
+                1,
+            )
+            assert changed_document != document
+            gateway_config_path.write_text(changed_document, encoding="utf-8")
+            pending_status = await _wait_for_gateway_pending_restart(client)
+
+        close_gateway_process(gateway)
+        gateway = None
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            candidate_ref = pending_status["candidate_ref"]
+            assert isinstance(candidate_ref, str)
+            intent = state.get_gateway_restart_intent(candidate_ref=candidate_ref)
+            assert intent is not None
+            pending = state.get_pending_config_candidate(
+                config_domain="gateway",
+                candidate_id=intent.candidate_id,
+            )
+            assert pending is not None
+            pending_last_error = pending.last_error
+        finally:
+            state.close()
+
+        with pytest.raises(RuntimeError, match="Gateway 提前退出"):
+            start_gateway_process(
+                workspace_root=primary_workspace,
+                default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+                port=port_block.port(17),
+                extra_env={
+                    "BOXTEAM_CONFIG_CANDIDATE_REF": intent.candidate_ref,
+                    "BOXTEAM_CONFIG_GENERATION": (
+                        f"stale-{intent.target_generation}"
+                    ),
+                    "BOXTEAM_CONFIG_FENCING_TOKEN": intent.fencing_token,
+                },
+            )
+
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            unchanged_intent = state.get_gateway_restart_intent(
+                candidate_ref=intent.candidate_ref
+            )
+            unchanged_pending = state.get_pending_config_candidate(
+                config_domain="gateway",
+                candidate_id=intent.candidate_id,
+            )
+            assert unchanged_intent is not None
+            assert unchanged_intent.state == "pending"
+            assert unchanged_intent.last_error is None
+            assert unchanged_pending is not None
+            assert unchanged_pending.state == "pending_restart"
+            assert unchanged_pending.last_error == pending_last_error
+        finally:
+            state.close()
+
+        gateway = start_gateway_process(
+            workspace_root=primary_workspace,
+            default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
+            port=port_block.port(17),
+        )
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as recovered_client:
+            await acquire_gateway_guest(recovered_client)
+            status_response = await recovered_client.get(
+                "/api/gateway/config/reload-status"
+            )
+            assert status_response.status_code == 200, status_response.text
+            status = status_response.json()["data"]
+            assert status["state"] == "pending_restart"
+            assert status["restart_required"] is True
+            assert status["candidate_ref"] == intent.candidate_ref
+    finally:
+        if gateway is not None:
+            close_gateway_process(gateway)
+        close_backend_process(primary_backend)
+
+
+@pytest.mark.asyncio
+async def test_gateway_federation_reconciles_pending_restart_offline_and_cursor_gap(
+    request: pytest.FixtureRequest,
+    integration_workspace_root_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    local_workspace = Path(integration_workspace_root_path).resolve()
+    remote_workspace = _prepare_workspace(
+        local_workspace.parent / "remote-gateway-host" / "workspace",
+        "remote gateway workspace",
+    )
+    _copy_workspace_config(local_workspace, remote_workspace)
+    remote_backend = start_backend_process(
+        workspace_root=str(remote_workspace),
+        port=port_block.port(30),
+        log_name="gateway-federation-remote-backend",
+    )
+    remote_gateway = start_gateway_process(
+        workspace_root=remote_workspace,
+        default_backend_url=f"http://127.0.0.1:{remote_backend.port}",
+        port=port_block.port(31),
+    )
+    local_gateway_root = local_workspace / ".boxteam" / "gateway"
+    remote_gateway_root = remote_workspace / ".boxteam" / "gateway"
+    local_state = GatewayStateStore(path=local_gateway_root / "gateway.sqlite")
+    local_registry: GatewayWorkspaceRegistry | None = None
+    try:
+        monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(local_gateway_root))
+        remote_gateway_id = load_or_create_gateway_id(
+            remote_gateway_root / "identity.json"
+        )
+        connection_id = "rgw_real_process_federation"
+        credential = FederationCredentialStore(
+            storage_path=local_gateway_root / "credentials" / "federation.json"
+        ).issue(
+            connection_id=connection_id,
+            peer_gateway_id="gateway_local_federation_test",
+        )
+        FederationCredentialStore(
+            storage_path=remote_gateway_root / "credentials" / "federation.json"
+        ).put(credential)
+        local_registry = GatewayWorkspaceRegistry(
+            storage_path=local_gateway_root / "workspaces.json",
+            state_store=local_state,
+        )
+        local_registry.upsert_remote_gateway(
+            RemoteGatewayConnection(
+                connection_id=connection_id,
+                name="real remote gateway",
+                host="127.0.0.1",
+                port=0,
+                username="integration",
+                private_key_path=None,
+                ssh_config_host=None,
+                remote_gateway_port=remote_gateway.port,
+                remote_gateway_id=remote_gateway_id,
+                protocol_version=FEDERATION_PROTOCOL_VERSION,
+                source_owner="manual",
+            ),
+            runtime=WorkspaceRuntime(
+                service_urls={
+                    "workspace_api": f"http://127.0.0.1:{remote_gateway.port}"
+                }
+            ),
+        )
+
+        projected = await refresh_remote_gateway_projections(
+            registry=local_registry,
+            connection_id=connection_id,
+        )
+        assert projected
+        projected_workspace_id = projected[0].workspace_id
+        initial_cursor = local_registry.remote_gateway_connection(
+            connection_id
+        ).remote_config_event_cursor
+
+        remote_config_path = (
+            remote_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
+        )
+        document = remote_config_path.read_text(encoding="utf-8")
+        changed_document = document.replace(
+            '"poll_interval_seconds": 0.5',
+            '"poll_interval_seconds": 0.75',
+            1,
+        )
+        assert changed_document != document
+        remote_config_path.write_text(changed_document, encoding="utf-8")
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{remote_gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as remote_client:
+            remote_pending_status = await _wait_for_gateway_pending_restart(
+                remote_client
+            )
+        refreshed_pending = await refresh_remote_gateway_projections(
+            registry=local_registry,
+            connection_id=connection_id,
+        )
+        assert refreshed_pending[0].workspace_id == projected_workspace_id
+        pending_connection = local_registry.remote_gateway_connection(connection_id)
+        assert pending_connection.remote_restart_required is True
+        assert pending_connection.remote_candidate_ref == remote_pending_status[
+            "candidate_ref"
+        ]
+        assert pending_connection.remote_config_event_cursor is not None
+        assert pending_connection.remote_config_event_cursor > (initial_cursor or 0)
+
+        close_gateway_process(remote_gateway)
+        remote_gateway = None
+        with pytest.raises(httpx.HTTPError):
+            await refresh_remote_gateway_projections(
+                registry=local_registry,
+                connection_id=connection_id,
+            )
+        assert local_registry.has_target(projected_workspace_id)
+        assert (
+            local_registry.remote_gateway_connection(connection_id).remote_candidate_ref
+            == remote_pending_status["candidate_ref"]
+        )
+
+        remote_state = GatewayStateStore(path=remote_gateway_root / "gateway.sqlite")
+        try:
+            candidate_ref = remote_pending_status["candidate_ref"]
+            assert isinstance(candidate_ref, str)
+            intent = remote_state.get_gateway_restart_intent(
+                candidate_ref=candidate_ref
+            )
+            assert intent is not None
+            remote_first_cursor, remote_max_cursor = remote_state.config_event_bounds(
+                config_domain="gateway"
+            )
+            assert remote_first_cursor is not None
+            assert remote_max_cursor >= 1
+        finally:
+            remote_state.close()
+
+        remote_gateway = start_gateway_process(
+            workspace_root=remote_workspace,
+            default_backend_url=f"http://127.0.0.1:{remote_backend.port}",
+            port=port_block.port(31),
+            extra_env={
+                "BOXTEAM_CONFIG_CANDIDATE_REF": intent.candidate_ref,
+                "BOXTEAM_CONFIG_GENERATION": intent.target_generation,
+                "BOXTEAM_CONFIG_FENCING_TOKEN": intent.fencing_token,
+            },
+        )
+        refreshed_active = await refresh_remote_gateway_projections(
+            registry=local_registry,
+            connection_id=connection_id,
+        )
+        assert refreshed_active[0].workspace_id == projected_workspace_id
+        active_connection = local_registry.remote_gateway_connection(connection_id)
+        assert active_connection.remote_restart_required is False
+        assert active_connection.remote_candidate_ref is None
+
+        remote_managed_root = remote_workspace.parent / "managed-projection"
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{remote_gateway.port}",
+            headers={"X-BoxTeam-Federation-Token": credential.token},
+            timeout=60,
+        ) as remote_client:
+            create_response = await remote_client.post(
+                "/api/gateway/federation/managed-workspaces",
+                json={
+                    "root_path": str(remote_managed_root),
+                    "name": "projected managed workspace",
+                    "create_directory": True,
+                },
+            )
+            assert create_response.status_code == 200, create_response.text
+        projected_after_update = await refresh_remote_gateway_projections(
+            registry=local_registry,
+            connection_id=connection_id,
+        )
+        assert any(
+            item.root_path == str(remote_managed_root.resolve())
+            for item in projected_after_update
+        )
+
+        second_document = remote_config_path.read_text(encoding="utf-8")
+        second_changed_document = second_document.replace(
+            '"poll_interval_seconds": 0.75',
+            '"poll_interval_seconds": 0.8',
+            1,
+        )
+        assert second_changed_document != second_document
+        remote_config_path.write_text(second_changed_document, encoding="utf-8")
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{remote_gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=60,
+        ) as remote_client:
+            await _wait_for_gateway_pending_restart(remote_client)
+        close_gateway_process(remote_gateway)
+        remote_gateway = None
+        remote_state = GatewayStateStore(path=remote_gateway_root / "gateway.sqlite")
+        try:
+            _, max_cursor = remote_state.config_event_bounds(config_domain="gateway")
+            assert max_cursor >= 3
+            connection = remote_state.connection()
+            try:
+                connection.execute(
+                    """
+                    UPDATE config_events
+                    SET occurred_at = '2000-01-01T00:00:00+00:00'
+                    WHERE config_domain = 'gateway' AND event_seq < ?
+                    """,
+                    (max_cursor,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            assert remote_state.prune_config_events(config_domain="gateway") >= 1
+            first_after_prune, _ = remote_state.config_event_bounds(
+                config_domain="gateway"
+            )
+            assert first_after_prune == max_cursor
+        finally:
+            remote_state.close()
+        remote_gateway = start_gateway_process(
+            workspace_root=remote_workspace,
+            default_backend_url=f"http://127.0.0.1:{remote_backend.port}",
+            port=port_block.port(31),
+        )
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{remote_gateway.port}",
+            headers=LOCAL_TOKEN_HEADERS,
+            timeout=30,
+        ) as remote_client:
+            gap_response = await remote_client.get(
+                "/api/gateway/config/events",
+                params={"after": max_cursor - 2},
+            )
+            assert gap_response.status_code == 410, gap_response.text
+            assert gap_response.json()["detail"]["code"] == "snapshot_required"
+    finally:
+        if local_registry is not None:
+            local_registry.close()
+        local_state.close()
+        if remote_gateway is not None:
+            close_gateway_process(remote_gateway)
+        close_backend_process(remote_backend)

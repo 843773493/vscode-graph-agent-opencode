@@ -68,6 +68,7 @@ class SQLiteStateDatabase:
         path: Path,
         schema_version: int,
         migrations: tuple[str, ...],
+        allow_shared_processes: bool = False,
     ) -> None:
         if schema_version != len(migrations):
             raise ValueError("SQLite schema_version 必须等于迁移数量")
@@ -75,9 +76,11 @@ class SQLiteStateDatabase:
         self._schema_version = schema_version
         self._migrations = migrations
         self._ownership = SQLiteProcessOwnership(self.path)
+        self._allow_shared_processes = allow_shared_processes
         self._closed = False
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._ownership.acquire()
+        if not self._allow_shared_processes:
+            self._ownership.acquire()
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:

@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from app.gateway.federation import build_projected_workspace_id
+from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.federation import (
+    RemoteGatewayConnection,
+    build_projected_workspace_id,
+)
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceTarget,
@@ -134,6 +138,474 @@ def test_external_local_workspace_resolves_backend_without_gateway_runtime(
     )
     with pytest.raises(LookupError, match="工作区运行时尚未连接"):
         registry.resolve_service_url("external", "terminal_manager")
+
+
+def test_route_references_track_requests_and_streams_without_persisting_runtime_state(
+    tmp_path: Path,
+) -> None:
+    storage_path = tmp_path / "gateway.json"
+    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="workspace",
+            name="Workspace",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:30100",
+            connection_kind="local",
+        )
+    )
+
+    request_lease = registry.acquire_route_reference(
+        "workspace",
+        streaming=False,
+    )
+    stream_lease = registry.acquire_route_reference(
+        "workspace",
+        streaming=True,
+    )
+    assert request_lease.token == stream_lease.token
+    assert registry.route_reference_counts("workspace") == (1, 1)
+
+    registry.release_route_reference("workspace", streaming=False)
+    assert registry.route_reference_counts("workspace") == (0, 1)
+    registry.release_route_reference("workspace", streaming=True)
+    assert registry.route_reference_counts("workspace") == (0, 0)
+    with pytest.raises(RuntimeError, match="流引用重复释放"):
+        registry.release_route_reference("workspace", streaming=True)
+
+    restored = GatewayWorkspaceRegistry(storage_path=storage_path)
+    assert restored.route_reference_counts("workspace") == (0, 0)
+
+
+def test_registry_rejects_local_runtime_replacement_before_route_drain(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    old_runtime = WorkspaceRuntime(
+        service_urls={"workspace_api": "http://127.0.0.1:41000"},
+        processes={"workspace_api": _OrderedCloseProcess("old", events, 1)},
+    )
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="workspace",
+            name="Workspace",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:41000",
+            connection_kind="local",
+            managed=True,
+        ),
+        runtime=old_runtime,
+    )
+    registry.acquire_route_reference("workspace", streaming=False)
+    candidate_runtime = WorkspaceRuntime(
+        service_urls={"workspace_api": "http://127.0.0.1:42000"},
+        processes={"workspace_api": _OrderedCloseProcess("candidate", events, 1)},
+    )
+
+    with pytest.raises(RuntimeError, match="先完成排空"):
+        registry.upsert(
+            WorkspaceTarget(
+                workspace_id="workspace",
+                name="Workspace",
+                root_path=str(tmp_path),
+                backend_url="http://127.0.0.1:42000",
+                connection_kind="local",
+                managed=True,
+            ),
+            runtime=candidate_runtime,
+            activate=False,
+        )
+
+    assert registry.managed_runtime("workspace") is old_runtime
+    assert events == ["terminate:candidate", "close:candidate"]
+    registry.release_route_reference("workspace", streaming=False)
+
+
+def test_remote_gateway_runtime_retires_until_proxy_references_are_drained(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    connection = RemoteGatewayConnection(
+        connection_id="rgw_connection",
+        name="Remote",
+        host="remote.example",
+        port=22,
+        username="user",
+        private_key_path=None,
+        ssh_config_host="remote",
+        remote_gateway_port=8014,
+        remote_gateway_id="remote_gateway",
+        protocol_version=1,
+    )
+    old_runtime = WorkspaceRuntime(
+        service_urls={"workspace_api": "http://127.0.0.1:41000"},
+        processes={"workspace_api": _OrderedCloseProcess("old", events, 1)},
+    )
+    registry.upsert_remote_gateway(connection, runtime=old_runtime)
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="projected",
+            name="Projected",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:41000",
+            connection_kind="remote_gateway",
+            owner="remote_projection",
+            connection_id=connection.connection_id,
+            remote_gateway_connection_id=connection.connection_id,
+            remote_workspace_id="remote_workspace",
+            remote_service_names=("workspace_api",),
+        )
+    )
+    registry.acquire_route_reference("projected", streaming=True)
+
+    new_runtime = WorkspaceRuntime(
+        service_urls={"workspace_api": "http://127.0.0.1:42000"}
+    )
+    registry.upsert_remote_gateway(connection, runtime=new_runtime)
+    assert registry.remote_gateway_url(connection.connection_id) == (
+        "http://127.0.0.1:42000"
+    )
+    assert events == []
+
+    registry.release_route_reference("projected", streaming=True)
+    assert events == ["terminate:old", "close:old"]
+
+
+def test_remote_projection_config_batch_is_atomic_and_respects_route_lease(
+    tmp_path: Path,
+) -> None:
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "gateway.json",
+        state_store=state,
+    )
+    connection = RemoteGatewayConnection(
+        connection_id="rgw_batch",
+        name="Remote batch",
+        host="remote.example",
+        port=22,
+        username="user",
+        private_key_path=None,
+        ssh_config_host="remote",
+        remote_gateway_port=8014,
+        remote_gateway_id="remote-gateway",
+        protocol_version=1,
+        source_owner="config",
+    )
+
+    def target(url: str) -> WorkspaceTarget:
+        return WorkspaceTarget(
+            workspace_id="projected-batch",
+            name="Projected batch",
+            root_path="/remote/project",
+            backend_url=url,
+            connection_kind="remote_gateway",
+            owner="remote_projection",
+            connection_id=connection.connection_id,
+            remote_gateway_connection_id=connection.connection_id,
+            remote_workspace_id="remote-workspace",
+            remote_service_names=("workspace_api",),
+        )
+
+    try:
+        registry.apply_remote_projection_batch(
+            connections=(connection,),
+            runtimes={
+                connection.connection_id: WorkspaceRuntime(
+                    service_urls={"workspace_api": "http://127.0.0.1:41000"}
+                )
+            },
+            projections={
+                connection.connection_id: (target("http://127.0.0.1:41000"),)
+            },
+        )
+        original_generation = registry.resolve("projected-batch").target_generation
+        registry.acquire_route_reference("projected-batch", streaming=True)
+
+        with pytest.raises(RuntimeError, match="仍有引用的 route"):
+            registry.apply_remote_projection_batch(
+                connections=(connection,),
+                runtimes={
+                    connection.connection_id: WorkspaceRuntime(
+                        service_urls={"workspace_api": "http://127.0.0.1:42000"}
+                    )
+                },
+                projections={
+                    connection.connection_id: (target("http://127.0.0.1:42000"),)
+                },
+            )
+
+        assert registry.resolve("projected-batch").backend_url.endswith("41000")
+        assert (
+            registry.resolve("projected-batch").target_generation
+            == original_generation
+        )
+        registry.release_route_reference("projected-batch", streaming=True)
+
+        registry.apply_remote_projection_batch(
+            connections=(connection,),
+            runtimes={
+                connection.connection_id: WorkspaceRuntime(
+                    service_urls={"workspace_api": "http://127.0.0.1:42000"}
+                )
+            },
+            projections={
+                connection.connection_id: (target("http://127.0.0.1:42000"),)
+            },
+        )
+        assert (
+            registry.resolve("projected-batch").target_generation
+            != original_generation
+        )
+        assert state.get_registry_revision() == 2
+    finally:
+        registry.close()
+        state.close()
+
+
+def test_remote_projection_batch_handoff_defers_old_runtime_and_can_rollback(
+    tmp_path: Path,
+) -> None:
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "gateway.json",
+        state_store=state,
+    )
+
+    class _TrackingRuntime(WorkspaceRuntime):
+        def __init__(self, url: str) -> None:
+            super().__init__(service_urls={"workspace_api": url})
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = RemoteGatewayConnection(
+        connection_id="rgw_handoff",
+        name="Handoff remote",
+        host="handoff.example",
+        port=22,
+        username="user",
+        private_key_path=None,
+        ssh_config_host="handoff",
+        remote_gateway_port=8014,
+        remote_gateway_id="handoff-gateway",
+        protocol_version=1,
+        source_owner="config",
+    )
+
+    def target(url: str) -> WorkspaceTarget:
+        return WorkspaceTarget(
+            workspace_id="handoff-workspace",
+            name="Handoff workspace",
+            root_path="/handoff",
+            backend_url=url,
+            connection_kind="remote_gateway",
+            owner="remote_projection",
+            connection_id=connection.connection_id,
+            remote_gateway_connection_id=connection.connection_id,
+            remote_workspace_id="handoff-workspace",
+            remote_service_names=("workspace_api",),
+        )
+
+    old_runtime = _TrackingRuntime("http://127.0.0.1:43100")
+    registry.apply_remote_projection_batch(
+        connections=(connection,),
+        runtimes={connection.connection_id: old_runtime},
+        projections={
+            connection.connection_id: (
+                target(old_runtime.service_urls["workspace_api"]),
+            )
+        },
+    )
+    new_runtime = _TrackingRuntime("http://127.0.0.1:43200")
+    handle = registry.apply_remote_projection_batch(
+        connections=(connection,),
+        runtimes={connection.connection_id: new_runtime},
+        projections={
+            connection.connection_id: (
+                target(new_runtime.service_urls["workspace_api"]),
+            )
+        },
+        defer_retiring_runtimes=True,
+    )
+
+    assert old_runtime.closed is False
+    assert registry.remote_gateway_url(connection.connection_id) == (
+        "http://127.0.0.1:43200"
+    )
+    handle.rollback()
+
+    assert old_runtime.closed is False
+    assert new_runtime.closed is True
+    assert registry.remote_gateway_url(connection.connection_id) == (
+        "http://127.0.0.1:43100"
+    )
+    assert registry.resolve("handoff-workspace").backend_url.endswith("43100")
+    registry.close()
+    state.close()
+
+
+def test_remote_projection_batch_handoff_closes_old_runtime_only_on_promotion(
+    tmp_path: Path,
+) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+
+    class _TrackingRuntime(WorkspaceRuntime):
+        def __init__(self, url: str) -> None:
+            super().__init__(service_urls={"workspace_api": url})
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = RemoteGatewayConnection(
+        connection_id="rgw_promote",
+        name="Promotion remote",
+        host="promote.example",
+        port=22,
+        username="user",
+        private_key_path=None,
+        ssh_config_host="promote",
+        remote_gateway_port=8014,
+        remote_gateway_id="promote-gateway",
+        protocol_version=1,
+        source_owner="config",
+    )
+    old_runtime = _TrackingRuntime("http://127.0.0.1:43300")
+    target = WorkspaceTarget(
+        workspace_id="promote-workspace",
+        name="Promotion workspace",
+        root_path="/promote",
+        backend_url="http://127.0.0.1:43300",
+        connection_kind="remote_gateway",
+        owner="remote_projection",
+        connection_id=connection.connection_id,
+        remote_gateway_connection_id=connection.connection_id,
+        remote_workspace_id="promote-workspace",
+        remote_service_names=("workspace_api",),
+    )
+    registry.apply_remote_projection_batch(
+        connections=(connection,),
+        runtimes={connection.connection_id: old_runtime},
+        projections={connection.connection_id: (target,)},
+    )
+    new_runtime = _TrackingRuntime("http://127.0.0.1:43400")
+    target.backend_url = "http://127.0.0.1:43400"
+    handle = registry.apply_remote_projection_batch(
+        connections=(connection,),
+        runtimes={connection.connection_id: new_runtime},
+        projections={connection.connection_id: (target,)},
+        defer_retiring_runtimes=True,
+    )
+
+    handle.promote()
+    assert old_runtime.closed is True
+    assert new_runtime.closed is False
+    registry.close()
+
+
+def test_registry_runtime_generation_protocol_is_persistent_and_reversible(
+    tmp_path: Path,
+) -> None:
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "gateway.json",
+        state_store=state,
+    )
+    runtime = WorkspaceRuntime(service_urls={"workspace_api": "http://local"})
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="local-runtime",
+            name="Local runtime",
+            root_path="/local-runtime",
+            backend_url="http://local",
+            connection_kind="local",
+            managed=True,
+        ),
+        runtime=runtime,
+    )
+
+    assert registry.prepare_runtime_generation("gateway-generation") is None
+    assert registry.apply_runtime_generation("gateway-generation") is None
+    workspace_previous = registry.apply_workspace_process_generation(
+        "gateway-generation"
+    )
+    registry.promote_runtime_generation("gateway-generation")
+    registry.promote_workspace_process_generation("gateway-generation")
+    proof = registry.runtime_health_proof(
+        consumer_id="workspace-process",
+        generation="gateway-generation",
+    )
+    assert proof.details["local_runtime_count"] == 1
+
+    restored = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "gateway.json",
+        state_store=state,
+    )
+    assert restored.runtime_generation == "gateway-generation"
+    registry.rollback_workspace_process_generation(
+        "gateway-generation",
+        workspace_previous,
+    )
+    registry.rollback_runtime_generation("gateway-generation", None)
+    assert registry.runtime_generation is None
+    registry.close()
+    restored.close()
+    state.close()
+
+
+def test_registry_persists_owner_namespace_and_generation(tmp_path: Path) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    target = registry.upsert(
+        WorkspaceTarget(
+            workspace_id="configured",
+            name="Configured",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:30100",
+            connection_kind="local",
+            owner="config",
+            target_namespace="gateway-config",
+            connection_id="connection-1",
+        )
+    )
+
+    restored = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    restored_target = restored.resolve("configured")
+    assert restored_target.owner == "config"
+    assert restored_target.target_namespace == "gateway-config"
+    assert restored_target.connection_id == "connection-1"
+    assert restored_target.target_generation == target.target_generation
+
+
+def test_registry_cas_failure_restores_uncommitted_memory(tmp_path: Path) -> None:
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        first = GatewayWorkspaceRegistry(
+            storage_path=tmp_path / "gateway.json",
+            state_store=state,
+        )
+        first.upsert(
+            WorkspaceTarget(
+                workspace_id="workspace",
+                name="Original",
+                root_path=str(tmp_path),
+                backend_url="http://127.0.0.1:30100",
+                connection_kind="local",
+            )
+        )
+        second = GatewayWorkspaceRegistry(
+            storage_path=tmp_path / "gateway.json",
+            state_store=state,
+        )
+        second.rename("workspace", "Committed")
+        with pytest.raises(RuntimeError, match="CAS"):
+            first.rename("workspace", "Uncommitted")
+        assert first.resolve("workspace").name == "Original"
+    finally:
+        state.close()
 
 
 def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
@@ -327,7 +799,7 @@ def test_registry_v5_migrates_managed_local_id_to_stable_root_id(
     assert registry.active_workspace_id == expected_id
     assert registry.resolve(expected_id).name == "Managed"
     persisted = json.loads(storage_path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 9
+    assert persisted["schema_version"] == 10
     assert persisted["active_workspace_id"] == expected_id
     assert registry.resolve(expected_id).desired_running is True
 

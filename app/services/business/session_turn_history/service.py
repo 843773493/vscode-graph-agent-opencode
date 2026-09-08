@@ -4,13 +4,15 @@ from __future__ import annotations
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.turn_history import TurnSessionLookupProtocol
 from app.core.history_loading import HistoryLoadingConfig
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.turn import (
     SessionTurnBootstrapDTO,
     TurnHistoryLoadRequest,
     TurnHistoryPageDTO,
     TurnJobSummaryDTO,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
 from app.services.infrastructure.trace_event_store import TraceEventStore
 

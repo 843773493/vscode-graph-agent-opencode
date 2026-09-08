@@ -15,6 +15,7 @@ export interface ConsumeSseResponseOptions {
   idleTimeoutMs?: number;
   idleTimeoutError?: (timeoutMs: number) => Error;
   onActivity?: () => void;
+  yieldBetweenEvents?: boolean;
 }
 
 export function defineSseEvent<T>(

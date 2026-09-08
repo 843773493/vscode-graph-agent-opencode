@@ -5,6 +5,12 @@ from pathlib import Path
 import commentjson
 import jsonschema
 
+from app.services.infrastructure.config.policy import (
+    gateway_config_policy,
+    validate_policy_manifest,
+    workspace_config_policy,
+)
+
 
 def read_jsonc_object(path: Path) -> dict[str, object]:
     if not path.is_file():
@@ -38,6 +44,11 @@ def validate_config(
     schema_path: Path,
 ) -> dict[str, object]:
     schema = read_jsonc_object(schema_path)
+    schema_domain = schema.get("x-boxteam-config-domain")
+    if schema_domain == "workspace":
+        validate_policy_manifest(schema, workspace_config_policy())
+    elif schema_domain == "gateway":
+        validate_policy_manifest(schema, gateway_config_policy())
     try:
         jsonschema.validate(config, schema)
     except jsonschema.ValidationError as error:

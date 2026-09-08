@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import commentjson
 import jsonschema
 import pytest
 
+from app.gateway.control.gateway_state import GatewayStateStore
 from configs.boxteam import (
     SSH_BLOCK_BEGIN,
     SSH_BLOCK_END,
@@ -20,6 +22,7 @@ from configs.boxteam import (
     install_source_development_configuration,
     install_user_configuration,
 )
+from configs.cli import main as config_cli_main
 
 
 def _load(path: Path) -> dict[str, object]:
@@ -235,6 +238,76 @@ def test_cli_migrate_splits_legacy_user_configuration(
     assert (config_root / "gateway.jsonc").is_file()
     assert (config_root / "workspace.jsonc").is_file()
     assert not (config_root / "boxteam.jsonc").exists()
+
+
+def test_cli_diagnose_is_read_only_and_reports_source_and_sqlite_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    boxteam_home = tmp_path / "boxteam-home"
+    config_root = boxteam_home / "config"
+    config_root.mkdir(parents=True)
+    gateway_config = config_root / "gateway.jsonc"
+    workspace_config = config_root / "workspace.jsonc"
+    shutil.copy2(Path("configs/gateway_inline.jsonc"), gateway_config)
+    shutil.copy2(Path("configs/workspace_inline.jsonc"), workspace_config)
+
+    gateway_root = boxteam_home / "state" / "gateway"
+    state = GatewayStateStore(path=gateway_root / "gateway.sqlite")
+    gateway_digest = hashlib.sha256(gateway_config.read_bytes()).hexdigest()
+    state.sync_config_source(
+        config_key="gateway_mutable_override",
+        source_path=gateway_config,
+        config_version=1,
+        presence="present",
+        payload={"config_version": 1, "workspaces": []},
+        layer_digest=gateway_digest,
+    )
+    state.close()
+    before_config_files = {
+        path.relative_to(boxteam_home): path.stat().st_mtime_ns
+        for path in config_root.rglob("*")
+        if path.is_file()
+    }
+
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "boxteam",
+            "doctor",
+            "--home",
+            str(tmp_path),
+            "--workspace",
+            str(tmp_path / "workspace"),
+        ],
+    )
+
+    config_cli_main()
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["action"] == "diagnose"
+    assert output["read_only"] is True
+    assert output["migration"]["executed"] is False
+    assert output["migration"]["backup_created"] is False
+    assert output["gateway"]["sqlite"]["available"] is True
+    assert any(
+        source["config_key"] == "gateway_mutable_override"
+        and source["layer_digest"] == gateway_digest
+        for source in output["gateway"]["sqlite"]["sources"]
+    )
+    assert not any(
+        "payload_json" in json.dumps(item, ensure_ascii=False)
+        for item in output["gateway"]["sqlite"]["sources"]
+    )
+    after_config_files = {
+        path.relative_to(boxteam_home): path.stat().st_mtime_ns
+        for path in config_root.rglob("*")
+        if path.is_file()
+    }
+    assert after_config_files == before_config_files
+    assert not list(config_root.glob("*.bak"))
 
 
 def test_install_gateway_development_assets_is_idempotent(tmp_path: Path) -> None:

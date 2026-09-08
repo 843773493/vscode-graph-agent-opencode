@@ -13,7 +13,9 @@ from urllib.request import Request, urlopen
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from tests.support.ports import E2E_PORT_BLOCK_SIZE
 
 

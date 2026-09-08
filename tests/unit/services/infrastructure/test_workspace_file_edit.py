@@ -7,6 +7,7 @@ import shutil
 import zipfile
 from pathlib import Path
 from unittest.mock import Mock
+from uuid import UUID
 
 import pytest
 
@@ -33,6 +34,34 @@ def workspace_service(
 ) -> WorkspaceService:
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     return WorkspaceService(config_service=_workspace_config_service_mock())
+
+
+@pytest.mark.asyncio
+async def test_workspace_service_assigns_distinct_persistent_ids_per_root(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first = WorkspaceService(
+        config_service=_workspace_config_service_mock(),
+        workspace_root=first_root,
+    )
+    second = WorkspaceService(
+        config_service=_workspace_config_service_mock(),
+        workspace_root=second_root,
+    )
+
+    first_id = first.workspace_id
+    second_id = second.workspace_id
+    restarted_first = WorkspaceService(
+        config_service=_workspace_config_service_mock(),
+        workspace_root=first_root,
+    )
+
+    assert UUID(first_id).version == 4
+    assert UUID(second_id).version == 4
+    assert first_id != second_id
+    assert restarted_first.workspace_id == first_id
 
 
 @pytest.mark.asyncio

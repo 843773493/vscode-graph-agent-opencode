@@ -38,8 +38,6 @@ tools/windows-vm/windows-vm.sh run-module dev-windows
 tools/windows-vm/windows-vm.sh run-module js-platform
 tools/windows-vm/windows-vm.sh run-module backend-js
 tools/windows-vm/windows-vm.sh run-module web-build
-tools/windows-vm/windows-vm.sh run-module webview-build
-tools/windows-vm/windows-vm.sh run-module extension
 tools/windows-vm/windows-vm.sh run-module full-python
 \`\`\`
 

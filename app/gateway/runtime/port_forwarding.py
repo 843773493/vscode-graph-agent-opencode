@@ -10,6 +10,7 @@ from uuid import uuid4
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.gateway.runtime.process import (
     ManagedProcess,
     SshLocalForwardSpec,
@@ -77,6 +78,7 @@ class SshPortForwardManager:
         self._port_allocator = port_allocator
         self._definitions: dict[str, _PortForwardDefinition] = {}
         self._runtimes: dict[str, _PortForwardRuntime] = {}
+        self._runtime_generation: str | None = None
         self._lock = asyncio.Lock()
         self._load()
 
@@ -101,6 +103,90 @@ class SshPortForwardManager:
                         definition.forward_id,
                         definition.workspace_id,
                     )
+
+    def assert_healthy(self) -> None:
+        """确认所有声明为 desired_running 的 SSH 转发都已监听。"""
+
+        errors: list[str] = []
+        for definition in self._definitions.values():
+            if not definition.desired_running:
+                continue
+            runtime = self._runtimes.get(definition.forward_id)
+            if runtime is None:
+                errors.append(f"{definition.forward_id}: 运行时未恢复")
+                continue
+            self._refresh_runtime(definition.forward_id, runtime)
+            if runtime.status != "active":
+                errors.append(
+                    f"{definition.forward_id}: {runtime.error or runtime.status}"
+                )
+        if errors:
+            raise RuntimeError("Gateway SSH 端口转发健康检查失败: " + "; ".join(errors))
+
+    def runtime_health_proof(
+        self,
+        *,
+        generation: str,
+        fencing_token_digest: str | None = None,
+    ) -> GatewayRuntimeHealthProof:
+        """为 SSH tunnel/proxy 消费者生成不含连接信息的健康证明。"""
+
+        self.assert_healthy()
+        if self._runtime_generation not in {None, generation}:
+            raise RuntimeError(
+                "SSH tunnel/proxy runtime generation 不匹配: "
+                f"expected={generation}, actual={self._runtime_generation}"
+            )
+        active_count = sum(
+            1
+            for runtime in self._runtimes.values()
+            if runtime.status == "active"
+        )
+        return GatewayRuntimeHealthProof(
+            consumer_id="ssh-tunnel-proxy",
+            generation=generation,
+            state="healthy",
+            details={
+                "defined_forward_count": len(self._definitions),
+                "active_forward_count": active_count,
+                "runtime_generation": self._runtime_generation,
+            },
+            fencing_token_digest=fencing_token_digest,
+        )
+
+    def prepare_runtime_generation(self, generation: str) -> str | None:
+        """校验 SSH tunnel/proxy 可转移到新的 Gateway generation。"""
+
+        if not generation.strip():
+            raise ValueError("SSH tunnel/proxy generation 不能为空")
+        self.assert_healthy()
+        return self._runtime_generation
+
+    def apply_runtime_generation(self, generation: str) -> str | None:
+        previous_generation = self.prepare_runtime_generation(generation)
+        self._runtime_generation = generation
+        return previous_generation
+
+    def promote_runtime_generation(self, generation: str) -> None:
+        if self._runtime_generation != generation:
+            raise RuntimeError(
+                "SSH tunnel/proxy generation promotion 不匹配: "
+                f"expected={generation}, actual={self._runtime_generation}"
+            )
+
+    def rollback_runtime_generation(
+        self,
+        generation: str,
+        previous_generation: str | None,
+    ) -> None:
+        if self._runtime_generation == previous_generation:
+            return
+        if self._runtime_generation != generation:
+            raise RuntimeError(
+                "SSH tunnel/proxy generation 回退发现当前 lease 已被替换: "
+                f"expected={generation}, actual={self._runtime_generation}"
+            )
+        self._runtime_generation = previous_generation
 
     async def list(self, workspace_id: str) -> list[PortForwardDTO]:
         async with self._lock:

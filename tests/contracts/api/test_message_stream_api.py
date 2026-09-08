@@ -124,6 +124,7 @@ async def test_message_stream_sse_replay_and_terminal_close(
     assert response.status_code == 200
     assert response.headers["x-request-id"] == "req_sse_replay"
     assert response.headers["x-message-stream-id"] == writer.turn_stream_id
+    assert response.headers["x-accel-buffering"] == "no"
     events = _sse_events(response.text)
     assert [event["event_seq"] for event in events] == [1, 2, 3, 4, 5]
     assert events[-1]["type"] == "stream.completed"

@@ -19,7 +19,9 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 
 FIXTURE_VERSION: Final = 3
 STATIC_LONG_SESSION_ID: Final = "ses_a1b2c3d4e5f6478899aabbccddeeff00"
@@ -348,7 +350,7 @@ def _write_session_manifest(
                 "created_at": created_at,
                 "updated_at": created_at,
                 "session_id": session_id,
-                "workspace_id": "ws_custom_tool_fixture",
+                "workspace_id": "ws_local",
                 "title": title,
                 "title_source": "user",
                 "current_agent_id": "default",

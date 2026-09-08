@@ -39,11 +39,17 @@ export default function WorkspaceFileReferenceLink({
         cancelled = true;
       };
     }
-    void context.resolve(target).then((nextResolution) => {
-      if (!cancelled) {
-        setResolution(nextResolution);
-      }
-    });
+    void context.resolve(target)
+      .then((nextResolution) => {
+        if (!cancelled) {
+          setResolution(nextResolution);
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setResolution({ status: "error", message });
+      });
     return () => {
       cancelled = true;
     };

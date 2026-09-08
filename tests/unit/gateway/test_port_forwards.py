@@ -13,8 +13,8 @@ from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
-from app.schemas.gateway import CreatePortForwardRequest
 from app.gateway.server.port_forwarding import get_port_forward_manager
+from app.schemas.gateway import CreatePortForwardRequest
 
 
 class _FakeManagedProcess:
@@ -292,6 +292,22 @@ async def test_restore_failure_remains_visible_on_workspace_list(
 
     assert restored[0].status == "error"
     assert "绑定的远程 Gateway 已变化" in (restored[0].error or "")
+    with pytest.raises(RuntimeError, match="SSH 端口转发健康检查失败"):
+        manager.assert_healthy()
+
+
+def test_port_forward_runtime_generation_protocol_is_reversible(
+    tmp_path: Path,
+) -> None:
+    manager = _manager(tmp_path, _registry(tmp_path), [], [])
+
+    assert manager.prepare_runtime_generation("gateway-generation") is None
+    assert manager.apply_runtime_generation("gateway-generation") is None
+    manager.promote_runtime_generation("gateway-generation")
+    proof = manager.runtime_health_proof(generation="gateway-generation")
+    assert proof.details["runtime_generation"] == "gateway-generation"
+    manager.rollback_runtime_generation("gateway-generation", None)
+
 
 
 def test_load_rejects_duplicate_persisted_local_port(tmp_path: Path) -> None:

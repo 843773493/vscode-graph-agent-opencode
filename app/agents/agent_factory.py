@@ -29,6 +29,7 @@ from app.agents.custom_tools import build_custom_tool_bundle
 from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
 )
+from app.agents.itemized_context_middleware import ItemizedContextProjectionMiddleware
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
 from app.agents.model_capability_routing import (
@@ -599,7 +600,12 @@ def create_my_deep_agent(
         backend=None,
         skills=None,
     )
-    runtime_middleware.extend(list(middleware) if middleware is not None else [LLMLoggingMiddleware()])
+    runtime_middleware.append(
+        ItemizedContextProjectionMiddleware(checkpointer=checkpointer)
+    )
+    runtime_middleware.extend(
+        list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
+    )
     if enabled_runtime_middleware_names is not None:
         runtime_middleware = [
             item for item in runtime_middleware if item.__class__.__name__ in enabled_runtime_middleware_names

@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
@@ -23,6 +23,7 @@ from app.core.path_utils import (
     get_user_workspace_root,
     safe_join,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.workspace import (
     WorkspaceContextDTO,
     WorkspaceDTO,
@@ -68,13 +69,26 @@ LANGUAGE_BY_FILENAME = {
 
 
 class WorkspaceService:
-    def __init__(self, *, config_service: ConfigService):
-        self.workspace_id = "ws_local"
-        self._workspace_root = get_runtime_workspace_root()
+    def __init__(
+        self,
+        *,
+        config_service: ConfigService,
+        workspace_root: Path | None = None,
+    ):
+        self._workspace_root = (
+            workspace_root or get_runtime_workspace_root()
+        ).expanduser().resolve()
+        self._workspace_id: str | None = None
         self.root_path = str(self._workspace_root)
         self.user_workspace_root = str(get_user_workspace_root())
         self.name = os.path.basename(self.root_path)
         self._config_service = config_service
+
+    @property
+    def workspace_id(self) -> str:
+        if self._workspace_id is None:
+            self._workspace_id = load_or_create_workspace_id(self._workspace_root)
+        return self._workspace_id
 
     async def get(self) -> WorkspaceDTO:
         return WorkspaceDTO(
@@ -89,7 +103,7 @@ class WorkspaceService:
             },
             runtime={
                 "pid": os.getpid(),
-                "started_at": datetime.now(timezone.utc).isoformat() + "Z"
+                "started_at": datetime.now(UTC).isoformat() + "Z"
             }
         )
 
@@ -100,7 +114,7 @@ class WorkspaceService:
             project_type="python",
             languages=["python", "javascript", "typescript"],
             git={},
-            index_status={"status": "ready", "indexed_at": datetime.now(timezone.utc).isoformat() + "Z"},
+            index_status={"status": "ready", "indexed_at": datetime.now(UTC).isoformat() + "Z"},
             config={}
         )
 
@@ -108,7 +122,7 @@ class WorkspaceService:
         return WorkspaceIndexStatusDTO(
             status="ready",
             indexed_files=0,
-            last_updated=datetime.now(timezone.utc).isoformat() + "Z",
+            last_updated=datetime.now(UTC).isoformat() + "Z",
         )
 
     async def rebuild_index(self) -> WorkspaceIndexRebuildDTO:
@@ -307,7 +321,7 @@ class WorkspaceService:
                 if stat_result is None
                 else datetime.fromtimestamp(
                     stat_result.st_mtime,
-                    timezone.utc,
+                    UTC,
                 ).isoformat()
             ),
         )
@@ -353,7 +367,7 @@ class WorkspaceService:
             size=stat_result.st_size,
             modified_at=datetime.fromtimestamp(
                 stat_result.st_mtime,
-                timezone.utc,
+                UTC,
             ).isoformat(),
             revision=self._content_revision(raw_content),
         )

@@ -41,5 +41,5 @@
 - [x] 6.1 增加 block walker、附件变体、历史 user projection、LiteLLM provider projection 和错误诊断的单元测试，覆盖中文文本、混合 block、未知 block、Anthropic 不直连和异常输入。
 - [x] 6.2 使用 `out/tests/<对应测试路径>/workspace/` 或 `out/tests/temp/<task_name>/workspace/` 的隔离工作区增加 checkpoint/rollout/历史 API 集成测试，禁止修改 fixture 源目录。
 - [x] 6.3 增加确定性 Web 组件/API 测试，验证用户正文不出现 `image_url` JSON/base64、缩略图渐进加载、附件失败态和右侧资源跳转。
-- [ ] 6.4 对变更涉及的 Python 模块运行静态分析和 pytest；修改 `src/clients/web` 后运行 `bun run --cwd src/clients/web build`，并通过 8011 经 Gateway 验证真实 API 链路及 LiteLLM 请求边界。
+- [x] 6.4 对变更涉及的 Python 模块运行静态分析和 pytest；修改 `src/clients/web` 后运行 `bun run --cwd src/clients/web build`，并通过 8011 经 Gateway 验证真实 API 链路及 LiteLLM 请求边界。
 - [x] 6.5 完成 canonical checkpoint/rollout 不重写检查、OpenSpec 验证和变更产物清单，确认无 reference_repo 测试被执行、无临时二进制写入项目根目录。

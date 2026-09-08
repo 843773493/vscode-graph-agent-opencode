@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { formatDateTime } from "../utils/format";
+import AssemblyContextInspector from "./contextInspection/AssemblyContextInspector";
 import {
   buildAgentStateSummary,
   formatAgentStateJsonlForDisplay,
@@ -11,13 +13,22 @@ export default function AgentStatePanel({
   loadedAt,
   loading,
   error,
+  port,
+  workspaceId,
+  sessionId,
+  active,
 }: {
   jsonl: string;
   messageCount: number;
   loadedAt: string | null;
   loading: boolean;
   error: string | null;
+  port: number;
+  workspaceId: string;
+  sessionId: string;
+  active: boolean;
 }) {
+  const [frozen, setFrozen] = useState(false);
   const loadedAtText = loadedAt ? formatDateTime(loadedAt) : "";
   const trimmedJsonl = jsonl.trim();
   const displayJsonl = trimmedJsonl
@@ -28,6 +39,13 @@ export default function AgentStatePanel({
 
   return (
     <section className="agent-state-panel">
+      <div className="context-inspection-mode" aria-label="上下文检查模式">
+        <button type="button" aria-pressed={!frozen} onClick={() => setFrozen(false)}>当前状态</button>
+        <button type="button" aria-pressed={frozen} onClick={() => setFrozen(true)}>冻结请求</button>
+      </div>
+      {frozen ? (sessionId && workspaceId ? <AssemblyContextInspector
+        key={`${workspaceId}:${sessionId}`} port={port} workspaceId={workspaceId}
+        sessionId={sessionId} active={active} /> : <p>请先选择会话。</p>) : <>
       <div className="agent-state-header">
         <div className="agent-state-title">Agent State 调试快照</div>
         <div className="agent-state-meta">
@@ -70,6 +88,7 @@ export default function AgentStatePanel({
       ) : (
         <div className="empty-state">暂无 Agent State messages</div>
       )}
+      </>}
     </section>
   );
 }

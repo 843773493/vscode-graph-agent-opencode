@@ -6,10 +6,25 @@ from pathlib import Path
 
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from app.core.rollout_append_writer import RolloutAppendWriter
-from app.core.rollout_checkpoint_saver import RolloutCheckpointSaver
-from app.core.rollout_context_reader import RolloutContextReader
-from app.core.rollout_storage import RolloutStorage
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.checkpoint.reader import (
+    RolloutContextReader,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.composer import (
+    ContextPlanComposer,
+)
+from app.services.infrastructure.rollout_context.runtime.detail_store import (
+    ContextPlanDetailStore,
+)
+from app.services.infrastructure.rollout_context.storage.append_writer import (
+    RolloutAppendWriter,
+)
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
 
@@ -26,16 +41,26 @@ class RolloutCheckpointRuntime:
         sessions_dir: str | Path,
         *,
         serde: JsonPlusSerializer | None = None,
+        protected_detail_key: bytes | None = None,
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
         self.serde = serde or JsonPlusSerializer()
-        self.storage = RolloutStorage(self.sessions_dir, serde=self.serde)
+        self.storage = RolloutStorage(
+            self.sessions_dir,
+            serde=self.serde,
+            message_codec=LangChainMessageCodec(),
+        )
         self.append_writer = RolloutAppendWriter(
             self.sessions_dir,
             storage=self.storage,
         )
         self.context_reader = RolloutContextReader(self.storage)
         self.history_reader = RolloutHistoryReader(self.context_reader)
+        self.context_plan_detail_store = ContextPlanDetailStore(
+            self.sessions_dir,
+            protected_key=protected_detail_key,
+        )
+        self.context_plan_composer = ContextPlanComposer()
         self.saver = RolloutCheckpointSaver(
             self.sessions_dir,
             serde=self.serde,
@@ -43,6 +68,7 @@ class RolloutCheckpointRuntime:
             writer=self.append_writer,
             context_reader=self.context_reader,
             history_reader=self.history_reader,
+            detail_store=self.context_plan_detail_store,
         )
 
 

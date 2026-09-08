@@ -994,6 +994,7 @@ message SessionInformationErrorDTO {
   string type = 3;
   string message = 4;
   google.protobuf.Timestamp timestamp = 5;
+  optional bool message_truncated = 6;
 }
 
 message SessionInformationExecutionDTO {
@@ -1001,6 +1002,7 @@ message SessionInformationExecutionDTO {
   optional string status = 2;
   optional string current_tool = 3;
   optional string last_error = 4;
+  optional bool last_error_truncated = 5;
 }
 
 message SessionInformationResourceDTO {
@@ -1009,27 +1011,62 @@ message SessionInformationResourceDTO {
   string name = 3;
   string status = 4;
   google.protobuf.Timestamp updated_at = 5;
+  optional google.protobuf.Timestamp ended_at = 6;
+  optional bool name_truncated = 7;
+}
+
+message SessionInformationSessionDTO {
+  string session_id = 1;
+  string workspace_id = 2;
+  string title = 3;
+  string current_agent_id = 4;
+  optional string current_provider_id = 5;
+  optional string parent_session_id = 6;
+  optional string context_source_session_id = 7;
+  string kind = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  optional bool title_truncated = 11;
+}
+
+message SessionInformationResourceSummaryDTO {
+  repeated SessionInformationResourceDTO active = 1;
+  repeated SessionInformationResourceDTO recent_closed = 2;
+  optional int64 active_count = 3;
+  optional int64 recent_closed_count = 4;
+  optional bool active_truncated = 5;
+  optional bool recent_closed_truncated = 6;
+  optional bool historical_omitted = 7;
+}
+
+message SessionInformationRelationsDTO {
+  optional int64 child_count = 1;
+  repeated string child_ids = 2;
+  optional bool child_ids_truncated = 3;
 }
 
 message SessionInformationSnapshotDTO {
   optional string kind = 1;
   optional int64 schema_version = 2;
   google.protobuf.Timestamp generated_at = 3;
-  SessionDTO session = 4;
-  repeated string child_session_ids = 5;
+  SessionInformationSessionDTO session = 4;
+  reserved 5;
   SessionInformationWorkspaceDTO workspace = 6;
   string storage_path = 7;
   SessionInformationExecutionDTO execution = 8;
   SessionInformationTraceDTO trace = 9;
-  repeated SessionInformationResourceDTO resources = 10;
-  repeated SessionInformationErrorDTO recent_errors = 11;
+  reserved 10, 11;
+  SessionInformationRelationsDTO relations = 12;
+  SessionInformationResourceSummaryDTO resources = 13;
+  repeated SessionInformationErrorDTO recent_errors = 14;
 }
 
 message SessionInformationTraceDTO {
-  optional int64 event_count = 1;
+  optional int64 observed_event_count = 1;
   optional string last_event_id = 2;
   optional string last_event_type = 3;
   optional google.protobuf.Timestamp last_event_at = 4;
+  optional bool truncated = 5;
 }
 
 message SessionInformationWorkspaceDTO {
